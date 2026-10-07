@@ -1184,6 +1184,50 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn golden_cursor_sink(home: &crate::console_sink::golden::GoldenHome) -> CursorPrintSink {
+        use crate::console_sink::golden::*;
+        CursorPrintSink {
+            session_id: SESSION.to_string(),
+            thread_id: THREAD.to_string(),
+            turn_id: Some(TURN.to_string()),
+            run_id: RUN.to_string(),
+            client_request_id: Some(CLIENT_REQUEST.to_string()),
+            provider_thread_id: PROVIDER_THREAD.to_string(),
+            launch_id: LAUNCH.to_string(),
+            process_group_id: None,
+            machine_name: MACHINE.to_string(),
+            local_db_path: Some(home.local_db()),
+            runtime_events_outbox_dir: home.outbox(),
+        }
+    }
+
+    #[test]
+    fn console_sink_golden_cursor() {
+        use crate::console_sink::golden::*;
+        let home = GoldenHome::new("cursor");
+        let sink = golden_cursor_sink(&home);
+        let phases = std::cell::RefCell::new(Vec::new());
+        let captured = home.run(async {
+            sink.post_binding().await;
+            sink.post_phase("thinking", None).await;
+            sink.post_stream_event(1, json!({"type": "system", "session_id": PROVIDER_THREAD}))
+                .await;
+            sink.post_stream_event(
+                2,
+                json!({"type": "tool_call", "subtype": "started", "tool_call": {"shellToolCall": {}}}),
+            )
+            .await;
+            sink.post_stream_event(3, json!({"type": "tool_call", "subtype": "completed"}))
+                .await;
+            sink.post_decode_gap(4, "bad json").await;
+            *phases.borrow_mut() = home.status_rows();
+            sink.post_terminal("run_completed", Some(0), None).await;
+        });
+        let mut captured = captured;
+        captured["status_before_terminal"] = json!(phases.into_inner());
+        assert_golden("cursor", &captured);
+    }
+
     #[test]
     fn terminal_result_requires_success_shape() {
         assert_eq!(

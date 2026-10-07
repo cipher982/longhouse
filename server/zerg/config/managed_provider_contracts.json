@@ -1884,7 +1884,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "08b45ee345d535941cd696613784cbdc993f05db6f9ce81fefa44a43ec869c74"
+      "adapter_digest": "a19a8a992dffb395940928aacaf2276d600896caf870f7038c47609136d52041"
     },
     {
       "provider": "opencode",
@@ -2629,7 +2629,7 @@
           "owner_action": "render reasoning parts as collapsed thinking records"
         }
       },
-      "adapter_digest": "c75f1e496e8572fff964486385caa18503668a44eb225dc9e86c9446b29ccbd1"
+      "adapter_digest": "50b2b14c58151043a8c4b2688ba9d8a81f17e9872fc518cfb23eebc896a60239"
     },
     {
       "provider": "antigravity",
@@ -3054,7 +3054,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "15bffdfcf1f350d4a4dc647077768870b2817838f0fdd357e5951f3371b1802e"
+      "adapter_digest": "5f2bedd59b0790eab3e9fc5ca004384a0345212d2739e4744690ddd7af15c371"
     },
     {
       "provider": "cursor",
@@ -3773,7 +3773,7 @@
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
       },
-      "adapter_digest": "4de98a3c2d65e9a64c5d3fd5cb754d036bd0a565979ddeeaaeb78319efbbf174"
+      "adapter_digest": "f72f9211113f02442417f9c127bd20c3d0af1e9eccc604502f0dca2d10193788"
     },
     {
       "provider": "pi",
@@ -4396,7 +4396,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "51a97cdf233f0d7a34600922a02c82ec83a529f48793a29003a252d4e84307da"
+      "adapter_digest": "1afe0cde6b0b2ff8538d1b937c8c49c1caa6e9d973edca0252fa39a7cb07fc2c"
     },
     {
       "provider": "omp",
@@ -5068,7 +5068,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "0abf4511987495a8a960e05e247d6bcc64c86366bc2be71a88e0044522222991"
+      "adapter_digest": "a15bfc2302f9e1bd2e16ac4cbbc81f1f9f1358250ac91be434bd2e2a33877293"
     }
   ]
 }

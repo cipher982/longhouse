@@ -1,0 +1,204 @@
+{
+  "claim": {
+    "invocation_state": "parked",
+    "pending_count": 1,
+    "state": "terminal",
+    "terminal_event": {
+      "dedupe_key": "omp-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:terminal",
+      "device_id": "golden-machine",
+      "kind": "terminal_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "execution_lifetime": "persistent",
+        "exit_code": 1,
+        "invocation": {
+          "id": "golden-launch",
+          "pending_count": 1,
+          "state": "parked"
+        },
+        "managed_transport": "omp_print",
+        "provider_thread_id": "golden-provider-thread",
+        "source_path": "<home>/sessions/native.jsonl",
+        "stderr_tail": "401 Unauthorized",
+        "terminal_reason": "provider_auth_required",
+        "terminal_source": "omp_print",
+        "terminal_state": "run_failed",
+        "turn_id": "golden-turn"
+      },
+      "provider": "omp",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "omp:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "omp_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    "terminal_event_handed_off": true
+  },
+  "local_phases": [
+    {
+      "local_only": true,
+      "occurred_at": "<clock>",
+      "phase_source": "omp_print",
+      "provider": "omp",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "state": "finished",
+      "tool_name": null
+    }
+  ],
+  "outbox": [
+    {
+      "dedupe_key": "omp-console:golden-launch:00000000-0000-4000-8000-0000000000aa:delegation:\"2026-10-07T00:00:00Z\"",
+      "device_id": "golden-machine",
+      "kind": "delegation_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "delegation": {
+          "agents": [],
+          "observed_at": "<clock>"
+        }
+      },
+      "provider": "omp",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "omp:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "omp_console",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "omp-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:decode-gap:2",
+      "device_id": "golden-machine",
+      "kind": "progress_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "error": "bad json",
+        "execution_lifetime": "persistent",
+        "managed_transport": "omp_print",
+        "progress_kind": "omp_print_decode_gap",
+        "seq": 2
+      },
+      "provider": "omp",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "omp:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "omp_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "omp-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:stdout:1",
+      "device_id": "golden-machine",
+      "kind": "progress_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "assistant_message_index": 3,
+        "client_request_id": "golden-client-request",
+        "event": {
+          "delta": "x",
+          "type": "message_update"
+        },
+        "execution_lifetime": "persistent",
+        "live_text": "partial answer",
+        "managed_transport": "omp_print",
+        "progress_kind": "omp_print_stream",
+        "provider_thread_id": "golden-provider-thread",
+        "seq": 1,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb",
+        "turn_id": "golden-turn"
+      },
+      "provider": "omp",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "omp:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "omp_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "omp-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:terminal",
+      "device_id": "golden-machine",
+      "kind": "terminal_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "execution_lifetime": "persistent",
+        "exit_code": 1,
+        "invocation": {
+          "id": "golden-launch",
+          "pending_count": 1,
+          "state": "parked"
+        },
+        "managed_transport": "omp_print",
+        "provider_thread_id": "golden-provider-thread",
+        "source_path": "<home>/sessions/native.jsonl",
+        "stderr_tail": "401 Unauthorized",
+        "terminal_reason": "provider_auth_required",
+        "terminal_source": "omp_print",
+        "terminal_state": "run_failed",
+        "turn_id": "golden-turn"
+      },
+      "provider": "omp",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "omp:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "omp_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "omp-print:00000000-0000-4000-8000-0000000000ee:golden-launch:binding",
+      "device_id": "golden-machine",
+      "kind": "binding_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "execution_lifetime": "persistent",
+        "managed_transport": "omp_print",
+        "provider_session_id": "golden-provider-thread",
+        "source_path": "<home>/sessions/native.jsonl"
+      },
+      "provider": "omp",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "omp:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "omp_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "wake:golden-wake",
+      "device_id": "golden-machine",
+      "kind": "wake_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "invocation_id": "golden-launch",
+        "provider_thread_id": "golden-provider-thread",
+        "trigger": {
+          "kind": "async_job"
+        },
+        "wake_id": "golden-wake"
+      },
+      "provider": "omp",
+      "runtime_key": "omp:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "omp_console",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    }
+  ],
+  "status": [],
+  "status_before_terminal": [
+    {
+      "payload": {
+        "activity_seq": 7,
+        "device_id": "golden-machine",
+        "execution_lifetime": "persistent",
+        "managed_transport": "omp_print",
+        "structured_remote_approval": false,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb"
+      },
+      "phase": "running",
+      "provider": "omp",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "omp:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "omp_print",
+      "tool_name": "bash"
+    }
+  ]
+}

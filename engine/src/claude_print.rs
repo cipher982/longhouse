@@ -2307,6 +2307,68 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn golden_claude_sink(home: &crate::console_sink::golden::GoldenHome) -> ClaudePrintSink {
+        use crate::console_sink::golden::*;
+        ClaudePrintSink {
+            session_id: SESSION.to_string(),
+            thread_id: THREAD.to_string(),
+            turn_id: Some(TURN.to_string()),
+            run_id: RUN.to_string(),
+            client_request_id: Some(CLIENT_REQUEST.to_string()),
+            provider_thread_id: PROVIDER_THREAD.to_string(),
+            launch_id: LAUNCH.to_string(),
+            process_group_id: None,
+            machine_name: MACHINE.to_string(),
+            local_db_path: Some(home.local_db()),
+            runtime_events_outbox_dir: home.outbox(),
+        }
+    }
+
+    #[test]
+    fn console_sink_golden_claude() {
+        use crate::console_sink::golden::*;
+        let home = GoldenHome::new("claude");
+        let sink = golden_claude_sink(&home);
+        let phases = std::cell::RefCell::new(Vec::new());
+        let captured = home.run(async {
+            sink.post_phase("running", Some("Bash".to_string())).await;
+            sink.post_stream_event(
+                1,
+                json!({"type": "system", "subtype": "init", "session_id": PROVIDER_THREAD}),
+            )
+            .await;
+            sink.post_stream_event(
+                2,
+                json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read"}]}}),
+            )
+            .await;
+            sink.post_stream_event(3, json!({"type": "user"})).await;
+            sink.post_decode_gap(4, "bad json", b"{oops").await;
+            sink.post_delegation_snapshot(json!({"observed_at": "2026-10-07T00:00:00Z", "agents": []}))
+                .await;
+            sink.post_wake_signal(&crate::console_lifecycle::WakeRequest {
+                invocation_id: LAUNCH.to_string(),
+                wake_id: "golden-wake".to_string(),
+                provider_thread_id: PROVIDER_THREAD.to_string(),
+                trigger: json!({"kind": "task_notification"}),
+            })
+            .await;
+            *phases.borrow_mut() = home.status_rows();
+            sink.post_terminal_with_lifecycle(
+                "run_failed",
+                Some(1),
+                Some("Not logged in · Please run /login".to_string()),
+                Some("parked"),
+                Some(2),
+                None,
+            )
+            .await;
+        });
+        let mut captured = captured;
+        captured["status_before_terminal"] = json!(phases.into_inner());
+        assert_golden("claude", &captured);
+    }
     use crate::console_lifecycle::conformance::{
         self, LifecycleScenario, ScenarioFuture, ScenarioOutcome, ScenarioRunner,
     };

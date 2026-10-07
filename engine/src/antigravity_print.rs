@@ -1275,6 +1275,44 @@ fn normalized_optional(value: &Option<String>) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn golden_antigravity_sink(
+        home: &crate::console_sink::golden::GoldenHome,
+    ) -> AntigravityPrintSink {
+        use crate::console_sink::golden::*;
+        AntigravityPrintSink {
+            session_id: SESSION.to_string(),
+            thread_id: THREAD.to_string(),
+            turn_id: Some(TURN.to_string()),
+            run_id: RUN.to_string(),
+            client_request_id: Some(CLIENT_REQUEST.to_string()),
+            launch_id: LAUNCH.to_string(),
+            process_group_id: None,
+            stdout_path: home.temp.path().join("stdout.jsonl"),
+            machine_name: MACHINE.to_string(),
+            local_db_path: Some(home.local_db()),
+            runtime_events_outbox_dir: home.outbox(),
+        }
+    }
+
+    #[test]
+    fn console_sink_golden_antigravity() {
+        use crate::console_sink::golden::*;
+        let home = GoldenHome::new("antigravity");
+        let sink = golden_antigravity_sink(&home);
+        let transcript = home.temp.path().join("brain/conversation.pb");
+        let phases = std::cell::RefCell::new(Vec::new());
+        let captured = home.run(async {
+            sink.post_binding(PROVIDER_THREAD, &transcript).await;
+            sink.post_phase("thinking", None).await;
+            *phases.borrow_mut() = home.status_rows();
+            sink.post_terminal("run_failed", Some(2), Some("boom".to_string()))
+                .await;
+        });
+        let mut captured = captured;
+        captured["status_before_terminal"] = json!(phases.into_inner());
+        assert_golden("antigravity", &captured);
+    }
+
     #[test]
     #[cfg(unix)]
     fn lsof_positive_holder_survives_unrelated_scan_warnings() {

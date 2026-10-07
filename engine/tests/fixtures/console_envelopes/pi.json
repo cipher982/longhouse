@@ -1,0 +1,200 @@
+{
+  "claim": {
+    "invocation_state": "idle",
+    "pending_count": 0,
+    "state": "terminal",
+    "terminal_event": {
+      "dedupe_key": "pi-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:terminal",
+      "device_id": "golden-machine",
+      "kind": "terminal_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "execution_lifetime": "one_shot",
+        "exit_code": 0,
+        "invocation": {
+          "id": "golden-launch",
+          "pending_count": 0,
+          "state": "idle"
+        },
+        "managed_transport": "pi_print",
+        "provider_thread_id": "golden-provider-thread",
+        "source_path": "<home>/sessions/native.jsonl",
+        "stderr_tail": null,
+        "terminal_reason": "run_completed",
+        "terminal_source": "pi_print",
+        "terminal_state": "run_completed",
+        "turn_id": "golden-turn"
+      },
+      "provider": "pi",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "pi:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "pi_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    "terminal_event_handed_off": true
+  },
+  "local_phases": [
+    {
+      "local_only": true,
+      "occurred_at": "<clock>",
+      "phase_source": "pi_print",
+      "provider": "pi",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "state": "finished",
+      "tool_name": null
+    }
+  ],
+  "outbox": [
+    {
+      "dedupe_key": "pi-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:decode-gap:3",
+      "device_id": "golden-machine",
+      "kind": "progress_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "error": "bad json",
+        "execution_lifetime": "one_shot",
+        "managed_transport": "pi_print",
+        "progress_kind": "pi_print_decode_gap",
+        "seq": 3
+      },
+      "provider": "pi",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "pi:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "pi_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "pi-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:stdout:1",
+      "device_id": "golden-machine",
+      "kind": "progress_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "event": {
+          "type": "message_update"
+        },
+        "execution_lifetime": "one_shot",
+        "item_id": "00000000-0000-4000-8000-0000000000aa:assistant:2",
+        "live_text": "partial answer",
+        "managed_transport": "pi_print",
+        "progress_kind": "pi_print_stream",
+        "provider_thread_id": "golden-provider-thread",
+        "seq": 1,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb",
+        "turn_id": "golden-turn"
+      },
+      "provider": "pi",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "pi:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "pi_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "pi-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:stdout:2",
+      "device_id": "golden-machine",
+      "kind": "progress_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "event": {
+          "isError": false,
+          "result": "ok",
+          "toolCallId": "call-1",
+          "toolName": "bash",
+          "type": "tool_execution_end"
+        },
+        "execution_lifetime": "one_shot",
+        "isError": false,
+        "item_id": "call-1",
+        "managed_transport": "pi_print",
+        "progress_kind": "pi_print_stream",
+        "provider_thread_id": "golden-provider-thread",
+        "result": "ok",
+        "seq": 2,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb",
+        "toolCallId": "call-1",
+        "toolName": "bash",
+        "turn_id": "golden-turn"
+      },
+      "provider": "pi",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "pi:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "pi_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "pi-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:terminal",
+      "device_id": "golden-machine",
+      "kind": "terminal_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "execution_lifetime": "one_shot",
+        "exit_code": 0,
+        "invocation": {
+          "id": "golden-launch",
+          "pending_count": 0,
+          "state": "idle"
+        },
+        "managed_transport": "pi_print",
+        "provider_thread_id": "golden-provider-thread",
+        "source_path": "<home>/sessions/native.jsonl",
+        "stderr_tail": null,
+        "terminal_reason": "run_completed",
+        "terminal_source": "pi_print",
+        "terminal_state": "run_completed",
+        "turn_id": "golden-turn"
+      },
+      "provider": "pi",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "pi:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "pi_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "pi-print:00000000-0000-4000-8000-0000000000ee:golden-launch:binding",
+      "device_id": "golden-machine",
+      "kind": "binding_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "execution_lifetime": "one_shot",
+        "managed_transport": "pi_print",
+        "provider_session_id": "golden-provider-thread",
+        "source_path": "<home>/sessions/native.jsonl"
+      },
+      "provider": "pi",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "pi:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "pi_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    }
+  ],
+  "status": [],
+  "status_before_terminal": [
+    {
+      "payload": {
+        "activity_seq": 5,
+        "device_id": "golden-machine",
+        "execution_lifetime": "one_shot",
+        "managed_transport": "pi_print",
+        "structured_remote_approval": false,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb"
+      },
+      "phase": "running",
+      "provider": "pi",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "pi:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "pi_print",
+      "tool_name": "bash"
+    }
+  ]
+}

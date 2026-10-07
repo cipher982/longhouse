@@ -1,0 +1,256 @@
+{
+  "claim": {
+    "invocation_state": "parked",
+    "pending_count": 2,
+    "state": "terminal",
+    "terminal_event": {
+      "dedupe_key": "claude-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:terminal",
+      "device_id": "golden-machine",
+      "kind": "terminal_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "execution_lifetime": "persistent",
+        "exit_code": 1,
+        "invocation": {
+          "id": "golden-launch",
+          "pending_count": 2,
+          "state": "parked"
+        },
+        "managed_transport": "claude_print",
+        "provider_thread_id": "golden-provider-thread",
+        "stderr_tail": "Not logged in · Please run /login",
+        "terminal_reason": "provider_auth_required",
+        "terminal_source": "claude_print",
+        "terminal_state": "run_failed",
+        "turn_id": "golden-turn"
+      },
+      "provider": "claude",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "claude:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "claude_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    "terminal_event_handed_off": true
+  },
+  "local_phases": [
+    {
+      "local_only": true,
+      "occurred_at": "<clock>",
+      "phase_source": "claude_print",
+      "provider": "claude",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "state": "finished",
+      "tool_name": null
+    }
+  ],
+  "outbox": [
+    {
+      "dedupe_key": "claude-console:golden-launch:00000000-0000-4000-8000-0000000000aa:delegation:\"2026-10-07T00:00:00Z\"",
+      "device_id": "golden-machine",
+      "kind": "delegation_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "delegation": {
+          "agents": [],
+          "observed_at": "<clock>"
+        }
+      },
+      "provider": "claude",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "claude:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "claude_console",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "claude-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:decode-gap:4",
+      "device_id": "golden-machine",
+      "kind": "progress_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "error": "bad json",
+        "progress_kind": "claude_print_decode_gap",
+        "raw_line": "{oops",
+        "seq": 4
+      },
+      "provider": "claude",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "claude:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "claude_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "claude-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:stdout:1",
+      "device_id": "golden-machine",
+      "kind": "progress_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "event": {
+          "session_id": "golden-provider-thread",
+          "subtype": "init",
+          "type": "system"
+        },
+        "execution_lifetime": "persistent",
+        "managed_transport": "claude_print",
+        "progress_kind": "claude_print_stream",
+        "provider_thread_id": "golden-provider-thread",
+        "seq": 1,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb",
+        "turn_id": "golden-turn"
+      },
+      "provider": "claude",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "claude:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "claude_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "claude-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:stdout:2",
+      "device_id": "golden-machine",
+      "kind": "progress_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "event": {
+          "message": {
+            "content": [
+              {
+                "name": "Read",
+                "type": "tool_use"
+              }
+            ]
+          },
+          "type": "assistant"
+        },
+        "execution_lifetime": "persistent",
+        "managed_transport": "claude_print",
+        "progress_kind": "claude_print_stream",
+        "provider_thread_id": "golden-provider-thread",
+        "seq": 2,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb",
+        "turn_id": "golden-turn"
+      },
+      "provider": "claude",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "claude:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "claude_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "claude-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:stdout:3",
+      "device_id": "golden-machine",
+      "kind": "progress_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "event": {
+          "type": "user"
+        },
+        "execution_lifetime": "persistent",
+        "managed_transport": "claude_print",
+        "progress_kind": "claude_print_stream",
+        "provider_thread_id": "golden-provider-thread",
+        "seq": 3,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb",
+        "turn_id": "golden-turn"
+      },
+      "provider": "claude",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "claude:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "claude_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "claude-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:terminal",
+      "device_id": "golden-machine",
+      "kind": "terminal_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "execution_lifetime": "persistent",
+        "exit_code": 1,
+        "invocation": {
+          "id": "golden-launch",
+          "pending_count": 2,
+          "state": "parked"
+        },
+        "managed_transport": "claude_print",
+        "provider_thread_id": "golden-provider-thread",
+        "stderr_tail": "Not logged in · Please run /login",
+        "terminal_reason": "provider_auth_required",
+        "terminal_source": "claude_print",
+        "terminal_state": "run_failed",
+        "turn_id": "golden-turn"
+      },
+      "provider": "claude",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "claude:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "claude_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "claude-print:00000000-0000-4000-8000-0000000000ee:golden-launch:binding",
+      "device_id": "golden-machine",
+      "kind": "binding_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "execution_lifetime": "persistent",
+        "managed_transport": "claude_print",
+        "provider_session_id": "golden-provider-thread"
+      },
+      "provider": "claude",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "claude:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "claude_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "wake:golden-wake",
+      "device_id": "golden-machine",
+      "kind": "wake_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "invocation_id": "golden-launch",
+        "provider_thread_id": "golden-provider-thread",
+        "trigger": {
+          "kind": "task_notification"
+        },
+        "wake_id": "golden-wake"
+      },
+      "provider": "claude",
+      "runtime_key": "claude:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "claude_console",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    }
+  ],
+  "status": [],
+  "status_before_terminal": [
+    {
+      "payload": {
+        "device_id": "golden-machine",
+        "execution_lifetime": "persistent",
+        "managed_transport": "claude_print",
+        "structured_remote_approval": false,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb"
+      },
+      "phase": "thinking",
+      "provider": "claude",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "claude:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "claude_print",
+      "tool_name": null
+    }
+  ]
+}

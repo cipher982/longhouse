@@ -2507,6 +2507,53 @@ impl OpenCodeRunSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn golden_opencode_sink(home: &crate::console_sink::golden::GoldenHome) -> OpenCodeRunSink {
+        use crate::console_sink::golden::*;
+        OpenCodeRunSink {
+            session_id: SESSION.to_string(),
+            thread_id: THREAD.to_string(),
+            turn_id: Some(TURN.to_string()),
+            run_id: RUN.to_string(),
+            client_request_id: Some(CLIENT_REQUEST.to_string()),
+            expected_provider_thread_id: Some(PROVIDER_THREAD.to_string()),
+            launch_id: LAUNCH.to_string(),
+            process_group_id: None,
+            machine_name: MACHINE.to_string(),
+            local_db_path: Some(home.local_db()),
+            runtime_events_outbox_dir: home.outbox(),
+        }
+    }
+
+    #[test]
+    fn console_sink_golden_opencode() {
+        use crate::console_sink::golden::*;
+        let home = GoldenHome::new("opencode");
+        let sink = golden_opencode_sink(&home);
+        let phases = std::cell::RefCell::new(Vec::new());
+        let captured = home.run(async {
+            sink.post_binding(PROVIDER_THREAD).await;
+            sink.post_stream_event(
+                1,
+                json!({"type": "tool_use", "part": {"tool": "bash", "state": {"status": "running"}}}),
+                Some(PROVIDER_THREAD),
+            )
+            .await;
+            sink.post_stream_event(
+                2,
+                json!({"type": "tool_use", "part": {"tool": "bash", "state": {"status": "completed"}}}),
+                Some(PROVIDER_THREAD),
+            )
+            .await;
+            sink.post_stream_event(3, json!({"type": "text"}), None).await;
+            *phases.borrow_mut() = home.status_rows();
+            sink.post_terminal("run_failed", Some(1), Some("boom".to_string()), Some(PROVIDER_THREAD))
+                .await;
+        });
+        let mut captured = captured;
+        captured["status_before_terminal"] = json!(phases.into_inner());
+        assert_golden("opencode", &captured);
+    }
     use tokio::process::Command;
 
     fn view(id: &str, role: &str, parent: Option<&str>, finish: Option<&str>) -> MessageView {

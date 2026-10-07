@@ -20,6 +20,7 @@ mod codex_ws_relay;
 mod commands;
 mod config;
 mod console_adapter;
+mod console_sink;
 mod console_lifecycle;
 mod console_rpc;
 mod control_channel;

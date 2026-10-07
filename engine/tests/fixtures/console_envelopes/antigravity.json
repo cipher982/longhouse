@@ -1,0 +1,105 @@
+{
+  "claim": {
+    "invocation_state": null,
+    "pending_count": 0,
+    "state": "terminal",
+    "terminal_event": {
+      "dedupe_key": "antigravity-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:terminal",
+      "device_id": "golden-machine",
+      "kind": "terminal_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "execution_lifetime": "one_shot",
+        "exit_code": 2,
+        "managed_transport": "antigravity_print",
+        "stderr_tail": "boom",
+        "terminal_reason": "run_failed",
+        "terminal_source": "antigravity_print",
+        "terminal_state": "run_failed",
+        "turn_id": "golden-turn"
+      },
+      "provider": "antigravity",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "antigravity:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "antigravity_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    "terminal_event_handed_off": true
+  },
+  "local_phases": [
+    {
+      "local_only": true,
+      "occurred_at": "<clock>",
+      "phase_source": "antigravity_print",
+      "provider": "antigravity",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "state": "finished",
+      "tool_name": null
+    }
+  ],
+  "outbox": [
+    {
+      "dedupe_key": "antigravity-print:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:terminal",
+      "device_id": "golden-machine",
+      "kind": "terminal_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "execution_lifetime": "one_shot",
+        "exit_code": 2,
+        "managed_transport": "antigravity_print",
+        "stderr_tail": "boom",
+        "terminal_reason": "run_failed",
+        "terminal_source": "antigravity_print",
+        "terminal_state": "run_failed",
+        "turn_id": "golden-turn"
+      },
+      "provider": "antigravity",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "antigravity:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "antigravity_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "antigravity-print:00000000-0000-4000-8000-0000000000ee:golden-launch:binding",
+      "device_id": "golden-machine",
+      "kind": "binding_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "execution_lifetime": "one_shot",
+        "managed_transport": "antigravity_print",
+        "provider_session_id": "golden-provider-thread",
+        "source_path": "<home>/brain/conversation.pb"
+      },
+      "provider": "antigravity",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "antigravity:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "antigravity_print",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    }
+  ],
+  "status": [],
+  "status_before_terminal": [
+    {
+      "payload": {
+        "device_id": "golden-machine",
+        "execution_lifetime": "one_shot",
+        "managed_transport": "antigravity_print",
+        "structured_remote_approval": false,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb"
+      },
+      "phase": "thinking",
+      "provider": "antigravity",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "antigravity:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "antigravity_print",
+      "tool_name": null
+    }
+  ]
+}

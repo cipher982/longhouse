@@ -1494,6 +1494,68 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn golden_pi_sink(home: &crate::console_sink::golden::GoldenHome) -> PiPrintSink {
+        use crate::console_sink::golden::*;
+        PiPrintSink {
+            session_id: SESSION.to_string(),
+            thread_id: THREAD.to_string(),
+            turn_id: Some(TURN.to_string()),
+            run_id: RUN.to_string(),
+            client_request_id: Some(CLIENT_REQUEST.to_string()),
+            launch_id: LAUNCH.to_string(),
+            process_group_id: None,
+            stdout_path: home.temp.path().join("stdout.jsonl"),
+            session_dir: home.temp.path().join("sessions"),
+            provider_thread_id: PROVIDER_THREAD.to_string(),
+            session_file: Some(home.temp.path().join("sessions/native.jsonl")),
+            binding_emitted: false,
+            machine_name: MACHINE.to_string(),
+            local_db_path: Some(home.local_db()),
+            runtime_events_outbox_dir: home.outbox(),
+        }
+    }
+
+    #[test]
+    fn console_sink_golden_pi() {
+        use crate::console_sink::golden::*;
+        let home = GoldenHome::new("pi");
+        let sink = golden_pi_sink(&home);
+        let projection = PiStreamProjection {
+            current_assistant: Some(PiAssistantProjection {
+                index: 2,
+                live_text: "partial answer".to_string(),
+            }),
+            ..PiStreamProjection::default()
+        };
+        let transcript = home.temp.path().join("sessions/native.jsonl");
+        let phases = std::cell::RefCell::new(Vec::new());
+        let captured = home.run(async {
+            sink.post_binding(PROVIDER_THREAD, &transcript).await;
+            sink.post_phase("running", Some("bash".to_string()), 5).await;
+            sink.post_stream_event(1, &json!({"type": "message_update"}), &projection)
+                .await;
+            sink.post_stream_event(
+                2,
+                &json!({"type": "tool_execution_end", "toolCallId": "call-1", "toolName": "bash", "result": "ok", "isError": false}),
+                &PiStreamProjection::default(),
+            )
+            .await;
+            sink.post_decode_gap(3, "bad json").await;
+            *phases.borrow_mut() = home.status_rows();
+            sink.post_terminal_with_lifecycle(
+                "run_completed",
+                Some(0),
+                None,
+                Some("idle"),
+                Some(0),
+            )
+            .await;
+        });
+        let mut captured = captured;
+        captured["status_before_terminal"] = json!(phases.into_inner());
+        assert_golden("pi", &captured);
+    }
     use crate::console_lifecycle::conformance::{
         self, LifecycleScenario, ScenarioFuture, ScenarioOutcome, ScenarioRunner,
     };

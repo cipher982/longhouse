@@ -1,0 +1,209 @@
+{
+  "claim": {
+    "invocation_state": null,
+    "pending_count": 0,
+    "state": "terminal",
+    "terminal_event": null,
+    "terminal_event_handed_off": false
+  },
+  "local_phases": [
+    {
+      "local_only": true,
+      "occurred_at": "<clock>",
+      "phase_source": "opencode_run",
+      "provider": "opencode",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "state": "running",
+      "tool_name": "bash"
+    },
+    {
+      "local_only": true,
+      "occurred_at": "<clock>",
+      "phase_source": "opencode_run",
+      "provider": "opencode",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "state": "thinking",
+      "tool_name": "bash"
+    },
+    {
+      "local_only": true,
+      "occurred_at": "<clock>",
+      "phase_source": "opencode_run",
+      "provider": "opencode",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "state": "finished",
+      "tool_name": null
+    }
+  ],
+  "outbox": [
+    {
+      "dedupe_key": "opencode-run:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:phase:running",
+      "device_id": "golden-machine",
+      "kind": "phase_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "execution_lifetime": "one_shot",
+        "managed_transport": "opencode_run"
+      },
+      "phase": "running",
+      "provider": "opencode",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "opencode:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "opencode_run",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb",
+      "tool_name": "bash"
+    },
+    {
+      "dedupe_key": "opencode-run:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:phase:thinking",
+      "device_id": "golden-machine",
+      "kind": "phase_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "execution_lifetime": "one_shot",
+        "managed_transport": "opencode_run"
+      },
+      "phase": "thinking",
+      "provider": "opencode",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "opencode:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "opencode_run",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb",
+      "tool_name": "bash"
+    },
+    {
+      "dedupe_key": "opencode-run:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:stdout:1",
+      "device_id": "golden-machine",
+      "kind": "progress_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "event": {
+          "part": {
+            "state": {
+              "status": "running"
+            },
+            "tool": "bash"
+          },
+          "type": "tool_use"
+        },
+        "execution_lifetime": "one_shot",
+        "managed_transport": "opencode_run",
+        "progress_kind": "opencode_run_stream",
+        "provider_thread_id": "golden-provider-thread",
+        "seq": 1,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb",
+        "turn_id": "golden-turn"
+      },
+      "provider": "opencode",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "opencode:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "opencode_run",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "opencode-run:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:stdout:2",
+      "device_id": "golden-machine",
+      "kind": "progress_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "event": {
+          "part": {
+            "state": {
+              "status": "completed"
+            },
+            "tool": "bash"
+          },
+          "type": "tool_use"
+        },
+        "execution_lifetime": "one_shot",
+        "managed_transport": "opencode_run",
+        "progress_kind": "opencode_run_stream",
+        "provider_thread_id": "golden-provider-thread",
+        "seq": 2,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb",
+        "turn_id": "golden-turn"
+      },
+      "provider": "opencode",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "opencode:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "opencode_run",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "opencode-run:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:stdout:3",
+      "device_id": "golden-machine",
+      "kind": "progress_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "event": {
+          "type": "text"
+        },
+        "execution_lifetime": "one_shot",
+        "managed_transport": "opencode_run",
+        "progress_kind": "opencode_run_stream",
+        "provider_thread_id": null,
+        "seq": 3,
+        "thread_id": "00000000-0000-4000-8000-0000000000bb",
+        "turn_id": "golden-turn"
+      },
+      "provider": "opencode",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "opencode:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "opencode_run",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "opencode-run:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:terminal",
+      "device_id": "golden-machine",
+      "kind": "terminal_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "execution_lifetime": "one_shot",
+        "exit_code": 1,
+        "managed_transport": "opencode_run",
+        "provider_thread_id": "golden-provider-thread",
+        "stderr_tail": "boom",
+        "terminal_reason": "run_failed",
+        "terminal_source": "opencode_run",
+        "terminal_state": "run_failed",
+        "turn_id": "golden-turn"
+      },
+      "provider": "opencode",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "opencode:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "opencode_run",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    {
+      "dedupe_key": "opencode-run:00000000-0000-4000-8000-0000000000ee:golden-launch:binding",
+      "device_id": "golden-machine",
+      "kind": "binding_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "execution_lifetime": "one_shot",
+        "managed_transport": "opencode_run",
+        "provider_session_id": "golden-provider-thread"
+      },
+      "provider": "opencode",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "opencode:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "opencode_run",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    }
+  ],
+  "status": [],
+  "status_before_terminal": []
+}
