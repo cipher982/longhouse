@@ -229,6 +229,7 @@ describe("buildInboxLayout", () => {
         id: "automation-new",
         repo: "agent-sessions",
         startedAt: "2026-05-20T11:00:00Z",
+        launchActor: "automation",
       }),
       makeCard({
         id: "project-closed",
@@ -249,35 +250,26 @@ describe("buildInboxLayout", () => {
     expect(layout.history[1].description).toBe("Background work");
     expect(layout.historyCount).toBe(3);
   });
-  it("uses source metadata and workspace path to identify automation runs", () => {
+  it("never classifies automation from a workspace path or repo name alone", () => {
+    // The server owns classification (automation machine credentials hide
+    // Sauron's rows); a folder name is not provenance.
     const layout = buildInboxLayout([
       makeCard({
         id: "sauron-email",
-        repo: "sauron-email-agent",
+        repo: "agent-sessions",
         startedAt: "2026-05-18T12:00:00Z",
         cwd: "/data/agent-sessions",
       }),
-    ], undefined, fixedNow);
-
-    expect(layout.history[0].label).toBe("Automation runs");
-    expect(layout.history[0].kind).toBe("automation");
-  });
-  it("preserves the git-derived automation fallback without provenance", () => {
-    const layout = buildInboxLayout([
       makeCard({
         id: "legacy-git-agent-sessions",
         repo: "agent-sessions",
         project: null,
         gitRepo: "https://github.com/example/agent-sessions.git",
-        startedAt: "2026-05-18T12:00:00Z",
+        startedAt: "2026-05-18T11:00:00Z",
       }),
     ], undefined, fixedNow);
 
-    expect(layout.history[0]).toMatchObject({
-      label: "Automation runs",
-      kind: "automation",
-      description: "Background work",
-    });
+    expect(layout.history[0]).toMatchObject({ label: "agent-sessions", kind: "project" });
   });
   it("lets explicit human provenance override the automation workspace heuristic", () => {
     const layout = buildInboxLayout([
@@ -339,7 +331,7 @@ describe("buildInboxLayout", () => {
   it("keeps automation runs last despite a stale saved repo order", () => {
     const layout = buildInboxLayout([
       makeCard({ id: "project", repo: "zerg", startedAt: "2026-05-18T12:00:00Z" }),
-      makeCard({ id: "automation", repo: "agent-sessions", startedAt: "2026-05-20T11:00:00Z" }),
+      makeCard({ id: "automation", repo: "agent-sessions", startedAt: "2026-05-20T11:00:00Z", launchActor: "automation" }),
     ], {
       shelfOrder: [],
       repoOrder: ["agent-sessions", "zerg"],

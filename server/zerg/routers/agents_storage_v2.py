@@ -824,6 +824,22 @@ def _conversation_resets(render_spec: RenderObjectSpec | None) -> list[dict[str,
     return resets
 
 
+def _apply_credential_provenance(session_facts: dict[str, Any], auth_token: DeviceToken | object | None) -> None:
+    """An automation credential fills absent launch provenance; it never overwrites.
+
+    The catalogd commit's visibility policy hides ``launch_actor=automation``;
+    managed and Console provenance retained in the catalog still win there
+    (docs/specs/automation-machine-credentials.md).
+    """
+
+    if getattr(caller_principal(auth_token), "automation", False) is not True:
+        return
+    if session_facts.get("launch_actor"):
+        return
+    session_facts["launch_actor"] = "automation"
+    session_facts["hidden_from_default_timeline"] = True
+
+
 def _authenticated_machine_id(auth_token: DeviceToken | object | None, payload: dict[str, Any]) -> str:
     auth_token = caller_principal(auth_token)
     if auth_token is not None:
@@ -1454,6 +1470,7 @@ async def _commit_admitted_envelope(
             return replay_receipt
 
         owner_value = getattr(auth_token, "owner_id", None)
+        _apply_credential_provenance(parsed["session_facts"], auth_token)
         render_spec = parsed["render_spec"]
         if render_spec is not None:
             parsed["render_spec"] = await enrich_render_interaction_kinds(

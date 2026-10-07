@@ -12,6 +12,7 @@ expiry can be added later if compliance or security policy requires it.
 
 from uuid import uuid4
 
+from sqlalchemy import Boolean
 from sqlalchemy import Column
 from sqlalchemy import DateTime
 from sqlalchemy import ForeignKey
@@ -52,6 +53,8 @@ class DeviceToken(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
+    # Automation credential (docs/specs/automation-machine-credentials.md).
+    automation = Column(Boolean, nullable=False, default=False, server_default="0")
 
     # Table constraints
     __table_args__ = (

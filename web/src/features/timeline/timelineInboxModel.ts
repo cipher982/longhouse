@@ -86,21 +86,17 @@ function explicitAutomationClassification(
   return null;
 }
 
+/**
+ * Automation is declared provenance only. The server owns classification
+ * (launch provenance, automation machine credentials) and hides what it
+ * classifies; no client guesses from a folder name, so web and iOS agree
+ * (control-plane docs/specs/automation-machine-credentials.md).
+ */
 export function isAutomationSession(
   session: TimelineSessionCard["head"],
-  resolvedRepo: string,
+  _resolvedRepo?: string,
 ): boolean {
-  const explicit = explicitAutomationClassification(session);
-  if (explicit !== null) return explicit;
-
-  // Legacy sessions may have no launch provenance. Their project can still
-  // resolve from cwd or git_repo, so preserve the resolved-group fallback.
-  const normalizedRepo = resolvedRepo.trim().toLowerCase();
-  if (normalizedRepo === "agent-sessions") return true;
-
-  const project = session.project?.trim().toLowerCase();
-  const cwd = session.cwd?.replace(/\/+$/, "").split("/").pop()?.toLowerCase();
-  return project === "agent-sessions" || cwd === "agent-sessions";
+  return explicitAutomationClassification(session) === true;
 }
 
 export function getInboxGroupPresentation(

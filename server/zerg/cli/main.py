@@ -566,6 +566,37 @@ def db_classify_automation(
         typer.echo(f"  {candidate['session_id']} {candidate['provider']} {candidate['prompt_preview'][:100]}")
 
 
+@db_app.command(name="mark-automation-machine")
+def db_mark_automation_machine(
+    device_id: str = typer.Argument(..., help="Machine id as its credential reports it (e.g. clifford-sauron)."),
+    off: bool = typer.Option(False, "--off", help="Clear the flag. Already-hidden history stays hidden."),
+    owner_id: int | None = typer.Option(None, "--owner-id", help="Owner of the machine (defaults to the single-tenant owner)."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Mark a machine's credentials as automation and hide what it already shipped.
+
+    Sessions it ships without launch provenance of their own become automation
+    (docs/specs/automation-machine-credentials.md).
+    """
+
+    from zerg.services.agents.automation_backfill import set_automation_machine
+
+    result = set_automation_machine(device_id, automation=not off, owner_id=owner_id)
+    if json_output:
+        typer.echo(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        if not result["found"]:
+            typer.echo(f"No active credential for machine {device_id!r} (owner {result['owner_id']}).", err=True)
+        else:
+            state = "automation" if result["automation"] else "not automation"
+            typer.echo(
+                f"{device_id}: {result['tokens_updated']} credential(s) marked {state}; "
+                f"{result['sessions_reclassified']} session(s) hidden; searchd failures: {len(result['searchd_failures'])}."
+            )
+    if not result["found"] or result["searchd_failures"]:
+        raise typer.Exit(code=1)
+
+
 @db_app.command(name="reconcile-session-visibility")
 def db_reconcile_session_visibility(
     database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override (defaults to env)."),

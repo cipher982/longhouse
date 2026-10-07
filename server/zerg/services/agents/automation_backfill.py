@@ -542,3 +542,73 @@ def reconcile_catalogd_all_visibility(
         "derived_applied_count": len(applied),
         "derived_failures": failures,
     }
+
+
+def set_automation_machine(
+    device_id: str,
+    *,
+    automation: bool,
+    owner_id: int | None = None,
+    timeout_seconds: float = 120.0,
+) -> dict[str, Any]:
+    """Mark a machine's credentials as automation and mirror the backfill to searchd.
+
+    docs/specs/automation-machine-credentials.md. ``owner_id`` defaults to the
+    single-tenant owner. Per-row searchd failures are reported, never hidden.
+    """
+
+    from datetime import UTC
+    from datetime import datetime
+
+    from zerg.catalogd.client import call_catalogd_sync
+    from zerg.services.catalogd_supervisor import catalogd_paths
+    from zerg.services.searchd_supervisor import searchd_paths
+
+    _, catalogd_socket = catalogd_paths()
+    if owner_id is None:
+        owner = call_catalogd_sync(catalogd_socket, "auth.owner.get.v2", params={}, timeout_seconds=timeout_seconds)
+        if owner.get("found") is not True:
+            raise RuntimeError("no active owner; pass --owner-id")
+        owner_id = int(owner["owner_id"])
+    result = call_catalogd_sync(
+        catalogd_socket,
+        "catalogd.device.automation.set.v2",
+        params={
+            "owner_id": int(owner_id),
+            "device_id": device_id,
+            "automation": automation,
+            "observed_at": datetime.now(UTC).isoformat(),
+        },
+        timeout_seconds=timeout_seconds,
+    )
+    sessions = result.get("sessions") or []
+    failures: list[dict[str, str]] = []
+    if sessions:
+        _, searchd_socket = searchd_paths()
+        source_commit_seq = int(result.get("commit_seq") or 0)
+        for row in sessions:
+            try:
+                call_catalogd_sync(
+                    searchd_socket,
+                    "search.session.reconcile_visibility.v2",
+                    params={
+                        "session_id": str(row["session_id"]),
+                        "system_hidden": True,
+                        "test_scope_visible": False,
+                        "user_hidden_from_timeline": bool(row["user_hidden_from_timeline"]),
+                        "user_state": str(row["user_state"]),
+                        "source_commit_seq": source_commit_seq,
+                    },
+                    timeout_seconds=30.0,
+                )
+            except Exception as exc:  # per-row maintenance report; do not hide partial convergence
+                failures.append({"session_id": str(row["session_id"]), "error": str(exc)})
+    return {
+        "owner_id": int(owner_id),
+        "device_id": device_id,
+        "automation": automation,
+        "found": result.get("found") is True,
+        "tokens_updated": int(result.get("tokens_updated") or 0),
+        "sessions_reclassified": len(sessions),
+        "searchd_failures": failures,
+    }

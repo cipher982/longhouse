@@ -168,6 +168,9 @@ class LiveDeviceToken(LiveBase):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
+    # Automation credential: sessions it ships without launch provenance of
+    # their own are automation (docs/specs/automation-machine-credentials.md).
+    automation = Column(Boolean, nullable=False, server_default=text("0"))
 
     __table_args__ = (Index("ix_device_tokens_owner_device", "owner_id", "device_id"),)
 

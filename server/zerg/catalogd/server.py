@@ -605,6 +605,8 @@ class CatalogDaemon:
             return await self._finish_local_launch(request)
         if request.method == "catalogd.session.reclassify_origin.v2":
             return await self._reclassify_session_origin(request)
+        if request.method == "catalogd.device.automation.set.v2":
+            return await self._set_device_automation(request)
         if request.method == "catalogd.session.reconcile_visibility.v2":
             return await self._reconcile_session_visibility(request)
         if request.method == "catalogd.session.reconcile_visibility_all.v2":
@@ -1453,6 +1455,24 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.reclassify_session_origin, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _set_device_automation(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id", "device_id", "automation", "observed_at"}:
+            return self._error(request, "invalid_request", "catalogd.device.automation.set.v2 has invalid parameters")
+        params = dict(request.params)
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if not isinstance(params["device_id"], str) or not params["device_id"].strip():
+            return self._error(request, "invalid_request", "device_id must be a non-empty string")
+        if type(params["automation"]) is not bool:
+            return self._error(request, "invalid_request", "automation must be a boolean")
+        try:
+            params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.set_device_automation, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _reconcile_session_visibility(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

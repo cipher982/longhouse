@@ -2743,6 +2743,7 @@ class CatalogStore:
                     "created_at": _encode_datetime(row["created_at"]),
                     "last_used_at": _encode_datetime(row["last_used_at"]),
                     "revoked_at": None,
+                    "automation": bool(row["automation"]),
                 },
             }
 
@@ -3201,6 +3202,7 @@ class CatalogStore:
                         token_table.c.token_hash.label("device_token_hash"),
                         token_table.c.created_at.label("device_created_at"),
                         token_table.c.last_used_at.label("device_last_used_at"),
+                        token_table.c.automation.label("device_automation"),
                     )
                     .select_from(token_table.join(user_table, token_table.c.owner_id == user_table.c.id))
                     .where(
@@ -3231,6 +3233,7 @@ class CatalogStore:
                     "created_at": _encode_datetime(row["device_created_at"]),
                     "last_used_at": _encode_datetime(last_used_at),
                     "revoked_at": None,
+                    "automation": bool(row["device_automation"]),
                 },
                 "user": _user_dto(row),
                 "commit_seq": str(commit_seq),
@@ -8524,6 +8527,102 @@ class CatalogStore:
             )
             changed_rows += int(thread_result.rowcount or 0)
         return {"reclassified": changed_rows > 0, "rows_changed": changed_rows, "commit_seq": str(commit_seq)}
+
+    def set_device_automation(
+        self,
+        *,
+        owner_id: int,
+        device_id: str,
+        automation: bool,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Mark one owner's machine credentials as automation, and backfill.
+
+        docs/specs/automation-machine-credentials.md: the credential fills an
+        absent ``launch_actor`` and never overwrites recorded provenance, at
+        ingest and here alike. Turning the flag off clears only the flag; no
+        history is guessed back to visible.
+        """
+
+        token_table = LiveDeviceToken.__table__
+        storage = StorageSession.__table__
+        catalog = LiveSessionCatalog.__table__
+        card = LiveTimelineCard.__table__
+        thread = LiveSessionThread.__table__
+        with _write_transaction(self.engine) as connection:
+            tokens = connection.execute(
+                update(token_table)
+                .where(
+                    token_table.c.owner_id == owner_id,
+                    token_table.c.device_id == device_id,
+                    token_table.c.revoked_at.is_(None),
+                )
+                .values(automation=automation)
+            ).rowcount
+            if not tokens:
+                return {"found": False, "tokens_updated": 0, "sessions": [], "commit_seq": str(_current_commit_seq(connection))}
+            if not automation:
+                return {
+                    "found": True,
+                    "tokens_updated": int(tokens),
+                    "sessions": [],
+                    "commit_seq": str(_advance_commit_seq(connection, observed_at)),
+                }
+            # Candidates: this owner's sessions from this machine with no launch
+            # provenance, not Console, in storage and (when present) the live
+            # catalog alike. A live row that recorded provenance wins.
+            live_declared = select(catalog.c.session_id).where(
+                or_(
+                    catalog.c.launch_actor.isnot(None),
+                    func.coalesce(catalog.c.origin_kind, "") == "console",
+                )
+            )
+            rows = (
+                connection.execute(
+                    select(storage.c.session_id, storage.c.user_hidden_from_timeline, storage.c.user_state).where(
+                        storage.c.machine_id == device_id,
+                        storage.c.owner_id == str(owner_id),
+                        storage.c.launch_actor.is_(None),
+                        func.coalesce(storage.c.origin_kind, "") != "console",
+                        storage.c.session_id.notin_(live_declared),
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            session_ids = [str(row["session_id"]) for row in rows]
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            for start in range(0, len(session_ids), 500):
+                chunk = session_ids[start : start + 500]
+                connection.execute(
+                    update(storage)
+                    .where(storage.c.session_id.in_(chunk))
+                    .values(launch_actor="automation", hidden_from_default_timeline=1, commit_seq=commit_seq, updated_at=observed_at)
+                )
+                for table in (catalog, card):
+                    connection.execute(
+                        update(table)
+                        .where(table.c.session_id.in_(chunk), table.c.launch_actor.is_(None))
+                        .values(launch_actor="automation", hidden_from_default_timeline=1, updated_at=observed_at)
+                    )
+                connection.execute(
+                    update(thread)
+                    .where(thread.c.session_id.in_(chunk), thread.c.is_primary == 1)
+                    .values(hidden_from_default_timeline=1, updated_at=observed_at)
+                )
+        return {
+            "found": True,
+            "tokens_updated": int(tokens),
+            "sessions": [
+                {
+                    "session_id": str(row["session_id"]),
+                    "user_hidden_from_timeline": bool(row["user_hidden_from_timeline"]),
+                    "user_state": str(row["user_state"] or "active"),
+                }
+                for row in rows
+            ],
+            "commit_seq": str(commit_seq),
+        }
 
     def reconcile_session_visibility(
         self,
