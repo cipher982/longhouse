@@ -977,7 +977,7 @@ pub async fn recover_claude_print_turns(
             let stopped = crate::console_lifecycle::stopped_items_for_claim(&claim);
             if let Err(error) = crate::console_lifecycle::publish_invocation_closed(
                 &registry,
-                &outbox_dir,
+                Ok(&outbox_dir),
                 &claim,
                 machine_name,
                 CLAUDE_RUNTIME_SOURCE,

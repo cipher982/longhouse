@@ -306,10 +306,66 @@ pub fn retry_retained_invocation_close_event(
     let Some(event) = claim.invocation_close_event else {
         return Ok(false);
     };
+    // A closed invocation owns no pending work. The empty delegation snapshot
+    // is derived from the retained close event and handed off with it, so a
+    // replay restores both; its dedupe key makes a repeat harmless.
+    if !enqueue_runtime_event_for_handoff(outbox_dir, &delegation_cleared_by(&event))? {
+        return Ok(false);
+    }
     if !enqueue_runtime_event_for_handoff(outbox_dir, &event)? {
         return Ok(false);
     }
     registry.mark_invocation_close_event_handed_off(run_id, &event)
+}
+
+/// The empty delegation snapshot that follows an `invocation_closed` event,
+/// observed one nanosecond after it so it orders after any earlier snapshot.
+fn delegation_cleared_by(close: &Value) -> Value {
+    let observed_at = close
+        .get("occurred_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+        .unwrap_or_else(Utc::now)
+        + chrono::Duration::nanoseconds(1);
+    let observed_at = observed_at.to_rfc3339();
+    let invocation_id = close
+        .pointer("/payload/invocation_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mut event = serde_json::Map::new();
+    for key in [
+        "runtime_key",
+        "session_id",
+        "thread_id",
+        "run_id",
+        "provider",
+        "device_id",
+        "source",
+    ] {
+        if let Some(value) = close.get(key) {
+            event.insert(key.to_string(), value.clone());
+        }
+    }
+    event.insert("kind".into(), Value::from("delegation_signal"));
+    event.insert("occurred_at".into(), Value::from(observed_at.clone()));
+    event.insert(
+        "dedupe_key".into(),
+        Value::from(format!("close:{invocation_id}:delegation")),
+    );
+    event.insert(
+        "payload".into(),
+        serde_json::json!({
+            "delegation": {
+                "count": 0,
+                "kinds": {},
+                "items": [],
+                "recent_items": [],
+                "observed_at": observed_at,
+            }
+        }),
+    );
+    Value::Object(event)
 }
 
 /// Commit a terminal fact/event into its claim, then hand the retained exact

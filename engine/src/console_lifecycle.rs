@@ -899,19 +899,24 @@ pub async fn close_parked_invocation(
                     format!("failed to persist stopped Console pending items: {error}"),
                 );
             }
-            let published = outbox_dir
-                .context("resolving Console close event outbox")
-                .and_then(|outbox_dir| {
-                    publish_invocation_closed(
-                        &claims,
-                        &outbox_dir,
-                        claim,
-                        machine_name,
-                        source,
-                        InvocationCloseReason::UserStop,
-                        &stopped,
-                    )
-                });
+            let outbox_dir = outbox_dir.context("resolving Console close event outbox");
+            let published = publish_invocation_closed(
+                &claims,
+                outbox_dir
+                    .as_deref()
+                    .map_err(|error| anyhow::anyhow!("{error:#}")),
+                claim,
+                machine_name,
+                source,
+                InvocationCloseReason::UserStop,
+                &stopped,
+            );
+            if let Ok(false) = published {
+                append_close_error(
+                    &mut error_note,
+                    "Console invocation close event is retained for replay".to_string(),
+                );
+            }
             if let Err(error) = published {
                 tracing::warn!(
                     %error,
@@ -1039,13 +1044,14 @@ pub fn stopped_items_for_claim(claim: &crate::turn_claims::TurnClaim) -> Vec<Pen
 /// Publish an invocation's closure through its claim.
 ///
 /// The exact `invocation_closed` event is retained in the claim before any
-/// handoff, so the daemon replays it until it reaches the durable outbox (and
-/// that handoff is what makes the claim's `closed` final). The empty delegation
-/// snapshot that clears the pending work follows it. Returns whether the close
-/// event was handed off now; false leaves it to the daemon's replay.
+/// handoff, so the daemon replays it (with the empty delegation snapshot that
+/// clears the pending work) until it reaches the durable outbox; that handoff
+/// is what makes the claim's `closed` final. Returns whether it was handed off
+/// now. Without an outbox the event is still retained, and this reports why it
+/// could not be handed off.
 pub fn publish_invocation_closed(
     registry: &crate::turn_claims::TurnClaimRegistry,
-    outbox_dir: &std::path::Path,
+    outbox_dir: Result<&std::path::Path>,
     claim: &crate::turn_claims::TurnClaim,
     machine_name: &str,
     source: &str,
@@ -1056,9 +1062,6 @@ pub fn publish_invocation_closed(
         !stopped.is_empty(),
         "an invocation close must name what it stopped"
     );
-    let close_time = chrono::Utc::now();
-    let occurred_at = close_time.to_rfc3339();
-    let delegation_observed_at = (close_time + chrono::Duration::nanoseconds(1)).to_rfc3339();
     let stopped = stopped
         .iter()
         .map(|item| {
@@ -1081,7 +1084,7 @@ pub fn publish_invocation_closed(
             "device_id": machine_name,
             "source": source,
             "kind": "invocation_closed",
-            "occurred_at": occurred_at,
+            "occurred_at": chrono::Utc::now().to_rfc3339(),
             "dedupe_key": format!("close:{invocation_id}"),
             "payload": {
                 "invocation_id": invocation_id,
@@ -1090,47 +1093,7 @@ pub fn publish_invocation_closed(
             }
         }),
     )?;
-    let handed_off = match crate::outbox::retry_retained_invocation_close_event(
-        registry,
-        outbox_dir,
-        &claim.run_id,
-    ) {
-        Ok(handed_off) => handed_off,
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                run_id = %claim.run_id,
-                "Console invocation close event remains retained for replay"
-            );
-            false
-        }
-    };
-    crate::outbox::enqueue_runtime_event(
-        outbox_dir,
-        &serde_json::json!({
-            "runtime_key": format!("{}:{}", claim.provider, claim.session_id),
-            "session_id": claim.session_id,
-            "thread_id": claim.thread_id,
-            "run_id": claim.run_id,
-            "provider": claim.provider,
-            "device_id": machine_name,
-            "source": source,
-            "kind": "delegation_signal",
-            "occurred_at": delegation_observed_at.clone(),
-            "dedupe_key": format!("close:{invocation_id}:delegation"),
-            "payload": {
-                "delegation": {
-                    "count": 0,
-                    "kinds": {},
-                    "items": [],
-                    "recent_items": [],
-                    "observed_at": delegation_observed_at,
-                }
-            }
-        }),
-    )
-    .context("enqueueing the cleared delegation snapshot")?;
-    Ok(handed_off)
+    crate::outbox::retry_retained_invocation_close_event(registry, outbox_dir?, &claim.run_id)
 }
 
 type RetainedWakeRegistry = HashMap<String, RetainedWake>;
@@ -1715,6 +1678,65 @@ mod tests {
                 serde_json::json!({}),
             )
             .unwrap()
+    }
+
+    #[test]
+    fn a_close_is_retained_for_replay_even_without_an_outbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(dir.path().join("claims"));
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let thread_id = uuid::Uuid::new_v4().to_string();
+        registry
+            .claim(&run_id, &session_id, &thread_id, None, None, "claude")
+            .unwrap();
+        let claim = registry.read(&run_id).unwrap();
+        let stopped = [PendingItem {
+            id: "task-1".to_string(),
+            kind: "monitor".to_string(),
+            status: "running".to_string(),
+            description: Some("watch files".to_string()),
+        }];
+
+        let error = publish_invocation_closed(
+            &registry,
+            Err(anyhow::anyhow!("no runtime outbox")),
+            &claim,
+            "box",
+            "claude_console",
+            InvocationCloseReason::UserStop,
+            &stopped,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("no runtime outbox"));
+        let retained = registry.read(&run_id).unwrap();
+        let close = retained.invocation_close_event.expect("close retained");
+        assert_eq!(close["payload"]["stopped"][0]["id"], "task-1");
+        assert!(!retained.invocation_close_event_handed_off);
+
+        // The daemon's replay hands off the close with its cleared delegation.
+        let outbox = dir.path().join("outbox");
+        assert!(
+            crate::outbox::retry_retained_invocation_close_event(&registry, &outbox, &run_id)
+                .unwrap()
+        );
+        let events = std::fs::read_dir(&outbox)
+            .unwrap()
+            .flatten()
+            .map(|entry| serde_json::from_slice::<Value>(&std::fs::read(entry.path()).unwrap()))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(events.iter().any(|event| event == &close));
+        let cleared = events
+            .iter()
+            .find(|event| event["kind"] == "delegation_signal")
+            .expect("cleared delegation replays with the close");
+        assert_eq!(cleared["payload"]["delegation"]["count"], 0);
+        assert_eq!(cleared["run_id"], run_id);
+        assert_eq!(cleared["dedupe_key"], format!("close:{run_id}:delegation"));
+        let closed = registry.read(&run_id).unwrap();
+        assert!(closed.invocation_close_event_handed_off);
+        assert_eq!(closed.invocation_state.as_deref(), Some("closed"));
     }
 
     #[tokio::test]

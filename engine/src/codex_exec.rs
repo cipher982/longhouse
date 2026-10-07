@@ -1779,7 +1779,7 @@ fn settle_codex_restart_claim(
             }
             match crate::console_lifecycle::publish_invocation_closed(
                 registry,
-                outbox_dir,
+                Ok(outbox_dir),
                 &claim,
                 machine_name,
                 CODEX_EXEC_RUNTIME_SOURCE,

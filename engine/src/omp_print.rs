@@ -1253,7 +1253,7 @@ fn publish_recovered_omp_close(
     let stopped = crate::console_lifecycle::stopped_items_for_claim(claim);
     match crate::console_lifecycle::publish_invocation_closed(
         registry,
-        outbox_dir,
+        Ok(outbox_dir),
         claim,
         machine_name,
         OMP_RUNTIME_SOURCE,
