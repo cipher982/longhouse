@@ -1,5 +1,12 @@
 {
  "auth.device.create.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -16,6 +23,13 @@
   }
  },
  "auth.device.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -32,6 +46,13 @@
   }
  },
  "auth.device.resolve.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "token_hash must be 64 lowercase hexadecimal characters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -48,6 +69,13 @@
   }
  },
  "auth.device.revoke.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -64,6 +92,13 @@
   }
  },
  "auth.device.validate.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "token_hash must be 64 lowercase hexadecimal characters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -80,6 +115,9 @@
   }
  },
  "auth.owner.get.v2": {
+  "declared_nulls": {
+   "ok": true
+  },
   "empty": {
    "ok": true
   },
@@ -92,6 +130,13 @@
   }
  },
  "auth.refresh.create.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "user_id or token_hash is invalid",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -124,6 +169,13 @@
   }
  },
  "auth.refresh.rotate.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "refresh token hashes must be lowercase hexadecimal SHA-256 values",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -140,6 +192,13 @@
   }
  },
  "auth.single_tenant.ensure.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "email and provider must be non-empty bounded strings",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -156,6 +215,13 @@
   }
  },
  "auth.user.get.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "user_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -172,6 +238,13 @@
   }
  },
  "auth.user.get_cp.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "cp_user_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -188,6 +261,13 @@
   }
  },
  "auth.user.resolve_cp.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "cp_user_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -204,6 +284,13 @@
   }
  },
  "auth.user.resolve_local.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "email and provider must be non-empty bounded strings",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -220,6 +307,13 @@
   }
  },
  "auth.user.update.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "user_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -236,6 +330,13 @@
   }
  },
  "backup.snapshot.create.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "output_dir must be an absolute path",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -252,6 +353,13 @@
   }
  },
  "catalogd.device.automation.set.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -268,6 +376,13 @@
   }
  },
  "catalogd.session.reclassify_origin.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a non-empty string",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -284,6 +399,13 @@
   }
  },
  "catalogd.session.reconcile_visibility.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a non-empty string",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -300,6 +422,13 @@
   }
  },
  "catalogd.session.reconcile_visibility_all.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "apply must be a boolean",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -316,6 +445,13 @@
   }
  },
  "control.command.prepare.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "operation_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -332,6 +468,13 @@
   }
  },
  "control.command_result.apply.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a non-negative integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -348,6 +491,13 @@
   }
  },
  "control.operation.finish.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "operation_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -364,6 +514,13 @@
   }
  },
  "deployment.read_consistency.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "observed_at must be an ISO-8601 UTC datetime string",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -380,6 +537,13 @@
   }
  },
  "directed_input.create.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -396,6 +560,13 @@
   }
  },
  "directed_input.link_receipt.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -412,6 +583,13 @@
   }
  },
  "directed_input.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -428,6 +606,13 @@
   }
  },
  "directed_input.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -444,6 +629,13 @@
   }
  },
  "interaction.decision.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -476,6 +668,13 @@
   }
  },
  "interaction.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -492,6 +691,13 @@
   }
  },
  "interaction.register.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction has invalid fields",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -508,6 +714,13 @@
   }
  },
  "interaction.repair.expire.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id and interaction_id must be canonical UUIDs",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -524,6 +737,13 @@
   }
  },
  "interaction.resolve.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id and interaction_id must be canonical UUIDs",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -540,6 +760,13 @@
   }
  },
  "machine.activity.summary.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -556,6 +783,13 @@
   }
  },
  "machine.enrollment.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -572,6 +806,13 @@
   }
  },
  "machine.enrollment.rename.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -588,6 +829,13 @@
   }
  },
  "machine.health.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -620,6 +868,13 @@
   }
  },
  "machine.models.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -636,6 +891,13 @@
   }
  },
  "machine.presence.policy.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -652,6 +914,13 @@
   }
  },
  "machine.presence.upsert.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -668,6 +937,13 @@
   }
  },
  "machine.workspace.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -684,6 +960,13 @@
   }
  },
  "migration.gaps.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "run_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -700,6 +983,13 @@
   }
  },
  "migration.render.repair.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "run_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -716,6 +1006,13 @@
   }
  },
  "migration.run.create.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "run_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -732,6 +1029,13 @@
   }
  },
  "migration.run.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "run_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -748,6 +1052,13 @@
   }
  },
  "migration.run.reconcile.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "run_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -764,6 +1075,13 @@
   }
  },
  "migration.run.summary.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "run_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -780,6 +1098,13 @@
   }
  },
  "migration.session.claim.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "run_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -812,6 +1137,13 @@
   }
  },
  "migration.session.fail.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "run_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -828,6 +1160,13 @@
   }
  },
  "migration.session.register.batch.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "run_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -860,6 +1199,13 @@
   }
  },
  "notification.apns.device.upsert.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -876,6 +1222,13 @@
   }
  },
  "notification.apns.live_activity.end.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -892,6 +1245,13 @@
   }
  },
  "notification.apns.live_activity.upsert.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -908,6 +1268,13 @@
   }
  },
  "notification.presence.upsert.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -924,6 +1291,13 @@
   }
  },
  "notification.presence.visible.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -952,6 +1326,13 @@
   }
  },
  "projector.coverage.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector must be canonical lowercase ASCII",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -968,6 +1349,13 @@
   }
  },
  "projector.state.advance.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector must be canonical lowercase ASCII",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -984,6 +1372,13 @@
   }
  },
  "projector.state.claim.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector must be canonical lowercase ASCII",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1000,6 +1395,13 @@
   }
  },
  "projector.state.complete.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector must be canonical lowercase ASCII",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1016,6 +1418,13 @@
   }
  },
  "projector.state.fail.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector must be canonical lowercase ASCII",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1032,6 +1441,13 @@
   }
  },
  "projector.state.list_lag.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector must be canonical lowercase ASCII",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1048,6 +1464,13 @@
   }
  },
  "projector.state.requeue.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector must be canonical lowercase ASCII",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1064,6 +1487,13 @@
   }
  },
  "projector.store.bind.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector must be canonical lowercase ASCII",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1080,6 +1510,13 @@
   }
  },
  "runner.operation.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "runner operation payload is invalid",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1108,6 +1545,13 @@
   }
  },
  "session.active.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "limit must be an integer from 1 through 1000",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1124,6 +1568,13 @@
   }
  },
  "session.alias.resolve.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "provider_session_id must be a trimmed string of 1 to 256 characters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1204,6 +1655,13 @@
   }
  },
  "session.console.turn.starting_for_device.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "console turn owner_id is invalid",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1236,6 +1694,13 @@
   }
  },
  "session.input.activity.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1252,6 +1717,13 @@
   }
  },
  "session.input.attachment.create.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "allow_unbound must be a boolean",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1268,6 +1740,13 @@
   }
  },
  "session.input.attachment.delete.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1284,6 +1763,13 @@
   }
  },
  "session.input.attachment.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1300,6 +1786,13 @@
   }
  },
  "session.input.cancel.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1316,6 +1809,13 @@
   }
  },
  "session.input.claim.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1332,6 +1832,13 @@
   }
  },
  "session.input.finish.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "receipt_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1364,6 +1871,13 @@
   }
  },
  "session.input.queued.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "limit must be an integer from 1 through 100",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1380,6 +1894,13 @@
   }
  },
  "session.input.receipt.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1396,6 +1917,13 @@
   }
  },
  "session.input.receipt.upsert.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "receipt has invalid fields",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1444,6 +1972,13 @@
   }
  },
  "session.launch.local.create.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "local launch has invalid fields",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1460,6 +1995,13 @@
   }
  },
  "session.launch.local.finish.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "local launch outcome has invalid fields",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1476,6 +2018,13 @@
   }
  },
  "session.launch.local.resume.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "local resume has invalid fields",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1508,6 +2057,13 @@
   }
  },
  "session.prefix.resolve.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "prefix must be 1 to 36 lowercase UUID characters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1588,6 +2144,13 @@
   }
  },
  "session.repair.codex_launch_visibility.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1604,6 +2167,13 @@
   }
  },
  "session.runtime.apply.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "events must contain 1 through 1024 rows",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1620,6 +2190,13 @@
   }
  },
  "session.shadow_state.health.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1636,6 +2213,13 @@
   }
  },
  "session.shadow_state.read.batch.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_ids must contain 1 to 20 UUIDs",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1652,6 +2236,13 @@
   }
  },
  "session.shadow_state.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1716,6 +2307,13 @@
   }
  },
  "storage.cursor.activity.repair.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID and dry_run a boolean",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1764,6 +2362,13 @@
   }
  },
  "storage.media.exists.batch.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "media_hashes must contain at most 1000 lowercase SHA-256 values",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1780,6 +2385,13 @@
   }
  },
  "storage.media.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "media_hash must be lowercase SHA-256 hex",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1812,6 +2424,13 @@
   }
  },
  "storage.raw_object.exists.batch.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "envelope_ids must contain at most 1000 lowercase SHA-256 values",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1828,6 +2447,13 @@
   }
  },
  "storage.session.canary.lookup.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "max_age_seconds must be an integer from 1 through 3600",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1844,6 +2470,13 @@
   }
  },
  "storage.session.delete.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1860,6 +2493,13 @@
   }
  },
  "storage.session.owned.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a bounded non-empty string",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1876,6 +2516,13 @@
   }
  },
  "storage.session.projector.raw_manifest.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1892,6 +2539,13 @@
   }
  },
  "storage.session.projector.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1908,6 +2562,13 @@
   }
  },
  "storage.session.purge_manifest.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1924,6 +2585,13 @@
   }
  },
  "storage.session.raw_manifest.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1940,6 +2608,13 @@
   }
  },
  "storage.session.raw_neighborhood.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1956,6 +2631,13 @@
   }
  },
  "storage.session.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1972,6 +2654,13 @@
   }
  },
  "storage.session.relinked_legacy.reconcile.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -1988,6 +2677,13 @@
   }
  },
  "storage.session.render_generation.restore.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -2020,6 +2716,13 @@
   }
  },
  "storage.session.render_objects.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -2036,6 +2739,13 @@
   }
  },
  "storage.session.semantic_projection.repair.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -2052,6 +2762,13 @@
   }
  },
  "storage.session.timeline.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a bounded non-empty string",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -2100,6 +2817,13 @@
   }
  },
  "storage.session.title.dependency.acquire.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "provider must be a non-empty string",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -2116,6 +2840,13 @@
   }
  },
  "storage.session.title.dependency.fail.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "provider must be a non-empty string",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -2132,6 +2863,9 @@
   }
  },
  "storage.session.title.dependency.health.v2": {
+  "declared_nulls": {
+   "ok": true
+  },
   "empty": {
    "ok": true
   },
@@ -2144,6 +2878,13 @@
   }
  },
  "storage.session.title.dependency.reconcile.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "provider must be a non-empty string",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -2160,6 +2901,13 @@
   }
  },
  "storage.session.title.dependency.recover.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "provider must be a non-empty string",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -2176,6 +2924,13 @@
   }
  },
  "storage.session.title.fail.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -2192,6 +2947,13 @@
   }
  },
  "storage.source_epoch.manifest.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "source_epoch must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -2208,6 +2970,13 @@
   }
  },
  "storage.source_epoch.open.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "tenant_id must be a non-empty string",
+   "retry_after_ms": null,
+   "retryable": false
+  },
   "empty": {
    "code": "invalid_request",
    "details": {},
@@ -2224,6 +2993,9 @@
   }
  },
  "storage.telemetry.summary.v2": {
+  "declared_nulls": {
+   "ok": true
+  },
   "empty": {
    "ok": true
   },

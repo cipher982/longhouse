@@ -209,7 +209,7 @@ class _Route:
     handler: str
     params: frozenset[str] | None = None
     invalid_message: str | None = None
-    kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
+    kwargs: tuple[tuple[str, Any], ...] = ()
 
 
 class CatalogDaemon:
@@ -992,7 +992,7 @@ class CatalogDaemon:
             "_read_storage_session_raw_manifest",
             frozenset({"after_source_key", "limit", "owner_id", "session_id"}),
             "storage.session.projector.raw_manifest.v2 has invalid parameters",
-            {"projector": True},
+            (("projector", True),),
         ),
         "storage.session.render_manifest.v2": _Route("_read_storage_session_render_manifest"),
         "storage.session.render_objects.list.v2": _Route(
@@ -1133,7 +1133,7 @@ class CatalogDaemon:
         if route is not None:
             if route.params is not None and set(request.params) != route.params:
                 return self._error(request, "invalid_request", route.invalid_message)
-            return await getattr(self, route.handler)(request, **route.kwargs)
+            return await getattr(self, route.handler)(request, **dict(route.kwargs))
         if request.method in {"writer.admission.close.v2", "writer.admission.open.v2"}:
             if request.params:
                 return self._error(request, "invalid_request", f"{request.method} accepts no parameters")
