@@ -3466,9 +3466,10 @@ fn activity_evidence_from_phase_row(
     run_id: Option<&str>,
 ) -> ActivityEvidence {
     let raw_kind = row.phase.trim().to_string();
-    let kind = match raw_kind.as_str() {
-        "thinking" | "running" | "blocked" | "stalled" | "needs_user" | "idle" => raw_kind.clone(),
-        _ => "unknown".to_string(),
+    let kind = if crate::managed_phase_contract::is_wire_phase(&raw_kind) {
+        raw_kind.clone()
+    } else {
+        "unknown".to_string()
     };
     let reason_codes = if raw_kind == "finished" {
         // A provider phase alone has neither run nor process authority. Keep
