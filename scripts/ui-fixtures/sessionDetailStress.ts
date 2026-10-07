@@ -1937,8 +1937,8 @@ export function buildSessionConsoleFixture(): SessionDetailFixture {
 
 /**
  * The session rail's list: the timeline's first page, with the open session
- * plus neighbours spanning live work, an active question, an unread Console
- * result, failure, idle, ended and uncertain states across providers.
+ * plus neighbours spanning live work, an active question, auth required, an
+ * unread Console result, failure, idle, ended and uncertain states.
  */
 export function buildRailSessionsFixture(active: AgentSession): JsonObject {
   const now = SESSION_DETAIL_STRESS_NOW;
@@ -2056,6 +2056,29 @@ export function buildRailSessionsFixture(active: AgentSession): JsonObject {
         last_result_at: now,
         presentation: {
           primary: { key: "ended", label: "Run failed", tone: "blocked", observed_at: now },
+          access: null,
+          transcript: null,
+        },
+      }),
+    },
+    {
+      id: "rail-auth-required",
+      provider: "claude",
+      summary_title: "Provider sign-in required",
+      device_id: "cinder",
+      session_state: makeSessionState({
+        working_set: "history",
+        run: {
+          lifecycle: "ended",
+          started_at: "2026-04-15T15:30:00Z",
+          ended_at: now,
+          end_reason: "provider_auth_required",
+        },
+        activity: { state: "quiescent", raw_kind: null, tool: null, observed_at: now, valid_until: null },
+        delegation: { state: "none", count: 0, kinds: {}, source: "claude_hook", observed_at: now, valid_until: null, items: [], recent_items: [] },
+        last_result_at: now,
+        presentation: {
+          primary: { key: "provider_auth_required", label: "Provider authentication required", tone: "blocked", observed_at: now },
           access: null,
           transcript: null,
         },

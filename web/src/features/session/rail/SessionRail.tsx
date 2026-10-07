@@ -96,8 +96,8 @@ const TONE_FOR_LAMP: Record<StatusLampState, RailActiveSession["tone"]> = {
 };
 
 /**
- * A blocked tone also covers terminal failures and non-interactive provider
- * states. Only a pending question/approval says "Needs you".
+ * A blocked tone covers failures and authentication too. Only a live
+ * question/approval says "Needs you"; authentication has a separate flag.
  */
 export function railStatusFlag({
   lamp,
@@ -110,13 +110,11 @@ export function railStatusFlag({
   statusKey?: string | null;
   needsUser?: boolean;
 }): string | null {
-  if (
-    lamp === "failed" ||
-    statusKey === "launch_failed" ||
-    (statusKey === "ended" && statusTone === "blocked")
-  ) {
+  if (lamp === "failed") return "Failed";
+  if (statusKey === "launch_failed" || (statusKey === "ended" && statusTone === "blocked")) {
     return "Failed";
   }
+  if (statusKey === "provider_auth_required") return "Sign in";
   if (needsUser) return "Needs you";
   return null;
 }
@@ -293,7 +291,7 @@ function SessionRail({
     const hotkey = index < RAIL_HOTKEY_COUNT ? railHotkeyLabel(index, mac) : null;
     const host = row.host && sharedTitles.has(row.title) ? row.host : null;
     const flag = railStatusFlag(row);
-    const dotState = flag === "Failed" ? "failed" : flag === "Needs you" ? "waiting" : row.lamp;
+    const dotState = flag === "Failed" ? "failed" : flag ? "waiting" : row.lamp;
     const fullStatus = row.stateText || "status unknown";
     return (
       <li key={row.id}>

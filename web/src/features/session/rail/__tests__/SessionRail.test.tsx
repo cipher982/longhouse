@@ -115,9 +115,10 @@ describe("rail hotkeys", () => {
 });
 
 describe("rail status word", () => {
-  it("labels only active interactions as Needs you and keeps failures distinct", () => {
+  it("labels questions, authentication, and failures distinctly", () => {
     expect(railStatusFlag({ lamp: "waiting", needsUser: true })).toBe("Needs you");
     expect(railStatusFlag({ lamp: "waiting", needsUser: false })).toBeNull();
+    expect(railStatusFlag({ lamp: "idle", statusKey: "provider_auth_required" })).toBe("Sign in");
     expect(railStatusFlag({ lamp: "idle", statusKey: "ended", statusTone: "blocked" })).toBe("Failed");
     expect(railStatusFlag({ lamp: "failed" })).toBe("Failed");
     expect(railStatusFlag({ lamp: "idle", statusTone: "blocked" })).toBeNull();

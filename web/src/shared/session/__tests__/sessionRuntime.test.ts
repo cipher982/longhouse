@@ -184,14 +184,16 @@ describe("resolveSessionRuntimeState", () => {
 
     expect(runtime.needsAttention).toBe(false);
   });
-  it("does not treat a pending interaction hidden by a terminal failure as actionable", () => {
+  it("suppresses a stale interaction when a failed launch owns the headline", () => {
     const session_state = makeSessionStateFacts({
       pendingInteraction: true,
       activity: "quiescent",
+      launchState: "failed",
     });
+    session_state.run = { lifecycle: "ended", end_reason: "provider_launch_failed" };
     session_state.presentation.primary = {
-      key: "ended",
-      label: "Run failed",
+      key: "launch_failed",
+      label: "Launch failed",
       tone: "blocked",
       observed_at: null,
     };
