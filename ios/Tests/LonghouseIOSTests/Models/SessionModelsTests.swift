@@ -212,6 +212,7 @@ struct SessionModelsTests {
             "host": {"state": "online"},
             "presentation": {
               "primary": {"key": "idle", "label": "Idle", "tone": "idle"},
+              "signal": {"state": "quiet", "valid_until": null},
               "access": {"key": "live_control", "label": "Live control", "tone": "live"}
             }
           },
@@ -415,6 +416,13 @@ struct SessionModelsTests {
         var unsignalledClosed = makeSessionStateFacts(activity: "executing", closed: true, activityValidUntil: "2026-08-23T12:10:00Z")
         unsignalledClosed.signal = nil
         #expect(summary(unsignalledClosed).spokenStatusLabel(asOf: now) == "Closed")
+        let closedFailure = makeSessionStateFacts(
+            activity: "unknown",
+            closed: true,
+            primaryOverride: SessionStateLabel(key: "ended", label: "Run failed", tone: "blocked", observedAt: nil)
+        )
+        #expect(closedFailure.terminalFailureLabel == nil)
+        #expect(summary(closedFailure).spokenStatusLabel(asOf: later) == "Closed")
     }
 
     @Test
@@ -485,6 +493,10 @@ struct SessionModelsTests {
                 of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
                 with: #""primary": {"key": "needs_answer", "label": "Needs answer", "tone": "blocked"}"#
             )
+            .replacingOccurrences(
+                of: #""signal": {"state": "quiet", "valid_until": null}"#,
+                with: #""signal": {"state": "attention", "valid_until": null}"#
+            )
             .replacingOccurrences(of: #""headline": "Idle","#, with: #""headline": "Needs answer","#)
             .replacingOccurrences(of: #""detail": "Waiting for next prompt","#, with: #""detail": "Codex needs a storage decision.","#)
             .replacingOccurrences(of: #""phase_label": "Idle","#, with: #""phase_label": "Needs answer","#)
@@ -513,10 +525,15 @@ struct SessionModelsTests {
             var json = apiSessionJSON()
                 .replacingOccurrences(of: #""activity": {"state": "quiescent"}"#, with: interaction)
             if canRespond {
-                json = json.replacingOccurrences(
-                    of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
-                    with: #""primary": {"key": "needs_answer", "label": "Needs answer", "tone": "blocked"}"#
-                )
+                json = json
+                    .replacingOccurrences(
+                        of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
+                        with: #""primary": {"key": "needs_answer", "label": "Needs answer", "tone": "blocked"}"#
+                    )
+                    .replacingOccurrences(
+                        of: #""signal": {"state": "quiet", "valid_until": null}"#,
+                        with: #""signal": {"state": "attention", "valid_until": null}"#
+                    )
             }
             let detail = try JSONDecoder.snakeCase
                 .decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8))
@@ -581,6 +598,10 @@ struct SessionModelsTests {
                 of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
                 with: #""primary": {"key": "ended", "label": "Run failed", "tone": "blocked"}"#
             )
+            .replacingOccurrences(
+                of: #""signal": {"state": "quiet", "valid_until": null}"#,
+                with: #""signal": {"state": "attention", "valid_until": null}"#
+            )
             .replacingOccurrences(of: #""state": "needs_user","#, with: #""state": "blocked","#)
             .replacingOccurrences(of: #""tone": "idle","#, with: #""tone": "blocked","#)
             .replacingOccurrences(of: #""headline": "Idle","#, with: #""headline": "Run failed","#)
@@ -608,6 +629,10 @@ struct SessionModelsTests {
                 of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
                 with: #""primary": {"key": "needs_answer", "label": "Needs answer", "tone": "blocked"}"#
             )
+            .replacingOccurrences(
+                of: #""signal": {"state": "quiet", "valid_until": null}"#,
+                with: #""signal": {"state": "attention", "valid_until": null}"#
+            )
         let detail = try JSONDecoder.snakeCase
             .decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8))
             .sessionDetail
@@ -626,6 +651,10 @@ struct SessionModelsTests {
             .replacingOccurrences(
                 of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
                 with: #""primary": {"key": "activity_unknown", "label": "Activity unknown", "tone": "quiet"}"#
+            )
+            .replacingOccurrences(
+                of: #""signal": {"state": "quiet", "valid_until": null}"#,
+                with: #""signal": {"state": "unknown", "valid_until": null}"#
             )
         let detail = try JSONDecoder.snakeCase
             .decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8))

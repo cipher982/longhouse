@@ -285,16 +285,17 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
 
 
 extension SessionSummary {
-    /// What VoiceOver says for the row's status: the server's primary label,
-    /// verbatim, the same words the row shows. The client adds nothing but the
-    /// freshness gate: a work claim whose evidence window has passed on the
-    /// reader's clock is spoken as "Activity uncertain", never as the cached
-    /// "Using Bash" (the ledger's `.uncertain` verdict).
+    /// What VoiceOver says for the row's status: explicit closure first, then
+    /// the server's primary label verbatim. The client adds no new status
+    /// except its freshness gate: a work claim whose evidence window has passed
+    /// on the reader's clock is spoken as "Activity uncertain", never as the
+    /// cached "Using Bash" (the ledger's `.uncertain` verdict).
     func spokenStatusLabel(asOf now: Date = Date()) -> String {
+        if isClosed { return "Closed" }
         if let failureLabel = stateFacts.terminalFailureLabel {
             return failureLabel
         }
-        if !isClosed, stateFacts.workClaimExpired(asOf: now) {
+        if stateFacts.workClaimExpired(asOf: now) {
             return "Activity uncertain"
         }
         let label = timelineStatusLabel

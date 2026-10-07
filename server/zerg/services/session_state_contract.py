@@ -1208,10 +1208,9 @@ def _primary(
             tone="blocked",
             observed_at=run.ended_at,
         )
-    # A run records one attempt. Fresh activity and live delegated work above
-    # remain the session's primary until their own evidence expires.
-    # Keep a terminal failure visible when its stale interaction cannot be
-    # answered; an answerable question still owns the primary presentation.
+    # A terminal failure is a durable outcome, not an answerable interaction.
+    # Fresh work, authentication, or an answerable interaction above retains
+    # primary precedence.
     if run is not None and run.lifecycle == "ended" and run.end_reason in FAILED_RUN_END_REASONS:
         return SessionPresentationLabel(
             key="ended",

@@ -31,7 +31,7 @@ extension SessionStateFacts {
     }
 
     var terminalFailureLabel: String? {
-        guard let primary else { return nil }
+        guard dispositionState != "closed", let primary else { return nil }
         guard primary.key == "launch_failed" || (primary.key == "ended" && primary.tone == "blocked") else {
             return nil
         }

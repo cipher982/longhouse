@@ -111,6 +111,17 @@ def test_an_unanswerable_interaction_is_not_attention():
     assert signal.state == "quiet"
 
 
+def test_failed_run_is_durable_attention_not_a_response_wait():
+    primary, signal = _signal(
+        run=SessionRunFacts(lifecycle="ended", end_reason="run_failed", ended_at=NOW),
+        activity=SessionActivityFacts(state="quiescent"),
+    )
+    assert primary.key == "ended"
+    assert primary.label == "Run failed"
+    assert signal.state == "attention"
+    assert signal.valid_until is None
+
+
 def test_stalled_is_attention_bounded_by_its_evidence():
     primary, signal = _signal(run=_running_run(), activity=SessionActivityFacts(state="stalled", valid_until=LATER))
     assert primary.key == "stalled"
