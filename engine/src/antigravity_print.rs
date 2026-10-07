@@ -1105,29 +1105,45 @@ impl AntigravityPrintSink {
                 "client_request_id": self.client_request_id
             }
         });
-        match crate::outbox::enqueue_runtime_event(
-            &self.runtime_events_outbox_dir,
-            &terminal_event,
-        ) {
-            Ok(()) => crate::status_slot::retire_console_run(
+        let terminal_error = (terminal_state == "run_failed")
+            .then(|| stderr.clone())
+            .flatten();
+        let handoff = crate::turn_claims::default_registry().and_then(|registry| {
+            crate::outbox::retain_and_enqueue_terminal_event(
+                &registry,
+                &self.runtime_events_outbox_dir,
+                &self.run_id,
+                terminal_state,
+                terminal_error,
+                terminal_event.clone(),
+            )
+        });
+        match handoff {
+            Ok((_, true)) => crate::status_slot::retire_console_run(
                 "antigravity",
                 ANTIGRAVITY_PRINT_ADAPTER,
                 &self.session_id,
                 &self.run_id,
             ),
-            Err(error) => eprintln!(
-                "[antigravity-print] terminal record enqueue failed for {} run {}: {error:#}; keeping the status slot",
+            Ok((_, false)) => eprintln!(
+                "[antigravity-print] terminal record remains pending for {} run {}; keeping the status slot",
                 self.session_id,
                 self.run_id
             ),
+            Err(error) => {
+                eprintln!(
+                    "[antigravity-print] terminal claim write failed for {} run {}: {error:#}; keeping the status slot",
+                    self.session_id,
+                    self.run_id
+                );
+                if let Err(error) = crate::outbox::enqueue_runtime_event(
+                    &self.runtime_events_outbox_dir,
+                    &terminal_event,
+                ) {
+                    eprintln!("[antigravity-print] runtime outbox write failed: {error}");
+                }
+            }
         }
-        crate::turn_claims::mark_terminal(
-            &self.run_id,
-            terminal_state,
-            (terminal_state == "run_failed")
-                .then(|| stderr.clone())
-                .flatten(),
-        );
     }
 
     fn persist_local_phase(
@@ -1936,14 +1952,7 @@ mod tests {
                 std::fs::write(&outbox, b"outbox path is a file").unwrap();
                 let registry = crate::turn_claims::default_registry().unwrap();
                 registry
-                    .claim(
-                        &run_id,
-                        &session_id,
-                        &thread_id,
-                        None,
-                        None,
-                        "antigravity",
-                    )
+                    .claim(&run_id, &session_id, &thread_id, None, None, "antigravity")
                     .unwrap();
                 let sink = AntigravityPrintSink {
                     session_id: session_id.clone(),
@@ -1970,7 +1979,10 @@ mod tests {
 
                 std::fs::remove_file(&outbox).unwrap();
                 sink.post_terminal("run_completed", Some(0), None).await;
-                assert_eq!(crate::outbox::collect_runtime_event_outbox(&outbox).len(), 1);
+                assert_eq!(
+                    crate::outbox::collect_runtime_event_outbox(&outbox).len(),
+                    1
+                );
                 assert!(!crate::status_slot::read_all(&status_dir)
                     .iter()
                     .any(|slot| slot.session_id == session_id));

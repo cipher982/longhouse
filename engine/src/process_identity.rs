@@ -17,6 +17,8 @@ pub const PID_REUSE_TOLERANCE_SECS: i64 = 120;
 // two-second scheduling hiccup as an unavailable inventory makes the whole
 // local projection yellow even though the durable managed state is readable.
 const PROCESS_INVENTORY_TIMEOUT: Duration = Duration::from_secs(10);
+const TARGETED_PROCESS_INVENTORY_TIMEOUT: Duration = Duration::from_secs(1);
+pub(crate) const TARGETED_PROCESS_FACT_BATCH_MAX: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessFact {
@@ -124,6 +126,47 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
         return None;
     }
     Some(facts)
+}
+/// Read one bounded batch of exact process identities without enumerating the
+/// rest of the machine. A successful result is a complete observation for the
+/// requested PIDs: omitted PIDs were absent, while a failed/partial `ps` pass
+/// remains unavailable.
+pub fn try_collect_process_facts_for_pids(pids: &[u32]) -> Option<HashMap<u32, ProcessFact>> {
+    if pids.len() > TARGETED_PROCESS_FACT_BATCH_MAX || pids.iter().any(|pid| *pid <= 1) {
+        return None;
+    }
+    let mut requested = pids.to_vec();
+    requested.sort_unstable();
+    requested.dedup();
+    if requested.is_empty() {
+        return Some(HashMap::new());
+    }
+
+    let pid_list = requested
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut command = Command::new("ps");
+    command.args(["-p", &pid_list, "-o", "pid=,tty=,stat=,lstart=,command="]);
+    let output = output_with_timeout(command, TARGETED_PROCESS_INVENTORY_TIMEOUT)?;
+    if !output.status.success() {
+        if output.status.code() == Some(1) && output.stderr.is_empty() {
+            return Some(HashMap::new());
+        }
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line_count = text.lines().filter(|line| !line.trim().is_empty()).count();
+    let mut facts = HashMap::with_capacity(requested.len().min(line_count));
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let (pid, fact) = parse_process_fact_for_inventory(line)?;
+        if requested.binary_search(&pid).is_err() || facts.insert(pid, fact).is_some() {
+            return None;
+        }
+    }
+    (facts.len() == line_count).then_some(facts)
 }
 
 #[cfg(unix)]

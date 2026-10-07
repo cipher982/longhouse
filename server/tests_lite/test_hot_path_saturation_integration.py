@@ -448,3 +448,60 @@ def test_control_flood_cannot_spend_machine_liveness_admission(live: LiveCatalog
     machines = client.get("/agents/machines/health", headers=headers)
     assert machines.status_code == 200, machines.text
     assert machines.json()["machines"][0]["version"] == HEARTBEAT_BODY["version"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [("json", 422), ("schema", 422), ("zstd", 400), ("oversize", 413)],
+)
+def test_invalid_runtime_bodies_spend_only_observation_admission(live: LiveCatalog, client, monkeypatch, failure, expected):
+    from zerg.dependencies import agents_auth
+    from zerg.routers import runtime
+
+    monkeypatch.setattr(agents_auth, "_RATE_LIMIT_MAX_REQUESTS", 2)
+    monkeypatch.setattr(agents_auth, "_rate_buckets", {})
+    monkeypatch.setattr(runtime, "_MAX_BATCH_BYTES", 4096)
+    owner = live.create_user(OWNER_EMAIL)
+    headers = {
+        "X-Agents-Token": live.create_device_token(owner_id=owner, device_id=DEVICE_ID),
+        "Content-Type": "application/json",
+    }
+    body = b"{"
+    if failure == "schema":
+        body = b'{"events": [{"kind": "invalid-kind"}]}'
+    elif failure == "zstd":
+        body = b"not-zstd"
+        headers["Content-Encoding"] = "zstd"
+    elif failure == "oversize":
+        body = b"x" * 4097
+    for _ in range(2):
+        response = client.post("/agents/runtime/events/batch", content=body, headers=headers)
+        assert response.status_code == expected, response.text
+    refused = client.post("/agents/runtime/events/batch", content=body, headers=headers)
+    assert refused.status_code == 429, refused.text
+    assert int(refused.headers["Retry-After"]) > 0
+
+    headers.pop("Content-Encoding", None)
+    session_id = str(uuid4())
+    launched = client.post(
+        "/sessions/managed-local/this-device",
+        json={"session_id": session_id, "cwd": "/tmp/admission-proof", "provider": "codex"},
+        headers=headers,
+    )
+    assert launched.status_code == 200, launched.text
+    terminal = {
+        "runtime_key": f"codex:{session_id}",
+        "session_id": session_id,
+        "run_id": launched.json()["run_id"],
+        "provider": "codex",
+        "device_id": DEVICE_ID,
+        "source": "codex_app_server",
+        "kind": "terminal_signal",
+        "occurred_at": datetime.now(UTC).isoformat(),
+        "dedupe_key": f"malformed-flood-terminal-{session_id}",
+        "payload": {"terminal_state": "session_ended", "terminal_source": "codex_app_server"},
+    }
+    ended = client.post("/agents/runtime/events/batch", json={"events": [terminal]}, headers=headers)
+    assert ended.status_code == 200, ended.text
+    heartbeat = client.post("/agents/heartbeat", json=HEARTBEAT_BODY, headers=headers)
+    assert heartbeat.status_code == 204, heartbeat.text

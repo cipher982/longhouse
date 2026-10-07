@@ -14,6 +14,8 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
+from fastapi.concurrency import run_in_threadpool
+from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session
 
@@ -27,6 +29,7 @@ from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import enforce_runtime_request_lane
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.request_db import no_request_db
 from zerg.metrics import event_age_at_ingest_seconds
 from zerg.services.catalogd_supervisor import get_catalogd_client
@@ -99,9 +102,30 @@ class _RuntimeBatchRoute(APIRoute):
         handler = super().get_route_handler()
 
         async def decoding_handler(request: Request) -> Response:
-            return await handler(_RuntimeBatchRequest(request.scope, request.receive))
+            batch_request = _RuntimeBatchRequest(request.scope, request.receive)
+            try:
+                return await handler(batch_request)
+            except RequestValidationError:
+                await _admit_rejected_runtime_body(batch_request)
+                raise
+            except HTTPException as exc:
+                if exc.status_code in {400, 413, 422}:
+                    await _admit_rejected_runtime_body(batch_request)
+                raise
 
         return decoding_handler
+
+
+async def _admit_rejected_runtime_body(request: Request) -> None:
+    """Invalid bodies cannot bypass telemetry admission or spend lifecycle quota."""
+    rate_key = getattr(request.state, "agents_rate_key", None)
+    if rate_key is None:
+        # JSON/decompression can fail before FastAPI executes dependencies.
+        # Authenticate the rejected request before charging a real principal.
+        await run_in_threadpool(verify_agents_token, request)
+        rate_key = request.state.agents_rate_key
+    if rate_key.endswith(":runtime") or rate_key == "auth-disabled":
+        enforce_runtime_request_lane(request, lifecycle=False)
 
 
 router = APIRouter(prefix="/agents/runtime", tags=["agents"], route_class=_RuntimeBatchRoute)

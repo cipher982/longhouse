@@ -1317,32 +1317,42 @@ impl PiPrintSink {
             "dedupe_key": format!("pi-print:{}:{}:terminal", self.session_id, self.run_id),
             "payload": payload
         });
-        match crate::outbox::enqueue_runtime_event(
-            &self.runtime_events_outbox_dir,
-            &terminal_event,
-        ) {
-            Ok(()) => crate::status_slot::retire_console_run(
+        let terminal_error = (terminal_state == "run_failed")
+            .then(|| stderr.clone())
+            .flatten();
+        let handoff = crate::turn_claims::default_registry().and_then(|registry| {
+            crate::outbox::retain_and_enqueue_terminal_event(
+                &registry,
+                &self.runtime_events_outbox_dir,
+                &self.run_id,
+                terminal_state,
+                terminal_error,
+                terminal_event.clone(),
+            )
+        });
+        match handoff {
+            Ok((_, true)) => crate::status_slot::retire_console_run(
                 "pi",
                 PI_PRINT_ADAPTER,
                 &self.session_id,
                 &self.run_id,
             ),
-            Err(error) => eprintln!(
-                "[pi-print] terminal record enqueue failed for {} run {}: {error:#}; keeping the status slot",
-                self.session_id,
-                self.run_id
+            Ok((_, false)) => eprintln!(
+                "[pi-print] terminal record remains pending for {} run {}; keeping the status slot",
+                self.session_id, self.run_id
             ),
-        }
-        crate::turn_claims::mark_terminal(
-            &self.run_id,
-            terminal_state,
-            (terminal_state == "run_failed")
-                .then(|| stderr.clone())
-                .flatten(),
-        );
-        if let (Some(state), Some(count)) = (invocation_state, pending_count) {
-            if let Ok(registry) = crate::turn_claims::default_registry() {
-                let _ = registry.record_invocation_state(&self.run_id, state, count);
+            Err(error) => {
+                eprintln!(
+                    "[pi-print] terminal claim write failed for {} run {}: {error:#}; keeping the status slot",
+                    self.session_id,
+                    self.run_id
+                );
+                if let Err(error) = crate::outbox::enqueue_runtime_event(
+                    &self.runtime_events_outbox_dir,
+                    &terminal_event,
+                ) {
+                    eprintln!("[pi-print] runtime outbox write failed: {error}");
+                }
             }
         }
     }
@@ -2260,7 +2270,10 @@ if args[:2] == ["--mode", "rpc"]:
                     Some(2),
                 )
                 .await;
-                assert_eq!(crate::outbox::collect_runtime_event_outbox(&outbox).len(), 1);
+                assert_eq!(
+                    crate::outbox::collect_runtime_event_outbox(&outbox).len(),
+                    1
+                );
                 assert!(!crate::status_slot::read_all(&status_dir)
                     .iter()
                     .any(|slot| slot.session_id == session_id));

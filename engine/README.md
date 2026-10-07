@@ -30,13 +30,15 @@ degrades with `runtime_events_backlogged` when an observed event is at least
 60s old. Sauron polls `GET /api/agents/machines/health` once per minute and
 alerts at that same reported-age threshold.
 
-Current status is asserted only for the exact execution owner. Ending a
-response retires its run's slot only after durable terminal-event enqueue,
-without deleting pending background work or history; delayed callbacks cannot
-remove or reclaim a successor's status. Unknown ownership never renews remote
-liveness; its reconstructable observation expires after 24 hours with an
-exact-version guard, without declaring execution ended. Runtime lifecycle
-records have independent admission and cooldowns from replaceable observations.
+Current status is asserted only for the exact execution owner. A response's
+exact terminal event is persisted atomically with its run claim before outbox
+handoff; failed handoffs replay that retained event after restart. Its status
+retires only after confirmed durable handoff, without deleting pending work or
+history; delayed callbacks cannot remove or reclaim a successor's status.
+Unknown ownership never renews remote liveness; its reconstructable observation
+expires after 24 hours with an exact-version guard, without declaring execution
+ended. Runtime lifecycle records have independent admission and cooldowns from
+replaceable observations.
 Helm and Console ownership are revalidated together on the existing managed
 scan cadence, using one process inventory. Unknown lookups retry on the next
 scan rather than being cached as permanent failure.

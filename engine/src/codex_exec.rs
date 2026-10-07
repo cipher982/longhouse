@@ -1726,34 +1726,24 @@ fn settle_codex_restart_claim(
     detail: &str,
 ) -> Result<bool> {
     let event = codex_exec_recovery_terminal_event(claim, machine_name, "run_cancelled", detail);
-    if let Err(error) = crate::outbox::enqueue_runtime_event(outbox_dir, &event) {
-        tracing::warn!(
-            %error,
-            run_id = %claim.run_id,
-            "Failed to enqueue recovered Codex Console terminal event"
-        );
-        return Ok(false);
+    match crate::outbox::retain_and_enqueue_terminal_event(
+        registry,
+        outbox_dir,
+        &claim.run_id,
+        "run_cancelled",
+        Some(detail.to_string()),
+        event,
+    ) {
+        Ok((_, safe_to_retire)) => Ok(safe_to_retire),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                run_id = %claim.run_id,
+                "Failed to retain recovered Codex Console terminal event"
+            );
+            Ok(false)
+        }
     }
-    if let Err(error) =
-        registry.mark_terminal(&claim.run_id, "run_cancelled", Some(detail.to_string()))
-    {
-        tracing::warn!(
-            %error,
-            run_id = %claim.run_id,
-            "Failed to mark recovered Codex Console turn terminal"
-        );
-        return Ok(false);
-    }
-    if let Err(error) =
-        registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)
-    {
-        tracing::warn!(
-            %error,
-            run_id = %claim.run_id,
-            "Failed to mark recovered Codex Console invocation closed"
-        );
-    }
-    Ok(true)
 }
 
 fn reconcile_codex_exec_claims(
@@ -3213,14 +3203,6 @@ impl CodexExecRuntimeSink {
         invocation_state: InvocationState,
         pending_count: usize,
     ) {
-        crate::turn_claims::mark_terminal(&self.run_id, terminal_state, stderr_tail.clone());
-        if let Ok(registry) = crate::turn_claims::default_registry() {
-            let _ = registry.record_invocation_state(
-                &self.run_id,
-                invocation_state.as_str(),
-                pending_count,
-            );
-        }
         let observed_at = Utc::now();
         self.persist_local_phase("finished", None, observed_at);
         let terminal_event = json!({
@@ -3253,24 +3235,63 @@ impl CodexExecRuntimeSink {
                 }
             }
         });
-        let enqueue = crate::config::get_agent_runtime_events_outbox_dir()
-            .and_then(|outbox| crate::outbox::enqueue_runtime_event(&outbox, &terminal_event));
-        match enqueue {
-            Ok(()) => crate::status_slot::retire_console_run(
+        let handoff = crate::turn_claims::default_registry().and_then(|registry| {
+            crate::config::get_agent_runtime_events_outbox_dir().and_then(|outbox| {
+                crate::outbox::retain_and_enqueue_terminal_event(
+                    &registry,
+                    &outbox,
+                    &self.run_id,
+                    terminal_state,
+                    stderr_tail.clone(),
+                    terminal_event.clone(),
+                )
+            })
+        });
+        let (direct_event, safe_to_retire) = match handoff {
+            Ok((event, safe_to_retire)) => (event, safe_to_retire),
+            Err(error) => {
+                eprintln!(
+                    "[codex-exec] terminal claim write failed for {} run {}: {error:#}; keeping the status slot",
+                    self.session_id,
+                    self.run_id
+                );
+                match crate::config::get_agent_runtime_events_outbox_dir().and_then(|outbox| {
+                    crate::outbox::enqueue_runtime_event_for_handoff(&outbox, &terminal_event)
+                }) {
+                    Ok(true) => {}
+                    Ok(false) => eprintln!(
+                        "[codex-exec] terminal outbox write was dropped for {} run {}; keeping the status slot",
+                        self.session_id,
+                        self.run_id
+                    ),
+                    Err(error) => eprintln!(
+                        "[codex-exec] terminal record enqueue failed for {} run {}: {error:#}; keeping the status slot",
+                        self.session_id,
+                        self.run_id
+                    ),
+                }
+                (Some(terminal_event), false)
+            }
+        };
+        if safe_to_retire {
+            crate::status_slot::retire_console_run(
                 "codex",
                 CODEX_EXEC_RUNTIME_SOURCE,
                 &self.session_id,
                 &self.run_id,
-            ),
-            Err(error) => eprintln!(
-                "[codex-exec] terminal record enqueue failed for {} run {}: {error:#}; keeping the status slot",
+            );
+        } else {
+            eprintln!(
+                "[codex-exec] terminal record remains pending for {} run {}; keeping the status slot",
                 self.session_id,
                 self.run_id
-            ),
+            );
         }
-        // Preserve the low-latency direct pump; the outbox above is the durable
-        // handoff and protects the terminal even if that pump later fails.
-        self.post_events(vec![terminal_event]).await;
+        // Keep the low-latency pump alongside the durable outbox handoff. It
+        // receives the claim's exact stored event, not a freshly rebuilt retry.
+        if let Some(event) = direct_event {
+            self.post_events(vec![event]).await;
+        }
     }
 
     fn persist_local_provider_binding(

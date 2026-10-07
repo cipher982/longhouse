@@ -78,7 +78,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-const CLAIM_SCHEMA_VERSION: u32 = 6;
+const CLAIM_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct OwnedProcessIdentity {
@@ -144,6 +144,12 @@ pub struct TurnClaim {
     pub owned_processes: Vec<OwnedProcessIdentity>,
     pub result: Option<Value>,
     pub error: Option<String>,
+    /// Exact terminal runtime event retained until durable outbox handoff.
+    #[serde(default)]
+    pub terminal_event: Option<Value>,
+    /// True only after this exact event has been durably handed to the outbox.
+    #[serde(default)]
+    pub terminal_event_handed_off: bool,
 }
 
 impl TurnClaim {
@@ -199,7 +205,7 @@ impl TurnClaimRegistry {
         validate_id(run_id, "run_id")?;
         validate_id(session_id, "session_id")?;
         validate_id(thread_id, "thread_id")?;
-        self.ensure_root()?;
+        let _lock = self.lock_run(run_id)?;
         let path = self.claim_path(run_id);
         let now = Utc::now().to_rfc3339();
         let claim = TurnClaim {
@@ -236,6 +242,8 @@ impl TurnClaimRegistry {
             owned_processes: Vec::new(),
             result: None,
             error: None,
+            terminal_event: None,
+            terminal_event_handed_off: false,
         };
         let bytes = serde_json::to_vec_pretty(&claim)?;
         match OpenOptions::new().write(true).create_new(true).open(&path) {
@@ -243,6 +251,8 @@ impl TurnClaimRegistry {
                 set_private_file_permissions(&file)?;
                 file.write_all(&bytes)?;
                 file.sync_all()?;
+                drop(file);
+                crate::outbox::sync_directory(&self.root)?;
                 Ok(ClaimOutcome::Acquired)
             }
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {
@@ -263,7 +273,7 @@ impl TurnClaimRegistry {
             session_dir.is_absolute(),
             "OMP pending session directory must be absolute"
         );
-        let mut claim = self.read(run_id)?;
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
         anyhow::ensure!(
             claim.provider.eq_ignore_ascii_case("omp") && claim.state == "claimed",
             "OMP session directory can only be reserved on a claimed OMP turn"
@@ -288,7 +298,10 @@ impl TurnClaimRegistry {
         adapter: &str,
         result: Value,
     ) -> Result<TurnClaim> {
-        let mut claim = self.read(run_id)?;
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
+        if claim.state == "terminal" || claim.state == "failed" || claim.terminal_event.is_some() {
+            return Ok(claim);
+        }
         claim.state = "spawned".to_string();
         claim.pid = pid;
         claim.process_group_id = process_group_id;
@@ -326,7 +339,10 @@ impl TurnClaimRegistry {
         stderr_path: &str,
         result: Value,
     ) -> Result<TurnClaim> {
-        let mut claim = self.read(run_id)?;
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
+        if claim.state == "terminal" || claim.state == "failed" || claim.terminal_event.is_some() {
+            return Ok(claim);
+        }
         claim.state = "spawned".to_string();
         claim.pid = Some(pid);
         claim.process_group_id = Some(process_group_id);
@@ -354,7 +370,10 @@ impl TurnClaimRegistry {
         origin: &str,
         adopted_parked_invocation: bool,
     ) -> Result<TurnClaim> {
-        let mut claim = self.read(run_id)?;
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
+        if claim.state == "terminal" || claim.state == "failed" || claim.terminal_event.is_some() {
+            return Ok(claim);
+        }
         claim.origin = Some(origin.to_string());
         claim.adopted_parked_invocation = adopted_parked_invocation;
         claim.invocation_state = Some("responding".to_string());
@@ -369,7 +388,7 @@ impl TurnClaimRegistry {
         invocation_state: &str,
         pending_count: usize,
     ) -> Result<TurnClaim> {
-        let mut claim = self.read(run_id)?;
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
         claim.invocation_state = Some(invocation_state.to_string());
         claim.pending_count = pending_count;
         claim.updated_at = Utc::now().to_rfc3339();
@@ -378,7 +397,7 @@ impl TurnClaimRegistry {
     }
 
     pub fn mark_cancel_requested(&self, run_id: &str) -> Result<TurnClaim> {
-        let mut claim = self.read(run_id)?;
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
         if claim.state != "spawned" {
             anyhow::bail!("turn claim {run_id} is not an active invocation");
         }
@@ -394,7 +413,7 @@ impl TurnClaimRegistry {
         stdout_offset: u64,
         seq: u64,
     ) -> Result<TurnClaim> {
-        let mut claim = self.read(run_id)?;
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
         if stdout_offset < claim.projected_stdout_offset || seq < claim.projected_seq {
             anyhow::bail!("turn claim {run_id} projection checkpoint cannot move backwards");
         }
@@ -410,7 +429,7 @@ impl TurnClaimRegistry {
         run_id: &str,
         observed: Vec<OwnedProcessIdentity>,
     ) -> Result<TurnClaim> {
-        let mut claim = self.read(run_id)?;
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
         if claim.state != "spawned" {
             return Ok(claim);
         }
@@ -463,7 +482,7 @@ impl TurnClaimRegistry {
         provider_thread_id: &str,
         source_path: &Path,
     ) -> Result<TurnClaim> {
-        let mut claim = self.read(run_id)?;
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
         anyhow::ensure!(
             claim.provider == "omp" && claim.state == "spawned",
             "only a spawned OMP invocation can reserve its reported source"
@@ -499,7 +518,7 @@ impl TurnClaimRegistry {
         provider_thread_id: &str,
         source_path: Option<&str>,
     ) -> Result<TurnClaim> {
-        let mut claim = self.read(run_id)?;
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
         claim.provider_thread_id = Some(provider_thread_id.to_string());
         claim.provider_identity_confirmed = true;
         claim.source_path = source_path.map(str::to_string);
@@ -509,7 +528,10 @@ impl TurnClaimRegistry {
     }
 
     pub fn mark_failed(&self, run_id: &str, error: &str) -> Result<TurnClaim> {
-        let mut claim = self.read(run_id)?;
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
+        if claim.state == "terminal" || claim.terminal_event.is_some() {
+            return Ok(claim);
+        }
         claim.state = "failed".to_string();
         claim.error = Some(error.to_string());
         claim.updated_at = Utc::now().to_rfc3339();
@@ -523,7 +545,7 @@ impl TurnClaimRegistry {
         terminal_state: &str,
         error: Option<String>,
     ) -> Result<TurnClaim> {
-        let mut claim = self.read(run_id)?;
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
         if claim.state == "terminal" || claim.state == "failed" {
             return Ok(claim);
         }
@@ -542,6 +564,119 @@ impl TurnClaimRegistry {
         Ok(claim)
     }
 
+    /// Atomically record this run's terminal fact and its exact runtime event.
+    /// A previously retained event is immutable; retries always hand off that
+    /// original payload, including its original timestamp and dedupe key.
+    /// Returns the exact pending event to enqueue, or `None` after handoff or
+    /// when a conflicting terminal fact already owns this run.
+    pub fn mark_terminal_with_event(
+        &self,
+        run_id: &str,
+        terminal_state: &str,
+        error: Option<String>,
+        event: Value,
+    ) -> Result<Option<Value>> {
+        anyhow::ensure!(
+            event.get("kind").and_then(Value::as_str) == Some("terminal_signal"),
+            "retained event for run {run_id} is not a terminal signal"
+        );
+        anyhow::ensure!(
+            event.get("run_id").and_then(Value::as_str) == Some(run_id),
+            "terminal event run_id does not match claim {run_id}"
+        );
+        anyhow::ensure!(
+            event
+                .pointer("/payload/terminal_state")
+                .and_then(Value::as_str)
+                == Some(terminal_state),
+            "terminal event state does not match claim {run_id}"
+        );
+
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
+        if claim.terminal_event_handed_off {
+            return Ok(None);
+        }
+        if claim.terminal_event.is_some() {
+            return Ok(claim.terminal_event);
+        }
+
+        let already_terminal = claim.state == "terminal" || claim.state == "failed";
+        if already_terminal {
+            let recorded_state = claim
+                .result
+                .as_ref()
+                .and_then(|result| result.get("terminal_state"))
+                .and_then(Value::as_str);
+            if recorded_state.is_some_and(|recorded| recorded != terminal_state) {
+                return Ok(None);
+            }
+        } else {
+            claim.state = "terminal".to_string();
+            claim.error = error;
+        }
+        claim.updated_at = Utc::now().to_rfc3339();
+        if let Some(result) = claim.result.as_mut().and_then(Value::as_object_mut) {
+            result.insert(
+                "terminal_state".to_string(),
+                Value::String(terminal_state.to_string()),
+            );
+        } else {
+            claim.result = Some(serde_json::json!({"terminal_state": terminal_state}));
+        }
+        if let Some(invocation) = event.pointer("/payload/invocation") {
+            if let Some(state) = invocation.get("state").and_then(Value::as_str) {
+                claim.invocation_state = Some(state.to_string());
+            }
+            if let Some(pending_count) = invocation
+                .get("pending_count")
+                .and_then(Value::as_u64)
+                .and_then(|count| usize::try_from(count).ok())
+            {
+                claim.pending_count = pending_count;
+            }
+        }
+        claim.terminal_event = Some(event);
+        self.write(&claim)?;
+        Ok(claim.terminal_event)
+    }
+
+    /// Exact event still needing a durable outbox handoff, if any.
+    pub fn pending_terminal_event(&self, run_id: &str) -> Result<Option<Value>> {
+        let claim = self.read(run_id)?;
+        Ok(if claim.terminal_event_handed_off {
+            None
+        } else {
+            claim.terminal_event
+        })
+    }
+
+    /// Acknowledge only the exact retained event after its durable handoff.
+    /// False means the event no longer matches this run and must not retire it.
+    pub fn mark_terminal_event_handed_off(&self, run_id: &str, event: &Value) -> Result<bool> {
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
+        if claim.terminal_event.as_ref() != Some(event)
+            || (claim.state != "terminal" && claim.state != "failed")
+        {
+            return Ok(false);
+        }
+        if claim.terminal_event_handed_off {
+            return Ok(true);
+        }
+        claim.terminal_event_handed_off = true;
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(true)
+    }
+
+    /// Whether this claim's exact terminal event has been handed to the durable
+    /// outbox and is therefore safe for its status owner to retire.
+    pub fn terminal_event_handed_off(&self, run_id: &str) -> Result<bool> {
+        let claim = self.read(run_id)?;
+        Ok(claim.terminal_event.is_some()
+            && claim.terminal_event_handed_off
+            && (claim.state == "terminal" || claim.state == "failed"))
+    }
+
     pub fn read(&self, run_id: &str) -> Result<TurnClaim> {
         validate_id(run_id, "run_id")?;
         let path = self.claim_path(run_id);
@@ -549,6 +684,31 @@ impl TurnClaimRegistry {
             fs::read(&path).with_context(|| format!("reading turn claim {}", path.display()))?;
         serde_json::from_slice(&bytes)
             .with_context(|| format!("parsing turn claim {}", path.display()))
+    }
+
+    /// Hold this run's stable sidecar lock from the fresh read through the
+    /// atomic replacement, so concurrent callbacks cannot publish stale claims.
+    fn read_for_update(&self, run_id: &str) -> Result<(fs::File, TurnClaim)> {
+        let lock = self.lock_run(run_id)?;
+        let claim = self.read(run_id)?;
+        Ok((lock, claim))
+    }
+
+    fn lock_run(&self, run_id: &str) -> Result<fs::File> {
+        validate_id(run_id, "run_id")?;
+        self.ensure_root()?;
+        let path = self.root.join(format!(".{run_id}.lock"));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("opening turn claim lock {}", path.display()))?;
+        set_private_file_permissions(&file)?;
+        file.lock()
+            .with_context(|| format!("locking turn claim {}", run_id))?;
+        Ok(file)
     }
 
     fn write(&self, claim: &TurnClaim) -> Result<()> {
@@ -568,6 +728,7 @@ impl TurnClaimRegistry {
         drop(file);
         fs::rename(&temporary, &path)
             .with_context(|| format!("replacing turn claim {}", path.display()))?;
+        crate::outbox::sync_directory(&self.root)?;
         Ok(())
     }
 
@@ -867,6 +1028,73 @@ mod tests {
         assert_eq!(claim.process_group_id, Some(42));
         assert_eq!(claim.adapter.as_deref(), Some("codex_exec"));
         assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
+    }
+
+    #[test]
+    fn concurrent_late_claim_update_preserves_terminal_handoff() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_id = id(211);
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        registry
+            .claim(&run_id, &id(212), &id(213), None, None, "claude")
+            .unwrap();
+        let event = serde_json::json!({
+            "kind": "terminal_signal",
+            "run_id": run_id.clone(),
+            "payload": {
+                "terminal_state": "run_completed",
+                "invocation": {"state": "closed", "pending_count": 2}
+            }
+        });
+        assert_eq!(
+            registry
+                .mark_terminal_with_event(&run_id, "run_completed", None, event.clone())
+                .unwrap(),
+            Some(event.clone())
+        );
+        assert!(registry
+            .mark_terminal_event_handed_off(&run_id, &event)
+            .unwrap());
+        let repeated = registry
+            .mark_terminal(&run_id, "run_failed", Some("late callback".to_string()))
+            .unwrap();
+        assert_eq!(repeated.state, "terminal");
+        assert_eq!(repeated.terminal_event, Some(event.clone()));
+
+        // Hold the same per-run lock used by every read-modify-write call while
+        // the delayed lifecycle update starts. It cannot read a stale claim and
+        // overwrite the acknowledged terminal evidence.
+        let (claim_lock, snapshot) = registry.read_for_update(&run_id).unwrap();
+        assert!(snapshot.terminal_event_handed_off);
+        let writer_registry = registry.clone();
+        let writer_run_id = run_id.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (updated_tx, updated_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let claim = writer_registry
+                .record_invocation_state(&writer_run_id, "closed", 2)
+                .unwrap();
+            updated_tx.send(claim).unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(
+            updated_rx
+                .recv_timeout(std::time::Duration::from_millis(25))
+                .is_err(),
+            "claim update must wait for the in-flight per-run transaction"
+        );
+        drop(claim_lock);
+
+        let updated = updated_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        writer.join().unwrap();
+        assert_eq!(updated.terminal_event, Some(event.clone()));
+        assert!(updated.terminal_event_handed_off);
+        assert_eq!(updated.invocation_state.as_deref(), Some("closed"));
+        assert_eq!(updated.pending_count, 2);
+        assert!(registry.terminal_event_handed_off(&run_id).unwrap());
     }
 
     #[test]

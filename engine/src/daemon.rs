@@ -139,6 +139,14 @@ const LOCAL_STATUS_BUDGET_MS: u64 = LOCAL_STATUS_INTERVAL_SECS * 1000 / 4;
 /// removes the spam; reporting every tick did the opposite of both.
 const LOCAL_STATUS_BUDGET_REPORT_INTERVAL: Duration = Duration::from_secs(60);
 const MANAGED_OBSERVATION_INTERVAL_SECS: u64 = 5;
+const STATUS_OWNER_SNAPSHOT_MAX_AGE: Duration =
+    Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+// One PID per Console claim; reserve the other half for managed owner rows.
+const STATUS_OWNER_REFRESH_BATCH_SIZE: usize =
+    crate::process_identity::TARGETED_PROCESS_FACT_BATCH_MAX / 2;
+// Each managed launch contributes at most two owner PIDs to the bounded probe.
+const STATUS_MANAGED_OWNER_REFRESH_BATCH_SIZE: usize =
+    crate::process_identity::TARGETED_PROCESS_FACT_BATCH_MAX / 4;
 /// How long a managed-enumeration certificate stays usable on the wire.
 ///
 /// The Runtime Host refuses a certificate older than its own bound, so a
@@ -367,18 +375,55 @@ struct StatusOwnerKey {
     run_id: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StatusOwnerClaimIdentity {
+    pid: Option<u32>,
+    process_start_time: Option<String>,
+    boot_id: Option<String>,
+}
+
+impl From<&crate::turn_claims::TurnClaim> for StatusOwnerClaimIdentity {
+    fn from(claim: &crate::turn_claims::TurnClaim) -> Self {
+        Self {
+            pid: claim.pid,
+            process_start_time: claim.process_start_time.clone(),
+            boot_id: claim.boot_id.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct StatusOwnerEvidence {
     active: HashSet<StatusOwnerKey>,
     ended: HashSet<StatusOwnerKey>,
+    terminal_pending: HashSet<StatusOwnerKey>,
+    claim_identities: HashMap<StatusOwnerKey, StatusOwnerClaimIdentity>,
 }
 
 impl StatusOwnerEvidence {
     fn merge(&mut self, other: Self) {
-        self.active.extend(other.active);
-        self.ended.extend(other.ended);
-        let ended = &self.ended;
-        self.active.retain(|owner| !ended.contains(owner));
+        for owner in other.active {
+            if other.claim_identities.contains_key(&owner) {
+                // A process-validated current claim is more specific than a
+                // stale provider row naming the same session/run.
+                self.ended.remove(&owner);
+                self.terminal_pending.remove(&owner);
+                self.active.insert(owner);
+            } else if !self.ended.contains(&owner) && !self.terminal_pending.contains(&owner) {
+                self.active.insert(owner);
+            }
+        }
+        for owner in other.ended {
+            self.active.remove(&owner);
+            self.terminal_pending.remove(&owner);
+            self.ended.insert(owner);
+        }
+        for owner in other.terminal_pending {
+            self.active.remove(&owner);
+            self.ended.remove(&owner);
+            self.terminal_pending.insert(owner);
+        }
+        self.claim_identities.extend(other.claim_identities);
     }
 }
 
@@ -386,6 +431,8 @@ impl StatusOwnerEvidence {
 struct StatusSlotResult {
     slots: Vec<crate::status_slot::StatusSlot>,
     recorded: Vec<(String, (String, u64))>,
+    owner_refresh_cursor: usize,
+    managed_owner_refresh_cursor: usize,
     elapsed_ms: u64,
 }
 #[derive(Debug, Default)]
@@ -599,6 +646,7 @@ struct ManagedObservationScanResult {
     retained_stale_rows: usize,
     elapsed_ms: u64,
     status_owners: StatusOwnerEvidence,
+    status_owner_snapshot_at: Option<Instant>,
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -1465,6 +1513,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         None;
     let mut last_projected_managed_observations = ManagedObservationSnapshot::default();
     let mut last_status_owners = Arc::new(StatusOwnerEvidence::default());
+    let mut last_status_owners_at: Option<Instant> = None;
+    let mut status_owner_refresh_cursor = 0_usize;
+    let mut managed_owner_refresh_cursor = 0_usize;
     let mut last_projected_managed_scan_partial = false;
     let mut last_projected_managed_snapshot_complete = false;
     let mut last_managed_captured_at = String::new();
@@ -1946,6 +1997,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             status_slot_result = status_slot_tasks.join_next(), if !status_slot_tasks.is_empty() => {
                 match status_slot_result {
                     Some(Ok(result)) => {
+                        status_owner_refresh_cursor = result.owner_refresh_cursor;
+                        managed_owner_refresh_cursor = result.managed_owner_refresh_cursor;
                         if result.elapsed_ms > 100 {
                             tracing::warn!(
                                 elapsed_ms = result.elapsed_ms,
@@ -2698,6 +2751,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             managed_observation_scan_result = managed_observation_scan_tasks.join_next(), if !managed_observation_scan_tasks.is_empty() => {
                 match managed_observation_scan_result {
                     Some(Ok(mut result)) => {
+                        last_status_owners_at = result.status_owner_snapshot_at;
                         last_status_owners = Arc::new(std::mem::take(&mut result.status_owners));
                         if result.elapsed_ms > 250 {
                             tracing::warn!(
@@ -3521,12 +3575,25 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     let db_path = config.shipper_config.db_path.clone();
                     let already_recorded = status_recorded.clone();
                     let owner_evidence = last_status_owners.clone();
+                    let owner_evidence_fresh = status_owner_snapshot_is_fresh(last_status_owners_at);
+                    let owner_refresh_cursor = status_owner_refresh_cursor;
+                    let managed_refresh_cursor = managed_owner_refresh_cursor;
                     status_slot_tasks.spawn_blocking(move || {
                         let started = Instant::now();
                         let dir = crate::status_slot::status_slot_dir(&agent_dir);
                         let slots = crate::status_slot::read_all(&dir);
-                        let slots =
-                            reconcile_status_slots(&dir, slots, owner_evidence.as_ref());
+                        let claims = read_status_slot_claims_for_slots(&slots);
+                        let (owners, owner_refresh_cursor, next_managed_refresh_cursor) =
+                            status_owner_evidence_for_slots(
+                                &slots,
+                                &claims,
+                                owner_evidence.as_ref(),
+                                owner_evidence_fresh,
+                                crate::heartbeat::machine_boot_id().as_deref(),
+                                owner_refresh_cursor,
+                                managed_refresh_cursor,
+                            );
+                        let slots = reconcile_status_slots(&dir, slots, &owners);
                         // The phase ledger is local truth, and the daemon is
                         // its single writer. Recording here is what lets a
                         // provider callback stop writing a file per frame.
@@ -3535,6 +3602,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         StatusSlotResult {
                             slots,
                             recorded,
+                            owner_refresh_cursor,
+                            managed_owner_refresh_cursor: next_managed_refresh_cursor,
                             elapsed_ms: started.elapsed().as_millis() as u64,
                         }
                     });
@@ -3998,12 +4067,336 @@ fn status_owner_key(provider: &str, session_id: &str, run_id: &str) -> Option<St
             run_id: run_id.to_string(),
         })
 }
+fn status_owner_snapshot_is_fresh(observed_at: Option<Instant>) -> bool {
+    observed_at.is_some_and(|observed_at| observed_at.elapsed() <= STATUS_OWNER_SNAPSHOT_MAX_AGE)
+}
+fn status_slot_uses_turn_claim(slot: &crate::status_slot::StatusSlot) -> bool {
+    matches!(
+        slot.payload
+            .get("execution_lifetime")
+            .and_then(serde_json::Value::as_str),
+        Some("one_shot" | "persistent")
+    )
+}
+
+fn claim_has_current_process_identity(
+    claim: &crate::turn_claims::TurnClaim,
+    current_boot_id: Option<&str>,
+) -> bool {
+    matches!(
+        (claim.boot_id.as_deref(), current_boot_id),
+        (Some(recorded), Some(current)) if recorded == current
+    ) && claim.pid.is_some_and(|pid| pid > 1)
+        && claim
+            .process_start_time
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+fn managed_status_state_file(slot: &crate::status_slot::StatusSlot) -> Option<PathBuf> {
+    let session_path = Path::new(&slot.session_id);
+    if session_path.file_name().and_then(|name| name.to_str()) != Some(slot.session_id.as_str())
+        || session_path.components().count() != 1
+        || !matches!(
+            session_path.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
+        return None;
+    }
+    let state_dir = match slot.provider.as_str() {
+        "codex" => managed_bridge_scan::default_codex_bridge_state_dir(),
+        "claude" => managed_claude_scan::default_claude_channel_state_dir(),
+        "opencode" => managed_opencode_scan::default_opencode_server_state_dir(),
+        "cursor" => managed_cursor_helm_scan::default_cursor_helm_state_dir(),
+        "pi" => managed_pi_helm_scan::default_pi_helm_state_dir(),
+        "omp" => managed_omp_helm_scan::default_omp_helm_state_dir(),
+        _ => None,
+    }?;
+    Some(state_dir.join(format!("{}.json", slot.session_id)))
+}
+
+fn managed_status_observation_matches_slot(
+    slot: &crate::status_slot::StatusSlot,
+    provider: &str,
+    session_id: &str,
+    run_id: Option<&str>,
+) -> bool {
+    slot.provider == provider
+        && slot.session_id == session_id
+        && run_id == Some(slot.run_id.as_str())
+}
+
+fn managed_status_observations_for_slots(
+    slots: &[crate::status_slot::StatusSlot],
+) -> ManagedObservationScanResult {
+    let mut scan = ManagedObservationScanResult::default();
+    let no_processes: HashMap<u32, crate::process_identity::ProcessFact> = HashMap::new();
+    for slot in slots {
+        let Some(path) = managed_status_state_file(slot) else {
+            continue;
+        };
+        let paths = [path];
+        match slot.provider.as_str() {
+            "codex" => scan.codex_observations.extend(
+                managed_bridge_scan::collect_observations_from_paths(&paths, &no_processes)
+                    .into_iter()
+                    .filter(|observation| {
+                        managed_status_observation_matches_slot(
+                            slot,
+                            "codex",
+                            &observation.session_id,
+                            observation.run_id.as_deref(),
+                        )
+                    }),
+            ),
+            "claude" => scan.claude_observations.extend(
+                managed_claude_scan::collect_observations_from_paths(&paths, &no_processes)
+                    .into_iter()
+                    .filter(|observation| {
+                        managed_status_observation_matches_slot(
+                            slot,
+                            "claude",
+                            &observation.session_id,
+                            observation.run_id.as_deref(),
+                        )
+                    }),
+            ),
+            "opencode" => scan.opencode_observations.extend(
+                managed_opencode_scan::collect_observations_from_paths(&paths, &no_processes)
+                    .into_iter()
+                    .filter(|observation| {
+                        managed_status_observation_matches_slot(
+                            slot,
+                            "opencode",
+                            &observation.session_id,
+                            observation.run_id.as_deref(),
+                        )
+                    }),
+            ),
+            "cursor" => scan.cursor_observations.extend(
+                managed_cursor_helm_scan::collect_observations_from_paths(&paths, &no_processes)
+                    .into_iter()
+                    .filter(|observation| {
+                        managed_status_observation_matches_slot(
+                            slot,
+                            "cursor",
+                            &observation.session_id,
+                            observation.run_id.as_deref(),
+                        )
+                    }),
+            ),
+            "pi" => scan.pi_observations.extend(
+                managed_pi_helm_scan::collect_observations_from_paths(&paths, &no_processes)
+                    .into_iter()
+                    .filter(|observation| {
+                        managed_status_observation_matches_slot(
+                            slot,
+                            "pi",
+                            &observation.session_id,
+                            observation.run_id.as_deref(),
+                        )
+                    }),
+            ),
+            "omp" => scan.omp_observations.extend(
+                managed_omp_helm_scan::collect_observations_from_paths(&paths, &no_processes)
+                    .into_iter()
+                    .filter(|observation| {
+                        managed_status_observation_matches_slot(
+                            slot,
+                            "omp",
+                            &observation.session_id,
+                            observation.run_id.as_deref(),
+                        )
+                    }),
+            ),
+            _ => {}
+        }
+    }
+    scan
+}
+
+fn managed_status_owner_pids(scan: &ManagedObservationScanResult) -> Vec<u32> {
+    let mut pids = Vec::new();
+    for observation in &scan.codex_observations {
+        pids.push(observation.bridge_pid);
+        pids.extend(observation.app_server_pid);
+    }
+    for observation in &scan.claude_observations {
+        pids.extend(observation.claude_pid);
+        pids.extend(observation.bridge_pid);
+    }
+    for observation in &scan.opencode_observations {
+        pids.extend(observation.pid);
+    }
+    for observation in &scan.cursor_observations {
+        pids.extend(observation.launcher_pid);
+        pids.extend(observation.cursor_pid);
+    }
+    for observation in &scan.pi_observations {
+        pids.extend(observation.launcher_pid);
+        pids.extend(observation.provider_pid);
+    }
+    for observation in &scan.omp_observations {
+        pids.extend(observation.launcher_pid);
+        pids.extend(observation.provider_pid);
+    }
+    pids.retain(|pid| *pid > 1);
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+fn status_owner_evidence_for_slots(
+    slots: &[crate::status_slot::StatusSlot],
+    claims: &[crate::turn_claims::TurnClaim],
+    previous: &StatusOwnerEvidence,
+    previous_is_fresh: bool,
+    current_boot_id: Option<&str>,
+    refresh_cursor: usize,
+    managed_refresh_cursor: usize,
+) -> (StatusOwnerEvidence, usize, usize) {
+    let mut evidence = StatusOwnerEvidence::default();
+    let mut unresolved_claims = Vec::new();
+    let mut unresolved_managed_slots = Vec::new();
+    for slot in slots {
+        let Some(owner) = status_owner_key(&slot.provider, &slot.session_id, &slot.run_id) else {
+            continue;
+        };
+        if status_slot_uses_turn_claim(slot) {
+            let Some(claim) = claims.iter().find(|claim| {
+                claim.provider == slot.provider
+                    && claim.session_id == slot.session_id
+                    && claim.run_id == slot.run_id
+            }) else {
+                continue;
+            };
+            let identity = StatusOwnerClaimIdentity::from(claim);
+            if turn_claim_has_ended_status(claim) {
+                evidence.claim_identities.insert(owner.clone(), identity);
+                if claim.terminal_event.is_some() && !claim.terminal_event_handed_off {
+                    evidence.terminal_pending.insert(owner);
+                } else {
+                    evidence.ended.insert(owner);
+                }
+                continue;
+            }
+            if claim.state != "spawned" {
+                continue;
+            }
+            if matches!(
+                (claim.boot_id.as_deref(), current_boot_id),
+                (Some(recorded), Some(current)) if recorded != current
+            ) {
+                evidence.claim_identities.insert(owner.clone(), identity);
+                evidence.ended.insert(owner);
+                continue;
+            }
+            if previous_is_fresh && previous.claim_identities.get(&owner) == Some(&identity) {
+                if previous.terminal_pending.contains(&owner) {
+                    evidence.terminal_pending.insert(owner);
+                    continue;
+                }
+                if previous.ended.contains(&owner) {
+                    evidence.claim_identities.insert(owner.clone(), identity);
+                    evidence.ended.insert(owner);
+                    continue;
+                }
+                if previous.active.contains(&owner) {
+                    evidence.claim_identities.insert(owner.clone(), identity);
+                    evidence.active.insert(owner);
+                    continue;
+                }
+            }
+            if claim_has_current_process_identity(claim, current_boot_id) {
+                unresolved_claims.push(claim.clone());
+            }
+        } else if previous_is_fresh {
+            if previous.terminal_pending.contains(&owner) {
+                evidence.terminal_pending.insert(owner);
+            } else if previous.ended.contains(&owner) {
+                evidence.ended.insert(owner);
+            } else if previous.active.contains(&owner) {
+                evidence.active.insert(owner);
+            } else if managed_status_state_file(slot).is_some_and(|path| path.is_file()) {
+                unresolved_managed_slots.push(slot.clone());
+            }
+        } else if managed_status_state_file(slot).is_some_and(|path| path.is_file()) {
+            unresolved_managed_slots.push(slot.clone());
+        }
+    }
+
+    unresolved_claims.sort_unstable_by(|left, right| left.run_id.cmp(&right.run_id));
+    let claim_start = if unresolved_claims.is_empty() {
+        0
+    } else {
+        refresh_cursor % unresolved_claims.len()
+    };
+    let selected_claim_count = unresolved_claims.len().min(STATUS_OWNER_REFRESH_BATCH_SIZE);
+    let selected_claims = (0..selected_claim_count)
+        .map(|offset| unresolved_claims[(claim_start + offset) % unresolved_claims.len()].clone())
+        .collect::<Vec<_>>();
+    let next_claim_cursor = if selected_claim_count == unresolved_claims.len() {
+        0
+    } else {
+        (claim_start + selected_claim_count) % unresolved_claims.len()
+    };
+
+    unresolved_managed_slots.sort_unstable_by(|left, right| {
+        left.provider
+            .cmp(&right.provider)
+            .then_with(|| left.session_id.cmp(&right.session_id))
+            .then_with(|| left.run_id.cmp(&right.run_id))
+    });
+    let managed_start = if unresolved_managed_slots.is_empty() {
+        0
+    } else {
+        managed_refresh_cursor % unresolved_managed_slots.len()
+    };
+    let selected_managed_count = unresolved_managed_slots
+        .len()
+        .min(STATUS_MANAGED_OWNER_REFRESH_BATCH_SIZE);
+    let selected_managed_slots = (0..selected_managed_count)
+        .map(|offset| {
+            unresolved_managed_slots[(managed_start + offset) % unresolved_managed_slots.len()]
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    let next_managed_cursor = if selected_managed_count == unresolved_managed_slots.len() {
+        0
+    } else {
+        (managed_start + selected_managed_count) % unresolved_managed_slots.len()
+    };
+    let mut managed_scan = managed_status_observations_for_slots(&selected_managed_slots);
+    let mut pids = selected_claims
+        .iter()
+        .filter_map(|claim| claim.pid)
+        .collect::<Vec<_>>();
+    pids.extend(managed_status_owner_pids(&managed_scan));
+    if let Some(process_facts) = crate::process_identity::try_collect_process_facts_for_pids(&pids)
+    {
+        evidence.merge(status_owner_evidence_from_claims(
+            &selected_claims,
+            Some(&process_facts),
+            current_boot_id,
+        ));
+        managed_scan.process_inventory_valid = true;
+        evidence.merge(status_owner_evidence_from_scan(
+            &managed_scan,
+            &process_facts,
+        ));
+    } else {
+        evidence.merge(status_owner_evidence_from_scan(
+            &managed_scan,
+            &HashMap::new(),
+        ));
+    }
+    (evidence, next_claim_cursor, next_managed_cursor)
+}
 
 /// Keep only statuses backed by the exact current run owner.
 ///
-/// Unknown ownership never renews liveness. Expired reconstructable
-/// observations are discarded without inferring execution end; evidenced
-/// terminal owners retire only their own run.
+/// Unknown ownership never renews liveness. A terminal event whose durable
+/// handoff is pending suppresses status but keeps both local records for retry.
 fn reconcile_status_slots(
     dir: &Path,
     slots: Vec<crate::status_slot::StatusSlot>,
@@ -4013,6 +4406,12 @@ fn reconcile_status_slots(
         .into_iter()
         .filter_map(|slot| {
             let key = status_owner_key(&slot.provider, &slot.session_id, &slot.run_id);
+            if key
+                .as_ref()
+                .is_some_and(|key| owners.terminal_pending.contains(key))
+            {
+                return None;
+            }
             if key.as_ref().is_some_and(|key| owners.active.contains(key)) {
                 return Some(slot);
             }
@@ -5271,6 +5670,8 @@ fn add_status_owner(
     explicit_terminal: bool,
     process_inventory_valid: bool,
 ) {
+    // Older Claude channel state may omit its optional run_id. Without that
+    // exact generation it cannot authorize any current status slot.
     let Some(key) = run_id.and_then(|run_id| status_owner_key(provider, session_id, run_id)) else {
         return;
     };
@@ -5320,17 +5721,25 @@ fn status_owner_evidence_from_claims(
         else {
             continue;
         };
+        let identity = StatusOwnerClaimIdentity::from(claim);
         if turn_claim_has_ended_status(claim) {
-            evidence.ended.insert(owner);
+            evidence.claim_identities.insert(owner.clone(), identity);
+            if claim.terminal_event.is_some() && !claim.terminal_event_handed_off {
+                evidence.terminal_pending.insert(owner);
+            } else {
+                evidence.ended.insert(owner);
+            }
         } else if claim.state == "spawned" {
             let Some(process_facts) = process_facts else {
                 continue;
             };
             match turn_claim_process_owner_state(claim, process_facts, current_boot_id) {
                 ProcessOwnerState::Live => {
+                    evidence.claim_identities.insert(owner.clone(), identity);
                     evidence.active.insert(owner);
                 }
                 ProcessOwnerState::Ended => {
+                    evidence.claim_identities.insert(owner.clone(), identity);
                     evidence.ended.insert(owner);
                 }
                 ProcessOwnerState::Unknown => {}
@@ -5508,17 +5917,24 @@ fn status_owner_evidence_from_scan(
 }
 
 /// Read only claims named by current status slots, before the shared process
-/// inventory. Every managed scan retries unknown owners and revalidates known
-/// ones; no separate process scan or permanent negative cache is needed.
+/// inventory. The one-second slot pass uses the same exact match for newly
+/// spawned owners that were not in the last managed scan.
 fn read_status_slot_claims() -> Vec<crate::turn_claims::TurnClaim> {
-    let (Ok(agent_dir), Ok(registry)) = (
-        crate::config::get_agent_dir(),
-        crate::turn_claims::default_registry(),
-    ) else {
+    let Ok(agent_dir) = crate::config::get_agent_dir() else {
         return Vec::new();
     };
-    crate::status_slot::read_all(&crate::status_slot::status_slot_dir(&agent_dir))
-        .into_iter()
+    let slots = crate::status_slot::read_all(&crate::status_slot::status_slot_dir(&agent_dir));
+    read_status_slot_claims_for_slots(&slots)
+}
+
+fn read_status_slot_claims_for_slots(
+    slots: &[crate::status_slot::StatusSlot],
+) -> Vec<crate::turn_claims::TurnClaim> {
+    let Ok(registry) = crate::turn_claims::default_registry() else {
+        return Vec::new();
+    };
+    slots
+        .iter()
         .filter_map(|slot| {
             let claim = registry.read(&slot.run_id).ok()?;
             (claim.provider == slot.provider
@@ -5527,6 +5943,47 @@ fn read_status_slot_claims() -> Vec<crate::turn_claims::TurnClaim> {
                 .then_some(claim)
         })
         .collect()
+}
+fn retry_pending_terminal_claim_handoffs() {
+    let Ok(registry) = crate::turn_claims::default_registry() else {
+        return;
+    };
+    let claims = match registry.list_all_shared() {
+        Ok(claims) => claims,
+        Err(error) => {
+            tracing::warn!(%error, "Could not read terminal claims for status-event replay");
+            return;
+        }
+    };
+    let outbox_dir = match crate::config::get_agent_runtime_events_outbox_dir() {
+        Ok(outbox_dir) => outbox_dir,
+        Err(error) => {
+            tracing::warn!(%error, "Could not resolve runtime-event outbox for terminal replay");
+            return;
+        }
+    };
+    let mut handed_off = 0;
+    for claim in claims.iter().filter(|claim| {
+        matches!(claim.state.as_str(), "terminal" | "failed")
+            && claim.terminal_event.is_some()
+            && !claim.terminal_event_handed_off
+    }) {
+        match crate::outbox::retry_retained_terminal_event(&registry, &outbox_dir, &claim.run_id) {
+            Ok(true) => handed_off += 1,
+            Ok(false) => {}
+            Err(error) => tracing::warn!(
+                run_id = %claim.run_id,
+                %error,
+                "Retained terminal event remains pending after daemon scan"
+            ),
+        }
+    }
+    if handed_off > 0 {
+        tracing::info!(
+            handed_off,
+            "Replayed retained terminal events from turn claims"
+        );
+    }
 }
 
 fn maybe_start_managed_observation_scan(
@@ -5574,9 +6031,11 @@ fn maybe_start_managed_observation_scan(
         let mut unresolved_state_dirs = 0_usize;
         let started = Instant::now();
         let status_claims = read_status_slot_claims();
+        retry_pending_terminal_claim_handoffs();
         let process_started = Instant::now();
         let process_inventory = crate::process_identity::try_collect_process_facts_by_pid();
         let process_inventory_valid = process_inventory.is_some();
+        let process_inventory_snapshot_at = Instant::now();
         let process_facts = process_inventory.unwrap_or_default();
         let unmanaged_process_inventory = process_facts
             .values()
@@ -5908,6 +6367,8 @@ fn maybe_start_managed_observation_scan(
             captured_at,
             elapsed_ms: started.elapsed().as_millis() as u64,
             status_owners: StatusOwnerEvidence::default(),
+            status_owner_snapshot_at: process_inventory_valid
+                .then_some(process_inventory_snapshot_at),
         };
         result.status_owners = status_owner_evidence_from_scan(&result, &process_facts);
         result
@@ -7321,7 +7782,7 @@ mod tests {
                         &chrono::Utc::now().to_rfc3339(),
                         "thinking",
                         None,
-                        serde_json::json!({}),
+                        serde_json::json!({"execution_lifetime": "persistent"}),
                     );
                     let status_dir = crate::status_slot::status_slot_dir(
                         &crate::config::get_agent_dir().unwrap(),
@@ -7487,6 +7948,453 @@ mod tests {
                 .pending(closed, std::time::Instant::now())
                 .is_empty(),
             "a closed fake run cannot be reasserted"
+        );
+    }
+
+    #[test]
+    fn status_slot_cadence_recovers_unknown_console_owner_and_new_run() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let status_dir = crate::status_slot::status_slot_dir(temp.path());
+        let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("turn-claims"));
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let first_run = uuid::Uuid::new_v4().to_string();
+        let first_thread = uuid::Uuid::new_v4().to_string();
+        registry
+            .claim(&first_run, &session_id, &first_thread, None, None, "codex")
+            .expect("first claim");
+        let pid = std::process::id();
+        let process =
+            crate::process_identity::try_collect_process_fact(pid).expect("test process identity");
+        let slot_for = |run_id: &str, seq| crate::status_slot::StatusSlot {
+            schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+            session_id: session_id.clone(),
+            provider: "codex".into(),
+            runtime_key: format!("codex:{session_id}"),
+            run_id: run_id.into(),
+            source: "codex_app_server".into(),
+            phase: "thinking".into(),
+            tool_name: None,
+            observed_at: chrono::Utc::now().to_rfc3339(),
+            payload: serde_json::json!({"execution_lifetime": "persistent"}),
+            preview: None,
+            producer_epoch: "epoch".into(),
+            seq,
+        };
+        let first_slot = slot_for(&first_run, 1);
+        crate::status_slot::publish(&status_dir, &first_slot).expect("publish first slot");
+        let claimed = registry.read(&first_run).expect("read claim");
+        let (unknown, cursor, managed_cursor) = super::status_owner_evidence_for_slots(
+            std::slice::from_ref(&first_slot),
+            &[claimed],
+            &super::StatusOwnerEvidence::default(),
+            false,
+            Some("test-boot"),
+            0,
+            0,
+        );
+        assert!(unknown.active.is_empty());
+        assert!(
+            super::reconcile_status_slots(
+                &status_dir,
+                crate::status_slot::read_all(&status_dir),
+                &unknown,
+            )
+            .is_empty(),
+            "an unspawned claim must not assert status"
+        );
+        assert!(crate::status_slot::slot_path(&status_dir, &session_id).exists());
+
+        let mut first_spawn = registry
+            .mark_spawned(
+                &first_run,
+                Some(pid),
+                Some(i32::try_from(pid).expect("pid fits process group")),
+                Some(process.lstart.clone()),
+                "codex_exec",
+                serde_json::json!({}),
+            )
+            .expect("spawn first owner");
+        first_spawn.boot_id = Some("test-boot".into());
+        let (first_live, cursor, managed_cursor) = super::status_owner_evidence_for_slots(
+            std::slice::from_ref(&first_slot),
+            &[first_spawn],
+            &super::StatusOwnerEvidence::default(),
+            false,
+            Some("test-boot"),
+            cursor,
+            managed_cursor,
+        );
+        let first_key = super::status_owner_key("codex", &session_id, &first_run).unwrap();
+        assert!(first_live.active.contains(&first_key));
+        assert_eq!(
+            super::reconcile_status_slots(
+                &status_dir,
+                crate::status_slot::read_all(&status_dir),
+                &first_live,
+            )
+            .len(),
+            1,
+            "the one-second slot pass resolves the exact new process identity"
+        );
+
+        let second_run = uuid::Uuid::new_v4().to_string();
+        registry
+            .claim(
+                &second_run,
+                &session_id,
+                &uuid::Uuid::new_v4().to_string(),
+                None,
+                None,
+                "codex",
+            )
+            .expect("successor claim");
+        let mut second_spawn = registry
+            .mark_spawned(
+                &second_run,
+                Some(pid),
+                Some(i32::try_from(pid).expect("pid fits process group")),
+                Some(process.lstart),
+                "codex_exec",
+                serde_json::json!({}),
+            )
+            .expect("spawn successor");
+        second_spawn.boot_id = Some("test-boot".into());
+        let second_slot = slot_for(&second_run, 2);
+        crate::status_slot::publish(&status_dir, &second_slot).expect("publish successor slot");
+        let (second_live, _, _) = super::status_owner_evidence_for_slots(
+            std::slice::from_ref(&second_slot),
+            &[second_spawn],
+            &first_live,
+            true,
+            Some("test-boot"),
+            cursor,
+            managed_cursor,
+        );
+        let second_key = super::status_owner_key("codex", &session_id, &second_run).unwrap();
+        assert!(second_live.active.contains(&second_key));
+        assert_eq!(
+            super::reconcile_status_slots(
+                &status_dir,
+                crate::status_slot::read_all(&status_dir),
+                &second_live,
+            )
+            .len(),
+            1,
+            "a successor run is resolved without inheriting its predecessor's owner"
+        );
+    }
+
+    #[test]
+    fn stale_owner_snapshot_does_not_renew_helm_status() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let status_dir = crate::status_slot::status_slot_dir(temp.path());
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let slot = crate::status_slot::StatusSlot {
+            schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+            session_id: session_id.clone(),
+            provider: "omp".into(),
+            runtime_key: format!("omp:{session_id}"),
+            run_id: run_id.clone(),
+            source: "omp_helm_channel".into(),
+            phase: "thinking".into(),
+            tool_name: None,
+            observed_at: chrono::Utc::now().to_rfc3339(),
+            payload: serde_json::json!({"execution_lifetime": "interactive"}),
+            preview: None,
+            producer_epoch: "epoch".into(),
+            seq: 1,
+        };
+        crate::status_slot::publish(&status_dir, &slot).expect("publish");
+        let mut stale = super::StatusOwnerEvidence::default();
+        stale
+            .active
+            .insert(super::status_owner_key("omp", &session_id, &run_id).unwrap());
+        let stale_at = Some(
+            std::time::Instant::now()
+                - super::STATUS_OWNER_SNAPSHOT_MAX_AGE
+                - std::time::Duration::from_secs(1),
+        );
+        let stale_snapshot_fresh = super::status_owner_snapshot_is_fresh(stale_at);
+        assert!(!stale_snapshot_fresh);
+
+        let (current, _, _) = temp_env::with_vars(
+            [
+                ("HOME", Some(temp.path().as_os_str())),
+                ("LONGHOUSE_HOME", Some(temp.path().as_os_str())),
+            ],
+            || {
+                super::status_owner_evidence_for_slots(
+                    std::slice::from_ref(&slot),
+                    &[],
+                    &stale,
+                    stale_snapshot_fresh,
+                    None,
+                    0,
+                    0,
+                )
+            },
+        );
+        assert!(current.active.is_empty());
+        assert!(super::reconcile_status_slots(
+            &status_dir,
+            crate::status_slot::read_all(&status_dir),
+            &current,
+        )
+        .is_empty());
+        assert!(
+            crate::status_slot::slot_path(&status_dir, &session_id).exists(),
+            "stale or unavailable process evidence is unknown, not terminal"
+        );
+    }
+
+    #[test]
+    fn new_helm_status_resolves_from_exact_state_without_prior_scan() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().expect("tempdir");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(temp.path().as_os_str())),
+                ("LONGHOUSE_HOME", Some(temp.path().as_os_str())),
+            ],
+            || {
+                let session_id = uuid::Uuid::new_v4().to_string();
+                let run_id = uuid::Uuid::new_v4().to_string();
+                let pid = std::process::id();
+                let process = crate::process_identity::try_collect_process_fact(pid)
+                    .expect("test process identity");
+                let state_dir = crate::managed_omp_helm_scan::default_omp_helm_state_dir()
+                    .expect("OMP state directory");
+                std::fs::create_dir_all(&state_dir).expect("create OMP state directory");
+                let state_path = state_dir.join(format!("{session_id}.json"));
+                let now = chrono::Utc::now().to_rfc3339();
+                std::fs::write(
+                    &state_path,
+                    serde_json::to_vec(&serde_json::json!({
+                        "session_id": session_id.clone(),
+                        "run_id": run_id.clone(),
+                        "launcher_pid": pid,
+                        "launcher_process_start_time": process.lstart.clone(),
+                        "provider_pid": pid,
+                        "provider_process_start_time": process.lstart.clone(),
+                        "started_at": now.clone(),
+                        "updated_at": now,
+                        "status": "ready",
+                        "ready": true
+                    }))
+                    .expect("serialize OMP state"),
+                )
+                .expect("write OMP state");
+                let status_dir = crate::status_slot::status_slot_dir(
+                    &crate::config::get_agent_dir().expect("agent directory"),
+                );
+                let slot = crate::status_slot::StatusSlot {
+                    schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+                    session_id: session_id.clone(),
+                    provider: "omp".into(),
+                    runtime_key: format!("omp:{session_id}"),
+                    run_id: run_id.clone(),
+                    source: crate::omp_helm_control::OMP_HELM_TRANSPORT.into(),
+                    phase: "thinking".into(),
+                    tool_name: None,
+                    observed_at: chrono::Utc::now().to_rfc3339(),
+                    payload: serde_json::json!({"execution_lifetime": "interactive"}),
+                    preview: None,
+                    producer_epoch: "epoch".into(),
+                    seq: 1,
+                };
+                crate::status_slot::publish(&status_dir, &slot).expect("publish Helm slot");
+                let (owners, _, _) = super::status_owner_evidence_for_slots(
+                    std::slice::from_ref(&slot),
+                    &[],
+                    &super::StatusOwnerEvidence::default(),
+                    false,
+                    None,
+                    0,
+                    0,
+                );
+                let key = super::status_owner_key("omp", &session_id, &run_id).unwrap();
+                assert!(owners.active.contains(&key));
+                assert_eq!(
+                    super::reconcile_status_slots(
+                        &status_dir,
+                        crate::status_slot::read_all(&status_dir),
+                        &owners,
+                    )
+                    .len(),
+                    1,
+                    "a new Helm owner resolves on the first slot pass without a managed scan"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn daemon_scan_replays_retained_terminal_event_before_retiring_status() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(temp.path().as_os_str())),
+                ("LONGHOUSE_HOME", Some(temp.path().as_os_str())),
+            ],
+            || {
+                runtime.block_on(async {
+                    let registry = crate::turn_claims::default_registry().expect("registry");
+                    let session_id = uuid::Uuid::new_v4().to_string();
+                    let run_id = uuid::Uuid::new_v4().to_string();
+                    registry
+                        .claim(
+                            &run_id,
+                            &session_id,
+                            &uuid::Uuid::new_v4().to_string(),
+                            None,
+                            None,
+                            "codex",
+                        )
+                        .expect("claim");
+                    let status_dir = crate::status_slot::status_slot_dir(
+                        &crate::config::get_agent_dir().expect("agent directory"),
+                    );
+                    let slot = crate::status_slot::StatusSlot {
+                        schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+                        session_id: session_id.clone(),
+                        provider: "codex".into(),
+                        runtime_key: format!("codex:{session_id}"),
+                        run_id: run_id.clone(),
+                        source: "codex_app_server".into(),
+                        phase: "thinking".into(),
+                        tool_name: None,
+                        observed_at: chrono::Utc::now().to_rfc3339(),
+                        payload: serde_json::json!({"execution_lifetime": "persistent"}),
+                        preview: None,
+                        producer_epoch: "epoch".into(),
+                        seq: 1,
+                    };
+                    crate::status_slot::publish(&status_dir, &slot).expect("publish");
+                    let event = serde_json::json!({
+                        "runtime_key": format!("codex:{session_id}"),
+                        "session_id": session_id,
+                        "provider": "codex",
+                        "run_id": run_id,
+                        "source": "codex_app_server",
+                        "kind": "terminal_signal",
+                        "occurred_at": chrono::Utc::now().to_rfc3339(),
+                        "dedupe_key": format!("test-terminal:{run_id}"),
+                        "payload": {"terminal_state": "run_completed"},
+                    });
+                    registry
+                        .mark_terminal_with_event(&run_id, "run_completed", None, event.clone())
+                        .expect("retain terminal event")
+                        .expect("event remains pending");
+                    let outbox_dir =
+                        crate::config::get_agent_runtime_events_outbox_dir().expect("outbox");
+                    std::fs::write(&outbox_dir, b"not a directory").expect("block outbox");
+                    assert!(
+                        crate::outbox::retry_retained_terminal_event(
+                            &registry,
+                            &outbox_dir,
+                            &run_id,
+                        )
+                        .is_err(),
+                        "the first terminal handoff attempt must fail"
+                    );
+                    assert!(!registry
+                        .terminal_event_handed_off(&run_id)
+                        .expect("read failed handoff"));
+                    assert_eq!(
+                        registry
+                            .pending_terminal_event(&run_id)
+                            .expect("pending event"),
+                        Some(event.clone())
+                    );
+                    std::fs::remove_file(&outbox_dir).expect("unblock outbox");
+                    let pending_claim = registry.read(&run_id).expect("read pending claim");
+                    let pending =
+                        super::status_owner_evidence_from_claims(&[pending_claim], None, None);
+                    assert!(super::reconcile_status_slots(
+                        &status_dir,
+                        crate::status_slot::read_all(&status_dir),
+                        &pending,
+                    )
+                    .is_empty());
+                    assert!(
+                        crate::status_slot::slot_path(&status_dir, &slot.session_id).exists(),
+                        "a pending terminal handoff suppresses status but keeps its slot"
+                    );
+
+                    let mut scans = tokio::task::JoinSet::new();
+                    assert!(super::maybe_start_managed_observation_scan(
+                        temp.path().join("state.db"),
+                        &mut scans,
+                        "terminal_replay_test",
+                        false,
+                        &super::ManagedObservationSnapshot::default(),
+                    ));
+                    let result = scans.join_next().await.expect("scan task").expect("scan");
+                    assert!(
+                        registry
+                            .terminal_event_handed_off(&run_id)
+                            .expect("read handoff state"),
+                        "the daemon scan durably replays the retained event"
+                    );
+                    let still_pending = super::reconcile_status_slots(
+                        &status_dir,
+                        crate::status_slot::read_all(&status_dir),
+                        &result.status_owners,
+                    );
+                    assert!(still_pending.is_empty());
+                    assert!(
+                        crate::status_slot::read_all(&status_dir)
+                            .iter()
+                            .any(|current| current.session_id == slot.session_id),
+                        "the scan's pre-handoff evidence cannot retire before acknowledgment"
+                    );
+
+                    let handed_off = registry.read(&run_id).expect("read handed-off claim");
+                    let ended = super::status_owner_evidence_from_claims(&[handed_off], None, None);
+                    assert!(super::reconcile_status_slots(
+                        &status_dir,
+                        crate::status_slot::read_all(&status_dir),
+                        &ended,
+                    )
+                    .is_empty());
+                    assert!(
+                        crate::status_slot::read_all(&status_dir)
+                            .iter()
+                            .all(|current| current.session_id != slot.session_id),
+                        "status is retired only after its exact terminal event is handed off"
+                    );
+
+                    let outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()
+                        .expect("runtime-event outbox");
+                    let found = std::fs::read_dir(outbox_dir)
+                        .expect("outbox entries")
+                        .filter_map(std::result::Result::ok)
+                        .filter(|entry| {
+                            entry.path().extension().and_then(|value| value.to_str())
+                                == Some("json")
+                        })
+                        .any(|entry| {
+                            std::fs::read(entry.path())
+                                .ok()
+                                .and_then(|bytes| {
+                                    serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+                                })
+                                .is_some_and(|queued| queued == event)
+                        });
+                    assert!(
+                        found,
+                        "the exact retained terminal event reaches the outbox"
+                    );
+                });
+            },
         );
     }
 

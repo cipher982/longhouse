@@ -235,10 +235,17 @@ fn runtime_event_phase_is_shippable(event: &Value) -> bool {
 /// Writers never POST directly: an atomic rename makes an event visible to the
 /// drain loop only after its complete JSON payload reaches disk.
 pub fn enqueue_runtime_event(dir: &Path, event: &Value) -> anyhow::Result<()> {
+    enqueue_runtime_event_for_handoff(dir, event).map(|_| ())
+}
+
+/// Durably enqueue one runtime event and report whether a file was actually
+/// created. Terminal claim retirement must not treat a fault-injected drop as a
+/// successful handoff.
+pub fn enqueue_runtime_event_for_handoff(dir: &Path, event: &Value) -> anyhow::Result<bool> {
     // The spill path drops too, or a fault-injected terminal would simply take
     // the durable route and arrive anyway.
     if crate::fault_injection::should_drop_runtime_event(event) {
-        return Ok(());
+        return Ok(false);
     }
     // Ingest rejects a phase_signal outside the contract, which dead-letters it.
     // Refuse at the producer instead, so the bug surfaces as a local error rather
@@ -262,7 +269,45 @@ pub fn enqueue_runtime_event(dir: &Path, event: &Value) -> anyhow::Result<()> {
     drop(file);
     std::fs::rename(&temporary, &ready)?;
     sync_directory(dir)?;
-    Ok(())
+    Ok(true)
+}
+
+/// Retry one exact terminal event retained in its claim and acknowledge it only
+/// after its durable outbox handoff succeeds. A true result permits retirement.
+pub fn retry_retained_terminal_event(
+    registry: &crate::turn_claims::TurnClaimRegistry,
+    outbox_dir: &Path,
+    run_id: &str,
+) -> anyhow::Result<bool> {
+    let Some(event) = registry.pending_terminal_event(run_id)? else {
+        return registry.terminal_event_handed_off(run_id);
+    };
+    if !enqueue_runtime_event_for_handoff(outbox_dir, &event)? {
+        return Ok(false);
+    }
+    registry.mark_terminal_event_handed_off(run_id, &event)
+}
+
+/// Commit a terminal fact/event into its claim, then hand the retained exact
+/// event to the runtime outbox. The bool is safe-to-retire, not merely enqueue
+/// success; failed writes leave the event pending in the claim for recovery.
+pub fn retain_and_enqueue_terminal_event(
+    registry: &crate::turn_claims::TurnClaimRegistry,
+    outbox_dir: &Path,
+    run_id: &str,
+    terminal_state: &str,
+    error: Option<String>,
+    event: Value,
+) -> anyhow::Result<(Option<Value>, bool)> {
+    let retained = registry.mark_terminal_with_event(run_id, terminal_state, error, event)?;
+    let safe_to_retire = match retry_retained_terminal_event(registry, outbox_dir, run_id) {
+        Ok(safe_to_retire) => safe_to_retire,
+        Err(error) => {
+            tracing::warn!(%error, run_id, "Failed to hand off retained terminal event");
+            false
+        }
+    };
+    Ok((retained, safe_to_retire))
 }
 
 /// Drain all ready presence events from the outbox directory.
@@ -1720,7 +1765,7 @@ fn write_runtime_event_dead_letter(
     Ok(ready)
 }
 
-fn sync_directory(dir: &Path) -> anyhow::Result<()> {
+pub(crate) fn sync_directory(dir: &Path) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
         OpenOptions::new().read(true).open(dir)?.sync_all()?;
@@ -2983,6 +3028,107 @@ mod tests {
         let logged = paths.lock().unwrap().clone();
         assert_eq!(logged.len(), 1);
         assert_eq!(logged[0], "/api/agents/presence");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn retained_terminal_survives_outbox_failure_reload_and_drain() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+
+        let temp = tempfile::tempdir().unwrap();
+        let claims_dir = temp.path().join("claims");
+        let registry = crate::turn_claims::TurnClaimRegistry::new(claims_dir.clone());
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let thread_id = uuid::Uuid::new_v4().to_string();
+        let run_id = uuid::Uuid::new_v4().to_string();
+        registry
+            .claim(&run_id, &session_id, &thread_id, None, None, "claude")
+            .unwrap();
+
+        let outbox = temp.path().join("runtime-events");
+        fs::write(&outbox, b"outbox path is a file").unwrap();
+        let event = json!({
+            "runtime_key": format!("claude:{session_id}"),
+            "session_id": session_id.clone(),
+            "thread_id": thread_id.clone(),
+            "run_id": run_id.clone(),
+            "provider": "claude",
+            "source": "claude_print",
+            "kind": "terminal_signal",
+            "occurred_at": "2026-10-06T12:00:00Z",
+            "dedupe_key": format!("claude-print:{session_id}:{run_id}:terminal"),
+            "payload": {
+                "terminal_state": "run_completed",
+                "invocation": {"state": "closed", "pending_count": 2}
+            }
+        });
+
+        let (retained, safe_to_retire) = retain_and_enqueue_terminal_event(
+            &registry,
+            &outbox,
+            &run_id,
+            "run_completed",
+            None,
+            event.clone(),
+        )
+        .unwrap();
+        assert_eq!(retained, Some(event.clone()));
+        assert!(!safe_to_retire);
+        assert!(collect_runtime_event_outbox(&outbox).is_empty());
+
+        let reopened = crate::turn_claims::TurnClaimRegistry::new(claims_dir);
+        let recovered = reopened.read(&run_id).unwrap();
+        assert_eq!(recovered.state, "terminal");
+        assert_eq!(recovered.terminal_event, Some(event.clone()));
+        assert!(!recovered.terminal_event_handed_off);
+        assert_eq!(recovered.invocation_state.as_deref(), Some("closed"));
+        assert_eq!(recovered.pending_count, 2);
+        assert_eq!(
+            reopened.pending_terminal_event(&run_id).unwrap(),
+            Some(event.clone())
+        );
+
+        fs::remove_file(&outbox).unwrap();
+        assert!(retry_retained_terminal_event(&reopened, &outbox, &run_id).unwrap());
+        let recovered = reopened.read(&run_id).unwrap();
+        assert_eq!(recovered.terminal_event, Some(event.clone()));
+        assert!(recovered.terminal_event_handed_off);
+        assert!(reopened.pending_terminal_event(&run_id).unwrap().is_none());
+        let queued = collect_runtime_event_outbox(&outbox);
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].event, event);
+
+        let (addr, requests, server) = spawn_runtime_validation_server().await;
+        let url = format!("http://{addr}");
+        let config =
+            ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
+        let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+        let (sent, kept) = drain_runtime_event_outbox(&outbox, &client).await;
+        server.abort();
+        assert_eq!((sent, kept), (1, 0));
+        let requests = requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, 204);
+        assert_eq!(requests[0].1["events"][0], event);
+
+        let successor_run_id = uuid::Uuid::new_v4().to_string();
+        reopened
+            .claim(
+                &successor_run_id,
+                &session_id,
+                &thread_id,
+                None,
+                None,
+                "claude",
+            )
+            .unwrap();
+        assert!(!reopened
+            .mark_terminal_event_handed_off(&successor_run_id, &event)
+            .unwrap());
     }
 
     #[tokio::test(flavor = "current_thread")]

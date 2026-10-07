@@ -3239,32 +3239,43 @@ impl OmpPrintSink {
             "dedupe_key": format!("omp-print:{}:{}:terminal", self.session_id, self.run_id),
             "payload": payload
         });
-        match crate::outbox::enqueue_runtime_event(
-            &self.runtime_events_outbox_dir,
-            &terminal_event,
-        ) {
-            Ok(()) => crate::status_slot::retire_console_run(
+        let terminal_error = (terminal_state == "run_failed")
+            .then_some(reason.clone())
+            .flatten();
+        let handoff = crate::turn_claims::default_registry().and_then(|registry| {
+            crate::outbox::retain_and_enqueue_terminal_event(
+                &registry,
+                &self.runtime_events_outbox_dir,
+                &self.run_id,
+                terminal_state,
+                terminal_error,
+                terminal_event.clone(),
+            )
+        });
+        match handoff {
+            Ok((_, true)) => crate::status_slot::retire_console_run(
                 "omp",
                 OMP_PRINT_ADAPTER,
                 &self.session_id,
                 &self.run_id,
             ),
-            Err(error) => eprintln!(
-                "[omp-print] terminal record enqueue failed for {} run {}: {error:#}; keeping the status slot",
+            Ok((_, false)) => eprintln!(
+                "[omp-print] terminal record remains pending for {} run {}; keeping the status slot",
                 self.session_id,
                 self.run_id
             ),
-        }
-        crate::turn_claims::mark_terminal(
-            &self.run_id,
-            terminal_state,
-            (terminal_state == "run_failed")
-                .then_some(reason.clone())
-                .flatten(),
-        );
-        if let (Some(state), Some(count)) = (invocation_state, pending_count) {
-            if let Ok(registry) = crate::turn_claims::default_registry() {
-                let _ = registry.record_invocation_state(&self.run_id, state, count);
+            Err(error) => {
+                eprintln!(
+                    "[omp-print] terminal claim write failed for {} run {}: {error:#}; keeping the status slot",
+                    self.session_id,
+                    self.run_id
+                );
+                if let Err(error) = crate::outbox::enqueue_runtime_event(
+                    &self.runtime_events_outbox_dir,
+                    &terminal_event,
+                ) {
+                    eprintln!("[omp-print] runtime outbox write failed: {error}");
+                }
             }
         }
     }

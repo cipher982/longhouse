@@ -50,6 +50,7 @@ the laptop sleeps. For durability you run the Runtime Host on an always-on box
   admission; heartbeat and machine presence use independent liveness admission.
   Validated batches carrying bindings, interactions, wakes, or execution ends
   use lifecycle admission and cooldowns, so telemetry cannot delay them.
+  Malformed runtime bodies spend observation quota, never lifecycle quota.
 
 OMP's launch-scoped coordination authority belongs to the main managed session.
 Native subagents cannot use it to send as their parent; they report blockers and

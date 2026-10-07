@@ -1854,32 +1854,43 @@ impl ClaudePrintSink {
             "dedupe_key": format!("claude-print:{}:{}:terminal", self.session_id, self.run_id),
             "payload": payload
         });
-        match crate::outbox::enqueue_runtime_event(
-            &self.runtime_events_outbox_dir,
-            &terminal_event,
-        ) {
-            Ok(()) => crate::status_slot::retire_console_run(
+        let terminal_error = (terminal_state == "run_failed")
+            .then(|| stderr.clone())
+            .flatten();
+        let handoff = crate::turn_claims::default_registry().and_then(|registry| {
+            crate::outbox::retain_and_enqueue_terminal_event(
+                &registry,
+                &self.runtime_events_outbox_dir,
+                &self.run_id,
+                terminal_state,
+                terminal_error,
+                terminal_event.clone(),
+            )
+        });
+        match handoff {
+            Ok((_, true)) => crate::status_slot::retire_console_run(
                 "claude",
                 CLAUDE_PRINT_ADAPTER,
                 &self.session_id,
                 &self.run_id,
             ),
-            Err(error) => eprintln!(
-                "[claude-print] terminal record enqueue failed for {} run {}: {error:#}; keeping the status slot",
+            Ok((_, false)) => eprintln!(
+                "[claude-print] terminal record remains pending for {} run {}; keeping the status slot",
                 self.session_id,
                 self.run_id
             ),
-        }
-        crate::turn_claims::mark_terminal(
-            &self.run_id,
-            terminal_state,
-            (terminal_state == "run_failed")
-                .then(|| stderr.clone())
-                .flatten(),
-        );
-        if let (Some(state), Some(count)) = (invocation_state, pending_count) {
-            if let Ok(registry) = crate::turn_claims::default_registry() {
-                let _ = registry.record_invocation_state(&self.run_id, state, count);
+            Err(error) => {
+                eprintln!(
+                    "[claude-print] terminal claim write failed for {} run {}: {error:#}; keeping the status slot",
+                    self.session_id,
+                    self.run_id
+                );
+                if let Err(error) = crate::outbox::enqueue_runtime_event(
+                    &self.runtime_events_outbox_dir,
+                    &terminal_event,
+                ) {
+                    eprintln!("[claude-print] runtime outbox write failed: {error}");
+                }
             }
         }
     }
@@ -3567,9 +3578,26 @@ for _ in sys.stdin:
                 assert_eq!(claim.state, "terminal");
                 assert_eq!(claim.invocation_state.as_deref(), Some("parked"));
                 assert_eq!(claim.pending_count, 2);
+                let retained_event = claim.terminal_event.clone().expect("retained terminal");
+                assert_eq!(retained_event["run_id"], run_id);
+                assert_eq!(retained_event["payload"]["invocation"]["pending_count"], 2);
+                assert!(!claim.terminal_event_handed_off);
+                let reopened =
+                    crate::turn_claims::TurnClaimRegistry::new(agent_dir.join("turn-claims"));
+                assert_eq!(
+                    reopened.pending_terminal_event(&run_id).unwrap(),
+                    Some(retained_event.clone())
+                );
                 assert!(crate::outbox::collect_runtime_event_outbox(&outbox).is_empty());
 
                 std::fs::remove_file(&outbox).unwrap();
+                assert!(
+                    crate::outbox::retry_retained_terminal_event(&reopened, &outbox, &run_id)
+                        .unwrap()
+                );
+                let recovered = reopened.read(&run_id).unwrap();
+                assert_eq!(recovered.terminal_event, Some(retained_event.clone()));
+                assert!(recovered.terminal_event_handed_off);
                 sink.post_terminal_with_lifecycle(
                     "run_completed",
                     Some(0),
@@ -3579,7 +3607,10 @@ for _ in sys.stdin:
                     None,
                 )
                 .await;
-                assert_eq!(crate::outbox::collect_runtime_event_outbox(&outbox).len(), 1);
+                assert_eq!(
+                    crate::outbox::collect_runtime_event_outbox(&outbox).len(),
+                    1
+                );
                 assert!(!crate::status_slot::read_all(&status_dir)
                     .iter()
                     .any(|slot| slot.session_id == session_id));
@@ -3594,12 +3625,15 @@ for _ in sys.stdin:
                     None,
                     json!({}),
                 );
-                crate::status_slot::retire_console_run(
-                    "claude",
-                    CLAUDE_PRINT_ADAPTER,
-                    &session_id,
-                    &run_id,
-                );
+                sink.post_terminal_with_lifecycle(
+                    "run_completed",
+                    Some(0),
+                    None,
+                    Some("parked"),
+                    Some(2),
+                    None,
+                )
+                .await;
                 assert!(crate::status_slot::read_all(&status_dir)
                     .iter()
                     .any(|slot| slot.session_id == session_id && slot.run_id == successor_run_id));
