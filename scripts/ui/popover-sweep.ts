@@ -78,8 +78,11 @@ const MARK_TRIGGERS = `(() => {
     if (el.closest("[data-sweep-trigger]")) continue;
     if (el.disabled || el.getAttribute("aria-disabled") === "true") continue;
     if (!visible(el)) continue;
+    // A declared popup is swept wherever it is (the click scrolls it into
+    // view); an off-screen disclosure that only expands inline is not.
     const r = el.getBoundingClientRect();
-    if (r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) continue;
+    const offscreen = r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth;
+    if (offscreen && !el.matches('[aria-haspopup]:not([aria-haspopup="false"])')) continue;
     el.setAttribute("data-sweep-trigger", String(out.length));
     out.push(label(el));
   }
@@ -291,15 +294,22 @@ export async function sweepPopovers(page: Page, shotPrefix?: string): Promise<Po
         return null;
       }
     }
-    await page.waitForTimeout(200);
-    if (page.url() !== url) {
-      report.skipped.push(`${name}: navigated away`);
-      await page.goBack().catch(() => undefined);
-      return null;
+    // A trigger that declares a popup may open it after a fetch (Show resume
+    // command): wait up to 2 s for something to appear before judging.
+    const expectsPopup = (await page.evaluate(
+      `!!document.querySelector(${JSON.stringify(selector)})?.matches('[aria-haspopup]:not([aria-haspopup="false"])')`,
+    )) as boolean;
+    let result: CheckResult = { checked: 0, overlays: [], failures: [], children: [] };
+    for (let attempt = 0; attempt < (expectsPopup ? 14 : 2); attempt += 1) {
+      await page.waitForTimeout(150);
+      if (page.url() !== url) {
+        report.skipped.push(`${name}: navigated away`);
+        await page.goBack().catch(() => undefined);
+        return null;
+      }
+      result = (await page.evaluate(`${CHECK_OVERLAYS}("new", ${JSON.stringify(parent)})`)) as CheckResult;
+      if (result.checked > 0) break;
     }
-    const result = (await page.evaluate(
-      `${CHECK_OVERLAYS}("new", ${JSON.stringify(parent)})`,
-    )) as CheckResult;
     record(name, result);
     if (shotPrefix && result.checked > 0) {
       await page.screenshot({ path: `${shotPrefix}-${shot}.png` });
@@ -339,10 +349,10 @@ export async function sweepPopovers(page: Page, shotPrefix?: string): Promise<Po
       const childSelector = `[data-sweep-child="${index}.${child}"]`;
       const childName = `${triggers[index]} > ${result.children[child]}`;
       if (!(await page.locator(childSelector).isVisible().catch(() => false))) {
-        await page.locator(selector).click({ timeout: 2_000 }).catch(() => undefined);
+        await page.locator(selector).click({ timeout: 5_000 }).catch(() => undefined);
         // A reopened modal may render its contents a beat later (a loaded CI
-        // guest took over 200 ms): look for the child for up to 3 s.
-        for (let attempt = 0; attempt < 20; attempt += 1) {
+        // guest took over 200 ms): look for the child for up to 5 s.
+        for (let attempt = 0; attempt < 33; attempt += 1) {
           await page.waitForTimeout(150);
           const found = await page.evaluate(
             `${REMARK_CHILD}(${JSON.stringify(`${index}.${child}`)}, ${JSON.stringify(result.children[child])})`,
