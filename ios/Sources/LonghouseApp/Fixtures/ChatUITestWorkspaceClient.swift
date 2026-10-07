@@ -932,6 +932,21 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         events += tool("Bash", output: "no failed steps", callId: "call-gh-1")
         events.append(notice("Background command \"Run the checks\" completed (exit code 0)"))
         events.append(makeEvent(id: next(), role: "assistant", content: "None of the alerting jobs is broken: the registry is healthy and the factory deploy finished green.", timestamp: ts()))
+        // Longhouse's own close notice after "Stop background work", with the
+        // server's line for a close that could not confirm its processes are gone.
+        events.append(makeEvent(
+            id: next(),
+            role: "user",
+            content: "Stopped 1 background task: tail the dev server log. Some processes were still running, "
+                + "but Longhouse couldn't confirm they were this session's, so it left them alone.",
+            timestamp: ts(),
+            inputOrigin: SessionInputOrigin(
+                authoredVia: .longhouse,
+                origin: "longhouse",
+                sessionInputId: nil,
+                clientRequestId: "close:invocation-fixture"
+            )
+        ))
         return events
     }
 

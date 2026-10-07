@@ -160,7 +160,10 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertNil(receiptRows.first?.role)
         XCTAssertEqual(receiptRows.first?.body, wakeText)
 
-        let closeText = "Stopped 2 background tasks: watch the branch; run the tests"
+        // A close that could not confirm its processes are gone carries the
+        // server's cleanup line in the same one-line notice.
+        let closeText = "Stopped 2 background tasks: watch the branch; run the tests. "
+            + "Some processes didn't exit and may still be running."
         let closeRows = WebTranscriptView.payloadItems(
             timelineItems: [],
             submittedInputs: [

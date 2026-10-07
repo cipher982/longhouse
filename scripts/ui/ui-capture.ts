@@ -771,6 +771,22 @@ export async function installSceneMocks(
               turn: null,
               created_at: "2026-04-15T16:10:50Z",
             },
+            {
+              // A close whose processes were not all confirmed gone: the
+              // server appends the cleanup line to the same notice text.
+              id: 9003,
+              live_input_id: "close-invocation-cleanup-fixture",
+              client_request_id: "close:invocation-cleanup-fixture",
+              origin: "longhouse",
+              text:
+                "Stopped 1 background task: tail the dev server log. Some processes were still running, " +
+                "but Longhouse couldn't confirm they were this session's, so it left them alone.",
+              intent: "auto",
+              status: "delivered",
+              delivery_status: "delivered",
+              turn: null,
+              created_at: "2026-04-15T16:11:20Z",
+            },
           ]),
         });
         return;
@@ -1449,9 +1465,9 @@ async function captureBundle(
     await wakeRow.scrollIntoViewIfNeeded();
   }
   if (scene === "session-parked-close") {
-    const closeRow = page.locator(
-      '[data-testid="session-provider-notification"][data-origin="longhouse"]',
-    );
+    const closeRow = page
+      .locator('[data-testid="session-provider-notification"][data-origin="longhouse"]')
+      .last();
     await closeRow.waitFor({ state: "visible", timeout: 10_000 });
     await page.getByRole("button", { name: "Stop background work" }).waitFor({ state: "visible", timeout: 10_000 });
     await closeRow.scrollIntoViewIfNeeded();
