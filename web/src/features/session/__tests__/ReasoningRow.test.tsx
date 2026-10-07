@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@/shared/api/agents";
 import { ReasoningRow, stripMarkdown, thoughtProse } from "../ReasoningRow";
@@ -63,5 +63,28 @@ describe("ReasoningRow control", () => {
     vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(120);
     render(<ReasoningRow event={event} isSelected={false} />);
     expect(screen.getByRole("button", { name: "Expand reasoning" })).toBeTruthy();
+  });
+
+  it("follows the remounted text so a later overflow brings the control back", () => {
+    const observed: { node: Element; fire: () => void }[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private cb: () => void) {}
+        observe(node: Element) { observed.push({ node, fire: this.cb }); }
+        disconnect() {}
+      },
+    );
+    let scroll = 40;
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(40);
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(() => scroll);
+    render(<ReasoningRow event={event} isSelected={false} />);
+    expect(screen.queryByRole("button", { name: "Expand reasoning" })).toBeNull();
+    const current = observed.filter((entry) => entry.node.isConnected);
+    expect(current.length).toBeGreaterThan(0);
+    scroll = 120;
+    act(() => current.forEach((entry) => entry.fire()));
+    expect(screen.getByRole("button", { name: "Expand reasoning" })).toBeTruthy();
+    vi.unstubAllGlobals();
   });
 });

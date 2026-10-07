@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AgentEvent } from "@/shared/api/agents";
@@ -57,7 +57,9 @@ export function ReasoningRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [clamped, setClamped] = useState(true);
-  const proseRef = useRef<HTMLSpanElement | null>(null);
+  // State, not a ref: the prose span remounts when the row switches between
+  // its button and text forms, and the observer has to follow the new node.
+  const [proseNode, setProseNode] = useState<HTMLSpanElement | null>(null);
   const text = reasoningText(event);
   const prose = thoughtProse(text);
   const bodyId = `reasoning-body-${event.id}`;
@@ -65,7 +67,7 @@ export function ReasoningRow({
   // Only a thought the clamp actually cut offers to open: a click that reveals
   // the same three lines is a control that does nothing.
   useLayoutEffect(() => {
-    const node = proseRef.current;
+    const node = proseNode;
     if (!node || expanded) return;
     // No layout (jsdom, a hidden pane) reports zero; keep the thought openable.
     const measure = () => {
@@ -76,7 +78,7 @@ export function ReasoningRow({
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [expanded, prose]);
+  }, [expanded, prose, proseNode]);
 
   const openable = expanded || clamped;
 
@@ -121,14 +123,14 @@ export function ReasoningRow({
           aria-label="Expand reasoning"
           onClick={() => setExpanded(true)}
         >
-          <span ref={proseRef} className="tl-thought__prose">
+          <span ref={setProseNode} className="tl-thought__prose">
             {prose || "No reasoning details"}
           </span>
         </button>
       ) : (
         // A thought that fits its three lines is text, not a control.
         <div className="tl-thought__head">
-          <span ref={proseRef} className="tl-thought__prose">
+          <span ref={setProseNode} className="tl-thought__prose">
             {prose || "No reasoning details"}
           </span>
         </div>
