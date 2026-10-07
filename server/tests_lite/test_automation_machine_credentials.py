@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 from datetime import UTC
 from datetime import datetime
-from types import SimpleNamespace
 from uuid import uuid4
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -19,7 +18,6 @@ os.environ.setdefault("TESTING", "1")
 from tests_lite.live_catalog_harness import LiveCatalog  # noqa: E402
 from tests_lite.live_catalog_harness import live_catalog  # noqa: E402,F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402,F401
-from zerg.routers.agents_storage_v2 import _credential_is_automation  # noqa: E402
 
 SAURON = "clifford-sauron"
 _GENERATIONS: dict[str, str] = {}
@@ -112,10 +110,20 @@ def test_marking_is_scoped_to_the_owner(live_catalog, live_catalog_client):  # n
     assert _catalog(live_catalog, shipped)["launch_actor"] is None
 
 
-def test_only_a_marked_credential_reports_automation():
-    assert _credential_is_automation(SimpleNamespace(automation=True)) is True
-    assert _credential_is_automation(SimpleNamespace(automation=False)) is False
-    assert _credential_is_automation(None) is False
+def test_a_revoked_or_other_owners_credential_does_not_mark(live_catalog, live_catalog_client):  # noqa: F811
+    """The commit reads the flag from active credentials of the shipping owner and machine."""
+
+    owner = live_catalog.create_user("owner@automation-creds.test")
+    stranger = live_catalog.create_user("stranger@automation-creds.test")
+    token = live_catalog.create_device_token(owner_id=owner, device_id=SAURON)
+    stranger_token = live_catalog.create_device_token(owner_id=stranger, device_id=SAURON)
+    _set(live_catalog, owner_id=stranger, device_id=SAURON, automation=True)
+
+    mine = _ship(live_catalog, live_catalog_client, token=token, device_id=SAURON)
+    theirs = _ship(live_catalog, live_catalog_client, token=stranger_token, device_id=SAURON)
+
+    assert _catalog(live_catalog, mine)["launch_actor"] is None
+    assert _catalog(live_catalog, theirs)["launch_actor"] == "automation"
 
 
 def test_set_automation_machine_mirrors_reclassified_rows_to_searchd(monkeypatch):

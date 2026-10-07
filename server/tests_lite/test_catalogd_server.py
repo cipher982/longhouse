@@ -424,7 +424,6 @@ async def test_device_auth_is_typed_read_only_and_reports_commit_seq(daemon_path
                 "created_at": created_at.isoformat(),
                 "last_used_at": None,
                 "revoked_at": None,
-                "automation": False,
             },
         }
         assert retry == first

@@ -224,7 +224,6 @@ def _validate_device_token_through_catalogd(token: str) -> DeviceToken | None:
             created_at=_decode_catalog_datetime(payload.get("created_at")),
             last_used_at=_decode_catalog_datetime(payload.get("last_used_at")),
             revoked_at=_decode_catalog_datetime(payload.get("revoked_at")),
-            automation=payload.get("automation") is True,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(

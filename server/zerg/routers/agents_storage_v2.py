@@ -824,17 +824,6 @@ def _conversation_resets(render_spec: RenderObjectSpec | None) -> list[dict[str,
     return resets
 
 
-def _credential_is_automation(auth_token: DeviceToken | object | None) -> bool:
-    """Whether the shipping credential is marked automation.
-
-    The catalogd commit applies it, because only the commit sees the durable
-    row: the credential fills a ``launch_actor`` absent from both the envelope
-    and storage, never overwriting (docs/specs/automation-machine-credentials.md).
-    """
-
-    return getattr(caller_principal(auth_token), "automation", False) is True
-
-
 def _authenticated_machine_id(auth_token: DeviceToken | object | None, payload: dict[str, Any]) -> str:
     auth_token = caller_principal(auth_token)
     if auth_token is not None:
@@ -1574,7 +1563,6 @@ async def _commit_admitted_envelope(
                 "conversation_resets": _conversation_resets(render_spec),
                 "provider_facts": parsed["provider_facts"],
                 "sealed_at": datetime.now(UTC).isoformat(),
-                **({"credential_automation": True} if _credential_is_automation(auth_token) else {}),
             },
             timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
         )

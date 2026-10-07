@@ -2743,7 +2743,6 @@ class CatalogStore:
                     "created_at": _encode_datetime(row["created_at"]),
                     "last_used_at": _encode_datetime(row["last_used_at"]),
                     "revoked_at": None,
-                    "automation": bool(row["automation"]),
                 },
             }
 
@@ -3202,7 +3201,6 @@ class CatalogStore:
                         token_table.c.token_hash.label("device_token_hash"),
                         token_table.c.created_at.label("device_created_at"),
                         token_table.c.last_used_at.label("device_last_used_at"),
-                        token_table.c.automation.label("device_automation"),
                     )
                     .select_from(token_table.join(user_table, token_table.c.owner_id == user_table.c.id))
                     .where(
@@ -3233,7 +3231,6 @@ class CatalogStore:
                     "created_at": _encode_datetime(row["device_created_at"]),
                     "last_used_at": _encode_datetime(last_used_at),
                     "revoked_at": None,
-                    "automation": bool(row["device_automation"]),
                 },
                 "user": _user_dto(row),
                 "commit_seq": str(commit_seq),
@@ -9720,7 +9717,6 @@ class CatalogStore:
         sealed_at: datetime,
         conversation_resets: tuple[dict[str, Any], ...] = (),
         provider_facts: tuple[dict[str, Any], ...] = (),
-        credential_automation: bool = False,
     ) -> dict[str, Any]:
         del protocol_version  # validated as v2 by the RPC boundary
         timer = _StageTimer("commit_raw_object")
@@ -10437,7 +10433,7 @@ class CatalogStore:
                 if recorded is not None:
                     session_values["launch_actor"] = recorded["launch_actor"]
                     session_values["launch_surface"] = session_values["launch_surface"] or recorded.get("launch_surface")
-                elif credential_automation:
+                elif _machine_is_automation(connection, owner_id=effective_owner_id, machine_id=machine_id):
                     session_values["launch_actor"] = "automation"
                 if session_values["launch_actor"]:
                     # Whichever fallback supplied it, a live row with no actor of
@@ -15511,6 +15507,37 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         # caller from reading it as one.
         "permission_mode_source": None,
     }
+
+
+def _machine_is_automation(connection: Connection, *, owner_id: object, machine_id: str) -> bool:
+    """Whether the owner marked this machine's credentials automation.
+
+    Read inside the commit's own transaction, not from the request's auth
+    snapshot, so an envelope authenticated just before the machine was marked
+    cannot slip past both the backfill and ingest
+    (docs/specs/automation-machine-credentials.md).
+    """
+
+    if owner_id is None:
+        return False
+    try:
+        owner = int(str(owner_id))
+    except ValueError:
+        return False
+    token = LiveDeviceToken.__table__
+    return (
+        connection.execute(
+            select(token.c.id)
+            .where(
+                token.c.owner_id == owner,
+                token.c.device_id == machine_id,
+                token.c.revoked_at.is_(None),
+                token.c.automation.is_(True),
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
 
 
 _STORAGE_CATALOG_OVERLAY_FIELDS = frozenset(

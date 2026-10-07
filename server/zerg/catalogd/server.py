@@ -3046,16 +3046,13 @@ class CatalogDaemon:
         # Optional so pre-rotation callers (legacy replay, direct commits) stay
         # valid; absent means the envelope carried no conversation_reset records
         # and no provider facts.
-        optional = {"conversation_resets", "provider_facts", "credential_automation"}
+        optional = {"conversation_resets", "provider_facts"}
         provided = set(request.params)
         if provided - expected - optional or expected - provided:
             return self._error(request, "invalid_request", "storage.raw_object.commit.v2 has invalid parameters")
         params = dict(request.params)
         params.setdefault("conversation_resets", [])
         params.setdefault("provider_facts", [])
-        params.setdefault("credential_automation", False)
-        if type(params["credential_automation"]) is not bool:
-            return self._error(request, "invalid_request", "credential_automation must be a boolean")
         try:
             _validate_raw_object_commit(params)
         except ValueError as exc:
