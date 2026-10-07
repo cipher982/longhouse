@@ -306,7 +306,8 @@ async def test_warm_lifespan_binds_only_after_the_permit_and_starts_services_aft
         await catalogd_up.wait()
         return {"ready": True}
 
-    async def start_services(app, startup_started, *, owns_test_catalog, e2e_catalog, catalogd_ping=None):
+    async def start_services(app, startup_started, *, owns_test_catalog, e2e_catalog, catalogd_ping=None, defer_background_loops=False):
+        assert defer_background_loops is True, "a warm candidate starts its background loops after reopen"
         started.append(catalogd_ping)
 
     async def stop_services(app, shutdown_started, *, owns_test_catalog):

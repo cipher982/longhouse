@@ -296,6 +296,7 @@ async def _complete_catalog_handoff(app: FastAPI, handoff, startup_started: floa
             owns_test_catalog=False,
             e2e_catalog=False,
             catalogd_ping=catalogd_ping,
+            defer_background_loops=True,
         )
     except asyncio.CancelledError:
         raise
@@ -309,7 +310,6 @@ async def _complete_catalog_handoff(app: FastAPI, handoff, startup_started: floa
 # before the permit, so first-import time does not stall the loop in the window.
 _CATALOG_DEPENDENT_MODULES = (
     "zerg.routers.internal_deployments",
-    "zerg.utils.async_runner",
     "zerg.services.live_control_catalog",
     "zerg.services.storage_session_titles",
     "zerg.services.maintenance",
@@ -343,6 +343,7 @@ async def _start_runtime_services(
     owns_test_catalog: bool,
     e2e_catalog: bool,
     catalogd_ping: dict | None = None,
+    defer_background_loops: bool = False,
 ) -> None:
     try:
         logger.info("Storage-v2 mode: retired cold database is not initialized or mounted")
@@ -428,49 +429,71 @@ async def _start_runtime_services(
         with _timed_startup_step("models_config_validation"):
             _validate_models_config_startup()
 
-        if not _settings.testing:
-            try:
-                from zerg.services.live_control_catalog import run_live_catalog_input_recovery_loop
+        async def start_background_loops() -> None:
+            if not _settings.testing:
+                try:
+                    from zerg.services.live_control_catalog import run_live_catalog_input_recovery_loop
 
-                asyncio.create_task(run_live_catalog_input_recovery_loop())
-                logger.info("Live catalog input recovery loop started")
-            except Exception:
-                logger.exception("Failed to start live catalog input recovery loop")
-            # Machine-control lease expiry is catalogd's job (checkpoint loop).
-            # The old API-side reaper called get_live_write_serializer(), which
-            # is intentionally never configured on the catalog lane.
+                    asyncio.create_task(run_live_catalog_input_recovery_loop())
+                    logger.info("Live catalog input recovery loop started")
+                except Exception:
+                    logger.exception("Failed to start live catalog input recovery loop")
+                # Machine-control lease expiry is catalogd's job (checkpoint loop).
+                # The old API-side reaper called get_live_write_serializer(), which
+                # is intentionally never configured on the catalog lane.
 
-        # Factory title assurance is deliberately a test Runtime Host, but it
-        # must exercise the real background worker. This is the only normal
-        # production loop re-enabled by the startup-bound assurance gate.
-        if not _settings.testing or owns_test_catalog:
-            try:
-                from zerg.services.storage_session_titles import run_storage_title_reconciler
+            # Factory title assurance is deliberately a test Runtime Host, but it
+            # must exercise the real background worker. This is the only normal
+            # production loop re-enabled by the startup-bound assurance gate.
+            if not _settings.testing or owns_test_catalog:
+                try:
+                    from zerg.services.storage_session_titles import run_storage_title_reconciler
 
-                app.state.storage_title_reconciler_task = asyncio.create_task(run_storage_title_reconciler())
-                logger.info("Storage-v2 AI title reconciler started")
-            except Exception:
-                logger.exception("Failed to start storage-v2 AI title reconciler")
+                    app.state.storage_title_reconciler_task = asyncio.create_task(run_storage_title_reconciler())
+                    logger.info("Storage-v2 AI title reconciler started")
+                except Exception:
+                    logger.exception("Failed to start storage-v2 AI title reconciler")
 
-        # Periodic runtime maintenance (runner-health reconcile, etc.).
-        if not _settings.testing:
-            try:
-                from zerg.services.maintenance import start_maintenance_loop
+            # Periodic runtime maintenance (runner-health reconcile, etc.).
+            if not _settings.testing:
+                try:
+                    from zerg.services.maintenance import start_maintenance_loop
 
-                start_maintenance_loop()
-                logger.info("Maintenance loop started")
-            except Exception:
-                logger.exception("Failed to start maintenance loop")
+                    start_maintenance_loop()
+                    logger.info("Maintenance loop started")
+                except Exception:
+                    logger.exception("Failed to start maintenance loop")
 
-        # WAL checkpoints
-        if not _settings.testing:
-            try:
-                from zerg.database import start_wal_checkpoint_loop
+            # WAL checkpoints
+            if not _settings.testing:
+                try:
+                    from zerg.database import start_wal_checkpoint_loop
 
-                await start_wal_checkpoint_loop()
-                logger.info("WAL checkpoint loop started")
-            except Exception as e:
-                logger.warning("Startup: WAL checkpoint loop failed (non-fatal): %s", e)
+                    await start_wal_checkpoint_loop()
+                    logger.info("WAL checkpoint loop started")
+                except Exception as e:
+                    logger.warning("Startup: WAL checkpoint loop failed (non-fatal): %s", e)
+
+        if defer_background_loops:
+            # A warm candidate's first iterations of these loops held its event
+            # loop for about a second right after the catalog opened, exactly
+            # when readiness, the probe and reopen arrive. None of them is
+            # needed before reopen, so they start then, like the non-gating
+            # services.
+            from zerg.services.runtime_admission import runtime_admission
+
+            async def start_background_loops_after_reopen() -> None:
+                await runtime_admission().wait_until_initial_open()
+                if getattr(app.state, "runtime_shutdown_started", False):
+                    return
+                await start_background_loops()
+
+            app.state.deferred_background_loops_task = asyncio.create_task(
+                start_background_loops_after_reopen(),
+                name="runtime-post-reopen-loops",
+            )
+        else:
+            await start_background_loops()
 
         elapsed_ms = (time.monotonic() - startup_started) * 1000
         logger.info("Application startup complete elapsed_ms=%.1f", elapsed_ms)
@@ -540,6 +563,7 @@ async def _stop_runtime_services(app: FastAPI, shutdown_started: float, *, owns_
             for name in (
                 "catalog_handoff_task",
                 "catalogd_start_task",
+                "deferred_background_loops_task",
                 "deferred_non_gating_startup_task",
                 "deploy_window_loop_lag_task",
             ):
