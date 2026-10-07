@@ -88,10 +88,14 @@ SQLite locks, FTS, migrations, or container health checks.
 
 ## DB Doctor
 
+The image puts `longhouse-server` on PATH. Images built before the
+2026-10-07 entry-point fix ship it with a dead shebang (exit 127); on those use
+`python -m zerg.cli.main` with the same arguments.
+
 When the tenant container is running:
 
 ```bash
-ssh <runtime-host> "docker exec longhouse-<subdomain> python -m zerg.cli.main db doctor --json"
+ssh <runtime-host> "docker exec longhouse-<subdomain> longhouse-server db doctor --json"
 ```
 
 When the tenant container cannot stay up, run the same command in a temporary
@@ -102,7 +106,7 @@ ssh <runtime-host> "docker run --rm \
   -v /var/app-data/longhouse/<subdomain>:/data \
   -e DATABASE_URL=sqlite:////data/longhouse.db \
   <runtime-image> \
-  python -m zerg.cli.main db doctor --json"
+  longhouse-server db doctor --json"
 ```
 
 Use the exact runtime image SHA from the incident when possible. If the goal is
@@ -122,9 +126,9 @@ Important fields:
 identity backfill counts require a second explicit flag:
 
 ```bash
-python -m zerg.cli.main db doctor --json
-python -m zerg.cli.main db doctor --json --deep
-python -m zerg.cli.main db doctor --json --deep --identity-counts
+longhouse-server db doctor --json
+longhouse-server db doctor --json --deep
+longhouse-server db doctor --json --deep --identity-counts
 ```
 
 Use `--identity-counts` sparingly on large tenants. It can scan archive tables.
@@ -135,7 +139,7 @@ If `sqlite_stat1` is missing or obviously stale, run explicit planner
 maintenance:
 
 ```bash
-ssh <runtime-host> "docker exec longhouse-<subdomain> python -m zerg.cli.main db optimize --json"
+ssh <runtime-host> "docker exec longhouse-<subdomain> longhouse-server db optimize --json"
 ```
 
 For a down container:
@@ -145,7 +149,7 @@ ssh <runtime-host> "docker run --rm \
   -v /var/app-data/longhouse/<subdomain>:/data \
   -e DATABASE_URL=sqlite:////data/longhouse.db \
   <runtime-image> \
-  python -m zerg.cli.main db optimize --json"
+  longhouse-server db optimize --json"
 ```
 
 This runs `PRAGMA optimize`. It may improve query planning. It does not shrink
@@ -159,19 +163,19 @@ explicit heavy migrations.
 Plan heavy migrations without running startup convergence:
 
 ```bash
-python -m zerg.cli.main migrate --database-url sqlite:////data/longhouse.db --no-schema-converge --json
+longhouse-server migrate --database-url sqlite:////data/longhouse.db --no-schema-converge --json
 ```
 
 Plan with normal lightweight convergence first:
 
 ```bash
-python -m zerg.cli.main migrate --database-url sqlite:////data/longhouse.db --schema-converge --json
+longhouse-server migrate --database-url sqlite:////data/longhouse.db --schema-converge --json
 ```
 
 Apply only after reviewing the plan:
 
 ```bash
-python -m zerg.cli.main migrate --database-url sqlite:////data/longhouse.db --apply --json
+longhouse-server migrate --database-url sqlite:////data/longhouse.db --apply --json
 ```
 
 Heavy migrations can rewrite large archive tables. Treat them as operator
@@ -181,8 +185,8 @@ The render branch-count upgrade (`db repair-render-counts`: prepare a verified
 cache while the old API still serves, then `--apply` once the updated catalog
 writer runs) is documented in
 [CONTRIBUTING.md, "Runtime data upgrades"](../../../CONTRIBUTING.md#runtime-data-upgrades).
-On a hosted tenant run it in the container (`docker exec ... python -m
-zerg.cli.main db repair-render-counts ...`), keep the cache on the persistent
+On a hosted tenant run it in the container (`docker exec ... longhouse-server
+db repair-render-counts ...`), keep the cache on the persistent
 data mount across container replacement, and use an explicit maintenance window
 for a combined Runtime Host: stop the old API and catalog, start the new catalog
 alone, apply to zero missing, start the new API, then re-apply to catch the old

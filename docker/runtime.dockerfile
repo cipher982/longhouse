@@ -118,7 +118,11 @@ FROM python-uv AS dependencies
 
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
-WORKDIR /repo/server
+# Build the venv at /app, the path production runs it from: uv writes absolute
+# interpreter paths into console-script shebangs (bin/longhouse-server) and the
+# editable install's .pth, so a venv built elsewhere and copied to /app has
+# entry points that exit 127.
+WORKDIR /app
 
 # Copy pyproject files for dependency caching
 COPY server/uv.lock server/pyproject.toml ./
@@ -155,10 +159,10 @@ FROM python-uv AS backend-builder
 
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
-WORKDIR /repo/server
+WORKDIR /app
 
-# Copy virtual environment from dependencies stage
-COPY --from=dependencies /repo/server/.venv ./.venv
+# Copy virtual environment from dependencies stage (same path, see above)
+COPY --from=dependencies /app/.venv ./.venv
 
 # Copy backend source
 COPY server/ ./
@@ -175,9 +179,6 @@ COPY config/tool-tiers.json /config/tool-tiers.json
 # because this file was never part of the runtime image at all.
 COPY schemas/managed_providers.yml /schemas/managed_providers.yml
 
-# Copy REAL frontend dist from frontend-builder (not placeholder)
-COPY --from=frontend-builder /app/web/dist /repo/web/dist
-
 # Install the project + pysqlite3 wheel (statically links modern SQLite)
 COPY --from=pysqlite-builder /dist/ /tmp/pysqlite3-dist/
 # The version floor comes from zerg.searchd.store.MIN_SQLITE_VERSION (not a
@@ -190,7 +191,7 @@ COPY --from=pysqlite-builder /dist/ /tmp/pysqlite3-dist/
 # MODELS_CONFIG_PATH like the production stage: there is no /repo/config here.
 RUN uv sync --frozen --no-dev \
     && uv pip install /tmp/pysqlite3-dist/*.whl \
-    && MODELS_CONFIG_PATH=/config/models.json PYTHONPATH=/repo/server ./.venv/bin/python -c "\
+    && MODELS_CONFIG_PATH=/config/models.json PYTHONPATH=/app ./.venv/bin/python -c "\
 import pysqlite3, sys; sys.modules['sqlite3'] = pysqlite3; \
 from zerg.searchd.store import MIN_SQLITE_VERSION; \
 v = pysqlite3.sqlite_version; \
@@ -232,7 +233,7 @@ WORKDIR /app
 # scripts/build/generate_build_identity.py before the Docker build
 # context is sent, so importlib.resources.files("zerg") / "build_identity.json"
 # resolves inside the container with no extra COPY.
-COPY --from=backend-builder --chown=longhouse:longhouse /repo/server /app
+COPY --from=backend-builder --chown=longhouse:longhouse /app /app
 
 # Copy frontend dist to where backend expects it
 COPY --from=frontend-builder --chown=longhouse:longhouse /app/web/dist /app/web/dist
@@ -273,6 +274,10 @@ ENV PATH="/app/.venv/bin:$PATH" \
 # demo behind a TLS proxy) must opt in by setting LONGHOUSE_ALLOW_PUBLIC_NO_AUTH=1
 # in the *deployment* environment — intentionally NOT baked into the image so a
 # pulled image is not public-no-auth by default.
+
+# The console-script entry point must run in the shipped image (its shebang
+# names the venv interpreter by absolute path; see the dependencies stage).
+RUN longhouse-server --help > /dev/null
 
 # Health check — /api/readyz returns 503 on unhealthy (unlike /api/health which always 200s)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
