@@ -1,6 +1,6 @@
 schema_version: 1
 state_contract_version: 4
-presentation_policy_version: 4
+presentation_policy_version: 5
 
 # Canonical state vocabulary. Provider adapters may retain raw evidence, but
 # every product surface projects only these values.
