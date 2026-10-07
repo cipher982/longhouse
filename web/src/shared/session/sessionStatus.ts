@@ -44,6 +44,7 @@ export function workClaimExpired(facts: StatusFacts, nowMs: number): boolean {
   return (signal.state === "working" || signal.state === "attention") && signalWindowPassed(signal, nowMs);
 }
 
+
 /**
  * The server's attention axis, with the one thing the client decides itself:
  * a claim whose `valid_until` has passed reads as unknown until a new frame
