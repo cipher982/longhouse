@@ -74,8 +74,21 @@ def _ago(seconds: float) -> str:
 
 def process_started(pid: int) -> str | None:
     """The process's start time as ps prints it: with the pid, it names one process even after pid reuse."""
-    proc = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True)
-    return proc.stdout.strip() or None if proc.returncode == 0 else None
+    try:
+        proc = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True)
+    except OSError:
+        return None  # no ps (a minimal container): liveness alone decides
+    return (proc.stdout.strip() or None) if proc.returncode == 0 else None
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def holder_gone(record: dict) -> str | None:
@@ -84,11 +97,12 @@ def holder_gone(record: dict) -> str | None:
     if now >= float(record.get("expires_at", 0)):
         return f"expired {_ago(now - float(record.get('expires_at', 0)))} ago"
     if record.get("host") == socket.gethostname() and record.get("pid"):
-        started = process_started(int(record["pid"]))
-        if started is None:
-            return f"its holder (pid {record['pid']}) exited"
-        if record.get("pid_started") and started != record["pid_started"]:
-            return f"its holder (pid {record['pid']}) exited and the pid was reused"
+        pid = int(record["pid"])
+        if not alive(pid):
+            return f"its holder (pid {pid}) exited"
+        started = process_started(pid)
+        if record.get("pid_started") and started and started != record["pid_started"]:
+            return f"its holder (pid {pid}) exited and the pid was reused"
     return None
 
 
