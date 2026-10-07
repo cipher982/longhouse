@@ -92,7 +92,16 @@ def test_catalogd_handoff_wait_needs_the_permit_and_then_the_free_lock(monkeypat
     holder = lock_path.open("a+")
     fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     done = threading.Event()
-    thread = threading.Thread(target=lambda: (handoff_module.wait_for_handoff_from_env(lock_path), done.set()))
+    errors: list[BaseException] = []
+
+    def wait() -> None:
+        try:
+            handoff_module.wait_for_handoff_from_env(lock_path)
+        except BaseException as exc:  # surfaced below instead of a bare timeout
+            errors.append(exc)
+        done.set()
+
+    thread = threading.Thread(target=wait)
     thread.start()
     try:
         assert not done.wait(0.1)
@@ -100,6 +109,7 @@ def test_catalogd_handoff_wait_needs_the_permit_and_then_the_free_lock(monkeypat
         assert not done.wait(0.1), "the permit alone must not open a catalog the predecessor still holds"
         fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
         assert done.wait(2)
+        assert errors == []
     finally:
         holder.close()
         thread.join(timeout=5)
