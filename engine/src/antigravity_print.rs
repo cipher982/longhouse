@@ -395,8 +395,8 @@ fn unrecorded_stdout_liveness(stdout_path: &Path, claimed_at: &str) -> ClaimLive
 fn stdout_liveness_from_processes(
     processes: impl IntoIterator<Item = std::io::Result<std::fs::DirEntry>>,
     stdout: &std::fs::Metadata,
-    claimed_at: Option<DateTime<Utc>>,
-    mut fresh_start_time: impl FnMut(u32) -> Option<DateTime<Utc>>,
+    claimed_at: Option<chrono::DateTime<Utc>>,
+    mut fresh_start_time: impl FnMut(u32) -> Option<chrono::DateTime<Utc>>,
 ) -> ClaimLiveness {
     let mut incomplete = false;
     for entry in processes {
