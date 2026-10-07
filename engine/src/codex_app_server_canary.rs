@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
-use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -19,7 +18,7 @@ use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Instant};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::connect_async;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -1592,7 +1591,9 @@ fn contains_subsequence(states: &[String], wanted: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::{SinkExt, StreamExt};
     use std::os::unix::fs::PermissionsExt;
+    use tokio_tungstenite::tungstenite::Message;
 
     #[test]
     fn contains_subsequence_handles_expected_hook_order() {

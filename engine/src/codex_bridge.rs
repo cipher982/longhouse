@@ -9,20 +9,23 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
-use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use tokio::sync::{mpsc, oneshot, Mutex};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::connect_async;
 use tracing::info;
 use uuid::Uuid;
 
+use crate::codex_app_server_rpc::{
+    self as rpc, extract_string, is_retryable_thread_subscription_error, thread_rollout_is_ready,
+    RequestIds, StreamEvent, WebSocketEnd,
+};
 use crate::codex_source::{
     codex_rollout_file_is_subagent, codex_thread_value_has_primary_source,
     codex_thread_value_is_subagent, codex_thread_value_subagent_source,
@@ -411,15 +414,6 @@ pub struct BridgeSendSummary {
 }
 
 #[derive(Debug)]
-enum StreamEvent {
-    Rpc(Value),
-    Stderr(String),
-    StdoutParseError(String),
-    TransportClosed(String),
-    ChildExited(ExitStatus),
-}
-
-#[derive(Debug)]
 enum RpcOutbound {
     WebSocket(mpsc::UnboundedSender<String>),
 }
@@ -432,8 +426,7 @@ struct RpcClient {
     child_ws_url: Option<String>,
     outbound: RpcOutbound,
     events_rx: mpsc::UnboundedReceiver<StreamEvent>,
-    pending_methods: BTreeMap<u64, String>,
-    next_request_id: u64,
+    ids: RequestIds,
     ws_url: String,
     /// Bearer token the relay in front of the app-server requires. Absent for
     /// clients that talk to a relay someone else spawned.
@@ -2089,12 +2082,12 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                 };
                 match event {
                     StreamEvent::Rpc(value) => {
-                        if value.get("id").is_some() && value.get("method").is_some() {
+                        if rpc::is_server_request(&value) {
                             handle_server_request(&config, value, &mut client, &mut context).await?;
                             continue;
                         }
-                        if let Some(id) = value.get("id").and_then(Value::as_u64) {
-                            let _ = client.pending_methods.remove(&id);
+                        if let Some(id) = rpc::response_id(&value) {
+                            let _ = client.ids.settle(id);
                             continue;
                         }
                         if let Some(followup) = process_notification(&value, &config, &mut context).await? {
@@ -3745,35 +3738,8 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     let stdout = child.stdout.take().context("missing app-server stdout")?;
     let stderr = child.stderr.take().context("missing app-server stderr")?;
     let (events_tx, events_rx) = mpsc::unbounded_channel();
-    let stdout_tx = events_tx.clone();
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            match serde_json::from_str::<Value>(&line) {
-                Ok(value) => {
-                    let _ = stdout_tx.send(StreamEvent::Rpc(value));
-                }
-                Err(err) => {
-                    let _ = stdout_tx.send(StreamEvent::StdoutParseError(format!("{err}: {line}")));
-                }
-            }
-        }
-    });
-
-    let stderr_tx = events_tx.clone();
-    let (ws_listen_tx, ws_listen_rx) = oneshot::channel();
-    tokio::spawn(async move {
-        let mut maybe_ws_listen_tx = Some(ws_listen_tx);
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if let Some(url) = extract_websocket_listen_url(&line) {
-                if let Some(tx) = maybe_ws_listen_tx.take() {
-                    let _ = tx.send(url);
-                }
-            }
-            let _ = stderr_tx.send(StreamEvent::Stderr(line));
-        }
-    });
+    rpc::spawn_stdout_pump(stdout, events_tx.clone());
+    let ws_listen_rx = rpc::spawn_stderr_pump(stderr, events_tx.clone());
 
     let upstream_ws_url = tokio::time::timeout(Duration::from_secs(10), ws_listen_rx)
         .await
@@ -3786,46 +3752,16 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     let ws_url = crate::codex_ws_relay::spawn(&upstream_ws_url, &ws_auth_token)
         .await
         .with_context(|| format!("spawning codex WS relay in front of {upstream_ws_url}"))?;
-    let (ws_stream, _response) = connect_async(relay_client_request(&ws_url, &ws_auth_token)?)
-        .await
-        .with_context(|| format!("connecting bridge client to {ws_url}"))?;
-    let (mut ws_write, mut ws_read) = ws_stream.split();
-    let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
-    tokio::spawn(async move {
-        while let Some(line) = outbound_rx.recv().await {
-            if ws_write.send(Message::Text(line.into())).await.is_err() {
-                break;
-            }
-        }
-        let _ = ws_write.close().await;
-    });
-    let ws_events_tx = events_tx.clone();
-    tokio::spawn(async move {
-        let detail = loop {
-            let Some(message) = ws_read.next().await else {
-                break "app-server websocket stream ended without a close frame".to_string();
-            };
-            match message {
-                Ok(Message::Text(text)) => match serde_json::from_str::<Value>(&text) {
-                    Ok(value) => {
-                        let _ = ws_events_tx.send(StreamEvent::Rpc(value));
-                    }
-                    Err(err) => {
-                        let _ = ws_events_tx
-                            .send(StreamEvent::StdoutParseError(format!("{err}: {text}")));
-                    }
-                },
-                Ok(Message::Close(frame)) => {
-                    break format!("app-server websocket closed: {frame:?}");
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    break format!("app-server websocket read error: {err}");
-                }
-            }
-        };
-        let _ = ws_events_tx.send(StreamEvent::TransportClosed(detail));
-    });
+    let (ws_stream, _response) =
+        connect_async(rpc::websocket_request(&ws_url, Some(&ws_auth_token))?)
+            .await
+            .with_context(|| format!("connecting bridge client to {ws_url}"))?;
+    let outbound_tx = rpc::spawn_websocket_pump(
+        ws_stream,
+        events_tx,
+        WebSocketEnd::Report("app-server websocket"),
+        Duration::ZERO,
+    );
 
     Ok(RpcClient {
         child: Some(child),
@@ -3834,8 +3770,7 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
         child_ws_url: Some(upstream_ws_url),
         outbound: RpcOutbound::WebSocket(outbound_tx),
         events_rx,
-        pending_methods: BTreeMap::new(),
-        next_request_id: 1,
+        ids: RequestIds::starting_at(1),
         ws_url,
         ws_auth_token: Some(ws_auth_token),
         token_files: coordination_token_file
@@ -3843,25 +3778,6 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
             .chain(std::iter::once(ws_token_file))
             .collect(),
     })
-}
-
-/// A relay connection that carries the bearer token the relay demands.
-fn relay_client_request(
-    ws_url: &str,
-    ws_auth_token: &str,
-) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request> {
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-
-    let mut request = ws_url
-        .into_client_request()
-        .with_context(|| format!("building app-server request for {ws_url}"))?;
-    request.headers_mut().insert(
-        tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
-        format!("Bearer {ws_auth_token}")
-            .parse()
-            .context("app-server relay token is not a valid header value")?,
-    );
-    Ok(request)
 }
 
 #[cfg(unix)]
@@ -3954,47 +3870,17 @@ fn codex_app_server_args(
 }
 
 async fn connect_remote_client(ws_url: &str, ws_auth_token: &str) -> Result<RpcClient> {
-    let (ws_stream, _response) = connect_async(relay_client_request(ws_url, ws_auth_token)?)
-        .await
-        .with_context(|| format!("connecting remote bridge client to {ws_url}"))?;
-    let (mut ws_write, mut ws_read) = ws_stream.split();
+    let (ws_stream, _response) =
+        connect_async(rpc::websocket_request(ws_url, Some(ws_auth_token))?)
+            .await
+            .with_context(|| format!("connecting remote bridge client to {ws_url}"))?;
     let (events_tx, events_rx) = mpsc::unbounded_channel();
-    let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
-    tokio::spawn(async move {
-        while let Some(line) = outbound_rx.recv().await {
-            if ws_write.send(Message::Text(line.into())).await.is_err() {
-                break;
-            }
-        }
-        let _ = ws_write.close().await;
-    });
-    let ws_events_tx = events_tx.clone();
-    tokio::spawn(async move {
-        let detail = loop {
-            let Some(message) = ws_read.next().await else {
-                break "remote app-server websocket stream ended without a close frame".to_string();
-            };
-            match message {
-                Ok(Message::Text(text)) => match serde_json::from_str::<Value>(&text) {
-                    Ok(value) => {
-                        let _ = ws_events_tx.send(StreamEvent::Rpc(value));
-                    }
-                    Err(err) => {
-                        let _ = ws_events_tx
-                            .send(StreamEvent::StdoutParseError(format!("{err}: {text}")));
-                    }
-                },
-                Ok(Message::Close(frame)) => {
-                    break format!("remote app-server websocket closed: {frame:?}");
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    break format!("remote app-server websocket read error: {err}");
-                }
-            }
-        };
-        let _ = ws_events_tx.send(StreamEvent::TransportClosed(detail));
-    });
+    let outbound_tx = rpc::spawn_websocket_pump(
+        ws_stream,
+        events_tx,
+        WebSocketEnd::Report("remote app-server websocket"),
+        Duration::ZERO,
+    );
 
     Ok(RpcClient {
         child: None,
@@ -4003,8 +3889,7 @@ async fn connect_remote_client(ws_url: &str, ws_auth_token: &str) -> Result<RpcC
         child_ws_url: None,
         outbound: RpcOutbound::WebSocket(outbound_tx),
         events_rx,
-        pending_methods: BTreeMap::new(),
-        next_request_id: 1,
+        ids: RequestIds::starting_at(1),
         ws_url: ws_url.to_string(),
         ws_auth_token: None,
         token_files: Vec::new(),
@@ -4015,28 +3900,21 @@ async fn initialize_client(client: &mut RpcClient) -> Result<()> {
     let _ = send_request(
         client,
         "initialize",
-        json!({
-            "clientInfo": {
-                "name": "longhouse_codex_bridge",
-                "title": "Longhouse Codex Bridge",
-                "version": env!("CARGO_PKG_VERSION"),
-            },
-            "capabilities": {
+        rpc::initialize_params(
+            "longhouse_codex_bridge",
+            "Longhouse Codex Bridge",
+            json!({
                 "experimentalApi": true,
                 "optOutNotificationMethods": BRIDGE_OPT_OUT_NOTIFICATION_METHODS,
-            }
-        }),
+            }),
+        ),
     )
     .await?;
     send_notification(client, "initialized", json!({})).await
 }
 
 async fn send_notification(client: &mut RpcClient, method: &str, params: Value) -> Result<()> {
-    let payload = json!({
-        "method": method,
-        "params": params,
-    });
-    send_payload(client, &payload).await
+    send_payload(client, &rpc::notification(method, params)).await
 }
 
 async fn send_payload(client: &mut RpcClient, payload: &Value) -> Result<()> {
@@ -4057,38 +3935,20 @@ fn websocket_outbound_sender(client: &RpcClient) -> mpsc::UnboundedSender<String
 }
 
 async fn send_request(client: &mut RpcClient, method: &str, params: Value) -> Result<Value> {
-    let request_id = client.next_request_id;
-    client.next_request_id += 1;
-    client
-        .pending_methods
-        .insert(request_id, method.to_string());
-    let payload = json!({
-        "id": request_id,
-        "method": method,
-        "params": params,
-    });
+    let (request_id, payload) = client.ids.begin(method, params);
     send_payload(client, &payload).await?;
 
     loop {
         let event = recv_event(client).await?;
         match event {
             StreamEvent::Rpc(value) => {
-                if value.get("id").is_some() && value.get("method").is_some() {
+                if rpc::is_server_request(&value) {
                     bail!("received unexpected server request while waiting for {method}: {value}");
                 }
-                if let Some(id) = value.get("id").and_then(Value::as_u64) {
-                    let method_name = client
-                        .pending_methods
-                        .remove(&id)
-                        .unwrap_or_else(|| format!("request#{id}"));
+                if let Some(id) = rpc::response_id(&value) {
+                    let method_name = client.ids.settle(id);
                     if id == request_id {
-                        if let Some(error) = value.get("error") {
-                            bail!("{method_name} failed: {error}");
-                        }
-                        return value
-                            .get("result")
-                            .cloned()
-                            .ok_or_else(|| anyhow!("response for {method_name} missing result"));
+                        return rpc::response_result(&value, &method_name);
                     }
                     continue;
                 }
@@ -4116,16 +3976,7 @@ async fn send_request_with_runtime(
     config: &BridgeRunConfig,
     context: &mut BridgeContext,
 ) -> Result<Value> {
-    let request_id = client.next_request_id;
-    client.next_request_id += 1;
-    client
-        .pending_methods
-        .insert(request_id, method.to_string());
-    let payload = json!({
-        "id": request_id,
-        "method": method,
-        "params": params,
-    });
+    let (request_id, payload) = client.ids.begin(method, params);
     send_payload(client, &payload).await?;
 
     loop {
@@ -4143,23 +3994,14 @@ async fn send_request_with_runtime(
         };
         match event {
             StreamEvent::Rpc(value) => {
-                if value.get("id").is_some() && value.get("method").is_some() {
+                if rpc::is_server_request(&value) {
                     handle_server_request(config, value, client, context).await?;
                     continue;
                 }
-                if let Some(id) = value.get("id").and_then(Value::as_u64) {
-                    let method_name = client
-                        .pending_methods
-                        .remove(&id)
-                        .unwrap_or_else(|| format!("request#{id}"));
+                if let Some(id) = rpc::response_id(&value) {
+                    let method_name = client.ids.settle(id);
                     if id == request_id {
-                        if let Some(error) = value.get("error") {
-                            bail!("{method_name} failed: {error}");
-                        }
-                        return value
-                            .get("result")
-                            .cloned()
-                            .ok_or_else(|| anyhow!("response for {method_name} missing result"));
+                        return rpc::response_result(&value, &method_name);
                     }
                     continue;
                 }
@@ -4231,10 +4073,10 @@ async fn handle_server_request(
         eprintln!(
             "[codex-bridge] declining server request for rejected Codex thread: method={method}"
         );
-        let payload = json!({
-            "id": request_id,
-            "result": immediate_server_request_result(method, &params, false)?,
-        });
+        let payload = rpc::response(
+            request_id,
+            immediate_server_request_result(method, &params, false)?,
+        );
         return send_payload(client, &payload).await;
     }
 
@@ -4287,43 +4129,12 @@ async fn handle_server_request(
     }
 
     let result = immediate_server_request_result(method, &params, config.auto_approve)?;
-
-    let payload = json!({
-        "id": request_id,
-        "result": result,
-    });
-    send_payload(client, &payload).await
+    send_payload(client, &rpc::response(request_id, result)).await
 }
 
 fn immediate_server_request_result(method: &str, params: &Value, approve: bool) -> Result<Value> {
-    let result = match method {
-        "item/commandExecution/requestApproval" => json!({
-            "decision": if approve { "accept" } else { "decline" }
-        }),
-        "item/fileChange/requestApproval" => json!({
-            "decision": if approve { "accept" } else { "decline" }
-        }),
-        "item/permissions/requestApproval" => json!({
-            "scope": "turn",
-            "permissions": if approve {
-                params.get("permissions").cloned().unwrap_or_else(|| json!({}))
-            } else {
-                json!({})
-            }
-        }),
-        "item/tool/requestUserInput" => json!({
-            "answers": build_request_user_input_answers(params, approve)
-        }),
-        "mcpServer/elicitation/request" => json!({
-            "action": "decline",
-            "content": Value::Null,
-        }),
-        "applyPatchApproval" | "execCommandApproval" => json!({
-            "decision": if approve { "Approved" } else { "Denied" }
-        }),
-        other => bail!("unsupported server request in codex bridge: {other}"),
-    };
-    Ok(result)
+    rpc::approval_answer(method, params, approve, "longhouse")
+        .ok_or_else(|| anyhow!("unsupported server request in codex bridge: {method}"))
 }
 
 fn is_structured_pause_request_method(method: &str) -> bool {
@@ -5048,12 +4859,6 @@ async fn process_notification(
     Ok(followup)
 }
 
-fn thread_rollout_is_ready(path: &str) -> bool {
-    std::fs::metadata(path)
-        .map(|metadata| metadata.is_file() && metadata.len() > 0)
-        .unwrap_or(false)
-}
-
 fn derive_thread_subscription_status(context: &BridgeContext) -> ThreadSubscriptionStatus {
     let Some(thread_id) = context.state.thread_id.as_deref() else {
         return ThreadSubscriptionStatus::WaitingForThread;
@@ -5136,11 +4941,6 @@ fn pending_thread_subscription(context: &mut BridgeContext) -> Result<Option<Bri
         thread_id,
         thread_path: context.state.thread_path.clone(),
     }))
-}
-
-fn is_retryable_thread_subscription_error(error_text: &str) -> bool {
-    error_text.contains("no rollout found for thread id")
-        || (error_text.contains("failed to load rollout") && error_text.contains("is empty"))
 }
 
 fn extract_notification_thread_id(params: &Value) -> Option<String> {
@@ -6758,57 +6558,12 @@ impl BridgeRuntimeSink {
     }
 }
 
-fn build_request_user_input_answers(params: &Value, auto_approve: bool) -> Value {
-    let mut answers = serde_json::Map::new();
-    let Some(questions) = params.get("questions").and_then(Value::as_array) else {
-        return Value::Object(answers);
-    };
-    for question in questions {
-        let Some(id) = question.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        let question_answers = if auto_approve {
-            question
-                .get("options")
-                .and_then(Value::as_array)
-                .and_then(|options| options.first())
-                .and_then(|option| option.get("label"))
-                .and_then(Value::as_str)
-                .map(|label| vec![Value::String(label.to_string())])
-                .unwrap_or_else(|| vec![Value::String("longhouse".to_string())])
-        } else {
-            Vec::new()
-        };
-        answers.insert(id.to_string(), json!({ "answers": question_answers }));
-    }
-    Value::Object(answers)
-}
-
-fn extract_string(value: &Value, path: &[&str]) -> Option<String> {
-    let mut current = value;
-    for key in path {
-        current = current.get(*key)?;
-    }
-    current.as_str().map(ToString::to_string)
-}
-
 fn parse_runtime_timing_header(headers: &HeaderMap, name: &'static str) -> Option<f64> {
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().parse::<f64>().ok())
         .filter(|value| value.is_finite())
-}
-
-fn extract_websocket_listen_url(line: &str) -> Option<String> {
-    let marker = "listening on:";
-    let (_, tail) = line.split_once(marker)?;
-    let candidate = tail.trim();
-    if candidate.starts_with("ws://") || candidate.starts_with("wss://") {
-        Some(candidate.to_string())
-    } else {
-        None
-    }
 }
 
 fn should_emit_progress(last_emit: Option<Instant>, throttle_ms: u64) -> bool {
@@ -7026,7 +6781,7 @@ async fn handle_bridge_followup(
         match followup {
             BridgeFollowup::InspectThread { thread_id } => {
                 let controlled_thread = context.state.thread_id.clone();
-                let request_id = client.next_request_id;
+                let request_id = client.ids.peek();
                 let response = tokio::time::timeout(
                     Duration::from_secs(5),
                     send_request_with_runtime(
@@ -7039,7 +6794,7 @@ async fn handle_bridge_followup(
                 )
                 .await;
                 if response.is_err() {
-                    client.pending_methods.remove(&request_id);
+                    let _ = client.ids.settle(request_id);
                 }
                 // A real TUI switch received during the read takes precedence.
                 // Its followup was deferred by send_request_with_runtime.
@@ -7367,7 +7122,9 @@ fn extract_in_progress_turn(thread: &Value) -> Option<&Value> {
 mod tests {
     use super::*;
     use chrono::DateTime;
+    use futures_util::{SinkExt, StreamExt};
     use pretty_assertions::assert_eq;
+    use tokio_tungstenite::tungstenite::Message;
 
     fn make_test_context(temp: &tempfile::TempDir) -> BridgeContext {
         let state_file = temp.path().join("bridge-state.json");
@@ -9012,7 +8769,7 @@ mod tests {
 
     #[test]
     fn build_request_user_input_answers_prefers_first_option_when_auto_approved() {
-        let answers = build_request_user_input_answers(
+        let answers = rpc::request_user_input_answers(
             &json!({
                 "questions": [{
                     "id": "color",
@@ -9023,6 +8780,7 @@ mod tests {
                 }]
             }),
             true,
+            "longhouse",
         );
         assert_eq!(answers["color"]["answers"][0], "blue");
     }
@@ -9039,8 +8797,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -9208,8 +8965,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://127.0.0.1:1".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -9241,8 +8997,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://127.0.0.1:1".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -9271,8 +9026,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://127.0.0.1:1".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -11039,8 +10793,7 @@ mod tests {
                 child_ws_url: None,
                 outbound: RpcOutbound::WebSocket(outbound_tx),
                 events_rx,
-                pending_methods: BTreeMap::new(),
-                next_request_id: 1,
+                ids: RequestIds::starting_at(1),
                 ws_url: "ws://example.test".to_string(),
                 ws_auth_token: None,
                 token_files: Vec::new(),
@@ -11199,8 +10952,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -11499,8 +11251,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -11617,8 +11368,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -11708,8 +11458,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -11859,8 +11608,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -11918,8 +11666,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -11976,8 +11723,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx.clone()),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -12125,8 +11871,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx.clone()),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -12260,8 +12005,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx.clone()),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -12388,8 +12132,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -12446,8 +12189,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -12503,8 +12245,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -12839,8 +12580,7 @@ mod tests {
             child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
-            pending_methods: BTreeMap::new(),
-            next_request_id: 1,
+            ids: RequestIds::starting_at(1),
             ws_url: "ws://example.test".to_string(),
             ws_auth_token: None,
             token_files: Vec::new(),
@@ -12908,11 +12648,18 @@ mod tests {
         ] {
             events_tx.send(event).unwrap();
         }
-        let result = send_request(&mut client, "thread/read", json!({"threadId": "thr_golden"})).await;
+        let result = send_request(
+            &mut client,
+            "thread/read",
+            json!({"threadId": "thr_golden"}),
+        )
+        .await;
         steps.push(json!({"step": "send_request ok", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
 
         events_tx
-            .send(StreamEvent::Rpc(json!({"id": 3, "error": {"code": -32000, "message": "boom"}})))
+            .send(StreamEvent::Rpc(
+                json!({"id": 3, "error": {"code": -32000, "message": "boom"}}),
+            ))
             .unwrap();
         let result = send_request(&mut client, "thread/list", json!({})).await;
         steps.push(json!({"step": "send_request error", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
@@ -12922,7 +12669,9 @@ mod tests {
         steps.push(json!({"step": "send_request missing result", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
 
         events_tx
-            .send(StreamEvent::Rpc(json!({"id": "srv-x", "method": "item/tool/requestUserInput", "params": {}})))
+            .send(StreamEvent::Rpc(
+                json!({"id": "srv-x", "method": "item/tool/requestUserInput", "params": {}}),
+            ))
             .unwrap();
         let result = send_request(&mut client, "turn/start", json!({})).await;
         steps.push(json!({"step": "send_request server request", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
@@ -12977,7 +12726,9 @@ mod tests {
             steps.push(json!({"step": format!("with_runtime auto_approve={auto_approve}"), "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
 
             events_tx
-                .send(StreamEvent::Rpc(json!({"id": "srv-bad", "method": "bogus/request", "params": {}})))
+                .send(StreamEvent::Rpc(
+                    json!({"id": "srv-bad", "method": "bogus/request", "params": {}}),
+                ))
                 .unwrap();
             let result = send_request_with_runtime(
                 &mut client,
@@ -12990,7 +12741,9 @@ mod tests {
             steps.push(json!({"step": format!("with_runtime unsupported auto_approve={auto_approve}"), "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
 
             events_tx
-                .send(StreamEvent::Rpc(json!({"id": 3, "error": {"code": 1, "message": "nope"}})))
+                .send(StreamEvent::Rpc(
+                    json!({"id": 3, "error": {"code": 1, "message": "nope"}}),
+                ))
                 .unwrap();
             let result = send_request_with_runtime(
                 &mut client,

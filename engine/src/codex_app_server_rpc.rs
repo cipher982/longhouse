@@ -86,6 +86,11 @@ impl RequestIds {
         }
     }
 
+    /// The id the next request will get.
+    pub(crate) fn peek(&self) -> u64 {
+        self.next
+    }
+
     /// The next id, not tracked.
     pub(crate) fn allocate(&mut self) -> u64 {
         let id = self.next;
