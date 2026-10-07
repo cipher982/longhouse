@@ -31,6 +31,7 @@ from zerg.services.session_state_contract import build_archive_session_state_fac
 from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_state_contract import project_transcript_facts
 from zerg.services.session_state_facts_projector import project_served_session_state_facts
+from zerg.services.session_views import build_compat_runtime_display_response
 
 NOW = datetime(2026, 7, 11, 18, 0, tzinfo=timezone.utc)
 
@@ -388,6 +389,14 @@ def test_a_keyed_interaction_is_still_what_makes_a_wait_visible():
             },
         )
 
+        assert facts.has_answerable_pending_interaction is True, kind
+        display = build_compat_runtime_display_response(
+            session_state=facts,
+            pause_request=None,
+            now=NOW,
+        )
+        assert display.needs_attention is True, kind
+
         primary = facts.presentation.primary
         assert primary is not None, kind
         assert primary.key == key, kind
@@ -426,7 +435,6 @@ def test_unanswerable_interaction_does_not_claim_a_wait():
             "kind": "structured_question",
             "status": "pending",
             "occurred_at": NOW - timedelta(seconds=4),
-            "can_respond": False,
         },
     )
 
@@ -434,6 +442,14 @@ def test_unanswerable_interaction_does_not_claim_a_wait():
     assert facts.pending_interaction.can_respond is False
     assert facts.presentation.primary is not None
     assert facts.presentation.primary.key == "idle"
+
+    assert facts.has_answerable_pending_interaction is False
+    display = build_compat_runtime_display_response(
+        session_state=facts,
+        pause_request=None,
+        now=NOW,
+    )
+    assert display.needs_attention is False
 
 
 def test_transcript_lag_never_becomes_provider_working():
@@ -1046,6 +1062,13 @@ def test_provider_auth_failure_is_actionable_without_closing_the_session():
             terminal_reason="provider_auth_required",
         ),
         session=_session(ended_at=NOW - timedelta(seconds=2)),
+        pause_request={
+            "id": "pause-auth",
+            "kind": "structured_question",
+            "status": "pending",
+            "occurred_at": NOW - timedelta(seconds=4),
+            "can_respond": True,
+        },
     )
 
     assert facts.disposition.state == "open"
@@ -1053,6 +1076,16 @@ def test_provider_auth_failure_is_actionable_without_closing_the_session():
     assert facts.presentation.primary.key == "provider_auth_required"
     assert facts.presentation.primary.label == "Provider authentication required"
     assert facts.presentation.primary.tone == "blocked"
+
+    assert facts.pending_interaction is not None
+    assert facts.pending_interaction.can_respond is True
+    assert facts.has_answerable_pending_interaction is False
+    display = build_compat_runtime_display_response(
+        session_state=facts,
+        pause_request=None,
+        now=NOW,
+    )
+    assert display.needs_attention is False
 
 
 def test_explicit_user_close_dominates_all_other_axes():

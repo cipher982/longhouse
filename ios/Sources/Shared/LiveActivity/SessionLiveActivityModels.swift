@@ -59,7 +59,7 @@ extension SessionDetail {
             displayPhase: stateFacts.primary?.label ?? "",
             activeTool: stateFacts.activityTool,
             updatedAt: Int(updatedAt.timeIntervalSince1970),
-            isAttention: stateFacts.pendingInteractionKind != nil
+            isAttention: stateFacts.hasAnswerablePendingInteraction
         )
     }
 

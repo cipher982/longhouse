@@ -108,6 +108,66 @@ struct SessionLiveActivityModelsTests {
     }
 
     @Test
+    func liveActivityAttentionRequiresAnAnswerableInteraction() throws {
+        let payload = """
+        {
+          "id": "session-answerability",
+          "provider": "claude",
+          "user_state": "active",
+          "capabilities": {},
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "signal_tier": "phase_signal",
+            "state": "quiescent",
+            "tone": "idle",
+            "headline": "Idle",
+            "detail": null,
+            "phase_label": "Idle",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_stalled": false,
+            "is_managed_local_truth": true,
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "quiet",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": null,
+            "pause_request": null
+          }
+        }
+        """
+        let base = try #require(payload.data(using: .utf8))
+        let answerableFacts = makeSessionStateFacts(
+            activity: "quiescent",
+            pendingInteractionKind: "question",
+            pendingInteractionCanRespond: true
+        )
+        let answerableData = try addingSessionStateFacts(answerableFacts, to: base)
+        let answerableDetail = try JSONDecoder.snakeCase.decodeSessionFixture(
+            SessionDetail.self,
+            from: answerableData
+        )
+        #expect(answerableDetail.liveActivityContentState().isAttention)
+
+        let unanswerableFacts = makeSessionStateFacts(
+            activity: "quiescent",
+            pendingInteractionKind: "question",
+            pendingInteractionCanRespond: false
+        )
+        let unanswerableData = try addingSessionStateFacts(unanswerableFacts, to: base)
+        let unanswerableDetail = try JSONDecoder.snakeCase.decodeSessionFixture(
+            SessionDetail.self,
+            from: unanswerableData
+        )
+        #expect(!unanswerableDetail.liveActivityContentState().isAttention)
+    }
+
+
+    @Test
     func contentStateDoesNotFallbackToStaleTopLevelProgressWhenRuntimeDisplayHasNoState() throws {
         let json = """
         {

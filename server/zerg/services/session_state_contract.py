@@ -358,6 +358,17 @@ class SessionStateFacts(_FrozenModel):
     presentation: SessionPresentation
     commit_seq: int | None = None
 
+    @property
+    def has_answerable_pending_interaction(self) -> bool:
+        interaction = self.pending_interaction
+        primary = self.presentation.primary
+        return (
+            interaction is not None
+            and interaction.can_respond
+            and primary is not None
+            and primary.key in {"needs_answer", "needs_approval"}
+        )
+
 
 def _clean(value: Any) -> str | None:
     normalized = str(value or "").strip()

@@ -293,7 +293,7 @@ def build_compat_runtime_display_response(
         compact_tool_label=activity.tool,
         is_live=activity.state in STEERABLE_ACTIVITY_STATES and activity_current,
         is_executing=activity.state in STEERABLE_ACTIVITY_STATES and activity_current,
-        needs_attention=session_state.pending_interaction is not None,
+        needs_attention=session_state.has_answerable_pending_interaction,
         is_idle=closed or activity.state == "quiescent",
         is_stalled=activity.state == "stalled",
         is_managed_local_truth=session_state.mode == "helm",

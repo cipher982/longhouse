@@ -857,7 +857,7 @@ def prepare_session_live_activity_pushes(
         if state_facts.presentation.primary is not None
         else _live_activity_display_phase(presence_state, active_tool)
     )
-    is_attention = state_facts.pending_interaction is not None
+    is_attention = state_facts.has_answerable_pending_interaction
     state_hash = _live_activity_state_hash(
         title=title,
         provider=provider,

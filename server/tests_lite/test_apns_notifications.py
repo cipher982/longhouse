@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 from unittest.mock import patch
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -42,6 +43,7 @@ from zerg.services.session_state_contract import SessionDelegationFacts
 from zerg.services.session_state_contract import SessionDispositionFacts
 from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import SessionTranscriptFacts
+from zerg.services.session_state_contract import SessionPendingInteractionFacts
 from zerg.services.session_state_contract import assemble_session_state_facts
 
 
@@ -73,7 +75,11 @@ def _seed_user(SessionLocal, *, user_id: int = 1, prefs: dict | None = None):
         db.commit()
 
 
-def test_live_activity_push_uses_canonical_session_contract(tmp_path):
+@pytest.mark.parametrize(
+    ("can_respond", "expected_attention"),
+    [(False, False), (True, True)],
+)
+def test_live_activity_push_uses_canonical_session_contract(tmp_path, can_respond, expected_attention):
     engine, SessionLocal = _make_db(tmp_path)
     session_id = uuid4()
     observed_at = datetime.now(timezone.utc).replace(microsecond=0)
@@ -101,7 +107,11 @@ def test_live_activity_push_uses_canonical_session_contract(tmp_path):
                 resume=unavailable,
             ),
         ),
-        pending_interaction=None,
+        pending_interaction=SessionPendingInteractionFacts(
+            id="pause-1",
+            kind="question",
+            can_respond=can_respond,
+        ),
         transcript=SessionTranscriptFacts(convergence="current"),
         host=SessionHostFacts(state="online", observed_at=observed_at),
         commit_seq=17,
@@ -140,10 +150,10 @@ def test_live_activity_push_uses_canonical_session_contract(tmp_path):
         assert len(pushes) == 1
         [push] = pushes
         assert push.presence_state == "running"
-        assert push.display_phase == "Using Shell"
+        assert push.display_phase == ("Needs answer" if can_respond else "Using Shell")
         assert push.active_tool == "Shell"
         assert push.title == "Canonical state cutover"
-        assert push.is_attention is False
+        assert push.is_attention is expected_attention
         assert (
             prepare_session_live_activity_pushes(
                 db,
