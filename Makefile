@@ -907,8 +907,9 @@ validate-phase-contract: ## @internal Guard the generated engine wire-phase voca
 	@python3 scripts/generate/managed_phase_contract_rs.py --check
 
 validate-managed-provider-contracts: ## @internal Guard the generated managed-provider contract manifest
-	@# The engine include_str!s server/zerg/config/managed_provider_contracts.json,
-	@# so the entire Rust-side provider authority rests on this generated file.
+	@# The engine include_str!s engine/src/managed_provider_contracts.generated.json
+	@# (the same manifest without source digests), so the entire Rust-side
+	@# provider authority rests on these generated files.
 	@# The generator had a --check mode and no caller anywhere in the repo.
 	@cd server && uv run python ../scripts/generate/generate_managed_provider_contracts.py --check
 

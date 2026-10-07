@@ -1,0 +1,4908 @@
+{
+  "schema_version": 1,
+  "providers": [
+    {
+      "provider": "codex",
+      "display_name": "Codex",
+      "marketing_name": "Codex CLI",
+      "provider_cli_binary": "codex",
+      "provider_cli_env": "LONGHOUSE_CODEX_BIN",
+      "auth_probe": {
+        "disposition": "implemented",
+        "argv": [
+          "login",
+          "status"
+        ],
+        "format": "exit_code"
+      },
+      "sign_in": {
+        "disposition": "implemented",
+        "argv": [
+          "login",
+          "--device-auth"
+        ],
+        "flow": "device_code",
+        "prerequisite": "Enable device code authorization in ChatGPT > Settings > Security first."
+      },
+      "requires_longhouse_cli": false,
+      "managed_transport": "codex_app_server",
+      "console_adapter": "codex_exec",
+      "control_plane": "codex_bridge",
+      "control_plane_aliases": [
+        "codex_app_server"
+      ],
+      "adapter_sources": [
+        "server/zerg/mcp_server/server.py",
+        "server/zerg/services/shipper/hooks.py",
+        "engine/src/claude_channel_server.rs",
+        "engine/src/codex_bridge.rs",
+        "engine/src/codex_bridge_ownership.rs",
+        "engine/src/codex_exec.rs",
+        "engine/src/console_lifecycle.rs",
+        "engine/src/codex_ws_relay.rs",
+        "engine/src/qa_fault.rs"
+      ],
+      "wire_families": [
+        "codex_jsonl",
+        "codex_app_server"
+      ],
+      "observation_sources": [
+        "native_archive",
+        "managed_bridge"
+      ],
+      "normalization_ruleset": "codex",
+      "presentation_ruleset": "shared_tool_presentation",
+      "proof_profiles": {
+        "pull_request": "hermetic",
+        "release_candidate": "staged_release",
+        "continuous": "privacy_safe_live_replay"
+      },
+      "support_tier": "launch",
+      "interaction_probes": [
+        {
+          "probe_id": "codex_model_picker",
+          "surface": "helm_tui",
+          "input_sequence": [
+            "/model",
+            "(escape)"
+          ],
+          "acknowledgement_oracle": "codex_model_picker_open_or_cancel",
+          "native_sources": [
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [],
+          "raw_output_markers": [],
+          "expected_interaction_kind": "local_control",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": false,
+          "source_surface": "helm_tui",
+          "state_mutation_scope": "session_model",
+          "evidence_class": "live_no_token",
+          "disposition": "implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        }
+      ],
+      "release_channel": {
+        "channel": "github_releases",
+        "coordinate": "openai/codex",
+        "version_discovery": "stable_github_releases",
+        "verification": "sha256_asset_digest_and_version",
+        "platform_artifacts": {
+          "linux-x86_64": [
+            "codex-x86_64-unknown-linux-musl.tar.gz",
+            "codex-package-x86_64-unknown-linux-musl.tar.gz"
+          ],
+          "linux-aarch64": [
+            "codex-aarch64-unknown-linux-musl.tar.gz",
+            "codex-package-aarch64-unknown-linux-musl.tar.gz"
+          ],
+          "darwin-x86_64": "codex-x86_64-apple-darwin.tar.gz",
+          "darwin-aarch64": "codex-aarch64-apple-darwin.tar.gz",
+          "windows-x86_64": "codex-x86_64-pc-windows-msvc.exe.zip",
+          "windows-aarch64": "codex-aarch64-pc-windows-msvc.exe.zip"
+        }
+      },
+      "permission_prompt_surface": true,
+      "external_event_channel": null,
+      "pause_tool_name": "requestUserInput",
+      "harness_safe_no_token_prompt": false,
+      "harness_safe_managed_session_scenarios": [
+        "launch_managed_session",
+        "send_receive"
+      ],
+      "harness_real_managed_session_e2e": true,
+      "launch_local": true,
+      "run_once": true,
+      "reattach": true,
+      "send_input": true,
+      "interrupt": true,
+      "steer_active_turn": true,
+      "answer_pause": true,
+      "terminate": true,
+      "tail_output": true,
+      "runtime_phase": true,
+      "transcript_binding": true,
+      "live_proof": false,
+      "startup_coordination_context": false,
+      "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "codex_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.activity.turn_boundary": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.activity_turn_boundary",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "activity_returns_to_quiescent_at_turn_boundary",
+              "scenario_id": "codex_turn_boundary_quiescent",
+              "oracle_source": "server/zerg/qa/codex_provider_release_canary.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.turn.steer": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.turn_steer",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_turn_steer_preserved",
+              "scenario_id": "codex_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.turn.start": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.turn_start",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_adapter_release_contract_preserved",
+              "variant": "interrupt_supported",
+              "scenario_id": "codex_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 5,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.branch.console": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.branch_console",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "branch_fork_produces_a_new_thread",
+              "scenario_id": "console_thread_fork",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.resume.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "cold_resume_registers_continuous_thread",
+              "scenario_id": "helm_cold_resume",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "native_provider_resume_proven",
+              "variant": "clean_exit",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "native_provider_resume_proven",
+              "variant": "process_loss",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "live_reattach_does_not_spawn_owner",
+              "scenario_id": "helm_live_reattach",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "console_continuation_is_distinct",
+              "scenario_id": "console_thread_continue",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "session_thread_and_machine_identity_continue",
+              "scenario_id": "resume_identity_continuity",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "resume_attempt_is_idempotent",
+              "scenario_id": "resume_attempt_idempotency",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "one_local_provider_owner_wins",
+              "scenario_id": "resume_single_owner",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "stale_input_is_not_replayed",
+              "scenario_id": "resume_input_safety",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "failed_resume_closes_attempt_and_restores_contract",
+              "scenario_id": "resume_failure_cleanup",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.launch.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.launch_local",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "helm_launch_visibility_preserved",
+              "scenario_id": "codex_helm_launch_visibility",
+              "oracle_source": "server/zerg/qa/provider_launch_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "codex_helm_send_idle",
+              "scenario_id": "codex_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/codex_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "codex_helm_steer_active",
+              "scenario_id": "codex_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/codex_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "codex_helm_abort_native",
+              "scenario_id": "codex_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/codex_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "codex_helm_terminate_owned",
+              "scenario_id": "codex_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/codex_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "coordination.awareness.create": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.coordination_awareness",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "coordination_instructions_model_visible",
+              "scenario_id": "codex_coordination_awareness_create",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 86400
+            }
+          ]
+        },
+        "coordination.awareness.post_compaction": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.coordination_awareness",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "coordination_instructions_model_visible_after_compaction",
+              "scenario_id": "codex_coordination_awareness_post_compaction",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 86400
+            },
+            {
+              "id": "no_duplicate_visible_bootstrap",
+              "scenario_id": "codex_coordination_awareness_post_compaction",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "coordination.directed_input.send": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.coordination_directed_input",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "provider_input_receipt_linked",
+              "scenario_id": "codex_coordination_directed_input",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "coordination.directed_input.receive": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.coordination_directed_input",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "attributed_input_visible",
+              "scenario_id": "codex_coordination_directed_input",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        }
+      },
+      "can_resume": true,
+      "turn_start": true,
+      "fork_thread": true,
+      "operation_evidence": {
+        "launch_local": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "helm_launch_visibility_preserved",
+              "scenario_id": "codex_helm_launch_visibility",
+              "oracle_source": "server/zerg/qa/provider_launch_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: helm_launch_visibility_preserved"
+        },
+        "run_once": {
+          "level": "hermetic",
+          "source": "engine codex_exec argv/runtime terminal tests plus server one-shot launch tests",
+          "disposition": "implemented",
+          "owner_action": "codex exec live-token transcript canary",
+          "blocker": "budget"
+        },
+        "fork_thread": {
+          "level": "live_no_token",
+          "source": "engine codex_exec installed_codex_forks_into_a_new_thread_that_remembers_the_parent",
+          "disposition": "implemented",
+          "owner_action": "fork canary in the release lane rather than run by hand",
+          "blocker": "budget"
+        },
+        "reattach": {
+          "level": "live_no_token",
+          "source": "scripts/qa/codex-provider-release-canary.py managed_tui_attach --remote",
+          "disposition": "implemented",
+          "owner_action": "codex resume-after-process-restart assertion"
+        },
+        "send_input": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "codex_helm_send_idle",
+              "scenario_id": "codex_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/codex_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: codex_helm_send_idle"
+        },
+        "interrupt": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "codex_helm_abort_native",
+              "scenario_id": "codex_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/codex_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: codex_helm_abort_native"
+        },
+        "steer_active_turn": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "codex_helm_steer_active",
+              "scenario_id": "codex_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/codex_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: codex_helm_steer_active"
+        },
+        "answer_pause": {
+          "level": "hermetic",
+          "source": "engine codex_bridge pause-answer command tests",
+          "disposition": "implemented",
+          "owner_action": "codex_bridge live-token pause-answer transcript canary",
+          "blocker": "budget"
+        },
+        "terminate": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "codex_helm_terminate_owned",
+              "scenario_id": "codex_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/codex_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: codex_helm_terminate_owned"
+        },
+        "tail_output": {
+          "level": "live_no_token",
+          "source": "Codex bridge rollout/transcript binding canaries",
+          "disposition": "implemented",
+          "owner_action": "codex rollout transcript live-token assertion",
+          "blocker": "budget"
+        },
+        "runtime_phase": {
+          "level": "hermetic",
+          "source": "engine codex_bridge runtime event reducer tests",
+          "disposition": "implemented",
+          "owner_action": "codex live runtime-phase canary"
+        },
+        "transcript_binding": {
+          "level": "hermetic",
+          "source": "Codex hook and rollout ingestion tests",
+          "disposition": "implemented",
+          "owner_action": "codex live transcript assertion"
+        },
+        "turn_start": {
+          "level": "hermetic",
+          "source": "codex_exec turn claims and Console dispatch tests",
+          "disposition": "implemented",
+          "owner_action": "codex_exec live Console dispatch canary"
+        }
+      },
+      "machine_control_supports": [
+        "codex.send",
+        "codex.interrupt",
+        "codex.steer",
+        "codex.answer_pause",
+        "codex.run_once",
+        "codex.resume_run_once",
+        "codex.turn_start",
+        "codex.turn_steer",
+        "codex.turn_interrupt",
+        "codex.invocation_close"
+      ],
+      "transcript_signals": {
+        "delegation.spawn": {
+          "disposition": "not_implemented",
+          "raw_source": "session_meta/source.subagent.thread_spawn",
+          "entrypoints": [
+            "cli"
+          ],
+          "canary": "codex_orchestration_signals",
+          "trigger": "spawn_subagent",
+          "owner_action": "widen CodexSubagentSource to carry depth/agent_nickname/agent_role and expose lineage_kind; parent_thread_id alone is already read"
+        },
+        "delegation.background": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "codex_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "Codex writes no in-flight count or registry; pendingBackgroundAgentCount is a Claude system/turn_duration field and appears in zero Codex rollouts (verified: the single hit in the local corpus is a transcript quoting this documentation)"
+        },
+        "delegation.workflow": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "codex_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no dynamic-workflow surface observed in 728 rollouts; the release census closes this cell if one appears"
+        },
+        "delegation.scheduled": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "codex_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no session-scoped scheduled-wakeup surface observed"
+        },
+        "delegation.peer_message": {
+          "disposition": "not_implemented",
+          "raw_source": "response_item/agent_message.author+recipient",
+          "entrypoints": [
+            "cli"
+          ],
+          "canary": "codex_orchestration_signals",
+          "trigger": "peer_send",
+          "owner_action": "project author/recipient agent messages and inter_agent_communication_metadata as a delegation edge"
+        },
+        "turn.duration": {
+          "disposition": "implemented",
+          "raw_source": "event_msg/task_complete + event_msg/turn_aborted",
+          "first_seen_version": "0.142.2",
+          "fixture": "engine/tests/fixtures/golden/codex/rollout-turn_signals.jsonl",
+          "canary": "codex_transcript_signals",
+          "trigger": "turn_end"
+        },
+        "session.recap": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "codex_transcript_signals",
+          "trigger": "idle_after_turn",
+          "owner_action": "Codex 0.153.0 recaps (tui.auto_recap, /recap) are rendered in the TUI from history and never enter the rollout; the census closes this cell if a recap record appears"
+        },
+        "session.title": {
+          "disposition": "not_implemented",
+          "raw_source": "sidecar:state_5.sqlite/threads.name",
+          "canary": "codex_transcript_signals",
+          "trigger": "first_turn",
+          "owner_action": "read threads.name from the Codex state store; Codex named 11 of 2257 threads on the reference machine, so the Longhouse title stays the default until that changes"
+        },
+        "turn.usage": {
+          "disposition": "implemented",
+          "raw_source": "event_msg/token_count + turn_context, stamped on the turn's closing line",
+          "first_seen_version": "0.142.2",
+          "fixture": "engine/tests/fixtures/golden/codex/rollout-turn_signals.jsonl",
+          "canary": "codex_transcript_signals",
+          "trigger": "turn_end"
+        },
+        "turn.api_error": {
+          "disposition": "implemented",
+          "raw_source": "event_msg/error + event_msg/stream_error",
+          "fixture": "engine/tests/fixtures/golden/codex/rollout-turn_signals.jsonl",
+          "canary": "codex_transcript_signals",
+          "trigger": "none_reliable",
+          "owner_action": "shapes taken from the 0.151.0 protocol crate (ErrorEvent, StreamErrorEvent); neither has appeared in the reference corpus yet"
+        },
+        "context.compaction": {
+          "disposition": "implemented",
+          "raw_source": "compacted",
+          "first_seen_version": "0.142.2",
+          "fixture": "engine/tests/fixtures/golden/codex/rollout-turn_signals.jsonl",
+          "canary": "codex_transcript_signals",
+          "trigger": "slash_compact"
+        },
+        "input.queue": {
+          "disposition": "not_implemented",
+          "raw_source": "sidecar:queue_1.sqlite/queued_items",
+          "canary": "codex_transcript_signals",
+          "trigger": "send_while_working",
+          "owner_action": "read queued items from the Codex queue store"
+        },
+        "turn.thinking": {
+          "disposition": "not_implemented",
+          "raw_source": "response_item/reasoning",
+          "first_seen_version": "0.142.2",
+          "canary": "codex_transcript_signals",
+          "trigger": "turn_end",
+          "owner_action": "render reasoning as collapsed thinking records"
+        }
+      }
+    },
+    {
+      "provider": "claude",
+      "display_name": "Claude",
+      "marketing_name": "Claude Code",
+      "provider_cli_binary": "claude",
+      "provider_cli_env": "LONGHOUSE_CLAUDE_BIN",
+      "auth_probe": {
+        "disposition": "implemented",
+        "argv": [
+          "auth",
+          "status"
+        ],
+        "format": "json",
+        "logged_in_field": "loggedIn",
+        "plan_field": "subscriptionType",
+        "credential_override_field": "apiKeySource"
+      },
+      "sign_in": {
+        "disposition": "implemented",
+        "argv": [
+          "auth",
+          "login",
+          "--claudeai"
+        ],
+        "flow": "paste_code"
+      },
+      "requires_longhouse_cli": false,
+      "managed_transport": "claude_channel_bridge",
+      "console_adapter": "claude_print",
+      "control_plane": "claude_channel_bridge",
+      "control_plane_aliases": [],
+      "adapter_sources": [
+        "engine/src/claude_channel_server.rs",
+        "server/zerg/services/shipper/hooks.py",
+        "engine/src/claude_print.rs",
+        "engine/src/console_sink.rs",
+        "engine/src/console_lifecycle.rs"
+      ],
+      "wire_families": [
+        "claude_jsonl",
+        "claude_hooks",
+        "claude_channel"
+      ],
+      "observation_sources": [
+        "native_archive",
+        "hooks",
+        "managed_bridge"
+      ],
+      "normalization_ruleset": "claude",
+      "presentation_ruleset": "shared_tool_presentation",
+      "proof_profiles": {
+        "pull_request": "hermetic",
+        "release_candidate": "staged_release",
+        "continuous": "privacy_safe_live_replay"
+      },
+      "support_tier": "launch",
+      "interaction_probes": [
+        {
+          "probe_id": "claude_effort_command",
+          "surface": "helm_tui",
+          "input_sequence": [
+            "/effort high"
+          ],
+          "acknowledgement_oracle": "claude_local_command_stdout",
+          "native_sources": [
+            "provider_file",
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "<local-command-caveat>",
+            "<command-name>",
+            "<command-message>",
+            "<command-args>"
+          ],
+          "raw_output_markers": [
+            "<local-command-stdout>"
+          ],
+          "expected_interaction_kind": "local_control",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": true,
+          "source_surface": "helm_tui",
+          "state_mutation_scope": "session_effort",
+          "evidence_class": "live_no_token",
+          "disposition": "implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        },
+        {
+          "probe_id": "claude_model_picker",
+          "surface": "helm_tui",
+          "input_sequence": [
+            "/model",
+            "(escape)"
+          ],
+          "acknowledgement_oracle": "claude_model_picker_cancelled",
+          "native_sources": [
+            "provider_file",
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [],
+          "raw_output_markers": [],
+          "expected_interaction_kind": "local_control",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": false,
+          "source_surface": "helm_tui",
+          "state_mutation_scope": "session_model",
+          "evidence_class": "live_no_token",
+          "disposition": "implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        },
+        {
+          "probe_id": "claude_clear_boundary",
+          "surface": "helm_tui",
+          "input_sequence": [
+            "/clear"
+          ],
+          "acknowledgement_oracle": "claude_conversation_reset",
+          "native_sources": [
+            "provider_file",
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "<local-command-caveat>",
+            "<command-name>",
+            "<command-message>",
+            "<command-args>"
+          ],
+          "raw_output_markers": [
+            "<local-command-stdout>"
+          ],
+          "expected_interaction_kind": "conversation_boundary",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": true,
+          "source_surface": "helm_tui",
+          "state_mutation_scope": "conversation_identity",
+          "evidence_class": "live_no_token",
+          "disposition": "implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        }
+      ],
+      "release_channel": {
+        "channel": "npm_registry",
+        "coordinate": "@anthropic-ai/claude-code",
+        "version_discovery": "npm_latest_dist_tag",
+        "verification": "npm_sha512_integrity_and_version",
+        "platform_artifacts": {
+          "linux-x86_64": "@anthropic-ai/claude-code-linux-x64",
+          "linux-aarch64": "@anthropic-ai/claude-code-linux-arm64",
+          "darwin-x86_64": "@anthropic-ai/claude-code-darwin-x64",
+          "darwin-aarch64": "@anthropic-ai/claude-code-darwin-arm64",
+          "windows-x86_64": "@anthropic-ai/claude-code-win32-x64",
+          "windows-aarch64": "@anthropic-ai/claude-code-win32-arm64"
+        }
+      },
+      "permission_prompt_surface": true,
+      "external_event_channel": "provider_live.claude_development_channel",
+      "pause_tool_name": "AskUserQuestion",
+      "harness_safe_no_token_prompt": false,
+      "harness_safe_managed_session_scenarios": [],
+      "harness_real_managed_session_e2e": true,
+      "launch_local": true,
+      "run_once": false,
+      "reattach": true,
+      "send_input": true,
+      "interrupt": true,
+      "steer_active_turn": true,
+      "answer_pause": true,
+      "terminate": true,
+      "tail_output": true,
+      "runtime_phase": true,
+      "transcript_binding": true,
+      "live_proof": true,
+      "startup_coordination_context": true,
+      "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "claude_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.activity.turn_boundary": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.activity_turn_boundary",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "activity_returns_to_quiescent_at_turn_boundary",
+              "scenario_id": "claude_turn_boundary_quiescent",
+              "oracle_source": "server/zerg/qa/managed_claude_live.py",
+              "minimum_scenario_revision": 3,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.resume.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "cold_resume_registers_continuous_thread",
+              "scenario_id": "helm_cold_resume",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "native_provider_resume_proven",
+              "variant": "clean_exit",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "native_provider_resume_proven",
+              "variant": "process_loss",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "live_reattach_does_not_spawn_owner",
+              "scenario_id": "helm_live_reattach",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "console_continuation_is_distinct",
+              "scenario_id": "console_thread_continue",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "session_thread_and_machine_identity_continue",
+              "scenario_id": "resume_identity_continuity",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "resume_attempt_is_idempotent",
+              "scenario_id": "resume_attempt_idempotency",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "one_local_provider_owner_wins",
+              "scenario_id": "resume_single_owner",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "stale_input_is_not_replayed",
+              "scenario_id": "resume_input_safety",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "failed_resume_closes_attempt_and_restores_contract",
+              "scenario_id": "resume_failure_cleanup",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.launch.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.launch_local",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "claude_cli_channel_contract_preserved",
+              "scenario_id": "claude_real_print",
+              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_no_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "claude_helm_launch_registration",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "claude_helm_send_idle",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "claude_helm_steer_active",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "claude_helm_abort_native",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "claude_helm_terminate_owned",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.turn.steer": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.turn_steer",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_turn_steer_preserved",
+              "scenario_id": "claude_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.turn.start": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.turn_start",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_adapter_release_contract_preserved",
+              "variant": "interrupt_supported",
+              "scenario_id": "claude_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "real_print_marker_returned",
+              "scenario_id": "claude_real_print",
+              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 86400
+            }
+          ]
+        },
+        "coordination.awareness.create": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.coordination_awareness",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "coordination_instructions_model_visible",
+              "scenario_id": "claude_coordination_awareness_create",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 4,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 86400
+            }
+          ]
+        },
+        "coordination.awareness.post_compaction": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.coordination_awareness",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "coordination_instructions_model_visible_after_compaction",
+              "scenario_id": "claude_coordination_awareness_post_compaction",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 4,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 86400
+            },
+            {
+              "id": "no_duplicate_visible_bootstrap",
+              "scenario_id": "claude_coordination_awareness_post_compaction",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 4,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "coordination.directed_input.send": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.coordination_directed_input",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "provider_input_receipt_linked",
+              "scenario_id": "claude_coordination_directed_input",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 5,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "coordination.directed_input.receive": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.coordination_directed_input",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "attributed_input_visible",
+              "scenario_id": "claude_coordination_directed_input",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 5,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.delegation.background": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.delegation_background",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "claude_background_native_source",
+              "scenario_id": "claude_background_jobs",
+              "oracle_source": "server/zerg/qa/claude_background_producer.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "claude_background_parent_turn_boundary",
+              "scenario_id": "claude_background_jobs",
+              "oracle_source": "server/zerg/qa/claude_background_producer.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "claude_background_registry_served",
+              "scenario_id": "claude_background_jobs",
+              "oracle_source": "server/zerg/qa/claude_background_producer.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "claude_background_callbacks_scoped",
+              "scenario_id": "claude_background_jobs",
+              "oracle_source": "server/zerg/qa/claude_background_producer.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "claude_background_explicit_empty",
+              "scenario_id": "claude_background_jobs",
+              "oracle_source": "server/zerg/qa/claude_background_producer.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        }
+      },
+      "can_resume": true,
+      "turn_start": true,
+      "fork_thread": false,
+      "operation_evidence": {
+        "fork_thread": {
+          "level": "none",
+          "source": "not implemented; `claude --resume ID --fork-session` verified present against installed 2.1.247 but claude_print still binds the parent identity",
+          "disposition": "not_implemented",
+          "owner_action": "teach claude_print to discover the forked session id before binding, then add the installed-binary fork canary beside Codex's"
+        },
+        "launch_local": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "claude_helm_launch_registration",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: claude_helm_launch_registration"
+        },
+        "run_once": {
+          "level": "none",
+          "source": "legacy session.run_once is retired; Claude Console uses session.turn.start through claude_print",
+          "disposition": "policy_disabled",
+          "reason": "Legacy session.run_once is retired for Claude; Console turns are turn-scoped rather than one-shot runs.",
+          "routed_to": "session.turn.start through the claude_print adapter"
+        },
+        "reattach": {
+          "level": "hermetic",
+          "source": "Claude channel bridge session state and resume unit coverage",
+          "disposition": "implemented",
+          "owner_action": "claude launch, restart, reattach, and send against one session id"
+        },
+        "send_input": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "claude_helm_send_idle",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: claude_helm_send_idle"
+        },
+        "interrupt": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "claude_helm_abort_native",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: claude_helm_abort_native"
+        },
+        "steer_active_turn": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "claude_helm_steer_active",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: claude_helm_steer_active"
+        },
+        "answer_pause": {
+          "level": "hermetic",
+          "source": "Claude channel bridge pause-answer command tests",
+          "disposition": "implemented",
+          "owner_action": "claude live-token pause-answer transcript canary",
+          "blocker": "budget"
+        },
+        "terminate": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "claude_helm_terminate_owned",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: claude_helm_terminate_owned"
+        },
+        "tail_output": {
+          "level": "hermetic",
+          "source": "Claude transcript ingest and channel observation tests",
+          "disposition": "implemented",
+          "owner_action": "claude live transcript tail assertion"
+        },
+        "runtime_phase": {
+          "level": "hermetic",
+          "source": "Claude hooks/channel runtime phase tests",
+          "disposition": "implemented",
+          "owner_action": "claude live active-turn phase freshness canary"
+        },
+        "transcript_binding": {
+          "level": "hermetic",
+          "source": "Claude hook transcript binding tests",
+          "disposition": "implemented",
+          "owner_action": "claude release-canary live transcript assertion"
+        },
+        "turn_start": {
+          "level": "hermetic",
+          "source": "engine production-dispatch test proves bounded fresh/resume claude_print argv, binding env, identity, and terminal evidence",
+          "disposition": "implemented",
+          "owner_action": "claude_print fresh, resume, interrupt, and restart transcript convergence proof"
+        }
+      },
+      "machine_control_supports": [
+        "claude.send",
+        "claude.interrupt",
+        "claude.steer",
+        "claude.terminate",
+        "claude.answer_pause",
+        "claude.turn_start",
+        "claude.turn_interrupt",
+        "claude.turn_steer",
+        "claude.invocation_close"
+      ],
+      "transcript_signals": {
+        "delegation.spawn": {
+          "disposition": "not_implemented",
+          "raw_source": "subagents/agent-*.meta.json",
+          "entrypoints": [
+            "cli"
+          ],
+          "first_seen_version": "2.1.150",
+          "canary": "claude_orchestration_signals",
+          "trigger": "spawn_subagent",
+          "owner_action": "read agent_id/agent_type from every hook so a child's tool event stops writing the parent's activity head; read requestShape/spawnDepth from the spawn sidecar"
+        },
+        "delegation.background": {
+          "disposition": "not_implemented",
+          "raw_source": "system/turn_duration.pendingBackgroundAgentCount",
+          "entrypoints": [
+            "cli"
+          ],
+          "first_seen_version": "2.1.259",
+          "canary": "claude_orchestration_signals",
+          "trigger": "background_work",
+          "owner_action": "consume the pending_background_agents provider fact the engine already ships with no reader; the live typed registry (hook Stop background_tasks[]) is a product seam, not a transcript signal, because the release census cannot fingerprint hook stdin"
+        },
+        "delegation.workflow": {
+          "disposition": "not_implemented",
+          "raw_source": "subagents/workflows/<run>/journal.jsonl",
+          "entrypoints": [
+            "cli"
+          ],
+          "first_seen_version": "2.1.150",
+          "canary": "claude_orchestration_signals",
+          "trigger": "workflow_run",
+          "owner_action": "read the started/result/failed ledger for fan-out width and per-branch verdicts instead of skipping the file at discovery"
+        },
+        "delegation.scheduled": {
+          "disposition": "not_implemented",
+          "raw_source": "system/scheduled_task_fire",
+          "entrypoints": [
+            "cli"
+          ],
+          "first_seen_version": "2.1.161",
+          "canary": "claude_orchestration_signals",
+          "trigger": "cron_create",
+          "owner_action": "add the scheduled_task_fire shape to the parser and the fired cron to the delegated-work dimension"
+        },
+        "delegation.peer_message": {
+          "disposition": "not_implemented",
+          "raw_source": "tool_use/SendMessage",
+          "entrypoints": [
+            "cli"
+          ],
+          "first_seen_version": "2.1.150",
+          "canary": "claude_orchestration_signals",
+          "trigger": "peer_send",
+          "owner_action": "model the SendMessage call and its pin/resume result as a delegation edge"
+        },
+        "turn.duration": {
+          "disposition": "implemented",
+          "raw_source": "system/turn_duration",
+          "entrypoints": [
+            "cli"
+          ],
+          "first_seen_version": "2.1.150",
+          "fixture": "engine/tests/fixtures/golden/claude/turn_duration.jsonl",
+          "canary": "claude_transcript_signals",
+          "trigger": "turn_end"
+        },
+        "session.recap": {
+          "disposition": "implemented",
+          "raw_source": "system/away_summary",
+          "entrypoints": [
+            "cli"
+          ],
+          "first_seen_version": "2.1.158",
+          "fixture": "engine/tests/fixtures/golden/claude/recap_title.jsonl",
+          "canary": "claude_transcript_signals",
+          "trigger": "idle_after_turn"
+        },
+        "session.title": {
+          "disposition": "implemented",
+          "raw_source": "ai-title",
+          "entrypoints": [
+            "cli"
+          ],
+          "first_seen_version": "2.1.150",
+          "fixture": "engine/tests/fixtures/golden/claude/recap_title.jsonl",
+          "canary": "claude_transcript_signals",
+          "trigger": "first_turn"
+        },
+        "turn.usage": {
+          "disposition": "implemented",
+          "raw_source": "assistant.message.usage",
+          "entrypoints": [
+            "cli",
+            "sdk-cli"
+          ],
+          "first_seen_version": "2.1.121",
+          "fixture": "engine/tests/fixtures/golden/claude/usage_errors_compaction.jsonl",
+          "canary": "claude_transcript_signals",
+          "trigger": "turn_end"
+        },
+        "turn.api_error": {
+          "disposition": "implemented",
+          "raw_source": "system/api_error",
+          "entrypoints": [
+            "cli"
+          ],
+          "first_seen_version": "2.1.152",
+          "fixture": "engine/tests/fixtures/golden/claude/usage_errors_compaction.jsonl",
+          "canary": "claude_transcript_signals",
+          "trigger": "none_reliable"
+        },
+        "context.compaction": {
+          "disposition": "implemented",
+          "raw_source": "system/compact_boundary",
+          "entrypoints": [
+            "cli",
+            "sdk-cli"
+          ],
+          "first_seen_version": "2.1.150",
+          "fixture": "engine/tests/fixtures/golden/claude/usage_errors_compaction.jsonl",
+          "canary": "claude_transcript_signals",
+          "trigger": "slash_compact"
+        },
+        "input.queue": {
+          "disposition": "not_implemented",
+          "raw_source": "queue-operation",
+          "entrypoints": [
+            "cli"
+          ],
+          "first_seen_version": "2.1.150",
+          "canary": "claude_transcript_signals",
+          "trigger": "send_while_working",
+          "owner_action": "project absorbed_mid_turn beside the receipt-based send reconciliation"
+        },
+        "turn.thinking": {
+          "disposition": "not_implemented",
+          "raw_source": "assistant.content.thinking",
+          "entrypoints": [
+            "cli",
+            "sdk-cli"
+          ],
+          "first_seen_version": "2.1.121",
+          "canary": "claude_transcript_signals",
+          "trigger": "turn_end",
+          "owner_action": "render as collapsed thinking records with a thinking interaction kind"
+        }
+      }
+    },
+    {
+      "provider": "opencode",
+      "display_name": "OpenCode",
+      "marketing_name": "OpenCode",
+      "provider_cli_binary": "opencode",
+      "provider_cli_env": "LONGHOUSE_OPENCODE_BIN",
+      "auth_probe": {
+        "disposition": "not_implemented",
+        "owner_action": "observe `opencode auth list` with an empty credential store and record whether it signals absence by exit code or output"
+      },
+      "requires_longhouse_cli": false,
+      "managed_transport": "opencode_server_bridge",
+      "console_adapter": "opencode_run",
+      "control_plane": "opencode_server_bridge",
+      "control_plane_aliases": [],
+      "adapter_sources": [
+        "server/zerg/mcp_server/server.py",
+        "engine/src/opencode_control.rs",
+        "engine/src/opencode_run.rs",
+        "engine/src/console_sink.rs",
+        "engine/src/opencode_server.rs"
+      ],
+      "wire_families": [
+        "opencode_storage",
+        "opencode_server_events"
+      ],
+      "observation_sources": [
+        "native_archive",
+        "managed_bridge"
+      ],
+      "normalization_ruleset": "opencode",
+      "presentation_ruleset": "shared_tool_presentation",
+      "proof_profiles": {
+        "pull_request": "hermetic",
+        "release_candidate": "staged_release",
+        "continuous": "privacy_safe_live_replay"
+      },
+      "support_tier": "launch",
+      "interaction_probes": [
+        {
+          "probe_id": "opencode_new_boundary",
+          "surface": "helm_tui",
+          "input_sequence": [
+            "/new"
+          ],
+          "acknowledgement_oracle": "opencode_conversation_reset",
+          "native_sources": [
+            "provider_file",
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "session.created.1",
+            "sessionID"
+          ],
+          "raw_output_markers": [
+            "sessionID"
+          ],
+          "expected_interaction_kind": "provider_system",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": true,
+          "source_surface": "helm_tui",
+          "state_mutation_scope": "conversation_identity",
+          "evidence_class": "live_no_token",
+          "disposition": "implemented",
+          "canary": "server/zerg/qa/opencode_conversation_reset.py"
+        },
+        {
+          "probe_id": "opencode_help_command",
+          "surface": "helm_tui",
+          "input_sequence": [
+            "/help"
+          ],
+          "acknowledgement_oracle": "opencode_local_help_output",
+          "native_sources": [
+            "provider_file",
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [],
+          "raw_output_markers": [],
+          "expected_interaction_kind": "local_control",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": false,
+          "source_surface": "helm_tui",
+          "state_mutation_scope": "command_help",
+          "evidence_class": "live_no_token",
+          "disposition": "implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        }
+      ],
+      "release_channel": {
+        "channel": "github_releases",
+        "coordinate": "anomalyco/opencode",
+        "version_discovery": "stable_github_releases",
+        "verification": "sha256_asset_digest_and_version",
+        "platform_artifacts": {
+          "linux-x86_64": "opencode-linux-x64-baseline.tar.gz",
+          "linux-aarch64": "opencode-linux-arm64.tar.gz",
+          "darwin-x86_64": "opencode-darwin-x64-baseline.zip",
+          "darwin-aarch64": "opencode-darwin-arm64.zip"
+        }
+      },
+      "permission_prompt_surface": true,
+      "external_event_channel": null,
+      "pause_tool_name": "opencode_pause_request",
+      "harness_safe_no_token_prompt": false,
+      "harness_safe_managed_session_scenarios": [
+        "launch_managed_session",
+        "send_receive"
+      ],
+      "harness_real_managed_session_e2e": true,
+      "launch_local": true,
+      "run_once": false,
+      "reattach": true,
+      "send_input": true,
+      "interrupt": true,
+      "steer_active_turn": true,
+      "answer_pause": true,
+      "terminate": true,
+      "tail_output": true,
+      "runtime_phase": true,
+      "transcript_binding": true,
+      "live_proof": true,
+      "startup_coordination_context": false,
+      "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "opencode_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.activity.turn_boundary": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.activity_turn_boundary",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "activity_returns_to_quiescent_at_turn_boundary",
+              "scenario_id": "opencode_turn_boundary_quiescent",
+              "oracle_source": "server/zerg/qa/opencode_server_qualification.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.turn.steer": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.turn_steer",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_turn_steer_preserved",
+              "scenario_id": "opencode_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.turn.start": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.turn_start",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_adapter_release_contract_preserved",
+              "variant": "interrupt_supported",
+              "scenario_id": "opencode_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.resume.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "cold_resume_registers_continuous_thread",
+              "scenario_id": "helm_cold_resume",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "native_provider_resume_proven",
+              "variant": "clean_exit",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "native_provider_resume_proven",
+              "variant": "process_loss",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "live_reattach_does_not_spawn_owner",
+              "scenario_id": "helm_live_reattach",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "console_continuation_is_distinct",
+              "scenario_id": "console_thread_continue",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "session_thread_and_machine_identity_continue",
+              "scenario_id": "resume_identity_continuity",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "resume_attempt_is_idempotent",
+              "scenario_id": "resume_attempt_idempotency",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "one_local_provider_owner_wins",
+              "scenario_id": "resume_single_owner",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "stale_input_is_not_replayed",
+              "scenario_id": "resume_input_safety",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "failed_resume_closes_attempt_and_restores_contract",
+              "scenario_id": "resume_failure_cleanup",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.launch.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.launch_local",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "serve_session_contract_preserved",
+              "scenario_id": "opencode_server_contract",
+              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_no_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "opencode_helm_launch_registration",
+              "scenario_id": "opencode_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/opencode_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "opencode_helm_send_idle",
+              "scenario_id": "opencode_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/opencode_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "opencode_helm_steer_active",
+              "scenario_id": "opencode_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/opencode_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "opencode_helm_abort_native",
+              "scenario_id": "opencode_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/opencode_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "opencode_helm_terminate_owned",
+              "scenario_id": "opencode_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/opencode_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.reattach.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.reattach",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "process_restart_reattach_preserved",
+              "scenario_id": "opencode_server_contract",
+              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_no_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        }
+      },
+      "can_resume": true,
+      "turn_start": true,
+      "fork_thread": false,
+      "operation_evidence": {
+        "fork_thread": {
+          "level": "none",
+          "source": "not implemented; no fork surface observed on the OpenCode run adapter",
+          "disposition": "not_implemented",
+          "owner_action": "observe whether OpenCode can branch a session and record the surface"
+        },
+        "launch_local": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "opencode_helm_launch_registration",
+              "scenario_id": "opencode_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/opencode_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: opencode_helm_launch_registration"
+        },
+        "run_once": {
+          "level": "none",
+          "source": "OpenCode Console uses turn_start; session.run_once is not supported by the engine",
+          "disposition": "policy_disabled",
+          "reason": "The engine has no OpenCode one-shot run path; Console work is turn-scoped.",
+          "routed_to": "session.turn.start through the opencode_run adapter"
+        },
+        "reattach": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "process_restart_reattach_preserved",
+              "scenario_id": "opencode_server_contract",
+              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_no_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_no_token",
+          "source": "factory assertions: process_restart_reattach_preserved"
+        },
+        "send_input": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "opencode_helm_send_idle",
+              "scenario_id": "opencode_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/opencode_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: opencode_helm_send_idle"
+        },
+        "interrupt": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "opencode_helm_abort_native",
+              "scenario_id": "opencode_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/opencode_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: opencode_helm_abort_native"
+        },
+        "steer_active_turn": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "opencode_helm_steer_active",
+              "scenario_id": "opencode_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/opencode_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "reason": "Bounded, not immediate. prompt_async into a running turn is picked up before the turn's next model call, so a steer lands after the current tool call finishes; one long tool call delays it. Verified 2026-09-16 on 1.17.20: a steer after tool call 2 of 5 prevented calls 3-5 and replaced the final answer.",
+          "observed_provider_version": "1.17.20",
+          "level": "live_token",
+          "source": "factory assertions: opencode_helm_steer_active"
+        },
+        "answer_pause": {
+          "level": "hermetic",
+          "source": "engine OpenCode permission reply endpoint and managed pause dispatch tests",
+          "disposition": "implemented",
+          "owner_action": "opencode_bridge permission.reply live canary"
+        },
+        "terminate": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "opencode_helm_terminate_owned",
+              "scenario_id": "opencode_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/opencode_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: opencode_helm_terminate_owned"
+        },
+        "tail_output": {
+          "level": "hermetic",
+          "source": "OpenCode plugin transcript observation tests",
+          "disposition": "implemented",
+          "owner_action": "opencode live transcript assertion"
+        },
+        "runtime_phase": {
+          "level": "hermetic",
+          "source": "engine OpenCode bridge maps the server session.status stream to phase signals",
+          "disposition": "implemented",
+          "owner_action": "opencode live active-turn phase freshness canary"
+        },
+        "transcript_binding": {
+          "level": "live_no_token",
+          "source": "longhouse provider-live canary OpenCode session.messages noReply marker assertion",
+          "disposition": "implemented",
+          "owner_action": "opencode release-canary assistant transcript assertion",
+          "blocker": "budget"
+        },
+        "turn_start": {
+          "level": "hermetic",
+          "source": "opencode_run durable claims, one owned `opencode serve` per turn driven over the v1 HTTP API with message-chain completion, native session resume, and Console dispatch and steer-outcome tests",
+          "disposition": "implemented",
+          "owner_action": "opencode_run live Console dispatch canary; factory console_turn_steer_preserved cell for steer"
+        }
+      },
+      "machine_control_supports": [
+        "opencode.send",
+        "opencode.interrupt",
+        "opencode.steer",
+        "opencode.answer_pause",
+        "opencode.terminate",
+        "opencode.turn_start",
+        "opencode.turn_interrupt",
+        "opencode.turn_steer"
+      ],
+      "transcript_signals": {
+        "delegation.spawn": {
+          "disposition": "not_implemented",
+          "raw_source": "session.parent_id + part.data.callID",
+          "canary": "opencode_orchestration_signals",
+          "trigger": "spawn_subagent",
+          "owner_action": "consume the task_child lineage the parser already resolves as a served delegation signal; nested depth is not modelled (opencode_task_child_evidence walks one level)"
+        },
+        "delegation.background": {
+          "disposition": "not_implemented",
+          "raw_source": "part.data.state.metadata.background+jobId",
+          "canary": "opencode_orchestration_signals",
+          "trigger": "background_work",
+          "owner_action": "read background/jobId into OpenCodeTaskChildEvidence; only reachable when OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS is set"
+        },
+        "delegation.workflow": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "opencode_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no durable workflow-run id exists; child sessions are the concrete primitive"
+        },
+        "delegation.scheduled": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "opencode_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no session-scoped scheduled-wakeup surface observed"
+        },
+        "delegation.peer_message": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "opencode_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no agent-to-agent message record observed"
+        },
+        "turn.duration": {
+          "disposition": "not_implemented",
+          "raw_source": "sidecar:opencode.db/message.data.time",
+          "canary": "opencode_transcript_signals",
+          "trigger": "turn_end",
+          "owner_action": "derive turn.duration from message.data.time.created and completed"
+        },
+        "session.recap": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "opencode_transcript_signals",
+          "trigger": "idle_after_turn"
+        },
+        "session.title": {
+          "disposition": "not_implemented",
+          "raw_source": "sidecar:opencode.db/session.title",
+          "canary": "opencode_transcript_signals",
+          "trigger": "first_turn",
+          "owner_action": "freeze session.title from the OpenCode session row"
+        },
+        "turn.usage": {
+          "disposition": "not_implemented",
+          "raw_source": "sidecar:opencode.db/message.data.tokens",
+          "canary": "opencode_transcript_signals",
+          "trigger": "turn_end",
+          "owner_action": "parse message.data.tokens, modelID and cost into turn.usage"
+        },
+        "turn.api_error": {
+          "disposition": "not_implemented",
+          "raw_source": "sidecar:opencode.db/message.data.error",
+          "canary": "opencode_transcript_signals",
+          "trigger": "none_reliable",
+          "owner_action": "surface message.data.error as turn.api_error"
+        },
+        "context.compaction": {
+          "disposition": "not_implemented",
+          "raw_source": "sidecar:opencode.db/session.time_compacting",
+          "canary": "opencode_transcript_signals",
+          "trigger": "slash_compact",
+          "owner_action": "surface session.time_compacting as context.compaction"
+        },
+        "input.queue": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "opencode_transcript_signals",
+          "trigger": "send_while_working"
+        },
+        "turn.thinking": {
+          "disposition": "not_implemented",
+          "raw_source": "sidecar:opencode.db/message.data.reasoning",
+          "canary": "opencode_transcript_signals",
+          "trigger": "turn_end",
+          "owner_action": "render reasoning parts as collapsed thinking records"
+        }
+      }
+    },
+    {
+      "provider": "antigravity",
+      "display_name": "Antigravity",
+      "marketing_name": "Antigravity CLI",
+      "provider_cli_binary": "agy",
+      "provider_cli_env": "LONGHOUSE_ANTIGRAVITY_BIN",
+      "auth_probe": {
+        "disposition": "upstream_absent",
+        "reason": "the agy CLI has no auth/login/status subcommand"
+      },
+      "requires_longhouse_cli": false,
+      "managed_transport": "antigravity_hook_inbox",
+      "console_adapter": "antigravity_print",
+      "control_plane": "antigravity_hook_inbox",
+      "control_plane_aliases": [],
+      "adapter_sources": [
+        "server/zerg/services/managed_local_control.py",
+        "engine/src/managed_antigravity_scan.rs",
+        "engine/src/antigravity_print.rs",
+        "engine/src/console_sink.rs",
+        "engine/src/antigravity_channel_control.rs",
+        "server/zerg/services/antigravity_hook_inbox.py",
+        "engine/src/discovery.rs",
+        "engine/src/daemon.rs",
+        "engine/src/outbox.rs",
+        "engine/src/pipeline/parser.rs"
+      ],
+      "wire_families": [
+        "antigravity_conversations",
+        "antigravity_hooks"
+      ],
+      "observation_sources": [
+        "native_archive",
+        "hooks"
+      ],
+      "normalization_ruleset": "antigravity",
+      "presentation_ruleset": "shared_tool_presentation",
+      "proof_profiles": {
+        "pull_request": "hermetic",
+        "release_candidate": "staged_release",
+        "continuous": "privacy_safe_live_replay"
+      },
+      "support_tier": "launch",
+      "interaction_probes": [
+        {
+          "probe_id": "antigravity_shadow_control_absence",
+          "surface": "shadow",
+          "input_sequence": [
+            "(no managed control input)"
+          ],
+          "acknowledgement_oracle": "antigravity_shadow_observation_only",
+          "native_sources": [
+            "native_archive",
+            "hooks"
+          ],
+          "raw_markers": [
+            "shadow_only"
+          ],
+          "raw_output_markers": [
+            "native_archive",
+            "hooks"
+          ],
+          "expected_interaction_kind": "provider_system",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": null,
+          "source_surface": "shadow",
+          "state_mutation_scope": "none",
+          "evidence_class": "hermetic",
+          "disposition": "policy_disabled",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        }
+      ],
+      "release_channel": {
+        "channel": "github_releases",
+        "coordinate": "google-antigravity/antigravity-cli",
+        "version_discovery": "stable_github_releases",
+        "verification": "sha256_asset_digest_and_version",
+        "platform_artifacts": {
+          "linux-x86_64": "agy_cli_linux_x64.tar.gz",
+          "linux-aarch64": "agy_cli_linux_arm64.tar.gz",
+          "darwin-x86_64": "agy_cli_mac_x64.tar.gz",
+          "darwin-aarch64": "agy_cli_mac_arm64.tar.gz",
+          "windows-x86_64": "agy_cli_windows_x64.zip",
+          "windows-aarch64": "agy_cli_windows_arm64.zip"
+        }
+      },
+      "permission_prompt_surface": false,
+      "external_event_channel": "provider_control.antigravity_hook_inbox",
+      "pause_tool_name": "antigravity_pause_request",
+      "harness_safe_no_token_prompt": false,
+      "harness_safe_managed_session_scenarios": [],
+      "harness_real_managed_session_e2e": true,
+      "launch_local": true,
+      "run_once": true,
+      "reattach": false,
+      "send_input": true,
+      "interrupt": false,
+      "steer_active_turn": false,
+      "answer_pause": false,
+      "terminate": false,
+      "tail_output": true,
+      "runtime_phase": true,
+      "transcript_binding": true,
+      "live_proof": false,
+      "startup_coordination_context": false,
+      "capabilities": {
+        "session.activity.turn_boundary": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.antigravity.activity_turn_boundary",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "activity_returns_to_quiescent_at_turn_boundary",
+              "scenario_id": "antigravity_turn_boundary_quiescent",
+              "oracle_source": "server/zerg/qa/antigravity_hook_qualification.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "assurance_priority": "sampled"
+            }
+          ]
+        },
+        "session.resume.helm": {
+          "disposition": "policy_disabled",
+          "reason_code": "policy_disabled",
+          "policy_key": "provider.antigravity.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "unsupported_resume_is_typed_and_side_effect_free",
+              "variant": "policy_disabled",
+              "scenario_id": "resume_unsupported",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.launch.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.antigravity.launch_local",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "hook_inbox_contract_preserved",
+              "scenario_id": "antigravity_hook_inbox",
+              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_no_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.input.send": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.antigravity.send_input",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "real_print_injection_observed",
+              "scenario_id": "antigravity_hook_inbox",
+              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 86400,
+              "assurance_priority": "sampled"
+            }
+          ]
+        }
+      },
+      "can_resume": false,
+      "turn_start": true,
+      "fork_thread": false,
+      "operation_evidence": {
+        "fork_thread": {
+          "level": "none",
+          "source": "not implemented; Console turns here are hermetic-graded with no reattach story",
+          "disposition": "not_implemented",
+          "owner_action": "revisit only after Antigravity Console turns are proven beyond hermetic"
+        },
+        "launch_local": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "hook_inbox_contract_preserved",
+              "scenario_id": "antigravity_hook_inbox",
+              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_no_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_no_token",
+          "source": "factory assertions: hook_inbox_contract_preserved"
+        },
+        "run_once": {
+          "level": "live_token",
+          "source": "real agy --print returned a structured single-turn result carrying the requested marker",
+          "disposition": "implemented",
+          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-run-once. This is upstream provider-release evidence for the bounded `agy --print` surface; it does not advertise or qualify a Longhouse Console adapter.",
+          "observed_provider_version": "1.1.17"
+        },
+        "reattach": {
+          "level": "none",
+          "source": "not implemented; provider reattach surface verified present",
+          "disposition": "not_implemented",
+          "reason": "Corrected 2026-08-20. This cell previously read upstream_absent on the grounds that Antigravity exposed no stable reattach surface. That was true of the 1.1.5 observation it was written against and is false now: `agy --conversation <id>` resumes an existing conversation with intact history, including after the previous process was killed with SIGINT. Verified against 1.1.16. Longhouse has not built the reattach path.",
+          "observed_provider_version": "1.1.16",
+          "owner_action": "antigravity --conversation reattach path and canary"
+        },
+        "send_input": {
+          "level": "live_token",
+          "source": "real agy --print PreInvocation hook-inbox injection changed the model-visible turn",
+          "disposition": "implemented",
+          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send: a queued message is claimed at PreInvocation, the inbox drains, and the injected text replaces the model-visible turn. Availability follows the hook rather than the release, because hooks do not fire under GEMINI_API_KEY auth -- the control fact's granted_operations is empty whenever the hook has not been seen recently, so a healthy but uncontrollable session offers nothing.",
+          "observed_provider_version": "1.1.17"
+        },
+        "interrupt": {
+          "level": "none",
+          "source": "no native cancel; reconstructable as kill plus resume",
+          "disposition": "not_implemented",
+          "reason": "Antigravity exposes no native turn cancel. `user` is the only accepted stream-json input event -- interrupt, cancel, stop and abort are all rejected as unsupported -- and SIGINT ends the process rather than the turn. The conversation survives and resumes intact by id, so interrupt is reconstructable as kill-then-resume rather than natively supported. Typing it as a native interrupt would be a lie to the caller.",
+          "observed_provider_version": "1.1.16",
+          "owner_action": "antigravity kill-and-resume interrupt path with process-group reap",
+          "blocker": "none"
+        },
+        "steer_active_turn": {
+          "level": "none",
+          "source": "not implemented; bounded injection verified against 1.1.16",
+          "disposition": "not_implemented",
+          "reason": "Corrected 2026-08-20. Bounded active-turn injection is proven, not unproven: a message queued in the hook inbox is claimed at the next PreInvocation inside the running turn and changes the model's course before that turn ends. Steering lands at an invocation boundary, so a single long tool call delays it -- it is bounded, not immediate, and product copy must say so. Longhouse does not route to it.",
+          "observed_provider_version": "1.1.16",
+          "owner_action": "antigravity bounded active-turn injection canary"
+        },
+        "answer_pause": {
+          "level": "none",
+          "source": "no headless pause exists upstream",
+          "disposition": "upstream_absent",
+          "reason": "Headless Antigravity never pauses for a permission or a question. It reports permission_mode always-proceed and settles the choice itself, which upstream made deliberate in 1.1.12. There is no pause to answer. The Helm TUI does prompt but exposes no structured surface for it, so answering would mean scraping and driving a PTY.",
+          "observed_provider_version": "1.1.16"
+        },
+        "terminate": {
+          "level": "none",
+          "source": "unsupported until process termination policy is designed",
+          "disposition": "not_implemented",
+          "reason": "SIGINT ends the process cleanly and emits a typed error result, but leaves run_command children orphaned. Longhouse has not designed the process-group termination policy that requires, and shipping terminate without it would strand child processes on every kill.",
+          "observed_provider_version": "1.1.16",
+          "owner_action": "antigravity process termination policy and canary"
+        },
+        "tail_output": {
+          "level": "hermetic",
+          "source": "Antigravity hook transcript binding tests",
+          "disposition": "implemented",
+          "owner_action": "real agy transcript canary"
+        },
+        "runtime_phase": {
+          "level": "hermetic",
+          "source": "Antigravity hook runtime outbox tests",
+          "disposition": "implemented",
+          "owner_action": "real agy phase canary"
+        },
+        "transcript_binding": {
+          "level": "hermetic",
+          "source": "Antigravity hook binding tests",
+          "disposition": "implemented",
+          "owner_action": "real agy transcript assertion"
+        },
+        "turn_start": {
+          "level": "live_token",
+          "source": "real agy executed with the Console adapter's own argv, read from the engine, returning a structured result at the transcript path the adapter binds",
+          "disposition": "implemented",
+          "reason": "One bounded `agy --print` invocation per Console turn. This path does not use hooks, which is why it matters: hook delivery is unavailable under GEMINI_API_KEY auth, so the Console turn is the control surface that works under either credential authority. The canary now reads the argv from `longhouse-engine antigravity-console-argv` instead of rebuilding it, so the adapter's command line, the result shape it parses, and the transcript path it binds are all proven against the installed release. It refuses to run rather than falling back to a copy when the engine is unavailable.",
+          "observed_provider_version": "1.1.18",
+          "owner_action": "extend the canary to drive start_antigravity_print_turn so process supervision, turn-claim settlement, and engine-side transcript binding are covered too"
+        }
+      },
+      "machine_control_supports": [
+        "antigravity.send",
+        "antigravity.turn_start"
+      ],
+      "transcript_signals": {
+        "delegation.spawn": {
+          "disposition": "not_implemented",
+          "raw_source": "INVOKE_SUBAGENT",
+          "canary": "antigravity_orchestration_signals",
+          "trigger": "spawn_subagent",
+          "owner_action": "parse INVOKE_SUBAGENT for the child conversationId and logAbsoluteUri; today it is downgraded to a tool-result string, and the child brain/<id> becomes an unlinked session"
+        },
+        "delegation.background": {
+          "disposition": "not_implemented",
+          "raw_source": "GENERIC/task-<N> + .system_generated/tasks/<id>.log",
+          "canary": "antigravity_orchestration_signals",
+          "trigger": "background_work",
+          "owner_action": "promote task ids and task logs into structured async-task observations; the status message is currently tool text"
+        },
+        "delegation.workflow": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "antigravity_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no workflow-run surface observed"
+        },
+        "delegation.scheduled": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "antigravity_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no scheduled-wakeup surface observed"
+        },
+        "delegation.peer_message": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "antigravity_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "SYSTEM_MESSAGE sender=<childId> carries child returns, not peer messages"
+        },
+        "turn.duration": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "antigravity_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for antigravity and name the raw source"
+        },
+        "session.recap": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "antigravity_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for antigravity and name the raw source"
+        },
+        "session.title": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "antigravity_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for antigravity and name the raw source"
+        },
+        "turn.usage": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "antigravity_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for antigravity and name the raw source"
+        },
+        "turn.api_error": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "antigravity_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for antigravity and name the raw source"
+        },
+        "context.compaction": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "antigravity_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for antigravity and name the raw source"
+        },
+        "input.queue": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "antigravity_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for antigravity and name the raw source"
+        },
+        "turn.thinking": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "antigravity_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for antigravity and name the raw source"
+        }
+      }
+    },
+    {
+      "provider": "cursor",
+      "display_name": "Cursor",
+      "marketing_name": "Cursor Agent",
+      "provider_cli_binary": "cursor-agent",
+      "provider_cli_env": "LONGHOUSE_CURSOR_BIN",
+      "auth_probe": {
+        "disposition": "not_implemented",
+        "owner_action": "observe `cursor-agent status` with no Cursor credential and record whether it signals absence by exit code or output"
+      },
+      "requires_longhouse_cli": false,
+      "managed_transport": "cursor_helm",
+      "console_adapter": "cursor_print",
+      "control_plane": "cursor_helm",
+      "control_plane_aliases": [
+        "cursor_acp",
+        "cursor_exec"
+      ],
+      "adapter_sources": [
+        "engine/src/cursor_helm_launcher.rs",
+        "engine/src/cursor_hooks.rs",
+        "server/zerg/services/managed_local_control.py",
+        "engine/src/cursor_helm_control.rs",
+        "engine/src/cursor_print.rs",
+        "engine/src/console_sink.rs",
+        "engine/src/cursor_visibility.rs",
+        "engine/src/storage_v2_shipper.rs"
+      ],
+      "wire_families": [
+        "cursor_agent_jsonl",
+        "cursor_helm"
+      ],
+      "observation_sources": [
+        "native_archive",
+        "managed_bridge"
+      ],
+      "normalization_ruleset": "cursor",
+      "presentation_ruleset": "shared_tool_presentation",
+      "proof_profiles": {
+        "pull_request": "hermetic",
+        "release_candidate": "staged_release",
+        "continuous": "privacy_safe_live_replay"
+      },
+      "support_tier": "launch",
+      "interaction_probes": [
+        {
+          "probe_id": "cursor_model_launch_option",
+          "surface": "console",
+          "input_sequence": [
+            "cursor-agent --model <fixture-model>"
+          ],
+          "acknowledgement_oracle": "cursor_model_launch_metadata",
+          "native_sources": [
+            "provider_file",
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "model",
+            "apiKeySource"
+          ],
+          "raw_output_markers": [
+            "result"
+          ],
+          "expected_interaction_kind": "provider_system",
+          "expected_title_eligibility": false,
+          "expected_model_turn": true,
+          "changes_provider_state": true,
+          "source_surface": "console",
+          "state_mutation_scope": "session_model",
+          "evidence_class": "live_token",
+          "disposition": "implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        }
+      ],
+      "release_channel": {
+        "channel": "observed_only",
+        "coordinate": "cursor-agent",
+        "version_discovery": "observed_install",
+        "verification": "closure_digest_and_version",
+        "platform_artifacts": {}
+      },
+      "permission_prompt_surface": true,
+      "external_event_channel": null,
+      "pause_tool_name": "cursor_pause_request",
+      "harness_safe_no_token_prompt": false,
+      "harness_safe_managed_session_scenarios": [],
+      "harness_real_managed_session_e2e": false,
+      "launch_local": true,
+      "run_once": false,
+      "reattach": true,
+      "send_input": true,
+      "interrupt": true,
+      "steer_active_turn": true,
+      "answer_pause": false,
+      "terminate": true,
+      "tail_output": true,
+      "runtime_phase": true,
+      "transcript_binding": true,
+      "live_proof": false,
+      "startup_coordination_context": false,
+      "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "cursor_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.activity.turn_boundary": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.activity_turn_boundary",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "activity_returns_to_quiescent_at_turn_boundary",
+              "scenario_id": "cursor_turn_boundary_quiescent",
+              "oracle_source": "server/zerg/qa/cursor_helm_product_e2e.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.turn.start": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.turn_start",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_adapter_release_contract_preserved",
+              "variant": "interrupt_supported",
+              "scenario_id": "cursor_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.launch.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.launch_local",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "cursor_helm_launch_registration",
+              "scenario_id": "cursor_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/cursor_helm_product_e2e.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "cursor_helm_send_idle",
+              "scenario_id": "cursor_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/cursor_helm_product_e2e.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "cursor_helm_steer_active",
+              "scenario_id": "cursor_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/cursor_helm_product_e2e.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "cursor_helm_abort_native",
+              "scenario_id": "cursor_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/cursor_helm_product_e2e.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "cursor_helm_terminate_owned",
+              "scenario_id": "cursor_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/cursor_helm_product_e2e.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.resume.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "cold_resume_registers_continuous_thread",
+              "scenario_id": "helm_cold_resume",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "native_provider_resume_proven",
+              "variant": "clean_exit",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "native_provider_resume_proven",
+              "variant": "process_loss",
+              "scenario_id": "helm_cold_resume",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "live_reattach_does_not_spawn_owner",
+              "scenario_id": "helm_live_reattach",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "console_continuation_is_distinct",
+              "scenario_id": "console_thread_continue",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "session_thread_and_machine_identity_continue",
+              "scenario_id": "resume_identity_continuity",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "resume_attempt_is_idempotent",
+              "scenario_id": "resume_attempt_idempotency",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "one_local_provider_owner_wins",
+              "scenario_id": "resume_single_owner",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "stale_input_is_not_replayed",
+              "scenario_id": "resume_input_safety",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "failed_resume_closes_attempt_and_restores_contract",
+              "scenario_id": "resume_failure_cleanup",
+              "assurance_priority": "ordinary_ci",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "coordination.awareness.create": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.coordination_awareness",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "coordination_instructions_model_visible",
+              "scenario_id": "cursor_coordination_awareness_create",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 86400,
+              "assurance_priority": "sampled"
+            }
+          ]
+        },
+        "coordination.directed_input.send": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.coordination_directed_input",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "provider_input_receipt_linked",
+              "scenario_id": "cursor_coordination_directed_input",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "coordination.directed_input.receive": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.coordination_directed_input",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "attributed_input_visible",
+              "scenario_id": "cursor_coordination_directed_input",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        }
+      },
+      "can_resume": true,
+      "turn_start": true,
+      "fork_thread": false,
+      "operation_evidence": {
+        "fork_thread": {
+          "level": "none",
+          "source": "not implemented; no fork surface observed on the Cursor print adapter",
+          "disposition": "not_implemented",
+          "owner_action": "observe whether Cursor can branch a conversation and record the surface"
+        },
+        "launch_local": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "cursor_helm_launch_registration",
+              "scenario_id": "cursor_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/cursor_helm_product_e2e.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: cursor_helm_launch_registration"
+        },
+        "run_once": {
+          "level": "none",
+          "source": "Cursor Console mints or resumes a provider thread through cursor_print; the legacy session.run_once command is intentionally Codex-only",
+          "disposition": "policy_disabled",
+          "reason": "Cursor Console has a durable headless path; only the legacy session.run_once command is Codex-only.",
+          "routed_to": "session.turn.start via the cursor_print adapter"
+        },
+        "reattach": {
+          "level": "live_token",
+          "source": "Gate 0 native_resume_continuity resumed the same provider conversation and store agent id under the same Longhouse session id. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json",
+          "disposition": "implemented"
+        },
+        "send_input": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "cursor_helm_send_idle",
+              "scenario_id": "cursor_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/cursor_helm_product_e2e.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: cursor_helm_send_idle"
+        },
+        "interrupt": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "cursor_helm_abort_native",
+              "scenario_id": "cursor_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/cursor_helm_product_e2e.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: cursor_helm_abort_native"
+        },
+        "steer_active_turn": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "cursor_helm_steer_active",
+              "scenario_id": "cursor_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/cursor_helm_product_e2e.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: cursor_helm_steer_active"
+        },
+        "answer_pause": {
+          "level": "none",
+          "source": "Cursor permission hooks use the separate pull-based Longhouse pause-request surface; session.answer_pause machine dispatch is intentionally not advertised",
+          "disposition": "policy_disabled",
+          "reason": "Cursor exposes a permission reply over ACP only, and Longhouse deliberately does not execute ACP; adopting it would replace the stock TUI and change the session mode.",
+          "routed_to": "the pull-based Longhouse pause-request API via the fail-closed permission hook"
+        },
+        "terminate": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "cursor_helm_terminate_owned",
+              "scenario_id": "cursor_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/cursor_helm_product_e2e.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: cursor_helm_terminate_owned"
+        },
+        "tail_output": {
+          "level": "live_token",
+          "source": "The product E2E observed archive convergence with a 0.337s recovery lag and matching event counts. ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
+          "disposition": "implemented"
+        },
+        "runtime_phase": {
+          "level": "live_token",
+          "source": "Gate 0 lifecycle hooks recorded active and idle phases; the product E2E reconverged control after a Machine Agent restart. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json, ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
+          "disposition": "implemented"
+        },
+        "transcript_binding": {
+          "level": "live_token",
+          "source": "Gate 0 observed hook conversation_id, native store agent id, and the Longhouse session id agreeing across create, resume, and cancel. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json",
+          "disposition": "implemented"
+        },
+        "turn_start": {
+          "level": "hermetic",
+          "source": "cursor_print structured stream, native create-chat/resume, hooks, and process-group cancellation tests",
+          "disposition": "implemented",
+          "owner_action": "cursor_console_live_canary create_resume"
+        }
+      },
+      "machine_control_supports": [
+        "cursor.send",
+        "cursor.interrupt",
+        "cursor.steer",
+        "cursor.terminate",
+        "cursor.turn_start",
+        "cursor.turn_interrupt"
+      ],
+      "transcript_signals": {
+        "delegation.spawn": {
+          "disposition": "not_implemented",
+          "raw_source": "tool-call/Task + input.subagent_type",
+          "canary": "cursor_orchestration_signals",
+          "trigger": "spawn_subagent",
+          "owner_action": "tag the Task tool call as an orchestration node and retain subagent_type; no provider lineage key exists, so the child stays a visible top-level session with lineage_source unknown"
+        },
+        "delegation.background": {
+          "disposition": "not_implemented",
+          "raw_source": "tool-call/Shell block_until_ms:0 + terminals/<id>.txt",
+          "canary": "cursor_orchestration_signals",
+          "trigger": "background_work",
+          "owner_action": "correlate AwaitShell with the terminal sidecar into a background-task observation"
+        },
+        "delegation.workflow": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "cursor_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no workflow surface observed"
+        },
+        "delegation.scheduled": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "cursor_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no scheduled-wakeup surface observed"
+        },
+        "delegation.peer_message": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "cursor_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no agent-to-agent message record observed"
+        },
+        "turn.duration": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "cursor_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for cursor and name the raw source"
+        },
+        "session.recap": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "cursor_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for cursor and name the raw source"
+        },
+        "session.title": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "cursor_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for cursor and name the raw source"
+        },
+        "turn.usage": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "cursor_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for cursor and name the raw source"
+        },
+        "turn.api_error": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "cursor_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for cursor and name the raw source"
+        },
+        "context.compaction": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "cursor_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for cursor and name the raw source"
+        },
+        "input.queue": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "cursor_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for cursor and name the raw source"
+        },
+        "turn.thinking": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "cursor_transcript_signals",
+          "trigger": "census",
+          "owner_action": "run the transcript census for cursor and name the raw source"
+        }
+      }
+    },
+    {
+      "provider": "pi",
+      "display_name": "Pi",
+      "marketing_name": "Pi Agent",
+      "provider_cli_binary": "pi",
+      "provider_cli_env": "LONGHOUSE_PI_BIN",
+      "auth_probe": {
+        "disposition": "policy_disabled",
+        "reason": "pi's only auth surface prints the credential to stdout"
+      },
+      "requires_longhouse_cli": true,
+      "managed_transport": "pi_helm_channel",
+      "console_adapter": "pi_print",
+      "control_plane": "pi_helm_channel",
+      "control_plane_aliases": [],
+      "adapter_sources": [
+        "engine/src/pi_helm_launcher.rs",
+        "engine/src/pi_helm_control.rs",
+        "engine/src/managed_pi_helm_scan.rs",
+        "engine/assets/longhouse-pi-helm.ts",
+        "engine/src/pi_print.rs",
+        "engine/src/console_sink.rs",
+        "engine/src/console_rpc.rs",
+        "engine/src/console_lifecycle.rs",
+        "engine/src/pi_session.rs",
+        "server/zerg/qa/provider_adapters/pi.py",
+        "server/zerg/qa/pi_native.py"
+      ],
+      "wire_families": [
+        "pi_jsonl"
+      ],
+      "observation_sources": [
+        "native_archive",
+        "managed_bridge"
+      ],
+      "normalization_ruleset": "pi",
+      "presentation_ruleset": "shared_tool_presentation",
+      "proof_profiles": {
+        "pull_request": "hermetic",
+        "release_candidate": "staged_release",
+        "continuous": "privacy_safe_live_replay"
+      },
+      "support_tier": "launch",
+      "interaction_probes": [
+        {
+          "probe_id": "pi_shadow_archive",
+          "surface": "shadow",
+          "input_sequence": [
+            "observe an existing Pi JSONL source"
+          ],
+          "acknowledgement_oracle": "pi_native_archive_discovered_once",
+          "native_sources": [
+            "native_archive"
+          ],
+          "raw_markers": [
+            "type",
+            "session"
+          ],
+          "raw_output_markers": [
+            "message"
+          ],
+          "expected_interaction_kind": "provider_notification",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": false,
+          "source_surface": "provider_file",
+          "state_mutation_scope": "none",
+          "evidence_class": "hermetic",
+          "disposition": "implemented",
+          "canary": "engine/tests/fixtures/golden/pi/native.jsonl"
+        },
+        {
+          "probe_id": "pi_print_model",
+          "surface": "console",
+          "input_sequence": [
+            "pi -p <prompt> --provider openrouter --model <fixture-model> --session-dir <workspace> --session-id <native-id>"
+          ],
+          "acknowledgement_oracle": "pi_print_model_metadata",
+          "native_sources": [
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "model",
+            "provider",
+            "usage",
+            "stopReason"
+          ],
+          "raw_output_markers": [
+            "message"
+          ],
+          "expected_interaction_kind": "provider_system",
+          "expected_title_eligibility": false,
+          "expected_model_turn": true,
+          "changes_provider_state": true,
+          "source_surface": "console",
+          "state_mutation_scope": "session_model",
+          "evidence_class": "live_token",
+          "disposition": "implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        }
+      ],
+      "release_channel": {
+        "channel": "npm_registry",
+        "coordinate": "@earendil-works/pi-coding-agent",
+        "version_discovery": "npm_latest_dist_tag",
+        "verification": "npm_sha512_integrity_and_version",
+        "platform_artifacts": {
+          "linux-x86_64": "@earendil-works/pi-coding-agent",
+          "linux-aarch64": "@earendil-works/pi-coding-agent",
+          "darwin-x86_64": "@earendil-works/pi-coding-agent",
+          "darwin-aarch64": "@earendil-works/pi-coding-agent",
+          "windows-x86_64": "@earendil-works/pi-coding-agent",
+          "windows-aarch64": "@earendil-works/pi-coding-agent"
+        }
+      },
+      "permission_prompt_surface": false,
+      "external_event_channel": "pi_helm_channel",
+      "pause_tool_name": "pi_pause_request",
+      "harness_safe_no_token_prompt": false,
+      "harness_safe_managed_session_scenarios": [],
+      "harness_real_managed_session_e2e": false,
+      "launch_local": true,
+      "run_once": false,
+      "reattach": true,
+      "send_input": true,
+      "interrupt": true,
+      "steer_active_turn": true,
+      "answer_pause": false,
+      "terminate": true,
+      "tail_output": true,
+      "runtime_phase": true,
+      "transcript_binding": true,
+      "live_proof": false,
+      "startup_coordination_context": false,
+      "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.pi.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "pi_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.launch.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.pi.launch_local",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "pi_helm_launch_registration",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "pi_helm_native_tool_taxonomy",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "pi_helm_send_idle",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "pi_helm_steer_active",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "pi_helm_follow_up_native",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "pi_helm_abort_native",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "pi_helm_terminate_owned",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "pi_helm_reload_rebind",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "pi_helm_session_replacement_rebind",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.resume.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.pi.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "pi_helm_cold_resume_exact_file",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "pi_helm_stale_owner_refused",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.turn.steer": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.pi.turn_steer",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_turn_steer_preserved",
+              "scenario_id": "pi_console_tool_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_console_tool_producer.py",
+              "minimum_scenario_revision": 5,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.turn.start": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.pi.turn_start",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "pi_console_tool_enabled",
+              "scenario_id": "pi_console_tool_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_console_tool_producer.py",
+              "minimum_scenario_revision": 3,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        }
+      },
+      "can_resume": true,
+      "turn_start": true,
+      "fork_thread": false,
+      "operation_evidence": {
+        "fork_thread": {
+          "level": "none",
+          "source": "native forks retain history lineage; remote branching is not exposed",
+          "disposition": "not_implemented",
+          "owner_action": "add a Pi native fork ownership canary before exposing remote branch"
+        },
+        "launch_local": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "pi_helm_launch_registration",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: pi_helm_launch_registration"
+        },
+        "run_once": {
+          "level": "none",
+          "source": "Console routes through session.turn.start, not the legacy run_once command",
+          "disposition": "policy_disabled",
+          "reason": "Pi Console has one turn-scoped path through session.turn.start.",
+          "routed_to": "turn_start"
+        },
+        "reattach": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "pi_helm_cold_resume_exact_file",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: pi_helm_cold_resume_exact_file"
+        },
+        "send_input": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "pi_helm_send_idle",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: pi_helm_send_idle"
+        },
+        "interrupt": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "pi_helm_abort_native",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: pi_helm_abort_native"
+        },
+        "steer_active_turn": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "pi_helm_steer_active",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: pi_helm_steer_active"
+        },
+        "answer_pause": {
+          "level": "none",
+          "source": "Pi has no provider-owned remote permission reply transport",
+          "disposition": "upstream_absent",
+          "reason": "Project trust and extension UI remain provider-local.",
+          "observed_provider_version": "0.85.1"
+        },
+        "terminate": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "pi_helm_terminate_owned",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: pi_helm_terminate_owned"
+        },
+        "tail_output": {
+          "level": "source_review",
+          "source": "native JSONL history plus reconciled Console live previews",
+          "disposition": "implemented"
+        },
+        "runtime_phase": {
+          "level": "source_review",
+          "source": "native agent/tool/UI lifecycle; agent_settled establishes quiescence",
+          "disposition": "implemented"
+        },
+        "transcript_binding": {
+          "level": "source_review",
+          "source": "pre-spawn native UUID claims and verified exact source bindings",
+          "disposition": "implemented"
+        },
+        "turn_start": {
+          "level": "source_review",
+          "source": "stock tool-enabled JSON print with exact continuation; pi_console_tool_lifecycle",
+          "disposition": "implemented"
+        }
+      },
+      "machine_control_supports": [
+        "pi.send",
+        "pi.interrupt",
+        "pi.steer",
+        "pi.terminate",
+        "pi.turn_start",
+        "pi.turn_interrupt",
+        "pi.turn_steer"
+      ],
+      "transcript_signals": {
+        "delegation.spawn": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "pi_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "Pi ships no child-session concept; the id/parentId chain is a linear append chain inside one file, not a session tree"
+        },
+        "delegation.background": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "pi_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "native steer and follow-up are live control, not durable transcript records"
+        },
+        "delegation.workflow": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "pi_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no workflow surface observed"
+        },
+        "delegation.scheduled": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "pi_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no scheduled-wakeup surface observed"
+        },
+        "delegation.peer_message": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "pi_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no agent-to-agent message record observed"
+        },
+        "turn.duration": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "pi_transcript_signals",
+          "trigger": "turn_end",
+          "owner_action": "Pi JSONL has message clocks but no authored turn duration; do not invent one"
+        },
+        "session.recap": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "pi_transcript_signals",
+          "trigger": "idle_after_turn",
+          "owner_action": "branch/compaction summaries are not away recaps"
+        },
+        "session.title": {
+          "disposition": "implemented",
+          "raw_source": "session_info/name",
+          "fixture": "engine/tests/fixtures/golden/pi/native.jsonl",
+          "canary": "pi_transcript_signals",
+          "trigger": "none_reliable"
+        },
+        "turn.usage": {
+          "disposition": "implemented",
+          "raw_source": "message/message.usage",
+          "fixture": "engine/tests/fixtures/golden/pi/native.jsonl",
+          "canary": "pi_transcript_signals",
+          "trigger": "turn_end"
+        },
+        "turn.api_error": {
+          "disposition": "implemented",
+          "raw_source": "message/message.errorMessage + message.stopReason",
+          "fixture": "engine/tests/fixtures/golden/pi/native.jsonl",
+          "canary": "pi_transcript_signals",
+          "trigger": "none_reliable"
+        },
+        "context.compaction": {
+          "disposition": "implemented",
+          "raw_source": "compaction/tokensBefore",
+          "fixture": "engine/tests/fixtures/golden/pi/native.jsonl",
+          "canary": "pi_transcript_signals",
+          "trigger": "slash_compact"
+        },
+        "input.queue": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "pi_transcript_signals",
+          "trigger": "send_while_working",
+          "owner_action": "native steer/follow-up queues are live state, not durable transcript records"
+        },
+        "turn.thinking": {
+          "disposition": "implemented",
+          "raw_source": "message/message.content.thinking",
+          "fixture": "engine/tests/fixtures/golden/pi/native.jsonl",
+          "canary": "pi_transcript_signals",
+          "trigger": "turn_end"
+        }
+      }
+    },
+    {
+      "provider": "omp",
+      "display_name": "OMP",
+      "marketing_name": "Oh My Pi",
+      "provider_cli_binary": "omp",
+      "provider_cli_env": "LONGHOUSE_OMP_BIN",
+      "auth_probe": {
+        "disposition": "policy_disabled",
+        "reason": "OMP owns its native profile credentials; Longhouse does not probe or replace them"
+      },
+      "requires_longhouse_cli": false,
+      "managed_transport": "omp_helm_channel",
+      "console_adapter": "omp_print",
+      "control_plane": "omp_helm_channel",
+      "control_plane_aliases": [],
+      "adapter_sources": [
+        "engine/src/omp_session.rs",
+        "engine/src/discovery.rs",
+        "engine/src/pipeline/parser.rs",
+        "engine/src/storage_v2_shipper.rs",
+        "engine/src/daemon.rs",
+        "engine/src/heartbeat.rs",
+        "engine/src/managed_omp_helm_scan.rs",
+        "engine/src/omp_helm_launcher.rs",
+        "engine/src/omp_helm_control.rs",
+        "engine/assets/longhouse-omp-helm.ts",
+        "engine/src/omp_print.rs",
+        "engine/src/console_sink.rs",
+        "engine/src/console_rpc.rs",
+        "engine/src/console_lifecycle.rs",
+        "server/zerg/services/session_live_previews.py",
+        "server/zerg/services/session_runtime.py",
+        "server/zerg/services/provider_interaction_semantics.py",
+        "server/zerg/qa/provider_adapters/omp.py",
+        "server/zerg/qa/omp_console_producer.py",
+        "server/zerg/qa/provider_console_lifecycle.py",
+        "server/zerg/qa/omp_helm_lifecycle.py"
+      ],
+      "wire_families": [
+        "omp_jsonl"
+      ],
+      "observation_sources": [
+        "native_archive",
+        "managed_bridge"
+      ],
+      "normalization_ruleset": "omp",
+      "presentation_ruleset": "shared_tool_presentation",
+      "proof_profiles": {
+        "pull_request": "hermetic",
+        "release_candidate": "staged_release",
+        "continuous": "privacy_safe_live_replay"
+      },
+      "support_tier": "launch",
+      "interaction_probes": [
+        {
+          "probe_id": "omp_shadow_archive",
+          "surface": "shadow",
+          "input_sequence": [
+            "observe an existing OMP JSONL source"
+          ],
+          "acknowledgement_oracle": "omp_native_archive_discovered_once",
+          "native_sources": [
+            "native_archive"
+          ],
+          "raw_markers": [
+            "type",
+            "session"
+          ],
+          "raw_output_markers": [
+            "message"
+          ],
+          "expected_interaction_kind": "provider_notification",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": false,
+          "source_surface": "provider_file",
+          "state_mutation_scope": "none",
+          "evidence_class": "hermetic",
+          "disposition": "implemented",
+          "canary": "engine/tests/fixtures/golden/omp/native.jsonl"
+        },
+        {
+          "probe_id": "omp_console_turn",
+          "surface": "console",
+          "input_sequence": [
+            "omp --mode json --session-dir <session-dir> --resume <exact-session-file> -p <prompt>"
+          ],
+          "acknowledgement_oracle": "omp_console_turn_settled_and_bound",
+          "native_sources": [
+            "native_archive"
+          ],
+          "raw_markers": [
+            "type",
+            "session",
+            "stopReason",
+            "isTerminal",
+            "willContinue",
+            "toolCall",
+            "toolResult",
+            "toolCallId"
+          ],
+          "raw_output_markers": [
+            "message",
+            "agent_end"
+          ],
+          "expected_interaction_kind": "provider_system",
+          "expected_title_eligibility": false,
+          "expected_model_turn": true,
+          "changes_provider_state": true,
+          "source_surface": "console",
+          "state_mutation_scope": "conversation_identity",
+          "evidence_class": "live_token",
+          "disposition": "implemented",
+          "canary": "engine/src/omp_print.rs"
+        }
+      ],
+      "release_channel": {
+        "channel": "github_releases",
+        "coordinate": "can1357/oh-my-pi@00085d4e7dfdcfbf302c122fa2682b410a0f43d1",
+        "version_discovery": "stable_github_releases",
+        "verification": "sha256_asset_digest_and_version",
+        "platform_artifacts": {
+          "linux-x86_64": "omp-linux-x64",
+          "linux-aarch64": "omp-linux-arm64",
+          "darwin-x86_64": "omp-darwin-x64",
+          "darwin-aarch64": "omp-darwin-arm64",
+          "windows-x86_64": "omp-windows-x64.exe",
+          "windows-aarch64": "omp-windows-arm64.exe"
+        }
+      },
+      "permission_prompt_surface": false,
+      "external_event_channel": "omp_helm_channel",
+      "pause_tool_name": "omp_pause_request",
+      "harness_safe_no_token_prompt": false,
+      "harness_safe_managed_session_scenarios": [],
+      "harness_real_managed_session_e2e": false,
+      "launch_local": true,
+      "run_once": false,
+      "reattach": true,
+      "send_input": true,
+      "interrupt": true,
+      "steer_active_turn": true,
+      "answer_pause": false,
+      "terminate": true,
+      "tail_output": true,
+      "runtime_phase": true,
+      "transcript_binding": true,
+      "startup_coordination_context": false,
+      "can_resume": true,
+      "turn_start": true,
+      "fork_thread": false,
+      "live_proof": false,
+      "machine_control_supports": [
+        "omp.send",
+        "omp.interrupt",
+        "omp.steer",
+        "omp.terminate",
+        "omp.turn_start",
+        "omp.turn_interrupt",
+        "omp.turn_steer",
+        "omp.invocation_close"
+      ],
+      "operation_evidence": {
+        "launch_local": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "omp_helm_launch_registration",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: omp_helm_launch_registration"
+        },
+        "run_once": {
+          "level": "none",
+          "source": "Console routes through session.turn.start, not the legacy run_once command",
+          "disposition": "policy_disabled",
+          "reason": "OMP Console has one turn-scoped path through session.turn.start.",
+          "routed_to": "turn_start"
+        },
+        "reattach": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "omp_helm_cold_resume_exact_file",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: omp_helm_cold_resume_exact_file"
+        },
+        "send_input": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "omp_helm_send_idle",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: omp_helm_send_idle"
+        },
+        "interrupt": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "omp_helm_abort_native",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: omp_helm_abort_native"
+        },
+        "steer_active_turn": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "omp_helm_steer_active",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: omp_helm_steer_active"
+        },
+        "answer_pause": {
+          "level": "none",
+          "source": "OMP provider-local Console approval surface",
+          "disposition": "not_implemented",
+          "reason": "OMP does not expose a proven remote approval transport",
+          "owner_action": "Add an OMP remote approval canary before exposing answer_pause",
+          "blocker": "none"
+        },
+        "terminate": {
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "omp_helm_terminate_owned",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: omp_helm_terminate_owned"
+        },
+        "tail_output": {
+          "level": "source_review",
+          "source": "OMP native JSONL Shadow source",
+          "disposition": "implemented",
+          "blocker": "none"
+        },
+        "runtime_phase": {
+          "level": "hermetic",
+          "source": "OMP extension lifecycle reducer tests",
+          "disposition": "implemented",
+          "owner_action": "Run bounded OMP native lifecycle canary",
+          "blocker": "budget"
+        },
+        "transcript_binding": {
+          "level": "source_review",
+          "source": "Opaque OMP source identity and source epochs",
+          "disposition": "implemented",
+          "blocker": "none"
+        },
+        "turn_start": {
+          "level": "source_review",
+          "source": "stock OMP JSON print with exact native continuation; omp_console_lifecycle",
+          "disposition": "implemented",
+          "blocker": "budget"
+        },
+        "fork_thread": {
+          "level": "none",
+          "source": "OMP native child acquisition is not exposed by Longhouse",
+          "disposition": "not_implemented",
+          "owner_action": "Add an OMP native child acquisition canary before exposing fork_thread",
+          "blocker": "none"
+        }
+      },
+      "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.omp.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "omp_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.launch.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.omp.launch_helm",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "omp_helm_launch_registration",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "omp_helm_send_idle",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "omp_helm_follow_up_native",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "omp_helm_steer_active",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "omp_helm_abort_native",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "omp_helm_terminate_owned",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "omp_helm_native_replacement_bound",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.resume.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.omp.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "omp_helm_cold_resume_exact_file",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "omp_helm_stale_owner_refused",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.turn.steer": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.omp.turn_steer",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_turn_steer_preserved",
+              "scenario_id": "omp_console_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_console_producer.py",
+              "minimum_scenario_revision": 9,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.turn.start": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.omp.turn_start",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "omp_console_turn_settled_and_bound",
+              "scenario_id": "omp_console_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_console_producer.py",
+              "minimum_scenario_revision": 7,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        },
+        "session.delegation.background": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.omp.delegation_background",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "omp_background_registry_owner_scoped",
+              "scenario_id": "omp_background_jobs",
+              "oracle_source": "server/zerg/qa/omp_background_producer.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "omp_background_partial_progress_child_scoped",
+              "scenario_id": "omp_background_jobs",
+              "oracle_source": "server/zerg/qa/omp_background_producer.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            },
+            {
+              "id": "omp_background_terminal_status_preserved",
+              "scenario_id": "omp_background_jobs",
+              "oracle_source": "server/zerg/qa/omp_background_producer.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800
+            }
+          ]
+        }
+      },
+      "transcript_signals": {
+        "delegation.spawn": {
+          "disposition": "not_implemented",
+          "raw_source": "session_header/parentSession",
+          "canary": "omp_orchestration_signals",
+          "trigger": "spawn_subagent",
+          "owner_action": "parentSession is already read into child-session lineage; the served delegation signal still has to consume it"
+        },
+        "delegation.background": {
+          "disposition": "not_implemented",
+          "raw_source": "message/toolResult.details.async + custom_message/async-result",
+          "canary": "omp_orchestration_signals",
+          "trigger": "background_work",
+          "owner_action": "Native 18.4.4 task/command jobs and completion notices exist; archive records alone do not establish a complete live registry. The managed manager observation is separately declared under session.delegation.background."
+        },
+        "delegation.workflow": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "omp_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no workflow surface observed"
+        },
+        "delegation.scheduled": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "omp_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no scheduled-wakeup surface observed"
+        },
+        "delegation.peer_message": {
+          "disposition": "upstream_absent",
+          "raw_source": "none",
+          "canary": "omp_orchestration_signals",
+          "trigger": "census",
+          "owner_action": "no agent-to-agent message record observed"
+        },
+        "turn.duration": {
+          "disposition": "not_implemented",
+          "raw_source": "none",
+          "canary": "omp_transcript_signals",
+          "trigger": "turn_end",
+          "owner_action": "Survey OMP turn duration in Phase 2"
+        },
+        "session.recap": {
+          "disposition": "not_implemented",
+          "raw_source": "none",
+          "canary": "omp_transcript_signals",
+          "trigger": "idle_after_turn",
+          "owner_action": "Survey OMP recaps in Phase 2"
+        },
+        "session.title": {
+          "disposition": "implemented",
+          "raw_source": "title/title_change",
+          "fixture": "engine/tests/fixtures/golden/omp/native.jsonl",
+          "canary": "omp_transcript_signals",
+          "trigger": "none_reliable"
+        },
+        "turn.usage": {
+          "disposition": "implemented",
+          "raw_source": "message/message.usage",
+          "fixture": "engine/tests/fixtures/golden/omp/native.jsonl",
+          "canary": "omp_transcript_signals",
+          "trigger": "turn_end"
+        },
+        "turn.api_error": {
+          "disposition": "implemented",
+          "raw_source": "message/message.errorMessage+message.stopReason",
+          "fixture": "engine/tests/fixtures/golden/omp/native.jsonl",
+          "canary": "omp_transcript_signals",
+          "trigger": "none_reliable"
+        },
+        "context.compaction": {
+          "disposition": "implemented",
+          "raw_source": "compaction/tokensBefore",
+          "fixture": "engine/tests/fixtures/golden/omp/native.jsonl",
+          "canary": "omp_transcript_signals",
+          "trigger": "slash_compact"
+        },
+        "input.queue": {
+          "disposition": "not_implemented",
+          "raw_source": "none",
+          "canary": "omp_transcript_signals",
+          "trigger": "send_while_working",
+          "owner_action": "Add OMP managed queue authority in Phase 2"
+        },
+        "turn.thinking": {
+          "disposition": "implemented",
+          "raw_source": "message/message.content.thinking",
+          "fixture": "engine/tests/fixtures/golden/omp/native.jsonl",
+          "canary": "omp_transcript_signals",
+          "trigger": "turn_end"
+        }
+      }
+    }
+  ]
+}

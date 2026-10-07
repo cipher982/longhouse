@@ -289,6 +289,7 @@ Never edit these by hand. `make validate` fails when one is stale.
 | `web/src/generated/provider-capabilities.ts` | `schemas/managed_providers.yml` | `make generate-provider-capabilities` (`scripts/generate/provider_capabilities_ts.py`) |
 | `web/src/shared/session/model/toolTiers.generated.ts`, `ios/Sources/Shared/Generated/ToolTiers.generated.swift` | `config/tool-tiers.json` | `scripts/generate/tool_tiers.py` (`make validate-tool-tiers` checks) |
 | `server/zerg/config/managed_provider_contracts.json` | `schemas/managed_providers.yml` | `scripts/generate/generate_managed_provider_contracts.py --write` |
+| `engine/src/managed_provider_contracts.generated.json` (engine copy, no source digests) | `schemas/managed_providers.yml` | `scripts/generate/generate_managed_provider_contracts.py --write` |
 | `engine/src/managed_phase_contract.rs`, `web/src/generated/presence-states.ts` | `server/zerg/config/managed_phase_contract.json` | `make generate-phase-contract` |
 | `engine/src/managed_identity_contract.rs` | `schemas/managed_providers.yml` | `make generate-managed-identity` |
 | `docs/generated/provider_census.json` | tracked source files | `make generate-provider-census` |

@@ -84,10 +84,11 @@ const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
 use crate::codex_exec::DEFAULT_CONSOLE_APPROVAL_POLICY as REMOTE_CODEX_EXEC_APPROVAL_POLICY;
 use crate::codex_exec::DEFAULT_CONSOLE_SANDBOX as REMOTE_CODEX_EXEC_SANDBOX;
 const CONSOLE_DEFAULT_PERMISSION_MODE: &str = "bypass";
-// Engine is built from the monorepo. Keep this path beside the Python reader so
-// advertised supports[] and server-side contracts cannot drift silently.
+// Generated beside the server's copy from the same schema, so advertised
+// supports[] and server-side contracts cannot drift silently. This copy omits the
+// source digests the engine never reads; they change on every adapter edit.
 const MANAGED_PROVIDER_CONTRACTS_JSON: &str =
-    include_str!("../../server/zerg/config/managed_provider_contracts.json");
+    include_str!("managed_provider_contracts.generated.json");
 const REPORT_STAGE_DEADLINE_SECS: u64 = 8;
 const COMPLETED_COMMAND_CACHE_CAPACITY: usize = 256;
 const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;

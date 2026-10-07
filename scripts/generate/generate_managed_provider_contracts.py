@@ -17,6 +17,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / "schemas" / "managed_providers.yml"
 OUTPUT_PATH = ROOT / "server" / "zerg" / "config" / "managed_provider_contracts.json"
+# The engine include_str!s this copy. It omits the source digests (adapter_digest,
+# oracle_digest): the engine reads neither, and they change whenever any adapter
+# or oracle file does, which rebuilt the engine on unrelated edits.
+ENGINE_OUTPUT_PATH = ROOT / "engine" / "src" / "managed_provider_contracts.generated.json"
+ENGINE_OMITTED_KEYS = frozenset({"adapter_digest", "oracle_digest"})
 
 sys.path.insert(0, str(ROOT / "server"))
 
@@ -36,6 +41,18 @@ def _write_schema_from_current_json() -> None:
     normalized = normalize_contract_manifest(payload)
     SCHEMA_PATH.parent.mkdir(parents=True, exist_ok=True)
     SCHEMA_PATH.write_text(yaml.safe_dump(normalized, sort_keys=False), encoding="utf-8")
+
+
+def _without_digests(value):
+    if isinstance(value, dict):
+        return {key: _without_digests(item) for key, item in value.items() if key not in ENGINE_OMITTED_KEYS}
+    if isinstance(value, list):
+        return [_without_digests(item) for item in value]
+    return value
+
+
+def _render_engine_json(rendered: str) -> str:
+    return json.dumps(_without_digests(json.loads(rendered)), indent=2, ensure_ascii=False) + "\n"
 
 
 def main() -> int:
@@ -58,19 +75,25 @@ def main() -> int:
         _write_schema_from_current_json()
 
     rendered = render_contract_manifest_json(_load_schema())
-    current = OUTPUT_PATH.read_text(encoding="utf-8") if OUTPUT_PATH.exists() else ""
+    outputs = {OUTPUT_PATH: rendered, ENGINE_OUTPUT_PATH: _render_engine_json(rendered)}
 
     if args.check:
-        if rendered != current:
+        stale = [
+            path
+            for path, text in outputs.items()
+            if (path.read_text(encoding="utf-8") if path.exists() else "") != text
+        ]
+        for path in stale:
             print(
-                f"{OUTPUT_PATH} is out of date; run scripts/generate/generate_managed_provider_contracts.py --write",
+                f"{path} is out of date; run scripts/generate/generate_managed_provider_contracts.py --write",
                 file=sys.stderr,
             )
-            return 1
-        return 0
+        return 1 if stale else 0
 
     if args.write:
-        OUTPUT_PATH.write_text(rendered, encoding="utf-8")
+        for path, text in outputs.items():
+            if not path.exists() or path.read_text(encoding="utf-8") != text:
+                path.write_text(text, encoding="utf-8")
         return 0
 
     sys.stdout.write(rendered)

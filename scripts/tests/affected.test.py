@@ -43,15 +43,23 @@ def test_web_styling_does_not_select_backend_or_engine() -> None:
 
 def test_shared_manifest_selects_every_relevant_filter() -> None:
     result = resolve("server/zerg/config/managed_provider_contracts.json")
-    for category in ("backend", "engine", "packaging", "e2e", "runtime_image", "deploy_verify"):
+    for category in ("backend", "packaging", "e2e", "runtime_image", "deploy_verify"):
         assert category in result["categories"], (category, result)
     assert "cube-deploy" in result["lanes"]
     assert {row["command"] for row in result["commands"]} >= {
         "make test",
-        "make test-engine",
         "make test-wheel-package",
         "make test-e2e",
     }
+
+
+def test_engine_manifest_copy_selects_the_engine() -> None:
+    # The engine embeds its own digest-free copy; the server manifest's source
+    # digests churn on every adapter edit and no longer rebuild the engine.
+    assert "engine" not in resolve("server/zerg/config/managed_provider_contracts.json")["categories"]
+    result = resolve("engine/src/managed_provider_contracts.generated.json")
+    assert "engine" in result["categories"], result
+    assert "make test-engine" in {row["command"] for row in result["commands"]}
 
 
 def test_release_version_bump_does_not_select_the_ios_lane() -> None:
