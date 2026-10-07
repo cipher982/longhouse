@@ -265,6 +265,15 @@ async def lifespan(app: FastAPI):
         )
         # In a thread, so the loop meanwhile runs the supervisor and spawns catalogd.
         await asyncio.to_thread(_preload_catalog_dependent_modules)
+        # Pay for the first full collection of the import-time heap now, and
+        # keep those objects out of later ones: every canary cutover showed a
+        # 250-460 ms event-loop stall just after the catalog opened, while the
+        # deployer's readiness request waited on it.
+        import gc
+
+        with _timed_startup_step("catalog_handoff_gc_freeze"):
+            gc.collect()
+            gc.freeze()
         with _timed_startup_step("catalog_handoff_permit"):
             await handoff.wait_for_permit()
         app.state.catalog_handoff_task = asyncio.create_task(

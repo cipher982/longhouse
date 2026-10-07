@@ -354,6 +354,9 @@ async def test_warm_lifespan_binds_only_after_the_permit_and_starts_services_aft
     assert json.loads(handoff.marker_path("catalog").read_text())["state"] == "catalog_ready"
     await context.__aexit__(None, None, None)
     assert stopped == ["services"]
+    import gc
+
+    gc.unfreeze()  # the warm path froze this test process's heap
 
 
 @pytest.mark.asyncio
