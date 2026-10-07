@@ -91,8 +91,8 @@ PY
 # Menu bar harness verification (dispatched to a hosted macOS VM: commit and push first)
 make menubar-harness MODE=test
 
-# Refresh the installed app after menu bar/runtime changes
-make dogfood-refresh
+# Refresh the installed app after menu bar/runtime changes (HERE=1: this working tree, before it lands)
+make dogfood-refresh HERE=1
 launchctl kickstart -k gui/$(id -u)/ai.longhouse.app
 ```
 

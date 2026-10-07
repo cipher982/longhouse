@@ -272,7 +272,7 @@ After changes:
 - Run focused tests for the touched layer.
 - For Codex launcher changes, run `make test-engine`; for runtime install or cleanup changes, run `cd server && uv run pytest tests_lite/test_local_runtime_installer.py`.
 - For bridge/relay changes, run `make test-engine`.
-- For local runtime install changes that affect the dogfood machine, run `make dogfood-refresh`.
+- For local runtime install changes that affect the dogfood machine, run `make dogfood-refresh` (installs `origin/main`; `HERE=1` installs your working tree before it lands).
 
 ## Naming Rules
 

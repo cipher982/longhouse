@@ -49,8 +49,9 @@ Do not blur these lanes:
   `longhouse-engine`), `Longhouse.app` and the PyPI wheel. Existing users do not
   get this from a hosted deploy: they rerun the installer (`scripts/install.sh`)
   or `uv tool upgrade longhouse` for the Python package. It is independent of
-  production promotion and runs only from a clean `main` equal to `origin/main`
-  (the primary checkout). Validation (~7 min) holds the heavy-build lock alone;
+  production promotion. Start it from any checkout: it holds the `release` ring
+  lock and runs from a disposable checkout of `origin/main` under `/tmp/agents`,
+  removed on exit. Validation (~7 min) holds the heavy-build lock alone;
   rerunning the same `VERSION` resumes and skips validation for an
   already-validated candidate (`RELEASE_REVALIDATE=1` forces it).
 - **iOS TestFlight** — `make testflight [SHA=<sha>] [WHATS_NEW="tester note"]`
@@ -312,7 +313,7 @@ installed Longhouse component: CLI/package code, engine, Desktop App,
 installer/onboarding, hooks, or other machine-side behavior.
 
 ```bash
-make dogfood-refresh
+make dogfood-refresh            # installs exactly origin/main (SHA=<rev> for another commit)
 launchctl kickstart -k gui/$(id -u)/ai.longhouse.app
 ```
 

@@ -96,7 +96,7 @@ desktop/LonghouseMenuBarHarness/
    make menubar-harness MODE=render-fixtures
    ```
 5. Inspect the actual PNGs in the downloaded evidence (path above).
-6. Only after the fixtures read well, run `MODE=smoke` and `MODE=xcuitest`, then refresh the installed app (`make dogfood-refresh`) and look at the real menu bar.
+6. Only after the fixtures read well, run `MODE=smoke` and `MODE=xcuitest`, then refresh the installed app (`make dogfood-refresh HERE=1` for your working tree before it lands; plain `make dogfood-refresh` installs `origin/main`) and look at the real menu bar.
 
 ## Product Guidance
 
