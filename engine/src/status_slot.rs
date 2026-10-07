@@ -116,6 +116,7 @@ impl StatusSlot {
 /// Status is delivered straight from the slot, with no queue of its own: the
 /// slot is the durable copy, so a failed send simply sends the newer value on
 /// the next tick, and a daemon restart is current as soon as it reads them.
+#[cfg(test)]
 pub fn runtime_events(slot: &StatusSlot) -> Vec<Value> {
     runtime_events_since(slot, None)
 }
@@ -287,38 +288,6 @@ fn publish_locked(dir: &Path, slot: &StatusSlot) -> std::io::Result<()> {
         return Err(error);
     }
     Ok(())
-}
-
-/// Publish only if this observation is newer than the slot already holds.
-///
-/// A launcher owns its slot and publishes in order, so it needs no guard. A
-/// hook does not: it is a short-lived process, several can run at once, and
-/// two firing close together would otherwise race to overwrite one slot with
-/// nothing to arbitrate between them — the older observation could win purely
-/// by finishing last. The lock makes the read-compare-write one step across
-/// processes, and the comparison is observation time, which is what the
-/// Runtime Host compares too.
-///
-/// Returns whether the slot was written.
-pub fn publish_if_newer(dir: &Path, slot: &StatusSlot) -> std::io::Result<bool> {
-    prepare_status_dir(dir)?;
-    let _guard = lock_session(dir, &slot.session_id)?;
-    if let Some(current) = read_slot(&slot_path(dir, &slot.session_id)) {
-        let (Some(existing), Some(incoming)) = (
-            parse_observed_at(&current.observed_at),
-            parse_observed_at(&slot.observed_at),
-        ) else {
-            // An unreadable timestamp on either side is not evidence that this
-            // observation is older, so publishing is the safe direction.
-            publish_locked(dir, slot)?;
-            return Ok(true);
-        };
-        if existing > incoming {
-            return Ok(false);
-        }
-    }
-    publish_locked(dir, slot)?;
-    Ok(true)
 }
 
 fn parse_observed_at(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -954,60 +923,6 @@ mod tests {
         let events = runtime_events(&slot("s1", "idle", 1));
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["kind"], "phase_signal");
-    }
-
-    /// Several short-lived writers, out of order on purpose: the slot must end
-    /// up holding the newest observation, not whichever process finished last.
-    #[test]
-    fn an_older_observation_never_overwrites_a_newer_one() {
-        let tmp = TempDir::new().expect("tempdir");
-        let dir = status_slot_dir(tmp.path());
-
-        let mut newest = slot("s1", "running", 2);
-        newest.observed_at = "2026-09-17T15:00:10Z".into();
-        assert!(publish_if_newer(&dir, &newest).expect("publish"));
-
-        let mut older = slot("s1", "idle", 3);
-        older.observed_at = "2026-09-17T15:00:05Z".into();
-        assert!(
-            !publish_if_newer(&dir, &older).expect("publish"),
-            "the older observation is refused"
-        );
-        assert_eq!(read_all(&dir).pop().expect("slot").phase, "running");
-
-        let mut later = slot("s1", "idle", 4);
-        later.observed_at = "2026-09-17T15:00:11Z".into();
-        assert!(publish_if_newer(&dir, &later).expect("publish"));
-        assert_eq!(read_all(&dir).pop().expect("slot").phase, "idle");
-    }
-
-    #[test]
-    fn concurrent_hook_style_writers_leave_the_newest_observation() {
-        let tmp = TempDir::new().expect("tempdir");
-        let dir = status_slot_dir(tmp.path());
-
-        std::thread::scope(|scope| {
-            for worker in 0..8 {
-                let dir = dir.clone();
-                scope.spawn(move || {
-                    for step in 0..40 {
-                        let mut value = slot("s1", "running", 1);
-                        // Interleaved times across workers, so finishing order
-                        // and observation order deliberately disagree.
-                        value.observed_at =
-                            format!("2026-09-17T15:00:{:02}Z", (step * 8 + worker) % 60);
-                        let _ = publish_if_newer(&dir, &value);
-                    }
-                });
-            }
-        });
-
-        let slots = read_all(&dir);
-        assert_eq!(slots.len(), 1);
-        assert_eq!(
-            slots[0].observed_at, "2026-09-17T15:00:59Z",
-            "the newest observation survived every race"
-        );
     }
 
     #[test]

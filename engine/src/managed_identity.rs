@@ -106,14 +106,6 @@ impl ManagedIdentity {
         self
     }
 
-    pub fn provider(&self) -> ManagedProvider {
-        self.provider
-    }
-
-    pub fn session_id(&self) -> &str {
-        &self.session_id
-    }
-
     /// The keys this identity sets, in order. Everything else in
     /// `NEVER_INHERITED_KEYS` is scrubbed.
     fn overlay(&self) -> Vec<(&'static str, String)> {
@@ -203,11 +195,13 @@ impl ManagedIdentity {
 }
 
 /// Every key the overlay guarantees is present. Exposed for conformance tests.
+#[cfg(test)]
 pub fn required_keys() -> &'static [&'static str] {
     REQUIRED_IDENTITY_KEYS
 }
 
 /// Every key a provider process must never inherit. Exposed for conformance tests.
+#[cfg(test)]
 pub fn never_inherited_keys() -> &'static [&'static str] {
     NEVER_INHERITED_KEYS
 }

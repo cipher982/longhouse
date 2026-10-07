@@ -32,7 +32,6 @@ use crate::managed_identity_contract::ManagedProvider;
 pub const OMP_PRINT_ADAPTER: &str = "omp_print";
 const OMP_RUNTIME_SOURCE: &str = "omp_console";
 const OMP_ASYNC_WORK_PLACEHOLDER_ID: &str = "omp:async-work";
-pub const DEFAULT_OMP_BIN: &str = "omp";
 const TERMINAL_DRAIN_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
@@ -3336,16 +3335,6 @@ impl OmpPrintSink {
             }
         })])
         .await;
-    }
-
-    async fn post_terminal(
-        &self,
-        terminal_state: &str,
-        exit_code: Option<i32>,
-        reason: Option<String>,
-    ) {
-        self.post_terminal_with_lifecycle(terminal_state, exit_code, reason, None, None)
-            .await;
     }
 
     async fn post_terminal_with_lifecycle(

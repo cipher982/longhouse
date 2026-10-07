@@ -103,9 +103,6 @@ const RUNTIME_EVENT_POST_CONCURRENCY: usize = 8;
 /// No single runtime event can legitimately reach this size, and one that
 /// does would defeat every budget below it.
 const RUNTIME_EVENT_MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
-/// Payload bytes one sweep pass may hold. A sweep keeps every durable record
-/// it reads, so the entry cap alone does not bound its memory.
-const RUNTIME_EVENT_SWEEP_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 struct PresenceOutboxPayload {

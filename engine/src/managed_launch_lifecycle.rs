@@ -366,6 +366,7 @@ fn record_registration_retry_state(
         .with_context(|| format!("write managed launch recovery receipt {}", path.display()))
 }
 
+#[cfg(test)]
 pub fn record_registration_retry(
     agent_dir: &std::path::Path,
     session_id: &str,

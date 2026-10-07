@@ -10,12 +10,13 @@ use anyhow::Result;
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension};
 
-use super::file_identity::{
-    current_file_identity, cursor_fingerprint, strongest_matching_file_identity,
-};
+#[cfg(test)]
+use super::file_identity::current_file_identity;
+use super::file_identity::{cursor_fingerprint, strongest_matching_file_identity};
 
 /// A tracked session file.
 #[derive(Debug, Clone)]
+#[cfg(test)]
 pub struct TrackedFile {
     pub path: String,
     pub provider: String,
@@ -145,6 +146,7 @@ impl<'a> FileState<'a> {
     }
 
     /// Update both offsets (used on successful ship). Monotonic — never regresses.
+    #[cfg(test)]
     pub fn set_offset(
         &self,
         file_path: &str,
@@ -185,6 +187,7 @@ impl<'a> FileState<'a> {
     }
 
     /// Advance queued offset only (data enqueued to spool but not yet acked).
+    #[cfg(test)]
     pub fn set_queued_offset(
         &self,
         file_path: &str,
@@ -255,23 +258,7 @@ impl<'a> FileState<'a> {
         Ok(())
     }
 
-    /// Reset both offsets to 0 (e.g., after file truncation).
-    pub fn reset_offsets(&self, file_path: &str) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        let file_identity = self.preferred_current_identity(file_path)?;
-        self.conn.execute(
-            "UPDATE file_state
-             SET queued_offset = 0,
-                 acked_offset = 0,
-                 file_identity = COALESCE(?1, file_identity),
-                 acked_cursor_fingerprint = NULL,
-                 last_updated = ?2
-             WHERE path = ?3",
-            rusqlite::params![file_identity, now, file_path],
-        )?;
-        Ok(())
-    }
-
+    #[cfg(test)]
     fn preferred_current_identity(&self, file_path: &str) -> Result<Option<String>> {
         let current = current_file_identity(file_path);
         let Some(current) = current else {
@@ -284,28 +271,6 @@ impl<'a> FileState<'a> {
                 .to_string(),
             None => current,
         }))
-    }
-
-    /// Get files where queued_offset > acked_offset (need recovery on startup).
-    pub fn get_unacked_files(&self) -> Result<Vec<TrackedFile>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT path, provider, queued_offset, acked_offset, session_id
-             FROM file_state WHERE queued_offset > acked_offset",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(TrackedFile {
-                path: row.get(0)?,
-                provider: row.get(1)?,
-                queued_offset: row.get::<_, i64>(2)? as u64,
-                acked_offset: row.get::<_, i64>(3)? as u64,
-                session_id: row.get(4)?,
-            })
-        })?;
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
     }
 
     /// Get full tracking info for a file.
@@ -468,30 +433,6 @@ mod tests {
         fs.set_acked_offset("/f", 2500).unwrap();
         assert_eq!(fs.get_offset("/f").unwrap(), 2500);
         assert_ne!(stamp(&conn), before);
-    }
-
-    #[test]
-    fn test_unacked_files() {
-        let (_tmp, conn) = setup();
-        let fs = FileState::new(&conn);
-
-        fs.set_queued_offset("/a", 1000, "claude", "s1", "ps1")
-            .unwrap();
-        fs.set_offset("/b", 500, "s1", "ps1", "claude").unwrap();
-
-        let unacked = fs.get_unacked_files().unwrap();
-        assert_eq!(unacked.len(), 1);
-        assert_eq!(unacked[0].path, "/a");
-    }
-
-    #[test]
-    fn test_reset_offsets() {
-        let (_tmp, conn) = setup();
-        let fs = FileState::new(&conn);
-        fs.set_offset("/f", 1000, "s1", "ps1", "claude").unwrap();
-        fs.reset_offsets("/f").unwrap();
-        assert_eq!(fs.get_offset("/f").unwrap(), 0);
-        assert_eq!(fs.get_queued_offset("/f").unwrap(), 0);
     }
 
     #[test]

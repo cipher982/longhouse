@@ -5,8 +5,6 @@
 //! both shipping lanes the same durable UUID while retaining every superseded
 //! epoch as a predecessor chain.
 
-#![allow(dead_code)] // Foundation is wired into shipping only at the v2 cutover.
-
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
@@ -592,38 +590,6 @@ pub fn resync_to_host_watermark(
     if changed != 1 {
         bail!("source epoch lane cursor changed before resync");
     }
-    Ok(current)
-}
-
-/// Rewind a lane to the start so its source re-parses from zero.
-///
-/// A source that has reached EOF ships nothing, which means a parser that
-/// learned to extract more from the same bytes cannot reach anything already
-/// ingested. Cursor solves this by comparing render revisions; the shared file
-/// path has no such marker, so rewinding is explicit and per-source rather than
-/// an automatic mass replay of every transcript on the machine.
-///
-/// Re-shipped events deduplicate by hash on the host, so a replay refreshes
-/// session facts without duplicating history.
-pub fn replay_lane_from_start(
-    conn: &Connection,
-    source_epoch: Uuid,
-    lane: SourceLane,
-) -> Result<u64> {
-    let current = lane_position(conn, source_epoch, lane)?;
-    if current == 0 {
-        return Ok(0);
-    }
-    conn.execute(
-        "UPDATE source_epoch_lane_state
-         SET last_position = 0, updated_at = ?1
-         WHERE source_epoch = ?2 AND lane = ?3",
-        params![
-            Utc::now().to_rfc3339(),
-            source_epoch.to_string(),
-            lane.as_str(),
-        ],
-    )?;
     Ok(current)
 }
 

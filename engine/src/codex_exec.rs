@@ -2881,15 +2881,6 @@ async fn read_stderr_tail(stream: tokio::process::ChildStderr, tail: Arc<Mutex<V
     }
 }
 
-fn stderr_tail_snapshot(tail: &Arc<Mutex<VecDeque<String>>>) -> Option<String> {
-    let guard = tail.lock().expect("codex exec stderr tail lock poisoned");
-    if guard.is_empty() {
-        None
-    } else {
-        Some(guard.iter().cloned().collect::<Vec<_>>().join("\n"))
-    }
-}
-
 fn normalized_optional(value: &Option<String>) -> Option<String> {
     value
         .as_deref()

@@ -666,6 +666,7 @@ pub fn collect_from_transcripts(
     )
 }
 
+#[cfg(test)]
 fn collect_from_transcripts_with_processes(
     machine_id: &str,
     transcripts: &[(PathBuf, &'static str)],

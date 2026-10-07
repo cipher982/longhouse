@@ -1,9 +1,7 @@
 //! Byte-exact identities for the storage-v2 durability boundary.
 //!
-//! This module deliberately has no shipping or serving integration. It freezes
-//! the producer-side identity contract before the v2 ingest path consumes it.
-
-#![allow(dead_code)] // Wired into ingest only after the frozen contract lands.
+//! The producer-side identity contract the storage-v2 shipper stamps on every
+//! envelope and object; the server recomputes the same identities on ingest.
 
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;

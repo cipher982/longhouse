@@ -184,6 +184,7 @@ fn parse_macos_identity(value: &str) -> Option<(u64, Option<u128>)> {
     Some((inode.parse().ok()?, None))
 }
 
+#[cfg(test)]
 pub fn current_file_identity(path: &str) -> Option<String> {
     std::fs::metadata(Path::new(path))
         .ok()

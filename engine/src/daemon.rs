@@ -4625,6 +4625,7 @@ fn maybe_start_projection_build(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn build_local_status_projection(
     conn: &rusqlite::Connection,
     parse_tracker: &RecentIssueTracker,

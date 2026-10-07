@@ -1710,6 +1710,7 @@ pub(crate) fn leases_from_antigravity_observations(
     leases
 }
 
+#[cfg(test)]
 pub fn filter_unmanaged_bindings_owned_by_managed_observations(
     bindings: Vec<UnmanagedSessionBinding>,
     codex_observations: &[CodexBridgeObservation],
@@ -1816,6 +1817,7 @@ pub(crate) fn stamp_scope_capture_time(evidence: &mut MachineEvidence, captured_
     }
 }
 
+#[cfg(test)]
 pub(crate) fn machine_evidence_from_observations(
     machine_id: &str,
     codex_observations: &[CodexBridgeObservation],
@@ -3494,6 +3496,7 @@ fn activity_evidence_from_phase_row(
     }
 }
 
+#[cfg(test)]
 pub fn resolved_sessions_from_observations(
     managed_sessions: &[ManagedSessionLease],
     unmanaged_bindings: &[UnmanagedSessionBinding],

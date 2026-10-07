@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -79,6 +79,7 @@ pub(crate) enum CursorPreparationOutcome {
 }
 
 /// The variant's name, for assertions that must say what they got instead.
+#[cfg(test)]
 fn outcome_name(outcome: &CursorPreparationOutcome) -> &'static str {
     match outcome {
         CursorPreparationOutcome::Envelope(_) => "Envelope",

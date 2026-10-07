@@ -74,21 +74,7 @@ fn runtime_clock_ms() -> u64 {
     RUNTIME_CLOCK_START.elapsed().as_millis() as u64
 }
 
-const WRITE_BACKPRESSURE_HEADER: &str = "X-Longhouse-Write-Backpressure";
-const WRITE_ERROR_KIND_HEADER: &str = "X-Longhouse-Write-Error-Kind";
-const WRITE_LANE_HEADER: &str = "X-Longhouse-Write-Lane";
 const STORAGE_BACKPRESSURE_HEADER: &str = "X-Longhouse-Storage-Backpressure";
-const HOT_WRITE_BACKPRESSURE_KIND: &str = "hot_write_backpressure";
-
-/// Structured details for server-declared ingest backpressure.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ServerBackpressureDetail {
-    pub status_code: u16,
-    pub kind: &'static str,
-    pub body: String,
-    pub lane: Option<String>,
-    pub retry_after_seconds: Option<f64>,
-}
 
 #[derive(Debug, Clone)]
 pub struct StorageV2Backpressure {
@@ -1230,29 +1216,6 @@ fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<f64
         .filter(|v| v.is_finite() && *v > 0.0)
 }
 
-fn parse_server_write_backpressure(
-    status_code: u16,
-    headers: &reqwest::header::HeaderMap,
-    body: String,
-) -> Option<ServerBackpressureDetail> {
-    if status_code != 503 {
-        return None;
-    }
-    let header_kind = parse_header_string(headers, WRITE_BACKPRESSURE_HEADER)
-        .or_else(|| parse_header_string(headers, WRITE_ERROR_KIND_HEADER));
-    let kind = match header_kind.as_deref() {
-        Some(HOT_WRITE_BACKPRESSURE_KIND) => HOT_WRITE_BACKPRESSURE_KIND,
-        _ => return None,
-    };
-    Some(ServerBackpressureDetail {
-        status_code,
-        kind,
-        body,
-        lane: parse_header_string(headers, WRITE_LANE_HEADER),
-        retry_after_seconds: parse_retry_after_seconds(headers),
-    })
-}
-
 /// Whether an anyhow error chain bottoms out in a transport failure.
 ///
 /// Storage-v2 uses anyhow contexts around reqwest, so checking only the outer
@@ -1275,8 +1238,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::{
-        is_connect_error, parse_server_write_backpressure, parse_storage_v2_backpressure,
-        parse_storage_v2_conflict, ShipperClient,
+        is_connect_error, parse_storage_v2_backpressure, parse_storage_v2_conflict, ShipperClient,
     };
 
     async fn spawn_heartbeat_server(
@@ -1571,38 +1533,5 @@ mod tests {
             parse_storage_v2_conflict(409, r#"{"detail":{"code":"other","message":"no"}}"#)
                 .is_none()
         );
-    }
-
-    #[test]
-    fn test_parse_server_write_backpressure_from_typed_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "X-Longhouse-Write-Backpressure",
-            HeaderValue::from_static("hot_write_backpressure"),
-        );
-        headers.insert("X-Longhouse-Write-Lane", HeaderValue::from_static("hot"));
-        headers.insert("Retry-After", HeaderValue::from_static("2"));
-
-        let detail =
-            parse_server_write_backpressure(503, &headers, "{\"detail\":\"busy\"}".to_string())
-                .expect("typed hot write backpressure should parse");
-
-        assert_eq!(detail.status_code, 503);
-        assert_eq!(detail.kind, "hot_write_backpressure");
-        assert_eq!(detail.lane.as_deref(), Some("hot"));
-        assert_eq!(detail.retry_after_seconds, Some(2.0));
-    }
-
-    #[test]
-    fn test_parse_server_write_backpressure_ignores_ingest_and_generic_503() {
-        let mut ingest_headers = HeaderMap::new();
-        ingest_headers.insert(
-            "X-Ingest-Backpressure",
-            HeaderValue::from_static("live_ingest_backpressure"),
-        );
-        assert!(parse_server_write_backpressure(503, &ingest_headers, "{}".to_string()).is_none());
-
-        let generic_headers = HeaderMap::new();
-        assert!(parse_server_write_backpressure(503, &generic_headers, "{}".to_string()).is_none());
     }
 }

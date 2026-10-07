@@ -1068,9 +1068,6 @@ fn quarantine_path(db_path: &Path) -> PathBuf {
     }
     candidate
 }
-pub const MAX_QUARANTINE_AGE_DAYS: u64 = 7;
-pub const MIN_PRESERVED_QUARANTINES: usize = 2;
-pub const MAX_QUARANTINE_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct QuarantinePruneReport {

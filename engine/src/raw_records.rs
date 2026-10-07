@@ -3,8 +3,6 @@
 //! This path never consumes parsed or redacted `source_lines`. Each call reads
 //! at most one bounded batch, so source size cannot become process memory.
 
-#![allow(dead_code)] // Foundation is wired into shipping only at the v2 cutover.
-
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -34,6 +32,7 @@ pub(crate) struct RawRecordBatch {
 }
 
 impl RawRecordBatch {
+    #[cfg(test)]
     pub fn byte_len(&self) -> u64 {
         self.range_end - self.range_start
     }
@@ -66,6 +65,7 @@ pub(crate) enum RawRecordError {
 /// Callers advance with the returned batch's `range_end` until this returns
 /// `None`. The function reopens the file for each batch and never accumulates
 /// prior or later batches in memory.
+#[cfg(test)]
 pub(crate) fn read_next_raw_batch(
     path: &Path,
     framing: RawSourceFraming,
@@ -80,6 +80,7 @@ pub(crate) fn read_next_raw_batch(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn read_next_raw_batch_bounded(
     path: &Path,
     framing: RawSourceFraming,

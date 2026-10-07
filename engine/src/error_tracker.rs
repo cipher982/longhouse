@@ -64,6 +64,7 @@ impl RecentIssueTracker {
         }
     }
 
+    #[cfg(test)]
     pub fn record(&self) {
         self.record_at(Instant::now());
     }
@@ -78,6 +79,7 @@ impl RecentIssueTracker {
         }
     }
 
+    #[cfg(test)]
     fn record_at(&self, instant: Instant) {
         if let Ok(mut guard) = self.inner.lock() {
             guard.push_back(instant);

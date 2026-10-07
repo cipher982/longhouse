@@ -49,11 +49,17 @@ pub const SHIPPING_IN_FLIGHT_CAP: usize = LIVE_IN_FLIGHT_CAP + BACKLOG_CAP;
 pub fn shipping_max_in_flight(workers: usize) -> usize {
     workers.max(SHIPPING_IN_FLIGHT_CAP)
 }
+#[cfg(test)]
 const LIVE_LATENCY_WARN_MS: u64 = 5_000;
+#[cfg(test)]
 const LIVE_LATENCY_SLA_MS: u64 = 10_000;
-const LIVE_ENQUEUE_WARN_MS: u64 = 1_000;
+#[cfg(test)]
 const LIVE_ENQUEUE_CRITICAL_MS: u64 = 2_000;
+#[cfg(test)]
+const LIVE_ENQUEUE_WARN_MS: u64 = 1_000;
+#[cfg(test)]
 const LIVE_PRESSURE_COOLDOWN: Duration = Duration::from_secs(30);
+#[cfg(test)]
 const LIVE_PRESSURE_CRITICAL_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// Archive replay request size controller. The lane starts conservatively,
@@ -61,7 +67,6 @@ const LIVE_PRESSURE_CRITICAL_COOLDOWN: Duration = Duration::from_secs(60);
 /// Host timing signals are comfortably below the interactive-write target.
 pub const ARCHIVE_BATCH_TARGET_MIN_BYTES: u64 = 64 * 1024;
 pub const ARCHIVE_BATCH_TARGET_BASE_BYTES: u64 = 256 * 1024;
-pub const ARCHIVE_BATCH_TARGET_MAX_BYTES: u64 = 1024 * 1024;
 
 const BACKPRESSURE_DEFAULT_COOLDOWN: Duration = Duration::from_secs(5);
 const BACKPRESSURE_MAX_COOLDOWN: Duration = Duration::from_secs(60);
@@ -174,6 +179,7 @@ impl AdaptiveLimiter {
     /// Feed the live-lane SLA guard. Archive work should consume only leftover
     /// capacity; when live p95 degrades, cut archive pressure before waiting
     /// for host backpressure.
+    #[cfg(test)]
     pub fn observe_live_latency(
         &self,
         latency_p95_ms: Option<u64>,
@@ -266,6 +272,7 @@ impl AdaptiveLimiter {
         ARCHIVE_BATCH_TARGET_BASE_BYTES
     }
 
+    #[cfg(test)]
     pub fn archive_target_batch_bytes(&self) -> u64 {
         let state = self.state.lock();
         Self::archive_target_batch_bytes_for_state(&state, Instant::now())

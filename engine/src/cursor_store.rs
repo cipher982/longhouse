@@ -6,8 +6,6 @@
 //! records are deterministic wrappers around exact SQLite values, so unknown
 //! Cursor material remains re-renderable evidence instead of a decode failure.
 
-#![allow(dead_code)] // Foundation is wired into storage-v2 shipping in the next slice.
-
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -23,6 +21,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::import_scope::ImportScope;
+#[cfg(test)]
 use crate::state::file_identity::identity_from_metadata;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +164,7 @@ pub fn root_reference_records(
 /// This never checkpoints or changes Cursor's database. A malformed root is a
 /// renderer concern, not a source-capture failure: the raw meta/blob rows are
 /// still returned with an explicit ordering gap.
+#[cfg(test)]
 pub fn read_cursor_store(path: &Path) -> Result<CursorStoreSnapshot> {
     let mut conn = open_readonly(path)?;
     // Keep `meta` and `blobs` in one WAL-consistent snapshot. In autocommit
@@ -365,6 +365,7 @@ pub fn visit_cursor_blob_records(
 /// Root observation is intentionally separate from its generic blob record:
 /// the same exact root bytes are durable evidence of the ordering snapshot
 /// without assigning meaning to unknown protobuf fields.
+#[cfg(test)]
 pub fn cursor_store_raw_snapshot(path: &Path) -> Result<CursorStoreRawSnapshot> {
     let metadata = path
         .metadata()
@@ -757,6 +758,7 @@ fn read_meta_rows(conn: &Connection) -> Result<Vec<CursorStoreMetaRow>> {
         .context("reading Cursor meta rows")
 }
 
+#[cfg(test)]
 fn read_blob_rows(conn: &Connection) -> Result<Vec<CursorStoreBlobRow>> {
     let mut statement = conn.prepare("SELECT id, data FROM blobs ORDER BY id")?;
     let rows = statement.query_map([], |row| {

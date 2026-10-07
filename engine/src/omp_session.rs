@@ -520,6 +520,7 @@ pub fn session_file_path_in_session_dir(session_dir: &Path, source: &Path) -> bo
 
 /// Whether a materialized OMP source is directly in a configured session
 /// directory or in one native cwd-bucket beneath it.
+#[cfg(test)]
 pub fn source_is_in_session_dir(session_dir: &Path, source: &Path) -> bool {
     if !session_file_path_in_session_dir(session_dir, source) {
         return false;

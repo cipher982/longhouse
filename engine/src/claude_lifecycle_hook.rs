@@ -39,6 +39,7 @@ pub fn run() -> anyhow::Result<()> {
 /// Absence is not: an older launcher predates the tag, and treating "no tag" as
 /// "not mine" would silently unmanage live sessions across an upgrade. So this
 /// fails closed only on a contradiction, which is the case that caused harm.
+#[cfg(test)]
 fn managed_claim_belongs_to_claude() -> bool {
     crate::managed_identity::managed_claim_belongs_to(
         crate::managed_identity_contract::ManagedProvider::Claude,
