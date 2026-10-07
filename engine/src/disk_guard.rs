@@ -43,14 +43,13 @@ const LEVELS: [(Level, f64, f64); 2] = [(Level::Critical, 15.0, 10.0), (Level::L
 /// breathing) rather than a runaway writer.
 const MIN_PROJECTED_RATE_GIB_PER_MIN: f64 = 0.25;
 
-/// Commands whose writes are bounded by a finite input: a copy, a download, a
-/// package fetch. A steep slope from one of these cannot continue
-/// indefinitely, so on its own it is not evidence of the runaway this guard
-/// exists to catch — the 2026-09-25 incident was a build loop, not a transfer.
-/// Absolute free-space thresholds still apply to these writers.
-const BOUNDED_WRITER_COMMANDS: [&str; 11] = [
-    "rsync", "cp", "scp", "sftp", "ditto", "curl", "wget", "uv", "pip", "pip3", "pipx",
-];
+/// Commands whose writes are bounded by a finite input: a copy or a download.
+/// A steep slope from one of these cannot continue indefinitely, so on its own
+/// it is not evidence of the runaway this guard exists to catch — the
+/// 2026-09-25 incident was a build loop, not a transfer. Package managers are
+/// deliberately absent: `uv`/`pip` fetches are finite, but the builds they can
+/// trigger are not. Absolute free-space thresholds still apply to every writer.
+const BOUNDED_WRITER_COMMANDS: [&str; 7] = ["rsync", "cp", "scp", "sftp", "ditto", "curl", "wget"];
 
 /// A projected time-to-full must hold for this many consecutive ticks before it
 /// raises the level on its own. One 60-second slope is not proof: a bounded copy
@@ -168,7 +167,14 @@ impl Policy {
             self.calm_ticks = 0;
             return self.level;
         }
-        let calm = classify(free_gib - RECOVERY_MARGIN_GIB, burn_gib_per_min);
+        // Recovery must honour the same suppression as escalation, or a bounded
+        // writer pins an already-elevated level until it finishes.
+        let calm_free = free_gib - RECOVERY_MARGIN_GIB;
+        let calm = if bounded_writer {
+            absolute_level(calm_free)
+        } else {
+            classify(calm_free, burn_gib_per_min)
+        };
         if calm < self.level {
             self.calm_ticks += 1;
             if self.calm_ticks >= RECOVERY_TICKS {
@@ -241,7 +247,11 @@ pub(crate) struct SessionActivity {
     /// Bytes written over the attribution window by the session's commands.
     pub bytes: u64,
     /// Name of the top-level command (direct child of the agent) that wrote most.
+    /// Usually the shell that spawned the work rather than the work itself.
     pub top_command: String,
+    /// Name of the process anywhere in the session's tree that wrote the most —
+    /// the command actually writing, where `top_command` is typically `zsh`.
+    pub dominant_command: String,
 }
 
 /// Charge each process's recent writes to the session whose agent it runs
@@ -261,6 +271,10 @@ pub(crate) fn attribute(
 
     // (session index, top-level command pid) -> bytes
     let mut per_command: HashMap<(usize, u32), u64> = HashMap::new();
+    // Per session: the deepest process that wrote the most, so a shell-wrapped
+    // `rsync`/`curl` is still recognised as the writer.
+    let mut dominant_bytes = vec![0u64; sessions.len()];
+    let mut dominant_command = vec![String::new(); sessions.len()];
     for proc in procs {
         let bytes = window_bytes
             .get(&(proc.pid, proc.start))
@@ -274,6 +288,10 @@ pub(crate) fn attribute(
         for _ in 0..64 {
             if let Some(index) = root_owner.get(&cursor) {
                 *per_command.entry((*index, child)).or_default() += bytes;
+                if bytes > dominant_bytes[*index] {
+                    dominant_bytes[*index] = bytes;
+                    dominant_command[*index] = proc.name.clone();
+                }
                 break;
             }
             match parent.get(&cursor) {
@@ -302,6 +320,9 @@ pub(crate) fn attribute(
             activity[index].top_command =
                 names.get(&command).copied().unwrap_or_default().to_string();
         }
+    }
+    for (index, name) in dominant_command.into_iter().enumerate() {
+        activity[index].dominant_command = name;
     }
     activity
 }
@@ -414,9 +435,12 @@ impl DiskGuard {
         let free_gib = free as f64 / GIB;
         let burn = burn_rate(&self.samples);
         let eta = eta_minutes(free_gib, burn);
-        // Observe before classifying: whether the dominant writer is a bounded
-        // transfer decides whether its slope may raise a level at all.
-        let activity = if self.level > Level::Ok || burn >= SNAPSHOT_RATE_GIB_PER_MIN {
+        // Observe before classifying: whether the writers are bounded decides
+        // whether their slope may raise a level at all.
+        let activity = if self.level > Level::Ok
+            || absolute_level(free_gib) > Level::Ok
+            || burn >= SNAPSHOT_RATE_GIB_PER_MIN
+        {
             self.observe_processes(sessions)
         } else {
             self.previous_counters = None;
@@ -424,9 +448,11 @@ impl DiskGuard {
             Vec::new()
         };
         let previous_level = self.level;
-        self.level = self
-            .policy
-            .update(free_gib, burn, dominant_writer_is_bounded(&activity));
+        self.level = self.policy.update(
+            free_gib,
+            burn,
+            all_substantial_writers_are_bounded(&activity),
+        );
         let level = self.level;
 
         let mut outcome = TickOutcome::default();
@@ -525,15 +551,18 @@ impl DiskGuard {
     }
 }
 
-/// True when the session writing the most is running a command whose output is
-/// bounded by a finite input, so its slope cannot continue indefinitely.
-fn dominant_writer_is_bounded(activity: &[SessionActivity]) -> bool {
-    activity
+/// True when every session that wrote meaningfully is running a bounded command,
+/// so no slope in play can continue indefinitely. One unbounded writer — a
+/// build, a log storm — keeps the projection enabled for the whole machine,
+/// because the guard measures one global slope and cannot attribute it.
+fn all_substantial_writers_are_bounded(activity: &[SessionActivity]) -> bool {
+    let substantial: Vec<&SessionActivity> = activity
         .iter()
         .filter(|session| session.bytes >= STEER_MIN_BYTES)
-        .max_by_key(|session| session.bytes)
-        .is_some_and(|session| {
-            BOUNDED_WRITER_COMMANDS.contains(&command_name(&session.top_command))
+        .collect();
+    !substantial.is_empty()
+        && substantial.iter().all(|session| {
+            BOUNDED_WRITER_COMMANDS.contains(&command_name(&session.dominant_command))
         })
 }
 
@@ -819,20 +848,48 @@ mod tests {
     }
 
     #[test]
-    fn only_a_bounded_dominant_writer_suppresses_the_projection() {
+    fn only_all_bounded_writers_suppress_the_projection() {
         let activity = |command: &str| {
             vec![SessionActivity {
                 session_id: "s".into(),
                 provider: "omp".into(),
                 bytes: STEER_MIN_BYTES + 1,
-                top_command: command.to_string(),
+                top_command: "zsh".into(),
+                dominant_command: command.to_string(),
             }]
         };
-        assert!(dominant_writer_is_bounded(&activity("/usr/bin/rsync")));
-        assert!(dominant_writer_is_bounded(&activity("curl")));
-        assert!(!dominant_writer_is_bounded(&activity("cargo")));
-        assert!(!dominant_writer_is_bounded(&activity("xcodebuild")));
-        assert!(!dominant_writer_is_bounded(&[]));
+        // A shell-wrapped transfer still counts: the writer is the child.
+        assert!(all_substantial_writers_are_bounded(&activity("rsync")));
+        assert!(all_substantial_writers_are_bounded(&activity(
+            "/usr/bin/rsync"
+        )));
+        assert!(all_substantial_writers_are_bounded(&activity("curl")));
+        assert!(!all_substantial_writers_are_bounded(&activity("cargo")));
+        assert!(!all_substantial_writers_are_bounded(&activity(
+            "xcodebuild"
+        )));
+        assert!(!all_substantial_writers_are_bounded(&[]));
+    }
+
+    #[test]
+    fn a_bounded_transfer_cannot_mask_an_unbounded_build() {
+        let writers = vec![
+            SessionActivity {
+                session_id: "a".into(),
+                provider: "omp".into(),
+                bytes: 900 * MIB,
+                top_command: "zsh".into(),
+                dominant_command: "rsync".into(),
+            },
+            SessionActivity {
+                session_id: "b".into(),
+                provider: "claude".into(),
+                bytes: 400 * MIB,
+                top_command: "zsh".into(),
+                dominant_command: "cargo".into(),
+            },
+        ];
+        assert!(!all_substantial_writers_are_bounded(&writers));
     }
 
     #[test]
@@ -887,6 +944,10 @@ mod tests {
             "agent and unrelated writes are not charged"
         );
         assert_eq!(activity[0].top_command, "zsh");
+        assert_eq!(
+            activity[0].dominant_command, "xcodebuild",
+            "the writer, not the shell that spawned it"
+        );
     }
 
     #[test]
@@ -898,12 +959,14 @@ mod tests {
                 provider: "omp".into(),
                 bytes: 900 * MIB,
                 top_command: "cargo".into(),
+                dominant_command: "cargo".into(),
             },
             SessionActivity {
                 session_id: "idle".into(),
                 provider: "claude".into(),
                 bytes: 0,
                 top_command: String::new(),
+                dominant_command: String::new(),
             },
         ];
         let mut last = HashMap::new();
@@ -970,6 +1033,7 @@ mod tests {
             provider: "omp".into(),
             bytes: 900 * MIB,
             top_command: "cargo".into(),
+            dominant_command: "cargo".into(),
         };
         let text = steer_text(Level::Critical, 12.0, 3.0, Some(4.0), &session);
         assert!(text.contains("Do not delete files"));
