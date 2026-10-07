@@ -112,8 +112,6 @@ async def test_workspace_never_falls_back_to_legacy_sqlite(monkeypatch):
             branch_mode="head",
             limit=100,
             cursor=None,
-            shared_by=None,
-            share_token=None,
             current_user=SimpleNamespace(owner_id=7),
         )
 

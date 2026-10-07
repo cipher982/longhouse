@@ -3,8 +3,7 @@
 Uvicorn's own access log stays off because presence/heartbeat polls bury
 everything useful. This records one line per real request so an incident can
 answer who read what, from where, and when. Request bodies, headers, cookies,
-query strings, and transcript content are never logged, and path segments that
-are themselves bearer credentials are redacted (see ``_CREDENTIAL_ROUTES``).
+query strings, and transcript content are never logged.
 
 The same finished-request seam also feeds services/funnel_facts.py, which is off
 unless a consenting tester's control plane turned it on; it keeps counts and
@@ -40,62 +39,6 @@ _SKIP_PREFIXES = (
     "/frontend-static/",
     "/static/",
 )
-
-# Routes that carry a bearer credential in the path itself. Logging the raw
-# path there would write a working credential into the log — a share token is
-# the entire authority to read that transcript — so the ``{credential}``
-# segment is replaced before the line is written.
-#
-# These are full wire paths as the outermost middleware sees them, so API
-# routes include the ``/api`` mount prefix. To cover a new route, add its
-# template here; that is the whole registration step.
-#
-# Credentials carried in headers (``X-Agents-Token``, ``Authorization``, the
-# session cookie) need no entry: this log records the path only. Browser
-# WebSockets deliberately do not accept bearer query parameters.
-_CREDENTIAL_ROUTES = (
-    # Share-link token: whoever holds it can read the shared transcript.
-    "/api/public/session-shares/{credential}/preview",
-    "/api/timeline/session-shares/{credential}/resolve",
-    # SPA landing page the share URL points at — same token, browser-visible.
-    "/share/{credential}",
-)
-
-_CREDENTIAL_PLACEHOLDER = "{credential}"
-_REDACTED = "[redacted]"
-
-
-def _compile_credential_routes() -> tuple[tuple[tuple[str | None, ...], int], ...]:
-    """Turn each template into (literal segments, index of the credential).
-
-    ``None`` marks the credential segment; every other segment must match
-    literally (case-insensitively, so a mis-cased request that 404s still gets
-    its token redacted).
-    """
-    shapes = []
-    for template in _CREDENTIAL_ROUTES:
-        segments = template.strip("/").split("/")
-        index = segments.index(_CREDENTIAL_PLACEHOLDER)  # raises if a template forgets it
-        literals = tuple(None if seg == _CREDENTIAL_PLACEHOLDER else seg.lower() for seg in segments)
-        shapes.append((literals, index))
-    return tuple(shapes)
-
-
-_CREDENTIAL_SHAPES = _compile_credential_routes()
-
-
-def _safe_path(path: str) -> str:
-    """Return ``path`` with any credential-bearing segment replaced."""
-    segments = path.strip("/").split("/")
-    for literals, index in _CREDENTIAL_SHAPES:
-        if len(segments) != len(literals):
-            continue
-        if all(literal is None or literal == segment.lower() for literal, segment in zip(literals, segments)):
-            redacted = list(segments)
-            redacted[index] = _REDACTED
-            trailing = "/" if path.endswith("/") and len(path) > 1 else ""
-            return "/" + "/".join(redacted) + trailing
-    return path
 
 
 def _client_ip(scope: Scope) -> str:
@@ -138,7 +81,7 @@ def log_ws_principal(scope: Scope, principal: str) -> None:
     """
     logger.info(
         "WS %s authenticated",
-        _safe_path(str(scope.get("path", "-"))),
+        str(scope.get("path", "-")),
         extra={
             "principal": principal,
             "client_ip": _client_ip(scope),
@@ -179,7 +122,7 @@ class AccessLogMiddleware:
             logger.info(
                 "%s %s %s",
                 scope.get("method", "-"),
-                _safe_path(path),
+                path,
                 status_code,
                 extra={
                     "principal": _principal(scope),
@@ -218,7 +161,7 @@ class AccessLogMiddleware:
             logged = True
             logger.info(
                 "WS %s %s",
-                _safe_path(path),
+                path,
                 outcome,
                 extra={
                     "principal": _principal(scope),

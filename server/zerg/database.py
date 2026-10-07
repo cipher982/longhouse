@@ -200,8 +200,6 @@ try:
     from zerg.models.notification_client_presence import NotificationClientPresence  # noqa: F401
     from zerg.models.notification_event import NotificationEvent  # noqa: F401
     from zerg.models.refresh_session import RefreshSession  # noqa: F401
-    from zerg.models.session_share import SessionShare  # noqa: F401
-    from zerg.models.session_share import SessionShareEvent  # noqa: F401
     from zerg.models.user import User as SplitUser  # noqa: F401
 except ImportError:
     # Handle case where models module might not be available during certain imports
@@ -859,8 +857,6 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.notification_client_presence import NotificationClientPresence  # noqa: F401
     from zerg.models.notification_event import NotificationEvent  # noqa: F401
     from zerg.models.refresh_session import RefreshSession  # noqa: F401
-    from zerg.models.session_share import SessionShare  # noqa: F401
-    from zerg.models.session_share import SessionShareEvent  # noqa: F401
     from zerg.models.user import User as SplitUser  # noqa: F401
 
     target_engine = engine or default_engine or _ensure_default_engines_from_env()

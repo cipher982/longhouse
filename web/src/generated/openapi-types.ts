@@ -14003,10 +14003,6 @@ export interface operations {
                 limit?: number;
                 /** @description Exclusive storage-v2 cursor for the next older page */
                 cursor?: string | null;
-                /** @description User id who shared this link. When set, the response includes a ``sharer`` block with their display name for the 'Shared by' header pill. Ignored when the user no longer exists. */
-                shared_by?: number | null;
-                /** @description Signed share token. When valid, this supersedes unsigned shared_by attribution. */
-                share_token?: string | null;
                 /** @description full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies) */
                 detail?: string;
             };

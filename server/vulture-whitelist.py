@@ -42,10 +42,8 @@ src = None
 dst = None
 follow_symlinks = None
 
-# FastAPI query parameters the web client still sends but the storage-v2
-# handlers do not consume yet. They stay on the signature so the contract does
-# not change under the client; see the comments at their declarations in
+# FastAPI query parameter the web client still sends but the storage-v2
+# handler does not consume yet. It stays on the signature so the contract does
+# not change under the client; see the comment at its declaration in
 # routers/timeline.py.
-shared_by
-share_token
 snapshot_event_id

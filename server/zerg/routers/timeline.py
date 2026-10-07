@@ -1026,29 +1026,12 @@ async def get_timeline_session_workspace(
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
-    shared_by: Optional[int] = Query(
-        None,
-        ge=1,
-        description=(
-            "User id who shared this link. When set, the response includes a "
-            "``sharer`` block with their display name for the 'Shared by' "
-            "header pill. Ignored when the user no longer exists."
-        ),
-    ),
-    share_token: Optional[str] = Query(
-        None,
-        description="Signed share token. When valid, this supersedes unsigned shared_by attribution.",
-    ),
     detail: str = Query(
         "full",
         description="full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies)",
     ),
     current_user=Depends(get_current_browser_caller),
 ):
-    # ``shared_by``/``share_token`` are accepted and currently unused: sharer
-    # attribution only ever resolved inside the deleted archive branch, and
-    # session sharing itself is gone -- nothing mints a share token any more.
-    # They stay on the signature because the web client still sends them.
     timing = ServerTimingRecorder(surface="session_detail")
     response.headers["Cache-Control"] = "no-store"
     storage_workspace = await build_storage_v2_workspace(

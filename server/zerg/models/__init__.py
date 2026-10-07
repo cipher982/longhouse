@@ -23,8 +23,6 @@ _EXPORTS = {
     "DeviceToken": ("zerg.models.device_token", "DeviceToken"),
     "User": ("zerg.models.user", "User"),
     "RefreshSession": ("zerg.models.refresh_session", "RefreshSession"),
-    "SessionShare": ("zerg.models.session_share", "SessionShare"),
-    "SessionShareEvent": ("zerg.models.session_share", "SessionShareEvent"),
     "Runner": ("zerg.models.models", "Runner"),
     "RunnerEnrollToken": ("zerg.models.models", "RunnerEnrollToken"),
     "RunnerJob": ("zerg.models.models", "RunnerJob"),

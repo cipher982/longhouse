@@ -140,7 +140,6 @@ def _uses_archive_read_timeout(api_path: str, method: str) -> bool:
         or api_path.startswith("/agents/sessions/")
         or api_path.startswith("/timeline/sessions/")
         or api_path.startswith("/timeline/workflows/")
-        or api_path.startswith("/timeline/session-shares/")
     )
 
 
