@@ -21,7 +21,7 @@ enum SessionComposerControlState {
     /// Helm queue is in reach, and neither carries attachments.
     static func attachmentInputEnabled(for detail: SessionDetail, asOf now: Date = Date()) -> Bool {
         detail.attachImagesEnabled
-            && (primaryIntent(for: detail, asOf: now) == "auto" || detail.stateFacts.mode == "console")
+            && (primaryIntent(for: detail, asOf: now) == "auto" || detail.originKind == "console")
     }
 
     /// The intent a send with images uses: `auto` between turns, `queue`
@@ -29,7 +29,7 @@ enum SessionComposerControlState {
     /// when this session cannot take images right now.
     static func attachmentIntent(for detail: SessionDetail, requested: String) -> String? {
         if requested == "auto" { return "auto" }
-        return detail.stateFacts.mode == "console" ? "queue" : nil
+        return detail.originKind == "console" ? "queue" : nil
     }
 
     static func showsSecondaryQueueAction(for detail: SessionDetail, asOf now: Date = Date()) -> Bool {

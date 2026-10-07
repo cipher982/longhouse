@@ -692,6 +692,7 @@ async def test_console_multipart_queues_images_behind_a_running_turn(monkeypatch
     )
 
     assert response.turn is not None
+    assert response.intent == "queue"
     assert calls["enqueue"]["message"] == "look at this"
     assert len(calls["enqueue"]["attachments"]) == 1
 

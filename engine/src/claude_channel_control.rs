@@ -381,12 +381,19 @@ pub fn steer_text_from_context(context: &str) -> Option<&str> {
     rest.rfind(TEXT_END).map(|end| &rest[..end])
 }
 
-/// Whether Claude already recorded this steer in its transcript. Delivery
-/// repeats only to survive a hook Claude cancelled under load; once one copy
-/// is on record, repeating it stacks duplicate user messages in the session.
-fn steer_already_recorded(input: &serde_json::Value, text: &str) -> bool {
+fn transcript_len(input: &serde_json::Value) -> Option<u64> {
+    let path = input.get("transcript_path")?.as_str()?;
+    std::fs::metadata(path).ok().map(|meta| meta.len())
+}
+
+/// Whether Claude recorded this steer after `offset`, the transcript length
+/// when its first delivery went out. Delivery repeats only to survive a hook
+/// Claude cancelled under load; once one copy is on record, repeating it
+/// stacks duplicate user messages. Searching from the steer's own offset keeps
+/// an identical later steer from matching an earlier one.
+fn steer_recorded_since(input: &serde_json::Value, offset: u64, text: &str) -> bool {
     use std::io::{Read, Seek, SeekFrom};
-    const TAIL_BYTES: u64 = 2 * 1024 * 1024;
+    const MAX_SCAN_BYTES: u64 = 32 * 1024 * 1024;
     let Some(path) = input
         .get("transcript_path")
         .and_then(serde_json::Value::as_str)
@@ -396,19 +403,22 @@ fn steer_already_recorded(input: &serde_json::Value, text: &str) -> bool {
     let Ok(mut file) = std::fs::File::open(path) else {
         return false;
     };
-    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-    let mut tail = Vec::new();
-    if file
-        .seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
-        .is_err()
-        || file.read_to_end(&mut tail).is_err()
+    let mut recorded = Vec::new();
+    if file.seek(SeekFrom::Start(offset)).is_err()
+        || file
+            .take(MAX_SCAN_BYTES)
+            .read_to_end(&mut recorded)
+            .is_err()
     {
         return false;
     }
     // Claude stores the context as a JSON string: match it escaped.
     let encoded = serde_json::to_string(&steer_context(text)).unwrap_or_default();
     let needle = encoded.trim_matches('"').as_bytes();
-    !needle.is_empty() && tail.windows(needle.len()).any(|window| window == needle)
+    !needle.is_empty()
+        && recorded
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 fn read_steer(path: &Path) -> Option<serde_json::Value> {
@@ -452,9 +462,20 @@ fn turn_control_at(
                 // and a steer consumed by a cancelled hook would be lost.
                 if let Some(mut pending) = read_steer(&steer) {
                     let text = steer_text(&pending)?;
-                    if steer_already_recorded(input, &text) {
-                        let _ = std::fs::remove_file(&steer);
-                        return None;
+                    match pending
+                        .get("transcript_offset")
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        Some(offset) if steer_recorded_since(input, offset, &text) => {
+                            let _ = std::fs::remove_file(&steer);
+                            return None;
+                        }
+                        Some(_) => {}
+                        None => {
+                            if let Some(len) = transcript_len(input) {
+                                pending["transcript_offset"] = json!(len);
+                            }
+                        }
                     }
                     pending["boundary_delivery_attempted"] = json!(true);
                     let _ =
@@ -1142,12 +1163,23 @@ mod tests {
             "type": "attachment",
             "attachment": {"type": "hook_additional_context", "content": [context]},
         });
-        std::fs::write(&transcript, format!("{{\"type\":\"user\"}}\n{row}\n")).unwrap();
+        let mut log = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        use std::io::Write as _;
+        writeln!(log, "{row}").unwrap();
         assert_eq!(
             turn_control_at(SESSION_ID, "PostToolUse", &post, Some(temp.path())),
             None
         );
         assert!(!steer.exists());
+
+        // The same words sent again are a new steer: the earlier copy on
+        // record must not swallow it.
+        std::fs::write(&steer, br#"{"text":"attach \"this\" too"}"#).unwrap();
+        assert!(turn_control_at(SESSION_ID, "PostToolUse", &post, Some(temp.path())).is_some());
+        assert!(steer.exists());
     }
 
     #[test]

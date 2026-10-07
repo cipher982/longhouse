@@ -210,6 +210,7 @@ export type SessionChatTarget = Pick<
   | "selected_model"
   | "capabilities"
   | "session_state"
+  | "origin_kind"
 >;
 function newClientRequestId(): string {
   const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
@@ -1931,7 +1932,9 @@ export function SessionChat({
   const interruptActionLabel = parkedBackgroundWork ? "Stop background work" : "Stop";
   // Images ride a new turn. Console queues it behind a running turn (a steer
   // cannot carry images); elsewhere a send with images waits for the turn.
-  const isConsoleSession = session.session_state.mode === "console";
+  // The server queues images only for Console-origin sessions; the projected
+  // mode also says "console" for one-shot and web/iOS/API launches.
+  const isConsoleSession = session.origin_kind === "console";
   const attachmentInputEnabled =
     attachImagesEnabled && (!isSendLocked || isConsoleSession);
   // A parked Console invocation has no active turn, but its provider-owned

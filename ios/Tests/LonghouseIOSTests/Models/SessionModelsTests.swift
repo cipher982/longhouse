@@ -1522,7 +1522,11 @@ struct SessionModelsTests {
             ),
             to: json
         )
-        let console = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: consoleData)
+        var console = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: consoleData)
+        // Projected mode alone is not enough: the server queues images only
+        // for Console-origin sessions.
+        #expect(!SessionComposerControlState.attachmentInputEnabled(for: console, asOf: before))
+        console.originKind = "console"
         #expect(SessionComposerControlState.attachmentInputEnabled(for: console, asOf: before))
         #expect(SessionComposerControlState.attachmentIntent(for: console, requested: "steer") == "queue")
         #expect(SessionComposerControlState.attachmentIntent(for: console, requested: "auto") == "auto")

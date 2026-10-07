@@ -198,6 +198,7 @@ async def _enqueue_console_input_with_attachments(
     model: str | None,
     upload_payloads: list[tuple[UploadFile, bytes]],
     record_outcome,
+    intent: str = INPUT_INTENT_AUTO,
 ) -> SessionInputResponse:
     """Console path: store the blobs, then enqueue the turn with their refs.
 
@@ -397,7 +398,7 @@ async def _enqueue_console_input_with_attachments(
         live_input_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
         client_request_id=client_request_id,
         turn=_console_turn_response(turn),
-        intent=INPUT_INTENT_AUTO,
+        intent=intent,
         queued=[],
     )
 
@@ -552,6 +553,7 @@ async def create_session_input_with_attachments(
             model=model,
             upload_payloads=upload_payloads,
             record_outcome=_record_outcome,
+            intent=intent,
         )
     if intent != INPUT_INTENT_AUTO:
         _record_outcome("rejected_intent")
