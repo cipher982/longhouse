@@ -1,8 +1,8 @@
 //! OMP Console turns through the stock `omp -p --mode json` surface.
 //!
 //! OMP is Pi-shaped, but its native archive and identity rules are separate.
-//! This adapter therefore owns its exact reserved/resumed source path and uses
-//! the OMP native session header as the only provider identity authority.
+//! Fresh runs let OMP create its source and capture the exact path it reports;
+//! cold resumes use only a validated retained file and native id.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -355,7 +355,15 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         let _ = cleanup_owned_child(&mut child, &config.run_id).await;
         let _ =
             crate::turn_claims::default_registry()?.mark_failed(&config.run_id, &error.to_string());
-        return Err(error).context("waiting for OMP to become ready");
+        // The control channel reports only this outermost message, so it must
+        // carry OMP's own reason: a bare "waiting for OMP to become ready" hid
+        // 18.7's empty-resume refusal on 2026-10-07.
+        let reason = stderr_tail(&stderr_path)
+            .as_deref()
+            .and_then(provider_error_line)
+            .map(|line| format!(": {line}"))
+            .unwrap_or_default();
+        return Err(error).context(format!("waiting for OMP to become ready{reason}"));
     }
     let identity_start = std::fs::metadata(&stdout_path)
         .map(|metadata| metadata.len())
@@ -558,6 +566,25 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         session_file: session_file.to_string_lossy().to_string(),
         argv,
     })
+}
+
+/// The line of a provider's stderr that names its failure: the last one that
+/// starts with "error", else the last line that is not a stack frame or a
+/// numbered source excerpt.
+fn provider_error_line(tail: &str) -> Option<String> {
+    let lines = tail.lines().map(str::trim).filter(|line| {
+        !line.is_empty()
+            && !line.starts_with("at ")
+            && line
+                .split_once(" | ")
+                .is_none_or(|(gutter, _)| !gutter.trim().chars().all(|c| c.is_ascii_digit()))
+    });
+    lines
+        .clone()
+        .filter(|line| line.to_ascii_lowercase().starts_with("error"))
+        .last()
+        .or_else(|| lines.last())
+        .map(|line| line.chars().take(500).collect())
 }
 
 /// Wait for OMP's `ready` frame (see `console_rpc::stdout_has_ready`), failing
@@ -2446,12 +2473,7 @@ pub fn build_omp_args(
             "--resume".into(),
             session_file.to_string_lossy().into_owned(),
         ]);
-        if std::fs::metadata(session_file)
-            .map(|metadata| metadata.len() > 0)
-            .unwrap_or(false)
-        {
-            args.push("--continue".into());
-        }
+        args.push("--continue".into());
     }
     if let Some(profile) = profile.map(str::trim).filter(|value| !value.is_empty()) {
         args.extend(["--profile".into(), profile.into()]);
@@ -3608,9 +3630,253 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires an authenticated stock omp and spends provider tokens"]
+    async fn installed_omp_completes_and_resumes_through_production_console_adapter() {
+        // A fresh launch must let stock OMP create and report its native
+        // source; cold resume must use that exact provider-authored file.
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", temp.path().join("longhouse"));
+        }
+        let omp_bin = std::env::var("LONGHOUSE_OMP_BIN").unwrap_or_else(|_| "omp".to_string());
+        let model = std::env::var("LONGHOUSE_OMP_CANARY_MODEL")
+            .unwrap_or_else(|_| "gpt-6-luna".to_string());
+        let marker = format!("LH_OMP_CONSOLE_{}", Uuid::new_v4().simple());
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let session_dir = temp.path().join("omp-sessions");
+
+        struct Turn {
+            summary: OmpPrintRunSummary,
+            provider_thread_id: String,
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        async fn run_turn(
+            omp_bin: &str,
+            model: &str,
+            cwd: &Path,
+            session_dir: &Path,
+            session_id: &str,
+            thread_id: &str,
+            prompt: String,
+            resume: Option<(String, PathBuf)>,
+        ) -> Turn {
+            let turn_id = Uuid::new_v4().to_string();
+            let run_id = Uuid::new_v4().to_string();
+            let client_request_id = format!("canary-{run_id}");
+            assert!(matches!(
+                crate::turn_claims::default_registry()
+                    .unwrap()
+                    .claim(
+                        &run_id,
+                        session_id,
+                        thread_id,
+                        Some(&turn_id),
+                        Some(&client_request_id),
+                        "omp",
+                    )
+                    .unwrap(),
+                crate::turn_claims::ClaimOutcome::Acquired
+            ));
+            let (resume_provider_thread_id, resume_session_file) = match resume {
+                Some((native_id, path)) => (Some(native_id), Some(path)),
+                None => (None, None),
+            };
+            let summary = start_omp_print_turn(OmpPrintRunConfig {
+                session_id: session_id.to_string(),
+                thread_id: thread_id.to_string(),
+                turn_id: Some(turn_id),
+                run_id,
+                client_request_id: Some(client_request_id),
+                cwd: cwd.to_path_buf(),
+                omp_bin: omp_bin.to_string(),
+                prompt,
+                image_paths: Vec::new(),
+                model: Some(model.to_string()),
+                profile: None,
+                session_dir: Some(session_dir.to_path_buf()),
+                resume_provider_thread_id,
+                resume_session_file,
+                permission_mode: "provider_local".to_string(),
+                origin: "user".to_string(),
+                wake_id: None,
+                invocation_id: None,
+                machine_name: "omp-console-canary".to_string(),
+                local_db_path: None,
+            })
+            .await
+            .unwrap();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+            loop {
+                let claim = crate::turn_claims::default_registry()
+                    .unwrap()
+                    .read(&summary.run_id)
+                    .unwrap();
+                if claim.state == "terminal" {
+                    assert_eq!(
+                        claim.result.as_ref().unwrap()["terminal_state"],
+                        "run_completed",
+                        "stdout={}\nstderr={}",
+                        std::fs::read_to_string(&summary.stdout_path).unwrap_or_default(),
+                        std::fs::read_to_string(&summary.stderr_path).unwrap_or_default(),
+                    );
+                    let provider_thread_id = claim.provider_thread_id.expect("OMP binding");
+                    return Turn {
+                        summary,
+                        provider_thread_id,
+                    };
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "OMP Console canary timed out: stderr={}",
+                    std::fs::read_to_string(&summary.stderr_path).unwrap_or_default()
+                );
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+
+        let first = run_turn(
+            &omp_bin,
+            &model,
+            temp.path(),
+            &session_dir,
+            &session_id,
+            &thread_id,
+            format!("Remember {marker}. Reply with exactly {marker} and nothing else. Do not use tools."),
+            None,
+        )
+        .await;
+        let first_file = PathBuf::from(&first.summary.session_file);
+        assert!(std::fs::read_to_string(&first_file)
+            .unwrap()
+            .contains(&marker));
+        assert!(
+            !first
+                .summary
+                .argv
+                .iter()
+                .any(|argument| argument == "--resume"),
+            "fresh Console launch must let OMP create its native session"
+        );
+        assert!(
+            crate::omp_session::session_file_path_in_session_dir(
+                Path::new(&first.summary.session_dir),
+                &first_file,
+            ),
+            "fresh OMP source must remain inside its launch-scoped directory"
+        );
+        let workspace = temp.path().display().to_string();
+        crate::omp_session::verify_exact_session_file(
+            &first_file,
+            &first.provider_thread_id,
+            Some(workspace.as_str()),
+        )
+        .expect("fresh OMP source has the provider's exact native header");
+
+        let second = run_turn(
+            &omp_bin,
+            &model,
+            temp.path(),
+            &session_dir,
+            &session_id,
+            &thread_id,
+            "Reply with exactly the marker from the previous turn and nothing else. Do not use tools."
+                .to_string(),
+            Some((first.provider_thread_id.clone(), first_file.clone())),
+        )
+        .await;
+        assert_eq!(second.provider_thread_id, first.provider_thread_id);
+        assert_eq!(second.summary.session_file, first.summary.session_file);
+        let first_file_arg = first_file.to_string_lossy();
+        assert!(second
+            .summary
+            .argv
+            .windows(2)
+            .any(|pair| { pair[0] == "--resume" && pair[1] == first_file_arg.as_ref() }));
+        assert!(
+            second
+                .summary
+                .argv
+                .iter()
+                .any(|argument| argument == "--continue"),
+            "exact cold resume must continue the retained native session"
+        );
+        let history = std::fs::read_to_string(&first_file).unwrap();
+        assert!(history.matches(&marker).count() >= 3, "{history}");
+
+        for turn in [&first, &second] {
+            crate::console_adapter::cleanup_process_group(
+                "omp-console-canary",
+                turn.summary.process_group_id,
+            )
+            .await;
+        }
+        match previous_home {
+            Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },
+            None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+        }
+    }
+
+    #[test]
+    fn provider_error_line_names_the_failure_not_the_stack() {
+        let tail = "192939 |         throw new Error(`Cannot resume`);\n                       ^\nerror: Cannot resume session \"/s.jsonl\": the session file holds no entries.\n      at #mt (/$bunfs/root/omp:192939:15)\n";
+        assert_eq!(
+            provider_error_line(tail).as_deref(),
+            Some("error: Cannot resume session \"/s.jsonl\": the session file holds no entries.")
+        );
+        assert_eq!(
+            provider_error_line("plain last line\n").as_deref(),
+            Some("plain last line")
+        );
+        assert_eq!(provider_error_line(" \n"), None);
+        assert_eq!(
+            provider_error_line("Session refused\n    at open (/omp:1:1)\n").as_deref(),
+            Some("Session refused")
+        );
+    }
     use crate::console_lifecycle::conformance::{
         self, LifecycleScenario, ScenarioFuture, ScenarioOutcome, ScenarioRunner,
     };
+    #[test]
+    fn stock_omp_console_builds_rpc_args_for_exact_resume() {
+        let args = build_omp_args(
+            Some("gpt-5.2"),
+            Some("work"),
+            Path::new("/sessions"),
+            Some(Path::new("/sessions/exact.jsonl")),
+            true,
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--mode",
+                "rpc",
+                "--no-ui",
+                "--session-dir",
+                "/sessions",
+                "--resume",
+                "/sessions/exact.jsonl",
+                "--continue",
+                "--profile",
+                "work",
+                "--model",
+                "gpt-5.2",
+            ]
+        );
+        // The prompt (and any image) is a stdin command, never argv.
+        assert!(!args
+            .iter()
+            .any(|arg| arg == "-p" || arg == "--" || arg.starts_with('@')));
+        assert!(!args.iter().any(|arg| matches!(
+            arg.as_str(),
+            "--no-tools" | "--no-extensions" | "--no-skills"
+        )));
+    }
 
     #[test]
     fn help_text_decides_whether_no_ui_is_advertised() {
@@ -5078,6 +5344,10 @@ for line in sys.stdin:
         })
         .await
         .unwrap();
+        assert!(
+            !first.argv.iter().any(|argument| argument == "--resume"),
+            "a fresh Console session must use native provider creation"
+        );
         let first_claim = wait_for_terminal(&first_run).await;
         wait_for_process_group_exit(first.process_group_id.unwrap()).await;
         assert_eq!(

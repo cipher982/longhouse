@@ -401,6 +401,7 @@ describe("SessionChat", () => {
       makeSession({
         device_id: "cinder",
         provider: "codex",
+        origin_kind: "console",
         selected_model,
         capabilities: { attach_images: true },
         session_state: makeSessionStateFacts({
@@ -3708,6 +3709,7 @@ describe("SessionChat", () => {
         return Promise.reject(new Error(`Unexpected request: ${path}`));
       });
       const session = makeSession({
+        origin_kind: "console",
         provider: "codex",
         capabilities: { attach_images: true },
         session_state: makeSessionStateFacts({

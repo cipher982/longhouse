@@ -415,6 +415,7 @@ function SessionDetailWorkspaceRoute({
     device_id: branchSourceSession.device_id,
     selected_model: branchSourceSession.selected_model,
     capabilities: branchSourceSession.capabilities,
+    origin_kind: branchSourceSession.origin_kind,
     session_state: branchSourceSession.session_state,
   };
   const runtimeHostLabel =

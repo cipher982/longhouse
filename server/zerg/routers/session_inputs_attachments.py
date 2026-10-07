@@ -71,6 +71,7 @@ from zerg.services.session_input_attachments import delete_catalog_attachment_bl
 from zerg.services.session_input_attachments import get_catalog_attachment
 from zerg.services.session_input_attachments import store_catalog_attachment_blob
 from zerg.services.session_inputs import INPUT_INTENT_AUTO
+from zerg.services.session_inputs import INPUT_INTENT_QUEUE
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_locks import session_lock_manager
@@ -197,6 +198,7 @@ async def _enqueue_console_input_with_attachments(
     model: str | None,
     upload_payloads: list[tuple[UploadFile, bytes]],
     record_outcome,
+    intent: str = INPUT_INTENT_AUTO,
 ) -> SessionInputResponse:
     """Console path: store the blobs, then enqueue the turn with their refs.
 
@@ -396,7 +398,7 @@ async def _enqueue_console_input_with_attachments(
         live_input_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
         client_request_id=client_request_id,
         turn=_console_turn_response(turn),
-        intent=INPUT_INTENT_AUTO,
+        intent=intent,
         queued=[],
     )
 
@@ -445,11 +447,13 @@ async def create_session_input_with_attachments(
 ) -> SessionInputResponse:
     """Send a user input with one or more image attachments.
 
-    v1 only supports the ``auto`` intent. ``steer`` would need the live
+    ``auto`` everywhere; ``queue`` only on Console sessions, where it is the
+    same FIFO enqueue as ``auto`` and the turn record carries the image refs,
+    so a user can attach while a turn runs. ``steer`` would need the live
     steer chain to accept attachments and would race the dispatch lock
-    that this route already acquires for the regular send path.
-    Queue-with-attachments is also rejected because the queued-input
-    drain path doesn't load attachments yet.
+    that this route already acquires for the regular send path. Helm
+    queue-with-attachments stays rejected: its queued-input drain path does
+    not load attachments.
     """
     client_label = _client_label_from_user_agent(user_agent)
     request_id = client_request_id.strip()
@@ -479,7 +483,7 @@ async def create_session_input_with_attachments(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=_rejected_detail("multipart input requires at least one attachment", code="empty_attachments"),
         )
-    if intent != INPUT_INTENT_AUTO:
+    if intent not in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE):
         _record_outcome("rejected_intent")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -549,6 +553,13 @@ async def create_session_input_with_attachments(
             model=model,
             upload_payloads=upload_payloads,
             record_outcome=_record_outcome,
+            intent=intent,
+        )
+    if intent != INPUT_INTENT_AUTO:
+        _record_outcome("rejected_intent")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_rejected_detail(f"intent {intent!r} not supported with attachments", code="invalid_intent"),
         )
 
     try:

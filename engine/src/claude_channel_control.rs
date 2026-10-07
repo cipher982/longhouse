@@ -371,6 +371,56 @@ fn steer_context(text: &str) -> String {
     )
 }
 
+/// The user's steer text inside a context `steer_context` wrote, so the
+/// transcript can show it as the user message it is.
+pub fn steer_text_from_context(context: &str) -> Option<&str> {
+    const PREFIX: &str =
+        "The user of this session sent this steer from Longhouse while you were working: \"";
+    const TEXT_END: &str = "\". It is the user's own instruction";
+    let rest = context.strip_prefix(PREFIX)?;
+    rest.rfind(TEXT_END).map(|end| &rest[..end])
+}
+
+fn transcript_len(input: &serde_json::Value) -> Option<u64> {
+    let path = input.get("transcript_path")?.as_str()?;
+    std::fs::metadata(path).ok().map(|meta| meta.len())
+}
+
+/// Whether Claude recorded this steer after `offset`, the transcript length
+/// when its first delivery went out. Delivery repeats only to survive a hook
+/// Claude cancelled under load; once one copy is on record, repeating it
+/// stacks duplicate user messages. Searching from the steer's own offset keeps
+/// an identical later steer from matching an earlier one.
+fn steer_recorded_since(input: &serde_json::Value, offset: u64, text: &str) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    const MAX_SCAN_BYTES: u64 = 8 * 1024 * 1024;
+    let Some(path) = input
+        .get("transcript_path")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut recorded = Vec::new();
+    if file.seek(SeekFrom::Start(offset)).is_err()
+        || file
+            .take(MAX_SCAN_BYTES)
+            .read_to_end(&mut recorded)
+            .is_err()
+    {
+        return false;
+    }
+    // Claude stores the context as a JSON string: match it escaped.
+    let encoded = serde_json::to_string(&steer_context(text)).unwrap_or_default();
+    let needle = encoded.trim_matches('"').as_bytes();
+    !needle.is_empty()
+        && recorded
+            .windows(needle.len())
+            .any(|window| window == needle)
+}
+
 fn read_steer(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
@@ -412,6 +462,21 @@ fn turn_control_at(
                 // and a steer consumed by a cancelled hook would be lost.
                 if let Some(mut pending) = read_steer(&steer) {
                     let text = steer_text(&pending)?;
+                    match pending
+                        .get("transcript_offset")
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        Some(offset) if steer_recorded_since(input, offset, &text) => {
+                            let _ = std::fs::remove_file(&steer);
+                            return None;
+                        }
+                        Some(_) => {}
+                        None => {
+                            if let Some(len) = transcript_len(input) {
+                                pending["transcript_offset"] = json!(len);
+                            }
+                        }
+                    }
                     pending["boundary_delivery_attempted"] = json!(true);
                     let _ =
                         std::fs::write(&steer, serde_json::to_vec(&pending).unwrap_or_default());
@@ -470,6 +535,11 @@ fn turn_control_at(
             // The turn stays active, and the marker keeps Stop from blocking twice.
             let mut pending = read_steer(&steer)?;
             let text = steer_text(&pending)?;
+            if pending.get("transcript_offset").is_none() {
+                if let Some(len) = transcript_len(input) {
+                    pending["transcript_offset"] = json!(len);
+                }
+            }
             pending["boundary_delivery_attempted"] = json!(true);
             let _ = std::fs::write(&steer, serde_json::to_vec(&pending).unwrap_or_default());
             Some(json!({"decision": "block", "reason": steer_context(&text)}))
@@ -1069,6 +1139,68 @@ mod tests {
             None
         );
         assert!(!steer.exists());
+    }
+
+    #[test]
+    fn steer_stops_repeating_once_the_transcript_records_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = state_file_path(SESSION_ID, Some(temp.path())).unwrap();
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        let steer = state.with_extension(STEER_REQUEST_EXTENSION);
+        std::fs::write(&steer, br#"{"text":"attach \"this\" too"}"#).unwrap();
+        let transcript = temp.path().join("transcript.jsonl");
+        std::fs::write(&transcript, b"{\"type\":\"user\"}\n").unwrap();
+        let post = json!({"tool_name": "Bash", "transcript_path": transcript});
+
+        // Not on record yet (or the hook was cancelled): deliver.
+        let output = turn_control_at(SESSION_ID, "PostToolUse", &post, Some(temp.path())).unwrap();
+        let context = output["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            steer_text_from_context(context),
+            Some("attach \"this\" too")
+        );
+
+        // Claude recorded it as an attachment row: stop, so the session shows
+        // one user message instead of one per tool step.
+        let row = json!({
+            "type": "attachment",
+            "attachment": {"type": "hook_additional_context", "content": [context]},
+        });
+        let mut log = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        use std::io::Write as _;
+        writeln!(log, "{row}").unwrap();
+        assert_eq!(
+            turn_control_at(SESSION_ID, "PostToolUse", &post, Some(temp.path())),
+            None
+        );
+        assert!(!steer.exists());
+
+        // Delivered first by Stop (no tool boundary yet), then recorded: the
+        // next tool boundary must not deliver it a second time.
+        std::fs::write(&steer, br#"{"text":"stop first"}"#).unwrap();
+        let block = turn_control_at(SESSION_ID, "Stop", &post, Some(temp.path())).unwrap();
+        let reason = block["reason"].as_str().unwrap().to_string();
+        let stop_row = json!({
+            "type": "attachment",
+            "attachment": {"type": "hook_blocking_error", "content": reason},
+        });
+        writeln!(log, "{stop_row}").unwrap();
+        assert_eq!(
+            turn_control_at(SESSION_ID, "PostToolUse", &post, Some(temp.path())),
+            None
+        );
+        assert!(!steer.exists());
+
+        // The same words sent again are a new steer: the earlier copy on
+        // record must not swallow it.
+        std::fs::write(&steer, br#"{"text":"attach \"this\" too"}"#).unwrap();
+        assert!(turn_control_at(SESSION_ID, "PostToolUse", &post, Some(temp.path())).is_some());
+        assert!(steer.exists());
     }
 
     #[test]

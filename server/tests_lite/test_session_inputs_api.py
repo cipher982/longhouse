@@ -380,6 +380,24 @@ def test_live_failed_input_summary_preserves_typed_error():
     assert summary.last_error == ("claude_lifecycle_hook_missing: run `longhouse claude configure`")
 
 
+def test_console_failure_summary_exposes_provider_reason_without_error_code():
+    summary = _live_queued_summary(
+        LiveInputReceiptSnapshot(
+            id="live-codex-failed-1",
+            owner_id=1,
+            session_id=str(uuid4()),
+            provider="codex",
+            text="start work",
+            intent="auto",
+            status=INPUT_STATUS_FAILED,
+            client_request_id="request-codex-failed-1",
+            archive_session_input_id=None,
+            error_json='{"code":null,"message":"run_failed: Codex turn ended with status failed: 401 Unauthorized"}',
+        )
+    )
+    assert summary.last_error == "run_failed: Codex turn ended with status failed: 401 Unauthorized"
+
+
 def test_delivered_input_summary_exposes_exact_transcript_echo():
     summary = _live_queued_summary(
         LiveInputReceiptSnapshot(

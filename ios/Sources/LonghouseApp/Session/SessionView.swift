@@ -889,10 +889,15 @@ struct SessionView: View {
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         let pendingAttachments = attachmentStore.snapshot()
         guard !trimmed.isEmpty || !pendingAttachments.isEmpty else { return }
-        let requestedIntent = intent ?? SessionComposerControlState.primaryIntent(for: detail)
-        if !pendingAttachments.isEmpty && requestedIntent != "auto" {
-            attachmentStore.errorMessage = "Images can be sent when the session is ready for a new turn."
-            return
+        var requestedIntent = intent ?? SessionComposerControlState.primaryIntent(for: detail)
+        if !pendingAttachments.isEmpty {
+            guard let attachmentIntent = SessionComposerControlState.attachmentIntent(
+                for: detail, requested: requestedIntent
+            ) else {
+                attachmentStore.errorMessage = "Images can be sent when the session is ready for a new turn."
+                return
+            }
+            requestedIntent = attachmentIntent
         }
         composerText = ""
         composerFocused = false

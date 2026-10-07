@@ -1509,6 +1509,27 @@ struct SessionModelsTests {
         #expect(SessionComposerControlState.primaryIntent(for: detail, asOf: after) == "auto")
         #expect(!SessionComposerControlState.showsSecondaryQueueAction(for: detail, asOf: after))
         #expect(SessionComposerControlState.attachmentInputEnabled(for: detail, asOf: after))
+        #expect(SessionComposerControlState.attachmentIntent(for: detail, requested: "steer") == nil)
+
+        // Console queues a turn with images behind the running one, so the
+        // picker stays open mid-turn and the send goes out as `queue`.
+        let consoleData = try addingSessionStateFacts(
+            makeSessionStateFacts(
+                activity: "executing",
+                mode: "console",
+                startTurnAvailable: true,
+                activityValidUntil: "2026-09-10T12:00:00Z"
+            ),
+            to: json
+        )
+        var console = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: consoleData)
+        // Projected mode alone is not enough: the server queues images only
+        // for Console-origin sessions.
+        #expect(!SessionComposerControlState.attachmentInputEnabled(for: console, asOf: before))
+        console.originKind = "console"
+        #expect(SessionComposerControlState.attachmentInputEnabled(for: console, asOf: before))
+        #expect(SessionComposerControlState.attachmentIntent(for: console, requested: "steer") == "queue")
+        #expect(SessionComposerControlState.attachmentIntent(for: console, requested: "auto") == "auto")
     }
 
     @Test

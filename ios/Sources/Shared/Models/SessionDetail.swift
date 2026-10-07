@@ -36,6 +36,9 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     var transcriptPreview: SessionTranscriptPreview? = nil
     /// Registered machine id the session runs on; the header's host name.
     var deviceId: String? = nil
+    /// Canonical origin. `console` sessions run as Console turns, which is
+    /// what lets images queue behind a running turn.
+    var originKind: String? = nil
     /// Longhouse sends for this session, newest first, each carrying the durable
     /// event it became once ingest linked it. Clients resolve optimistic rows by
     /// this identity, whether or not that event is on the page they loaded.

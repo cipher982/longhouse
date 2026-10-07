@@ -3013,6 +3013,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         .as_ref()
         .map(|state| state.native_session_id.clone())
         .unwrap_or_default();
+
     let (url, token, machine_name) = registration_credentials(&config)?;
     let resume_attempt_id = resume_state.as_ref().map(|_| Uuid::new_v4().to_string());
     let run_id = resume_attempt_id
