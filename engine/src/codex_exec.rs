@@ -1398,8 +1398,18 @@ async fn start_new_codex_exec(config: CodexExecRunConfig) -> Result<CodexExecRun
         {
             tracing::error!(run_id = %task_config.run_id, %error, "Codex Console invocation failed");
         }
-        if let Err(error) = shutdown_worker_process_group(&mut worker.child, worker.pgid).await {
-            tracing::warn!(pid = worker.pid.unwrap_or_default(), %error, "Codex Console worker shutdown failed");
+        let shutdown = crate::process_group::shutdown_owned_child(
+            &mut worker.child,
+            worker.pgid,
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await;
+        if !shutdown.is_gone() {
+            retain_surviving_codex_invocation(&launch_id);
+            tracing::warn!(
+                pid = worker.pid.unwrap_or_default(),
+                "Codex Console worker shutdown remains unverified"
+            );
         }
         unregister_active_worker(worker.pid).await;
         crate::console_lifecycle::unregister(&launch_id);
@@ -2582,25 +2592,21 @@ async fn run_app_server_turn(
     turn_outcome.context("Codex app-server turn timed out")??;
     Ok(())
 }
-fn retain_surviving_codex_invocation(pgid: Option<i32>) {
-    let Some(pgid) = pgid.filter(|pgid| *pgid > 0) else {
-        return;
-    };
+fn retain_surviving_codex_invocation(launch_id: &str) {
     let recovery = (|| -> Result<()> {
         let registry = crate::turn_claims::default_registry()?;
         let claims = registry.list_all_shared()?;
         if let Some(claim) = claims.iter().rev().find(|claim| {
             claim.provider == "codex"
                 && claim.adapter.as_deref() == Some(CODEX_EXEC_ADAPTER)
-                && claim.process_group_id == Some(pgid)
-                && claim.process_group_is_from_this_boot()
+                && claim.launch_id.as_deref() == Some(launch_id)
         }) {
             registry.record_shutdown_survived(&claim.run_id, claim.pending_count)?;
         }
         Ok(())
     })();
     if let Err(error) = recovery {
-        tracing::warn!(%error, pgid, "Could not retain surviving Codex invocation for recovery");
+        tracing::warn!(%error, launch_id, "Could not retain surviving Codex invocation for recovery");
     }
 }
 
@@ -2617,7 +2623,6 @@ async fn shutdown_worker_process_group(child: &mut Child, pgid: Option<i32>) -> 
             outcome = outcome.as_str(),
             "Codex worker process group survived SIGKILL"
         );
-        retain_surviving_codex_invocation(pgid);
     }
     Ok(())
 }
@@ -2694,7 +2699,6 @@ async fn shutdown_codex_console_worker_pool_within(budget: Duration) {
                 outcome = outcome.as_str(),
                 "Codex console process group survived SIGKILL during shutdown"
             );
-            retain_surviving_codex_invocation(Some(pgid));
         }
     }
     for mut worker in workers {
@@ -3334,34 +3338,41 @@ impl CodexExecRuntimeSink {
                 let conflict = error
                     .downcast_ref::<crate::turn_claims::TerminalEventConflict>()
                     .is_some();
-                let (event, already_durable) = match crate::turn_claims::default_registry()
-                    .and_then(|registry| registry.read(&self.run_id))
-                {
-                    Ok(claim) => match claim.terminal_event {
-                        Some(_) if claim.terminal_event_handed_off => (None, true),
-                        Some(event) => (Some(event), false),
-                        None if conflict => (None, false),
-                        None => (Some(terminal_event), false),
-                    },
-                    Err(read_error) => {
-                        eprintln!(
+                let (event, already_durable, retained_in_claim) =
+                    match crate::turn_claims::default_registry()
+                        .and_then(|registry| registry.read(&self.run_id))
+                    {
+                        Ok(claim) => match claim.terminal_event {
+                            Some(_) if claim.terminal_event_handed_off => (None, true, false),
+                            Some(event) => (Some(event), false, true),
+                            None if conflict => (None, false, false),
+                            None => (Some(terminal_event), false, false),
+                        },
+                        Err(read_error) => {
+                            eprintln!(
                             "[codex-exec] terminal claim unreadable for {} run {}: {read_error:#}",
                             self.session_id, self.run_id
                         );
-                        // A known conflict cannot publish the replacement.
-                        // IO failure must still preserve the observed native
-                        // outcome in the independent durable outbox.
-                        if conflict {
-                            (None, false)
-                        } else {
-                            (Some(terminal_event), false)
+                            // A known conflict cannot publish the replacement.
+                            // IO failure must still preserve the observed native
+                            // outcome in the independent durable outbox.
+                            if conflict {
+                                (None, false, false)
+                            } else {
+                                (Some(terminal_event), false, false)
+                            }
                         }
-                    }
-                };
+                    };
                 let durable = if let Some(event) = event.as_ref() {
                     match crate::config::get_agent_runtime_events_outbox_dir().and_then(|outbox| {
                         crate::outbox::enqueue_runtime_event_for_handoff(&outbox, event)
                     }) {
+                        Ok(true) if retained_in_claim => crate::turn_claims::default_registry()
+                            .and_then(|registry| registry.mark_terminal_event_handed_off(&self.run_id, event))
+                            .unwrap_or_else(|error| {
+                                eprintln!("[codex-exec] terminal handoff acknowledgment failed: {error:#}");
+                                false
+                            }),
                         Ok(durable) => durable,
                         Err(error) => {
                             eprintln!(
@@ -6252,14 +6263,29 @@ for line in sys.stdin:
         temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
             let registry = crate::turn_claims::default_registry().unwrap();
             let run_id = uuid::Uuid::new_v4().to_string();
+            let launch_id = uuid::Uuid::new_v4().to_string();
             seed_codex_claim(&registry, &run_id, Some(424242), Some("known-birth".into()));
+            registry
+                .mark_spawned_invocation(
+                    &run_id,
+                    424242,
+                    424242,
+                    Some("known-birth".into()),
+                    CODEX_EXEC_ADAPTER,
+                    &launch_id,
+                    None,
+                    "",
+                    "",
+                    json!({}),
+                )
+                .unwrap();
             registry
                 .record_invocation_state(&run_id, "closed", 2)
                 .unwrap();
             registry
                 .mark_terminal(&run_id, "run_completed", None)
                 .unwrap();
-            retain_surviving_codex_invocation(Some(424242));
+            retain_surviving_codex_invocation(&launch_id);
             let survivor = registry.read(&run_id).unwrap();
             assert_eq!(survivor.invocation_state.as_deref(), Some("parked"));
             assert_eq!(
@@ -6270,6 +6296,60 @@ for line in sys.stdin:
                 .unwrap()
                 .iter()
                 .any(|claim| claim.run_id == run_id));
+        });
+    }
+    #[test]
+    fn conflicting_terminal_fallback_delivers_only_the_retained_response_and_acknowledges_it() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            runtime.block_on(async {
+                let registry = crate::turn_claims::default_registry().unwrap();
+                let mut sink = runtime_sink(None);
+                sink.session_id = uuid::Uuid::new_v4().to_string();
+                sink.run_id = uuid::Uuid::new_v4().to_string();
+                registry.claim(
+                    &sink.run_id, &sink.session_id, &uuid::Uuid::new_v4().to_string(),
+                    None, None, "codex",
+                ).unwrap();
+                let original = json!({
+                    "runtime_key": format!("codex:{}", sink.session_id),
+                    "session_id": sink.session_id,
+                    "run_id": sink.run_id,
+                    "provider": "codex",
+                    "device_id": "cinder",
+                    "source": CODEX_EXEC_RUNTIME_SOURCE,
+                    "kind": "terminal_signal",
+                    "occurred_at": Utc::now().to_rfc3339(),
+                    "dedupe_key": format!("codex-exec:{}:{}:terminal", sink.session_id, sink.run_id),
+                    "payload": {"terminal_state": "run_completed"}
+                });
+                registry.mark_terminal_with_event(
+                    &sink.run_id, "run_completed", None, original.clone(),
+                ).unwrap();
+                sink.post_phase("thinking", None).await;
+                sink.post_terminal(
+                    "run_cancelled", None, None, "invocation",
+                    InvocationState::Closed, 0,
+                ).await;
+                let saved = registry.read(&sink.run_id).unwrap();
+                assert_eq!(saved.result.as_ref().unwrap()["terminal_state"], "run_completed");
+                assert!(saved.terminal_event_handed_off);
+                let outbox = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
+                let outcomes = fs::read_dir(&outbox).unwrap().flatten()
+                    .filter_map(|entry| fs::read(entry.path()).ok())
+                    .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                    .filter(|event| event["kind"] == "terminal_signal")
+                    .collect::<Vec<_>>();
+                assert_eq!(outcomes, vec![original]);
+                assert!(crate::status_slot::read_all(
+                    &crate::status_slot::status_slot_dir(&crate::config::get_agent_dir().unwrap()),
+                ).iter().all(|slot| slot.run_id != sink.run_id));
+            });
         });
     }
 }
