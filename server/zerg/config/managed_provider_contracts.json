@@ -3797,6 +3797,7 @@
       "adapter_sources": [
         "engine/src/pi_helm_launcher.rs",
         "engine/src/pi_helm_control.rs",
+        "engine/src/helm_control.rs",
         "engine/src/managed_pi_helm_scan.rs",
         "engine/assets/longhouse-pi-helm.ts",
         "engine/src/pi_print.rs",
@@ -4401,7 +4402,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "c38d0dfe2f49aef4e988a35264878a641f776e4a7c44a6781fd1862caf8792da"
+      "adapter_digest": "ce4bce3a393458ae334dbb624dbfb6a322827db5ffabff5814ebc5435a1b8527"
     },
     {
       "provider": "omp",
@@ -4428,6 +4429,7 @@
         "engine/src/managed_omp_helm_scan.rs",
         "engine/src/omp_helm_launcher.rs",
         "engine/src/omp_helm_control.rs",
+        "engine/src/helm_control.rs",
         "engine/assets/longhouse-omp-helm.ts",
         "engine/src/omp_print.rs",
         "engine/src/console_sink.rs",
@@ -5074,7 +5076,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "c08136f1fb2972cd145512e3d62f18446e9f98e06b4d6fc34bdcca59388890c1"
+      "adapter_digest": "1984a3200590c158df082022947e4c81151937618038501fd5e530919788e317"
     }
   ]
 }

@@ -3668,6 +3668,7 @@
       "adapter_sources": [
         "engine/src/pi_helm_launcher.rs",
         "engine/src/pi_helm_control.rs",
+        "engine/src/helm_control.rs",
         "engine/src/managed_pi_helm_scan.rs",
         "engine/assets/longhouse-pi-helm.ts",
         "engine/src/pi_print.rs",
@@ -4278,6 +4279,7 @@
         "engine/src/managed_omp_helm_scan.rs",
         "engine/src/omp_helm_launcher.rs",
         "engine/src/omp_helm_control.rs",
+        "engine/src/helm_control.rs",
         "engine/assets/longhouse-omp-helm.ts",
         "engine/src/omp_print.rs",
         "engine/src/console_sink.rs",
