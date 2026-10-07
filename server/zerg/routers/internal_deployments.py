@@ -629,7 +629,13 @@ async def _catalog_consistency_read(catalog_socket) -> dict[str, Any]:
             )
         except (CatalogUnavailable, CatalogRemoteError) as exc:
             _record_catalog_call("deployment.read_consistency.v2", started, _catalog_failure_name(exc))
-            not_answering_yet = exc.retryable if isinstance(exc, CatalogRemoteError) else not isinstance(exc.__cause__, TimeoutError)
+            # Not answering yet: the socket refused, or catalogd says it is not
+            # ready or its control lane is full. A timeout or an expired
+            # deadline means this read already had the whole budget.
+            if isinstance(exc, CatalogRemoteError):
+                not_answering_yet = exc.retryable and exc.code != "deadline_exceeded"
+            else:
+                not_answering_yet = not isinstance(exc.__cause__, TimeoutError)
             if not not_answering_yet or time.monotonic() + _READ_CONSISTENCY_RETRY_SECONDS >= deadline:
                 raise
             await asyncio.sleep(_READ_CONSISTENCY_RETRY_SECONDS)

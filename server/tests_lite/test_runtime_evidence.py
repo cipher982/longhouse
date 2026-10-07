@@ -446,6 +446,24 @@ def test_read_consistency_waits_for_a_slow_answer_instead_of_resending(evidence_
     assert response.status_code == 503
     assert len(timeouts) == 2
 
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.protocol import CatalogRpcError
+
+    def expired(socket_path, method, *, params, timeout_seconds):
+        timeouts.append(timeout_seconds)
+        raise CatalogRemoteError(
+            CatalogRpcError(code="deadline_exceeded", message="request deadline exceeded", retryable=True, retry_after_ms=None, details={})
+        )
+
+    monkeypatch.setattr(internal_deployments, "call_catalogd_sync", expired)
+    response = client.get(
+        "/internal/deployments/owned-attempt/read-consistency",
+        params={"runtime_epoch": runtime.runtime_epoch},
+        headers={"X-Internal-Token": "evidence-test-only"},
+    )
+    assert response.status_code == 503
+    assert len(timeouts) == 3
+
 
 def _activation_payload(runtime) -> dict[str, object]:
     return {
