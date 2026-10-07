@@ -432,16 +432,20 @@ class RuntimeAdmission:
                     return True, self._snapshot_unlocked()
 
         async with self._lock:
-            payload = self._snapshot_unlocked()
-            payload.update(
-                {
-                    "retryable": True,
-                    "code": "runtime_restarting",
-                    "message": "Runtime is restarting; retry after reopen with the same request identity.",
-                    "path": path,
-                }
-            )
-            return False, payload
+            return False, self.restarting_payload(path=path)
+
+    def restarting_payload(self, *, path: str) -> dict[str, Any]:
+        """K1 body for a request this process cannot serve yet."""
+        payload = self._snapshot_unlocked()
+        payload.update(
+            {
+                "retryable": True,
+                "code": "runtime_restarting",
+                "message": "Runtime is restarting; retry after reopen with the same request identity.",
+                "path": path,
+            }
+        )
+        return payload
 
     async def release(self) -> None:
         async with self._lock:

@@ -26,6 +26,10 @@ _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _INTERNAL_CONTROL_PREFIXES = ("/internal/deployments/", "/api/internal/deployments/")
 _RUNTIME_WEBSOCKET_PATHS = frozenset({"/api/agents/control/ws", "/api/runners/ws", "/api/ws"})
 _REQUEST_BODY_DISCARD_TIMEOUT_SECONDS = 1.0
+# The predecessor releases the catalog within about a second of its stop; a
+# held request that outlives this bound gets a typed retryable 503 instead,
+# well inside RequestTimeoutMiddleware's 15 s.
+_CATALOG_HANDOFF_HOLD_SECONDS = 5.0
 
 
 async def _discard_body(receive: Receive) -> bool:
@@ -61,12 +65,49 @@ async def _deny_websocket(scope: Scope, send: Send, content: dict) -> None:
     await send({"type": "websocket.http.response.body", "body": response.body})
 
 
+async def _await_catalog_handoff() -> bool:
+    """Hold a request that reached a warm candidate until its catalog is open.
+
+    Returns False when the catalog is still not open after the bounded wait;
+    the caller then answers the same typed, retryable 503 as a closed runtime.
+    """
+    from zerg.services.catalog_handoff import catalog_handoff_pending
+
+    handoff = catalog_handoff_pending()
+    if handoff is None:
+        return True
+    if handoff.failed is None:
+        try:
+            await asyncio.wait_for(handoff.ready.wait(), timeout=_CATALOG_HANDOFF_HOLD_SECONDS)
+        except TimeoutError:
+            pass
+    return handoff.ready.is_set()
+
+
+def _restarting_payload(path: str) -> dict:
+    from zerg.services.runtime_admission import runtime_admission
+
+    return runtime_admission().restarting_payload(path=path)
+
+
 class RuntimeWriteAdmissionMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = scope.get("path", "")
+        if scope["type"] in {"http", "websocket"} and not path.startswith(_INTERNAL_CONTROL_PREFIXES):
+            if not await _await_catalog_handoff():
+                content = _restarting_payload(path)
+                if scope["type"] == "websocket":
+                    await _deny_websocket(scope, send, content)
+                    return
+                body_complete = await _discard_body(receive)
+                headers = {"Retry-After": "2"}
+                if not body_complete:
+                    headers["Connection"] = "close"
+                await JSONResponse(status_code=503, content=content, headers=headers)(scope, receive, send)
+                return
         if scope["type"] == "websocket" and path.rstrip("/") in _RUNTIME_WEBSOCKET_PATHS:
             from zerg.services.runtime_admission import runtime_admission
 

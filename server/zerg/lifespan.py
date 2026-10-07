@@ -242,15 +242,61 @@ async def lifespan(app: FastAPI):
     factory_title_assurance = factory_assurance_title_enabled()
     e2e_catalog = _settings.testing and _settings.environment == "test:e2e"
     owns_test_catalog = factory_title_assurance or e2e_catalog
+    handoff = None
+    if not _settings.testing:
+        from zerg.services.catalog_handoff import catalog_handoff
+        from zerg.services.event_loop_lag import start_deploy_window_monitor
+        from zerg.services.runtime_admission import runtime_admission
+
+        pending_runtime = runtime_admission()
+        if pending_runtime.admission != "open":
+            app.state.deploy_window_loop_lag_task = start_deploy_window_monitor(lambda: pending_runtime.admission == "open")
+        handoff = catalog_handoff()
+    if handoff is not None:
+        # Warm candidate: boot and imports are done. Wait for the deployer's
+        # permit (the predecessor has drained) before binding HTTP, then take
+        # the catalog in the background once the predecessor releases it.
+        with _timed_startup_step("catalog_handoff_permit"):
+            await handoff.wait_for_permit()
+        app.state.catalog_handoff_task = asyncio.create_task(
+            _complete_catalog_handoff(app, handoff, startup_started),
+            name="catalog-handoff",
+        )
+    else:
+        await _start_runtime_services(app, startup_started, owns_test_catalog=owns_test_catalog, e2e_catalog=e2e_catalog)
+
+    yield  # Application is running
+
+    shutdown_started = time.monotonic()
+    app.state.runtime_shutdown_started = True
+    await _stop_runtime_services(app, shutdown_started, owns_test_catalog=owns_test_catalog)
+
+
+async def _complete_catalog_handoff(app: FastAPI, handoff, startup_started: float) -> None:
+    """Announce the bound port, wait for the catalog lock, then start as usual."""
+    import os
+
+    from zerg.services.catalogd_supervisor import catalogd_paths
+
+    try:
+        await handoff.announce_bound(int(os.getenv("LONGHOUSE_RUNTIME_PORT", "8000")))
+        database_path, _socket_path = catalogd_paths()
+        lock_path = database_path.with_suffix(f"{database_path.suffix}.catalogd.lock")
+        with _timed_startup_step("catalog_handoff_lock"):
+            await handoff.wait_for_catalog_lock(lock_path)
+        await _start_runtime_services(app, startup_started, owns_test_catalog=False, e2e_catalog=False)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # the deployer reads this through readiness
+        handoff.mark_failed(f"{type(exc).__name__}: {exc}")
+        return
+    handoff.mark_ready()
+
+
+async def _start_runtime_services(app: FastAPI, startup_started: float, *, owns_test_catalog: bool, e2e_catalog: bool) -> None:
     try:
         logger.info("Storage-v2 mode: retired cold database is not initialized or mounted")
         if not _settings.testing:
-            from zerg.services.event_loop_lag import start_deploy_window_monitor
-            from zerg.services.runtime_admission import runtime_admission
-
-            pending_runtime = runtime_admission()
-            if pending_runtime.admission != "open":
-                app.state.deploy_window_loop_lag_task = start_deploy_window_monitor(lambda: pending_runtime.admission == "open")
             with _timed_startup_step("catalogd_supervisor"):
                 from zerg.services.catalogd_supervisor import start_catalogd_supervisor
 
@@ -433,14 +479,12 @@ async def lifespan(app: FastAPI):
                 logger.exception("Failed to stop catalogd after startup failure")
         raise
 
-    yield  # Application is running
 
-    shutdown_started = time.monotonic()
-    app.state.runtime_shutdown_started = True
+async def _stop_runtime_services(app: FastAPI, shutdown_started: float, *, owns_test_catalog: bool) -> None:
     try:
 
         async def stop_deferred_runtime_startup() -> None:
-            for name in ("deferred_non_gating_startup_task", "deploy_window_loop_lag_task"):
+            for name in ("catalog_handoff_task", "deferred_non_gating_startup_task", "deploy_window_loop_lag_task"):
                 task = getattr(app.state, name, None)
                 if task is not None and not task.done():
                     task.cancel()
@@ -514,6 +558,17 @@ async def lifespan(app: FastAPI):
             await stop_catalogd_supervisor()
 
         await _timed_shutdown_step("deferred_runtime_startup", stop_deferred_runtime_startup)
+        drained_for_cutover = False
+        if not _settings.testing:
+            from zerg.services.runtime_admission import runtime_admission
+
+            drained_for_cutover = runtime_admission().state in {"draining", "drained"}
+        if drained_for_cutover:
+            # A drained process has closed catalog writer admission, so no
+            # later step can commit a catalog write anyway. Releasing the
+            # catalog first lets a warm candidate open it while this process
+            # finishes the rest of its shutdown.
+            await _timed_shutdown_step("catalogd_supervisor", stop_catalogd)
         if not _settings.testing:
             await _timed_shutdown_step("wal_checkpoint_loop", stop_wal_checkpoints)
             await _timed_shutdown_step("maintenance_loop", stop_maintenance)
@@ -526,7 +581,8 @@ async def lifespan(app: FastAPI):
             await _timed_shutdown_step("embeddings_v2_projector", stop_embedding_projector)
             await _timed_shutdown_step("storage_v2_workers", stop_storage_workers)
             await _timed_shutdown_step("searchd_supervisor", stop_searchd)
-            await _timed_shutdown_step("catalogd_supervisor", stop_catalogd)
+            if not drained_for_cutover:
+                await _timed_shutdown_step("catalogd_supervisor", stop_catalogd)
         logger.info("Background services stopped elapsed_ms=%.1f", (time.monotonic() - shutdown_started) * 1000)
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")

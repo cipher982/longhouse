@@ -509,6 +509,39 @@ async def runtime_evidence(
     return JSONResponse(status_code=200 if evidence["outcome"] == "ready" else 503, content=payload)
 
 
+# A warm candidate opens its catalog only after the predecessor releases it.
+# Readiness waits briefly for that instead of answering "not ready" and making
+# the deployer poll again; it never pings the catalog socket before then, because
+# the shared socket path could still name the predecessor's catalogd.
+_HANDOFF_READINESS_WAIT_SECONDS = 2.0
+
+
+async def _catalog_handoff_readiness(attempt_id: str, runtime_epoch: str) -> JSONResponse | None:
+    from zerg.services.catalog_handoff import catalog_handoff
+
+    handoff = catalog_handoff()
+    if handoff is None or handoff.ready.is_set():
+        return None
+    if handoff.failed is None:
+        with _timed_stage("catalog_handoff_wait"):
+            try:
+                await asyncio.wait_for(handoff.ready.wait(), timeout=_HANDOFF_READINESS_WAIT_SECONDS)
+            except TimeoutError:
+                pass
+    if handoff.ready.is_set():
+        return None
+    base = {"attempt_id": attempt_id, "runtime_epoch": runtime_epoch, "handoff": dict(handoff.timings)}
+    if handoff.failed is not None:
+        return JSONResponse(
+            status_code=409,
+            content={**base, "outcome": "conflict", "detail": f"catalog handoff failed: {handoff.failed}"},
+        )
+    return JSONResponse(
+        status_code=503,
+        content={**base, "outcome": "not_ready", "detail": "catalog handoff has not taken the catalog yet"},
+    )
+
+
 @router.get("/{attempt_id}/readiness")
 async def runtime_readiness(
     attempt_id: str,
@@ -557,6 +590,9 @@ async def runtime_readiness(
                 {"state": snapshot.get("state"), "attempt_id": attempt_id},
                 lifecycle=lifecycle,
             )
+    handoff_response = await _catalog_handoff_readiness(attempt_id, runtime.runtime_epoch)
+    if handoff_response is not None:
+        return handoff_response
     # The catalogd ping is a blocking socket call; off the event loop it cannot
     # stall the clients that reconnect to this candidate at the same moment.
     with _timed_stage("evidence"):

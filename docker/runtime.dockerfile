@@ -285,6 +285,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 EXPOSE 8000
 
+# The hosted deployer starts this image as a warm candidate beside the serving
+# process only when the image says it can wait for the catalog handoff
+# (server/zerg/services/catalog_handoff.py). Images without the label get the
+# stop-then-start cutover.
+LABEL ai.longhouse.runtime.warm-handoff="v1"
+
 ENTRYPOINT ["/entrypoint.sh"]
 # Start server - serves both API and frontend
 # `exec` so the server replaces the shell as PID 1 and receives SIGTERM. A
