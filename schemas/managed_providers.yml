@@ -632,6 +632,7 @@ providers:
   - engine/src/claude_channel_server.rs
   - server/zerg/services/shipper/hooks.py
   - engine/src/claude_print.rs
+  - engine/src/console_sink.rs
   - engine/src/console_lifecycle.rs
   wire_families: [claude_jsonl, claude_hooks, claude_channel]
   observation_sources: [native_archive, hooks, managed_bridge]
@@ -1186,6 +1187,7 @@ providers:
   - server/zerg/mcp_server/server.py
   - engine/src/opencode_control.rs
   - engine/src/opencode_run.rs
+  - engine/src/console_sink.rs
   - engine/src/opencode_server.rs
   wire_families: [opencode_storage, opencode_server_events]
   observation_sources: [native_archive, managed_bridge]
@@ -1571,6 +1573,7 @@ providers:
   - server/zerg/services/managed_local_control.py
   - engine/src/managed_antigravity_scan.rs
   - engine/src/antigravity_print.rs
+  - engine/src/console_sink.rs
   - engine/src/antigravity_channel_control.rs
   - server/zerg/services/antigravity_hook_inbox.py
   - engine/src/discovery.rs
@@ -1951,6 +1954,7 @@ providers:
   - server/zerg/services/managed_local_control.py
   - engine/src/cursor_helm_control.rs
   - engine/src/cursor_print.rs
+  - engine/src/console_sink.rs
   - engine/src/cursor_visibility.rs
   - engine/src/storage_v2_shipper.rs
   wire_families: [cursor_agent_jsonl, cursor_helm]
@@ -2358,6 +2362,7 @@ providers:
   - engine/src/managed_pi_helm_scan.rs
   - engine/assets/longhouse-pi-helm.ts
   - engine/src/pi_print.rs
+  - engine/src/console_sink.rs
   - engine/src/console_rpc.rs
   - engine/src/console_lifecycle.rs
   - engine/src/pi_session.rs
@@ -2745,6 +2750,7 @@ providers:
   - engine/src/omp_helm_control.rs
   - engine/assets/longhouse-omp-helm.ts
   - engine/src/omp_print.rs
+  - engine/src/console_sink.rs
   - engine/src/console_rpc.rs
   - engine/src/console_lifecycle.rs
   - server/zerg/services/session_live_previews.py

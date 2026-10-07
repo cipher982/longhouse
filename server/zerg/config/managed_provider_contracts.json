@@ -900,6 +900,7 @@
         "engine/src/claude_channel_server.rs",
         "server/zerg/services/shipper/hooks.py",
         "engine/src/claude_print.rs",
+        "engine/src/console_sink.rs",
         "engine/src/console_lifecycle.rs"
       ],
       "wire_families": [
@@ -1884,7 +1885,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "dc9f86a64af77b084042daa8df9bfe25b7183720b733572110bcb0d3c6bc5601"
+      "adapter_digest": "955225e927eef0de9d70812263afb15738b79d7d40147869cff93026ea6968c8"
     },
     {
       "provider": "opencode",
@@ -1905,6 +1906,7 @@
         "server/zerg/mcp_server/server.py",
         "engine/src/opencode_control.rs",
         "engine/src/opencode_run.rs",
+        "engine/src/console_sink.rs",
         "engine/src/opencode_server.rs"
       ],
       "wire_families": [
@@ -2629,7 +2631,7 @@
           "owner_action": "render reasoning parts as collapsed thinking records"
         }
       },
-      "adapter_digest": "854a9029a217b6213de10346f5d9913224c1153f47fd138c33ad908f0adbe23a"
+      "adapter_digest": "6d58acc709118b70e975877f0c1e8528064244787f38a6c7badce2ae8e97412e"
     },
     {
       "provider": "antigravity",
@@ -2650,6 +2652,7 @@
         "server/zerg/services/managed_local_control.py",
         "engine/src/managed_antigravity_scan.rs",
         "engine/src/antigravity_print.rs",
+        "engine/src/console_sink.rs",
         "engine/src/antigravity_channel_control.rs",
         "server/zerg/services/antigravity_hook_inbox.py",
         "engine/src/discovery.rs",
@@ -3054,7 +3057,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "92ba55fac9aab452713815a5235b92f63d82d4025f362023931f287117ddab34"
+      "adapter_digest": "78a8f0acd78e5694b25ec2b7e96f38535fb24b0ec6d56ec8cbbf171fb57b2f2c"
     },
     {
       "provider": "cursor",
@@ -3080,6 +3083,7 @@
         "server/zerg/services/managed_local_control.py",
         "engine/src/cursor_helm_control.rs",
         "engine/src/cursor_print.rs",
+        "engine/src/console_sink.rs",
         "engine/src/cursor_visibility.rs",
         "engine/src/storage_v2_shipper.rs"
       ],
@@ -3773,7 +3777,7 @@
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
       },
-      "adapter_digest": "c615db4801c043dbedbe6db0c4caf066c19d65eb40f3de0446b164921073572a"
+      "adapter_digest": "c51dc6c9fb557975daf22aef8bfccd2e8586d183e51676a255ba381adf893b30"
     },
     {
       "provider": "pi",
@@ -3796,6 +3800,7 @@
         "engine/src/managed_pi_helm_scan.rs",
         "engine/assets/longhouse-pi-helm.ts",
         "engine/src/pi_print.rs",
+        "engine/src/console_sink.rs",
         "engine/src/console_rpc.rs",
         "engine/src/console_lifecycle.rs",
         "engine/src/pi_session.rs",
@@ -4396,7 +4401,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "b8a848535fe781493e1f0fd841d7794f790bab9dc6aa2c939423aee6abeca443"
+      "adapter_digest": "768500dbc095d57a060fb545379173eb2976ca387e0d32f15a3bd3f081aa1976"
     },
     {
       "provider": "omp",
@@ -4425,6 +4430,7 @@
         "engine/src/omp_helm_control.rs",
         "engine/assets/longhouse-omp-helm.ts",
         "engine/src/omp_print.rs",
+        "engine/src/console_sink.rs",
         "engine/src/console_rpc.rs",
         "engine/src/console_lifecycle.rs",
         "server/zerg/services/session_live_previews.py",
@@ -5068,7 +5074,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "be3efc055949d3548e82197d308a9c7af35a526b72d90bdc94c0842e41b34ed2"
+      "adapter_digest": "31970389c666a47ff985f29b14763287b7d3d2981193d7518ce67bfc46b93032"
     }
   ]
 }
