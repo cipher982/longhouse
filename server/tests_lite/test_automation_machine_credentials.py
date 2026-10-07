@@ -276,3 +276,45 @@ def test_a_live_only_recorded_actor_is_sticky(live_catalog, live_catalog_client)
     after_off = _catalog(live_catalog, backfilled)
     assert after_off["launch_actor"] == "automation"
     assert bool(after_off["hidden_from_default_timeline"]) is True
+
+
+def test_a_restored_archived_actor_reaches_actorless_live_rows(live_catalog, live_catalog_client):  # noqa: F811
+    from sqlalchemy import delete
+    from sqlalchemy import select
+
+    from zerg.catalogd.schema import create_catalog_engine
+    from zerg.models.live_store import LiveSessionCatalog
+    from zerg.services.catalogd_supervisor import catalogd_paths
+
+    owner = live_catalog.create_user("owner@automation-creds.test")
+    token = live_catalog.create_device_token(owner_id=owner, device_id=SAURON)
+    session_id = _ship(live_catalog, live_catalog_client, token=token, device_id=SAURON)
+    _set(live_catalog, owner_id=owner, device_id=SAURON, automation=True)
+    _set(live_catalog, owner_id=owner, device_id=SAURON, automation=False)
+
+    table = LiveSessionCatalog.__table__
+    now = datetime.now(UTC).replace(microsecond=0)
+    engine = create_catalog_engine(catalogd_paths()[0])
+    try:
+        with engine.begin() as connection:
+            # The archived row says automation; the live row has no actor.
+            connection.execute(delete(table).where(table.c.session_id == session_id))
+            connection.execute(
+                table.insert().values(
+                    session_id=session_id,
+                    provider="codex",
+                    environment="production",
+                    device_id=SAURON,
+                    started_at=now,
+                    user_state="active",
+                    notification_muted=0,
+                    launch_actor=None,
+                )
+            )
+        _ship(live_catalog, live_catalog_client, token=token, device_id=SAURON, session_id=session_id)
+        with engine.connect() as connection:
+            live_actor = connection.execute(select(table.c.launch_actor).where(table.c.session_id == session_id)).scalar_one()
+    finally:
+        engine.dispose()
+    assert live_actor == "automation"
+    assert bool(_catalog(live_catalog, session_id)["hidden_from_default_timeline"]) is True

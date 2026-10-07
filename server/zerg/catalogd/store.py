@@ -10439,14 +10439,15 @@ class CatalogStore:
                     session_values["launch_surface"] = session_values["launch_surface"] or recorded.get("launch_surface")
                 elif credential_automation:
                     session_values["launch_actor"] = "automation"
-                    # The live rows carry the same provenance; a live row with
-                    # none of its own takes the credential's, so a later full
-                    # visibility reconcile reads the same answer.
+                if session_values["launch_actor"]:
+                    # Whichever fallback supplied it, a live row with no actor of
+                    # its own takes the same one, so a later full visibility
+                    # reconcile reads the same provenance from every row.
                     for table in (live_session_catalog, live_timeline_card):
                         connection.execute(
                             update(table)
                             .where(table.c.session_id == session_key, table.c.launch_actor.is_(None))
-                            .values(launch_actor="automation", updated_at=commit_time)
+                            .values(launch_actor=session_values["launch_actor"], updated_at=commit_time)
                         )
             if render_manifest is None and _session_keeps_published_render(connection, existing_session):
                 # This envelope's `render_state` is a receipt about the envelope
