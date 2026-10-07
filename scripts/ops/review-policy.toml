@@ -95,6 +95,8 @@ paths = [
   "scripts/ops/promotion_gates.py",
   "scripts/ops/ring_lock.py",
   "scripts/lib/ring-lock.sh",
+  "scripts/lib/exact-checkout.sh",
+  "scripts/lib/heavy-build-lock.sh",
   "scripts/ops/runtime-deploy.sh",
   "scripts/ops/release.sh",
   "scripts/ops/release-artifacts.py",

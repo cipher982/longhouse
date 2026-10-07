@@ -730,10 +730,10 @@ install-cli: ## Reinstall the longhouse CLI from current repo source (no engine/
 	cd server && uv tool install -e . --reinstall
 	@echo "longhouse CLI installed"
 
-dogfood: dogfood-refresh ## Refresh the real local runtime from current repo source
+dogfood: dogfood-refresh ## Refresh the real local runtime (see dogfood-refresh)
 
-dogfood-refresh: ## Rebuild/reinstall the actual local Longhouse runtime from current repo source
-	@./scripts/dev/dogfood-runtime.sh refresh
+dogfood-refresh: ## Reinstall this Mac's Longhouse runtime from one exact commit (SHA=<rev>, default origin/main), built in a disposable checkout; HERE=1 builds this working tree as it is
+	@./scripts/dev/dogfood-runtime.sh refresh $(if $(SHA),--sha $(SHA),) $(if $(HERE),--here,)
 
 dogfood-check: ## Show installed local runtime status + local health
 	@./scripts/dev/dogfood-runtime.sh check
@@ -846,6 +846,7 @@ validate-ship-monitor: ## @internal Ship monitor regression tests
 validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 	@bash scripts/tests/dogfood-runtime.test.sh
 	@python3 scripts/tests/ring-lock.test.py
+	@python3 scripts/tests/dogfood-refresh-exact.test.py
 	@python3 scripts/tests/promote-dogfood.test.py
 	@python3 scripts/tests/promotion-gates.test.py
 	@python3 scripts/tests/promote-production.test.py

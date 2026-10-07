@@ -70,3 +70,27 @@ def test_clean_rejects_symlinked_target(monkeypatch: pytest.MonkeyPatch, tmp_pat
     monkeypatch.setenv("LONGHOUSE_CARGO_TARGET_DIR", str(link))
     with pytest.raises(SystemExit, match="symlinked"):
         cargo.clean()
+
+
+def test_an_exact_checkout_borrows_the_owners_target_and_its_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    owner = tmp_path / "primary"
+    monkeypatch.delenv("LONGHOUSE_CARGO_TARGET_DIR", raising=False)
+    monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
+    monkeypatch.setenv(cargo.OWNER_ENV, str(owner))
+    target = cargo.target_dir()
+    assert target == owner / ".build" / "cargo-target"
+    assert cargo._lock_path(target).parent == owner / ".build" / "locks"
+    cargo._ensure_marker(target)  # the marker names the owner, so the owner's own runs keep accepting it
+    monkeypatch.setattr(cargo, "REPO_ROOT", owner)
+    monkeypatch.delenv(cargo.OWNER_ENV)
+    monkeypatch.setattr(cargo, "DEFAULT_TARGET_DIR", target)
+    cargo._ensure_marker(target)
+
+
+def test_without_an_owner_another_checkouts_target_is_still_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    target = configure_target(monkeypatch, tmp_path)
+    monkeypatch.setenv(cargo.OWNER_ENV, str(tmp_path / "primary"))
+    cargo._ensure_marker(target)
+    monkeypatch.delenv(cargo.OWNER_ENV)
+    with pytest.raises(SystemExit, match="another checkout"):
+        cargo._ensure_marker(target)

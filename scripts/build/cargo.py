@@ -23,11 +23,22 @@ DEFAULT_TARGET_DIR = REPO_ROOT / ".build" / "cargo-target"
 LOCK_DIR = REPO_ROOT / ".build" / "locks"
 MARKER_NAME = ".longhouse-target.json"
 DEFAULT_BUDGET_BYTES = 12 * 1024**3
+# The checkout whose build output a run uses, when it is not this one. A disposable
+# exact-SHA checkout (scripts/lib/exact-checkout.sh: make dogfood-refresh) names the
+# clone's primary checkout, so it builds into that warm target (and takes that
+# target's lock) instead of cold-building a fresh one it deletes on exit.
+OWNER_ENV = "LONGHOUSE_CARGO_TARGET_OWNER"
+
+
+def owner_root() -> Path:
+    configured = os.environ.get(OWNER_ENV)
+    return Path(os.path.abspath(Path(configured).expanduser())) if configured else REPO_ROOT
 
 
 def target_dir() -> Path:
     configured = os.environ.get("LONGHOUSE_CARGO_TARGET_DIR") or os.environ.get("CARGO_TARGET_DIR")
-    path = Path(configured).expanduser() if configured else DEFAULT_TARGET_DIR
+    default = owner_root() / ".build" / "cargo-target" if os.environ.get(OWNER_ENV) else DEFAULT_TARGET_DIR
+    path = Path(configured).expanduser() if configured else default
     if not path.is_absolute():
         path = REPO_ROOT / path
     # Keep the final path component visible so symlinked targets can be
@@ -35,14 +46,18 @@ def target_dir() -> Path:
     return Path(os.path.abspath(path))
 
 
+def _lock_dir() -> Path:
+    return owner_root() / ".build" / "locks" if os.environ.get(OWNER_ENV) else LOCK_DIR
+
+
 def _lock_path(target: Path) -> Path:
     key = hashlib.sha256(str(target).encode("utf-8")).hexdigest()[:20]
-    return LOCK_DIR / f"cargo-{key}.lock"
+    return _lock_dir() / f"cargo-{key}.lock"
 
 
 @contextlib.contextmanager
 def target_lock(target: Path):
-    LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    _lock_dir().mkdir(parents=True, exist_ok=True)
     with _lock_path(target).open("a+") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
@@ -108,14 +123,14 @@ def _ensure_marker(target: Path) -> None:
             payload = json.loads(marker.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise SystemExit(f"invalid Longhouse Cargo target marker: {marker}") from exc
-        if payload.get("repo_root") != str(REPO_ROOT):
+        if payload.get("repo_root") != str(owner_root()):
             raise SystemExit(f"Cargo target belongs to another checkout: {target}")
         return
     marker.write_text(
         json.dumps(
             {
                 "schema": 1,
-                "repo_root": str(REPO_ROOT),
+                "repo_root": str(owner_root()),
                 "target_dir": str(target),
             },
             indent=2,
@@ -194,7 +209,7 @@ def clean() -> int:
             payload = json.loads(marker.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise SystemExit(f"invalid Longhouse Cargo target marker: {marker}") from exc
-        if payload.get("repo_root") != str(REPO_ROOT):
+        if payload.get("repo_root") != str(owner_root()):
             raise SystemExit(f"refusing to clean target owned by another checkout: {target}")
 
         trash = target.with_name(f"{target.name}.deleting-{uuid.uuid4().hex}")

@@ -21,6 +21,9 @@ SKIP_ENGINE=0
 FULL_HEALTH="${LONGHOUSE_DOGFOOD_FULL_HEALTH:-0}"
 SWIFT_BUILD_DIR=""
 BUILT_APP_BUNDLE=""
+SHA_REQUEST=""
+HERE=0
+FORWARD_ARGS=()
 
 cleanup_dogfood_scratch() {
   if [[ -n "$SWIFT_BUILD_DIR" && -d "$SWIFT_BUILD_DIR" ]]; then
@@ -48,11 +51,16 @@ resolve_longhouse_home() {
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/dev/dogfood-runtime.sh refresh [--url <url>] [--machine-name <name>] [--no-menubar] [--skip-engine]
+  scripts/dev/dogfood-runtime.sh refresh [--sha <rev>] [--here] [--url <url>] [--machine-name <name>] [--no-menubar] [--skip-engine]
   scripts/dev/dogfood-runtime.sh check [--claude-dir <path>]
 
 Purpose:
-  Refresh installs the real local Longhouse runtime from current repo source.
+  Refresh installs the real local Longhouse runtime from one exact commit:
+  origin/main (fetched) unless --sha names another. It builds from a disposable
+  worktree of that commit under /tmp/agents, removed on exit, under the
+  machine-wide heavy-build lock, reusing the primary checkout's Cargo target; no
+  checkout's working tree matters. --here builds this working tree as it is
+  instead (uncommitted edits included), the old behavior.
   Check shows the installed runtime state and local health.
 
 Notes:
@@ -305,6 +313,37 @@ run_check() {
   rm -f "$snapshot_file"
 }
 
+run_refresh_exact() {
+  # shellcheck source=../lib/exact-checkout.sh
+  . "$ROOT_DIR/scripts/lib/exact-checkout.sh"
+  # shellcheck source=../lib/heavy-build-lock.sh
+  . "$ROOT_DIR/scripts/lib/heavy-build-lock.sh"
+  local rev="$SHA_REQUEST" common owner identity status=0
+  if [[ -z "$rev" ]]; then
+    git -C "$ROOT_DIR" fetch --quiet origin main || fail "Could not fetch origin main; pass --sha <rev> or --here."
+    rev=origin/main
+  fi
+  trap 'cleanup_dogfood_scratch; lh_exact_checkout_cleanup' EXIT
+  lh_exact_checkout "$ROOT_DIR" dogfood-refresh "$rev" || fail "Cannot check out $rev."
+  # Build into the clone's primary checkout's Cargo target (scripts/build/cargo.py
+  # LONGHOUSE_CARGO_TARGET_OWNER): one warm build output, not a cold one per refresh.
+  common="$(git -C "$ROOT_DIR" rev-parse --path-format=absolute --git-common-dir)"
+  owner="$ROOT_DIR"
+  [[ "$(basename "$common")" != ".git" ]] || owner="$(dirname "$common")"
+  log "==> Refreshing this Mac from ${LH_EXACT_SHA} ($rev) in $LH_EXACT_CHECKOUT"
+  (
+    cd "$LH_EXACT_CHECKOUT"
+    LONGHOUSE_DOGFOOD_CHECKOUT=1 LONGHOUSE_CARGO_TARGET_OWNER="$owner" \
+      lh_run_heavy bash "$LH_EXACT_CHECKOUT/scripts/dev/dogfood-runtime.sh" refresh ${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}
+  ) || status=$?
+  (( status == 0 )) || exit "$status"
+  if (( SKIP_ENGINE == 0 )); then
+    identity="$("$HOME/.local/bin/longhouse" build-identity 2>/dev/null || true)"
+    [[ "$identity" == *"+${LH_EXACT_SHA:0:8}"* ]] || fail "Installed longhouse reports '$identity', not ${LH_EXACT_SHA:0:8}."
+    log "Installed exactly ${LH_EXACT_SHA:0:8}: $identity"
+  fi
+}
+
 run_refresh() {
   local url
   local machine_name
@@ -373,22 +412,36 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --url)
       URL_OVERRIDE="${2:-}"
+      FORWARD_ARGS+=("$1" "${2:-}")
       shift 2
       ;;
     --machine-name)
       MACHINE_NAME_OVERRIDE="${2:-}"
+      FORWARD_ARGS+=("$1" "${2:-}")
       shift 2
       ;;
     --claude-dir)
       CLAUDE_DIR="${2:-}"
+      FORWARD_ARGS+=("$1" "${2:-}")
       shift 2
       ;;
     --no-menubar)
       MENUBAR=0
+      FORWARD_ARGS+=("$1")
       shift
       ;;
     --skip-engine)
       SKIP_ENGINE=1
+      FORWARD_ARGS+=("$1")
+      shift
+      ;;
+    --sha)
+      SHA_REQUEST="${2:-}"
+      [[ -n "$SHA_REQUEST" ]] || fail "--sha needs a revision"
+      shift 2
+      ;;
+    --here)
+      HERE=1
       shift
       ;;
     -h|--help)
@@ -405,7 +458,11 @@ LONGHOUSE_HOME="$(resolve_longhouse_home "$CLAUDE_DIR")"
 
 case "$COMMAND" in
   refresh)
-    run_refresh
+    if (( HERE == 1 )) || [[ "${LONGHOUSE_DOGFOOD_CHECKOUT:-0}" == "1" ]]; then
+      run_refresh
+    else
+      run_refresh_exact
+    fi
     ;;
   check)
     require_cmd uv

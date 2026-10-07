@@ -9,7 +9,11 @@ Usage: release.sh VERSION
 
   VERSION is the tag to cut (e.g. v0.1.13).
 
-Cuts a stable Longhouse release:
+Cuts a stable Longhouse release. Start it from any checkout, clean or not, on
+any branch: it takes the release lock (scripts/ops/ring_lock.py; a second
+release refuses and names the first), makes a disposable worktree of the exact
+origin/main commit under /tmp/agents, runs every step below from there, and
+removes it on exit, success or failure. The primary checkout is not involved.
   1. Bumps every public component manifest (server, engine, runner,
      iOS xcconfig) to the same shared release version via bump-my-version.
      Note: this is the release version, not the per-commit build identity.
@@ -41,6 +45,54 @@ if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 2
 fi
 
+CANDIDATE_REF="refs/longhouse/release-candidates/$VERSION"
+
+# --- The run you start: the release lock and a disposable exact-SHA checkout --
+# A release used to need the primary checkout on main for its ~30 minutes, so it
+# blocked `make dogfood-refresh` and was blocked by any agent that left that
+# checkout dirty or behind origin/main. This part only takes the lock, picks the
+# start commit, and runs this same script from a disposable worktree of it.
+if [[ -z "${LONGHOUSE_RELEASE_CHECKOUT:-}" ]]; then
+  . "$ROOT/scripts/lib/ring-lock.sh"
+  . "$ROOT/scripts/lib/exact-checkout.sh"
+  trap 'lh_exact_checkout_cleanup; lh_ring_lock_release' EXIT
+  git -C "$ROOT" fetch --quiet origin main
+  REMOTE_HEAD="$(git -C "$ROOT" rev-parse origin/main)"
+  # Releases took a median 28 min and up to 77 min (v0.1.68..v0.1.75, bump commit to
+  # release workflows done), and single steps block much longer (the heavy-build lock
+  # wait, the 2 h gate wait, up to 6 h of notarization). No fixed TTL holds a live
+  # release without also holding a dead one for hours, so the keepalive renews it every
+  # minute while this script lives; the 10 min TTL only bounds a stopped keepalive (a
+  # hung or suspended run), and a release that dies frees it at once.
+  lh_ring_lock_acquire release "$REMOTE_HEAD" 600 "make release $VERSION" || {
+    echo "Refusing: another release is in flight (above)." >&2
+    exit 1
+  }
+  lh_ring_lock_keepalive 60 600
+  START="$REMOTE_HEAD"
+  if candidate="$(git -C "$ROOT" rev-parse --verify --quiet "$CANDIDATE_REF")"; then
+    # A bump commit an earlier run made but did not push: resume from it while it
+    # still sits on origin/main; otherwise bump again from the new origin/main.
+    if git -C "$ROOT" merge-base --is-ancestor "$REMOTE_HEAD" "$candidate"; then
+      START="$candidate"
+      echo "Resuming $VERSION from its unpushed candidate ${candidate:0:10}."
+    else
+      echo "Dropping the unpushed $VERSION candidate ${candidate:0:10}: origin/main moved; bumping again."
+      git -C "$ROOT" update-ref -d "$CANDIDATE_REF"
+    fi
+  fi
+  lh_exact_checkout "$ROOT" "release-$VERSION" "$START"
+  echo "Releasing from a disposable checkout of ${START:0:10}: $LH_EXACT_CHECKOUT"
+  status=0
+  LONGHOUSE_RELEASE_CHECKOUT=1 LH_RING_LOCK_SURFACE="$LH_RING_LOCK_SURFACE" LH_RING_LOCK_TOKEN="$LH_RING_LOCK_TOKEN" \
+    bash "$LH_EXACT_CHECKOUT/scripts/ops/release.sh" "$VERSION" || status=$?
+  exit "$status"
+fi
+
+# --- From here on: the disposable checkout ($ROOT), detached at the start commit --
+cd "$ROOT"
+. "$ROOT/scripts/lib/ring-lock.sh"  # the outer run's lock, renewed here with the candidate SHA
+
 PYVER="${VERSION#v}"
 PYPROJECT="$ROOT/server/pyproject.toml"
 CURRENT_VERSION="$(grep -E '^version\s*=' "$PYPROJECT" | head -1 | sed -E 's/version *= *"([^"]+)".*/\1/')"
@@ -50,27 +102,20 @@ if ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet; then
   exit 1
 fi
 
-BRANCH="$(git -C "$ROOT" symbolic-ref --quiet --short HEAD)"
-if [[ "$BRANCH" != "main" ]]; then
-  echo "Refusing to release from branch '$BRANCH'. Release from main." >&2
-  exit 1
-fi
-
-# Shared-worktree guard: another agent may have committed to local main without
-# pushing. Refuse to release until local main == origin/main so we only release
-# commits that exist on origin and that the user can see in GitHub. Fetch only
-# the branch here: local historical tags may intentionally differ from origin,
-# and tag existence is checked against the remote below without clobbering them.
+# The checkout is detached at origin/main, or at an unpushed bump candidate on top
+# of it. Release only commits that exist on origin (plus that one bump), never
+# another agent's unpushed work. Fetch only the branch here: local historical tags
+# may intentionally differ from origin, and tag existence is checked against the
+# remote below without clobbering them.
 git -C "$ROOT" fetch --quiet origin main
 LOCAL_HEAD="$(git -C "$ROOT" rev-parse HEAD)"
 REMOTE_HEAD="$(git -C "$ROOT" rev-parse origin/main)"
 if [[ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]]; then
   if [[ "$CURRENT_VERSION" != "$PYVER" ]] || ! git -C "$ROOT" merge-base --is-ancestor "$REMOTE_HEAD" "$LOCAL_HEAD"; then
-    echo "Local main ($LOCAL_HEAD) does not match origin/main ($REMOTE_HEAD)." >&2
-    echo "Push (or discard) local work before releasing — this guards against sweeping another agent's WIP into the release." >&2
+    echo "The release checkout ($LOCAL_HEAD) is neither origin/main ($REMOTE_HEAD) nor a $PYVER bump on top of it; rerun make release VERSION=$VERSION." >&2
     exit 1
   fi
-  echo "Resuming $VERSION from local main ahead of origin/main at ${LOCAL_HEAD:0:10}."
+  echo "Resuming $VERSION from its candidate ${LOCAL_HEAD:0:10}, ahead of origin/main."
 fi
 
 if git -C "$ROOT" rev-parse --verify --quiet "refs/tags/$VERSION" >/dev/null; then
@@ -131,39 +176,19 @@ if [[ "$CURRENT_VERSION" != "$PYVER" ]]; then
     ios/XcodeHarness/Configs/Version.xcconfig \
     .bumpversion.toml
   git -C "$ROOT" commit -m "Bump version to $PYVER"
+  # The checkout is removed on exit; this ref keeps the candidate for a rerun to resume.
+  git -C "$ROOT" update-ref "$CANDIDATE_REF" HEAD
 fi
 
 BUMP_SHA="$(git -C "$ROOT" rev-parse HEAD)"
 echo "Versioned candidate: ${BUMP_SHA:0:10}"
+lh_ring_lock_renew 600 "$BUMP_SHA" >/dev/null || true  # the lock's status names the candidate
 
 # The validation is the one heavy step of a release; everything after it waits on
 # GitHub. Hold the machine-wide heavy-build lock for this step only, so other
-# agents can build while the gates and notarization run. An outer
-# `lockf <lock> make release` wrapper already holds it (taking it again would
-# deadlock on ourselves), so detect that and just run.
-HEAVY_BUILD_LOCK="${LONGHOUSE_HEAVY_BUILD_LOCK:-/tmp/agents/longhouse-heavy-build.lock}"
-
-heavy_lock_held_by_ancestor() {
-  local pid=$$ command first
-  while [[ -n "$pid" && "$pid" -gt 1 ]]; do
-    command="$(ps -o command= -p "$pid" 2>/dev/null || true)"
-    first="${command%% *}"
-    # argv[0] must be lockf itself: a shell whose -c text merely mentions it is not a holder.
-    [[ "${first##*/}" == lockf && "$command" == *"$HEAVY_BUILD_LOCK"* ]] && return 0
-    pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
-  done
-  return 1
-}
-
-run_heavy() {
-  if ! command -v lockf >/dev/null 2>&1 || heavy_lock_held_by_ancestor; then
-    "$@"
-    return
-  fi
-  mkdir -p "$(dirname "$HEAVY_BUILD_LOCK")"
-  echo "Waiting for the heavy-build lock ($HEAVY_BUILD_LOCK) if another build holds it..."
-  lockf -k "$HEAVY_BUILD_LOCK" "$@"
-}
+# agents can build while the gates and notarization run (an outer
+# `lockf <lock> make release` wrapper is detected, not deadlocked on).
+. "$ROOT/scripts/lib/heavy-build-lock.sh"
 
 # The isolated guest defaults to 2 CPU / 4 GiB, sized for cube's shared pods. A
 # release holds the lock alone on a 16-core laptop; the 4 GiB ceiling is what
@@ -177,15 +202,16 @@ export LONGHOUSE_TEST_MEMORY="${LONGHOUSE_TEST_MEMORY:-8g}"
 # A resume (same version, candidate already committed) must not repeat a
 # validation the exact commit already passed: v0.1.58's gate failed after a green
 # validation and a retry would have paid it again. The stamp is keyed by commit
-# SHA under the gitignored .build/, written only once make test-ci succeeded and
-# left the tree clean (below), so an edited candidate has a new SHA and
-# revalidates, and a validation that dirtied the tree is never stamped.
-VALIDATED_STAMP="$ROOT/.build/release-validated/$BUMP_SHA"
+# SHA in the clone's git common dir (the release checkout is disposable), written
+# only once make test-ci succeeded and left the tree clean (below), so an edited
+# candidate has a new SHA and revalidates, and a validation that dirtied the tree
+# is never stamped.
+VALIDATED_STAMP="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)/release-validated/$BUMP_SHA"
 if [[ -z "${RELEASE_REVALIDATE:-}" && -f "$VALIDATED_STAMP" ]]; then
   echo "Candidate ${BUMP_SHA:0:10} already passed make test-ci ($(cat "$VALIDATED_STAMP")); skipping. RELEASE_REVALIDATE=1 forces it."
 else
   echo "Running full release validation on the exact candidate commit..."
-  run_heavy bash -c 'cd "$1" && make test-ci' _ "$ROOT"
+  lh_run_heavy bash -c 'cd "$1" && make test-ci' _ "$ROOT"
   NEEDS_STAMP=1
 fi
 
@@ -200,6 +226,10 @@ fi
 
 # A candidate that needed no bump commit is already on origin/main; other
 # agents landing on top of it during validation must not fail the release.
+lh_ring_lock_renew 600 "$BUMP_SHA" >/dev/null || {
+  echo "This run no longer holds the release lock (above); not pushing. Rerun make release VERSION=$VERSION." >&2
+  exit 1
+}
 git -C "$ROOT" fetch --quiet origin main
 # Landing rule: local commits ahead of origin/main that touch the blocking list
 # (scripts/ops/review-policy.toml) need a completed review before they reach main.
@@ -219,17 +249,19 @@ elif echo "Pushing versioned candidate to main..." && ! git -C "$ROOT" push orig
     || ! git -C "$ROOT" rebase --quiet origin/main \
     || ! BUMP_SHA="$(git -C "$ROOT" rev-parse HEAD)" \
     || ! git -C "$ROOT" push origin "$BUMP_SHA:refs/heads/main"; then
-    echo "Push failed — another commit likely landed on origin/main. Rewind and retry:" >&2
-    echo "  reconcile local main with origin/main, then rerun make release VERSION=$VERSION" >&2
+    echo "Push failed — another commit likely landed on origin/main. Rerun make release VERSION=$VERSION:" >&2
+    echo "  it resumes from the unpushed candidate when it still sits on origin/main, else bumps again." >&2
     exit 1
   fi
   echo "Rebased versioned candidate onto origin/main: ${BUMP_SHA:0:10}"
 fi
+git -C "$ROOT" update-ref -d "$CANDIDATE_REF" 2>/dev/null || true  # on origin/main now: nothing left to resume
+lh_ring_lock_renew 600 "$BUMP_SHA" >/dev/null || true
 
 # GitHub path filters may omit required release gates when the final candidate
 # only changes another product surface. Give push-triggered runs a moment to
 # register, then dispatch only the exact-SHA gates GitHub did not create.
-sleep 10
+sleep "${RELEASE_SETTLE_SECONDS:-10}"
 for workflow in runtime-image.yml deploy-and-verify.yml launch-gate.yml; do
   run_count="$(gh run list \
     --repo cipher982/longhouse \
