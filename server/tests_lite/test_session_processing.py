@@ -401,31 +401,6 @@ class TestCountTokens:
         assert resolved == vendored
         assert os.environ["TIKTOKEN_CACHE_DIR"] == str(vendored)
 
-    def test_testing_falls_back_to_cl100k_when_o200k_cache_missing(self, monkeypatch, tmp_path):
-        vendored = tmp_path / "vendored-tiktoken"
-        vendored.mkdir()
-        monkeypatch.setenv("TESTING", "1")
-        monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(vendored))
-        monkeypatch.delenv("DATA_GYM_CACHE_DIR", raising=False)
-        tokens_mod._get_encoding.cache_clear()
-        calls: list[str] = []
-
-        def fake_get_encoding(name: str):
-            calls.append(name)
-            if name == "o200k_base":
-                raise AssertionError("o200k_base should have fallen back before tiktoken lookup")
-            return name
-
-        monkeypatch.setattr(tokens_mod.tiktoken, "get_encoding", fake_get_encoding)
-
-        cache_blob = tokens_mod._cache_blob_path("o200k_base")
-
-        assert cache_blob is not None
-        assert not cache_blob.exists()
-        assert tokens_mod._get_encoding("o200k_base") == "cl100k_base"
-        assert calls == ["cl100k_base"]
-        tokens_mod._get_encoding.cache_clear()
-
     def test_known_string(self):
         # "hello world" is 2 tokens in cl100k_base
         result = count_tokens("hello world", encoding="cl100k_base")
@@ -439,14 +414,6 @@ class TestCountTokens:
         result = count_tokens(text, encoding="cl100k_base")
         assert result > 0
         assert result < len(text)  # tokens < chars
-
-    def test_different_encoding(self):
-        text = "hello world"
-        cl100k = count_tokens(text, encoding="cl100k_base")
-        o200k = count_tokens(text, encoding="o200k_base")
-        # Both should count > 0 (exact values may differ)
-        assert cl100k > 0
-        assert o200k > 0
 
 
 # =====================================================================

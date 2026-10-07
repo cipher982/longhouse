@@ -1,10 +1,10 @@
 """Token counting and truncation with explicit encoding control.
 
 Callers specify the encoding — never change the default silently. The default
-``cl100k_base`` matches the default embedding model. Callers using
-GPT-5 era models should pass ``o200k_base`` explicitly.
+``cl100k_base`` matches the default embedding model and is the only encoding
+vendored.
 
-The two vendored tokenizer blobs live under ``zerg/vendor/tiktoken``. They are
+The vendored tokenizer blob lives under ``zerg/vendor/tiktoken``. They are
 read-only seed data for the runtime cache, not an in-repo writable cache.
 """
 
@@ -21,9 +21,7 @@ import tiktoken
 
 _ENCODING_URLS = {
     "cl100k_base": "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken",
-    "o200k_base": "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken",
 }
-_FALLBACK_ENCODINGS = {"o200k_base": "cl100k_base"}
 _VENDORED_TIKTOKEN_DIR = Path(__file__).resolve().parents[2] / "vendor" / "tiktoken"
 
 
@@ -98,22 +96,9 @@ def _use_vendored_tiktoken_data_if_available() -> Path | None:
 _use_vendored_tiktoken_data_if_available()
 
 
-def _cache_blob_path(encoding: str) -> Path | None:
-    url = _ENCODING_URLS.get(encoding)
-    cache_dir = os.getenv("TIKTOKEN_CACHE_DIR") or os.getenv("DATA_GYM_CACHE_DIR")
-    if not url or not cache_dir:
-        return None
-    return Path(cache_dir) / hashlib.sha1(url.encode()).hexdigest()
-
-
 @lru_cache(maxsize=4)
 def _get_encoding(encoding: str) -> tiktoken.Encoding:
     """Return a cached tiktoken Encoding object."""
-    fallback = _FALLBACK_ENCODINGS.get(encoding)
-    if os.getenv("TESTING") and fallback:
-        cache_blob = _cache_blob_path(encoding)
-        if cache_blob is None or not cache_blob.is_file():
-            return _get_encoding(fallback)
     return tiktoken.get_encoding(encoding)
 
 
@@ -122,7 +107,7 @@ def count_tokens(text: str, encoding: str = "cl100k_base") -> int:
 
     Args:
         text: Input text.
-        encoding: tiktoken encoding name (e.g. ``cl100k_base``, ``o200k_base``).
+        encoding: tiktoken encoding name (e.g. ``cl100k_base``).
 
     Returns:
         Token count (0 for empty/None input).

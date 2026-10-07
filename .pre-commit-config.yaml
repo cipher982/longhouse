@@ -23,7 +23,7 @@ repos:
       - id: check-added-large-files
         args: [--maxkb=1500]
         # The landing page's full-page visual baseline is ~1.8 MB (7,800 px tall).
-        exclude: ^(server/zerg/vendor/tiktoken/(9b5ad71b2ce5302211f9c61530b329a4922fc6a4|fb374d419588a4632f3f557e76b4b70aebbca790)|e2e/tests/ui_baseline_public\.spec\.ts-snapshots/landing-chromium-linux\.png)$
+        exclude: ^(server/zerg/vendor/tiktoken/9b5ad71b2ce5302211f9c61530b329a4922fc6a4|e2e/tests/ui_baseline_public\.spec\.ts-snapshots/landing-chromium-linux\.png)$
       - id: check-merge-conflict
 
   # =========================================================================
