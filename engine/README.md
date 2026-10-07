@@ -37,6 +37,9 @@ remove or reclaim a successor's status. Unknown ownership never renews remote
 liveness; its reconstructable observation expires after 24 hours with an
 exact-version guard, without declaring execution ended. Runtime lifecycle
 records have independent admission and cooldowns from replaceable observations.
+Helm and Console ownership are revalidated together on the existing managed
+scan cadence, using one process inventory. Unknown lookups retry on the next
+scan rather than being cached as permanent failure.
 
 Fresh OMP Helm and Console use native creation, not resume. OMP may report its
 exact session path before writing a JSONL header: controls can be ready while

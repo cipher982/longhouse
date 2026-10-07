@@ -374,10 +374,6 @@ struct StatusOwnerEvidence {
 }
 
 impl StatusOwnerEvidence {
-    fn knows(&self, owner: &StatusOwnerKey) -> bool {
-        self.active.contains(owner) || self.ended.contains(owner)
-    }
-
     fn merge(&mut self, other: Self) {
         self.active.extend(other.active);
         self.ended.extend(other.ended);
@@ -386,16 +382,11 @@ impl StatusOwnerEvidence {
     }
 }
 
-struct StatusOwnerRefreshResult {
-    evidence: StatusOwnerEvidence,
-}
-
 /// One pass over the session status slots.
 struct StatusSlotResult {
     slots: Vec<crate::status_slot::StatusSlot>,
     recorded: Vec<(String, (String, u64))>,
     elapsed_ms: u64,
-    unresolved_owners: Vec<StatusOwnerKey>,
 }
 #[derive(Debug, Default)]
 struct StatusPostResult {
@@ -1493,9 +1484,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut runtime_sweep_quiet_until: Option<Instant> = None;
     let mut status_slot_tasks: JoinSet<StatusSlotResult> = JoinSet::new();
     let mut status_post_tasks: JoinSet<StatusPostResult> = JoinSet::new();
-    let mut status_owner_refresh_tasks: JoinSet<StatusOwnerRefreshResult> = JoinSet::new();
-    let mut status_owner_refresh_attempted: HashMap<String, HashMap<String, String>> =
-        HashMap::new();
     let mut status_ledger = StatusLedger::default();
     // What the local phase ledger already holds. Recording an unchanged phase
     // every 100ms bumps its revision, and the projection debounce watches that
@@ -1985,32 +1973,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 post_status_slots(&client, pending).await
                             });
                         }
-                        let refresh_owners = result
-                            .unresolved_owners
-                            .into_iter()
-                            .filter(|owner| {
-                                if last_status_owners.knows(owner) {
-                                    return false;
-                                }
-                                status_owner_refresh_attempted
-                                    .get(&owner.provider)
-                                    .and_then(|sessions| sessions.get(&owner.session_id))
-                                    .map_or(true, |run_id| run_id != &owner.run_id)
-                            })
-                            .collect::<Vec<_>>();
-                        if !refresh_owners.is_empty() && status_owner_refresh_tasks.is_empty() {
-                            for owner in &refresh_owners {
-                                status_owner_refresh_attempted
-                                    .entry(owner.provider.clone())
-                                    .or_default()
-                                    .insert(owner.session_id.clone(), owner.run_id.clone());
-                            }
-                            status_owner_refresh_tasks.spawn_blocking(move || {
-                                StatusOwnerRefreshResult {
-                                    evidence: refresh_status_claim_owners(refresh_owners),
-                                }
-                            });
-                        }
                     }
                     Some(Err(err)) => {
                         tracing::warn!("Status slot task failed: {}", err);
@@ -2023,28 +1985,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Some(Ok(result)) => status_ledger.settle(result, Instant::now()),
                     Some(Err(err)) => {
                         tracing::warn!("Status slot POST task failed: {}", err);
-                    }
-                    None => {}
-                }
-            }
-            status_owner_refresh_result = status_owner_refresh_tasks.join_next(), if !status_owner_refresh_tasks.is_empty() => {
-                match status_owner_refresh_result {
-                    Some(Ok(result)) => {
-                        for owner in result
-                            .evidence
-                            .active
-                            .iter()
-                            .chain(result.evidence.ended.iter())
-                        {
-                            forget_status_owner_refresh_attempt(
-                                &mut status_owner_refresh_attempted,
-                                owner,
-                            );
-                        }
-                        Arc::make_mut(&mut last_status_owners).merge(result.evidence)
-                    }
-                    Some(Err(error)) => {
-                        tracing::warn!("Status owner refresh task failed: {}", error);
                     }
                     None => {}
                 }
@@ -2758,14 +2698,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             managed_observation_scan_result = managed_observation_scan_tasks.join_next(), if !managed_observation_scan_tasks.is_empty() => {
                 match managed_observation_scan_result {
                     Some(Ok(mut result)) => {
-                        let status_owners = std::mem::take(&mut result.status_owners);
-                        for owner in status_owners.active.iter().chain(status_owners.ended.iter()) {
-                            forget_status_owner_refresh_attempt(
-                                &mut status_owner_refresh_attempted,
-                                owner,
-                            );
-                        }
-                        last_status_owners = Arc::new(status_owners);
+                        last_status_owners = Arc::new(std::mem::take(&mut result.status_owners));
                         if result.elapsed_ms > 250 {
                             tracing::warn!(
                                 reason = result.reason,
@@ -3592,8 +3525,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         let started = Instant::now();
                         let dir = crate::status_slot::status_slot_dir(&agent_dir);
                         let slots = crate::status_slot::read_all(&dir);
-                        let unresolved_owners =
-                            unresolved_status_owner_keys(&slots, owner_evidence.as_ref());
                         let slots =
                             reconcile_status_slots(&dir, slots, owner_evidence.as_ref());
                         // The phase ledger is local truth, and the daemon is
@@ -3605,7 +3536,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             slots,
                             recorded,
                             elapsed_ms: started.elapsed().as_millis() as u64,
-                            unresolved_owners,
                         }
                     });
                 }
@@ -4067,34 +3997,6 @@ fn status_owner_key(provider: &str, session_id: &str, run_id: &str) -> Option<St
             session_id: session_id.to_string(),
             run_id: run_id.to_string(),
         })
-}
-
-fn unresolved_status_owner_keys(
-    slots: &[crate::status_slot::StatusSlot],
-    owners: &StatusOwnerEvidence,
-) -> Vec<StatusOwnerKey> {
-    slots
-        .iter()
-        .filter_map(|slot| status_owner_key(&slot.provider, &slot.session_id, &slot.run_id))
-        .filter(|owner| !owners.knows(owner))
-        .collect()
-}
-
-fn forget_status_owner_refresh_attempt(
-    attempted: &mut HashMap<String, HashMap<String, String>>,
-    owner: &StatusOwnerKey,
-) {
-    let remove_provider = if let Some(sessions) = attempted.get_mut(&owner.provider) {
-        if sessions.get(&owner.session_id) == Some(&owner.run_id) {
-            sessions.remove(&owner.session_id);
-        }
-        sessions.is_empty()
-    } else {
-        false
-    };
-    if remove_provider {
-        attempted.remove(&owner.provider);
-    }
 }
 
 /// Keep only statuses backed by the exact current run owner.
@@ -5605,39 +5507,26 @@ fn status_owner_evidence_from_scan(
     evidence
 }
 
-/// Resolve newly observed Console status owners in one batch.
-///
-/// Read only the named run claims, then collect one coherent process inventory
-/// for all spawned claims. The status cadence must never launch one `ps` per
-/// slot or repeatedly parse the full claim directory.
-fn refresh_status_claim_owners(owners: Vec<StatusOwnerKey>) -> StatusOwnerEvidence {
-    let evidence = StatusOwnerEvidence::default();
-    let Ok(registry) = crate::turn_claims::default_registry() else {
-        return evidence;
+/// Read only claims named by current status slots, before the shared process
+/// inventory. Every managed scan retries unknown owners and revalidates known
+/// ones; no separate process scan or permanent negative cache is needed.
+fn read_status_slot_claims() -> Vec<crate::turn_claims::TurnClaim> {
+    let (Ok(agent_dir), Ok(registry)) = (
+        crate::config::get_agent_dir(),
+        crate::turn_claims::default_registry(),
+    ) else {
+        return Vec::new();
     };
-    let mut claims = Vec::with_capacity(owners.len());
-    for owner in owners {
-        let Ok(claim) = registry.read(&owner.run_id) else {
-            continue;
-        };
-        if claim.provider == owner.provider
-            && claim.session_id == owner.session_id
-            && claim.run_id == owner.run_id
-        {
-            claims.push(claim);
-        }
-    }
-    let process_inventory = claims
-        .iter()
-        .any(|claim| claim.state == "spawned" && !turn_claim_has_ended_status(claim))
-        .then(crate::process_identity::try_collect_process_facts_by_pid)
-        .flatten();
-    let current_boot_id = crate::heartbeat::machine_boot_id();
-    status_owner_evidence_from_claims(
-        &claims,
-        process_inventory.as_ref(),
-        current_boot_id.as_deref(),
-    )
+    crate::status_slot::read_all(&crate::status_slot::status_slot_dir(&agent_dir))
+        .into_iter()
+        .filter_map(|slot| {
+            let claim = registry.read(&slot.run_id).ok()?;
+            (claim.provider == slot.provider
+                && claim.session_id == slot.session_id
+                && claim.run_id == slot.run_id)
+                .then_some(claim)
+        })
+        .collect()
 }
 
 fn maybe_start_managed_observation_scan(
@@ -5684,6 +5573,7 @@ fn maybe_start_managed_observation_scan(
         let captured_at = chrono::Utc::now().to_rfc3339();
         let mut unresolved_state_dirs = 0_usize;
         let started = Instant::now();
+        let status_claims = read_status_slot_claims();
         let process_started = Instant::now();
         let process_inventory = crate::process_identity::try_collect_process_facts_by_pid();
         let process_inventory_valid = process_inventory.is_some();
@@ -6020,6 +5910,13 @@ fn maybe_start_managed_observation_scan(
             status_owners: StatusOwnerEvidence::default(),
         };
         result.status_owners = status_owner_evidence_from_scan(&result, &process_facts);
+        result
+            .status_owners
+            .merge(status_owner_evidence_from_claims(
+                &status_claims,
+                process_inventory_valid.then_some(&process_facts),
+                crate::heartbeat::machine_boot_id().as_deref(),
+            ));
         result
     });
     true
@@ -7389,6 +7286,97 @@ mod tests {
     }
 
     #[test]
+    fn managed_scan_recovers_console_status_and_revalidates_it_until_terminal() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        temp_env::with_vars(
+            [
+                ("HOME", Some(temp.path().as_os_str())),
+                ("LONGHOUSE_HOME", Some(temp.path().as_os_str())),
+            ],
+            || {
+                runtime.block_on(async {
+                    let registry = crate::turn_claims::default_registry().unwrap();
+                    let session = uuid::Uuid::new_v4().to_string();
+                    let run = uuid::Uuid::new_v4().to_string();
+                    registry
+                        .claim(
+                            &run,
+                            &session,
+                            &uuid::Uuid::new_v4().to_string(),
+                            None,
+                            None,
+                            "codex",
+                        )
+                        .unwrap();
+                    crate::status_slot::publish_console_phase(
+                        "codex",
+                        "codex_app_server",
+                        &session,
+                        &run,
+                        &chrono::Utc::now().to_rfc3339(),
+                        "thinking",
+                        None,
+                        serde_json::json!({}),
+                    );
+                    let status_dir = crate::status_slot::status_slot_dir(
+                        &crate::config::get_agent_dir().unwrap(),
+                    );
+                    let process = crate::process_identity::try_collect_process_facts_by_pid()
+                        .unwrap()
+                        .remove(&std::process::id())
+                        .unwrap();
+                    let mut scans = tokio::task::JoinSet::new();
+                    for stage in 0..4 {
+                        if stage == 1 {
+                            registry
+                                .mark_spawned(
+                                    &run,
+                                    Some(process.pid),
+                                    None,
+                                    Some(process.lstart.clone()),
+                                    "codex_exec",
+                                    serde_json::json!({}),
+                                )
+                                .unwrap();
+                        } else if stage == 3 {
+                            registry.mark_terminal(&run, "run_completed", None).unwrap();
+                        }
+                        assert!(super::maybe_start_managed_observation_scan(
+                            temp.path().join("state.db"),
+                            &mut scans,
+                            "test",
+                            false,
+                            &super::ManagedObservationSnapshot::default(),
+                        ));
+                        let result = scans.join_next().await.unwrap().unwrap();
+                        let visible = super::reconcile_status_slots(
+                            &status_dir,
+                            crate::status_slot::read_all(&status_dir),
+                            &result.status_owners,
+                        );
+                        if stage == 1 || stage == 2 {
+                            assert_eq!(visible.len(), 1);
+                            assert_eq!(visible[0].run_id, run);
+                            assert_eq!(visible[0].phase, "thinking");
+                        } else {
+                            assert!(visible.is_empty());
+                        }
+                        assert_eq!(
+                            crate::status_slot::slot_path(&status_dir, &session).exists(),
+                            stage != 3,
+                        );
+                    }
+                });
+            },
+        );
+    }
+
+    #[test]
     fn console_status_tracks_the_exact_claim_until_terminal_and_not_after() {
         let temp = tempfile::tempdir().expect("tempdir");
         let status_dir = crate::status_slot::status_slot_dir(temp.path());
@@ -7433,7 +7421,7 @@ mod tests {
             source: "codex_app_server".into(),
             phase: "thinking".into(),
             tool_name: None,
-            observed_at: "2026-10-06T00:00:00Z".into(),
+            observed_at: chrono::Utc::now().to_rfc3339(),
             payload: serde_json::json!({}),
             preview: None,
             producer_epoch: "epoch".into(),
@@ -7534,7 +7522,7 @@ mod tests {
             source: "omp_helm_channel".into(),
             phase: "thinking".into(),
             tool_name: None,
-            observed_at: "2026-10-06T00:00:00Z".into(),
+            observed_at: chrono::Utc::now().to_rfc3339(),
             payload: serde_json::json!({}),
             preview: None,
             producer_epoch: "epoch".into(),

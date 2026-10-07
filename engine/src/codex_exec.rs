@@ -3268,6 +3268,9 @@ impl CodexExecRuntimeSink {
                 self.run_id
             ),
         }
+        // Preserve the low-latency direct pump; the outbox above is the durable
+        // handoff and protects the terminal even if that pump later fails.
+        self.post_events(vec![terminal_event]).await;
     }
 
     fn persist_local_provider_binding(
@@ -5919,7 +5922,10 @@ for line in sys.stdin:
                     2,
                 )
                 .await;
-                assert_eq!(crate::outbox::collect_runtime_event_outbox(&outbox).len(), 1);
+                assert_eq!(
+                    crate::outbox::collect_runtime_event_outbox(&outbox).len(),
+                    1
+                );
                 assert!(!crate::status_slot::read_all(&status_dir)
                     .iter()
                     .any(|slot| slot.session_id == session_id));
