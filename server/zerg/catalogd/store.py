@@ -5823,6 +5823,9 @@ class CatalogStore:
                     .limit(100)
                     .all()
                 )
+                reporting_turn_ids = _console_turns_with_reporting_run(
+                    orm, [turn for turn, _receipt, _thread in rows], observed_at=datetime.now(UTC)
+                )
                 return {
                     "turns": [
                         _live_console_turn_dto(
@@ -5831,6 +5834,7 @@ class CatalogStore:
                             client_request_id=receipt.client_request_id,
                             provider_config=thread.provider_config_json,
                             model=turn.model,
+                            reporting_turn_ids=reporting_turn_ids,
                             resume_session_file=_live_thread_source_path(
                                 orm,
                                 thread_id=thread.id,
@@ -5930,6 +5934,7 @@ class CatalogStore:
                         provider_config=thread.provider_config_json if thread is not None else None,
                         model=turn.model,
                         error_code=_receipt_error_code(receipt),
+                        reporting_turn_ids=_console_turns_with_reporting_run(orm, [turn], observed_at=datetime.now(UTC)),
                         resume_session_file=(
                             _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
                         ),

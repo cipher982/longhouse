@@ -924,6 +924,8 @@ def test_queued_console_receipt_stays_fresh_behind_a_reporting_long_turn(tmp_pat
             runtime = db.query(LiveRuntimeState).filter_by(session_id=session_id).one()
             runtime.run_id = run.id
             runtime.last_asserted_at = datetime.now(UTC) - timedelta(seconds=5)
+            # Only the assertion is recent: the phase itself was observed long ago.
+            runtime.updated_at = long_ago
             active_receipt = db.get(LiveSessionInputReceipt, active_receipt_id)
             assert active_receipt is not None
             active_receipt.status = "delivered"
