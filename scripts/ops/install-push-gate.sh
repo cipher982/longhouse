@@ -16,7 +16,13 @@
 # stop every push. `git push --no-verify` and the logged
 # LONGHOUSE_REVIEW_OVERRIDE bypass it; the promotion rule is the backstop for both.
 #
-# Idempotent. Refuses to replace a pre-push hook that is not this one.
+# It also installs the two shims the self-staging pre-commit fixes need (scripts/qa/precommit_autofix.py):
+# `pre-commit.legacy`, which pre-commit runs before it stashes unstaged changes, records which files have
+# them, so a fix is staged only where that is safe; `post-commit` brings the real index up to a fix that
+# `git commit -o` staged in its temporary index. Without them a fix is left in the working tree and the
+# commit fails, as before.
+#
+# Idempotent. Refuses to replace a hook that is not its own (and says so; the others are still installed).
 set -euo pipefail
 
 hooks_dir="$(git rev-parse --path-format=absolute --git-path hooks)"
@@ -59,3 +65,31 @@ chmod +x "$tmp"
 mv "$tmp" "$hook"
 trap - EXIT
 echo "install-push-gate: pre-push hook installed at $hook"
+
+# --- the self-staging pre-commit shims ----------------------------------------------------------------
+install_shim() {  # NAME MARKER BODY
+  local path="$hooks_dir/$1" tmp
+  if [[ -e "$path" ]] && ! grep -q "$2" "$path"; then
+    echo "install-push-gate: $path exists and is not ours; not replacing it, so pre-commit fixes will not stage themselves here." >&2
+    return 0
+  fi
+  tmp="$(mktemp "$hooks_dir/.$1.XXXXXX")"
+  printf '%s\n' "$3" >"$tmp"
+  chmod +x "$tmp"
+  mv "$tmp" "$path"
+  echo "install-push-gate: $1 shim installed at $path"
+}
+shim_body() {  # MARKER MODE
+  cat <<SHIM
+#!/bin/sh
+# $1: installed by scripts/ops/install-push-gate.sh; see scripts/qa/precommit_autofix.py.
+top="\$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+script="\$top/scripts/qa/precommit_autofix.py"
+[ -f "\$script" ] && command -v python3 >/dev/null 2>&1 || exit 0
+# PPID is the pre-commit process that then runs the hooks; the fixers trust only its record.
+LONGHOUSE_AUTOFIX_PID="\$PPID" python3 "\$script" $2 || true
+exit 0
+SHIM
+}
+install_shim pre-commit.legacy longhouse-autofix-snapshot "$(shim_body longhouse-autofix-snapshot snapshot)"
+install_shim post-commit longhouse-autofix-post-commit "$(shim_body longhouse-autofix-post-commit post-commit)"

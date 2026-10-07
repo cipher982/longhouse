@@ -15,8 +15,7 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
+      # trailing-whitespace and end-of-file-fixer run below as self-staging local hooks.
       - id: check-json
       - id: check-yaml
         args: [--allow-multiple-documents]
@@ -51,16 +50,53 @@ repos:
         args: [--fix, --exit-non-zero-on-fix, --config=server/pyproject.toml]
         files: ^server/zerg/
         exclude: ^server/zerg/generated/
-      - id: ruff-format
-        args: [--config=server/pyproject.toml]
-        files: ^server/zerg/
-        exclude: ^server/zerg/generated/
+      # ruff-format runs below as a self-staging local hook, with the project's own ruff.
 
   # =========================================================================
   # Local hooks for project-specific checks
   # =========================================================================
   - repo: local
     hooks:
+      # -----------------------------------------------------------------------
+      # Self-staging mechanical fixes (scripts/qa/precommit_autofix.py).
+      # Each rewrites only what it is given (or a file generated from the
+      # commit), carries no meaning, and re-stages the result when the file has
+      # no unstaged changes, so one `git commit` succeeds instead of failing and
+      # sending the author around again. A fixer that errors still fails loudly.
+      # Staging needs the pre-commit.legacy/post-commit shims that
+      # `make install-push-gate` installs once per clone; without them a fix is
+      # left in the working tree and the commit fails, as before. Lint autofix
+      # (`ruff --fix`) is deliberately not here: it deletes "unused" imports.
+      # require_serial: the fixers `git add`, which must not race on the index.
+      # -----------------------------------------------------------------------
+      - id: trailing-whitespace
+        name: Trim trailing whitespace (self-staging)
+        entry: python scripts/qa/precommit_autofix.py fix --name "trailing whitespace" --cmd trailing-whitespace-fixer --ok-exit 0,1 --how "pre-commit run trailing-whitespace --files <file>"
+        language: python
+        additional_dependencies: ["pre-commit-hooks==4.6.0"]
+        types: [text]
+        require_serial: true
+
+      - id: end-of-file-fixer
+        name: Fix end of files (self-staging)
+        entry: python scripts/qa/precommit_autofix.py fix --name "end of file" --cmd end-of-file-fixer --ok-exit 0,1 --how "pre-commit run end-of-file-fixer --files <file>"
+        language: python
+        additional_dependencies: ["pre-commit-hooks==4.6.0"]
+        types: [text]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format (self-staging)
+        # The project's ruff (server/uv.lock), the same one `make validate-format`
+        # runs, over the same trees: a separately pinned hook drifted from it
+        # once (hook 0.8.4, project 0.9.9) and the two never agreed.
+        entry: python3 scripts/qa/precommit_autofix.py fix --name "ruff format" --cmd "uv run --project server --extra dev ruff format --config server/pyproject.toml" --how "cd server && uv run --extra dev ruff format <file>"
+        language: system
+        types: [python]
+        files: ^server/(zerg|tests_lite)/
+        exclude: ^server/zerg/generated/
+        require_serial: true
+
       # -----------------------------------------------------------------------
       # Session-mode vocabulary must have one canonical definition
       # -----------------------------------------------------------------------
@@ -136,9 +172,13 @@ repos:
       # Check the managed-provider contract digest when an adapter changes
       # -----------------------------------------------------------------------
       - id: check-provider-contract-digest
-        name: Managed provider contract digest
-        entry: scripts/qa/check-provider-contract-digest.sh
+        name: Managed provider contract digest (self-staging)
+        # Regenerated from the commit's own adapter/oracle sources and staged
+        # (the engine include_str!s it, so a stale digest aborted `make validate`
+        # and once blocked a release); see the self-staging note above.
+        entry: python3 scripts/qa/precommit_autofix.py fix --name "managed provider contract digest" --cmd "uv run --project server --extra dev python scripts/generate/generate_managed_provider_contracts.py --write" --watch server/zerg/config/managed_provider_contracts.json --how "cd server && uv run --extra dev python ../scripts/generate/generate_managed_provider_contracts.py --write"
         language: system
+        require_serial: true
         # Deliberately unfiltered. The manifest digests every adapter_source
         # AND every oracle_source, and the hand-maintained path list only ever
         # listed the adapters -- so editing an oracle
@@ -152,11 +192,14 @@ repos:
 
       # -----------------------------------------------------------------------
       # Regenerate the provider literal census when source files change
+      # (self-staging, from the commit's own tree; see the note above). A stale
+      # census failed CI's Validation job twice in a day, hours after landing.
       # -----------------------------------------------------------------------
       - id: check-provider-census
-        name: Provider literal census
-        entry: scripts/qa/check-provider-census.sh
+        name: Provider literal census (self-staging)
+        entry: python3 scripts/qa/precommit_autofix.py fix --name "provider census" --cmd "uv run --no-project --with pyyaml python scripts/generate/generate_provider_census.py --write" --watch docs/generated/provider_census.json --how "make generate-provider-census"
         language: system
+        require_serial: true
         files: '\.(py|rs|swift|ts|tsx)$'
         pass_filenames: false
 

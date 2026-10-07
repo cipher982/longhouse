@@ -656,7 +656,7 @@ test-hooks: ## Hook outbox pipeline E2E (requires daemon running)
 check-push-readiness: ## Before pushing: stale duplicate commits on main, and blocking-list commits without a completed review (~1s)
 	@./scripts/ops/check-push-readiness.sh
 
-install-push-gate: ## Once per clone: a pre-push hook so a bare `git push origin HEAD:main` asks the review gate too
+install-push-gate: ## Once per clone: the pre-push review gate (which also starts reviews) and the self-staging pre-commit shims
 	@./scripts/ops/install-push-gate.sh
 
 test-ci: ## Broad pre-release CI check (about 7 min in the release guest; not required for every push)
@@ -824,8 +824,9 @@ validate-format: ## @internal Backend formatting is uniform tree-wide
 validate-legacy-nouns: ## @internal Guard against pre-pivot product nouns
 	@python3 scripts/qa/legacy-nouns-check
 
-validate-review-gate: ## @internal Review gate tests (the landing rule itself runs on the host: check-push-readiness, ship.sh)
+validate-review-gate: ## @internal Review gate and git hook tests (the landing rule itself runs on the host: check-push-readiness, ship.sh)
 	@python3 scripts/tests/review-gate.test.py
+	@python3 scripts/tests/precommit-autofix.test.py
 
 # The verifier (server/zerg/qa/**, the canary) and the subject import nothing from each other outside the
 # shrink-only allowlist. The guest has no git history, so "the allowlist did not grow" (--base) is checked
