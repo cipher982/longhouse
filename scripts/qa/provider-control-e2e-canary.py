@@ -2160,91 +2160,153 @@ def _run_antigravity_claim_cycle(
     config_dir: Path,
     hook_payload: dict[str, Any],
     text: str,
-    wait_claimed_secs: str = "45",
+    wait_claimed_secs: float = 45.0,
 ) -> dict[str, Any]:
-    send_proc = subprocess.Popen(
-        _longhouse_command(
-            args,
-            [
-                "antigravity-channel",
-                "send",
-                "--config-dir",
-                str(config_dir),
-                "--session-id",
-                session_id,
-                "--text",
-                text,
-                "--wait-claimed-secs",
-                wait_claimed_secs,
-            ],
-        ),
-        cwd=str(_server_cwd(args)),
-        env=_runtime_env(args),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    attempts: list[dict[str, Any]] = []
-    try:
-        _wait_for_antigravity_pending_message(config_dir, session_id)
-        deadline = time.monotonic() + float(wait_claimed_secs)
-        matched_payload: dict[str, Any] | None = None
-        while time.monotonic() < deadline:
-            hook = _invoke_antigravity_hook(
-                args,
-                script,
-                event,
-                session_id=session_id,
-                config_dir=config_dir,
-                payload=hook_payload,
-            )
-            try:
-                parsed = json.loads(hook.stdout or "{}")
-            except json.JSONDecodeError:
-                parsed = {"parse_error": hook.stdout}
-            attempts.append(
-                {
-                    "returncode": hook.returncode,
-                    "stdout": hook.stdout,
-                    "stderr": hook.stderr,
-                    "payload": parsed,
-                    "pending_files": _antigravity_pending_files(config_dir, session_id),
-                    "claimed_files": _antigravity_claimed_files(config_dir, session_id),
-                }
-            )
-            if _antigravity_expected_claim_payload(event, text, parsed):
-                matched_payload = parsed
-                break
-            if not _antigravity_pending_files(config_dir, session_id):
-                break
-            time.sleep(0.1)
+    """Queue one message the way the engine's Helm send does, then let the
+    shipped hook claim it.
 
-        send_stdout, send_stderr = send_proc.communicate(timeout=max(5.0, float(wait_claimed_secs) + 5.0))
-        return {
-            "ok": send_proc.returncode == 0 and matched_payload is not None,
-            "returncode": send_proc.returncode,
-            "stdout": send_stdout,
-            "stderr": send_stderr,
-            "payload": matched_payload or (attempts[-1]["payload"] if attempts else {}),
-            "attempts": attempts,
-            "pending_files": _antigravity_pending_files(config_dir, session_id),
-            "claimed_files": _antigravity_claimed_files(config_dir, session_id),
-        }
-    finally:
-        if send_proc.poll() is None:
-            send_proc.terminate()
-            try:
-                send_proc.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                send_proc.kill()
+    engine/src/antigravity_channel_control.rs writes the same message shape
+    to the same inbox path as enqueue_antigravity_message and waits for
+    claimed/claimed-msg-<id>.json, so this cycle checks both the injected
+    steps and that claim receipt.
+    """
+    enqueued = _enqueue_antigravity_direct(args, session_id, text, config_dir)
+    message_id = str(enqueued.get("message_id") or "")
+    claim_receipt = _antigravity_inbox_dir(config_dir, session_id) / "claimed" / f"claimed-msg-{message_id}.json"
+    attempts: list[dict[str, Any]] = []
+    matched_payload: dict[str, Any] | None = None
+    deadline = time.monotonic() + wait_claimed_secs
+    while time.monotonic() < deadline:
+        hook = _invoke_antigravity_hook(
+            args,
+            script,
+            event,
+            session_id=session_id,
+            config_dir=config_dir,
+            payload=hook_payload,
+        )
+        try:
+            parsed = json.loads(hook.stdout or "{}")
+        except json.JSONDecodeError:
+            parsed = {"parse_error": hook.stdout}
+        attempts.append(
+            {
+                "returncode": hook.returncode,
+                "stdout": hook.stdout,
+                "stderr": hook.stderr,
+                "payload": parsed,
+                "pending_files": _antigravity_pending_files(config_dir, session_id),
+                "claimed_files": _antigravity_claimed_files(config_dir, session_id),
+            }
+        )
+        if _antigravity_expected_claim_payload(event, text, parsed):
+            matched_payload = parsed
+            break
+        if not _antigravity_pending_files(config_dir, session_id):
+            break
+        time.sleep(0.1)
+    return {
+        "ok": matched_payload is not None and claim_receipt.is_file(),
+        "message_id": message_id,
+        "claim_receipt": str(claim_receipt),
+        "claim_receipt_present": claim_receipt.is_file(),
+        "payload": matched_payload or (attempts[-1]["payload"] if attempts else {}),
+        "attempts": attempts,
+        "pending_files": _antigravity_pending_files(config_dir, session_id),
+        "claimed_files": _antigravity_claimed_files(config_dir, session_id),
+    }
 
 
 def run_antigravity_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
-    return _status(
-        "blocked",
-        failure_code="antigravity_shadow_only",
-        message="Antigravity is maintenance-tier Shadow and has no supported managed control canary.",
-    )
+    session_id = "antigravity-canary-session"
+    config_dir = root / ".claude"
+    hook_payload = {
+        "conversationId": "antigravity-provider-canary",
+        "workspacePaths": [str(root / "workspace")],
+        "transcriptPath": str(root / "transcript.jsonl"),
+        "stepIdx": 7,
+    }
+    try:
+        (root / "workspace").mkdir(parents=True, exist_ok=True)
+        script = _install_antigravity_hook(args, root, config_dir)
+
+        pre_cycle = _run_antigravity_claim_cycle(
+            args,
+            script=script,
+            event="PreInvocation",
+            session_id=session_id,
+            config_dir=config_dir,
+            hook_payload=hook_payload,
+            text="pre invocation canary input",
+        )
+        if not pre_cycle["ok"]:
+            return _fail(
+                "antigravity_send_claim_failed",
+                "the shipped hook did not claim an engine-shaped inbox message",
+                cycle=pre_cycle,
+            )
+        pre_payload = pre_cycle["payload"]
+        if pre_payload.get("injectSteps") != [{"userMessage": "pre invocation canary input"}]:
+            return _fail(
+                "antigravity_pre_injection_missing",
+                "PreInvocation did not inject queued input",
+                output=pre_payload,
+                cycle=pre_cycle,
+            )
+
+        post_cycle = _run_antigravity_claim_cycle(
+            args,
+            script=script,
+            event="PostInvocation",
+            session_id=session_id,
+            config_dir=config_dir,
+            hook_payload=hook_payload,
+            text="post invocation canary input",
+        )
+        if not post_cycle["ok"]:
+            return _fail(
+                "antigravity_post_claim_failed",
+                "PostInvocation did not claim queued inbox input",
+                cycle=post_cycle,
+            )
+        post_payload = post_cycle["payload"]
+        if post_payload.get("terminationBehavior") != "force_continue":
+            return _fail(
+                "antigravity_force_continue_missing",
+                "PostInvocation did not request force_continue",
+                output=post_payload,
+                cycle=post_cycle,
+            )
+
+        _enqueue_antigravity_direct(args, session_id, "stop canary input", config_dir)
+        stop = _invoke_antigravity_hook(
+            args,
+            script,
+            "Stop",
+            session_id=session_id,
+            config_dir=config_dir,
+            payload=hook_payload,
+        )
+        stop_payload = json.loads(stop.stdout or "{}")
+        if stop_payload.get("decision") != "continue":
+            return _fail(
+                "antigravity_stop_continue_missing",
+                "Stop did not continue with pending inbox input",
+                output=stop_payload,
+                pending_files=_antigravity_pending_files(config_dir, session_id),
+            )
+
+        return _status(
+            "pass",
+            session_id=session_id,
+            pre_injection=pre_payload,
+            post_injection=post_payload,
+            stop_decision=stop_payload,
+            pre_claim_attempts=pre_cycle["attempts"],
+            post_claim_attempts=post_cycle["attempts"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _exception_failure("antigravity_canary_exception", exc)
 
 
 def _claimed_antigravity_loop_messages(inbox_dir: Path) -> list[dict[str, Any]]:

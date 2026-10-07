@@ -534,15 +534,23 @@ def test_antigravity_real_agy_send_canary_fails_without_injected_marker() -> Non
         assert agy["baseline_in_stdout"] is True
 
 
-def test_antigravity_hermetic_control_is_blocked_as_shadow_only() -> None:
+def test_antigravity_hermetic_hook_inbox_claims_engine_shaped_messages() -> None:
+    # Helm send writes the hook inbox directly (engine/src/antigravity_channel_control.rs,
+    # restored in 00430cbac); the shipped hook must claim each message, inject it,
+    # and leave the claimed-msg-<id>.json receipt the engine waits on.
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         result, payload = _run_canary(root, ["--provider", "antigravity"])
 
         assert result.returncode == 0, result.stderr + result.stdout
         antigravity = payload["canaries"]["antigravity"]
-        assert antigravity["status"] == "blocked"
-        assert antigravity["failure_code"] == "antigravity_shadow_only"
+        assert antigravity["status"] == "pass", antigravity
+        assert antigravity["pre_injection"] == {"injectSteps": [{"userMessage": "pre invocation canary input"}]}
+        assert antigravity["post_injection"]["terminationBehavior"] == "force_continue"
+        assert antigravity["stop_decision"]["decision"] == "continue"
+        for attempts in (antigravity["pre_claim_attempts"], antigravity["post_claim_attempts"]):
+            claimed = attempts[-1]["claimed_files"]
+            assert any(Path(entry["path"]).name.startswith("claimed-msg-") for entry in claimed)
 
 
 def test_antigravity_real_agy_send_canary_blocks_before_marker_evaluation() -> None:
@@ -714,7 +722,7 @@ def main() -> int:
         test_claude_real_print_canary_fails_on_api_error_result,
         test_claude_real_print_canary_preserves_non_secret_launch_env,
         test_claude_channel_canary_uses_native_channel_module,
-        test_antigravity_hermetic_control_is_blocked_as_shadow_only,
+        test_antigravity_hermetic_hook_inbox_claims_engine_shaped_messages,
         test_antigravity_real_agy_send_canary_blocks_without_an_unwatched_worker,
         test_antigravity_real_agy_send_canary_blocks_before_marker_evaluation,
         test_antigravity_real_agy_send_canary_requires_model_visible_marker,
