@@ -65,9 +65,10 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     var isClosed: Bool { stateFacts.dispositionState == "closed" }
     var activePauseRequest: SessionPauseRequest? {
         guard !isClosed,
-              stateFacts.pendingInteractionKind != nil,
+              stateFacts.hasAnswerablePendingInteraction,
               let request = runtimeDisplay.pauseRequest,
-              request.isPending else {
+              request.isPending,
+              request.canRespond else {
             return nil
         }
         return request
