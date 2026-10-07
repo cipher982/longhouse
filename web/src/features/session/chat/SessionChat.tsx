@@ -39,7 +39,7 @@ import type {
   TimelineItem,
 } from "@/shared/session/model";
 import { useComposerAttachments } from "./useComposerAttachments";
-import { Badge, Button } from "@/shared/ui";
+import { Button } from "@/shared/ui";
 import { AttachmentTray } from "./AttachmentTray";
 import { isSessionClosed } from "@/shared/session/sessionRuntime";
 import { ManagedLaunchHintCard } from "../ManagedLaunchHintCard";
@@ -52,8 +52,6 @@ import {
   formatElapsedClock,
   getSessionHeaderState,
 } from "../sessionHeaderState";
-import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
-import { getProviderLabel } from "@/shared/lib/providers";
 import ModelPicker from "@/features/launch/ModelPicker";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import {
@@ -157,11 +155,7 @@ function activeConsoleTurnPhase(
 }
 interface SessionChatProps {
   session: SessionChatTarget;
-  onClose?: () => void;
-  emptyStateTitle?: string;
-  hintText?: string;
   composerPlaceholder?: string;
-  layout?: "panel" | "dock";
   submitLabel?: string;
   requireClickForFirstSend?: boolean;
   keyboardHintText?: string;
@@ -193,7 +187,7 @@ interface SessionChatProps {
    */
   timelineItems?: TimelineItem[];
   /**
-   * The runtime strip's evidence-disclosure icon (dock layout only). It
+   * The runtime strip's evidence-disclosure icon. It
    * rides along the input's bottom edge, and in the head row while the
    * composer is unavailable.
    */
@@ -642,11 +636,7 @@ function structuredInputErrorDetail(error: unknown): StructuredInputErrorDetail 
 
 export function SessionChat({
   session,
-  onClose,
-  emptyStateTitle,
-  hintText,
   composerPlaceholder,
-  layout = "panel",
   submitLabel = "Send",
   requireClickForFirstSend = false,
   keyboardHintText,
@@ -670,7 +660,6 @@ export function SessionChat({
   );
   const isSessionExecuting = isActivityExecuting(activity, activityNowMs);
   const isStalled = isActivityStalled(activity, activityNowMs);
-  const isDock = layout === "dock";
   const isManagedLocal = chatMode === "managed_local";
   const isComposerDisabled = Boolean(composerDisabledReason);
   const attachImagesEnabled =
@@ -679,7 +668,7 @@ export function SessionChat({
   const hasHadComposer = useRef(false);
   if (!isComposerDisabled) hasHadComposer.current = true;
   const retainDockComposer =
-    isDock && hasHadComposer.current && !composerDisabledAction;
+    hasHadComposer.current && !composerDisabledAction;
   const showComposerUnavailableState =
     isComposerDisabled && !retainDockComposer;
   const queryClient = useQueryClient();
@@ -2486,15 +2475,6 @@ export function SessionChat({
     }
   };
 
-  const statusBadge = isComposerDisabled
-    ? { variant: "warning" as const, label: "Unavailable" }
-    : isSubmitting
-      ? { variant: "warning" as const, label: "Sending" }
-      : isStalled
-        ? { variant: "warning" as const, label: "Stalled" }
-        : isSendLocked
-          ? { variant: "warning" as const, label: "Working" }
-          : { variant: "neutral" as const, label: "Input available" };
   const submitButtonLabel = !isSendLocked
     ? submitLabel
     : canSteerNow
@@ -2551,10 +2531,9 @@ export function SessionChat({
       ? `${composerState.text} — message to continue`
       : composerPlaceholder || "Message";
 
-  // Dock layout: this renders inside the composer frame itself, between
-  // the head row and the input (see below) — one framed object, not a
-  // separate block floating above it. Non-dock (panel) layout keeps it
-  // above the composer, where it has always lived.
+  // Renders inside the composer frame itself, between the head row and the
+  // input (see below) — one framed object, not a separate block floating
+  // above it.
   const queuedBanner =
     isManagedLocal && !outboxInTranscript && activeQueuedInputs.length > 0 ? (
       <div className="session-chat-queued" data-testid="session-chat-queued">
@@ -2730,46 +2709,9 @@ export function SessionChat({
 
   return (
     <div
-      className={`session-chat${isDock ? " session-chat--dock" : ""}`}
-      data-testid={isDock ? "session-continuation-panel" : undefined}
+      className="session-chat session-chat--dock"
+      data-testid="session-continuation-panel"
     >
-      {isDock ? null : (
-        <div className="session-chat-header">
-          <div className="session-chat-info">
-            {onClose && (
-              <button
-                type="button"
-                className="session-chat-back"
-                onClick={onClose}
-                title="Back to details"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <path d="M19 12H5M12 19l-7-7 7-7" />
-                </svg>
-              </button>
-            )}
-            <div className="session-chat-titles">
-              {session.project ? (
-                <span className="session-chat-title">{session.project}</span>
-              ) : null}
-              <span className="session-chat-provider">
-                <ProviderGlyph provider={session.provider} size={16} />
-                {getProviderLabel(session.provider)}
-              </span>
-            </div>
-          </div>
-          <div className="session-chat-status">
-            <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
-          </div>
-        </div>
-      )}
 
       {error && !errorShownInTranscript && (
         <div className="session-chat-error">
@@ -2806,12 +2748,6 @@ export function SessionChat({
         </div>
       ) : null}
 
-      {isSendLocked && !isStalled && !isDock && (
-        <div className="session-chat-turn-notice">
-          <span>{turnNoticeText}</span>
-        </div>
-      )}
-
       {turnEndedDraft && !outboxInTranscript ? (
         <div
           className="session-chat-queued session-chat-queued--failed"
@@ -2837,8 +2773,6 @@ export function SessionChat({
           </div>
         </div>
       ) : null}
-
-      {!isDock ? queuedBanner : null}
 
       {isManagedLocal && !outboxInTranscript && failedInputs.length > 0 ? (
         <div
@@ -2880,21 +2814,6 @@ export function SessionChat({
         </div>
       ) : null}
 
-      {isDock ? null : (
-        <div className="session-chat-messages">
-          <div className="session-chat-empty">
-            <p>
-              {emptyStateTitle || "Start a conversation with this session."}
-            </p>
-            <p className="session-chat-hint">
-              {hintText ||
-                (isManagedLocal
-                  ? `Longhouse will send your next prompt into the live ${session.provider} session.`
-                  : "Earlier synced turns stay visible here. Your first message continues from that context.")}
-            </p>
-          </div>
-        </div>
-      )}
       {isComposerDisabled && retainDockComposer ? (
         <p className="session-chat-control-note" role="status">
           {composerDisabledReason}
@@ -2911,15 +2830,14 @@ export function SessionChat({
         </div>
       ) : null}
       <form
-        className={`session-chat-composer${isDock ? " session-chat-composer--dock" : ""}${isDock && composerState.tone === "live" ? " session-chat-composer--running" : ""}`}
+        className={`session-chat-composer session-chat-composer--dock${composerState.tone === "live" ? " session-chat-composer--running" : ""}`}
         onSubmit={handleSend}
         title={composerDisabledReason ?? undefined}
         onPaste={attachmentInputEnabled ? handleComposerPaste : undefined}
         onDrop={attachmentInputEnabled ? handleComposerDrop : undefined}
         onDragOver={attachmentInputEnabled ? handleComposerDragOver : undefined}
       >
-        {isDock ? (
-          <>
+        <>
             <span className="session-chat-composer__leaf" aria-hidden="true" />
             <span
               className="session-chat-composer__point session-chat-composer__point--tl"
@@ -2938,8 +2856,7 @@ export function SessionChat({
               aria-hidden="true"
             />
           </>
-        ) : null}
-        {isDock && composerHeadVisible ? (
+        {composerHeadVisible ? (
           <div
             className="session-chat-composer__head"
             data-testid="session-chat-composer-head"
@@ -2987,7 +2904,7 @@ export function SessionChat({
             ) : null}
           </div>
         ) : null}
-        {isDock ? queuedBanner : null}
+        {queuedBanner}
         {showComposerUnavailableState ? (
           managedLaunchSuggestion ? (
             <ManagedLaunchHintCard
@@ -3021,12 +2938,7 @@ export function SessionChat({
               >
                 {keyboardHintText || `Click "${submitLabel}" to confirm.`}
               </div>
-            ) : isDock ? null : (
-              <div
-                className="session-chat-confirmation session-chat-confirmation--spacer"
-                aria-hidden="true"
-              />
-            )}
+            ) : null}
             {isManagedLocal && !outboxInTranscript
               ? pendingManagedLocalInputs
                   .filter((pendingInput) => pendingInput.phase !== "delivered")
@@ -3114,11 +3026,10 @@ export function SessionChat({
                   ))
               : null}
             {attachImagesEnabled &&
-            (!isDock ||
-              composerAttachments.attachments.length > 0 ||
+            (composerAttachments.attachments.length > 0 ||
               composerAttachments.error) ? (
               <AttachmentTray
-                showAdd={!isDock}
+                showAdd={false}
                 attachments={composerAttachments.attachments}
                 onAddFiles={composerAttachments.addFiles}
                 onRemove={composerAttachments.removeAttachment}
@@ -3129,7 +3040,6 @@ export function SessionChat({
                 addDisabled={!attachmentInputEnabled}
               />
             ) : null}
-            {isDock ? (
               <div
                 className={`session-chat-composer-row${
                   hasComposerToolbar ? " session-chat-composer-row--stacked" : ""
@@ -3181,63 +3091,6 @@ export function SessionChat({
                   composerActions
                 )}
               </div>
-            ) : (
-              <>
-                <textarea
-                  ref={composerTextareaRef}
-                  value={draft}
-                  onChange={(e) => handleDraftChange(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={composerPlaceholder || "Message"}
-                  disabled={isComposerDisabled || isSubmitting}
-                  rows={2}
-                  title={composerDisabledReason ?? undefined}
-                />
-                <div className="session-chat-actions">
-                  {showInlineInterrupt ? (
-                    <Button
-                      type="button"
-                      variant="danger"
-                      size="sm"
-                      onClick={() => void handleInterrupt()}
-                      disabled={isInterrupting}
-                      data-testid="session-chat-interrupt"
-                    >
-                      {isInterrupting ? "Stopping" : interruptActionLabel}
-                    </Button>
-                  ) : null}
-                  {canSteerNow && canQueueNow ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => void handleSecondaryQueue()}
-                      disabled={
-                        isComposerDisabled || !draft.trim() || isSubmitting
-                      }
-                    >
-                      Queue next
-                    </Button>
-                  ) : null}
-                  <Button
-                    type="submit"
-                    variant="primary"
-                    size="sm"
-                    disabled={
-                      isComposerDisabled ||
-                      !hasComposerContent ||
-                      isSubmitting ||
-                      isSendBlocked ||
-                      attachmentSendBlocked ||
-                      composerAttachments.isCompressing
-                    }
-                    title={composerDisabledReason ?? undefined}
-                  >
-                    {submitButtonLabel}
-                  </Button>
-                </div>
-              </>
-            )}
           </>
         )}
       </form>

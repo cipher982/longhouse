@@ -780,7 +780,6 @@ function SessionDetailWorkspaceRoute({
                   <SessionChat
                     key={sessionChatTarget.id}
                     session={sessionChatTarget}
-                    layout="dock"
                     chatMode={
                       interaction.mode === "managed_local"
                         ? "managed_local"

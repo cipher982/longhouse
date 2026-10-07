@@ -148,7 +148,6 @@ function renderSessionChat(
 
   const defaultProps: React.ComponentProps<typeof SessionChat> = {
     session: makeSession(),
-    layout: "dock",
     ...props,
   };
 
@@ -771,27 +770,6 @@ describe("SessionChat", () => {
     ).not.toHaveTextContent("Control offline");
   });
 
-  it("replaces disabled full-panel composer controls with status copy", () => {
-    renderSessionChat({
-      layout: "panel",
-      composerDisabledTitle: "Machine offline",
-      composerDisabledReason:
-        "The machine running this Codex session is offline. Sending resumes when it reconnects.",
-    });
-
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Send" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByTestId("session-chat-disabled-reason"),
-    ).toHaveTextContent("Machine offline");
-    expect(
-      screen.getByTestId("session-chat-disabled-reason"),
-    ).toHaveTextContent("Sending resumes when it reconnects");
-    expect(screen.getByText("Unavailable")).toBeInTheDocument();
-  });
-
   it("shows a managed-launch hint card for unmanaged sessions", () => {
     renderSessionChat({
       composerDisabledReason:
@@ -819,22 +797,6 @@ describe("SessionChat", () => {
     expect(
       screen.getByRole("button", { name: /copy command: longhouse codex/i }),
     ).toHaveTextContent("Copy");
-  });
-
-  it("shows empty-state copy instead of resume wording", () => {
-    renderSessionChat({
-      layout: "panel",
-    });
-
-    expect(
-      screen.getByText("Start a conversation with this session."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Earlier synced turns stay visible here. Your first message continues from that context.",
-      ),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/--resume/i)).not.toBeInTheDocument();
   });
 
   it("blocks duplicate input until a managed-local ack arrives", async () => {
@@ -4226,7 +4188,6 @@ describe("SessionChat", () => {
           <QueryClientProvider client={queryClient}>
             <SessionChat
               session={makeSession()}
-              layout="dock"
               chatMode="managed_local"
               onOutboxChange={onOutboxChange}
             />
