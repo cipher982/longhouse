@@ -160,14 +160,7 @@ pub async fn start_antigravity_print_turn(
         .with_run_id(&config.run_id)
         .apply(&mut command, &[]);
     #[cfg(unix)]
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    crate::console_sink::own_process_group(&mut command, || Ok(()));
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {

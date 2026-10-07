@@ -265,14 +265,10 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         .with_run_id(&config.run_id)
         .apply(&mut command, &[]);
     #[cfg(unix)]
-    unsafe {
-        command.pre_exec(move || {
-            if libc::setpgid(0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            crate::console_rpc::adopt_fifo_as_stdin(&rpc_stdin_c)
-        });
-    }
+    crate::console_sink::own_process_group(&mut command, move || {
+        // SAFETY: runs in the forked child before exec; open/dup2/close only.
+        unsafe { crate::console_rpc::adopt_fifo_as_stdin(&rpc_stdin_c) }
+    });
     if session_file.is_none() {
         if let Err(error) = registry.set_pending_omp_session_dir(&config.run_id, &session_dir) {
             let _ = registry.mark_failed(&config.run_id, &error.to_string());

@@ -179,14 +179,10 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
         .apply(&mut command, &[]);
     let rpc_stdin_c = std::ffi::CString::new(rpc_stdin.as_os_str().as_bytes())?;
     #[cfg(unix)]
-    unsafe {
-        command.pre_exec(move || {
-            if libc::setpgid(0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            crate::console_rpc::adopt_fifo_as_stdin(&rpc_stdin_c)
-        });
-    }
+    crate::console_sink::own_process_group(&mut command, move || {
+        // SAFETY: runs in the forked child before exec; open/dup2/close only.
+        unsafe { crate::console_rpc::adopt_fifo_as_stdin(&rpc_stdin_c) }
+    });
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
