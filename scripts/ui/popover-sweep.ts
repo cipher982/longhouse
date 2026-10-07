@@ -33,7 +33,7 @@ import type { Page } from "playwright";
 export type PopoverFailure = {
   trigger: string;
   overlay: string;
-  rule: "viewport" | "occluded" | "clipped" | "unreachable";
+  rule: "viewport" | "occluded" | "clipped" | "unreachable" | "never-opened";
   detail: string;
 };
 
@@ -104,12 +104,15 @@ const CHECK_OVERLAYS = `((mode, parent) => {
   const vh = document.documentElement.clientHeight;
   const TOL = 1;
   const appeared = [];
+  // Anything newly showing, inline or not: proof a declared popup opened.
+  let shown = 0;
   const candidates = mode === "open"
     ? document.querySelectorAll('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="listbox"]')
     : document.querySelectorAll("body *");
   for (const el of candidates) {
     if (mode === "new" && el.__sweepWasVisible) continue;
     if (!visible(el)) continue;
+    shown += 1;
     const pos = getComputedStyle(el).position;
     if (mode === "new" && pos !== "absolute" && pos !== "fixed") continue;
     const r = el.getBoundingClientRect();
@@ -200,7 +203,7 @@ const CHECK_OVERLAYS = `((mode, parent) => {
       }
     }
   }
-  return { checked: judged.length, overlays: judged.map(({ el }) => label(el)), failures, children };
+  return { checked: judged.length, shown, overlays: judged.map(({ el }) => label(el)), failures, children };
 })`;
 
 const CLOSE_DETAILS = `((selector) => {
@@ -241,6 +244,7 @@ const TRIGGER_HIT = `((selector) => {
 
 type CheckResult = {
   checked: number;
+  shown: number;
   overlays: string[];
   failures: Omit<PopoverFailure, "trigger">[];
   children: string[];
@@ -299,7 +303,7 @@ export async function sweepPopovers(page: Page, shotPrefix?: string): Promise<Po
     const expectsPopup = (await page.evaluate(
       `!!document.querySelector(${JSON.stringify(selector)})?.matches('[aria-haspopup]:not([aria-haspopup="false"])')`,
     )) as boolean;
-    let result: CheckResult = { checked: 0, overlays: [], failures: [], children: [] };
+    let result: CheckResult = { checked: 0, shown: 0, overlays: [], failures: [], children: [] };
     for (let attempt = 0; attempt < (expectsPopup ? 14 : 2); attempt += 1) {
       await page.waitForTimeout(150);
       if (page.url() !== url) {
@@ -309,6 +313,14 @@ export async function sweepPopovers(page: Page, shotPrefix?: string): Promise<Po
       }
       result = (await page.evaluate(`${CHECK_OVERLAYS}("new", ${JSON.stringify(parent)})`)) as CheckResult;
       if (result.checked > 0) break;
+    }
+    if (expectsPopup && result.shown === 0) {
+      report.failures.push({
+        trigger: name,
+        overlay: name,
+        rule: "never-opened",
+        detail: "declares aria-haspopup but nothing appeared within 2 s",
+      });
     }
     record(name, result);
     if (shotPrefix && result.checked > 0) {
