@@ -647,6 +647,8 @@ def _run_source_canary(
                     "--run-fake-app-server",
                     "--fake-app-server-build-timeout-secs",
                     str(args.codex_fake_app_server_build_timeout_secs),
+                    "--fake-app-server-timeout-secs",
+                    str(args.codex_fake_app_server_timeout_secs),
                 ]
             )
         if args.codex_run_raw_fresh_remote:
@@ -734,11 +736,17 @@ def _run_source_canary(
         run_env[CODEX_AGENTS_TOKEN_ENV] = args.codex_agents_token
     source_timeout_secs = args.timeout_secs
     if args.provider == "codex" and args.codex_run_fake_app_server:
-        # The canary builds the engine test binary under its own budget, then
-        # runs two tests at 120 s each; the outer budget must cover all three.
+        # Every bounded step the canary runs on this path: git rev-parse 10 s,
+        # codex --version 20 s, static contract 60 s, managed target lookup 30 s,
+        # build identity 30 s (150 s), then the test-binary build and two
+        # tests on their own budgets, plus 60 s for process start and the
+        # artifact write.
         source_timeout_secs = max(
             args.timeout_secs,
-            args.codex_fake_app_server_build_timeout_secs + 2 * 120 + 60,
+            150
+            + args.codex_fake_app_server_build_timeout_secs
+            + 2 * args.codex_fake_app_server_timeout_secs
+            + 60,
         )
     try:
         result = subprocess.run(
@@ -1950,6 +1958,9 @@ def _args_from_config(config_path: Path) -> argparse.Namespace:
     args.codex_fake_app_server_build_timeout_secs = int(
         codex.get("fake_app_server_build_timeout_secs", 600)
     )
+    args.codex_fake_app_server_timeout_secs = int(
+        codex.get("fake_app_server_timeout_secs", 120)
+    )
     args.codex_api_url = codex.get("api_url")
     args.codex_agents_token = codex.get("agents_token")
 
@@ -2031,6 +2042,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-live-interrupt-timeout-secs", type=int, default=45)
     parser.add_argument("--codex-real-tool-timeout-secs", type=int, default=180)
     parser.add_argument("--codex-fake-app-server-build-timeout-secs", type=int, default=600)
+    parser.add_argument("--codex-fake-app-server-timeout-secs", type=int, default=120)
     parser.add_argument("--codex-api-url")
     parser.add_argument("--codex-agents-token")
     parser.add_argument("--claude-run-real-print", action="store_true")

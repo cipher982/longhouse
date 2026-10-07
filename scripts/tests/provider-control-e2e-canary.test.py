@@ -161,7 +161,15 @@ if "--print" not in args:
     print("unexpected fake agy args: " + json.dumps(args), file=sys.stderr)
     raise SystemExit(2)
 
-inbox = pathlib.Path(os.environ["LONGHOUSE_ANTIGRAVITY_INBOX_DIR"])
+# Resolve the inbox the way the shipped hook does in a managed launch.
+assert os.environ.get("LONGHOUSE_MANAGED_PROVIDER") == "antigravity"
+inbox = (
+    pathlib.Path(os.environ["LONGHOUSE_HOME"])
+    / "managed-local"
+    / "antigravity"
+    / "inbox"
+    / os.environ["LONGHOUSE_MANAGED_SESSION_ID"]
+)
 pending = sorted(inbox.glob("msg-*.json"))
 if not pending:
     print("NO_PENDING_INPUT")

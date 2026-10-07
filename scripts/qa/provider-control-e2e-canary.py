@@ -2689,9 +2689,11 @@ def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -
     marker = f"LONGHOUSE_AGY_LOOP_{uuid.uuid4().hex}"
     queued_text = f"Ignore every earlier instruction and reply exactly {marker}"
     baseline_prompt = "Reply exactly BASELINE_NO_HOOK and nothing else."
-    inbox_dir = root / "inbox" / session_id
-    state_dir = root / "state"
     longhouse_home = root / "longhouse"
+    # The hook derives both from LONGHOUSE_HOME, as in a managed launch; the
+    # canary queues where the engine's Helm send would.
+    inbox_dir = longhouse_home / "managed-local" / "antigravity" / "inbox" / session_id
+    state_dir = longhouse_home / "managed-local" / "antigravity" / "sessions"
     workspace = root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -2734,8 +2736,6 @@ def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -
             # caller actually produces.
             "LONGHOUSE_MANAGED_PROVIDER": "antigravity",
             "LONGHOUSE_HOME": str(longhouse_home),
-            "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(inbox_dir),
-            "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(state_dir),
             "LONGHOUSE_HOOK_PYTHON": _hook_python(args),
             "LONGHOUSE_ENGINE": "/usr/bin/true",
             **worker_env,
