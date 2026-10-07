@@ -26,9 +26,7 @@ _GENERATIONS: dict[str, str] = {}
 HUMAN = "cinder"
 
 
-def _ship(
-    live: LiveCatalog, client, *, token: str, device_id: str, launch_actor: str | None = None, session_id: str | None = None
-) -> str:
+def _ship(live: LiveCatalog, client, *, token: str, device_id: str, launch_actor: str | None = None, session_id: str | None = None) -> str:
     session_id = session_id or uuid4()
     body = live.envelope_body(session_id=session_id, device_id=device_id, texts=("server selfcheck reports unhealthy",))
     # A later envelope for the same session continues its render generation.
