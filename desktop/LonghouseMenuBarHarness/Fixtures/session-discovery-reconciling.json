@@ -72,6 +72,7 @@
       },
       "presentation": {
         "primary": {"key": "idle", "label": "Idle", "tone": "neutral"},
+        "signal": {"state": "quiet", "valid_until": null},
         "access": {"key": "live_control", "label": "Live control", "tone": "positive"}
       }
     }

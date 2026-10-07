@@ -120,6 +120,10 @@
           "key": "needs_approval",
           "label": "Needs approval",
           "tone": "neutral"
+        },
+        "signal": {
+          "state": "attention",
+          "valid_until": null
         }
       },
       "activity": {
@@ -161,6 +165,10 @@
           "key": "executing",
           "label": "Executing",
           "tone": "neutral"
+        },
+        "signal": {
+          "state": "working",
+          "valid_until": null
         }
       },
       "activity": {
@@ -202,6 +210,10 @@
           "key": "thinking",
           "label": "Thinking",
           "tone": "neutral"
+        },
+        "signal": {
+          "state": "working",
+          "valid_until": null
         }
       },
       "activity": {
@@ -243,6 +255,10 @@
           "key": "executing",
           "label": "Executing",
           "tone": "neutral"
+        },
+        "signal": {
+          "state": "working",
+          "valid_until": null
         }
       },
       "activity": {
@@ -312,6 +328,10 @@
           "key": "idle",
           "label": "Idle",
           "tone": "neutral"
+        },
+        "signal": {
+          "state": "quiet",
+          "valid_until": null
         }
       },
       "activity": {
@@ -353,6 +373,10 @@
           "key": "idle",
           "label": "Idle",
           "tone": "neutral"
+        },
+        "signal": {
+          "state": "quiet",
+          "valid_until": null
         }
       },
       "activity": {

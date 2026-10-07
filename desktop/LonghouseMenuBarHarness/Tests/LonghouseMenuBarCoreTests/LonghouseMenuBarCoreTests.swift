@@ -1137,6 +1137,7 @@ struct LonghouseMenuBarCoreTests {
             presentationPolicyVersion: 1, commitSeq: "738014", mode: "helm",
             presentation: SessionPresentationSnapshot(
                 primary: SessionPresentationLabelSnapshot(key: "executing", label: "Using shell", tone: "running"),
+                signal: SessionSignalSnapshot(state: "working", validUntil: nil),
                 access: SessionPresentationLabelSnapshot(key: "live_control", label: "Live control", tone: "live")
             ),
             activity: SessionActivitySnapshot(
@@ -1270,6 +1271,7 @@ struct LonghouseMenuBarCoreTests {
                 mode: "helm",
                 presentation: SessionPresentationSnapshot(
                     primary: SessionPresentationLabelSnapshot(key: "thinking", label: "Thinking", tone: "active"),
+                    signal: SessionSignalSnapshot(state: "working", validUntil: nil),
                     access: SessionPresentationLabelSnapshot(key: "live_control", label: "Live control", tone: "positive")
                 ),
                 activity: SessionActivitySnapshot(
@@ -3434,7 +3436,7 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func quietPresentationKeysMapToIdleAttention() throws {
+    func aLastObservedSessionReadsUnknownWithoutPromotingTheMenuBar() throws {
         let json = """
         {
           "health_state": "healthy",
@@ -3452,7 +3454,8 @@ struct LonghouseMenuBarCoreTests {
                   "key": "no_recent_activity",
                   "label": "Last observed idle",
                   "tone": "quiet"
-                }
+                },
+                "signal": {"state": "unknown", "valid_until": null}
               }
             }
           ]
@@ -3462,8 +3465,39 @@ struct LonghouseMenuBarCoreTests {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let snapshot = try decoder.decode(HealthSnapshot.self, from: Data(json.utf8))
         let session = try #require(snapshot.currentManagedSessions.first)
-        #expect(session.menuBarAttentionKind == .idle)
+        #expect(session.menuBarAttentionKind == .unknown("no_recent_activity"))
         #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .normal)
+    }
+
+    @Test
+    func theMenuBarDrawsTheServedSignalOnItsOwnClock() throws {
+        func session(_ key: String, _ state: String, validUntil: String? = nil) -> ManagedSessionSnapshot {
+            ManagedSessionSnapshot(
+                sessionId: key, provider: "claude", workspaceLabel: "zerg",
+                branch: "main", state: "attached", phase: nil,
+                lastActivityAt: nil, bridgeStatus: nil, bridgePid: nil,
+                bridgeHeartbeatAt: nil, reasonCodes: [], authority: "runtime_host",
+                presentation: SessionPresentationSnapshot(
+                    primary: SessionPresentationLabelSnapshot(key: key, label: key, tone: "blocked"),
+                    signal: SessionSignalSnapshot(state: state, validUntil: validUntil),
+                    access: nil
+                )
+            )
+        }
+        let now = try #require(HealthSnapshot.parseISO8601("2026-10-07T12:00:00Z"))
+        #expect(session("needs_answer", "attention").menuBarAttentionKind(asOf: now) == .needsYou)
+        // A failed launch or a provider sign-in is owed by the user, not unknown.
+        #expect(session("launch_failed", "attention").menuBarAttentionKind(asOf: now) == .blocked)
+        #expect(session("provider_auth_required", "attention").menuBarAttentionKind(asOf: now) == .blocked)
+        #expect(session("delegated_work", "working").menuBarAttentionKind(asOf: now) == .working)
+        #expect(
+            session("executing", "working", validUntil: "2026-10-07T12:01:00Z").menuBarAttentionKind(asOf: now) == .working
+        )
+        #expect(
+            session("executing", "working", validUntil: "2026-10-07T11:59:00Z").menuBarAttentionKind(asOf: now)
+                == .unknown("activity unknown")
+        )
+        #expect(session("idle", "quiet").menuBarAttentionKind(asOf: now) == .idle)
     }
 
     @Test
@@ -4032,6 +4066,7 @@ struct LonghouseMenuBarCoreTests {
                     primary: SessionPresentationLabelSnapshot(
                         key: "thinking", label: "Thinking", tone: "active"
                     ),
+                    signal: SessionSignalSnapshot(state: "working", validUntil: nil),
                     access: nil
                 )
             )
@@ -4150,6 +4185,7 @@ struct LonghouseMenuBarCoreTests {
                 primary: SessionPresentationLabelSnapshot(
                     key: "thinking", label: "Thinking", tone: "active"
                 ),
+                signal: SessionSignalSnapshot(state: "working", validUntil: nil),
                 access: nil
             ),
             activity: SessionActivitySnapshot(

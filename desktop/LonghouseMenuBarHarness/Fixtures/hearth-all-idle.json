@@ -120,6 +120,10 @@
           "key": "idle",
           "label": "Idle",
           "tone": "neutral"
+        },
+        "signal": {
+          "state": "quiet",
+          "valid_until": null
         }
       },
       "activity": {
@@ -161,6 +165,10 @@
           "key": "idle",
           "label": "Idle",
           "tone": "neutral"
+        },
+        "signal": {
+          "state": "quiet",
+          "valid_until": null
         }
       },
       "activity": {

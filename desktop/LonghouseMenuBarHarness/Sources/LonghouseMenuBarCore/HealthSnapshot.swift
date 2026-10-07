@@ -2159,7 +2159,16 @@ public struct SessionPresentationLabelSnapshot: Codable, Equatable, Sendable {
 
 public struct SessionPresentationSnapshot: Codable, Equatable, Sendable {
     public let primary: SessionPresentationLabelSnapshot?
+    /// The served attention axis; nil from a host that predates it.
+    public var signal: SessionSignalSnapshot? = nil
     public let access: SessionPresentationLabelSnapshot?
+}
+
+/// `presentation.signal`: attention, working, quiet, unknown or closed, decided
+/// by the Runtime Host, plus the instant the claim's evidence lapses.
+public struct SessionSignalSnapshot: Codable, Equatable, Sendable {
+    public let state: String
+    public let validUntil: String?
 }
 
 public struct SessionActivitySnapshot: Codable, Equatable, Sendable {
@@ -2479,19 +2488,28 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         isConsoleManagedSession || needsManagedSessionAttention
     }
 
-    var menuBarAttentionKind: ManagedAttentionKind {
-        if let key = presentation?.primary?.key {
-            switch key {
-            case "thinking", "executing", "starting": return .working
-            case "needs_answer", "needs_approval": return .needsYou
-            case "blocked": return .blocked
-            case "stalled": return .blocked
-            case "idle", "ended", "closed", "ready", "no_recent_activity": return .idle
-            case "activity_unknown": return .unknown("activity unknown")
-            default: return .unknown(key)
-            }
+    var menuBarAttentionKind: ManagedAttentionKind { menuBarAttentionKind(asOf: Date()) }
+
+    /// The served attention axis on this Mac's clock. The Runtime Host decides
+    /// working / attention / quiet; the menu bar only retires a claim whose
+    /// `valid_until` has passed, and splits attention into an explicit
+    /// question ("needs you") and everything else the user owes ("blocked").
+    func menuBarAttentionKind(asOf now: Date) -> ManagedAttentionKind {
+        guard let presentation else { return .phaseUnavailable }
+        let key = presentation.primary?.key
+        let unknownReason = key == nil || key == "activity_unknown" ? "activity unknown" : key!
+        guard let signal = presentation.signal else { return .unknown(unknownReason) }
+        if signal.state == "working" || signal.state == "attention",
+           let deadline = signal.validUntil.flatMap(HealthSnapshot.parseISO8601),
+           now >= deadline {
+            return .unknown("activity unknown")
         }
-        return .phaseUnavailable
+        switch signal.state {
+        case "working": return .working
+        case "attention": return key == "needs_answer" || key == "needs_approval" ? .needsYou : .blocked
+        case "quiet", "closed": return .idle
+        default: return .unknown(unknownReason)
+        }
     }
 }
 
