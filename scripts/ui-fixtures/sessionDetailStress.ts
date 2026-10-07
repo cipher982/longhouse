@@ -1877,6 +1877,7 @@ export function buildSessionConsoleFixture(): SessionDetailFixture {
   const fixture = buildSessionProseIdleFixture();
   const now = "2026-04-15T16:02:40Z";
   fixture.session.selected_model = "claude-opus-5-5";
+  fixture.session.origin_kind = "console";
   fixture.session.control = {
     ...(fixture.session.control as JsonObject),
     managed_transport: "claude_console",
