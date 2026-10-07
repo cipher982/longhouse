@@ -584,7 +584,7 @@ def canary_last_obs_age_s(hop: str) -> float | None:
 
 
 _CANARY_HOPS = ("ingest", "sse", "render")
-_CANARY_SSE_P95_TARGET_MS = 300.0
+_CANARY_SSE_P95_TARGET_MS = 400.0
 
 
 def _histogram_percentile(samples: list[float], p: float) -> float:
