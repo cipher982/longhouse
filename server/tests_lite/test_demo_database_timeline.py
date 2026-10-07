@@ -77,10 +77,10 @@ def test_demo_corpus_lists_all_of_its_aged_sessions(monkeypatch, tmp_path):
     monkeypatch.setenv("DEMO_MODE", "0")
     assert resolve_search_days_back(None, has_query=False) == DEFAULT_LIST_DAYS_BACK
     monkeypatch.setenv("LONGHOUSE_DEMO_CORPUS", "1")  # serve --demo
-    assert resolve_search_days_back(None, has_query=False) is None
+    assert resolve_search_days_back(None, has_query=False) == 3650
     monkeypatch.delenv("LONGHOUSE_DEMO_CORPUS")
     monkeypatch.setenv("DEMO_MODE", "1")  # the public demo
-    assert resolve_search_days_back(None, has_query=False) is None
+    assert resolve_search_days_back(None, has_query=False) == 3650
     assert resolve_search_days_back(7, has_query=False) == 7
 
     monkeypatch.setenv("LONGHOUSE_STORAGE_V2_ROOT", str(tmp_path / "objects"))

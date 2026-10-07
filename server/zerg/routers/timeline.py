@@ -717,7 +717,7 @@ async def get_timeline_filters(
     if days_back is None:
         # The same window an unfiltered listing uses, so every listed session's
         # project, provider and machine is offered.
-        days_back = resolve_search_days_back(None, has_query=False) or 3650
+        days_back = resolve_search_days_back(None, has_query=False)
 
     from collections import Counter
 

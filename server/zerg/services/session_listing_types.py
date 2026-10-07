@@ -12,6 +12,7 @@ from zerg.services.session_views import SessionsListResponse
 # unnamed range means "all indexed history", not this window. See
 # `resolve_search_days_back`.
 DEFAULT_LIST_DAYS_BACK = 14
+DEMO_LIST_DAYS_BACK = 3650
 
 
 def resolve_search_days_back(explicit: int | None, *, has_query: bool) -> int | None:
@@ -26,9 +27,11 @@ def resolve_search_days_back(explicit: int | None, *, has_query: bool) -> int | 
     """
     if explicit is not None:
         return explicit
-    if has_query or demo_corpus_listing():
+    if has_query:
         return None
-    return DEFAULT_LIST_DAYS_BACK
+    # The longest listing window catalogd accepts (1..3650), not None: a
+    # query-less listing must name one, and None served the demo a 503.
+    return DEMO_LIST_DAYS_BACK if demo_corpus_listing() else DEFAULT_LIST_DAYS_BACK
 
 
 def demo_corpus_listing() -> bool:
