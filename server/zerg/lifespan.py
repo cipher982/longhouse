@@ -311,6 +311,15 @@ async def _complete_catalog_handoff(app: FastAPI, handoff, startup_started: floa
         raise
     except Exception as exc:  # the deployer reads this through readiness
         handoff.mark_failed(f"{type(exc).__name__}: {exc}")
+        # A failed candidate must not keep a pre-spawned catalogd that could
+        # still take the lock behind its 503s.
+        start_task = getattr(app.state, "catalogd_start_task", None)
+        if start_task is not None and not start_task.done():
+            start_task.cancel()
+            await asyncio.gather(start_task, return_exceptions=True)
+        from zerg.services.catalogd_supervisor import stop_catalogd_supervisor
+
+        await stop_catalogd_supervisor()
         return
     handoff.mark_ready()
 

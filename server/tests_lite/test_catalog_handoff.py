@@ -447,3 +447,27 @@ def test_only_api_stream_routes_are_answered_by_the_drain_lifecycle() -> None:
     assert not _wants_event_stream({"method": "GET", "path": "/api/agents/sessions", "headers": accept})
     assert not _wants_event_stream({"method": "GET", "path": "/admin", "headers": accept})
     assert not _wants_event_stream({"method": "GET", "path": "/api/agents/sessions/stream", "headers": []})
+
+
+@pytest.mark.asyncio
+async def test_a_failed_handoff_stops_the_pre_spawned_catalogd(monkeypatch, tmp_path) -> None:
+    handoff = _handoff(tmp_path)
+    handoff.directory.mkdir(parents=True)
+    stopped: list[str] = []
+
+    async def bound_fails(_port):
+        raise CatalogHandoffAborted("runtime HTTP did not bind after the handoff permit")
+
+    async def stop_catalogd():
+        stopped.append("catalogd")
+
+    monkeypatch.setattr(handoff, "announce_bound", bound_fails)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.stop_catalogd_supervisor", stop_catalogd)
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.state.catalogd_start_task = asyncio.create_task(asyncio.Event().wait())
+    await lifespan_module._complete_catalog_handoff(app, handoff, 0.0)
+    assert handoff.failed is not None
+    assert app.state.catalogd_start_task.cancelled()
+    assert stopped == ["catalogd"]
