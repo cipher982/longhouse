@@ -51,6 +51,12 @@ const MIN_PROJECTED_RATE_GIB_PER_MIN: f64 = 0.25;
 /// trigger are not. Absolute free-space thresholds still apply to every writer.
 const BOUNDED_WRITER_COMMANDS: [&str; 7] = ["rsync", "cp", "scp", "sftp", "ditto", "curl", "wget"];
 
+/// A command must have moved at least this much inside the attribution window to
+/// count as a writer. Bytes are aggregated per command *name* within a session,
+/// so a parallel build's many short-lived children add up instead of each
+/// falling under the floor.
+const WRITER_MIN_BYTES: u64 = MIB;
+
 /// A projected time-to-full must hold for this many consecutive ticks before it
 /// raises the level on its own. One 60-second slope is not proof: a bounded copy
 /// finishes inside a tick or two, while the 2026-09-25 ramp burned for about two
@@ -249,9 +255,10 @@ pub(crate) struct SessionActivity {
     /// Name of the top-level command (direct child of the agent) that wrote most.
     /// Usually the shell that spawned the work rather than the work itself.
     pub top_command: String,
-    /// True when some process in this session wrote meaningfully and is not a
-    /// bounded transfer. A session can run several writers, so this is a
-    /// property of the whole tree rather than of one chosen process.
+    /// True when any command in this session whose bytes are aggregated over
+    /// `WRITER_MIN_BYTES` is not a bounded transfer. Summing per command name
+    /// is what makes a parallel build count: its children are short-lived and
+    /// individually small, but together they are the writer.
     pub unbounded_writer: bool,
 }
 
@@ -272,10 +279,10 @@ pub(crate) fn attribute(
 
     // (session index, top-level command pid) -> bytes
     let mut per_command: HashMap<(usize, u32), u64> = HashMap::new();
-    // Per session: whether any process that wrote meaningfully is a command
-    // whose output is not bounded by a finite input. Checked per process, so a
-    // transfer cannot hide an unbounded build running beside it.
-    let mut unbounded_writer = vec![false; sessions.len()];
+    // (session index, writer command name) -> bytes. Grouped by name, so a
+    // parallel build's short-lived children aggregate into one writer instead
+    // of each hiding under the floor.
+    let mut per_writer: HashMap<(usize, String), u64> = HashMap::new();
     for proc in procs {
         let bytes = window_bytes
             .get(&(proc.pid, proc.start))
@@ -289,11 +296,7 @@ pub(crate) fn attribute(
         for _ in 0..64 {
             if let Some(index) = root_owner.get(&cursor) {
                 *per_command.entry((*index, child)).or_default() += bytes;
-                if bytes >= STEER_MIN_BYTES
-                    && !BOUNDED_WRITER_COMMANDS.contains(&command_name(&proc.name))
-                {
-                    unbounded_writer[*index] = true;
-                }
+                *per_writer.entry((*index, proc.name.clone())).or_default() += bytes;
                 break;
             }
             match parent.get(&cursor) {
@@ -323,8 +326,10 @@ pub(crate) fn attribute(
                 names.get(&command).copied().unwrap_or_default().to_string();
         }
     }
-    for (index, unbounded) in unbounded_writer.into_iter().enumerate() {
-        activity[index].unbounded_writer = unbounded;
+    for ((index, command), bytes) in per_writer {
+        if bytes >= WRITER_MIN_BYTES && !BOUNDED_WRITER_COMMANDS.contains(&command_name(&command)) {
+            activity[index].unbounded_writer = true;
+        }
     }
     activity
 }
@@ -844,6 +849,35 @@ mod tests {
         assert_eq!(command_name("/usr/bin/rsync"), "rsync");
         assert_eq!(command_name("rsync"), "rsync");
         assert_eq!(command_name("/opt/homebrew/bin/uv run"), "uv");
+    }
+
+    #[test]
+    fn a_split_build_beside_a_transfer_is_not_bounded() {
+        // A parallel build: many short-lived compilers, each far below the
+        // session threshold, running beside one large bounded transfer.
+        let mut procs = vec![
+            proc(100, 1, "longhouse-engine"),
+            proc(101, 100, "omp"),
+            proc(200, 101, "zsh"),
+            proc(201, 200, "rsync"),
+        ];
+        let mut window = HashMap::from([((201, 2010), 3 * 1024 * MIB)]);
+        for n in 0..8u32 {
+            let pid = 300 + n;
+            procs.push(proc(pid, 200, "clang"));
+            window.insert((pid, u64::from(pid) * 10), 40 * MIB);
+        }
+        let sessions = vec![SessionRoot {
+            session_id: "s1".into(),
+            provider: "omp".into(),
+            pids: vec![100, 101],
+        }];
+        let activity = attribute(&procs, &window, &sessions);
+        assert!(
+            activity[0].unbounded_writer,
+            "eight 40 MiB compilers are one 320 MiB build"
+        );
+        assert!(!all_substantial_writers_are_bounded(&activity));
     }
 
     #[test]
