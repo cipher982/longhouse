@@ -187,7 +187,7 @@ public struct ProviderGlyph: View {
 
     private var assetName: String? {
         switch key {
-        case "codex", "openai": return "ProviderCodex"
+        case "codex": return "ProviderCodex"
         case "claude": return "ProviderClaude"
         case "opencode": return "ProviderOpencode"
         case "antigravity": return "ProviderAntigravity"
