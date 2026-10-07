@@ -296,14 +296,8 @@ def test_unimplemented_managed_driver_is_refused_not_passed() -> None:
 
 
 if __name__ == "__main__":
-    for test in (
-        test_empty_shell_and_promotion_boundary,
-        test_empty_projection_proof_and_failed_empty_launch,
-        test_promotion_delta_rejects_out_of_order_observation,
-        test_manifest_moves_legacy_metric_out_of_hard_targeting,
-        test_batch_clean_metrics_exclude_classified_failures,
-        test_http_protocol_browser_error_is_transport_contamination,
-        test_unimplemented_managed_driver_is_refused_not_passed,
-    ):
-        test()
+    # Every test_ function, so a new test cannot be defined and forgotten.
+    for name, test in list(globals().items()):
+        if name.startswith("test_") and callable(test):
+            test()
     print("session propagation SLA tests passed")
