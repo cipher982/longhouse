@@ -31,6 +31,13 @@ def test_launch_provider_resume_factory_matrix(provider: str, scenario: str) -> 
         assert result["observation"]["distinct_run"] is True
 
 
+@pytest.mark.parametrize("provider", ["claude", "cursor", "opencode", "pi", "omp"])
+def test_console_thread_fork_is_not_applicable_without_declared_fork_thread(provider: str) -> None:
+    result = run_provider_resume_scenario(provider, "console_thread_fork")
+    assert result["status"] == "not_applicable", result
+    assert result["disposition"] == "fork_thread_not_declared"
+
+
 def test_maintenance_provider_resume_is_typed_and_side_effect_free() -> None:
     result = run_provider_resume_scenario("antigravity", "resume_unsupported")
     assert result["status"] == "pass"

@@ -59,6 +59,10 @@ def run_provider_resume_scenario(provider: str, scenario: str) -> dict[str, Any]
         return _result(provider, scenario, observation)
     if not supported:
         return _not_applicable(provider, scenario, disposition)
+    if scenario == "console_thread_fork" and not (contract and contract.fork_thread):
+        # Branching is its own declared capability; a provider that does not
+        # claim fork_thread has nothing for this scenario to prove.
+        return _not_applicable(provider, scenario, "fork_thread_not_declared")
     return asyncio.run(_run_catalog_scenario(provider, scenario))
 
 
