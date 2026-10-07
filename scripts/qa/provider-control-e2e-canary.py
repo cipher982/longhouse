@@ -2027,10 +2027,6 @@ def _antigravity_inbox_dir(config_dir: Path, session_id: str) -> Path:
     return _antigravity_runtime_dir(config_dir) / "inbox" / session_id
 
 
-def _antigravity_state_dir(config_dir: Path) -> Path:
-    return _antigravity_runtime_dir(config_dir) / "sessions"
-
-
 def _invoke_antigravity_hook(
     args: argparse.Namespace,
     script: Path,
@@ -2040,12 +2036,15 @@ def _invoke_antigravity_hook(
     config_dir: Path,
     payload: dict[str, Any],
 ) -> subprocess.CompletedProcess[str]:
+    # The managed launch environment, not pinned paths: the hook must bind the
+    # managed session id (only when the provider is antigravity) and derive the
+    # inbox from LONGHOUSE_HOME exactly as the engine's Helm send does.
     hook_env = {
         "LONGHOUSE_HOOK_PYTHON": _hook_python(args),
         "LONGHOUSE_ENGINE": "/usr/bin/true",
+        "LONGHOUSE_HOME": str(_longhouse_home_from_provider_config(config_dir)),
+        "LONGHOUSE_MANAGED_PROVIDER": "antigravity",
         "LONGHOUSE_MANAGED_SESSION_ID": session_id,
-        "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(_antigravity_inbox_dir(config_dir, session_id)),
-        "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(_antigravity_state_dir(config_dir)),
     }
     return subprocess.run(
         [str(script), event],
@@ -2113,17 +2112,6 @@ def _antigravity_pending_files(config_dir: Path, session_id: str) -> list[dict[s
             entry["error"] = f"{type(exc).__name__}: {exc}"
         pending.append(entry)
     return pending
-
-
-def _wait_for_antigravity_pending_message(config_dir: Path, session_id: str, *, timeout_secs: float = 10.0) -> Path:
-    inbox_dir = _antigravity_inbox_dir(config_dir, session_id)
-    deadline = time.monotonic() + timeout_secs
-    while time.monotonic() < deadline:
-        for entry in _antigravity_pending_files(config_dir, session_id):
-            if entry.get("payload") and entry.get("hook_safe"):
-                return Path(str(entry["path"]))
-        time.sleep(0.05)
-    raise TimeoutError(f"Timed out waiting for Antigravity inbox message in {inbox_dir}")
 
 
 def _antigravity_claimed_files(config_dir: Path, session_id: str) -> list[dict[str, Any]]:
@@ -2287,7 +2275,16 @@ def run_antigravity_canary(args: argparse.Namespace, root: Path) -> dict[str, An
             config_dir=config_dir,
             payload=hook_payload,
         )
-        stop_payload = json.loads(stop.stdout or "{}")
+        try:
+            stop_payload = json.loads(stop.stdout or "{}")
+        except json.JSONDecodeError:
+            return _fail(
+                "antigravity_stop_output_invalid",
+                "Stop hook did not print JSON",
+                returncode=stop.returncode,
+                stdout=stop.stdout,
+                stderr=stop.stderr,
+            )
         if stop_payload.get("decision") != "continue":
             return _fail(
                 "antigravity_stop_continue_missing",
