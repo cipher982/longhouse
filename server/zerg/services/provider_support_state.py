@@ -18,26 +18,13 @@ from datetime import UTC
 from datetime import datetime
 from typing import Any
 
+from zerg.managed_provider_contract_manifest import CONTRACT_OPERATIONS
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
 from zerg.services.provider_action_coverage import serialize_provider_action_coverage
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 
 SCHEMA_VERSION = 1
-CONTRACT_OPERATIONS = (
-    "launch_local",
-    "run_once",
-    "turn_start",
-    "reattach",
-    "send_input",
-    "interrupt",
-    "steer_active_turn",
-    "answer_pause",
-    "terminate",
-    "tail_output",
-    "runtime_phase",
-    "transcript_binding",
-)
 EVIDENCE_RANK = {
     "none": 0,
     "source_review": 1,

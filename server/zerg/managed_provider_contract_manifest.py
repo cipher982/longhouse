@@ -86,6 +86,10 @@ _OPERATION_EVIDENCE_FIELDS = (
     "turn_start",
     "fork_thread",
 )
+# Every managed operation a contract declares, with evidence; provider_support_state
+# reports one row per entry. The private name stays: provider_factory/capability_coverage.py
+# reads it from the subject tree.
+CONTRACT_OPERATIONS = _OPERATION_EVIDENCE_FIELDS
 MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX = {
     "send": "send_input",
     "interrupt": "interrupt",
