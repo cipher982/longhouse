@@ -288,8 +288,10 @@ EXPOSE 8000
 # The hosted deployer starts this image as a warm candidate beside the serving
 # process only when the image says it can wait for the catalog handoff
 # (server/zerg/services/catalog_handoff.py). Images without the label get the
-# stop-then-start cutover.
-LABEL ai.longhouse.runtime.warm-handoff="v1"
+# stop-then-start cutover. v2: a restart after the attempt's cutoff starts
+# ordinarily instead of waiting for a permit that will never come (v1 images
+# fail startup on every restart of a warm-cut-over container).
+LABEL ai.longhouse.runtime.warm-handoff="v2"
 
 ENTRYPOINT ["/entrypoint.sh"]
 # Start server - serves both API and frontend

@@ -143,6 +143,31 @@ def test_no_handoff_dir_is_an_ordinary_start(monkeypatch) -> None:
     assert handoff_module.catalog_handoff_pending() is None
 
 
+def _restarted_candidate_env(monkeypatch, tmp_path, *, cutoff: datetime) -> None:
+    monkeypatch.setenv("LONGHOUSE_CATALOG_HANDOFF_DIR", str(tmp_path / "handoff"))
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "1")
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_ATTEMPT_ID", "a-1")
+    monkeypatch.setenv("LONGHOUSE_CLAIM_CUTOFF", cutoff.isoformat().replace("+00:00", "Z"))
+
+
+def test_a_restart_after_the_attempt_cutoff_is_an_ordinary_start(monkeypatch, tmp_path) -> None:
+    # A cut-over container keeps the candidate environment; no permit will come
+    # for an attempt past its cutoff, so waiting for one would fail every restart.
+    _restarted_candidate_env(monkeypatch, tmp_path, cutoff=datetime.now(UTC) - timedelta(seconds=1))
+    assert handoff_module.catalog_handoff() is None
+    assert handoff_module.catalog_handoff_pending() is None
+
+
+@pytest.mark.asyncio
+async def test_a_restart_inside_the_cutoff_passes_through_the_kept_permit(monkeypatch, tmp_path) -> None:
+    _restarted_candidate_env(monkeypatch, tmp_path, cutoff=datetime.now(UTC) + timedelta(minutes=5))
+    handoff = handoff_module.catalog_handoff()
+    assert handoff is not None
+    handoff.directory.mkdir(parents=True)
+    _permit(handoff)
+    await asyncio.wait_for(handoff.wait_for_permit(), timeout=1.0)
+
+
 @pytest.mark.asyncio
 async def test_request_on_a_warm_candidate_is_held_until_its_first_reopen(monkeypatch, tmp_path) -> None:
     from zerg.services import runtime_admission as admission_module

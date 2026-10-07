@@ -218,6 +218,14 @@ def catalog_handoff() -> CatalogHandoff | None:
 
     Warm start needs a pending deployment (the candidate never serves writes
     before reopen) and an attempt id that names the permit.
+
+    The container keeps this environment after its cutover, so a later restart
+    (Docker or host restart, the health reconciler) starts here too. Once the
+    attempt's cutoff has passed no deployer will permit it, and waiting for the
+    permit would fail startup on every restart. That process starts ordinarily
+    instead and reopens from the durable activation, as a cold restart does.
+    Inside the cutoff the deployer leaves the permit in place, so a restart
+    passes straight through the handoff.
     """
     global _HANDOFF, _HANDOFF_LOADED
     if _HANDOFF_LOADED:
@@ -229,13 +237,17 @@ def catalog_handoff() -> CatalogHandoff | None:
     attempt_id = os.getenv("LONGHOUSE_DEPLOYMENT_ATTEMPT_ID", "").strip()
     if os.getenv("LONGHOUSE_DEPLOYMENT_PENDING", "").strip() != "1" or not attempt_id:
         raise RuntimeError(f"{HANDOFF_DIR_ENV} requires a pending deployment with LONGHOUSE_DEPLOYMENT_ATTEMPT_ID")
+    cutoff = _parse_time(os.getenv("LONGHOUSE_CLAIM_CUTOFF"))
+    if cutoff is not None and cutoff <= datetime.now(timezone.utc):
+        logger.info("catalog handoff attempt_id=%s is past its cutoff; ordinary start", attempt_id)
+        return None
     from zerg.services.runtime_admission import runtime_admission
 
     _HANDOFF = CatalogHandoff(
         directory=Path(directory),
         attempt_id=attempt_id,
         runtime_epoch=runtime_admission().runtime_epoch,
-        cutoff=_parse_time(os.getenv("LONGHOUSE_CLAIM_CUTOFF")),
+        cutoff=cutoff,
     )
     return _HANDOFF
 
