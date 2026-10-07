@@ -96,7 +96,11 @@ def _blob(path: str, content: bytes | None) -> str:
 def _worktree_is_head(path: str) -> bool:
     """By blob, so it also answers for a path the index does not list (which `git diff HEAD` reports as deleted)."""
     head = git("rev-parse", "--verify", "--quiet", f"HEAD:{path}", check=False).stdout.strip()
-    return bool(head) and head == _blob(path, Path(path).read_bytes())
+    try:
+        content = Path(path).read_bytes()
+    except OSError:  # a directory or an unreadable path: not something a fix wrote, so never settled
+        return False
+    return bool(head) and head == _blob(path, content)
 
 
 def _index_blob(path: str) -> str:

@@ -197,11 +197,11 @@ class AutofixTests(unittest.TestCase):
         self.assertEqual(self.fix(cmd="gen.py", watch="generated.txt").returncode, 0)
         state = Path(self.git("rev-parse", "--absolute-git-dir").strip()) / "longhouse-autofix"
         self.assertEqual((state / "staged").read_text(), "generated.txt\tabsent\n")
-        # `commit -o source.txt` committed both from its temporary index; the real index never saw the new file.
+        # The state `commit -o source.txt` leaves: both committed from its temporary index, while the real
+        # index never saw the new file (simulated: commit, then drop it from the real index).
         self.git("commit", "-q", "-m", "with the generated file")
         self.git("rm", "-q", "--cached", "generated.txt")
         self.assertEqual(self.git("status", "--short"), "D  generated.txt\n?? generated.txt\n")
-        (state / "staged").write_text("generated.txt\tabsent\n")
         self.assertEqual(self.autofix("post-commit").returncode, 0)
         self.assertEqual(self.git("status", "--short"), "", "no phantom staged deletion")
 
