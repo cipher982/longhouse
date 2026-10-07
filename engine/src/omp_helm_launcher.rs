@@ -2964,6 +2964,9 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
             "Longhouse: OMP source claim could not be written; continuing unclaimed: {error:#}"
         );
     }
+    if resume_state.is_none() {
+        crate::omp_session::write_new_session_header(&session_file, &cwd)?;
+    }
     let (url, token, machine_name) = registration_credentials(&config)?;
     let resume_attempt_id = resume_state.as_ref().map(|_| Uuid::new_v4().to_string());
     let run_id = resume_attempt_id

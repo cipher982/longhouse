@@ -489,6 +489,10 @@ test-claude-console-live-canary: ## Real stock-Claude native Console create/resu
 test-claude-conversation-reset: ## Real managed-Claude /clear characterization canary
 	@cd server && uv run python -m zerg.qa.claude_conversation_reset $(ARGS)
 
+test-omp-console-live-canary: ## Real stock-OMP native Console create/resume canary (run after `omp update`)
+	@python3 scripts/build/generate_build_identity.py
+	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine omp_print::tests::installed_omp_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
+
 test-cursor-console-live-canary: ## Real stock-Cursor native Console create/resume canary
 	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine cursor_print::tests::installed_cursor_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture

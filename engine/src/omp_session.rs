@@ -5,7 +5,7 @@
 //! provider semantics accidentally.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -511,6 +511,35 @@ pub fn reserve_session_path(session_dir: &Path) -> Result<PathBuf> {
     bail!("unable to reserve a unique OMP session path")
 }
 
+/// Write a fresh native session header into an empty reservation and return
+/// its native id. OMP 18.7 refuses `--resume` on an empty file ("the session
+/// file holds no entries") and on a missing one, so a first launch must hand
+/// it a file that already names its session; OMP appends from there exactly
+/// as it does on any resume. Call only once the source claim exists, so
+/// discovery never sees an unclaimed header.
+pub fn write_new_session_header(path: &Path, cwd: &Path) -> Result<String> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .open(path)
+        .with_context(|| format!("opening OMP session reservation: {}", path.display()))?;
+    anyhow::ensure!(
+        file.metadata()?.len() == 0,
+        "OMP session reservation is not empty: {}",
+        path.display()
+    );
+    let native_id = Uuid::new_v4().to_string();
+    let header = serde_json::json!({
+        "type": "session",
+        "version": 3,
+        "id": native_id,
+        "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "cwd": cwd.display().to_string(),
+    });
+    writeln!(file, "{header}")?;
+    file.sync_all()?;
+    Ok(native_id)
+}
+
 /// Compare workspace identities after resolving harmless symlink aliases.
 fn workspace_binding_matches(actual: &str, expected: &str) -> bool {
     if actual == expected {
@@ -976,6 +1005,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read_session_header(&path).unwrap().native_id, "omp-id");
+    }
+
+    #[test]
+    fn new_session_header_makes_a_reservation_a_valid_exact_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = reserve_session_path(dir.path()).unwrap();
+        let native_id = write_new_session_header(&path, Path::new("/workspace")).unwrap();
+        let header = verify_exact_session_file(&path, &native_id, Some("/workspace")).unwrap();
+        assert_eq!(header.native_id, native_id);
+        assert!(write_new_session_header(&path, Path::new("/workspace")).is_err());
     }
 
     #[test]
