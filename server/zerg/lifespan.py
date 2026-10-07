@@ -499,10 +499,11 @@ async def _start_runtime_services(
         logger.info("Application startup complete elapsed_ms=%.1f", elapsed_ms)
     except Exception as e:
         logger.error(f"Error during startup: {e}")
-        deferred_task = getattr(app.state, "deferred_non_gating_startup_task", None)
-        if deferred_task is not None and not deferred_task.done():
-            deferred_task.cancel()
-            await asyncio.gather(deferred_task, return_exceptions=True)
+        for deferred_name in ("deferred_non_gating_startup_task", "deferred_background_loops_task"):
+            deferred_task = getattr(app.state, deferred_name, None)
+            if deferred_task is not None and not deferred_task.done():
+                deferred_task.cancel()
+                await asyncio.gather(deferred_task, return_exceptions=True)
         if not _settings.testing or owns_test_catalog:
             await _stop_storage_title_services(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)

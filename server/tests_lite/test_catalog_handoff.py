@@ -144,7 +144,12 @@ def test_no_handoff_dir_is_an_ordinary_start(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_request_on_a_warm_candidate_is_held_until_the_catalog_opens(monkeypatch, tmp_path) -> None:
+async def test_request_on_a_warm_candidate_is_held_until_its_first_reopen(monkeypatch, tmp_path) -> None:
+    from zerg.services import runtime_admission as admission_module
+
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "1")
+    runtime = RuntimeAdmission()
+    monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
     handoff = _handoff(tmp_path)
     handoff.directory.mkdir(parents=True)
     handoff_module.reset_catalog_handoff_for_tests(handoff)
@@ -173,8 +178,17 @@ async def test_request_on_a_warm_candidate_is_held_until_the_catalog_opens(monke
     assert served == ["/api/internal/deployments/a-1/readiness"]
 
     handoff.mark_ready()
+    await asyncio.sleep(0.05)
+    assert served == ["/api/internal/deployments/a-1/readiness"], "the deployer's probe and reopen go first"
+
+    runtime._initial_open_event.set()
     await asyncio.wait_for(task, timeout=1)
     assert served[-1] == "/api/timeline/sessions"
+
+    # Once this process has opened, a later drain of it never holds reads.
+    runtime._state = "draining"
+    await middleware({"type": "http", "method": "GET", "path": "/api/timeline/sessions"}, receive, send)
+    assert served[-1] == "/api/timeline/sessions" and len(served) == 3
 
 
 @pytest.mark.asyncio

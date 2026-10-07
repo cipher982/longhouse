@@ -206,6 +206,10 @@ class RuntimeAdmission:
         async with self._lock:
             return self._admission_unlocked() == "open"
 
+    @property
+    def initially_opened(self) -> bool:
+        return self._initial_open_event.is_set()
+
     async def wait_until_initial_open(self) -> None:
         """Wait for the first successful reopen; used only by deferred startup work."""
         await self._initial_open_event.wait()

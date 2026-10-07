@@ -66,22 +66,33 @@ async def _deny_websocket(scope: Scope, send: Send, content: dict) -> None:
 
 
 async def _await_catalog_handoff() -> bool:
-    """Hold a request that reached a warm candidate until its catalog is open.
+    """Hold a request that reached a warm candidate until its first reopen.
 
-    Returns False when the catalog is still not open after the bounded wait;
-    the caller then answers the same typed, retryable 503 as a closed runtime.
+    Until the catalog is open there is nothing to serve. Between the catalog
+    opening and reopen the deployer's readiness, probe and reopen are the
+    critical path; released early, the reconnect backlog (stream replays,
+    machine agents) held the candidate's event loop for 0.3-0.45 s on every
+    canary cutover. Returns False when the bounded wait ends first; the caller
+    then answers the same typed, retryable 503 as a closed runtime.
     """
-    from zerg.services.catalog_handoff import catalog_handoff_pending
+    from zerg.services.catalog_handoff import catalog_handoff
+    from zerg.services.runtime_admission import runtime_admission
 
-    handoff = catalog_handoff_pending()
+    handoff = catalog_handoff()
     if handoff is None:
         return True
-    if handoff.failed is None:
-        try:
-            await asyncio.wait_for(handoff.ready.wait(), timeout=_CATALOG_HANDOFF_HOLD_SECONDS)
-        except TimeoutError:
-            pass
-    return handoff.ready.is_set()
+    runtime = runtime_admission()
+    if runtime.initially_opened:
+        return True
+    if handoff.failed is not None:
+        return False
+    try:
+        async with asyncio.timeout(_CATALOG_HANDOFF_HOLD_SECONDS):
+            await handoff.ready.wait()
+            await runtime.wait_until_initial_open()
+    except TimeoutError:
+        pass
+    return runtime.initially_opened
 
 
 def _restarting_payload(path: str) -> dict:
