@@ -209,6 +209,24 @@ describe("SessionRuntimeStrip connection presentation", () => {
     expect(state.receiptMarks).toHaveLength(0);
   });
 
+  it("does not render an unanswerable stale question as a response wait", () => {
+    const unanswerable = session("local-only-question", {
+      activity: "quiescent",
+      pendingInteraction: true,
+    });
+    unanswerable.session_state.pending_interaction!.can_respond = false;
+    unanswerable.session_state.presentation.primary = {
+      key: "needs_answer",
+      label: "Needs answer",
+      tone: "blocked",
+      observed_at: null,
+    };
+
+    const state = buildSessionLedgerState(unanswerable, interaction, 0, false);
+
+    expect(state.tone).toBe("quiet");
+    expect(state.detail).not.toBe("A response is required before another message.");
+  });
   it("removes the running clock when activity expires and freezes a confirmed turn duration", () => {
     const started = Date.parse("2026-09-09T19:00:00.000Z");
     const current = session("activity-clock", {

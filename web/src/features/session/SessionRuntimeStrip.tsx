@@ -5,7 +5,7 @@ import { getToolInputRecord } from "@/shared/session/model";
 import type { SessionActivityFeed } from "./sessionActivityFeed";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import { activityEvidenceIsLive, delegationEvidenceIsLive } from "@/shared/session/activityEvidence";
-import { resolveSessionRuntimeState } from "@/shared/session/sessionRuntime";
+import { needsSessionAttention, resolveSessionRuntimeState } from "@/shared/session/sessionRuntime";
 import {
   getRuntimeDisplayCopy,
   getRuntimeMetaLabel,
@@ -14,6 +14,7 @@ import {
   ACTIVITY_UNCERTAIN_LABEL,
   pendingInteractionLabel,
   sessionIsWorking,
+  sessionNeedsInteraction,
   workClaimExpired,
 } from "@/shared/session/sessionStatus";
 import {
@@ -259,7 +260,7 @@ export function buildSessionLedgerState(
   const rawProviderWorking =
     facts.activity.state === "thinking" || facts.activity.state === "executing";
   const openSession = !closedSession && facts.working_set === "open";
-  const pending = openSession && facts.pending_interaction != null;
+  const pending = openSession && needsSessionAttention(session);
   const inInitialConnectionGrace = initialConnectionGrace && openSession;
   const evidenceLive = activityEvidenceIsLive(facts.activity, nowMs);
   // The viewer's socket is not provider evidence: a connected stream only means
@@ -287,8 +288,7 @@ export function buildSessionLedgerState(
       ? "attention"
       : viewerNeedsDisclosure
         ? "unknown"
-        : evidenceLive &&
-            (runtime.tone === "blocked" || runtime.tone === "stalled")
+        : evidenceLive && sessionNeedsInteraction(facts, nowMs)
           ? "attention"
           : providerWorking
             ? "working"
