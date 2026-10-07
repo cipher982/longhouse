@@ -51,12 +51,6 @@ const MIN_PROJECTED_RATE_GIB_PER_MIN: f64 = 0.25;
 /// trigger are not. Absolute free-space thresholds still apply to every writer.
 const BOUNDED_WRITER_COMMANDS: [&str; 7] = ["rsync", "cp", "scp", "sftp", "ditto", "curl", "wget"];
 
-/// A command must have moved at least this much inside the attribution window to
-/// count as a writer. Bytes are aggregated per command *name* within a session,
-/// so a parallel build's many short-lived children add up instead of each
-/// falling under the floor.
-const WRITER_MIN_BYTES: u64 = MIB;
-
 /// A projected time-to-full must hold for this many consecutive ticks before it
 /// raises the level on its own. One 60-second slope is not proof: a bounded copy
 /// finishes inside a tick or two, while the 2026-09-25 ramp burned for about two
@@ -255,10 +249,10 @@ pub(crate) struct SessionActivity {
     /// Name of the top-level command (direct child of the agent) that wrote most.
     /// Usually the shell that spawned the work rather than the work itself.
     pub top_command: String,
-    /// True when any command in this session whose bytes are aggregated over
-    /// `WRITER_MIN_BYTES` is not a bounded transfer. Summing per command name
-    /// is what makes a parallel build count: its children are short-lived and
-    /// individually small, but together they are the writer.
+    /// True when the session's non-bounded writers together cleared the
+    /// substantial-writer threshold. Summing across tool names is what makes a
+    /// parallel build count: its children are short-lived, individually small,
+    /// and often differently named.
     pub unbounded_writer: bool,
 }
 
@@ -279,10 +273,12 @@ pub(crate) fn attribute(
 
     // (session index, top-level command pid) -> bytes
     let mut per_command: HashMap<(usize, u32), u64> = HashMap::new();
-    // (session index, writer command name) -> bytes. Grouped by name, so a
-    // parallel build's short-lived children aggregate into one writer instead
-    // of each hiding under the floor.
-    let mut per_writer: HashMap<(usize, String), u64> = HashMap::new();
+    // Per session: bytes written by commands that are not bounded transfers.
+    // Summed across tool names, so a build split over rustc/ld/cc1plus counts as
+    // one writer, and compared against the same threshold a session needs to
+    // matter at all — a helper writing a few MiB cannot disable suppression for
+    // a large finite transfer.
+    let mut unbounded_bytes = vec![0u64; sessions.len()];
     for proc in procs {
         let bytes = window_bytes
             .get(&(proc.pid, proc.start))
@@ -296,7 +292,9 @@ pub(crate) fn attribute(
         for _ in 0..64 {
             if let Some(index) = root_owner.get(&cursor) {
                 *per_command.entry((*index, child)).or_default() += bytes;
-                *per_writer.entry((*index, proc.name.clone())).or_default() += bytes;
+                if !BOUNDED_WRITER_COMMANDS.contains(&command_name(&proc.name)) {
+                    unbounded_bytes[*index] += bytes;
+                }
                 break;
             }
             match parent.get(&cursor) {
@@ -326,10 +324,8 @@ pub(crate) fn attribute(
                 names.get(&command).copied().unwrap_or_default().to_string();
         }
     }
-    for ((index, command), bytes) in per_writer {
-        if bytes >= WRITER_MIN_BYTES && !BOUNDED_WRITER_COMMANDS.contains(&command_name(&command)) {
-            activity[index].unbounded_writer = true;
-        }
+    for (index, bytes) in unbounded_bytes.into_iter().enumerate() {
+        activity[index].unbounded_writer = bytes >= STEER_MIN_BYTES;
     }
     activity
 }
@@ -876,6 +872,55 @@ mod tests {
         assert!(
             activity[0].unbounded_writer,
             "eight 40 MiB compilers are one 320 MiB build"
+        );
+        assert!(!all_substantial_writers_are_bounded(&activity));
+    }
+
+    #[test]
+    fn a_small_helper_beside_a_transfer_does_not_defeat_suppression() {
+        // 3 GiB of rsync plus a 5 MiB MCP server: still a bounded session, so a
+        // finite transfer must not be escalated because a helper wrote a little.
+        let procs = vec![
+            proc(100, 1, "longhouse-engine"),
+            proc(101, 100, "omp"),
+            proc(200, 101, "zsh"),
+            proc(201, 200, "rsync"),
+            proc(202, 101, "node"),
+        ];
+        let window = HashMap::from([((201, 2010), 3 * 1024 * MIB), ((202, 2020), 5 * MIB)]);
+        let sessions = vec![SessionRoot {
+            session_id: "s1".into(),
+            provider: "omp".into(),
+            pids: vec![100, 101],
+        }];
+        let activity = attribute(&procs, &window, &sessions);
+        assert!(!activity[0].unbounded_writer);
+        assert!(all_substantial_writers_are_bounded(&activity));
+    }
+
+    #[test]
+    fn a_build_split_across_tool_names_is_still_one_writer() {
+        // rustc + ld + cc1plus, each below the threshold, together above it.
+        let mut procs = vec![
+            proc(100, 1, "longhouse-engine"),
+            proc(101, 100, "omp"),
+            proc(200, 101, "zsh"),
+        ];
+        let mut window = HashMap::new();
+        for (n, tool) in ["rustc", "ld", "cc1plus"].iter().enumerate() {
+            let pid = 300 + n as u32;
+            procs.push(proc(pid, 200, tool));
+            window.insert((pid, u64::from(pid) * 10), 120 * MIB);
+        }
+        let sessions = vec![SessionRoot {
+            session_id: "s1".into(),
+            provider: "omp".into(),
+            pids: vec![100, 101],
+        }];
+        let activity = attribute(&procs, &window, &sessions);
+        assert!(
+            activity[0].unbounded_writer,
+            "120 MiB across three tool names is one 360 MiB build"
         );
         assert!(!all_substantial_writers_are_bounded(&activity));
     }
