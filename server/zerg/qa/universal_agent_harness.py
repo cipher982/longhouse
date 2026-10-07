@@ -14,8 +14,11 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from collections.abc import Iterable
+from collections.abc import Iterator
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
@@ -735,6 +738,39 @@ def utc_now() -> str:
 def write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(dict(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+@contextmanager
+def _co_located_store_settings() -> Iterator[None]:
+    """Run with archive and Live Store schemas on one explicit engine.
+
+    A file-backed ``DATABASE_URL`` always implies a split Live Store, and
+    ``session_runtime`` then leaves runtime reduction to catalogd. The runtime
+    phase and pause-request scenarios bind both schemas to one engine on
+    purpose -- the isolated case the local reducer exists for -- so they run
+    with an anonymous in-memory URL, which configures no split store.
+    """
+    from zerg.database import refresh_database_settings_from_env
+
+    previous = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = "sqlite://"
+    refresh_database_settings_from_env()
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous
+        refresh_database_settings_from_env()
+
+
+def _with_co_located_store_settings(method: Callable[..., Any]) -> Callable[..., Any]:
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with _co_located_store_settings():
+            return method(*args, **kwargs)
+
+    return wrapper
 
 
 def _json_safe(value: Any) -> Any:
@@ -2868,9 +2904,9 @@ class UniversalProviderAdapter:
         package.write_json("assertions/old_new_release_diff.json", payload)
         return payload
 
+    @_with_co_located_store_settings
     def _run_pause_request_service_projection(self, package: EvidencePackage, *, answer: bool) -> dict[str, Any]:
         os.environ.setdefault("TESTING", "1")
-        os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
 
         from zerg.database import make_engine
         from zerg.database import make_sessionmaker
@@ -3364,9 +3400,9 @@ class UniversalProviderAdapter:
         payload["scenario"] = scenario
         return payload
 
+    @_with_co_located_store_settings
     def _run_runtime_phase_service_projection(self, package: EvidencePackage) -> dict[str, Any]:
         os.environ.setdefault("TESTING", "1")
-        os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
 
         from zerg.database import initialize_database
         from zerg.database import initialize_live_database
