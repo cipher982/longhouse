@@ -257,7 +257,7 @@ struct MachineSelectionView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("launch-machine-row-\(machine.deviceId)")
-                        .accessibilityLabel("\(machine.machineName), \(deriveMachineStatus(machine: machine).text)")
+                        .accessibilityLabel("\(machine.machineName), \(machineStatus(machine: machine).text)")
                         .accessibilityAddTraits(machine.deviceId == selectedDeviceId ? .isSelected : [])
                         .listRowInsets(EdgeInsets())
                     }
@@ -275,7 +275,7 @@ struct MachineSelectionView: View {
                             showsChevron: false
                         )
                         .accessibilityIdentifier("launch-machine-row-\(machine.deviceId)")
-                        .accessibilityLabel("\(machine.machineName), \(deriveMachineStatus(machine: machine).text), Not available")
+                        .accessibilityLabel("\(machine.machineName), \(machineStatus(machine: machine).text), Not available")
                         .listRowInsets(EdgeInsets())
                     }
                 }

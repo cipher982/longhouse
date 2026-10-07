@@ -45,28 +45,60 @@ public struct MachinesSummaryResponse: Decodable, Sendable {
     }
 }
 
+/// A machine's status line, decided by the Runtime Host
+/// (server/zerg/services/machine_status.py) so every client shows the same words.
+public struct MachineServedStatus: Decodable, Sendable, Hashable {
+    public let tone: String
+    public let label: String
+    public let hint: String?
+    /// Offline with nothing started in the window: folded below the list.
+    public let quiet: Bool
+
+    public init(tone: String, label: String, hint: String? = nil, quiet: Bool = false) {
+        self.tone = tone
+        self.label = label
+        self.hint = hint
+        self.quiet = quiet
+    }
+
+    private enum CodingKeys: String, CodingKey { case tone, label, hint, quiet }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        tone = try container.decode(String.self, forKey: .tone)
+        label = try container.decode(String.self, forKey: .label)
+        hint = try container.decodeIfPresent(String.self, forKey: .hint)
+        quiet = try container.decodeIfPresent(Bool.self, forKey: .quiet) ?? false
+    }
+}
+
 public struct MachineSummary: Decodable, Sendable, Hashable {
     public let machine: MachineDirectoryEntry
     public let activity: MachineActivity
     public let sync: MachineSync?
+    /// Nil only from a host that predates served machine status.
+    public let status: MachineServedStatus?
 
     public init(
         machine: MachineDirectoryEntry,
         activity: MachineActivity = MachineActivity(),
-        sync: MachineSync? = nil
+        sync: MachineSync? = nil,
+        status: MachineServedStatus? = nil
     ) {
         self.machine = machine
         self.activity = activity
         self.sync = sync
+        self.status = status
     }
 
-    private enum CodingKeys: String, CodingKey { case machine, activity, sync }
+    private enum CodingKeys: String, CodingKey { case machine, activity, sync, status }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         machine = try container.decode(MachineDirectoryEntry.self, forKey: .machine)
         activity = try container.decodeIfPresent(MachineActivity.self, forKey: .activity) ?? MachineActivity()
         sync = try container.decodeIfPresent(MachineSync.self, forKey: .sync)
+        status = try container.decodeIfPresent(MachineServedStatus.self, forKey: .status)
     }
 }
 

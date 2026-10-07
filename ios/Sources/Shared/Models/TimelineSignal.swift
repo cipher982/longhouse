@@ -74,27 +74,16 @@ enum TimelineSignal {
         }
     }
 
-    /// Resolve the attention signal from a session's runtime facts. The optional
-    /// `suppressed` flag lets a surface force `.quiet` (e.g. the app suppresses
-    /// per-row attention while a global connectivity banner owns severity).
-    /// Pending interaction and provider activity are independent facts.
+    /// The row's signal: the Runtime Host's served attention axis
+    /// (`presentation.signal`) on this device's clock. The app adds only what
+    /// the server cannot know: `suppressed` forces `.quiet` while a global
+    /// connectivity banner owns severity, and a parked or muted session's
+    /// attention rests quiet.
     static func resolve(for session: SessionSummary, suppressed: Bool = false, asOf now: Date = Date()) -> TimelineSignal {
-        if session.isClosed { return .closed }
+        let signal = session.stateFacts.servedSignal(asOf: now)
+        if signal == .closed || session.isClosed { return .closed }
         if suppressed { return .quiet }
-        let facts = session.stateFacts
-        if facts.workClaimExpired(asOf: now) { return .unknown }
-        if session.needsAttention { return .attention }
-        let keyedInteraction = facts.pendingInteractionKind != nil
-            || facts.primary?.key == "needs_answer" || facts.primary?.key == "needs_approval"
-        let tone = facts.primary?.tone
-        if !keyedInteraction && (tone == "running" || tone == "thinking" || tone == "active"
-            || facts.activityState == "thinking" || facts.activityState == "executing") {
-            return .working
-        }
-        switch facts.activityState {
-        case "blocked", "stalled": return .attention
-        case "unknown": return facts.primary?.key == "idle" ? .quiet : .unknown
-        default: return .quiet
-        }
+        if signal == .attention && !session.isUserActive { return .quiet }
+        return signal
     }
 }

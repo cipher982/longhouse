@@ -206,7 +206,7 @@ struct LaunchSessionSheet: View {
                         LaunchSummaryRow(
                             title: selectedMachine?.machineName ?? "Choose a machine",
                             subtitle: selectedMachine.map { machine in
-                                let status = deriveMachineStatus(machine: machine)
+                                let status = machineStatus(machine: machine)
                                 return [status.text, status.detail].compactMap { $0 }.joined(separator: " · ")
                             },
                             status: selectedMachine.map(machineStatusStyle),
@@ -590,8 +590,8 @@ struct LaunchSessionSheet: View {
     }
 
     private func machineStatusStyle(_ machine: MachineDirectoryEntry) -> LaunchStatusStyle {
-        switch deriveMachineStatus(machine: machine).role {
-        case .live: return .ready
+        switch machineStatus(machine: machine).role {
+        case .live, .idle: return .ready
         case .quiet, .off: return .offline
         case .attention: return .warning
         case .fault: return .repair

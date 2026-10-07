@@ -40,7 +40,7 @@ struct MachineDetailView: View {
     }
 
     private var status: MachineStatus {
-        deriveMachineStatus(machine: machine, activity: activity, sync: sync)
+        machineStatus(machine: machine, summaryStatus: summary?.status)
     }
 
     private var canLaunch: Bool { machine.isLaunchable }

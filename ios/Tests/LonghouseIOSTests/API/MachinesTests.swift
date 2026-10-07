@@ -84,48 +84,56 @@ struct MachinesTests {
     }
 
     @Test
-    func statusDerivationFollowsContractTable() {
-        let now = Date(timeIntervalSince1970: 1_791_043_200)
-        let cases: [(MachineDirectoryEntry, MachineActivity?, MachineSync?, String, MachineStatusRole)] = [
-            (machine(online: true), MachineActivity(liveCount: 9), nil, "9 live", .live),
-            (machine(online: true), MachineActivity(liveCount: 9), MachineSync(stale: false, status: "broken"), "Needs repair", .fault),
-            (machine(online: true, unavailable: [unavailable("codex", reason: "not_authenticated")]), nil, nil, "Codex signed out", .attention),
-            (machine(online: true, unavailable: [unavailable("codex", reason: "cli_missing")]), nil, nil, "Codex not installed", .attention),
-            (machine(online: true, blockedBy: "auth_failed"), nil, nil, "Needs repair", .fault),
-            (machine(online: true, blockedBy: "engine_too_old"), nil, nil, "Update required", .attention),
-            (machine(online: true, blockedBy: "no_launch_support"), nil, nil, "Can't start sessions", .attention),
-            (machine(online: true), nil, nil, "Online", .live),
-            (machine(online: false, blockedBy: "control_down"), nil, MachineSync(stale: false), "Sync only", .quiet),
-            (machine(online: true), nil, MachineSync(status: "broken"), "Needs repair", .fault),
-            (machine(online: false, lastSeenAt: "2026-09-25T16:40:00Z"), nil, nil, "Offline", .off),
-        ]
+    func servedStatusDecodesAndMapsToneToRole() throws {
+        let data = try #require("""
+        {"machine": {"device_id": "cube", "machine_name": "cube", "online": true,
+                     "launch": {"providers": [{"provider": "claude"}]},
+                     "status": {"tone": "live", "label": "Ready", "hint": null, "quiet": false}},
+         "status": {"tone": "idle", "label": "Online, idle", "hint": null, "quiet": false}}
+        """.data(using: .utf8))
+        let summary = try JSONDecoder.snakeCase.decode(MachineSummary.self, from: data)
+        #expect(summary.machine.status?.label == "Ready")
 
-        for (machine, activity, sync, text, role) in cases {
-            let status = deriveMachineStatus(machine: machine, activity: activity, sync: sync, now: now)
-            #expect(status.text == text)
-            #expect(status.role == role)
+        // The summary's status supersedes the directory's own.
+        let status = machineStatus(machine: summary.machine, summaryStatus: summary.status)
+        #expect(status.text == "Online, idle")
+        #expect(status.role == .idle)
+
+        let cases: [(String, MachineStatusRole)] = [
+            ("live", .live), ("idle", .idle), ("attention", .attention),
+            ("fault", .fault), ("quiet", .quiet), ("off", .off),
+        ]
+        for (tone, role) in cases {
+            let served = MachineServedStatus(tone: tone, label: tone)
+            #expect(machineStatus(machine: machine(online: true), summaryStatus: served).role == role)
         }
     }
 
     @Test
     func statusKeepsLastSeenSeparateFromRepairAction() {
         let now = Date(timeIntervalSince1970: 1_791_043_200)
-        let offline = deriveMachineStatus(
+        let offline = machineStatus(
             machine: machine(online: false, lastSeenAt: "2026-09-25T16:40:00Z"),
+            summaryStatus: MachineServedStatus(tone: "off", label: "Offline"),
             now: now
         )
         #expect(offline.detail?.hasPrefix("last seen ") == true)
 
-        let repair = deriveMachineStatus(
+        let repair = machineStatus(
             machine: machine(online: false, blockedBy: "runtime_unreachable"),
+            summaryStatus: MachineServedStatus(
+                tone: "fault",
+                label: "Needs repair",
+                hint: "Run longhouse local-health on this machine to inspect the fault"
+            ),
             now: now
         )
         #expect(repair.detail == "Run longhouse local-health on this machine to inspect the fault")
     }
 
     @Test
-    func directoryOnlyOnlineWithoutLaunchMetadataDoesNotReadAsIdle() {
-        let status = deriveMachineStatus(machine: machine(online: true))
+    func aHostWithoutServedStatusIsNeverCalledIdle() {
+        let status = machineStatus(machine: machine(online: true))
         #expect(status.text == "Online")
         #expect(status.detail == nil)
     }

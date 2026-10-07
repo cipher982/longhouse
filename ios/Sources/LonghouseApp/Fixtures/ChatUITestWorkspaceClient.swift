@@ -692,7 +692,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     access: SessionStateLabel(key: "live_control", label: "Live control", tone: "live", observedAt: nil),
                     transcript: nil,
                     commitSeq: nil
-                )
+                ).withMirroredSignal()
             ),
             deviceId: isEndedCodexHelm ? "cinder" : nil
         )

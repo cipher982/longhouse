@@ -45,7 +45,7 @@ func makeSessionStateFacts(
         case "executing": return SessionStateLabel(key: "executing", label: tool.map { "Using \($0)" } ?? "Running", tone: "running", observedAt: nil)
         case "thinking": return SessionStateLabel(key: "thinking", label: "Thinking", tone: "thinking", observedAt: nil)
         case "quiescent": return SessionStateLabel(key: "idle", label: "Idle", tone: "idle", observedAt: nil)
-        case "blocked": return SessionStateLabel(key: "blocked", label: "Blocked", tone: "blocked", observedAt: nil)
+        // The server has no `blocked` rung: a raw provider block is not a headline.
         case "stalled": return SessionStateLabel(key: "stalled", label: "Stalled", tone: "stalled", observedAt: nil)
         default: return SessionStateLabel(key: "activity_unknown", label: "Activity unknown", tone: "quiet", observedAt: nil)
         }
@@ -98,7 +98,7 @@ func makeSessionStateFacts(
         ),
         transcript: nil,
         commitSeq: commitSeq
-    )
+    ).withMirroredSignal()
 }
 
 func addingSessionStateFacts(

@@ -84,6 +84,9 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
     public let connectedSince: String?
     public let engineBuild: String?
     public let launch: MachineLaunchProjection
+    /// The directory's own served status (no activity or sync); nil only from
+    /// a host that predates served machine status.
+    public let status: MachineServedStatus?
 
     public init(
         deviceId: String,
@@ -95,7 +98,8 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         lastSeenAt: String?,
         connectedSince: String? = nil,
         engineBuild: String?,
-        launch: MachineLaunchProjection
+        launch: MachineLaunchProjection,
+        status: MachineServedStatus? = nil
     ) {
         self.deviceId = deviceId
         self.machineName = machineName
@@ -107,11 +111,12 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         self.connectedSince = connectedSince
         self.engineBuild = engineBuild
         self.launch = launch
+        self.status = status
     }
 
     private enum CodingKeys: String, CodingKey {
         case deviceId, machineName, online, controlChannelStatus, supports
-        case controlOperationsByProvider, lastSeenAt, connectedSince, engineBuild, launch
+        case controlOperationsByProvider, lastSeenAt, connectedSince, engineBuild, launch, status
     }
 
     public init(from decoder: Decoder) throws {
@@ -126,6 +131,7 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         connectedSince = try c.decodeIfPresent(String.self, forKey: .connectedSince)
         engineBuild = try c.decodeIfPresent(String.self, forKey: .engineBuild)
         launch = try c.decode(MachineLaunchProjection.self, forKey: .launch)
+        status = try c.decodeIfPresent(MachineServedStatus.self, forKey: .status)
     }
 
     public var consoleLaunchProviders: [String] {

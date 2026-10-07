@@ -73,10 +73,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return request
     }
 
+    /// A served question or approval whose pause request has not loaded.
+    /// A raw provider block is not one: the server mints no headline for it.
     var shouldShowAttentionFallback: Bool {
         guard !isClosed, activePauseRequest == nil else { return false }
         return stateFacts.pendingInteractionKind != nil
-            || stateFacts.activityState == "blocked"
     }
 
     var canSendLive: Bool {

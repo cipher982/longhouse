@@ -15,6 +15,14 @@ struct SessionStateAction: Hashable, Codable, Sendable {
     var isAvailable: Bool { state == "available" }
 }
 
+/// The attention axis the Runtime Host serves (`presentation.signal`): one of
+/// attention, working, quiet, unknown, closed, plus the instant its evidence
+/// lapses. Decided once on the server; the app only applies its own clock.
+struct SessionStateSignal: Hashable, Codable, Sendable {
+    let state: String
+    let validUntil: String?
+}
+
 extension SessionStateFacts {
     /// Is the served activity evidence still inside its window?
     ///
@@ -28,51 +36,32 @@ extension SessionStateFacts {
         return now <= expiresAt
     }
 
-    /// The first clock boundary that can retire the presentation's work claim.
+    /// The first clock boundary that can retire the served claim: the
+    /// signal's own `valid_until`, for a working or attention claim.
     var workClaimValidUntil: String? {
-        if pendingInteractionKind != nil || primary?.key == "needs_answer" || primary?.key == "needs_approval" {
-            return nil
-        }
-        guard primary?.key == "delegated_work" else {
-            return activityState == "thinking" || activityState == "executing" || activityState == "stalled"
-                ? activityValidUntil : nil
-        }
-        guard let delegation, delegation.state == "pending", (delegation.count ?? 0) > 0 else { return nil }
-        let delegationWindow = delegation.validUntil
-        guard activityState == "thinking" || activityState == "executing" else {
-            return delegationWindow
-        }
-        guard let activityDeadline = activityValidUntil.flatMap(LonghouseDateParser.parse) else {
-            return delegationWindow
-        }
-        guard let delegationDeadline = delegationWindow.flatMap(LonghouseDateParser.parse) else {
-            return activityValidUntil
-        }
-        return activityDeadline < delegationDeadline ? activityValidUntil : delegationWindow
+        guard let signal, signal.state == "working" || signal.state == "attention" else { return nil }
+        return signal.validUntil
     }
 
-    /// The presentation's work claim owns its clock; delegation outlives parent activity.
+    /// Has the served claim outlived its window on this device's clock?
+    /// Exclusive, as the server and catalogd treat `valid_until`.
     func workClaimExpired(asOf now: Date = Date()) -> Bool {
-        if pendingInteractionKind != nil || primary?.key == "needs_answer" || primary?.key == "needs_approval" {
-            return false
-        }
-        switch activityState {
-        case "thinking", "executing":
-            if !activityEvidenceIsLive(asOf: now) { return true }
-        default:
-            break
-        }
-        if primary?.key == "delegated_work" {
-            guard let delegation, delegation.state == "pending", (delegation.count ?? 0) > 0 else {
-                return true
-            }
-            return !delegation.isValid(asOf: now)
-        }
-        switch activityState {
-        case "thinking", "executing", "stalled":
-            return !activityEvidenceIsLive(asOf: now)
-        default:
-            return false
+        guard let deadline = workClaimValidUntil.flatMap(LonghouseDateParser.parse) else { return false }
+        return now >= deadline
+    }
+
+    /// The served attention axis, demoted to unknown once its window has
+    /// passed. A payload without the field (an older host or cache) is unknown,
+    /// never quiet.
+    func servedSignal(asOf now: Date = Date()) -> TimelineSignal {
+        guard let signal else { return .unknown }
+        if workClaimExpired(asOf: now) { return .unknown }
+        switch signal.state {
+        case "attention": return .attention
+        case "working": return .working
+        case "quiet": return .quiet
+        case "closed": return .closed
+        default: return .unknown
         }
     }
 }
@@ -234,17 +223,13 @@ extension SessionStateFacts {
         hasPendingInteraction: Bool = false,
         asOf now: Date = Date()
     ) -> SessionLedgerEvidence {
-        if hasPendingInteraction || pendingInteractionKind != nil
-            || primary?.key == "needs_answer" || primary?.key == "needs_approval" {
-            return .attention
-        }
+        if hasPendingInteraction { return .attention }
         if workClaimExpired(asOf: now) { return .uncertain }
-        let tone = primary?.tone
-        if tone == "active" || tone == "running" || tone == "thinking"
-            || activityState == "thinking" || activityState == "executing" {
-            return .working
+        switch servedSignal(asOf: now) {
+        case .attention: return .attention
+        case .working: return .working
+        default: return .quiet
         }
-        return .quiet
     }
 }
 
@@ -304,6 +289,8 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     /// When the owner last sent input from a composer. Recent sorts by it
     /// (recent-by-last-user-input spec). Nil is unknown, never inferred.
     var lastUserInputAt: String? = nil
+    /// The served attention axis. Nil on an older host or cached payload.
+    var signal: SessionStateSignal? = nil
 
     static let unknown = SessionStateFacts(
         contractVersion: 1,

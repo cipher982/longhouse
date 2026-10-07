@@ -131,7 +131,8 @@ private extension APISessionStateFacts {
             transcript: presentation.transcript?.sessionStateLabel,
             commitSeq: commitSeq,
             delegation: delegation?.sessionDelegationFacts,
-            lastUserInputAt: lastUserInputAt
+            lastUserInputAt: lastUserInputAt,
+            signal: presentation.signal.map { SessionStateSignal(state: $0.state, validUntil: $0.validUntil) }
         )
     }
 }

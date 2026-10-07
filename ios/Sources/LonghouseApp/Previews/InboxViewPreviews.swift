@@ -77,7 +77,7 @@ private func previewStateFacts(
         access: nil,
         transcript: nil,
         commitSeq: nil
-    )
+    ).withMirroredSignal()
 }
 
 private func mockSession(

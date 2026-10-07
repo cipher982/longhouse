@@ -8,11 +8,12 @@ struct MachineRow: View {
     let machine: MachineDirectoryEntry
     let activity: MachineActivity?
     let sync: MachineSync?
+    var summaryStatus: MachineServedStatus? = nil
     var showsChevron = true
     var showsCheckmark = false
 
     private var status: MachineStatus {
-        deriveMachineStatus(machine: machine, activity: activity, sync: sync)
+        machineStatus(machine: machine, summaryStatus: summaryStatus)
     }
 
     private var providers: [String] {

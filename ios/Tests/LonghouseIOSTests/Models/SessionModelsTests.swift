@@ -335,6 +335,7 @@ struct SessionModelsTests {
             state: "pending", count: 1, kinds: ["subagent": 1], source: "claude_hook",
             observedAt: "2026-09-25T16:00:00Z", validUntil: "2026-09-25T16:30:00Z", items: nil
         )
+        facts = facts.withMirroredSignal()
         func summary(_ facts: SessionStateFacts, userState: String? = nil) -> SessionSummary {
             SessionSummary(
                 id: base.id, title: base.title, presenceState: base.presenceState,
@@ -348,12 +349,6 @@ struct SessionModelsTests {
         #expect(TimelineSignal.resolve(for: summary(facts), asOf: expired) == .unknown)
         #expect(summary(facts).spokenStatusLabel(asOf: expired) != primary.label)
 
-        var parentWorking = makeSessionStateFacts(
-            activity: "thinking", activityValidUntil: "2026-09-25T16:01:00Z",
-            primaryOverride: primary
-        )
-        parentWorking.delegation = facts.delegation
-        #expect(TimelineSignal.resolve(for: summary(parentWorking), asOf: now) == .unknown)
         var interaction = makeSessionStateFacts(
             activity: "quiescent", pendingInteractionKind: "question",
             activityValidUntil: "2026-09-25T16:01:00Z"
@@ -362,7 +357,7 @@ struct SessionModelsTests {
         #expect(TimelineSignal.resolve(for: summary(interaction), asOf: expired) == .attention)
         #expect(TimelineSignal.resolve(for: summary(interaction, userState: "parked"), asOf: now) == .quiet)
         let unknownInteraction = makeSessionStateFacts(activity: "unknown", pendingInteractionKind: "question")
-        #expect(TimelineSignal.resolve(for: summary(unknownInteraction, userState: "parked"), asOf: now) == .unknown)
+        #expect(TimelineSignal.resolve(for: summary(unknownInteraction, userState: "parked"), asOf: now) == .quiet)
         let workingInteraction = makeSessionStateFacts(activity: "executing", pendingInteractionKind: "question")
         #expect(TimelineSignal.resolve(for: summary(workingInteraction, userState: "parked"), asOf: now) == .quiet)
     }
@@ -489,15 +484,15 @@ struct SessionModelsTests {
     }
 
     @Test
-    func sessionDetailShowsAttentionFallbackWhenBlockedPauseRequestIsMissing() throws {
+    func sessionDetailShowsAttentionFallbackWhenAServedQuestionHasNoPauseRequest() throws {
         let json = apiSessionJSON()
             .replacingOccurrences(
                 of: #""activity": {"state": "quiescent"}"#,
-                with: #""activity": {"state": "blocked"}"#
+                with: #""activity": {"state": "quiescent"}, "pending_interaction": {"id": "pause-missing", "kind": "question", "can_respond": true}"#
             )
             .replacingOccurrences(
                 of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
-                with: #""primary": {"key": "blocked", "label": "Blocked", "tone": "blocked"}"#
+                with: #""primary": {"key": "needs_answer", "label": "Needs answer", "tone": "blocked"}"#
             )
             .replacingOccurrences(of: #""state": "needs_user","#, with: #""state": "blocked","#)
             .replacingOccurrences(of: #""tone": "idle","#, with: #""tone": "blocked","#)

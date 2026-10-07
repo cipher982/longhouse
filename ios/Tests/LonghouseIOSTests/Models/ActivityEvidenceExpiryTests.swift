@@ -106,15 +106,12 @@ struct ActivityEvidenceExpiryTests {
             state: "pending", count: 1, kinds: ["subagent": 1], source: "claude_hook",
             observedAt: "2026-08-23T12:00:00Z", validUntil: "2026-08-23T12:30:00Z", items: nil
         )
+        facts = facts.withMirroredSignal()
         #expect(facts.ledgerEvidence(asOf: at("2026-08-23T12:05:00Z")) == .working)
         #expect(facts.ledgerEvidence(asOf: at("2026-08-23T12:30:00Z")) == .uncertain)
-
-        var parentWorking = makeSessionStateFacts(
-            activity: "executing", activityValidUntil: "2026-08-23T12:01:00Z",
-            primaryOverride: primary
-        )
-        parentWorking.delegation = facts.delegation
-        #expect(parentWorking.ledgerEvidence(asOf: at("2026-08-23T12:05:00Z")) == .uncertain)
+        // The server serves delegated work only once the parent loop is
+        // quiescent, so "delegated over an expired parent" is no longer an
+        // input the app has to fence.
 
         var interaction = makeSessionStateFacts(
             activity: "quiescent", pendingInteractionKind: "question",
@@ -125,18 +122,14 @@ struct ActivityEvidenceExpiryTests {
     }
 
     @Test
-    func absentOrEmptyDelegationHasNoDeferredWorkClock() {
-        let primary = SessionStateLabel(key: "delegated_work", label: "Background", tone: "active", observedAt: nil)
-        var facts = makeSessionStateFacts(activity: "quiescent", primaryOverride: primary)
+    func aPayloadWithoutTheServedSignalHasNoWorkClaim() {
+        // An older host or cache: no served signal means no clock and no work,
+        // whatever the headline says. The app does not rebuild the axis.
+        var facts = makeSessionStateFacts(activity: "executing", activityValidUntil: "2026-08-23T12:30:00Z")
+        facts.signal = nil
         let now = at("2026-08-23T12:05:00Z")
-        #expect(facts.ledgerEvidence(asOf: now) == .uncertain)
         #expect(facts.workClaimValidUntil == nil)
-        facts.delegation = SessionDelegationFacts(
-            state: "none", count: 0, kinds: [:], source: "claude_hook",
-            observedAt: "2026-08-23T12:00:00Z", validUntil: "2026-08-23T12:30:00Z", items: []
-        )
-        #expect(facts.ledgerEvidence(asOf: now) == .uncertain)
-        #expect(facts.workClaimValidUntil == nil)
+        #expect(facts.ledgerEvidence(asOf: now) == .quiet)
     }
 
     @Test

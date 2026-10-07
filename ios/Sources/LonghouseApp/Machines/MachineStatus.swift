@@ -1,10 +1,12 @@
 import SwiftUI
 
 /// The machine signal role is intentionally independent of the older Ember
-/// fire ramp. Every machine row (directory, summary, and launch picker) uses
-/// this one derivation so status words and colour stay in lockstep.
+/// fire ramp. The role comes from the served tone, so every machine row
+/// (directory, summary, and launch picker) shows the web's words and colour.
 enum MachineStatusRole: Equatable {
     case live
+    /// Connected with nothing running: the live dot, quieter words.
+    case idle
     case attention
     case fault
     case quiet
@@ -12,7 +14,7 @@ enum MachineStatusRole: Equatable {
 
     var dotColor: Color {
         switch self {
-        case .live: return Ember.signalLive
+        case .live, .idle: return Ember.signalLive
         case .attention: return Ember.signalAttention
         case .fault: return Ember.signalFault
         case .quiet: return Ember.signalQuiet
@@ -23,6 +25,7 @@ enum MachineStatusRole: Equatable {
     var textColor: Color {
         switch self {
         case .live: return Ember.signalLiveText
+        case .idle: return Ember.textSecondary
         case .attention: return Ember.signalAttentionText
         case .fault: return Ember.signalFaultText
         case .quiet: return Ember.signalQuietText
@@ -43,113 +46,34 @@ struct MachineStatus: Equatable {
     }
 }
 
-/// Derive the product status words from the directory plus optional summary.
-/// Supplying `now` keeps this a pure, deterministic function for unit tests;
-/// production callers use its default value.
-func deriveMachineStatus(
+/// The machine's status words and colour, as the Runtime Host serves them
+/// (server/zerg/services/machine_status.py): the summary's status when the
+/// summary has loaded, otherwise the directory entry's own. The app adds only
+/// a "last seen" age for an offline machine, which needs this device's clock.
+/// Supplying `now` keeps this deterministic for unit tests.
+func machineStatus(
     machine: MachineDirectoryEntry,
-    activity: MachineActivity? = nil,
-    sync: MachineSync? = nil,
+    summaryStatus: MachineServedStatus? = nil,
     now: Date = Date()
 ) -> MachineStatus {
-    let liveCount = activity?.liveCount ?? 0
-    let syncFresh = sync.map { !$0.stale } ?? false
-    let blockedBy = machine.launch.blockedBy
-
-    // Repair is deliberately first. A live session does not hide a broken
-    // shipping/control path that needs the person's attention.
-    if blockedBy == "auth_failed"
-        || blockedBy == "runtime_unreachable"
-        || (syncFresh && sync?.status.lowercased() == "broken") {
-        return MachineStatus(
-            text: "Needs repair",
-            detail: "Run longhouse local-health on this machine to inspect the fault",
-            role: .fault
-        )
+    guard let served = summaryStatus ?? machine.status else {
+        // A host that predates served machine status: say only what the
+        // directory itself knows.
+        return machine.online
+            ? MachineStatus(text: "Online", role: .live)
+            : MachineStatus(text: "Offline", detail: lastSeenText(machine.lastSeenAt, now: now), role: .off)
     }
-
-    if machine.online {
-        let needs = machineSignInNeed(machine)
-        if liveCount > 0 {
-            return MachineStatus(text: "\(liveCount) live", detail: needs?.hint, role: .live)
-        }
-        if let needs {
-            return MachineStatus(text: needs.label, detail: needs.hint, role: .attention)
-        }
-        switch blockedBy {
-        case "engine_too_old":
-            return MachineStatus(
-                text: "Update required",
-                detail: "Update Longhouse on this machine",
-                role: .attention
-            )
-        case "no_launch_support":
-            // Amber, as on the web: connected but unable to start a session.
-            return MachineStatus(text: "Can't start sessions", role: .attention)
-        default:
-            break
-        }
-        // A directory-only machine may not have launch metadata yet. It is
-        // connected, but an absent summary must never be rendered as idle.
-        if activity == nil {
-            if !machine.launch.providers.isEmpty {
-                return MachineStatus(text: "Ready", role: .live)
-            }
-            return MachineStatus(text: "Online", role: .live)
-        }
-        return MachineStatus(text: "Online, idle", role: .live)
+    let role: MachineStatusRole
+    switch served.tone {
+    case "live": role = .live
+    case "idle": role = .idle
+    case "attention": role = .attention
+    case "fault": role = .fault
+    case "quiet": role = .quiet
+    default: role = .off
     }
-
-    if liveCount > 0 {
-        return MachineStatus(text: "\(liveCount) live", role: .live)
-    }
-    if syncFresh {
-        return MachineStatus(text: "Sync only", role: .quiet)
-    }
-    return MachineStatus(
-        text: "Offline",
-        detail: lastSeenText(machine.lastSeenAt, now: now),
-        role: .off
-    )
-}
-
-
-private struct MachineSignInNeed {
-    let label: String
-    let hint: String
-}
-
-private func machineSignInNeed(_ machine: MachineDirectoryEntry) -> MachineSignInNeed? {
-    let unavailable = machine.launch.unavailableProviders
-    let signedOut = unavailable.filter { $0.reason == "not_authenticated" }
-    // A missing CLI only matters when it leaves nothing launchable; otherwise
-    // it is an agent this person simply does not use.
-    let missing = machine.launch.providers.isEmpty
-        ? unavailable.filter { $0.reason == "cli_missing" }
-        : []
-    let actionable = signedOut.isEmpty ? missing : signedOut
-    guard !actionable.isEmpty else { return nil }
-
-    let signedOutState = !signedOut.isEmpty
-    let verb = signedOutState ? "signed out" : "not installed"
-    if actionable.count == 1, let item = actionable.first {
-        let name = ProviderBrands.displayName(item.provider)
-        let fallback = signedOutState
-            ? "Sign in to \(name) on \(machine.machineName)"
-            : "Install \(name) on \(machine.machineName)"
-        return MachineSignInNeed(
-            label: "\(name) \(verb)",
-            hint: item.remediation ?? fallback
-        )
-    }
-    let names = actionable
-        .map { ProviderBrands.displayName($0.provider) }
-        .sorted()
-        .joined(separator: " and ")
-    return MachineSignInNeed(
-        label: "\(actionable.count) agents \(verb)",
-        hint: "\(signedOutState ? "Sign in to" : "Install") \(names) on \(machine.machineName)"
-    )
+    let detail = served.hint ?? (role == .off ? lastSeenText(machine.lastSeenAt, now: now) : nil)
+    return MachineStatus(text: served.label, detail: detail, role: role)
 }
 
 func machineRelativeTime(_ raw: String?, now: Date = Date()) -> String? {

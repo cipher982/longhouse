@@ -50,7 +50,8 @@ enum MachinePreviewFixtures {
             lastUploadAt: "2026-10-03T16:39:52Z",
             waitingUploads: 0,
             history: MachineSyncHistory(state: "current", sourceCount: 3)
-        )
+        ),
+        status: MachineServedStatus(tone: "live", label: "9 live")
     )
 
     static let cubeBench = MachineSummary(
@@ -61,34 +62,40 @@ enum MachinePreviewFixtures {
             supports: ["codex.sign_in"],
             providers: [],
             unavailable: [MachineLaunchUnavailableProvider(provider: "codex", reason: "not_authenticated", remediation: nil)],
-            blockedBy: "providers_not_ready"
+            blockedBy: "providers_not_ready",
+            status: MachineServedStatus(tone: "attention", label: "Codex signed out", hint: "Sign in to Codex on cube-bench")
         ),
         activity: MachineActivity(sessionsStarted: 12, daily: dailyCounts.map { MachineDailyActivity(date: $0.date, total: $0.total / 4, byProvider: $0.byProvider) }),
-        sync: MachineSync(status: "healthy", history: MachineSyncHistory(state: "current"))
+        sync: MachineSync(status: "healthy", history: MachineSyncHistory(state: "current")),
+        status: MachineServedStatus(tone: "attention", label: "Codex signed out", hint: "Sign in to Codex on cube-bench")
     )
 
     static let cube = MachineSummary(
         machine: directory(id: "cube", name: "cube", online: true, providers: ["omp"]),
         activity: MachineActivity(sessionsStarted: 18, daily: dailyCounts.map { MachineDailyActivity(date: $0.date, total: $0.total / 6, byProvider: $0.byProvider) }),
-        sync: MachineSync(status: "healthy", history: MachineSyncHistory(state: "current"))
+        sync: MachineSync(status: "healthy", history: MachineSyncHistory(state: "current")),
+        status: MachineServedStatus(tone: "idle", label: "Online, idle")
     )
 
     static let clifford = MachineSummary(
         machine: directory(id: "clifford-sauron", name: "clifford-sauron", online: false, lastSeenAt: "2026-10-01T16:40:00Z", blockedBy: "control_down"),
         activity: MachineActivity(sessionsStarted: 3, daily: dailyCounts.map { MachineDailyActivity(date: $0.date, total: $0.total / 10, byProvider: $0.byProvider) }),
-        sync: MachineSync(stale: false, status: "offline", history: MachineSyncHistory(state: "current"))
+        sync: MachineSync(stale: false, status: "offline", history: MachineSyncHistory(state: "current")),
+        status: MachineServedStatus(tone: "quiet", label: "Sync only")
     )
 
     static let quietOne = MachineSummary(
         machine: directory(id: "drose-web-pepper", name: "drose-web-pepper", online: false, lastSeenAt: "2026-09-25T16:40:00Z", blockedBy: "control_down"),
         activity: MachineActivity(),
-        sync: nil
+        sync: nil,
+        status: MachineServedStatus(tone: "off", label: "Offline", quiet: true)
     )
 
     static let quietTwo = MachineSummary(
         machine: directory(id: "sauron-clifford", name: "sauron-clifford", online: false, lastSeenAt: "2026-09-24T16:40:00Z", blockedBy: "control_down"),
         activity: MachineActivity(),
-        sync: nil
+        sync: nil,
+        status: MachineServedStatus(tone: "off", label: "Offline", quiet: true)
     )
 
     static let directoryMachines: [MachineDirectoryEntry] = response.machines.map(\.machine)
@@ -111,7 +118,8 @@ enum MachinePreviewFixtures {
         supports: [String] = [],
         providers: [String] = [],
         unavailable: [MachineLaunchUnavailableProvider] = [],
-        blockedBy: String? = nil
+        blockedBy: String? = nil,
+        status: MachineServedStatus? = nil
     ) -> MachineDirectoryEntry {
         MachineDirectoryEntry(
             deviceId: id,
@@ -127,7 +135,11 @@ enum MachinePreviewFixtures {
                 providers: providers.map { MachineLaunchProviderOption(provider: $0) },
                 defaultProvider: providers.first,
                 unavailableProviders: unavailable
-            )
+            ),
+            // What the Runtime Host serves for a directory entry alone.
+            status: status ?? (online
+                ? MachineServedStatus(tone: "live", label: providers.isEmpty ? "Online" : "Ready")
+                : MachineServedStatus(tone: "off", label: "Offline"))
         )
     }
 }

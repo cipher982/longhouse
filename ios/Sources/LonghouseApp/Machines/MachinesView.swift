@@ -70,15 +70,8 @@ struct MachinesView: View {
 
     private var recent: [MachineListItem] {
         machineItems.filter { item in
-            guard let summary = item.summary else { return false }
-            let status = deriveMachineStatus(
-                machine: summary.machine,
-                activity: summary.activity,
-                sync: summary.sync
-            )
-            return status.text == "Offline"
-                && (summary.sync == nil || summary.sync?.stale == true)
-                && summary.activity.sessionsStarted == 0
+            // The server folds an offline machine that started nothing.
+            item.summary?.status?.quiet == true
         }
     }
 
@@ -194,6 +187,7 @@ struct MachinesView: View {
                                 machine: item.machine,
                                 activity: item.summary?.activity,
                                 sync: item.summary?.sync,
+                                summaryStatus: item.summary?.status,
                                 showsChevron: false
                             )
                         }
@@ -216,6 +210,7 @@ struct MachinesView: View {
                                 machine: item.machine,
                                 activity: item.summary?.activity,
                                 sync: item.summary?.sync,
+                                summaryStatus: item.summary?.status,
                                 showsChevron: false
                             )
                         }

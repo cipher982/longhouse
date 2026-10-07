@@ -545,7 +545,7 @@
     {
       "path": "ios/Tests/LonghouseIOSTests/API/MachinesTests.swift",
       "providers": [
-        "codex",
+        "claude",
         "cursor",
         "omp",
         "opencode"
