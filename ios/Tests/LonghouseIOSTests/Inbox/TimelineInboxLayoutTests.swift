@@ -132,7 +132,7 @@ struct TimelineInboxLayoutTests {
     }
 
     @Test
-    func failedRunRetainsItsLabelWithoutAWaitingSignal() {
+    func failedRunRetainsItsLabelWithoutAResponseWait() {
         let now = LonghouseDateParser.parse("2026-09-25T16:05:00Z")!
         let failed = session(
             id: "failed-run",
@@ -144,7 +144,8 @@ struct TimelineInboxLayoutTests {
             )
         )
 
-        #expect(TimelineSignal.resolve(for: failed, asOf: now) == .quiet)
+        #expect(failed.stateFacts.hasAnswerablePendingInteraction == false)
+        #expect(TimelineSignal.resolve(for: failed, asOf: now) == .attention)
         #expect(failed.spokenStatusLabel(asOf: now) == "Run failed")
     }
 

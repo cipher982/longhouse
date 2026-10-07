@@ -56,6 +56,7 @@ export function needsSessionAttention(
 export function sessionHasFailedRun(
   session: Pick<AgentSession, "session_state">,
 ): boolean {
+  if (isSessionClosed(session)) return false;
   const primary = session.session_state.presentation.primary;
   return primary?.key === "launch_failed"
     || (primary?.key === "ended" && primary.tone === "blocked");
@@ -64,7 +65,7 @@ export function sessionHasFailedRun(
 /**
  * The single attention axis for a timeline row, served by the Runtime Host
  * (`presentation.signal`) and drawn the same way on iOS and the menu bar:
- *   - attention: WAITING ON YOU — steady amber, never pulses.
+ *   - attention: a server-flagged status, not always a response wait; steady amber, never pulses.
  *   - working:   actively running — teal, pulses (live only).
  *   - quiet:     idle — grey, static.
  *   - unknown:   no current evidence — grey, static.

@@ -186,12 +186,13 @@ describe("resolveSessionRuntimeState", () => {
 
     expect(runtime.needsAttention).toBe(false);
   });
-  it("suppresses a stale interaction after failed launch", () => {
+  it("keeps failed launch attention separate from a response wait", () => {
     const session_state = makeSessionStateFacts({
       pendingInteraction: true,
       activity: "quiescent",
       launchState: "failed",
     });
+    session_state.pending_interaction!.can_respond = false;
     session_state.run = { lifecycle: "ended", end_reason: "provider_launch_failed" };
     session_state.presentation.primary = {
       key: "launch_failed",
@@ -203,16 +204,24 @@ describe("resolveSessionRuntimeState", () => {
     const session = makeSession({ session_state, user_state: "active" });
 
     expect(resolveSessionRuntimeState(session).needsAttention).toBe(false);
-    expect(resolveTimelineSignal(session)).toBe("quiet");
+    expect(needsSessionAttention(session)).toBe(false);
+    expect(resolveTimelineSignal(session)).toBe("attention");
   });
 
-  it("does not mark a closed session failed from its retained run outcome", () => {
+  it("does not classify a closed failure presentation as a failed session", () => {
     const session_state = makeSessionStateFacts({ closed: true });
     session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
+    session_state.presentation.primary = {
+      key: "ended",
+      label: "Run failed",
+      tone: "blocked",
+      observed_at: null,
+    };
     const session = makeSession({ session_state, user_state: "active" });
 
     expect(sessionHasFailedRun(session)).toBe(false);
   });
+
   it("does not signal a question that Longhouse cannot answer", () => {
     const session_state = makeSessionStateFacts({
       pendingInteraction: true,
@@ -220,14 +229,16 @@ describe("resolveSessionRuntimeState", () => {
     });
     session_state.pending_interaction!.can_respond = false;
     session_state.presentation.primary = {
-      key: "needs_answer",
-      label: "Needs answer",
-      tone: "blocked",
+      key: "idle",
+      label: "Idle",
+      tone: "idle",
       observed_at: null,
     };
+    session_state.presentation.signal = mirrorServedSignal(session_state.presentation.primary);
     const session = makeSession({ session_state, user_state: "active" });
 
     expect(resolveSessionRuntimeState(session).needsAttention).toBe(false);
+    expect(needsSessionAttention(session)).toBe(false);
     expect(resolveTimelineSignal(session)).toBe("quiet");
   });
 });
@@ -286,12 +297,13 @@ describe("resolveTimelineSignal", () => {
       tone: "blocked",
       observed_at: null,
     };
+    session.session_state.presentation.signal = mirrorServedSignal(session.session_state.presentation.primary);
 
     expect(needsSessionAttention(session)).toBe(false);
     expect(resolveTimelineSignal(session)).toBe("attention");
   });
 
-  it("keeps a failed run out of blocked-activity attention", () => {
+  it("keeps a failed run signal distinct from a response wait", () => {
     const session_state = makeSessionStateFacts({ activity: "blocked" });
     session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
     session_state.presentation.primary = {
@@ -300,7 +312,11 @@ describe("resolveTimelineSignal", () => {
       tone: "blocked",
       observed_at: null,
     };
-    expect(resolveTimelineSignal({ session_state, user_state: "active" })).toBe("quiet");
+    session_state.presentation.signal = mirrorServedSignal(session_state.presentation.primary);
+    const session = makeSession({ session_state, user_state: "active" });
+    expect(needsSessionAttention(session)).toBe(false);
+    expect(sessionHasFailedRun(session)).toBe(true);
+    expect(resolveTimelineSignal(session)).toBe("attention");
   });
 
   it("idle is quiet", () => {

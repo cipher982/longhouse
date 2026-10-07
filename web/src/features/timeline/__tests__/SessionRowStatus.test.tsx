@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { TimelineSessionCard } from "@/shared/api/agents";
-import { makeSessionStateFacts } from "@/shared/test/sessionState";
+import { makeSessionStateFacts, mirrorServedSignal } from "@/shared/test/sessionState";
 import { SessionRow } from "../SessionRow";
 
 function card(sessionState: ReturnType<typeof makeSessionStateFacts>): TimelineSessionCard {
@@ -62,6 +62,31 @@ describe("SessionRow status label", () => {
     expect(activity).toHaveAttribute("data-signal", "unknown");
   });
 
+
+  it("preserves a failed-run label when old activity evidence expires", () => {
+    const facts = makeSessionStateFacts({
+      activity: "blocked",
+      workingSet: "open",
+      activityValidUntil: "2026-05-19T15:45:00Z",
+    });
+    facts.run = { lifecycle: "ended", end_reason: "run_failed" };
+    facts.presentation.primary = {
+      key: "ended",
+      label: "Run failed",
+      tone: "blocked",
+      observed_at: "2026-05-19T15:40:00Z",
+    };
+    facts.presentation.signal = mirrorServedSignal(facts.presentation.primary, {
+      activity: { state: "blocked", valid_until: "2026-05-19T15:45:00Z" },
+    });
+    renderRow(card(facts));
+
+    const row = screen.getByTestId("session-row");
+    const activity = row.querySelector(".inbox-row-activity");
+    expect(activity).toHaveTextContent("Run failed");
+    expect(activity).not.toHaveTextContent("Activity uncertain");
+    expect(activity).toHaveAttribute("data-signal", "attention");
+  });
   it("keeps the served label while the claim is still fresh", () => {
     const facts = makeSessionStateFacts({
       activity: "executing",

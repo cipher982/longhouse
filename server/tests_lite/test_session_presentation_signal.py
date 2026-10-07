@@ -88,12 +88,27 @@ def test_a_keyed_interaction_is_attention_without_a_clock(kind, key):
     primary, signal = _signal(
         run=_running_run(),
         activity=SessionActivityFacts(state="executing", tool="Bash", valid_until=LATER),
-        interaction=SessionPendingInteractionFacts(id="p1", kind=kind, opened_at=NOW),
+        interaction=SessionPendingInteractionFacts(id="p1", kind=kind, opened_at=NOW, can_respond=True),
     )
     assert primary.key == key
     assert signal.state == "attention"
     # A question does not lapse because the activity that preceded it did.
     assert signal.valid_until is None
+
+
+def test_an_unanswerable_interaction_is_not_attention():
+    primary, signal = _signal(
+        run=_running_run(),
+        activity=SessionActivityFacts(state="quiescent"),
+        interaction=SessionPendingInteractionFacts(
+            id="p1",
+            kind="question",
+            opened_at=NOW,
+            can_respond=False,
+        ),
+    )
+    assert primary.key == "idle"
+    assert signal.state == "quiet"
 
 
 def test_stalled_is_attention_bounded_by_its_evidence():
