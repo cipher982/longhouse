@@ -19,6 +19,7 @@ CLAUDE_LIVE_CONTROL_OPERATIONS = [
     "turn_start",
     "turn_interrupt",
     "turn_steer",
+    "invocation_close",
 ]
 # Mirrors what the engine advertises for OpenCode. control_supports_for_path
 # extends this straight from the contract's machine_control_supports, so adding
@@ -172,7 +173,17 @@ def test_support_state_separates_candidate_release_from_local_readiness() -> Non
         control_channel={
             "status": "connected",
             "control_operations_by_provider": {
-                "codex": ["send", "interrupt", "steer", "answer_pause", "launch", "continue", "turn_steer", "turn_interrupt"],
+                "codex": [
+                    "send",
+                    "interrupt",
+                    "steer",
+                    "answer_pause",
+                    "launch",
+                    "continue",
+                    "turn_steer",
+                    "turn_interrupt",
+                    "invocation_close",
+                ],
             },
         },
     )
@@ -190,6 +201,7 @@ def test_support_state_separates_candidate_release_from_local_readiness() -> Non
         "continue",
         "turn_steer",
         "turn_interrupt",
+        "invocation_close",
     ]
     assert codex["capabilities"]["missing_live_control_operations"] == []
     assert codex["proof"]["state"] == "mixed"
@@ -360,7 +372,17 @@ def test_support_state_keeps_one_shot_support_out_of_live_control_readiness() ->
         control_channel={
             "status": "connected",
             "control_operations_by_provider": {
-                "codex": ["send", "interrupt", "steer", "answer_pause", "launch", "continue", "turn_steer", "turn_interrupt"],
+                "codex": [
+                    "send",
+                    "interrupt",
+                    "steer",
+                    "answer_pause",
+                    "launch",
+                    "continue",
+                    "turn_steer",
+                    "turn_interrupt",
+                    "invocation_close",
+                ],
             },
         },
     )
@@ -389,6 +411,7 @@ def test_support_state_keeps_claude_first_class_with_mixed_proof() -> None:
                     "turn_start",
                     "turn_interrupt",
                     "turn_steer",
+                    "invocation_close",
                 ]
             },
         },
@@ -404,6 +427,7 @@ def test_support_state_keeps_claude_first_class_with_mixed_proof() -> None:
         "answer_pause",
         "turn_interrupt",
         "turn_steer",
+        "invocation_close",
     ]
     assert "steer_active_turn" in claude["capabilities"]["supported_operations"]
     assert claude["proof"]["minimum_evidence_level"] == "hermetic"
@@ -451,6 +475,7 @@ def test_support_state_reports_partial_live_control_operations() -> None:
         "answer_pause",
         "turn_interrupt",
         "turn_steer",
+        "invocation_close",
     ]
 
 
