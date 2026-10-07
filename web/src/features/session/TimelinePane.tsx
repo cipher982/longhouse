@@ -422,7 +422,7 @@ function MessageRow({
         {isAssistant || isUser ? (
           <span className="tl-msg__node" aria-hidden="true">
             {isAssistant ? (
-              <ProviderGlyph provider={provider} size={16} />
+              <ProviderGlyph provider={provider} size={18} style={{ borderRadius: 999 }} />
             ) : (
               <span className="tl-msg__node-ring" />
             )}
