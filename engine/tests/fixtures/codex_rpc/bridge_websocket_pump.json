@@ -1,0 +1,20 @@
+[
+  {
+    "ending": "close_frame",
+    "events": [
+      "Rpc(Object {\"method\": String(\"hello\"), \"params\": Object {}})",
+      "StdoutParseError(\"expected ident at line 1 column 2: not json\")",
+      "TransportClosed(\"remote app-server websocket closed: Some(CloseFrame { code: Normal, reason: Utf8Bytes(b\\\"bye\\\") })\")"
+    ],
+    "server_received": "{\"method\":\"client/hello\",\"params\":{\"x\":1}}"
+  },
+  {
+    "ending": "drop",
+    "events": [
+      "Rpc(Object {\"method\": String(\"hello\"), \"params\": Object {}})",
+      "StdoutParseError(\"expected ident at line 1 column 2: not json\")",
+      "TransportClosed(\"remote app-server websocket read error: WebSocket protocol error: Connection reset without closing handshake\")"
+    ],
+    "server_received": "{\"method\":\"client/hello\",\"params\":{\"x\":1}}"
+  }
+]

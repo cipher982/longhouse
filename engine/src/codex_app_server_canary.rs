@@ -2146,4 +2146,221 @@ for line in sys.stdin:
         );
         assert_eq!(summary.turn_status, "completed");
     }
+
+    const GOLDEN_CANARY_FAKE: &str = r#"
+REQUESTS = [
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+    "item/tool/requestUserInput",
+    "mcpServer/elicitation/request",
+    "applyPatchApproval",
+    "execCommandApproval",
+]
+PARAMS = {"threadId": "thr_golden", "questions": [{"id": "color", "options": [{"label": "blue"}]}, {"id": "free"}], "permissions": {"network": {"hosts": ["example.com"]}}}
+if method == "initialize":
+    sys.stderr.write("fake app-server ready\n")
+    sys.stderr.flush()
+    emit({"id": msg["id"], "result": {"userAgent": "fake/1.0"}})
+elif method is None or method == "initialized":
+    pass
+elif method == "thread/start":
+    emit({"method": "thread/started", "params": {"thread": {"id": "thr_golden"}}})
+    emit({"id": msg["id"], "result": {"thread": {"id": "thr_golden"}}})
+elif method == "turn/start":
+    emit({"id": msg["id"], "result": {"turn": {"id": "turn_golden", "status": "inProgress", "items": []}}})
+    emit({"method": "turn/started", "params": {"threadId": "thr_golden", "turn": {"id": "turn_golden", "status": "inProgress", "items": []}}})
+    for index, name in enumerate(REQUESTS):
+        emit({"id": 500 + index, "method": name, "params": PARAMS})
+    emit({"id": 4242, "error": {"code": 7, "message": "stray"}})
+    emit({"method": "item/started", "params": {"threadId": "thr_golden", "turnId": "turn_golden", "item": {"id": "m1", "type": "assistantMessage"}}})
+    emit({"method": "item/agentMessage/delta", "params": {"threadId": "thr_golden", "turnId": "turn_golden", "itemId": "m1", "delta": "GOLD"}})
+elif method == "turn/steer":
+    emit({"id": msg["id"], "result": {}})
+elif method == "turn/interrupt":
+    emit({"id": msg["id"], "result": {}})
+    emit({"method": "turn/completed", "params": {"threadId": "thr_golden", "turn": {"id": "turn_golden", "status": "interrupted", "items": []}}})
+elif method == "thread/read":
+    emit({"id": msg["id"], "error": {"code": -32000, "message": "read refused"}})
+elif method == "thread/list":
+    emit({"id": msg["id"], "result": {"data": [{"id": "thr_golden"}], "hasMore": False}})
+else:
+    emit({"id": msg["id"], "result": {}})
+"#;
+
+    fn golden_canary_config(bin: &Path, workspace: PathBuf, auto_approve: bool) -> CanaryConfig {
+        CanaryConfig {
+            prompt: "Golden prompt".to_string(),
+            cwd: workspace,
+            home_override: None,
+            approval_policy: "on-request".to_string(),
+            sandbox: "workspace-write".to_string(),
+            model: Some("gpt-golden".to_string()),
+            effort: Some("low".to_string()),
+            codex_bin: bin.display().to_string(),
+            app_server_transport: AppServerTransport::Stdio,
+            listen_port: 0,
+            session_source: "longhouse-test".to_string(),
+            resume_thread_id: None,
+            steer_text: Some("golden steer".to_string()),
+            steer_after_ms: 300,
+            interrupt_after_ms: Some(900),
+            auto_approve,
+            spawn_remote_tui: false,
+            remote_tui_subscribe_phase: RemoteTuiSubscribePhase::PostTurn,
+            remote_tui_grace_ms: 3000,
+            remote_tui_log: None,
+            probe_thread_read: false,
+            probe_thread_list: true,
+            event_timeout_secs: 20,
+            log_jsonl: None,
+            isolate_home: false,
+            keep_home: false,
+            verify_hooks: false,
+            ws_read_throttle_ms: 0,
+            proxy_codex_ws: false,
+        }
+    }
+
+    fn golden_log_lines(path: &Path, scratch: &[&Path]) -> Vec<Value> {
+        fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            // stderr and stdout are separate pipes, so where a stderr line lands
+            // among stdout events is a race; its content is in the summary.
+            .filter(|value| value["direction"] != "server_stderr")
+            .map(|mut value| {
+                value.as_object_mut().unwrap().remove("ts");
+                let text = crate::codex_rpc_golden::normalize_text(&value.to_string(), scratch);
+                serde_json::from_str(&text).unwrap()
+            })
+            .collect()
+    }
+
+    fn golden_summary(summary: &CanarySummary, scratch: &[&Path]) -> Value {
+        let text = crate::codex_rpc_golden::normalize_text(
+            &serde_json::to_string(summary).unwrap(),
+            scratch,
+        );
+        serde_json::from_str(&text).unwrap()
+    }
+
+    #[tokio::test]
+    async fn codex_rpc_golden_canary_stdio() {
+        use crate::codex_rpc_golden::{assert_golden, recorded_lines, write_recording_fake};
+        let real_home = home_dir().unwrap();
+        let mut cases = Vec::new();
+        for auto_approve in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let scratch = [temp.path(), real_home.as_path()];
+            let workspace = temp.path().join("workspace");
+            fs::create_dir_all(&workspace).unwrap();
+            let (bin, raw_log) = write_recording_fake(temp.path(), GOLDEN_CANARY_FAKE);
+            let log_path = temp.path().join("canary.jsonl");
+            let mut config = golden_canary_config(&bin, workspace, auto_approve);
+            config.log_jsonl = Some(log_path.clone());
+            let result = run(config).await;
+            let summary = match &result {
+                Ok(summary) => golden_summary(summary, &scratch),
+                Err(error) => json!({"err": format!("{error:#}")}),
+            };
+            cases.push(json!({
+                "auto_approve": auto_approve,
+                "summary": summary,
+                "wire": recorded_lines(&raw_log, &scratch),
+                "log": golden_log_lines(&log_path, &scratch),
+            }));
+        }
+        assert_golden("canary_stdio", &Value::Array(cases));
+    }
+
+    #[tokio::test]
+    async fn codex_rpc_golden_canary_websocket() {
+        use crate::codex_rpc_golden::assert_golden;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::tempdir().unwrap();
+        let real_home = home_dir().unwrap();
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let scratch_port = format!("127.0.0.1:{port}");
+        let bin = temp.path().join("codex");
+        fs::write(
+            &bin,
+            format!(
+                "#!/usr/bin/env python3\nimport sys, time\nsys.stderr.write('  listening on: ws://127.0.0.1:{port}\\n')\nsys.stderr.flush()\ntime.sleep(60)\n"
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&bin).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&bin, permissions).unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut received = Vec::new();
+            while let Some(Ok(message)) = websocket.next().await {
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                received.push(text.to_string());
+                let msg: Value = serde_json::from_str(&text).unwrap();
+                let id = msg.get("id").cloned();
+                let reply = |value: Value| Message::Text(value.to_string().into());
+                match msg.get("method").and_then(Value::as_str) {
+                    Some("initialize") => {
+                        websocket.send(reply(json!({"id": id, "result": {}}))).await.unwrap();
+                    }
+                    Some("thread/start") => {
+                        websocket.send(reply(json!({"id": id, "result": {"thread": {"id": "thr_ws"}}}))).await.unwrap();
+                    }
+                    Some("turn/start") => {
+                        websocket.send(reply(json!({"id": id, "result": {"turn": {"id": "turn_ws", "status": "inProgress"}}}))).await.unwrap();
+                        websocket.send(Message::Binary(vec![9].into())).await.unwrap();
+                        websocket.send(reply(json!({"id": 77, "method": "item/fileChange/requestApproval", "params": {}}))).await.unwrap();
+                    }
+                    None if id == Some(json!(77)) => {
+                        websocket.send(reply(json!({"method": "turn/completed", "params": {"turn": {"id": "turn_ws", "status": "completed"}}}))).await.unwrap();
+                    }
+                    Some(_) => {
+                        websocket.send(reply(json!({"id": id, "result": {}}))).await.unwrap();
+                    }
+                    None => {}
+                }
+            }
+            received
+        });
+
+        let mut config = golden_canary_config(&bin, workspace, false);
+        config.app_server_transport = AppServerTransport::WebSocket;
+        config.listen_port = port;
+        config.steer_text = None;
+        config.interrupt_after_ms = None;
+        config.probe_thread_list = false;
+        let result = run(config).await;
+        let scratch = [temp.path(), real_home.as_path()];
+        let summary = match &result {
+            Ok(summary) => golden_summary(summary, &scratch),
+            Err(error) => json!({"err": format!("{error:#}")}),
+        };
+        let received = tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
+        let normalize = |text: &str| {
+            crate::codex_rpc_golden::normalize_text(text, &scratch).replace(&scratch_port, "<ws>")
+        };
+        let summary: Value = serde_json::from_str(&normalize(&summary.to_string())).unwrap();
+        assert_golden(
+            "canary_websocket",
+            &json!({
+                "summary": summary,
+                "server_received": received.iter().map(|line| normalize(line)).collect::<Vec<_>>(),
+            }),
+        );
+    }
 }

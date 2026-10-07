@@ -863,7 +863,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "3ccdf19a84459630c103954691d879bbf34794815b370417be1c521a5b327ac4"
+      "adapter_digest": "a5cdf1145710cc2814c67d8b1f8d19184589d116ca1d7ba7c05661b47a02e551"
     },
     {
       "provider": "claude",

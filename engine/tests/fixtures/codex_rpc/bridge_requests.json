@@ -1,0 +1,166 @@
+[
+  {
+    "outcome": {
+      "ok": null
+    },
+    "step": "initialize",
+    "wire": [
+      "{\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"experimentalApi\":true,\"optOutNotificationMethods\":[\"item/plan/delta\",\"item/reasoning/summaryTextDelta\",\"item/reasoning/summaryPartAdded\",\"item/reasoning/textDelta\",\"turn/plan/updated\",\"turn/diff/updated\",\"thread/tokenUsage/updated\",\"rawResponseItem/completed\"]},\"clientInfo\":{\"name\":\"longhouse_codex_bridge\",\"title\":\"Longhouse Codex Bridge\",\"version\":\"<version>\"}}}",
+      "{\"method\":\"initialized\",\"params\":{}}"
+    ]
+  },
+  {
+    "outcome": {
+      "ok": {
+        "thread": {
+          "id": "thr_golden"
+        }
+      }
+    },
+    "step": "send_request ok",
+    "wire": [
+      "{\"id\":2,\"method\":\"thread/read\",\"params\":{\"threadId\":\"thr_golden\"}}"
+    ]
+  },
+  {
+    "outcome": {
+      "err": "thread/list failed: {\"code\":-32000,\"message\":\"boom\"}"
+    },
+    "step": "send_request error",
+    "wire": [
+      "{\"id\":3,\"method\":\"thread/list\",\"params\":{}}"
+    ]
+  },
+  {
+    "outcome": {
+      "err": "response for thread/list missing result"
+    },
+    "step": "send_request missing result",
+    "wire": [
+      "{\"id\":4,\"method\":\"thread/list\",\"params\":{}}"
+    ]
+  },
+  {
+    "outcome": {
+      "err": "received unexpected server request while waiting for turn/start: {\"id\":\"srv-x\",\"method\":\"item/tool/requestUserInput\",\"params\":{}}"
+    },
+    "step": "send_request server request",
+    "wire": [
+      "{\"id\":5,\"method\":\"turn/start\",\"params\":{}}"
+    ]
+  },
+  {
+    "outcome": {
+      "err": "codex bridge protocol parse error while waiting for turn/start: bad json"
+    },
+    "step": "send_request parse error",
+    "wire": [
+      "{\"id\":6,\"method\":\"turn/start\",\"params\":{}}"
+    ]
+  },
+  {
+    "outcome": {
+      "err": "codex app-server transport closed while waiting for turn/start: gone"
+    },
+    "step": "send_request transport closed",
+    "wire": [
+      "{\"id\":7,\"method\":\"turn/start\",\"params\":{}}"
+    ]
+  },
+  {
+    "outcome": {
+      "ok": null
+    },
+    "step": "send_notification",
+    "wire": [
+      "{\"method\":\"custom/notify\",\"params\":{\"a\":1}}"
+    ]
+  },
+  {
+    "outcome": {
+      "err": "codex app-server transport closed while waiting for turn/start: Codex app-server closed its output stream unexpectedly"
+    },
+    "step": "send_request events closed",
+    "wire": [
+      "{\"id\":8,\"method\":\"turn/start\",\"params\":{}}"
+    ]
+  },
+  {
+    "outcome": {
+      "ok": {
+        "turn": {
+          "id": "turn-golden",
+          "status": "inProgress"
+        }
+      }
+    },
+    "step": "with_runtime auto_approve=false",
+    "wire": [
+      "{\"id\":1,\"method\":\"turn/start\",\"params\":{\"input\":[],\"threadId\":\"thr_golden\"}}",
+      "{\"id\":\"srv-0\",\"result\":{\"decision\":\"decline\"}}",
+      "{\"id\":\"srv-1\",\"result\":{\"decision\":\"decline\"}}",
+      "{\"id\":\"srv-2\",\"result\":{\"permissions\":{},\"scope\":\"turn\"}}",
+      "{\"id\":\"srv-3\",\"result\":{\"answers\":{\"color\":{\"answers\":[]},\"free\":{\"answers\":[]}}}}",
+      "{\"id\":\"srv-4\",\"result\":{\"action\":\"decline\",\"content\":null}}",
+      "{\"id\":\"srv-5\",\"result\":{\"decision\":\"Denied\"}}",
+      "{\"id\":\"srv-6\",\"result\":{\"decision\":\"Denied\"}}"
+    ]
+  },
+  {
+    "outcome": {
+      "err": "unsupported server request in codex bridge: bogus/request"
+    },
+    "step": "with_runtime unsupported auto_approve=false",
+    "wire": [
+      "{\"id\":2,\"method\":\"turn/start\",\"params\":{}}"
+    ]
+  },
+  {
+    "outcome": {
+      "err": "turn/steer failed: {\"code\":1,\"message\":\"nope\"}"
+    },
+    "step": "with_runtime error auto_approve=false",
+    "wire": [
+      "{\"id\":3,\"method\":\"turn/steer\",\"params\":{}}"
+    ]
+  },
+  {
+    "outcome": {
+      "ok": {
+        "turn": {
+          "id": "turn-golden",
+          "status": "inProgress"
+        }
+      }
+    },
+    "step": "with_runtime auto_approve=true",
+    "wire": [
+      "{\"id\":1,\"method\":\"turn/start\",\"params\":{\"input\":[],\"threadId\":\"thr_golden\"}}",
+      "{\"id\":\"srv-0\",\"result\":{\"decision\":\"accept\"}}",
+      "{\"id\":\"srv-1\",\"result\":{\"decision\":\"accept\"}}",
+      "{\"id\":\"srv-2\",\"result\":{\"permissions\":{\"network\":{\"hosts\":[\"example.com\"]}},\"scope\":\"turn\"}}",
+      "{\"id\":\"srv-3\",\"result\":{\"answers\":{\"color\":{\"answers\":[\"blue\"]},\"free\":{\"answers\":[\"longhouse\"]}}}}",
+      "{\"id\":\"srv-4\",\"result\":{\"action\":\"decline\",\"content\":null}}",
+      "{\"id\":\"srv-5\",\"result\":{\"decision\":\"Approved\"}}",
+      "{\"id\":\"srv-6\",\"result\":{\"decision\":\"Approved\"}}"
+    ]
+  },
+  {
+    "outcome": {
+      "err": "unsupported server request in codex bridge: bogus/request"
+    },
+    "step": "with_runtime unsupported auto_approve=true",
+    "wire": [
+      "{\"id\":2,\"method\":\"turn/start\",\"params\":{}}"
+    ]
+  },
+  {
+    "outcome": {
+      "err": "turn/steer failed: {\"code\":1,\"message\":\"nope\"}"
+    },
+    "step": "with_runtime error auto_approve=true",
+    "wire": [
+      "{\"id\":3,\"method\":\"turn/steer\",\"params\":{}}"
+    ]
+  }
+]

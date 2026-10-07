@@ -6515,4 +6515,186 @@ for line in sys.stdin:
             });
         });
     }
+
+    const GOLDEN_CONSOLE_FAKE: &str = r#"
+REQUESTS = [
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+    "item/tool/requestUserInput",
+    "mcpServer/elicitation/request",
+    "applyPatchApproval",
+    "execCommandApproval",
+]
+PARAMS = {"threadId": "thr-golden", "questions": [{"id": "color", "options": [{"label": "blue"}]}], "permissions": {"network": {"hosts": ["example.com"]}}}
+if "turns" not in globals():
+    turns = 0
+if method == "initialize":
+    emit({"id": 900, "method": "item/commandExecution/requestApproval", "params": PARAMS})
+    emit({"method": "golden/beforeInitialized", "params": {}})
+    emit({"id": msg["id"], "result": {"userAgent": "fake/1"}})
+elif method is None:
+    pass
+elif method in ("golden/serverRequests", "golden/quiet"):
+    for index, name in enumerate(REQUESTS):
+        emit({"id": "srv-" + str(index), "method": name, "params": PARAMS})
+    emit({"method": "thread/status/changed", "params": {"threadId": "thr-golden"}})
+    emit({"id": 4242, "result": {"stray": True}})
+    emit({"id": msg["id"], "result": {"ok": method}})
+elif method == "golden/error":
+    emit({"id": msg["id"], "error": {"code": -32000, "message": "nope"}})
+elif method == "golden/noResult":
+    emit({"id": msg["id"]})
+elif method == "golden/unsupported":
+    emit({"id": "srv-bad", "method": "bogus/request", "params": {}})
+elif method == "golden/badJson":
+    sys.stdout.write("{not json\n")
+    sys.stdout.flush()
+elif method == "thread/start":
+    emit({"method": "thread/started", "params": {"thread": {"id": "thr-golden"}}})
+    emit({"id": msg["id"], "result": {"thread": {"id": "thr-golden", "path": "/tmp/golden-rollout.jsonl"}}})
+elif method == "turn/start":
+    turns += 1
+    turn_id = "turn-" + str(turns)
+    emit({"id": msg["id"], "result": {"turn": {"id": turn_id, "status": "inProgress"}}})
+    emit({"method": "turn/started", "params": {"turn": {"id": turn_id, "status": "inProgress"}}})
+elif method == "turn/steer":
+    emit({"id": msg["id"], "result": {}})
+    emit({"id": "srv-turn", "method": "item/tool/requestUserInput", "params": PARAMS})
+    emit({"method": "item/agentMessage/delta", "params": {"itemId": "m1", "delta": "steered"}})
+    emit({"method": "turn/completed", "params": {"turn": {"id": "turn-" + str(turns), "status": "completed"}}})
+elif method == "turn/interrupt":
+    emit({"id": msg["id"], "result": {}})
+    emit({"id": "srv-turn", "method": "item/permissions/requestApproval", "params": PARAMS})
+    emit({"method": "turn/completed", "params": {"turn": {"id": "turn-" + str(turns), "status": "interrupted"}}})
+elif method == "golden/bye":
+    emit({"id": msg["id"], "result": {}})
+    sys.exit(0)
+"#;
+
+    #[tokio::test]
+    async fn codex_rpc_golden_console_worker() {
+        use crate::codex_rpc_golden::{assert_golden, outcome, recorded_lines, write_recording_fake};
+        let temp = tempfile::tempdir().unwrap();
+        let scratch = [temp.path()];
+        let (bin, raw_log) = write_recording_fake(temp.path(), GOLDEN_CONSOLE_FAKE);
+        let mut worker = spawn_initialized_codex_worker(
+            &bin.display().to_string(),
+            Some("never"),
+            Some("read-only"),
+            temp.path(),
+            None,
+            None,
+            None,
+            Duration::from_secs(20),
+        )
+        .await
+        .unwrap();
+        let sink = runtime_sink(None);
+        let mut projection = AppServerProjection::default();
+        let mut steps = Vec::new();
+
+        let result = worker
+            .rpc
+            .request("golden/serverRequests", json!({"a": 1}), &sink, &mut projection)
+            .await;
+        steps.push(json!({"step": "request", "outcome": outcome(&result, &scratch), "seq": worker.rpc.seq}));
+        let result = worker
+            .rpc
+            .request_quiet("golden/quiet", json!({}), &mut projection)
+            .await;
+        steps.push(json!({"step": "request_quiet", "outcome": outcome(&result, &scratch), "seq": worker.rpc.seq}));
+        let result = worker
+            .rpc
+            .request("golden/error", json!({}), &sink, &mut projection)
+            .await;
+        steps.push(json!({"step": "request error", "outcome": outcome(&result, &scratch)}));
+        let result = worker
+            .rpc
+            .request_quiet("golden/error", json!({}), &mut projection)
+            .await;
+        steps.push(json!({"step": "request_quiet error", "outcome": outcome(&result, &scratch)}));
+        let result = worker
+            .rpc
+            .request("golden/noResult", json!({}), &sink, &mut projection)
+            .await;
+        steps.push(json!({"step": "request no result", "outcome": outcome(&result, &scratch)}));
+        let result = worker
+            .rpc
+            .request("golden/unsupported", json!({}), &sink, &mut projection)
+            .await;
+        steps.push(json!({"step": "request unsupported", "outcome": outcome(&result, &scratch)}));
+        let result = worker
+            .rpc
+            .notify("golden/notify", json!({"n": 1}))
+            .await
+            .map(|()| Value::Null);
+        steps.push(json!({"step": "notify", "outcome": outcome(&result, &scratch)}));
+
+        let mut thread_config = config();
+        thread_config.cwd = temp.path().to_path_buf();
+        thread_config.approval_policy = Some("never".to_string());
+        thread_config.sandbox = Some("read-only".to_string());
+        let result =
+            start_app_server_thread(&mut worker.rpc, &sink, &mut projection, &thread_config)
+                .await
+                .map(|(thread, path)| json!({"thread": thread, "path": path}));
+        steps.push(json!({"step": "thread/start", "outcome": outcome(&result, &scratch)}));
+
+        for control in ["steer", "interrupt"] {
+            let run_id = sink.run_id.clone();
+            let starting = ConsoleStartingGuard::new(&run_id);
+            let controller = tokio::spawn(async move {
+                if control == "steer" {
+                    steer_codex_console_turn(&run_id, "steer text").await
+                } else {
+                    interrupt_codex_console_turn(&run_id).await
+                }
+            });
+            let result = run_app_server_turn(
+                &mut worker.rpc,
+                "thr-golden",
+                None,
+                &sink,
+                &format!("prompt for {control}"),
+                &[],
+                Some("gpt-golden"),
+                &mut projection,
+                false,
+                std::time::Instant::now(),
+                None,
+                Some(starting),
+            )
+            .await
+            .map(|()| Value::Null);
+            let control_result = controller
+                .await
+                .unwrap()
+                .map(|()| Value::Null)
+                .map_err(|error| anyhow::anyhow!(error));
+            steps.push(json!({
+                "step": format!("turn with {control}"),
+                "outcome": outcome(&result, &scratch),
+                "control": outcome(&control_result, &scratch),
+            }));
+        }
+
+        let result = worker
+            .rpc
+            .request("golden/badJson", json!({}), &sink, &mut projection)
+            .await;
+        steps.push(json!({"step": "bad json", "outcome": outcome(&result, &scratch)}));
+        let result = worker
+            .rpc
+            .request_quiet("golden/bye", json!({}), &mut projection)
+            .await;
+        steps.push(json!({"step": "bye", "outcome": outcome(&result, &scratch)}));
+        let _ = tokio::time::timeout(Duration::from_secs(5), worker.child.wait()).await;
+        let _ = shutdown_worker_process_group(&mut worker.child, worker.pgid).await;
+
+        assert_golden(
+            "console_worker",
+            &json!({"steps": steps, "wire": recorded_lines(&raw_log, &scratch)}),
+        );
+    }
 }

@@ -12824,4 +12824,246 @@ mod tests {
             );
         }
     }
+
+    fn golden_channel_client() -> (
+        RpcClient,
+        mpsc::UnboundedSender<StreamEvent>,
+        mpsc::UnboundedReceiver<String>,
+    ) {
+        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let client = RpcClient {
+            child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
+        };
+        (client, events_tx, outbound_rx)
+    }
+
+    fn golden_drain(outbound_rx: &mut mpsc::UnboundedReceiver<String>) -> Vec<Value> {
+        let mut lines = Vec::new();
+        while let Ok(line) = outbound_rx.try_recv() {
+            lines.push(Value::String(crate::codex_rpc_golden::normalize_text(
+                &line,
+                &[],
+            )));
+        }
+        lines
+    }
+
+    fn golden_server_requests() -> Vec<Value> {
+        let params = json!({
+            "threadId": "thr_golden",
+            "questions": [
+                {"id": "color", "options": [{"label": "blue"}, {"label": "red"}]},
+                {"id": "free"}
+            ],
+            "permissions": {"network": {"hosts": ["example.com"]}}
+        });
+        [
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+            "item/permissions/requestApproval",
+            "item/tool/requestUserInput",
+            "mcpServer/elicitation/request",
+            "applyPatchApproval",
+            "execCommandApproval",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(index, method)| {
+            json!({"id": format!("srv-{index}"), "method": method, "params": params})
+        })
+        .collect()
+    }
+
+    #[tokio::test]
+    async fn codex_rpc_golden_bridge_requests() {
+        use crate::codex_rpc_golden::{assert_golden, outcome};
+        let mut steps = Vec::new();
+
+        // initialize + initialized
+        let (mut client, events_tx, mut outbound_rx) = golden_channel_client();
+        events_tx
+            .send(StreamEvent::Rpc(json!({"id": 1, "result": {}})))
+            .unwrap();
+        let result = initialize_client(&mut client).await.map(|()| Value::Null);
+        steps.push(json!({"step": "initialize", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
+
+        // success with stderr, a notification and another id interleaved
+        for event in [
+            StreamEvent::Stderr("noise on stderr".to_string()),
+            StreamEvent::Rpc(json!({"method": "thread/status/changed", "params": {}})),
+            StreamEvent::Rpc(json!({"id": 77, "result": {"other": true}})),
+            StreamEvent::Rpc(json!({"id": "text-id", "result": {}})),
+            StreamEvent::Rpc(json!({"id": 2, "result": {"thread": {"id": "thr_golden"}}})),
+        ] {
+            events_tx.send(event).unwrap();
+        }
+        let result = send_request(&mut client, "thread/read", json!({"threadId": "thr_golden"})).await;
+        steps.push(json!({"step": "send_request ok", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
+
+        events_tx
+            .send(StreamEvent::Rpc(json!({"id": 3, "error": {"code": -32000, "message": "boom"}})))
+            .unwrap();
+        let result = send_request(&mut client, "thread/list", json!({})).await;
+        steps.push(json!({"step": "send_request error", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
+
+        events_tx.send(StreamEvent::Rpc(json!({"id": 4}))).unwrap();
+        let result = send_request(&mut client, "thread/list", json!({})).await;
+        steps.push(json!({"step": "send_request missing result", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
+
+        events_tx
+            .send(StreamEvent::Rpc(json!({"id": "srv-x", "method": "item/tool/requestUserInput", "params": {}})))
+            .unwrap();
+        let result = send_request(&mut client, "turn/start", json!({})).await;
+        steps.push(json!({"step": "send_request server request", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
+
+        events_tx
+            .send(StreamEvent::StdoutParseError("bad json".to_string()))
+            .unwrap();
+        let result = send_request(&mut client, "turn/start", json!({})).await;
+        steps.push(json!({"step": "send_request parse error", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
+
+        events_tx
+            .send(StreamEvent::TransportClosed("gone".to_string()))
+            .unwrap();
+        let result = send_request(&mut client, "turn/start", json!({})).await;
+        steps.push(json!({"step": "send_request transport closed", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
+
+        let result = send_notification(&mut client, "custom/notify", json!({"a": 1}))
+            .await
+            .map(|()| Value::Null);
+        steps.push(json!({"step": "send_notification", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
+
+        drop(events_tx);
+        let result = send_request(&mut client, "turn/start", json!({})).await;
+        steps.push(json!({"step": "send_request events closed", "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
+
+        // send_request_with_runtime answers every server request immediately
+        for auto_approve in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let (mut client, events_tx, mut outbound_rx) = golden_channel_client();
+            let mut context = make_test_context(&temp);
+            context.state.thread_id = Some("thr_golden".to_string());
+            context.runtime.thread_id = Some("thr_golden".to_string());
+            let mut config = make_test_run_config(&temp);
+            config.auto_approve = auto_approve;
+            for request in golden_server_requests() {
+                events_tx.send(StreamEvent::Rpc(request)).unwrap();
+            }
+            events_tx
+                .send(StreamEvent::Rpc(json!({"id": 9, "result": {}})))
+                .unwrap();
+            events_tx
+                .send(StreamEvent::Rpc(json!({"id": 1, "result": {"turn": {"id": "turn-golden", "status": "inProgress"}}})))
+                .unwrap();
+            let result = send_request_with_runtime(
+                &mut client,
+                "turn/start",
+                json!({"threadId": "thr_golden", "input": []}),
+                &config,
+                &mut context,
+            )
+            .await;
+            steps.push(json!({"step": format!("with_runtime auto_approve={auto_approve}"), "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
+
+            events_tx
+                .send(StreamEvent::Rpc(json!({"id": "srv-bad", "method": "bogus/request", "params": {}})))
+                .unwrap();
+            let result = send_request_with_runtime(
+                &mut client,
+                "turn/start",
+                json!({}),
+                &config,
+                &mut context,
+            )
+            .await;
+            steps.push(json!({"step": format!("with_runtime unsupported auto_approve={auto_approve}"), "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
+
+            events_tx
+                .send(StreamEvent::Rpc(json!({"id": 3, "error": {"code": 1, "message": "nope"}})))
+                .unwrap();
+            let result = send_request_with_runtime(
+                &mut client,
+                "turn/steer",
+                json!({}),
+                &config,
+                &mut context,
+            )
+            .await;
+            steps.push(json!({"step": format!("with_runtime error auto_approve={auto_approve}"), "outcome": outcome(&result, &[]), "wire": golden_drain(&mut outbound_rx)}));
+        }
+
+        assert_golden("bridge_requests", &Value::Array(steps));
+    }
+
+    #[tokio::test]
+    async fn codex_rpc_golden_bridge_websocket_pump() {
+        use crate::codex_rpc_golden::assert_golden;
+        use tokio_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
+
+        let mut cases = Vec::new();
+        for ending in ["close_frame", "drop"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let first = websocket.next().await.unwrap().unwrap();
+                websocket
+                    .send(Message::Text(r#"{"method":"hello","params":{}}"#.into()))
+                    .await
+                    .unwrap();
+                websocket
+                    .send(Message::Text("not json".into()))
+                    .await
+                    .unwrap();
+                websocket
+                    .send(Message::Binary(vec![1, 2, 3].into()))
+                    .await
+                    .unwrap();
+                if ending == "close_frame" {
+                    websocket
+                        .send(Message::Close(Some(CloseFrame {
+                            code: CloseCode::Normal,
+                            reason: "bye".into(),
+                        })))
+                        .await
+                        .unwrap();
+                }
+                drop(websocket);
+                first.into_text().unwrap().to_string()
+            });
+            let mut client = connect_remote_client(&format!("ws://127.0.0.1:{port}"), "tok")
+                .await
+                .unwrap();
+            send_notification(&mut client, "client/hello", json!({"x": 1}))
+                .await
+                .unwrap();
+            let mut events = Vec::new();
+            loop {
+                let event = tokio::time::timeout(Duration::from_secs(5), recv_event(&mut client))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let done = matches!(event, StreamEvent::TransportClosed(_));
+                events.push(Value::String(format!("{event:?}")));
+                if done {
+                    break;
+                }
+            }
+            let received = server.await.unwrap();
+            cases.push(json!({"ending": ending, "server_received": received, "events": events}));
+        }
+        assert_golden("bridge_websocket_pump", &Value::Array(cases));
+    }
 }

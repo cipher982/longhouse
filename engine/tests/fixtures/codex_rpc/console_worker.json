@@ -1,0 +1,126 @@
+{
+  "steps": [
+    {
+      "outcome": {
+        "ok": {
+          "ok": "golden/serverRequests"
+        }
+      },
+      "seq": 2,
+      "step": "request"
+    },
+    {
+      "outcome": {
+        "ok": {
+          "ok": "golden/quiet"
+        }
+      },
+      "seq": 4,
+      "step": "request_quiet"
+    },
+    {
+      "outcome": {
+        "err": "golden/error failed: {\"code\":-32000,\"message\":\"nope\"}"
+      },
+      "step": "request error"
+    },
+    {
+      "outcome": {
+        "err": "golden/error failed: {\"code\":-32000,\"message\":\"nope\"}"
+      },
+      "step": "request_quiet error"
+    },
+    {
+      "outcome": {
+        "ok": null
+      },
+      "step": "request no result"
+    },
+    {
+      "outcome": {
+        "err": "unsupported Codex app-server request: bogus/request"
+      },
+      "step": "request unsupported"
+    },
+    {
+      "outcome": {
+        "ok": null
+      },
+      "step": "notify"
+    },
+    {
+      "outcome": {
+        "ok": {
+          "path": "/tmp/golden-rollout.jsonl",
+          "thread": "thr-golden"
+        }
+      },
+      "step": "thread/start"
+    },
+    {
+      "control": {
+        "ok": null
+      },
+      "outcome": {
+        "ok": null
+      },
+      "step": "turn with steer"
+    },
+    {
+      "control": {
+        "ok": null
+      },
+      "outcome": {
+        "err": "Codex turn interrupted from Longhouse"
+      },
+      "step": "turn with interrupt"
+    },
+    {
+      "outcome": {
+        "err": "invalid Codex app-server JSON: {not json: key must be a string at line 1 column 2"
+      },
+      "step": "bad json"
+    },
+    {
+      "outcome": {
+        "ok": {}
+      },
+      "step": "bye"
+    }
+  ],
+  "wire": [
+    "{\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"experimentalApi\":true},\"clientInfo\":{\"name\":\"longhouse_console\",\"title\":\"Longhouse Console\",\"version\":\"<version>\"}}}",
+    "{\"id\":900,\"result\":{\"decision\":\"decline\"}}",
+    "{\"method\":\"initialized\",\"params\":{}}",
+    "{\"id\":2,\"method\":\"golden/serverRequests\",\"params\":{\"a\":1}}",
+    "{\"id\":\"srv-0\",\"result\":{\"decision\":\"decline\"}}",
+    "{\"id\":\"srv-1\",\"result\":{\"decision\":\"decline\"}}",
+    "{\"id\":\"srv-2\",\"result\":{\"permissions\":{},\"scope\":\"turn\"}}",
+    "{\"id\":\"srv-3\",\"result\":{\"answers\":{}}}",
+    "{\"id\":\"srv-4\",\"result\":{\"action\":\"decline\",\"content\":null}}",
+    "{\"id\":\"srv-5\",\"result\":{\"decision\":\"Denied\"}}",
+    "{\"id\":\"srv-6\",\"result\":{\"decision\":\"Denied\"}}",
+    "{\"id\":3,\"method\":\"golden/quiet\",\"params\":{}}",
+    "{\"id\":\"srv-0\",\"result\":{\"decision\":\"decline\"}}",
+    "{\"id\":\"srv-1\",\"result\":{\"decision\":\"decline\"}}",
+    "{\"id\":\"srv-2\",\"result\":{\"permissions\":{},\"scope\":\"turn\"}}",
+    "{\"id\":\"srv-3\",\"result\":{\"answers\":{}}}",
+    "{\"id\":\"srv-4\",\"result\":{\"action\":\"decline\",\"content\":null}}",
+    "{\"id\":\"srv-5\",\"result\":{\"decision\":\"Denied\"}}",
+    "{\"id\":\"srv-6\",\"result\":{\"decision\":\"Denied\"}}",
+    "{\"id\":4,\"method\":\"golden/error\",\"params\":{}}",
+    "{\"id\":5,\"method\":\"golden/error\",\"params\":{}}",
+    "{\"id\":6,\"method\":\"golden/noResult\",\"params\":{}}",
+    "{\"id\":7,\"method\":\"golden/unsupported\",\"params\":{}}",
+    "{\"method\":\"golden/notify\",\"params\":{\"n\":1}}",
+    "{\"id\":8,\"method\":\"thread/start\",\"params\":{\"approvalPolicy\":\"never\",\"cwd\":\"<scratch>\",\"sandbox\":\"read-only\"}}",
+    "{\"id\":9,\"method\":\"turn/start\",\"params\":{\"input\":[{\"text\":\"prompt for steer\",\"type\":\"text\"}],\"model\":\"gpt-golden\",\"threadId\":\"thr-golden\"}}",
+    "{\"id\":10,\"method\":\"turn/steer\",\"params\":{\"expectedTurnId\":\"turn-1\",\"input\":[{\"text\":\"steer text\",\"type\":\"text\"}],\"threadId\":\"thr-golden\"}}",
+    "{\"id\":\"srv-turn\",\"result\":{\"answers\":{}}}",
+    "{\"id\":11,\"method\":\"turn/start\",\"params\":{\"input\":[{\"text\":\"prompt for interrupt\",\"type\":\"text\"}],\"model\":\"gpt-golden\",\"threadId\":\"thr-golden\"}}",
+    "{\"id\":12,\"method\":\"turn/interrupt\",\"params\":{\"threadId\":\"thr-golden\",\"turnId\":\"turn-2\"}}",
+    "{\"id\":\"srv-turn\",\"result\":{\"permissions\":{},\"scope\":\"turn\"}}",
+    "{\"id\":13,\"method\":\"golden/badJson\",\"params\":{}}",
+    "{\"id\":14,\"method\":\"golden/bye\",\"params\":{}}"
+  ]
+}

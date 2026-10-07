@@ -1,0 +1,59 @@
+{
+  "server_received": [
+    "{\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"experimentalApi\":true},\"clientInfo\":{\"name\":\"longhouse_canary\",\"title\":\"Longhouse Codex App Server Canary\",\"version\":\"<version>\"}}}",
+    "{\"method\":\"initialized\",\"params\":{}}",
+    "{\"id\":2,\"method\":\"thread/start\",\"params\":{\"approvalPolicy\":\"on-request\",\"cwd\":\"<scratch>/workspace\",\"model\":\"gpt-golden\",\"sandbox\":\"workspace-write\"}}",
+    "{\"id\":3,\"method\":\"turn/start\",\"params\":{\"effort\":\"low\",\"input\":[{\"text\":\"Golden prompt\",\"type\":\"text\"}],\"model\":\"gpt-golden\",\"threadId\":\"thr_ws\"}}",
+    "{\"id\":77,\"result\":{\"decision\":\"decline\"}}"
+  ],
+  "summary": {
+    "app_server_transport": "web_socket",
+    "app_server_ws_url": "ws://<ws>",
+    "assistant_text": "",
+    "codex_bin": "<scratch>/codex",
+    "cwd": "<scratch>/workspace",
+    "effective_codex_home_path": "<scratch>/.codex",
+    "effective_home_path": "<scratch>",
+    "hook_notification_counts": {},
+    "hook_session_id": null,
+    "hook_states": [],
+    "isolated_home": false,
+    "isolated_home_path": null,
+    "item_completed_counts": {},
+    "item_started_counts": {},
+    "log_jsonl": null,
+    "received_notifications": {
+      "turn/completed": 1
+    },
+    "remote_tui_alive_after_grace": null,
+    "remote_tui_alive_before_shutdown": null,
+    "remote_tui_log": null,
+    "remote_tui_spawned": false,
+    "remote_tui_stderr_lines": [],
+    "remote_tui_subscribe_phase": "postturn",
+    "response_errors": [],
+    "sandbox": "workspace-write",
+    "sent_requests": {
+      "initialize": 1,
+      "thread/start": 1,
+      "turn/start": 1
+    },
+    "server_request_counts": {
+      "item/fileChange/requestApproval": 1
+    },
+    "session_source": "longhouse-test",
+    "stderr_lines": [
+      "  listening on: ws://<ws>"
+    ],
+    "thread_active_flag_counts": {},
+    "thread_id": "thr_ws",
+    "thread_list_contains_thread": null,
+    "thread_list_count": null,
+    "thread_path": null,
+    "thread_path_exists": false,
+    "thread_path_within_home": false,
+    "thread_read_turn_count": null,
+    "turn_id": "turn_ws",
+    "turn_status": "completed"
+  }
+}

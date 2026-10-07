@@ -17,6 +17,8 @@ mod codex_exec;
 mod codex_source;
 mod codex_teardown;
 mod codex_ws_relay;
+#[cfg(test)]
+mod codex_rpc_golden;
 mod commands;
 mod config;
 mod console_adapter;

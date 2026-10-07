@@ -1,0 +1,1232 @@
+[
+  {
+    "auto_approve": false,
+    "log": [
+      {
+        "direction": "meta",
+        "text": "spawned <scratch>/codex app-server"
+      },
+      {
+        "direction": "client_request",
+        "payload": {
+          "id": 1,
+          "method": "initialize",
+          "params": {
+            "capabilities": {
+              "experimentalApi": true
+            },
+            "clientInfo": {
+              "name": "longhouse_canary",
+              "title": "Longhouse Codex App Server Canary",
+              "version": "<version>"
+            }
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 1,
+          "result": {
+            "userAgent": "fake/1.0"
+          }
+        }
+      },
+      {
+        "direction": "client_notification",
+        "payload": {
+          "method": "initialized",
+          "params": {}
+        }
+      },
+      {
+        "direction": "client_request",
+        "payload": {
+          "id": 2,
+          "method": "thread/start",
+          "params": {
+            "approvalPolicy": "on-request",
+            "cwd": "<scratch>/workspace",
+            "model": "gpt-golden",
+            "sandbox": "workspace-write"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "method": "thread/started",
+          "params": {
+            "thread": {
+              "id": "thr_golden"
+            }
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 2,
+          "result": {
+            "thread": {
+              "id": "thr_golden"
+            }
+          }
+        }
+      },
+      {
+        "direction": "client_request",
+        "payload": {
+          "id": 3,
+          "method": "turn/start",
+          "params": {
+            "effort": "low",
+            "input": [
+              {
+                "text": "Golden prompt",
+                "type": "text"
+              }
+            ],
+            "model": "gpt-golden",
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 3,
+          "result": {
+            "turn": {
+              "id": "turn_golden",
+              "items": [],
+              "status": "inProgress"
+            }
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "method": "turn/started",
+          "params": {
+            "threadId": "thr_golden",
+            "turn": {
+              "id": "turn_golden",
+              "items": [],
+              "status": "inProgress"
+            }
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 500,
+          "method": "item/commandExecution/requestApproval",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 500,
+          "result": {
+            "decision": "decline"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 501,
+          "method": "item/fileChange/requestApproval",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 501,
+          "result": {
+            "decision": "decline"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 502,
+          "method": "item/permissions/requestApproval",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 502,
+          "result": {
+            "permissions": {},
+            "scope": "turn"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 503,
+          "method": "item/tool/requestUserInput",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 503,
+          "result": {
+            "answers": {
+              "color": {
+                "answers": []
+              },
+              "free": {
+                "answers": []
+              }
+            }
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 504,
+          "method": "mcpServer/elicitation/request",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 504,
+          "result": {
+            "action": "decline",
+            "content": null
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 505,
+          "method": "applyPatchApproval",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 505,
+          "result": {
+            "decision": "Denied"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 506,
+          "method": "execCommandApproval",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 506,
+          "result": {
+            "decision": "Denied"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "error": {
+            "code": 7,
+            "message": "stray"
+          },
+          "id": 4242
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "id": "m1",
+              "type": "assistantMessage"
+            },
+            "threadId": "thr_golden",
+            "turnId": "turn_golden"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "method": "item/agentMessage/delta",
+          "params": {
+            "delta": "GOLD",
+            "itemId": "m1",
+            "threadId": "thr_golden",
+            "turnId": "turn_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_request",
+        "payload": {
+          "id": 4,
+          "method": "turn/steer",
+          "params": {
+            "expectedTurnId": "turn_golden",
+            "input": [
+              {
+                "text": "golden steer",
+                "type": "text"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 4,
+          "result": {}
+        }
+      },
+      {
+        "direction": "client_request",
+        "payload": {
+          "id": 5,
+          "method": "turn/interrupt",
+          "params": {
+            "threadId": "thr_golden",
+            "turnId": "turn_golden"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 5,
+          "result": {}
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "thr_golden",
+            "turn": {
+              "id": "turn_golden",
+              "items": [],
+              "status": "interrupted"
+            }
+          }
+        }
+      },
+      {
+        "direction": "client_request",
+        "payload": {
+          "id": 6,
+          "method": "thread/list",
+          "params": {
+            "cwd": "<scratch>/workspace",
+            "limit": 50,
+            "sourceKinds": [
+              "appServer",
+              "cli",
+              "vscode",
+              "unknown"
+            ]
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 6,
+          "result": {
+            "data": [
+              {
+                "id": "thr_golden"
+              }
+            ],
+            "hasMore": false
+          }
+        }
+      }
+    ],
+    "summary": {
+      "app_server_transport": "stdio",
+      "app_server_ws_url": null,
+      "assistant_text": "GOLD",
+      "codex_bin": "<scratch>/codex",
+      "cwd": "<scratch>/workspace",
+      "effective_codex_home_path": "<scratch>/.codex",
+      "effective_home_path": "<scratch>",
+      "hook_notification_counts": {},
+      "hook_session_id": null,
+      "hook_states": [],
+      "isolated_home": false,
+      "isolated_home_path": null,
+      "item_completed_counts": {},
+      "item_started_counts": {
+        "assistantMessage": 1
+      },
+      "log_jsonl": "<scratch>/canary.jsonl",
+      "received_notifications": {
+        "item/agentMessage/delta": 1,
+        "item/started": 1,
+        "thread/started": 1,
+        "turn/completed": 1,
+        "turn/started": 1
+      },
+      "remote_tui_alive_after_grace": null,
+      "remote_tui_alive_before_shutdown": null,
+      "remote_tui_log": null,
+      "remote_tui_spawned": false,
+      "remote_tui_stderr_lines": [],
+      "remote_tui_subscribe_phase": "postturn",
+      "response_errors": [
+        "request#4242 failed: {\"code\":7,\"message\":\"stray\"}"
+      ],
+      "sandbox": "workspace-write",
+      "sent_requests": {
+        "initialize": 1,
+        "thread/list": 1,
+        "thread/start": 1,
+        "turn/interrupt": 1,
+        "turn/start": 1,
+        "turn/steer": 1
+      },
+      "server_request_counts": {
+        "applyPatchApproval": 1,
+        "execCommandApproval": 1,
+        "item/commandExecution/requestApproval": 1,
+        "item/fileChange/requestApproval": 1,
+        "item/permissions/requestApproval": 1,
+        "item/tool/requestUserInput": 1,
+        "mcpServer/elicitation/request": 1
+      },
+      "session_source": "longhouse-test",
+      "stderr_lines": [
+        "fake app-server ready"
+      ],
+      "thread_active_flag_counts": {},
+      "thread_id": "thr_golden",
+      "thread_list_contains_thread": true,
+      "thread_list_count": 1,
+      "thread_path": null,
+      "thread_path_exists": false,
+      "thread_path_within_home": false,
+      "thread_read_turn_count": null,
+      "turn_id": "turn_golden",
+      "turn_status": "interrupted"
+    },
+    "wire": [
+      "{\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"experimentalApi\":true},\"clientInfo\":{\"name\":\"longhouse_canary\",\"title\":\"Longhouse Codex App Server Canary\",\"version\":\"<version>\"}}}",
+      "{\"method\":\"initialized\",\"params\":{}}",
+      "{\"id\":2,\"method\":\"thread/start\",\"params\":{\"approvalPolicy\":\"on-request\",\"cwd\":\"<scratch>/workspace\",\"model\":\"gpt-golden\",\"sandbox\":\"workspace-write\"}}",
+      "{\"id\":3,\"method\":\"turn/start\",\"params\":{\"effort\":\"low\",\"input\":[{\"text\":\"Golden prompt\",\"type\":\"text\"}],\"model\":\"gpt-golden\",\"threadId\":\"thr_golden\"}}",
+      "{\"id\":500,\"result\":{\"decision\":\"decline\"}}",
+      "{\"id\":501,\"result\":{\"decision\":\"decline\"}}",
+      "{\"id\":502,\"result\":{\"permissions\":{},\"scope\":\"turn\"}}",
+      "{\"id\":503,\"result\":{\"answers\":{\"color\":{\"answers\":[]},\"free\":{\"answers\":[]}}}}",
+      "{\"id\":504,\"result\":{\"action\":\"decline\",\"content\":null}}",
+      "{\"id\":505,\"result\":{\"decision\":\"Denied\"}}",
+      "{\"id\":506,\"result\":{\"decision\":\"Denied\"}}",
+      "{\"id\":4,\"method\":\"turn/steer\",\"params\":{\"expectedTurnId\":\"turn_golden\",\"input\":[{\"text\":\"golden steer\",\"type\":\"text\"}],\"threadId\":\"thr_golden\"}}",
+      "{\"id\":5,\"method\":\"turn/interrupt\",\"params\":{\"threadId\":\"thr_golden\",\"turnId\":\"turn_golden\"}}",
+      "{\"id\":6,\"method\":\"thread/list\",\"params\":{\"cwd\":\"<scratch>/workspace\",\"limit\":50,\"sourceKinds\":[\"appServer\",\"cli\",\"vscode\",\"unknown\"]}}"
+    ]
+  },
+  {
+    "auto_approve": true,
+    "log": [
+      {
+        "direction": "meta",
+        "text": "spawned <scratch>/codex app-server"
+      },
+      {
+        "direction": "client_request",
+        "payload": {
+          "id": 1,
+          "method": "initialize",
+          "params": {
+            "capabilities": {
+              "experimentalApi": true
+            },
+            "clientInfo": {
+              "name": "longhouse_canary",
+              "title": "Longhouse Codex App Server Canary",
+              "version": "<version>"
+            }
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 1,
+          "result": {
+            "userAgent": "fake/1.0"
+          }
+        }
+      },
+      {
+        "direction": "client_notification",
+        "payload": {
+          "method": "initialized",
+          "params": {}
+        }
+      },
+      {
+        "direction": "client_request",
+        "payload": {
+          "id": 2,
+          "method": "thread/start",
+          "params": {
+            "approvalPolicy": "on-request",
+            "cwd": "<scratch>/workspace",
+            "model": "gpt-golden",
+            "sandbox": "workspace-write"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "method": "thread/started",
+          "params": {
+            "thread": {
+              "id": "thr_golden"
+            }
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 2,
+          "result": {
+            "thread": {
+              "id": "thr_golden"
+            }
+          }
+        }
+      },
+      {
+        "direction": "client_request",
+        "payload": {
+          "id": 3,
+          "method": "turn/start",
+          "params": {
+            "effort": "low",
+            "input": [
+              {
+                "text": "Golden prompt",
+                "type": "text"
+              }
+            ],
+            "model": "gpt-golden",
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 3,
+          "result": {
+            "turn": {
+              "id": "turn_golden",
+              "items": [],
+              "status": "inProgress"
+            }
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "method": "turn/started",
+          "params": {
+            "threadId": "thr_golden",
+            "turn": {
+              "id": "turn_golden",
+              "items": [],
+              "status": "inProgress"
+            }
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 500,
+          "method": "item/commandExecution/requestApproval",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 500,
+          "result": {
+            "decision": "accept"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 501,
+          "method": "item/fileChange/requestApproval",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 501,
+          "result": {
+            "decision": "accept"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 502,
+          "method": "item/permissions/requestApproval",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 502,
+          "result": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "scope": "turn"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 503,
+          "method": "item/tool/requestUserInput",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 503,
+          "result": {
+            "answers": {
+              "color": {
+                "answers": [
+                  "blue"
+                ]
+              },
+              "free": {
+                "answers": [
+                  "canary"
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 504,
+          "method": "mcpServer/elicitation/request",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 504,
+          "result": {
+            "action": "decline",
+            "content": null
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 505,
+          "method": "applyPatchApproval",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 505,
+          "result": {
+            "decision": "Approved"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 506,
+          "method": "execCommandApproval",
+          "params": {
+            "permissions": {
+              "network": {
+                "hosts": [
+                  "example.com"
+                ]
+              }
+            },
+            "questions": [
+              {
+                "id": "color",
+                "options": [
+                  {
+                    "label": "blue"
+                  }
+                ]
+              },
+              {
+                "id": "free"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_response",
+        "payload": {
+          "id": 506,
+          "result": {
+            "decision": "Approved"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "error": {
+            "code": 7,
+            "message": "stray"
+          },
+          "id": 4242
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "id": "m1",
+              "type": "assistantMessage"
+            },
+            "threadId": "thr_golden",
+            "turnId": "turn_golden"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "method": "item/agentMessage/delta",
+          "params": {
+            "delta": "GOLD",
+            "itemId": "m1",
+            "threadId": "thr_golden",
+            "turnId": "turn_golden"
+          }
+        }
+      },
+      {
+        "direction": "client_request",
+        "payload": {
+          "id": 4,
+          "method": "turn/steer",
+          "params": {
+            "expectedTurnId": "turn_golden",
+            "input": [
+              {
+                "text": "golden steer",
+                "type": "text"
+              }
+            ],
+            "threadId": "thr_golden"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 4,
+          "result": {}
+        }
+      },
+      {
+        "direction": "client_request",
+        "payload": {
+          "id": 5,
+          "method": "turn/interrupt",
+          "params": {
+            "threadId": "thr_golden",
+            "turnId": "turn_golden"
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 5,
+          "result": {}
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "thr_golden",
+            "turn": {
+              "id": "turn_golden",
+              "items": [],
+              "status": "interrupted"
+            }
+          }
+        }
+      },
+      {
+        "direction": "client_request",
+        "payload": {
+          "id": 6,
+          "method": "thread/list",
+          "params": {
+            "cwd": "<scratch>/workspace",
+            "limit": 50,
+            "sourceKinds": [
+              "appServer",
+              "cli",
+              "vscode",
+              "unknown"
+            ]
+          }
+        }
+      },
+      {
+        "direction": "server_message",
+        "payload": {
+          "id": 6,
+          "result": {
+            "data": [
+              {
+                "id": "thr_golden"
+              }
+            ],
+            "hasMore": false
+          }
+        }
+      }
+    ],
+    "summary": {
+      "app_server_transport": "stdio",
+      "app_server_ws_url": null,
+      "assistant_text": "GOLD",
+      "codex_bin": "<scratch>/codex",
+      "cwd": "<scratch>/workspace",
+      "effective_codex_home_path": "<scratch>/.codex",
+      "effective_home_path": "<scratch>",
+      "hook_notification_counts": {},
+      "hook_session_id": null,
+      "hook_states": [],
+      "isolated_home": false,
+      "isolated_home_path": null,
+      "item_completed_counts": {},
+      "item_started_counts": {
+        "assistantMessage": 1
+      },
+      "log_jsonl": "<scratch>/canary.jsonl",
+      "received_notifications": {
+        "item/agentMessage/delta": 1,
+        "item/started": 1,
+        "thread/started": 1,
+        "turn/completed": 1,
+        "turn/started": 1
+      },
+      "remote_tui_alive_after_grace": null,
+      "remote_tui_alive_before_shutdown": null,
+      "remote_tui_log": null,
+      "remote_tui_spawned": false,
+      "remote_tui_stderr_lines": [],
+      "remote_tui_subscribe_phase": "postturn",
+      "response_errors": [
+        "request#4242 failed: {\"code\":7,\"message\":\"stray\"}"
+      ],
+      "sandbox": "workspace-write",
+      "sent_requests": {
+        "initialize": 1,
+        "thread/list": 1,
+        "thread/start": 1,
+        "turn/interrupt": 1,
+        "turn/start": 1,
+        "turn/steer": 1
+      },
+      "server_request_counts": {
+        "applyPatchApproval": 1,
+        "execCommandApproval": 1,
+        "item/commandExecution/requestApproval": 1,
+        "item/fileChange/requestApproval": 1,
+        "item/permissions/requestApproval": 1,
+        "item/tool/requestUserInput": 1,
+        "mcpServer/elicitation/request": 1
+      },
+      "session_source": "longhouse-test",
+      "stderr_lines": [
+        "fake app-server ready"
+      ],
+      "thread_active_flag_counts": {},
+      "thread_id": "thr_golden",
+      "thread_list_contains_thread": true,
+      "thread_list_count": 1,
+      "thread_path": null,
+      "thread_path_exists": false,
+      "thread_path_within_home": false,
+      "thread_read_turn_count": null,
+      "turn_id": "turn_golden",
+      "turn_status": "interrupted"
+    },
+    "wire": [
+      "{\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"experimentalApi\":true},\"clientInfo\":{\"name\":\"longhouse_canary\",\"title\":\"Longhouse Codex App Server Canary\",\"version\":\"<version>\"}}}",
+      "{\"method\":\"initialized\",\"params\":{}}",
+      "{\"id\":2,\"method\":\"thread/start\",\"params\":{\"approvalPolicy\":\"on-request\",\"cwd\":\"<scratch>/workspace\",\"model\":\"gpt-golden\",\"sandbox\":\"workspace-write\"}}",
+      "{\"id\":3,\"method\":\"turn/start\",\"params\":{\"effort\":\"low\",\"input\":[{\"text\":\"Golden prompt\",\"type\":\"text\"}],\"model\":\"gpt-golden\",\"threadId\":\"thr_golden\"}}",
+      "{\"id\":500,\"result\":{\"decision\":\"accept\"}}",
+      "{\"id\":501,\"result\":{\"decision\":\"accept\"}}",
+      "{\"id\":502,\"result\":{\"permissions\":{\"network\":{\"hosts\":[\"example.com\"]}},\"scope\":\"turn\"}}",
+      "{\"id\":503,\"result\":{\"answers\":{\"color\":{\"answers\":[\"blue\"]},\"free\":{\"answers\":[\"canary\"]}}}}",
+      "{\"id\":504,\"result\":{\"action\":\"decline\",\"content\":null}}",
+      "{\"id\":505,\"result\":{\"decision\":\"Approved\"}}",
+      "{\"id\":506,\"result\":{\"decision\":\"Approved\"}}",
+      "{\"id\":4,\"method\":\"turn/steer\",\"params\":{\"expectedTurnId\":\"turn_golden\",\"input\":[{\"text\":\"golden steer\",\"type\":\"text\"}],\"threadId\":\"thr_golden\"}}",
+      "{\"id\":5,\"method\":\"turn/interrupt\",\"params\":{\"threadId\":\"thr_golden\",\"turnId\":\"turn_golden\"}}",
+      "{\"id\":6,\"method\":\"thread/list\",\"params\":{\"cwd\":\"<scratch>/workspace\",\"limit\":50,\"sourceKinds\":[\"appServer\",\"cli\",\"vscode\",\"unknown\"]}}"
+    ]
+  }
+]
