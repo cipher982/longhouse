@@ -7,9 +7,8 @@ does NOT launch a managed OpenCode session, send a marker, or poll transcript
 ship. The launch->ship->assert orchestration canary is a separate, heavier
 follow-up that needs a managed provider runtime on the QA box.
 
-The load-bearing regression guard for convergence is the hermetic test
-(server/tests_lite/test_provider_binding_convergence.py). This audit is
-release/dogfood proof layered on top of it.
+It is release/dogfood proof; the hermetic convergence test it once sat on top
+of went with the unused server convergence module (ed3368403).
 
 It is GATED and honest about coverage:
   - No api_url / token, or instance unreachable -> SKIP (exit 0).
