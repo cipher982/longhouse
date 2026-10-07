@@ -1,0 +1,2322 @@
+{
+ "auth.device.create.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.device.create.v2 requires owner_id, token_id, device_id, and token_hash",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.device.create.v2 requires owner_id, token_id, device_id, and token_hash",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.device.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.device.list.v2 requires owner_id and include_revoked",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.device.list.v2 requires owner_id and include_revoked",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.device.resolve.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.device.resolve.v2 requires token_hash, touch_last_used, and touch_interval_seconds",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.device.resolve.v2 requires token_hash, touch_last_used, and touch_interval_seconds",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.device.revoke.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.device.revoke.v2 requires owner_id and token_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.device.revoke.v2 requires owner_id and token_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.device.validate.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.device.validate.v2 requires token_hash",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.device.validate.v2 requires token_hash",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.owner.get.v2": {
+  "empty": {
+   "ok": true
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.owner.get.v2 accepts no parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.refresh.create.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.refresh.create.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.refresh.create.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.refresh.revoke_family.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.refresh.revoke_family.v2 requires token_hash and now",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.refresh.revoke_family.v2 requires token_hash and now",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.refresh.rotate.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.refresh.rotate.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.refresh.rotate.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.single_tenant.ensure.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.single_tenant.ensure.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.single_tenant.ensure.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.user.get.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.user.get.v2 requires user_id and touch_last_login",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.user.get.v2 requires user_id and touch_last_login",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.user.get_cp.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.user.get_cp.v2 requires cp_user_id, email, email_verified, display_name, and avatar_url",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.user.get_cp.v2 requires cp_user_id, email, email_verified, display_name, and avatar_url",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.user.resolve_cp.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.user.resolve_cp.v2 requires cp_user_id, email, email_verified, display_name, and avatar_url",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.user.resolve_cp.v2 requires cp_user_id, email, email_verified, display_name, and avatar_url",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.user.resolve_local.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.user.resolve_local.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.user.resolve_local.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "auth.user.update.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.user.update.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "auth.user.update.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "backup.snapshot.create.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "backup.snapshot.create.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "backup.snapshot.create.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "catalogd.device.automation.set.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "catalogd.device.automation.set.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "catalogd.device.automation.set.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "catalogd.session.reclassify_origin.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "catalogd.session.reclassify_origin.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "catalogd.session.reclassify_origin.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "catalogd.session.reconcile_visibility.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "catalogd.session.reconcile_visibility.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "catalogd.session.reconcile_visibility.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "catalogd.session.reconcile_visibility_all.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "catalogd.session.reconcile_visibility_all.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "catalogd.session.reconcile_visibility_all.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "control.command.prepare.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "control.command.prepare.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "control.command.prepare.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "control.command_result.apply.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "control.command_result.apply.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "control.command_result.apply.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "control.operation.finish.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "control.operation.finish.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "control.operation.finish.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "deployment.read_consistency.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "deployment.read_consistency.v2 requires observed_at",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "deployment.read_consistency.v2 requires observed_at",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "directed_input.create.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "directed_input.create.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "directed_input.create.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "directed_input.link_receipt.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "directed_input.link_receipt.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "directed_input.link_receipt.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "directed_input.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "directed_input.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "directed_input.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "directed_input.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "directed_input.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "directed_input.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "interaction.decision.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction.decision.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction.decision.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "interaction.expire_due.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction.expire_due.v2 requires now and optional session_id, dry_run",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction.expire_due.v2 requires now and optional session_id, dry_run",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "interaction.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "interaction.register.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction.register.v2 requires interaction",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction.register.v2 requires interaction",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "interaction.repair.expire.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction.repair.expire.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction.repair.expire.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "interaction.resolve.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction.resolve.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "interaction.resolve.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "machine.activity.summary.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.activity.summary.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.activity.summary.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "machine.enrollment.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.enrollment.list.v2 requires owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.enrollment.list.v2 requires owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "machine.enrollment.rename.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.enrollment.rename.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.enrollment.rename.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "machine.health.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.health.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.health.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "machine.heartbeat.apply.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.heartbeat.apply.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.heartbeat.apply.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "machine.models.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.models.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.models.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "machine.presence.policy.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.presence.policy.v2 requires owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.presence.policy.v2 requires owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "machine.presence.upsert.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.presence.upsert.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.presence.upsert.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "machine.workspace.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.workspace.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "machine.workspace.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "migration.gaps.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.gaps.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.gaps.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "migration.render.repair.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.render.repair.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.render.repair.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "migration.run.create.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.run.create.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.run.create.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "migration.run.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.run.read.v2 requires run_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.run.read.v2 requires run_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "migration.run.reconcile.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.run.reconcile.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.run.reconcile.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "migration.run.summary.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.run.summary.v2 requires run_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.run.summary.v2 requires run_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "migration.session.claim.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.session.claim.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.session.claim.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "migration.session.complete.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.session.complete.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.session.complete.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "migration.session.fail.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.session.fail.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.session.fail.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "migration.session.register.batch.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.session.register.batch.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "migration.session.register.batch.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "nonexistent.method.v2": {
+  "empty": {
+   "code": "unknown_method",
+   "details": {},
+   "message": "unknown catalog method: nonexistent.method.v2",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "catalog metadata methods accept empty params",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "notification.apns.device.upsert.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "notification.apns.device.upsert.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "notification.apns.device.upsert.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "notification.apns.live_activity.end.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "notification.apns.live_activity.end.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "notification.apns.live_activity.end.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "notification.apns.live_activity.upsert.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "notification.apns.live_activity.upsert.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "notification.apns.live_activity.upsert.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "notification.presence.upsert.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "notification.presence.upsert.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "notification.presence.upsert.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "notification.presence.visible.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "notification.presence.visible.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "notification.presence.visible.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "ping.v2": {
+  "empty": {
+   "ok": true
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "catalog metadata methods accept empty params",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "projector.coverage.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.coverage.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.coverage.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "projector.state.advance.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.state.advance.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.state.advance.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "projector.state.claim.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.state.claim.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.state.claim.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "projector.state.complete.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.state.complete.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.state.complete.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "projector.state.fail.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.state.fail.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.state.fail.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "projector.state.list_lag.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.state.list_lag.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.state.list_lag.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "projector.state.requeue.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.state.requeue.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.state.requeue.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "projector.store.bind.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.store.bind.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "projector.store.bind.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "runner.operation.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "runner.operation.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "runner.operation.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "schema.v2": {
+  "empty": {
+   "ok": true
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "catalog metadata methods accept empty params",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.active.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.active.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.active.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.alias.resolve.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.alias.resolve.v2 requires provider_session_id and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.alias.resolve.v2 requires provider_session_id and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.branch.create.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.branch.create.v2 requires branch",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.branch.create.v2 requires branch",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.console.create.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.console.create.v2 requires session",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.console.create.v2 requires session",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.console.turn.current.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.console.turn.current.v2 requires session_id and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.console.turn.current.v2 requires session_id and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.console.turn.enqueue.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.console.turn.enqueue.v2 requires turn",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.console.turn.enqueue.v2 requires turn",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.console.turn.starting_for_device.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.console.turn.starting_for_device.v2 requires owner_id and device_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.console.turn.starting_for_device.v2 requires owner_id and device_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.console.turn.update.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.console.turn.update.v2 requires turn",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.console.turn.update.v2 requires turn",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.activity.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.activity.read.v2 requires session_id and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.activity.read.v2 requires session_id and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.attachment.create.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.attachment.create.v2 requires attachment and allow_unbound",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.attachment.create.v2 requires attachment and allow_unbound",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.attachment.delete.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.attachment.delete.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.attachment.delete.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.attachment.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.attachment.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.attachment.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.cancel.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.cancel.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.cancel.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.claim.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.claim.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.claim.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.finish.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.finish.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.finish.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.link_events.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.link_events.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.link_events.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.queued.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.queued.list.v2 requires limit",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.queued.list.v2 requires limit",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.receipt.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.receipt.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.receipt.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.receipt.upsert.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.receipt.upsert.v2 requires receipt",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.receipt.upsert.v2 requires receipt",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.receipts.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.receipts.list.v2 requires a canonical session_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.receipts.list.v2 requires a canonical session_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.input.recent.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.recent.list.v2 requires a canonical session_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.recent.list.v2 requires a canonical session_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.launch.local.create.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.launch.local.create.v2 requires launch",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.launch.local.create.v2 requires launch",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.launch.local.finish.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.launch.local.finish.v2 requires outcome",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.launch.local.finish.v2 requires outcome",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.launch.local.resume.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.launch.local.resume.v2 requires resume",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.launch.local.resume.v2 requires resume",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.preferences.update.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.preferences.update.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.preferences.update.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.prefix.resolve.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.prefix.resolve.v2 requires prefix and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.prefix.resolve.v2 requires prefix and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.provider_facts.insert.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.provider_facts.insert.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.provider_facts.insert.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.provider_facts.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.provider_facts.list.v2 requires a canonical session_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.provider_facts.list.v2 requires a canonical session_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.read.batch.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.read.batch.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.read.batch.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.read.v2 requires session_id and optional owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.read.v2 requires session_id and optional owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.repair.codex_launch_visibility.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.repair.codex_launch_visibility.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.repair.codex_launch_visibility.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.runtime.apply.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.runtime.apply.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.runtime.apply.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.shadow_state.health.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.shadow_state.health.v2 requires owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.shadow_state.health.v2 requires owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.shadow_state.read.batch.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.shadow_state.read.batch.v2 requires session_ids and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.shadow_state.read.batch.v2 requires session_ids and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.shadow_state.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.shadow_state.read.v2 requires session_id and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.shadow_state.read.v2 requires session_id and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.subagents.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.subagents.list.v2 requires session_id and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.subagents.list.v2 requires session_id and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.timeline.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.timeline.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.timeline.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "session.titles.search.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.titles.search.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.titles.search.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.cursor.activity.repair.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.cursor.activity.repair.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.cursor.activity.repair.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.health.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.health.v2 requires owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.health.v2 requires owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.media.commit.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.media.commit.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.media.commit.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.media.exists.batch.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.media.exists.batch.v2 requires media_hashes and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.media.exists.batch.v2 requires media_hashes and owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.media.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.media.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.media.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.raw_object.commit.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.raw_object.commit.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.raw_object.commit.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.raw_object.exists.batch.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.raw_object.exists.batch.v2 requires envelope_ids",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.raw_object.exists.batch.v2 requires envelope_ids",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.canary.lookup.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.canary.lookup.v2 requires observed_at and max_age_seconds",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.canary.lookup.v2 requires observed_at and max_age_seconds",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.delete.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.delete.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.delete.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.owned.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.owned.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.owned.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.projector.raw_manifest.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.projector.raw_manifest.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.projector.raw_manifest.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.projector.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.projector.read.v2 requires session_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.projector.read.v2 requires session_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.purge_manifest.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.purge_manifest.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.purge_manifest.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.raw_manifest.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.raw_manifest.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.raw_manifest.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.raw_neighborhood.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.raw_neighborhood.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.raw_neighborhood.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.read.v2 requires session_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.read.v2 requires session_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.relinked_legacy.reconcile.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.relinked_legacy.reconcile.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.relinked_legacy.reconcile.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.render_generation.restore.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.render_generation.restore.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.render_generation.restore.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.render_manifest.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.render_manifest.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.render_manifest.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.render_objects.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.render_objects.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.render_objects.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.semantic_projection.repair.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.semantic_projection.repair.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.semantic_projection.repair.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.timeline.list.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.timeline.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.timeline.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.title.candidates.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title candidates require limit from 1 through 100",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title candidates require limit from 1 through 100",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.title.complete.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title completion has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title completion has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.title.dependency.acquire.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title dependency acquire has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title dependency acquire has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.title.dependency.fail.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title dependency failure has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title dependency failure has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.title.dependency.health.v2": {
+  "empty": {
+   "ok": true
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title dependency health takes no parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.title.dependency.reconcile.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title dependency reconcile has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title dependency reconcile has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.title.dependency.recover.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title dependency recovery has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title dependency recovery has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.title.fail.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title failure has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "title failure has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.source_epoch.manifest.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.source_epoch.manifest.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.source_epoch.manifest.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.source_epoch.open.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.source_epoch.open.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.source_epoch.open.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.telemetry.summary.v2": {
+  "empty": {
+   "ok": true
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.telemetry.summary.v2 takes no parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "tenant.funnel.facts.read.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "tenant.funnel.facts.read.v2 requires a numeric owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "tenant.funnel.facts.read.v2 requires a numeric owner_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "test.user_data.reset.v2": {
+  "empty": {
+   "code": "unknown_method",
+   "details": {},
+   "message": "unknown catalog method: test.user_data.reset.v2",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "catalog metadata methods accept empty params",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "writer.admission.activation.read.v2": {
+  "empty": {
+   "ok": true
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "activation read accepts no parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "writer.admission.activation.record.v2": {
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "activation record requires image_digest and generation",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "activation record requires image_digest and generation",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "writer.admission.close.v2": {
+  "empty": {
+   "ok": true
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "writer.admission.close.v2 accepts no parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "writer.admission.open.v2": {
+  "empty": {
+   "ok": true
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "writer.admission.open.v2 accepts no parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ }
+}
