@@ -44,6 +44,7 @@ mod error_tracker;
 mod fault_injection;
 mod flight;
 mod heartbeat;
+mod helm_control;
 mod hook_outbox;
 mod host_link;
 mod import_scope;
