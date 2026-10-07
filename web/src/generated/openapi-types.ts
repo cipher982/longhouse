@@ -4077,7 +4077,7 @@ export interface components {
              * @default codex
              * @enum {string}
              */
-            provider: "claude" | "codex" | "cursor" | "opencode" | "antigravity" | "pi";
+            provider: "codex" | "claude" | "opencode" | "antigravity" | "cursor" | "pi" | "omp";
             /**
              * Project
              * @default e2e

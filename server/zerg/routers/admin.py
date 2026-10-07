@@ -18,6 +18,7 @@ from zerg.config import get_settings
 # Auth dependency
 from zerg.dependencies.auth import get_current_user
 from zerg.dependencies.auth import require_admin
+from zerg.generated.provider_brands import ManagedProviderId
 
 router = APIRouter(
     prefix="/admin",
@@ -96,7 +97,7 @@ async def reset_database():
 class ConfigureTestSessionRuntimeRequest(BaseModel):
     """Test-only session runtime override for Playwright coverage."""
 
-    provider: Literal["claude", "codex", "cursor", "opencode", "antigravity", "pi"] = "codex"
+    provider: ManagedProviderId = "codex"
     project: str = "e2e"
     cwd: str = "/tmp"
     execution_home: Literal["managed_local"] = "managed_local"

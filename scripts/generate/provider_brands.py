@@ -37,6 +37,7 @@ def merge_managed_provider_identity(brands: dict, contracts: dict) -> dict:
     merged = {
         **brands,
         "providers": {provider: dict(identity) for provider, identity in brands["providers"].items()},
+        "managed_provider_ids": [str(contract["provider"]) for contract in contracts["providers"]],
     }
     for contract in contracts["providers"]:
         provider = str(contract["provider"])
@@ -364,8 +365,19 @@ def render_python(data: dict) -> str:
         names[key] = provider["display_name"]
         for alias in provider["aliases"]:
             names[alias] = provider["alias_display_names"].get(alias, provider["display_name"])
+    managed_ids = data["managed_provider_ids"]
+    managed_literal = ", ".join(json.dumps(provider) for provider in managed_ids)
     return f'''# @generated from schemas/managed_providers.yml and config/provider-brands.json — do not edit by hand.
 # Run: python3 scripts/generate/provider_brands.py
+
+from typing import Literal
+from typing import get_args
+
+# Every managed provider, in contract order. Request models type their
+# provider field with ManagedProviderId so a new provider is accepted
+# everywhere at once instead of per hand-written Literal.
+ManagedProviderId = Literal[{managed_literal}]
+MANAGED_PROVIDER_IDS: tuple[ManagedProviderId, ...] = get_args(ManagedProviderId)
 
 PROVIDER_DISPLAY_NAMES: dict[str, str] = {json.dumps(names, indent=4, sort_keys=True)}
 

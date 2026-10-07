@@ -50,6 +50,7 @@ from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.request_db import no_request_db
+from zerg.generated.provider_brands import ManagedProviderId
 from zerg.machine_evidence import MAX_MACHINE_EVIDENCE_BYTES
 from zerg.machine_evidence import machine_evidence_bytes
 from zerg.machine_evidence import validate_machine_evidence_identities
@@ -363,7 +364,7 @@ class ActivityEvidenceIn(UTCBaseModel):
 class ControlEvidenceIn(UTCBaseModel):
     authority_class: Literal["provider_control"] | None = None
     # Managed launch identities, not process names, authorize these claims.
-    provider: Literal["codex", "claude", "opencode", "cursor", "antigravity", "pi", "omp"]
+    provider: ManagedProviderId
     session_id: str = Field(..., max_length=255)
     connection_id: str | None = Field(None, min_length=1, max_length=255)
     lease_generation: str | None = Field(None, min_length=1, max_length=255)

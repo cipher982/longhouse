@@ -6,10 +6,16 @@
  * Add new providers here when onboarding them.
  */
 
-import { GENERATED_PROVIDER_CAPABILITIES, type ProvenChips } from "@/generated/provider-capabilities";
+import {
+  GENERATED_PROVIDER_CAPABILITIES,
+  type GeneratedProviderId,
+  type ProvenChips,
+} from "@/generated/provider-capabilities";
 import { lookupProviderBrand, providerDisplayName } from "@/generated/provider-brands";
 
-export type LaunchProviderId = "claude" | "codex" | "opencode" | "antigravity" | "cursor" | "pi" | "omp";
+// Every managed provider in the contract; the Record types below fail to
+// compile when a provider is added without its presentation.
+export type LaunchProviderId = GeneratedProviderId;
 
 export type LaunchProviderSupport = {
   id: LaunchProviderId;

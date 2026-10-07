@@ -1,6 +1,15 @@
 # @generated from schemas/managed_providers.yml and config/provider-brands.json — do not edit by hand.
 # Run: python3 scripts/generate/provider_brands.py
 
+from typing import Literal
+from typing import get_args
+
+# Every managed provider, in contract order. Request models type their
+# provider field with ManagedProviderId so a new provider is accepted
+# everywhere at once instead of per hand-written Literal.
+ManagedProviderId = Literal["codex", "claude", "opencode", "antigravity", "cursor", "pi", "omp"]
+MANAGED_PROVIDER_IDS: tuple[ManagedProviderId, ...] = get_args(ManagedProviderId)
+
 PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "agy": "Antigravity",
     "antigravity": "Antigravity",
