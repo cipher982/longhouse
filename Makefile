@@ -656,8 +656,9 @@ test-hooks: ## Hook outbox pipeline E2E (requires daemon running)
 check-push-readiness: ## Before pushing: stale duplicate commits on main, and blocking-list commits without a completed review (~1s)
 	@./scripts/ops/check-push-readiness.sh
 
-install-push-gate: ## Once per clone: the pre-push review gate (which also starts reviews) and the self-staging pre-commit shims
+install-push-gate: ## Once per clone: the pre-push review gate (which also starts reviews), the self-staging pre-commit shims, and (macOS) the review attester
 	@./scripts/ops/install-push-gate.sh
+	@./scripts/ops/install-review-attester.sh
 
 test-ci: ## Broad pre-release CI check (about 7 min in the release guest; not required for every push)
 	$(MAKE) validate
@@ -850,6 +851,7 @@ validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 	@python3 scripts/tests/promote-dogfood.test.py
 	@python3 scripts/tests/promotion-gates.test.py
 	@python3 scripts/tests/promote-production.test.py
+	@python3 scripts/tests/ring-promoter.test.py
 	@python3 scripts/tests/crunch.test.py
 
 validate-build-identity: ## @internal Build identity freshness check
@@ -1255,14 +1257,26 @@ reprovision: ## Reprovision an explicit immutable image (SUBDOMAIN=..., IMAGE=..
 			LH_DEPLOYMENT_IDEMPOTENCY_KEY LH_DEPLOYMENT_REASON && \
 		lh_hosted_reprovision "$$LH_INSTANCE_ID" "$$TARGET_IMAGE"'
 
+# Promote Rings (.github/workflows/promote-rings.yml) moves dogfood and production on its own; the
+# targets below are for a specific SHA by hand (a rollback, a stuck ring). They refuse while a Promote
+# Rings job is running, so the two writers do not interleave; the control plane fences the rest.
+PROMOTER_IDLE = busy="$$(gh run list -R cipher982/longhouse --workflow promote-rings.yml --status in_progress --json url -q '.[0].url' 2>/dev/null)"; \
+	[ -z "$$busy" ] || { echo "Promote Rings is running ($$busy); wait for it to finish (it may be doing this already)." >&2; exit 1; }
+
+.PHONY: promote-rings
+promote-rings: ## Run the ring promoter now (Promote Rings workflow): dogfood follows main, production follows dogfood
+	@gh workflow run promote-rings.yml -R cipher982/longhouse --ref main && echo "Dispatched; follow it: gh run list -R cipher982/longhouse --workflow promote-rings.yml --limit 1"
+
 .PHONY: promote-dogfood
-promote-dogfood: ## Promote a canary-verified runtime image to the dogfood instance (SHA=<full sha> required)
-	@SUBDOMAIN="$(or $(SUBDOMAIN),$(LONGHOUSE_DEFAULT_SUBDOMAIN))" ./scripts/ops/promote-dogfood.sh $(SHA)
+promote-dogfood: ## By hand: promote a canary-verified runtime image to the dogfood instance (SHA=<full sha> required; FAST_LANE=1 for a published image with no blocking-list change)
+	@$(PROMOTER_IDLE)
+	@SUBDOMAIN="$(or $(SUBDOMAIN),$(LONGHOUSE_DEFAULT_SUBDOMAIN))" ./scripts/ops/promote-dogfood.sh $(if $(FAST_LANE),--fast-lane,) $(SHA)
 
 # The old interface was VERSION=vX.Y.Z. Make would swallow it and promote whatever dogfood serves, so refuse it.
 .PHONY: promote-production
-promote-production: ## Promote the image dogfood serves to production tenants, demo, and the new-tenant pointer (SHA=<full sha> optional; CHECK=1 prints the gate receipt and moves nothing)
+promote-production: ## By hand: promote the image dogfood serves to production tenants, demo, and the new-tenant pointer (SHA=<full sha> optional; CHECK=1 prints the gate receipt and moves nothing)
 	@$(if $(filter command line,$(origin VERSION)),echo "promote-production no longer takes VERSION=; it promotes the image dogfood serves (pass SHA=<full sha> to name the commit; CHECK=1 moves nothing)" >&2; exit 2,:)
+	@$(if $(CHECK),:,$(PROMOTER_IDLE))
 	@./scripts/ops/promote-production.sh $(if $(CHECK),--check,) $(SHA)
 
 deploy-status: ## Show deployed SHA + health for all surfaces

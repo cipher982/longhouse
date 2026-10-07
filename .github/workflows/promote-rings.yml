@@ -1,0 +1,106 @@
+name: Promote Rings
+
+# Continuous promotion (control-plane/docs/specs/release-rings.md "Continuous
+# promotion"): dogfood follows every published runtime image (fast lane when the
+# range touches nothing on the review blocking list, the canary-qualified and
+# reviewed path when it does), and production follows dogfood as soon as the
+# unchanged promote-production contract passes. scripts/ops/ring_promoter.py
+# decides; the promote scripts keep every gate. Each run is stateless, so a run
+# triggered by anything re-reads everything.
+on:
+  workflow_run:
+    # Image published (dogfood fast lane), canary qualified (blocking-list
+    # ranges), QA verdict and CI receipts (production gates).
+    workflows: ["Publish Runtime Image", "Deploy and Verify", "Hosted Live QA", "CI"]
+    types: [completed]
+    branches: [main]
+  # The review attester (review_gate.py attest, on the machine that holds the
+  # receipts) posts `longhouse/review-gate` statuses; the job ignores others.
+  status: {}
+  # Catch-all: a soak that elapsed, a missed event, a promoter run that failed.
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+  statuses: write
+
+jobs:
+  promote:
+    name: "Promote dogfood and production"
+    if: >-
+      github.repository == 'cipher982/longhouse' &&
+      (github.event_name != 'status' || github.event.context == 'longhouse/review-gate') &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    runs-on: cube-gate
+    timeout-minutes: 75
+    # One writer for both rings: one run at a time, never cancelled mid-cutover.
+    # GitHub keeps one pending job and drops older pending ones, which is what we
+    # want: a pending run re-reads the newest state, so a newer SHA supersedes an
+    # older one only between runs. Job-level, so a skipped run (another status
+    # context, a failed upstream run) never displaces a pending real one.
+    concurrency:
+      group: promote-rings
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: main
+          # Ancestry and the blocking-list check need history and trees, not blobs.
+          fetch-depth: 0
+          filter: blob:none
+          show-progress: false
+
+      # cube runners have no GitHub CLI; the promote scripts need it. Pinned and
+      # checksum-verified.
+      - name: Install GitHub CLI
+        env:
+          GH_VERSION: "2.101.0"
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) arch=amd64 ;;
+            aarch64|arm64) arch=arm64 ;;
+            *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
+          esac
+          name="gh_${GH_VERSION}_linux_${arch}"
+          base="https://github.com/cli/cli/releases/download/v${GH_VERSION}"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "${base}/${name}.tar.gz"
+          curl -fsSL "${base}/gh_${GH_VERSION}_checksums.txt" | grep " ${name}.tar.gz\$" | sha256sum -c -
+          tar -xzf "${name}.tar.gz"
+          echo "$RUNNER_TEMP/${name}/bin" >> "$GITHUB_PATH"
+          for tool in jq python3 curl unzip ssh docker; do command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }; done
+
+      # promote-production pins the public demo over ssh (deploy-host, the
+      # Runtime Host that serves it), as blog-publish.yml does.
+      - name: Configure deploy SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_RUNTIME_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_RUNTIME_USER || 'zerg' }}
+        run: ./scripts/ci/setup-deploy-ssh.sh
+
+      - name: Decide and promote
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_PLANE_URL: https://control.longhouse.ai
+          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+          SUBDOMAIN: ${{ vars.LONGHOUSE_DEFAULT_SUBDOMAIN }}
+          DEMO_SSH_HOST: deploy-host
+          PROMOTER_TRIGGER: ${{ github.event_name }}${{ github.event.workflow_run.name && format(':{0}', github.event.workflow_run.name) || '' }}
+        run: python3 scripts/ops/ring_promoter.py --json "$RUNNER_TEMP/ring-decision.json"
+
+      - name: Upload decision
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ring-decision-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ring-decision.json
+          if-no-files-found: ignore
+          retention-days: 14

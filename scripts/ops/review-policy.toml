@@ -93,6 +93,8 @@ paths = [
   "scripts/lib/review-gate.sh",
   "scripts/ops/promote-*.sh",
   "scripts/ops/promotion_gates.py",
+  "scripts/ops/ring_promoter.py",
+  "scripts/ops/install-review-attester.sh",
   "scripts/ops/ring_lock.py",
   "scripts/lib/ring-lock.sh",
   "scripts/lib/exact-checkout.sh",

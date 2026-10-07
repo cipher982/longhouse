@@ -27,6 +27,10 @@ class PromotionAuthorizationTests(unittest.TestCase):
         final_attempt: int = 1,
         receipt_attempts: tuple[int, ...] = (1,),
         held_by_pid: int | None = None,
+        fast_lane: bool = False,
+        served: str = "d" * 40,
+        blocking_rc: int = 0,
+        ancestor: bool = True,
     ):
         with tempfile.TemporaryDirectory(prefix="longhouse-promotion-test-") as directory:
             root = Path(directory)
@@ -58,6 +62,9 @@ class PromotionAuthorizationTests(unittest.TestCase):
                     "functional_smoke": "success",
                 },
             }
+            if fast_lane:
+                receipt = {key: value for key, value in receipt.items() if key != "verification"}
+                receipt["schema"] = "longhouse.runtime-publication.v1"
             (root / "receipt.json").write_text(json.dumps(receipt))
             (library / "hosted-instance.sh").write_text(
                 'lh_hosted_prepare_control_plane_auth() { :; }\n'
@@ -83,9 +90,15 @@ args = sys.argv[1:]
 root = pathlib.Path(os.environ['FIXTURE_ROOT'])
 sha = os.environ['FIXTURE_SHA']
 if name == 'git':
+    if 'merge-base' in args:
+        sys.exit(0 if os.environ['FIXTURE_ANCESTOR'] == '1' else 1)
     print(sha)
 elif name == 'gh':
-    if args[:2] == ['run', 'list']:
+    if args[:2] == ['run', 'list'] and 'Publish Runtime Image' in args:
+        with open(root/'publish_lookups', 'a') as log:
+            log.write('x\n')
+        print(json.dumps([{'headSha':sha,'databaseId':10,'attempt':1,'event':'push'}]))
+    elif args[:2] == ['run', 'list']:
         runs = [
             {'headSha':sha,'databaseId':21,'workflowName':'Deploy and Verify','event':'push'},
             {'headSha':sha,'databaseId':20,'workflowName':'Deploy and Verify','event':'workflow_dispatch'},
@@ -99,6 +112,9 @@ elif name == 'gh':
         attempt = 1 if publish else int(os.environ['FIXTURE_FINAL_ATTEMPT'])
         print(json.dumps({'headSha':sha,'attempt':attempt,'number':10,'status':'completed',
                          'conclusion':'success','workflowName':'Publish Runtime Image' if publish else 'Deploy and Verify'}))
+    elif args[0] == 'api' and '/runs/10/' in args[1]:
+        print(json.dumps({'artifacts':[{'id':300,'expired':False,'name':'runtime-publication-10-1'},
+                                       {'id':301,'expired':False,'name':'runtime-publication-10-2'}]}))
     elif args[0] == 'api':
         available = '/runs/20/' in args[1] and os.environ['FIXTURE_HAS_RECEIPT'] == '1'
         artifacts = []
@@ -111,16 +127,23 @@ elif name == 'gh':
         print(json.dumps({'artifacts':artifacts}))
     else:
         raise AssertionError(args)
+elif name == 'curl' and args[-1].endswith('/api/health'):
+    print(json.dumps({'build': {'commit': os.environ['FIXTURE_SERVED']}}))
 elif name == 'curl':
     destination = args[args.index('--output')+1]
     with open(root/'downloads', 'a') as log:
         log.write(args[-1].rsplit('/artifacts/', 1)[1].split('/')[0] + '\n')
     with zipfile.ZipFile(destination, 'w') as archive:
         archive.write(root/'receipt.json','runtime-verification.json')
+        archive.write(root/'receipt.json','runtime-publication.json')
 elif name == 'unzip':
     with zipfile.ZipFile(args[1]) as archive:
         sys.stdout.buffer.write(archive.read(args[2]))
 elif name == 'python3':
+    if 'blocking' in args:
+        with open(root/'blocking_calls', 'a') as log:
+            log.write(' '.join(args[args.index('blocking') + 1:]) + '\n')
+        sys.exit(int(os.environ['FIXTURE_BLOCKING']))
     if len(args) > 1 and args[1] == 'inspect':
         print(json.dumps({'source_sha':sha,'schema_version':1,'schema_min_reader':1,'schema_max_reader':1}))
     else:
@@ -145,9 +168,12 @@ else:
                 "SUBDOMAIN": "fixture-owner",
                 "GH_TOKEN": "fixture-not-a-credential",
                 "LONGHOUSE_RING_LOCK_DIR": str(locks),
+                "FIXTURE_SERVED": served,
+                "FIXTURE_BLOCKING": str(blocking_rc),
+                "FIXTURE_ANCESTOR": "1" if ancestor else "0",
             }
             result = subprocess.run(
-                ["bash", str(ops / "promote-dogfood.sh"), SHA],
+                ["bash", str(ops / "promote-dogfood.sh"), *(["--fast-lane"] if fast_lane else []), SHA],
                 env=environment,
                 text=True,
                 capture_output=True,
@@ -160,6 +186,9 @@ else:
             self.downloaded_artifacts = downloads.read_text().splitlines() if downloads.exists() else []
             during = root / "locks_during"
             self.locks_during = during.read_text().split() if during.exists() else []
+            blocking_calls = root / "blocking_calls"
+            self.blocking_calls = blocking_calls.read_text().splitlines() if blocking_calls.exists() else []
+            self.publish_lookups = (root / "publish_lookups").exists()
             self.locks_left = sorted(p.name for p in locks.glob("*.json")) if locks.exists() else []
             events = locks / "events.jsonl"
             self.lock_events = [json.loads(line)["event"] for line in events.read_text().splitlines()] if events.exists() else []
@@ -243,6 +272,47 @@ else:
 
     def test_receipt_for_another_source_cannot_promote(self):
         result, promotions = self.run_promotion(receipt_sha="c" * 40)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(promotions, [])
+
+
+    # --- the fast lane: a published image, no blocking-list change since what dogfood serves ---
+
+    def test_fast_lane_promotes_the_published_image_without_canary_or_review(self):
+        result, promotions = self.run_promotion(fast_lane=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(promotions, [f"ghcr.io/cipher982/longhouse-runtime@{DIGEST}"])
+        self.assertEqual(self.gate_calls, [])  # review runs in parallel; production still waits for it
+        self.assertEqual(self.blocking_calls, [f"--base {'d' * 40} --head {SHA}"])
+        self.assertEqual(self.downloaded_artifacts, ["300"])  # the publication receipt of the final attempt
+        self.assertIn("(fast-lane)", result.stdout)
+        self.assertEqual(self.locks_during, ["dogfood-fixture-owner.json"])
+        self.assertEqual(self.locks_left, [])
+
+    def test_fast_lane_hands_a_blocking_range_to_the_qualified_path(self):
+        result, promotions = self.run_promotion(fast_lane=True, blocking_rc=1)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertEqual(promotions, [])
+        self.assertFalse(self.publish_lookups)
+        self.assertIn("needs the canary-qualified path", result.stderr)
+
+    def test_fast_lane_refuses_when_the_guard_cannot_decide(self):
+        result, promotions = self.run_promotion(fast_lane=True, blocking_rc=2)
+        self.assertEqual((result.returncode, promotions), (1, []))
+
+    def test_fast_lane_never_moves_dogfood_backwards_or_sideways(self):
+        result, promotions = self.run_promotion(fast_lane=True, ancestor=False)
+        self.assertEqual((result.returncode, promotions), (1, []))
+        self.assertIn("never moves dogfood backwards", result.stderr)
+        self.assertEqual(self.blocking_calls, [])
+
+    def test_fast_lane_is_a_no_op_when_dogfood_already_serves_it(self):
+        result, promotions = self.run_promotion(fast_lane=True, served=SHA)
+        self.assertEqual((result.returncode, promotions), (0, []))
+        self.assertIn("already serves", result.stdout)
+
+    def test_fast_lane_receipt_for_another_source_cannot_promote(self):
+        result, promotions = self.run_promotion(fast_lane=True, receipt_sha="c" * 40)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(promotions, [])
 

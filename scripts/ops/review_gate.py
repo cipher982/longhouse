@@ -29,7 +29,9 @@ written by `hatch review --merge <sha>`, which reviews exactly that diff.
 
   review_gate.py push [--base origin/main]
   review_gate.py pre-push REMOTE [URL]        (the git hook; stdin is git's list of refs being pushed)
-  review_gate.py promotion --target SHA (--served SHA | --served-url URL) [--start-reviews]
+  review_gate.py promotion --target SHA (--served SHA | --served-url URL) [--start-reviews | --attested]
+  review_gate.py blocking --base A --head B    (commits touching the blocking list; the dogfood fast lane's guard)
+  review_gate.py attest [--target REV ...]     (post the promotion verdict as a GitHub status; see "attestations")
   review_gate.py status [--range A..B]
   review_gate.py backfill --range A..B         (start background reviews for the range's unreviewed commits)
   review_gate.py queue [--wait SECONDS]        (the background reviews: queued, running, done, failed)
@@ -1031,6 +1033,193 @@ def queue_mode(repo: str, wait: int | None) -> int:
     return 1 if any(j.get("state") == "failed" for j in jobs) else 0
 
 
+# --- attestations: the promotion verdict, published for promoters that cannot read the receipts -----------
+#
+# Receipts live in this machine's git common dir; the ring promoter runs on a CI runner (Promote Rings,
+# .github/workflows/promote-rings.yml) so production follows dogfood while this machine sleeps. The attester
+# (`attest`, run every two minutes by a launchd agent that install-push-gate.sh installs) computes the
+# promotion verdict here, from what production serves to each candidate, and posts it as a GitHub commit
+# status on the candidate: state plus `from <served sha>: <summary>`, no findings text (the repo is public).
+# `promotion --attested` reads it back: it allows the target only when the newest attestation by an allowed
+# account is `success` and was computed from a commit the ring's served SHA contains (a range inside a
+# clean range is clean). A missing, failed or unreadable attestation refuses, like a missing receipt.
+
+ATTEST_CONTEXT = "longhouse/review-gate"
+ATTEST_RE = re.compile(r"^from ([0-9a-f]{40}): ")
+ATTESTERS_ENV = "LONGHOUSE_REVIEW_ATTESTERS"  # comma-separated GitHub logins whose attestations count
+DEFAULT_ATTESTERS = "cipher982"
+PRODUCTION_HEALTH_URL = "https://longhouse.ai/api/health"
+DOGFOOD_HEALTH_URL = "https://david010.longhouse.ai/api/health"
+ATTEST_REPOST_S = 6 * 3600  # repost an unchanged verdict this often, so a lost post heals itself
+
+
+def github_slug(repo: str | Path) -> str:
+    if os.environ.get("GITHUB_REPOSITORY", "").strip():
+        return os.environ["GITHUB_REPOSITORY"].strip()
+    url = git(repo, "remote", "get-url", "origin", check=False).strip()
+    match = re.search(r"github\.com[:/]+([^/]+/[^/]+?)(?:\.git)?/?$", url)
+    if not match:
+        raise GateError(f"cannot tell the GitHub repository from origin {url!r} (set GITHUB_REPOSITORY)")
+    return match.group(1)
+
+
+def is_ancestor(repo: str | Path, older: str, newer: str) -> bool:
+    return git_ok(repo, "merge-base", "--is-ancestor", older, newer)
+
+
+def blocking_commits(repo: str | Path, policy: Policy, base: str, head: str) -> list[tuple[Commit, list[str]]]:
+    """The commits of base..head that touch the blocking list, receipts or not (the dogfood fast lane's guard)."""
+    found = []
+    for commit in commits_in(repo, f"{resolve(repo, base)}..{resolve(repo, head)}"):
+        areas = policy.blocking_areas(commit.files)
+        if areas:
+            found.append((commit, areas))
+    return found
+
+
+def attestation_summary(verdicts: list[Verdict]) -> tuple[str, str]:
+    if not verdicts:
+        return "success", "clean"
+    unreviewed = sum(1 for v in verdicts if v.needs_receipt)
+    parts = [f"{unreviewed} unreviewed"] if unreviewed else []
+    if len(verdicts) - unreviewed:
+        parts.append(f"{len(verdicts) - unreviewed} with open findings")
+    return "failure", f"{len(verdicts)} commit(s) refused ({', '.join(parts)}), first {verdicts[0].commit.sha[:12]}"
+
+
+def _github_get(path: str) -> object:
+    token = (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
+               "User-Agent": "longhouse-review-gate/1"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        request = urllib.request.Request(f"https://api.github.com{path}", headers=headers)
+        with urllib.request.urlopen(request, timeout=20) as resp:  # noqa: S310 - fixed GitHub API host
+            return json.load(resp)
+    except (OSError, ValueError) as exc:
+        raise GateError(f"cannot read GitHub {path}: {exc}")
+
+
+def read_attestation(slug: str, sha: str) -> dict | None:
+    """The newest review-gate status on sha posted by an allowed account, or None."""
+    allowed = {s.strip().lower() for s in (os.environ.get(ATTESTERS_ENV) or DEFAULT_ATTESTERS).split(",") if s.strip()}
+    statuses = _github_get(f"/repos/{slug}/commits/{sha}/statuses?per_page=100")
+    if not isinstance(statuses, list):
+        raise GateError(f"GitHub returned no status list for {sha[:12]}")
+    mine = [s for s in statuses if isinstance(s, dict) and s.get("context") == ATTEST_CONTEXT
+            and str((s.get("creator") or {}).get("login") or "").lower() in allowed]
+    return max(mine, key=lambda s: str(s.get("created_at") or ""), default=None)
+
+
+def attested_refusal(repo: str | Path, slug: str, served: str, target: str) -> str | None:
+    """None when an attestation allows served..target; otherwise why not."""
+    status = read_attestation(slug, target)
+    if status is None:
+        return (f"no review attestation on {target[:12]} yet (the review attester posts `{ATTEST_CONTEXT}` "
+                "from the machine that holds the receipts, every two minutes while it is awake)")
+    description = str(status.get("description") or "")
+    match = ATTEST_RE.match(description)
+    if not match:
+        return f"the review attestation on {target[:12]} is malformed: {description!r}"
+    if status.get("state") != "success":
+        return f"the review attestation on {target[:12]} is {status.get('state')}: {description}"
+    base = match.group(1)
+    if not git(repo, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}", check=False).strip():
+        raise GateError(f"the attestation's base {base[:12]} is not in this checkout (fetch first)")
+    if not is_ancestor(repo, base, served):
+        return (f"the review attestation on {target[:12]} was computed from {base[:12]}, which the served "
+                f"{served[:12]} does not contain; it says nothing about {served[:12]}..{target[:12]}")
+    return None
+
+
+def post_attestation(slug: str, sha: str, state: str, description: str) -> None:
+    proc = subprocess.run(["gh", "api", "--method", "POST", f"repos/{slug}/statuses/{sha}", "-f", f"state={state}",
+                           "-f", f"context={ATTEST_CONTEXT}", "-f", f"description={description[:140]}"],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise GateError(f"could not post the attestation on {sha[:12]}: {proc.stderr.strip()[:300]}")
+
+
+def attest_mode(repo: str, policy: Policy, targets: list[str], served_url: str, dogfood_url: str,
+                dry_run: bool, start_reviews: bool) -> int:
+    store = store_dir(repo)
+    store.mkdir(parents=True, exist_ok=True)
+    lock = os.open(store / "attest.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(lock)
+        return 0  # another attester is running; it will post what this one would
+    try:
+        git(repo, "fetch", "--quiet", os.environ.get("PUSH_READINESS_REMOTE", "").strip() or "origin", check=False)
+        slug = github_slug(repo)
+        served = served_commit(served_url)
+        try:
+            dogfood = served_commit(dogfood_url)
+        except GateError as exc:
+            dogfood = None
+            print(f"review-gate: attest: dogfood unreadable: {exc}", file=sys.stderr)
+        # The verdict is computed from the oldest ring that gives a clean one: production first (what a
+        # production promotion asks), then dogfood (enough for a dogfood promotion, which asks from what
+        # dogfood serves). A reader only trusts it for a ring whose served SHA contains that base.
+        bases = [served] + ([dogfood] if dogfood and dogfood != served and is_ancestor(repo, served, dogfood) else [])
+        if not targets:
+            targets = ([dogfood] if dogfood else []) + [f"refs/remotes/origin/{DEFAULT_BRANCH}"]
+        state_path = store / "attest.json"
+        try:
+            posted = json.loads(state_path.read_text())
+        except (OSError, ValueError):
+            posted = {}
+        seen = set()
+        for rev in targets:
+            try:
+                target = resolve(repo, rev)
+            except GateError as exc:
+                print(f"review-gate: attest: {exc}", file=sys.stderr)
+                continue
+            if target in seen or target == served:
+                continue
+            seen.add(target)
+            usable = [b for b in bases if b != target and is_ancestor(repo, b, target)]
+            if not usable:
+                print(f"review-gate: attest: {target[:12]} does not contain what production serves ({served[:12]}); skipped")
+                continue
+            first = None
+            for base in usable:
+                verdicts = promotion_verdicts(repo, policy, base, target)
+                if first is None:
+                    first = (base, verdicts)
+                if not verdicts:
+                    break
+            else:
+                base, verdicts = first
+            if first[1] and start_reviews and not dry_run:
+                jobs = start_reviews_quietly(repo, policy, promotion_revs(repo, first[0], target), "attest")
+                if jobs:
+                    print(queued_note(repo, jobs))
+            state, summary = attestation_summary(verdicts)
+            description = f"from {base}: {summary}"
+            last = posted.get(target) or {}
+            fresh = _now() - float(last.get("at", 0)) < ATTEST_REPOST_S
+            if (last.get("state"), last.get("description")) == (state, description) and fresh:
+                continue
+            print(f"review-gate: attest {target[:12]} {state}: {description}")
+            if dry_run:
+                continue
+            post_attestation(slug, target, state, description)
+            posted[target] = {"state": state, "description": description, "at": _now()}
+        if not dry_run:
+            cutoff = _now() - 14 * 86400
+            posted = {k: v for k, v in posted.items() if float(v.get("at", 0)) >= cutoff}
+            tmp = state_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(posted, indent=1) + "\n")
+            tmp.replace(state_path)
+        return 0
+    finally:
+        os.close(lock)
+
+
 # --- reporting -------------------------------------------------------------
 
 def refusal(repo: str, kind: str, what: str, verdicts: list[Verdict], started: list[dict] | None = None) -> str:
@@ -1110,6 +1299,18 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--served-url")
     promo.add_argument("--start-reviews", action="store_true",
                        help="on a refusal, queue background reviews of the commits that lack a receipt")
+    promo.add_argument("--attested", action="store_true",
+                       help="decide from the GitHub review attestation instead of local receipts (a promoter off this machine)")
+    blocking = sub.add_parser("blocking", help="list base..head commits that touch the blocking list (no receipts read); "
+                              "exit 1 when there are any")
+    blocking.add_argument("--base", required=True)
+    blocking.add_argument("--head", required=True)
+    attest = sub.add_parser("attest", help="post the promotion verdict for the candidates as a GitHub commit status")
+    attest.add_argument("--target", action="append", default=[], help="candidate (default: what dogfood serves, and origin/main)")
+    attest.add_argument("--served-url", default=PRODUCTION_HEALTH_URL, help="the ring the verdict is computed from (production)")
+    attest.add_argument("--dogfood-url", default=DOGFOOD_HEALTH_URL)
+    attest.add_argument("--dry-run", action="store_true", help="print what it would post; post and queue nothing")
+    attest.add_argument("--no-reviews", action="store_true", help="do not queue reviews of unreviewed commits")
     status = sub.add_parser("status", help="print the verdict of every commit of a range (never refuses)")
     status.add_argument("--range", dest="rng", default="origin/main..HEAD")
     backfill = sub.add_parser("backfill", help="queue background reviews of a range's commits that lack a receipt")
@@ -1149,6 +1350,25 @@ def main(argv: list[str] | None = None) -> int:
             kind, what, target = "push", "touch the blocking list without a completed review", DEFAULT_BRANCH
             if not verdicts:
                 pushed_review_note(repo, policy, updates)
+        elif args.mode == "blocking":
+            found = blocking_commits(repo, policy, args.base, args.head)
+            for commit, areas in found:
+                print(f"{commit.sha[:12]} [{', '.join(areas)}] {commit.subject[:80]}")
+            if not found:
+                print(f"review-gate: {args.base[:12]}..{args.head[:12]} touches nothing on the blocking list.")
+            return 1 if found else 0
+        elif args.mode == "attest":
+            return attest_mode(repo, policy, args.target, args.served_url, args.dogfood_url, args.dry_run,
+                               not args.no_reviews)
+        elif args.mode == "promotion" and args.attested:
+            served = resolve(repo, args.served or served_commit(args.served_url))
+            target = resolve(repo, args.target)
+            why = attested_refusal(repo, github_slug(repo), served, target)
+            if why is None:
+                print(f"review-gate: promotion OK (attested for {served[:12]}..{target[:12]}).")
+                return 0
+            print(f"review-gate: REFUSED promotion: {why}", file=sys.stderr)
+            return 1
         elif args.mode == "promotion":
             served = args.served or served_commit(args.served_url)
             verdicts = promotion_verdicts(repo, policy, served, args.target)

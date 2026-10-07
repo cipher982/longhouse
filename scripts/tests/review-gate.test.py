@@ -245,7 +245,9 @@ class EnforcementWiringTests(unittest.TestCase):
         for path in ("scripts/ops/ship.sh", "scripts/ops/release.sh", "scripts/ops/check-push-readiness.sh",
                      "scripts/ops/promote-dogfood.sh", "scripts/ops/promote-production.sh",
                      "scripts/lib/review-gate.sh", "scripts/ops/review_gate.py", "scripts/ops/review-policy.toml",
-                     "scripts/ops/promotion_gates.py", "scripts/ops/install-push-gate.sh"):
+                     "scripts/ops/promotion_gates.py", "scripts/ops/install-push-gate.sh",
+                     "scripts/ops/ring_promoter.py", "scripts/ops/install-review-attester.sh",
+                     ".github/workflows/promote-rings.yml"):
             self.assertTrue(policy.blocking_areas([path]), f"{path} must be on the blocking list")
 
 
@@ -1266,6 +1268,116 @@ class PushStartsReviewTests(PrePushHookTests.__bases__[0]):
         self.assertEqual(pushed.returncode, 0, pushed.stderr)
         self.assertNotIn("background review", pushed.stderr)
         self.assertEqual(gate._load_jobs(self.repo.dir), [])
+
+
+class BlockingModeTests(unittest.TestCase):
+    """The dogfood fast lane's guard: which commits of a range touch the blocking list, receipts or not."""
+
+    def test_lists_blocking_commits_and_exits_1_and_exits_0_for_a_clean_range(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Repo(directory)
+            base = repo.commit("base", {"README.md": "x"})
+            repo.commit("feature", {"server/zerg/services/thing.py": "1"})
+            clean = repo.git("rev-parse", "HEAD")
+            auth = repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+            repo.receipt(base)  # a review does not make a range fast-lane: the guard is about paths
+            result = repo.run("blocking", "--base", base, "--head", "HEAD")
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn(auth[:12], result.stdout)
+            self.assertIn("[auth]", result.stdout)
+            self.assertNotIn(clean[:12], result.stdout)
+            result = repo.run("blocking", "--base", base, "--head", clean)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("touches nothing on the blocking list", result.stdout)
+
+
+class AttestationTests(unittest.TestCase):
+    """The promotion verdict published for a promoter that cannot read the receipts, and read back."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        (Path(self.tmp.name) / "repo").mkdir()
+        self.repo = Repo(str(Path(self.tmp.name) / "repo"))
+        bare = Path(self.tmp.name) / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        self.repo.git("remote", "set-url", "origin", str(bare))
+        self.prod = self.repo.commit("base", {"README.md": "x"})
+        self.dogfood = self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        self.target = self.repo.commit("feature", {"server/zerg/services/thing.py": "1"})
+        self.repo.git("push", "-q", "origin", "main")
+        self.repo.git("fetch", "-q", "origin")
+        self.policy = self.repo.policy()
+        self.served = {gate.PRODUCTION_HEALTH_URL: self.prod, gate.DOGFOOD_HEALTH_URL: self.dogfood}
+        self.posted = []
+        patches = {
+            "served_commit": lambda url: self.served[url],
+            "post_attestation": lambda slug, sha, state, description: self.posted.append((sha, state, description)),
+        }
+        for name, fn in patches.items():
+            original = getattr(gate, name)
+            setattr(gate, name, fn)
+            self.addCleanup(setattr, gate, name, original)
+        os.environ["GITHUB_REPOSITORY"] = "example/fixture"
+        self.addCleanup(os.environ.pop, "GITHUB_REPOSITORY", None)
+
+    def attest(self, *targets):
+        self.posted.clear()
+        rc = gate.attest_mode(str(self.repo.dir), self.policy, list(targets), gate.PRODUCTION_HEALTH_URL,
+                              gate.DOGFOOD_HEALTH_URL, dry_run=False, start_reviews=False)
+        self.assertEqual(rc, 0)
+        return {sha: (state, description) for sha, state, description in self.posted}
+
+    def test_unreviewed_range_attests_failure_from_production(self):
+        posted = self.attest(self.target)
+        state, description = posted[self.target]
+        self.assertEqual(state, "failure")
+        self.assertTrue(description.startswith(f"from {self.prod}: 2 commit(s) refused (2 unreviewed)"), description)
+
+    def test_reviewed_range_attests_success_and_an_unchanged_verdict_is_not_posted_again(self):
+        self.repo.receipt(self.prod)
+        self.assertEqual(self.attest(self.target)[self.target], ("success", f"from {self.prod}: clean"))
+        self.assertEqual(self.attest(self.target), {})
+        rid = self.repo.receipt(self.prod, rid="rv-later", findings=[finding("F1", "material")])
+        self.assertEqual(self.attest(self.target)[self.target][0], "failure")  # a new open finding is posted at once
+        self.repo.disposition(rid, "F1", "rejected")
+        self.assertEqual(self.attest(self.target)[self.target], ("success", f"from {self.prod}: clean"))
+
+    def test_an_open_finding_dogfood_already_holds_still_allows_a_dogfood_promotion(self):
+        rid = self.repo.receipt(self.prod, self.dogfood, findings=[finding("F1", "blocking")])
+        self.repo.receipt(self.dogfood)
+        (state, description), = self.attest(self.target).values()
+        self.assertEqual((state, description), ("success", f"from {self.dogfood}: clean"))
+        self.repo.disposition(rid, "F1", "fixed")
+        self.assertEqual(self.attest(self.target)[self.target], ("success", f"from {self.prod}: clean"))
+
+    def read_back(self, statuses, served):
+        original = gate._github_get
+        gate._github_get = lambda path: statuses
+        try:
+            return gate.attested_refusal(self.repo.dir, "example/fixture", served, self.target)
+        finally:
+            gate._github_get = original
+
+    def status(self, state, base, login="cipher982", at="2026-10-07T00:00:00Z"):
+        return {"context": gate.ATTEST_CONTEXT, "state": state, "description": f"from {base}: x",
+                "creator": {"login": login}, "created_at": at}
+
+    def test_reading_back_allows_only_a_success_computed_from_what_the_ring_serves_or_older(self):
+        self.assertIsNone(self.read_back([self.status("success", self.prod)], self.prod))
+        self.assertIsNone(self.read_back([self.status("success", self.prod)], self.dogfood))  # a sub-range of a clean range
+        why = self.read_back([self.status("success", self.dogfood)], self.prod)  # says nothing about prod..dogfood
+        self.assertIn("does not contain", why)
+        self.assertIn("is failure", self.read_back([self.status("failure", self.prod)], self.prod))
+        self.assertIn("no review attestation", self.read_back([], self.prod))
+
+    def test_the_newest_attestation_by_an_allowed_account_wins(self):
+        statuses = [self.status("success", self.prod, at="2026-10-07T00:00:00Z"),
+                    self.status("failure", self.prod, at="2026-10-07T01:00:00Z"),
+                    self.status("success", self.prod, login="someone-else", at="2026-10-07T02:00:00Z"),
+                    {**self.status("success", self.prod, at="2026-10-07T03:00:00Z"), "context": "ci/other"}]
+        self.assertIn("is failure", self.read_back(statuses, self.prod))
+        self.assertIn("no review attestation", self.read_back(statuses[2:], self.prod))
 
 
 class StatusTests(unittest.TestCase):
