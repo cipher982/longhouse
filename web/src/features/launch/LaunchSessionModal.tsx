@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import {
@@ -205,10 +206,15 @@ export default function LaunchSessionModal({
 
   if (!isOpen) return null;
 
-  return (
+  // On <body>: #app-container is a stacking context under the app header,
+  // so inside it the header drew over the modal's top (phone, make ui-sweep).
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div
         className="modal-container"
+        role="dialog"
+        aria-modal="true"
+        aria-label="New Session"
         data-testid="launch-session-modal"
         onClick={(e) => e.stopPropagation()}
       >
@@ -383,7 +389,8 @@ export default function LaunchSessionModal({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

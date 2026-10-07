@@ -12,6 +12,11 @@
  *   2. on top: the element at its centre and inset corners is the overlay,
  *   3. not cut off by an ancestor that clips (overflow other than visible).
  *
+ * A full-screen overlay (a modal's backdrop wrapper) passes those trivially,
+ * so its content panels are judged too, unless the wrapper scrolls. A
+ * trigger that cannot be clicked is a failure ("unreachable") unless an open
+ * modal dialog is what covers it.
+ *
  * Content a trigger expands inline (a tool row's output, a notice body) is
  * not an overlay and is not judged: it scrolls with the page.
  *
@@ -28,7 +33,7 @@ import type { Page } from "playwright";
 export type PopoverFailure = {
   trigger: string;
   overlay: string;
-  rule: "viewport" | "occluded" | "clipped";
+  rule: "viewport" | "occluded" | "clipped" | "unreachable";
   detail: string;
 };
 
@@ -111,11 +116,27 @@ const CHECK_OVERLAYS = `((mode, parent) => {
   }
   // Judge only the outermost new overlay; its children move with it.
   const roots = appeared.filter((el) => !appeared.some((other) => other !== el && other.contains(el)));
+  // ...except inside a full-screen wrapper, where the panels are what can be
+  // off-screen. A wrapper that scrolls brings them in itself.
+  const fills = (r) => r.left <= TOL && r.top <= TOL && r.right >= vw - TOL && r.bottom >= vh - TOL;
+  const scrolls = (el) => /(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1;
+  const judged = roots.map((el) => ({ el, scrollable: false }));
+  const walk = (node, scrollable) => {
+    for (const child of node.children) {
+      if (!visible(child) || getComputedStyle(child).pointerEvents === "none") continue;
+      const cr = child.getBoundingClientRect();
+      if (fills(cr)) walk(child, scrollable || scrolls(child));
+      else if (cr.width >= 24 && cr.height >= 16) judged.push({ el: child, scrollable });
+    }
+  };
+  for (const root of roots) {
+    if (fills(root.getBoundingClientRect())) walk(root, scrolls(root));
+  }
   const failures = [];
-  for (const el of roots) {
+  for (const { el, scrollable } of judged) {
     const r = el.getBoundingClientRect();
     const name = label(el);
-    if (r.left < -TOL || r.top < -TOL || r.right > vw + TOL || r.bottom > vh + TOL) {
+    if (!scrollable && (r.left < -TOL || r.top < -TOL || r.right > vw + TOL || r.bottom > vh + TOL)) {
       const off = [];
       if (r.top < -TOL) off.push(Math.round(-r.top) + "px above");
       if (r.bottom > vh + TOL) off.push(Math.round(r.bottom - vh) + "px below");
@@ -125,15 +146,20 @@ const CHECK_OVERLAYS = `((mode, parent) => {
       continue;
     }
     let clipped = null;
-    for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+    for (let a = el.parentElement; a && a !== document.body && !scrollable; a = a.parentElement) {
       const c = getComputedStyle(a);
-      if (c.overflowX === "visible" && c.overflowY === "visible") continue;
+      if (c.overflowX === "visible" && c.overflowY === "visible") {
+        if (c.position === "fixed") break;
+        continue;
+      }
       if (getComputedStyle(el).position === "fixed" && c.transform === "none" && c.contain === "none") continue;
       const ar = a.getBoundingClientRect();
       if (r.left < ar.left - TOL || r.top < ar.top - TOL || r.right > ar.right + TOL || r.bottom > ar.bottom + TOL) {
         clipped = label(a);
         break;
       }
+      // A fixed ancestor escapes every clip above it.
+      if (c.position === "fixed") break;
     }
     if (clipped) {
       failures.push({ overlay: name, rule: "clipped", detail: "cut off by " + clipped });
@@ -169,7 +195,7 @@ const CHECK_OVERLAYS = `((mode, parent) => {
       }
     }
   }
-  return { checked: roots.length, overlays: roots.map(label), failures, children };
+  return { checked: judged.length, overlays: judged.map(({ el }) => label(el)), failures, children };
 })`;
 
 const CLOSE_DETAILS = `((selector) => {
@@ -189,6 +215,23 @@ const REMARK_CHILD = `((childId, name) => {
     return true;
   }
   return false;
+})`;
+
+// Why a trigger could not be clicked: "self" (it is on top, just not stable,
+// e.g. a ticking timer), "modal" (an open modal dialog covers it), or what
+// covers it.
+const TRIGGER_HIT = `((selector) => {
+  const label = ${LABEL_FN};
+  const el = document.querySelector(selector);
+  if (!el) return { state: "gone" };
+  const r = el.getBoundingClientRect();
+  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  if (!hit || el.contains(hit) || hit.contains(el)) return { state: "self" };
+  // The hit is the modal or its backdrop wrapper (which holds the dialog).
+  const MODAL = 'dialog[open], [aria-modal="true"], [role="dialog"], [role="alertdialog"]';
+  const modal = hit.closest(MODAL) || hit.querySelector(MODAL);
+  if (modal && !modal.contains(el)) return { state: "modal" };
+  return { state: "covered", by: label(hit) };
 })`;
 
 type CheckResult = {
@@ -230,10 +273,21 @@ export async function sweepPopovers(page: Page, shotPrefix?: string): Promise<Po
     const trigger = page.locator(selector);
     await page.evaluate(SNAPSHOT_VISIBLE);
     try {
-      await trigger.click({ timeout: 2_000 });
-    } catch (error) {
-      report.skipped.push(`${name}: not clickable (${String(error).split("\n")[0].slice(0, 80)})`);
-      return null;
+      await trigger.click({ timeout: 3_000 });
+    } catch {
+      const hit = (await page.evaluate(`${TRIGGER_HIT}(${JSON.stringify(selector)})`)) as {
+        state: "self" | "modal" | "covered" | "gone";
+        by?: string;
+      };
+      if (hit.state === "self") {
+        await trigger.click({ force: true, timeout: 3_000 });
+      } else if (hit.state === "modal" || hit.state === "gone") {
+        report.skipped.push(`${name}: ${hit.state === "modal" ? "behind an open dialog" : "gone before its turn"}`);
+        return null;
+      } else {
+        report.failures.push({ trigger: name, overlay: name, rule: "unreachable", detail: `trigger covered by ${hit.by}` });
+        return null;
+      }
     }
     await page.waitForTimeout(200);
     if (page.url() !== url) {
@@ -290,7 +344,12 @@ export async function sweepPopovers(page: Page, shotPrefix?: string): Promise<Po
         );
       }
       if (!(await page.locator(childSelector).isVisible().catch(() => false))) {
-        report.skipped.push(`${childName}: its menu did not reopen`);
+        report.failures.push({
+          trigger: childName,
+          overlay: result.overlays.join(", "),
+          rule: "unreachable",
+          detail: "the menu holding this trigger did not reopen",
+        });
         continue;
       }
       const childResult = await openAndCheck(childSelector, childName, null, `${index}-${child}`);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { copyToClipboard } from "@/shared/lib/clipboard";
 import type { SessionResumeIntent } from "@/shared/api/agents";
 import { Button } from "@/shared/ui";
@@ -33,7 +34,9 @@ export function ResumeSessionModal({
     }
   };
 
-  return (
+  // On <body>: #app-container is a stacking context under the app header,
+  // so inside it the header drew over the modal's top (phone, make ui-sweep).
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div
         className="modal-container resume-session-modal"
@@ -82,7 +85,8 @@ export function ResumeSessionModal({
           ) : null}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

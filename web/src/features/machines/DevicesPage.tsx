@@ -332,7 +332,13 @@ export default function DevicesPage() {
       {/* Create modal */}
       {showCreateModal && (
         <div className="devices-modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="devices-modal-content" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="devices-modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Create Device Token"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="devices-modal-header">
               <h3>Create Device Token</h3>
               <button className="devices-modal-close" onClick={() => setShowCreateModal(false)}>

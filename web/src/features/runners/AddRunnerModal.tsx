@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useCreateEnrollToken } from "./useRunners";
 import { buildRunnerNativeInstallCommand, describeRunnerNativeInstallMode, type RunnerNativeInstallMode } from "./runnerInstallCommands";
 import { parseUTC } from "@/shared/lib/dateUtils";
@@ -63,9 +64,18 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
 
   if (!isOpen) return null;
 
-  return (
+  // On <body>: #app-container is a stacking context under the app header,
+  // so inside it the header drew over the modal's top (phone, make ui-sweep).
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container add-runner-modal" data-testid="add-runner-modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal-container add-runner-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Connect a machine"
+        data-testid="add-runner-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
           <h2>Connect a machine</h2>
           <button
@@ -192,6 +202,7 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
