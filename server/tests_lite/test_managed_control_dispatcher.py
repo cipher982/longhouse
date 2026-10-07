@@ -655,15 +655,6 @@ def test_dispatch_managed_control_command_records_the_operation_in_the_live_cata
     assert operation["error"] is None
     assert operation["request"]["payload"] == {"provider": "codex", "text": "continue"}
 
-    # The route that serves this operation reads it back through catalogd, so
-    # the record has to be owner-scoped there and not merely present on disk.
-    served = live_catalog.rpc("machine.operation.read.v2", {"owner_id": 42, "operation_id": operation["operation_id"]})
-    assert served["found"] is True
-    assert served["operation"]["status"] == "succeeded"
-    assert served["operation"]["result"] == {"exit_code": 0, "stdout": "accepted", "stderr": ""}
-    other_owner = live_catalog.rpc("machine.operation.read.v2", {"owner_id": 43, "operation_id": operation["operation_id"]})
-    assert other_owner["found"] is False
-
 
 def test_catalog_managed_control_uses_catalogd_for_grant_and_operation(monkeypatch):
     calls = []

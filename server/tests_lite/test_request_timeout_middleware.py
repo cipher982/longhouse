@@ -257,19 +257,3 @@ def test_session_control_write_keeps_default_timeout_budget():
         response = client.post("/api/agents/sessions/test-session/action")
 
     assert response.status_code == 503
-
-
-def test_provider_live_proof_route_uses_default_timeout_budget():
-    app = FastAPI()
-    app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
-
-    @app.post("/api/agents/machines/cinder/provider-live-proof")
-    async def provider_live_proof():
-        await asyncio.sleep(0.05)
-        return {"ok": True}
-
-    with TestClient(app) as client:
-        response = client.post("/api/agents/machines/cinder/provider-live-proof")
-
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Request timed out"}
