@@ -10,8 +10,10 @@
 # one, and posts again whenever the verdict changes: a review lands, a finding is dispositioned,
 # production or dogfood moves. Unchanged verdicts post nothing. See review_gate.py "attestations".
 #
-# It runs the primary checkout's copy of the gate (kept equal to origin/main), in a login shell so
-# gh and hatch resolve their credentials as they do for an agent. Log: <git common dir>/review-receipts/attest.log.
+# Each run fetches origin and runs origin/main's copy of the gate and policy (extracted into
+# <git common dir>/review-receipts/attester/, so it never waits for a checkout to be updated and never
+# touches one), in a login shell so gh and hatch resolve their credentials as they do for an agent.
+# Log: <git common dir>/review-receipts/attest.log.
 # Remove: launchctl bootout gui/$(id -u)/ai.longhouse.review-attest && rm ~/Library/LaunchAgents/ai.longhouse.review-attest.plist
 set -euo pipefail
 
@@ -23,12 +25,10 @@ fi
 label="ai.longhouse.review-attest"
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
 primary="$(cd "$common/.." && pwd)"
-[[ -f "$primary/scripts/ops/review_gate.py" ]] || {
-  echo "install-review-attester: $primary has no scripts/ops/review_gate.py; update the primary checkout first." >&2
-  exit 1
-}
 log="$common/review-receipts/attest.log"
-mkdir -p "$common/review-receipts"
+cache="$common/review-receipts/attester"
+mkdir -p "$cache"
+run="git -C '$primary' fetch --quiet origin; for f in review_gate.py review-policy.toml; do git -C '$primary' show origin/main:scripts/ops/\$f > '$cache'/\$f.tmp && mv '$cache'/\$f.tmp '$cache'/\$f; done; exec python3 '$cache/review_gate.py' --repo '$primary' attest"
 plist="$HOME/Library/LaunchAgents/$label.plist"
 mkdir -p "$(dirname "$plist")"
 tmp="$(mktemp "$plist.XXXXXX")"
@@ -43,7 +43,7 @@ cat >"$tmp" <<PLIST
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>exec python3 "$primary/scripts/ops/review_gate.py" --repo "$primary" attest</string>
+    <string>$run</string>
   </array>
   <key>StartInterval</key><integer>120</integer>
   <key>RunAtLoad</key><true/>
