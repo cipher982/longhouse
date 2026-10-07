@@ -24,7 +24,7 @@ import { hearthModeForLamp, hearthSnapshotFromSession } from "@/shared/instrumen
 import { NEW_SESSION_PATH } from "@/features/launch/newSessionPath";
 import { delegatedWorkLabel, pendingInteractionLabel, workingStatusLabel } from "@/shared/session/sessionStatus";
 import { getRowStatus } from "@/features/timeline/SessionRow";
-import { needsSessionResponse, sessionHasFailedRun } from "@/shared/session/sessionRuntime";
+import { needsSessionAttention, sessionHasFailedRun } from "@/shared/session/sessionRuntime";
 import { buildInboxLayout, historySortKey, isAutomationSession } from "@/features/timeline/timelineInboxModel";
 import { getProjectLabel, getSessionCardText } from "@/shared/session/sessionLabels";
 import {
@@ -144,17 +144,19 @@ function rowFromCard(
 ): RailRow {
   const session = card.head;
   const status = getRowStatus({ thread: card, relativeNowMs: nowMs, unread: group === "attention" });
+  const primary = session.session_state.presentation.primary;
+  const failed = sessionHasFailedRun(session);
   const needsUser = needsSessionAttention(session);
   return {
     id: session.id,
     title: getSessionCardText(session, { titleMaxChars: 96 }).title,
     provider: session.provider ?? null,
     host: session.control?.source_runner_name?.trim() || session.device_id || null,
-    stateText: status.statusLabel,
+    stateText: failed && primary?.key !== "launch_failed" ? "Run failed" : status.statusLabel,
     tone: TONE_FOR_LAMP[status.lampState],
     lamp: status.lampState,
-    statusTone: status.statusTone,
-    statusKey: session.session_state.presentation.primary?.key ?? null,
+    statusKey: primary?.key ?? null,
+    failed,
     needsUser,
     group,
     hearth: hearthSnapshotFromSession(session, hearthModeForLamp(status.lampState), nowMs),

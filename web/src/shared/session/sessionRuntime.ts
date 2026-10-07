@@ -48,23 +48,27 @@ export function needsSessionAttention(
     && session.session_state.pending_interaction != null;
 }
 
-/** Is a pending question/approval still answerable in the current session run? */
+/** Is a pending question/approval answerable from Longhouse? */
 export function needsSessionResponse(
   session: Pick<AgentSession, "session_state" | "user_state">,
 ): boolean {
-  const primaryKey = session.session_state.presentation.primary?.key;
+  const facts = session.session_state;
+  const primaryKey = facts.presentation.primary?.key;
   return needsSessionAttention(session)
-    && session.session_state.run?.lifecycle !== "ended"
+    && facts.pending_interaction?.can_respond === true
     && (primaryKey === "needs_answer" || primaryKey === "needs_approval");
 }
 
-/** A canonical failed or failed-launch presentation for compact status surfaces. */
+/** Failed-run evidence, even when a stale interaction still owns the headline. */
 export function sessionHasFailedRun(
   session: Pick<AgentSession, "session_state">,
 ): boolean {
-  const primary = session.session_state.presentation.primary;
+  const facts = session.session_state;
+  const primary = facts.presentation.primary;
+  const run = facts.run;
   return primary?.key === "launch_failed"
-    || (primary?.key === "ended" && primary.tone === "blocked");
+    || (primary?.key === "ended" && primary.tone === "blocked")
+    || (run?.lifecycle === "ended" && run.end_reason != null && FAILED_RUN_END_REASONS[run.end_reason] === true);
 }
 
 /**

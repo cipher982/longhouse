@@ -553,17 +553,27 @@ describe("rail rows follow the Timeline's tiers", () => {
 
   it("keeps failed and unread outcomes distinct from answer requests", () => {
     const question = card("question", {}, { activity: "quiescent", pendingInteraction: true });
-    const failed = card("failed", {}, { activity: "unknown" });
+    const failed = card("failed", {}, { activity: "unknown", pendingInteraction: true });
+    failed.head.session_state.pending_interaction!.can_respond = false;
     failed.head.session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
     failed.head.session_state.presentation.primary = {
-      key: "ended",
-      label: "Run failed",
+      key: "needs_answer",
+      label: "Needs answer",
       tone: "blocked",
       observed_at: "2026-10-06T11:00:00Z",
     };
-    const endedQuestion = card("ended-question", {}, { activity: "unknown", pendingInteraction: true });
-    endedQuestion.head.session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
-    endedQuestion.head.session_state.presentation.primary = {
+    const answerableEnded = card("answerable-ended", {}, { activity: "unknown", pendingInteraction: true });
+    answerableEnded.head.session_state.run = { lifecycle: "ended", end_reason: "run_completed" };
+    answerableEnded.head.session_state.presentation.primary = {
+      key: "needs_answer",
+      label: "Needs answer",
+      tone: "blocked",
+      observed_at: "2026-10-06T11:00:00Z",
+    };
+    const unanswerableUnknown = card("unanswerable-unknown", {}, { activity: "unknown", pendingInteraction: true });
+    unanswerableUnknown.head.session_state.pending_interaction!.can_respond = false;
+    unanswerableUnknown.head.session_state.run = { lifecycle: "unknown" };
+    unanswerableUnknown.head.session_state.presentation.primary = {
       key: "needs_answer",
       label: "Needs answer",
       tone: "blocked",
@@ -583,12 +593,18 @@ describe("rail rows follow the Timeline's tiers", () => {
     };
     const stalled = card("stalled", {}, { activity: "stalled" });
 
-    const rows = buildRailRows([question, failed, endedQuestion, unreadFailed, stalled], Date.parse("2026-10-06T12:30:00Z"), null);
+    const rows = buildRailRows(
+      [question, failed, answerableEnded, unanswerableUnknown, unreadFailed, stalled],
+      Date.parse("2026-10-06T12:30:00Z"),
+      null,
+    );
     const byId = new Map(rows.map((row) => [row.id, row]));
 
     expect(railStatusFlag(byId.get("question")!)).toBe("Needs you");
     expect(railStatusFlag(byId.get("failed")!)).toBe("Failed");
-    expect(railStatusFlag(byId.get("ended-question")!)).toBeNull();
+    expect(byId.get("failed")!.stateText).toBe("Run failed");
+    expect(railStatusFlag(byId.get("answerable-ended")!)).toBe("Needs you");
+    expect(railStatusFlag(byId.get("unanswerable-unknown")!)).toBeNull();
     expect(railStatusFlag(byId.get("unread-failed")!)).toBe("Failed");
     expect(railStatusFlag(byId.get("stalled")!)).toBeNull();
   });

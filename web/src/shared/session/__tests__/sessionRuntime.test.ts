@@ -205,6 +205,24 @@ describe("resolveSessionRuntimeState", () => {
     expect(needsSessionResponse(session)).toBe(false);
     expect(resolveTimelineSignal(session)).toBe("attention");
   });
+  it("does not mark an unanswerable interaction as a rail response request", () => {
+    const session_state = makeSessionStateFacts({
+      pendingInteraction: true,
+      activity: "quiescent",
+    });
+    session_state.pending_interaction!.can_respond = false;
+    session_state.presentation.primary = {
+      key: "needs_answer",
+      label: "Needs answer",
+      tone: "blocked",
+      observed_at: null,
+    };
+    const session = makeSession({ session_state, user_state: "active" });
+
+    expect(resolveSessionRuntimeState(session).needsAttention).toBe(true);
+    expect(needsSessionResponse(session)).toBe(false);
+    expect(resolveTimelineSignal(session)).toBe("attention");
+  });
 });
 
 describe("resolveTimelineSignal", () => {
