@@ -291,6 +291,8 @@ struct RawLine {
     content: Option<Value>,
     /// File-history snapshot payload.
     snapshot: Option<FileHistorySnapshot>,
+    /// Claude attachment rows (hook output, queued commands, images).
+    attachment: Option<Value>,
     /// Optional compaction metadata payloads on system boundary lines.
     #[serde(rename = "compactMetadata")]
     compact_metadata: Option<Box<RawValue>>,
@@ -4635,8 +4637,54 @@ fn extract_compaction_metadata_event(
                 raw_line: Some(raw_line.to_string()),
             })
         }
+        "attachment" => longhouse_steer_event(obj, session_id, line_offset, raw_line),
         _ => None,
     }
+}
+
+/// A steer sent from Longhouse mid-turn reaches Claude as lifecycle-hook
+/// context, not as a user row. Without this the transcript never shows it,
+/// so the client kept the send pinned below every later reply (2026-10-07).
+fn longhouse_steer_event(
+    obj: &RawLine,
+    session_id: &str,
+    line_offset: u64,
+    raw_line: &str,
+) -> Option<ParsedEvent> {
+    let attachment = obj.attachment.as_ref()?;
+    let kind = attachment.get("type").and_then(Value::as_str)?;
+    if !matches!(
+        kind,
+        "hook_additional_context" | "hook_blocking_error" | "hook_stopped_continuation"
+    ) {
+        return None;
+    }
+    let strings: Vec<&str> = match attachment.get("content") {
+        Some(Value::String(text)) => vec![text.as_str()],
+        Some(Value::Array(items)) => items.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    };
+    let text = strings
+        .into_iter()
+        .find_map(crate::claude_channel_control::steer_text_from_context)?;
+    Some(ParsedEvent {
+        parent_uuid: obj.parent_uuid.clone(),
+        uuid: obj
+            .uuid
+            .clone()
+            .unwrap_or_else(|| format!("longhouse-steer-{line_offset}")),
+        session_id: session_id.to_string(),
+        timestamp: metadata_timestamp(obj),
+        role: Role::User,
+        content_text: Some(text.to_string()),
+        tool_name: None,
+        tool_input_json: None,
+        tool_output_text: None,
+        tool_call_id: None,
+        source_offset: line_offset,
+        raw_type: "longhouse_steer".to_string(),
+        raw_line: Some(raw_line.to_string()),
+    })
 }
 
 fn metadata_timestamp(obj: &RawLine) -> DateTime<Utc> {
@@ -6506,6 +6554,46 @@ mod tests {
         assert!(
             result.source_lines[1].raw_line.contains("blob:sha256:"),
             "an unresolvable pointer stays a pointer"
+        );
+    }
+
+    #[test]
+    fn claude_hook_steer_becomes_the_user_message_it_carries() {
+        let steer = "The user of this session sent this steer from Longhouse while you were working: \
+                     \"also fix \"attachments\" mid-turn\". It is the user's own instruction, delivered \
+                     by this session's Longhouse hook, and it updates the current request.";
+        let lines = [
+            json!({"type": "user", "uuid": "u-1", "timestamp": "2026-10-07T04:00:00Z",
+                   "message": {"role": "user", "content": "fix the OMP launch"}}),
+            json!({"type": "attachment", "uuid": "a-1", "parentUuid": "t-1",
+                   "timestamp": "2026-10-07T04:10:00Z",
+                   "attachment": {"type": "hook_additional_context", "hookEvent": "PostToolUse",
+                                  "content": [steer]}}),
+            json!({"type": "attachment", "uuid": "a-2", "timestamp": "2026-10-07T04:11:00Z",
+                   "attachment": {"type": "hook_additional_context", "content": ["Outstanding work: ..."]}}),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let body: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        std::fs::write(&path, body).unwrap();
+
+        let result = parse_session_file_with_provider(&path, 0, Some("claude")).unwrap();
+
+        let users: Vec<_> = result
+            .events
+            .iter()
+            .filter(|event| event.role == Role::User)
+            .collect();
+        assert_eq!(
+            users.len(),
+            2,
+            "the prompt and the steer; other hook context is not a message"
+        );
+        assert_eq!(users[1].uuid, "a-1");
+        assert_eq!(users[1].raw_type, "longhouse_steer");
+        assert_eq!(
+            users[1].content_text.as_deref(),
+            Some("also fix \"attachments\" mid-turn")
         );
     }
 

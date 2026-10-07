@@ -371,6 +371,46 @@ fn steer_context(text: &str) -> String {
     )
 }
 
+/// The user's steer text inside a context `steer_context` wrote, so the
+/// transcript can show it as the user message it is.
+pub fn steer_text_from_context(context: &str) -> Option<&str> {
+    const PREFIX: &str =
+        "The user of this session sent this steer from Longhouse while you were working: \"";
+    const TEXT_END: &str = "\". It is the user's own instruction";
+    let rest = context.strip_prefix(PREFIX)?;
+    rest.rfind(TEXT_END).map(|end| &rest[..end])
+}
+
+/// Whether Claude already recorded this steer in its transcript. Delivery
+/// repeats only to survive a hook Claude cancelled under load; once one copy
+/// is on record, repeating it stacks duplicate user messages in the session.
+fn steer_already_recorded(input: &serde_json::Value, text: &str) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL_BYTES: u64 = 2 * 1024 * 1024;
+    let Some(path) = input
+        .get("transcript_path")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let mut tail = Vec::new();
+    if file
+        .seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
+        .is_err()
+        || file.read_to_end(&mut tail).is_err()
+    {
+        return false;
+    }
+    // Claude stores the context as a JSON string: match it escaped.
+    let encoded = serde_json::to_string(&steer_context(text)).unwrap_or_default();
+    let needle = encoded.trim_matches('"').as_bytes();
+    !needle.is_empty() && tail.windows(needle.len()).any(|window| window == needle)
+}
+
 fn read_steer(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
@@ -412,6 +452,10 @@ fn turn_control_at(
                 // and a steer consumed by a cancelled hook would be lost.
                 if let Some(mut pending) = read_steer(&steer) {
                     let text = steer_text(&pending)?;
+                    if steer_already_recorded(input, &text) {
+                        let _ = std::fs::remove_file(&steer);
+                        return None;
+                    }
                     pending["boundary_delivery_attempted"] = json!(true);
                     let _ =
                         std::fs::write(&steer, serde_json::to_vec(&pending).unwrap_or_default());
@@ -1066,6 +1110,41 @@ mod tests {
         assert!(block["reason"].as_str().unwrap().contains("stop now"));
         assert_eq!(
             turn_control_at(SESSION_ID, "Stop", &json!({}), Some(temp.path())),
+            None
+        );
+        assert!(!steer.exists());
+    }
+
+    #[test]
+    fn steer_stops_repeating_once_the_transcript_records_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = state_file_path(SESSION_ID, Some(temp.path())).unwrap();
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        let steer = state.with_extension(STEER_REQUEST_EXTENSION);
+        std::fs::write(&steer, br#"{"text":"attach \"this\" too"}"#).unwrap();
+        let transcript = temp.path().join("transcript.jsonl");
+        std::fs::write(&transcript, b"{\"type\":\"user\"}\n").unwrap();
+        let post = json!({"tool_name": "Bash", "transcript_path": transcript});
+
+        // Not on record yet (or the hook was cancelled): deliver.
+        let output = turn_control_at(SESSION_ID, "PostToolUse", &post, Some(temp.path())).unwrap();
+        let context = output["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            steer_text_from_context(context),
+            Some("attach \"this\" too")
+        );
+
+        // Claude recorded it as an attachment row: stop, so the session shows
+        // one user message instead of one per tool step.
+        let row = json!({
+            "type": "attachment",
+            "attachment": {"type": "hook_additional_context", "content": [context]},
+        });
+        std::fs::write(&transcript, format!("{{\"type\":\"user\"}}\n{row}\n")).unwrap();
+        assert_eq!(
+            turn_control_at(SESSION_ID, "PostToolUse", &post, Some(temp.path())),
             None
         );
         assert!(!steer.exists());
