@@ -451,3 +451,242 @@ def test_runtime_artifact_check_fails_on_missing_identity(monkeypatch, tmp_path)
 
     assert check.ok is False
     assert "missing build_identity" in check.detail
+
+
+# --- coverage, not identity, on a busy main (v0.1.76, 2026-10-07) ----------------------------------------
+
+CANDIDATE = "0bc8b44b55bb1da46204ce91201df462cff470a7"
+NEWER = "e9e02b21b0000000000000000000000000000000"
+UNRELATED = "f3ece996486b2b1d56325ce4cd62cf88197b9a48"
+
+
+def _fake_gh(monkeypatch, mod, *, exact, main_runs=(), deploys=None, reruns=None):
+    """Answers `gh run list --commit SHA` with `exact`, `gh run list --branch main` with `main_runs`,
+    `--workflow "Deploy and Verify" --commit X` from `deploys`, and records `gh run rerun`."""
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "run", "rerun"]:
+            if reruns is not None:
+                reruns.append(cmd[3])
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if "--branch" in cmd:
+            workflow = cmd[cmd.index("--workflow") + 1]
+            return SimpleNamespace(returncode=0, stdout=json.dumps([r for r in main_runs if r["workflow"] == workflow]), stderr="")
+        if "--workflow" in cmd and cmd[cmd.index("--workflow") + 1] == "Deploy and Verify":
+            commit = cmd[cmd.index("--commit") + 1]
+            return SimpleNamespace(returncode=0, stdout=json.dumps((deploys or {}).get(commit, [])), stderr="")
+        return SimpleNamespace(returncode=0, stdout=json.dumps(exact), stderr="")
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(mod, "descends_from", lambda ancestor, commit: ancestor == CANDIDATE and commit == NEWER)
+
+
+def _cancelled(workflow="CI", run_id=37650853995):
+    return {
+        "workflowName": workflow,
+        "databaseId": run_id,
+        "status": "completed",
+        "conclusion": "cancelled",
+        "headSha": CANDIDATE,
+        "url": f"https://example.test/run/{run_id}",
+    }
+
+
+def test_a_superseded_run_is_covered_by_the_same_workflow_succeeding_on_a_descendant(monkeypatch):
+    mod = _load_module()
+    _fake_gh(
+        monkeypatch,
+        mod,
+        exact=[_cancelled()],
+        main_runs=[
+            {"workflow": "CI", "databaseId": 2, "headSha": NEWER, "status": "completed", "conclusion": "success", "url": "u2"},
+        ],
+    )
+
+    [check] = mod.check_workflows("cipher982/longhouse", CANDIDATE, ("CI",), accept_covering=True)
+
+    assert check.ok
+    assert "cancelled (superseded)" in check.detail and NEWER[:12] in check.detail
+
+
+def test_a_superseded_run_waits_on_a_covering_run_still_in_progress(monkeypatch):
+    mod = _load_module()
+    _fake_gh(
+        monkeypatch,
+        mod,
+        exact=[_cancelled()],
+        main_runs=[
+            {"workflow": "CI", "databaseId": 2, "headSha": NEWER, "status": "in_progress", "conclusion": None, "url": "u2"},
+        ],
+    )
+
+    [check] = mod.check_workflows("cipher982/longhouse", CANDIDATE, ("CI",), accept_covering=True)
+
+    assert check.state == "pending" and not check.terminal
+
+
+def test_a_run_on_a_commit_that_does_not_contain_the_candidate_covers_nothing(monkeypatch):
+    mod = _load_module()
+    _fake_gh(
+        monkeypatch,
+        mod,
+        exact=[_cancelled()],
+        main_runs=[
+            {"workflow": "CI", "databaseId": 2, "headSha": UNRELATED, "status": "completed", "conclusion": "success", "url": "u2"},
+        ],
+    )
+
+    [check] = mod.check_workflows("cipher982/longhouse", CANDIDATE, ("CI",), accept_covering=True)
+
+    assert check.terminal and check.rerun_id == "37650853995"
+
+
+def test_a_genuine_failure_is_never_covered(monkeypatch):
+    mod = _load_module()
+    failed = {**_cancelled(), "conclusion": "failure"}
+    _fake_gh(
+        monkeypatch,
+        mod,
+        exact=[failed],
+        main_runs=[
+            {"workflow": "CI", "databaseId": 2, "headSha": NEWER, "status": "completed", "conclusion": "success", "url": "u2"},
+        ],
+    )
+
+    [check] = mod.check_workflows("cipher982/longhouse", CANDIDATE, ("CI",), accept_covering=True)
+
+    assert check.terminal and check.rerun_id is None
+
+
+def test_without_accept_covering_a_cancelled_run_stays_a_failure(monkeypatch):
+    mod = _load_module()
+    _fake_gh(
+        monkeypatch,
+        mod,
+        exact=[_cancelled()],
+        main_runs=[
+            {"workflow": "CI", "databaseId": 2, "headSha": NEWER, "status": "completed", "conclusion": "success", "url": "u2"},
+        ],
+    )
+
+    [check] = mod.check_workflows("cipher982/longhouse", CANDIDATE, ("CI",))
+
+    assert check.terminal and check.rerun_id is None
+
+
+def test_the_canary_may_serve_a_descendant_whose_own_deploy_passed(monkeypatch):
+    mod = _load_module()
+    _fake_gh(
+        monkeypatch,
+        mod,
+        exact=[],
+        deploys={
+            NEWER: [{"databaseId": 9, "status": "completed", "conclusion": "success", "url": "d9", "headSha": NEWER}],
+        },
+    )
+    monkeypatch.setattr(mod, "fetch_json_url", lambda url: {"status": "ok", "build": {"commit": NEWER}})
+
+    check = mod.check_live_surface("canary", "https://c.test/api/health", CANDIDATE, accept_covering=True, repo="r")
+
+    assert check.ok and "serves descendant" in check.detail
+    assert not mod.check_live_surface("canary", "https://c.test/api/health", CANDIDATE).ok  # identity without the flag
+
+
+def test_the_canary_on_a_descendant_without_a_passed_deploy_or_on_an_unrelated_commit_is_pending(monkeypatch):
+    mod = _load_module()
+    _fake_gh(
+        monkeypatch,
+        mod,
+        exact=[],
+        deploys={
+            NEWER: [{"databaseId": 9, "status": "in_progress", "conclusion": None, "url": "d9", "headSha": NEWER}],
+        },
+    )
+    for served in (NEWER, UNRELATED):
+        monkeypatch.setattr(mod, "fetch_json_url", lambda url, served=served: {"status": "ok", "build": {"commit": served}})
+        check = mod.check_live_surface("canary", "https://c.test/api/health", CANDIDATE, accept_covering=True, repo="r")
+        assert check.state == "pending"
+
+
+def test_wait_mode_reruns_an_uncovered_superseded_run_a_bounded_number_of_times(monkeypatch, capsys):
+    mod = _load_module()
+    reruns: list[str] = []
+    _fake_gh(monkeypatch, mod, exact=[_cancelled()], reruns=reruns)  # stays cancelled, nothing covers it
+    monkeypatch.setattr(mod, "resolve_sha", lambda root, rev: CANDIDATE)
+    clock = _FakeClock()
+    monkeypatch.setattr(mod.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+
+    rc = mod.main(
+        [
+            "--sha",
+            CANDIDATE,
+            "--required-workflow",
+            "CI",
+            "--skip-live",
+            "--skip-release",
+            "--skip-public-package",
+            "--skip-runtime-artifacts",
+            "--accept-covering",
+            "--redispatch-superseded",
+            "2",
+            "--wait",
+            "--timeout",
+            "7200",
+            "--poll",
+            "30",
+        ]
+    )
+
+    err = capsys.readouterr().err
+    assert reruns == ["37650853995", "37650853995"]
+    assert "re-dispatched it for the exact SHA (2/2)" in err
+    assert rc == 1 and "failed terminal checks" in err  # the third cancellation is terminal
+    assert clock.now < 7200
+
+
+def test_wait_mode_passes_once_a_rerun_succeeds(monkeypatch, capsys):
+    mod = _load_module()
+    states = iter([_cancelled(), {**_cancelled(), "status": "queued", "conclusion": None}, {**_cancelled(), "conclusion": "success"}])
+    current = {"run": next(states)}
+    reruns: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "run", "rerun"]:
+            reruns.append(cmd[3])
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if "--branch" in cmd:
+            return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+        out = json.dumps([current["run"]])
+        current["run"] = next(states, current["run"])
+        return SimpleNamespace(returncode=0, stdout=out, stderr="")
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(mod, "resolve_sha", lambda root, rev: CANDIDATE)
+    clock = _FakeClock()
+    monkeypatch.setattr(mod.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+
+    rc = mod.main(
+        [
+            "--sha",
+            CANDIDATE,
+            "--required-workflow",
+            "CI",
+            "--skip-live",
+            "--skip-release",
+            "--skip-public-package",
+            "--skip-runtime-artifacts",
+            "--accept-covering",
+            "--redispatch-superseded",
+            "2",
+            "--wait",
+            "--timeout",
+            "7200",
+            "--poll",
+            "30",
+        ]
+    )
+
+    assert rc == 0, capsys.readouterr().err
+    assert reruns == ["37650853995"]

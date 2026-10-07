@@ -91,6 +91,19 @@ def test_release_dispatches_only_path_filtered_gates_missing_for_exact_sha() -> 
     assert 'gh workflow run "$workflow"' in dispatch
 
 
+def test_a_concurrent_push_cannot_kill_the_release_but_a_real_failure_still_does() -> None:
+    gate_start = SOURCE.index('echo "Waiting for pre-release exact-SHA gates')
+    release_create = SOURCE.index("gh release create")
+    readiness = SOURCE.index('echo "Verifying launch readiness for $BUMP_SHA')
+    shipped = SOURCE.index('echo ""\necho "Release $VERSION shipped')
+
+    # Both waits take coverage for identity and rerun an uncovered superseded run, bounded.
+    for gate in (SOURCE[gate_start:release_create], SOURCE[readiness:shipped]):
+        assert "--accept-covering --redispatch-superseded 2" in gate
+    readiness_source = (ROOT / "scripts" / "ops" / "launch-readiness.py").read_text(encoding="utf-8")
+    assert 'conclusion == "cancelled"' in readiness_source  # only a cancellation is ever covered or rerun
+
+
 def test_same_version_resumes_a_pushed_candidate() -> None:
     assert 'if [[ "$CURRENT_VERSION" == "$PYVER" ]]; then' in SOURCE
     assert "reusing the current candidate" in SOURCE
@@ -114,6 +127,7 @@ if __name__ == "__main__":
     test_pre_release_gate_precedes_github_release_and_skips_only_release_evidence()
     test_final_launch_readiness_also_skips_only_the_demo()
     test_release_dispatches_only_path_filtered_gates_missing_for_exact_sha()
+    test_a_concurrent_push_cannot_kill_the_release_but_a_real_failure_still_does()
     test_same_version_resumes_a_pushed_candidate()
     test_release_fetches_remote_branch_before_building_changelog()
     print("release tests passed")

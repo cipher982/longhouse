@@ -245,6 +245,13 @@ for workflow in runtime-image.yml deploy-and-verify.yml launch-gate.yml; do
 done
 
 echo "Waiting for pre-release exact-SHA gates before creating $VERSION..."
+# On a busy main another agent's push lands within minutes of the candidate's, and main's
+# supersede logic cancels the candidate's queued runs while the canary moves past it
+# (v0.1.76 died twice that way, 2026-10-07). --accept-covering takes coverage for identity
+# there: a cancelled run passes when the same workflow succeeded on a main commit that
+# contains the candidate, and the canary when it serves such a commit whose own Deploy and
+# Verify passed. A cancelled run nothing covers is rerun for the exact SHA, at most twice.
+# A genuine failure stays terminal.
 # The canary ring (same source as deploy-status.sh); the public demo is production.
 CANARY_SUBDOMAIN="${HOSTED_CANARY_SUBDOMAIN:-release-canary-a}"
 CANARY_HEALTH_URL="https://${CANARY_SUBDOMAIN}.longhouse.ai/api/health"
@@ -258,6 +265,7 @@ CANARY_HEALTH_URL="https://${CANARY_SUBDOMAIN}.longhouse.ai/api/health"
   --skip-public-package \
   --skip-runtime-artifacts \
   --skip-demo \
+  --accept-covering --redispatch-superseded 2 \
   --wait --timeout 7200 --discovery-grace 1800 --poll 30
 
 echo "Creating GitHub release $VERSION (this triggers publish.yml + local-runtime-release.yml)..."
@@ -380,6 +388,7 @@ echo "Verifying launch readiness for $BUMP_SHA..."
   --sha "$BUMP_SHA" \
   --canary-url "$CANARY_HEALTH_URL" \
   --skip-demo \
+  --accept-covering --redispatch-superseded 2 \
   --wait --timeout 1800 --poll 30
 
 echo ""

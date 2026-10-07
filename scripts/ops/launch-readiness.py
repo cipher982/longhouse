@@ -33,6 +33,9 @@ class Check:
     state: str
     detail: str
     hint: str | None = None
+    # A workflow run for the exact SHA that main's supersede logic cancelled and no newer main run
+    # covers yet: --redispatch-superseded may rerun it (gh run rerun keeps the exact SHA).
+    rerun_id: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -109,6 +112,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=300,
         help="Seconds to allow required workflow runs to appear before missing evidence fails. Default: 300.",
     )
+    parser.add_argument(
+        "--accept-covering",
+        action="store_true",
+        help="Accept coverage, not only identity, on a busy main: a required workflow run on the SHA that a "
+        "newer main push cancelled passes when the same workflow succeeded on a main commit descending from "
+        "it, and the canary passes when it serves a descendant whose own Deploy and Verify succeeded. A "
+        "genuine failure (anything but a superseded cancellation) stays terminal.",
+    )
+    parser.add_argument(
+        "--redispatch-superseded",
+        type=int,
+        default=0,
+        metavar="N",
+        help="In --wait mode, rerun (exact SHA) a cancelled required run that nothing covers, at most N times "
+        "per workflow, before treating the cancellation as terminal. Default: 0.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     return parser.parse_args(argv)
 
@@ -152,7 +171,54 @@ def missing_workflow_hint(repo: str, sha: str, workflow: str) -> str:
     )
 
 
-def check_workflows(repo: str, sha: str, required: tuple[str, ...]) -> list[Check]:
+_FETCHED_FOR_ANCESTRY = False
+
+
+def descends_from(ancestor: str, commit: str) -> bool:
+    """`commit` contains `ancestor` (git merge-base --is-ancestor). A commit this checkout has not
+    fetched yet triggers one `git fetch origin main`; still unknown reads as not descending."""
+    global _FETCHED_FOR_ANCESTRY
+    if not commit or commit == ancestor:
+        return False
+    for _ in range(2):
+        proc = run(["git", "merge-base", "--is-ancestor", ancestor, commit], cwd=repo_root(), check=False)
+        if proc.returncode in (0, 1):
+            return proc.returncode == 0
+        if _FETCHED_FOR_ANCESTRY:
+            return False
+        _FETCHED_FOR_ANCESTRY = True
+        run(["git", "fetch", "--quiet", "origin", "main"], cwd=repo_root(), check=False)
+    return False
+
+
+def covering_run(repo: str, sha: str, workflow: str) -> Check | None:
+    """The newest main run of `workflow` on a commit descending from `sha`: its success covers `sha`,
+    one still running may, and None when no descendant run exists or all of them failed."""
+    proc = run(
+        [
+            "gh", "run", "list", "-R", repo, "--workflow", workflow, "--branch", "main", "--event", "push",
+            "--limit", "30", "--json", "databaseId,headSha,status,conclusion,url",
+        ],
+        check=False,
+    )
+    try:
+        runs = json.loads(proc.stdout or "[]") if proc.returncode == 0 else []
+    except ValueError:
+        runs = []
+    pending = None
+    for item in runs:  # newest first
+        head = str(item.get("headSha") or "")
+        if not descends_from(sha, head):
+            continue
+        detail = f"covered by run {item.get('databaseId')} on descendant {head[:12]} {item.get('url')}"
+        if item.get("status") == "completed" and item.get("conclusion") in ACCEPTED_CONCLUSIONS:
+            return Check(f"workflow:{workflow}", "succeeded", detail)
+        if item.get("status") != "completed" and pending is None:
+            pending = Check(f"workflow:{workflow}", "pending", detail.replace("covered by", "awaiting covering"))
+    return pending
+
+
+def check_workflows(repo: str, sha: str, required: tuple[str, ...], accept_covering: bool = False) -> list[Check]:
     proc = run(
         [
             "gh",
@@ -190,11 +256,20 @@ def check_workflows(repo: str, sha: str, required: tuple[str, ...]) -> list[Chec
         url = run_info.get("url")
         ok = status == "completed" and conclusion in ACCEPTED_CONCLUSIONS
         terminal = status == "completed" and not ok
+        detail = f"run {run_id} {status}/{conclusion or '-'} {url}"
+        if accept_covering and status == "completed" and conclusion == "cancelled":
+            covered = covering_run(repo, sha, workflow)
+            if covered is not None:
+                checks.append(replace(covered, detail=f"run {run_id} cancelled (superseded); {covered.detail}"))
+            else:
+                checks.append(Check(f"workflow:{workflow}", "failed", f"{detail}; no newer main run covers it",
+                                    rerun_id=str(run_id)))
+            continue
         checks.append(
             Check(
                 f"workflow:{workflow}",
                 "succeeded" if ok else ("failed" if terminal else "pending"),
-                f"run {run_id} {status}/{conclusion or '-'} {url}",
+                detail,
             )
         )
     return checks
@@ -209,7 +284,25 @@ def fetch_json_url(url: str) -> dict[str, Any]:
     return payload
 
 
-def check_live_surface(name: str, url: str, sha: str) -> Check:
+def deploy_passed(repo: str, commit: str) -> str | None:
+    """The URL of `commit`'s own successful Deploy and Verify run, else None."""
+    proc = run(
+        ["gh", "run", "list", "-R", repo, "--workflow", "Deploy and Verify", "--commit", commit, "--limit", "10",
+         "--json", "databaseId,status,conclusion,url,headSha"],
+        check=False,
+    )
+    try:
+        runs = json.loads(proc.stdout or "[]") if proc.returncode == 0 else []
+    except ValueError:
+        return None
+    exact = [r for r in runs if r.get("headSha") == commit]
+    latest = max(exact, key=lambda r: int(r.get("databaseId") or 0), default=None)
+    if latest and latest.get("status") == "completed" and latest.get("conclusion") in ACCEPTED_CONCLUSIONS:
+        return str(latest.get("url"))
+    return None
+
+
+def check_live_surface(name: str, url: str, sha: str, *, accept_covering: bool = False, repo: str | None = None) -> Check:
     try:
         payload = fetch_json_url(url)
     except Exception as exc:
@@ -220,6 +313,11 @@ def check_live_surface(name: str, url: str, sha: str) -> Check:
     commit = str(build.get("commit") or "")
     status = str(payload.get("status") or "")
     ok = commit_matches(commit, sha) and status in {"ok", "healthy", "degraded"}
+    if not ok and accept_covering and repo and status in {"ok", "healthy", "degraded"} and descends_from(sha, commit):
+        deploy = deploy_passed(repo, commit)
+        if deploy:
+            return Check(f"live:{name}", "succeeded", f"status={status} serves descendant {commit} of {sha[:12]}, "
+                                                      f"whose Deploy and Verify passed ({deploy}) url={url}")
     return Check(
         f"live:{name}",
         "succeeded" if ok else "pending",
@@ -385,11 +483,12 @@ def run_checks(
     cache = immutable_success_cache if immutable_success_cache is not None else {}
     checks: list[Check] = []
     if not args.skip_workflows:
-        checks.extend(check_workflows(args.repo, sha, required))
+        checks.extend(check_workflows(args.repo, sha, required, getattr(args, "accept_covering", False)))
     if not args.skip_live:
         if not args.skip_demo:
             checks.append(check_live_surface("demo", args.demo_url, sha))
-        checks.append(check_live_surface("canary", args.canary_url, sha))
+        checks.append(check_live_surface("canary", args.canary_url, sha,
+                                         accept_covering=getattr(args, "accept_covering", False), repo=args.repo))
     release_tag: str | None = None
     if not args.skip_release:
         release_check, release_tag = check_latest_release(args.repo, sha)
@@ -427,6 +526,30 @@ def _expire_missing_workflows(checks: list[Check]) -> list[Check]:
     ]
 
 
+def _redispatch_superseded(args: argparse.Namespace, sha: str, checks: list[Check], redispatched: dict[str, int]) -> list[Check]:
+    """Rerun each cancelled, uncovered exact-SHA run (bounded per workflow) and wait on it instead of failing."""
+    out = []
+    for check in checks:
+        if check.state != "failed" or not check.rerun_id:
+            out.append(check)
+            continue
+        count = redispatched.get(check.name, 0)
+        if count >= args.redispatch_superseded:
+            out.append(replace(check, detail=f"{check.detail}; re-dispatched {count} time(s) already"))
+            continue
+        proc = run(["gh", "run", "rerun", check.rerun_id, "-R", args.repo], check=False)
+        redispatched[check.name] = count + 1
+        if proc.returncode != 0:
+            print(f"Re-dispatch of {check.name} run {check.rerun_id} for {sha[:12]} failed: {(proc.stderr or proc.stdout).strip()}",
+                  file=sys.stderr)
+            out.append(check)
+            continue
+        print(f"{check.name}: run {check.rerun_id} for {sha[:12]} was cancelled by a newer push and nothing newer covers it; "
+              f"re-dispatched it for the exact SHA ({count + 1}/{args.redispatch_superseded})", file=sys.stderr)
+        out.append(replace(check, state="pending", detail=f"{check.detail}; re-dispatched ({count + 1}/{args.redispatch_superseded})"))
+    return out
+
+
 def _pending_signature(checks: list[Check]) -> tuple[tuple[str, str, str], ...]:
     return tuple((check.name, check.state, check.detail) for check in checks if not check.ok)
 
@@ -442,6 +565,7 @@ def main(argv: list[str] | None = None) -> int:
     attempt = 0
     last_pending_signature: tuple[tuple[str, str, str], ...] | None = None
     immutable_success_cache: dict[tuple[str, ...], Check] = {}
+    redispatched: dict[str, int] = {}
     while True:
         attempt += 1
         checks = run_checks(
@@ -452,6 +576,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.wait and time.monotonic() - started_at >= args.discovery_grace:
             checks = _expire_missing_workflows(checks)
+        if args.wait and args.redispatch_superseded:
+            checks = _redispatch_superseded(args, sha, checks, redispatched)
         ok = all(check.ok for check in checks)
         terminal_failures = [check for check in checks if not check.ok and check.terminal]
         if ok or not args.wait or time.monotonic() >= deadline:
