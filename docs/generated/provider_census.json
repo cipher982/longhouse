@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 312,
+  "file_count": 310,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -672,15 +672,6 @@
       ]
     },
     {
-      "path": "scripts/qa/provider-release-profile-canary.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "opencode"
-      ]
-    },
-    {
       "path": "scripts/qa/provider-release-proof-universal-smoke.py",
       "providers": [
         "antigravity",
@@ -755,15 +746,6 @@
       "path": "scripts/tests/provider-live-route-e2e.test.py",
       "providers": [
         "claude",
-        "opencode"
-      ]
-    },
-    {
-      "path": "scripts/tests/provider-release-profile-canary.test.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
         "opencode"
       ]
     },

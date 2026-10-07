@@ -970,7 +970,6 @@ PROVIDER_CLI_CANARY_TESTS := \
 	provider-live-route-e2e \
 	provider-release-proof-baseline \
 	provider-control-e2e-canary \
-	provider-release-profile-canary \
 	provider-release-proof-old-new \
 	provider-release-proof-maturity \
 	provider-live-proof-publish
