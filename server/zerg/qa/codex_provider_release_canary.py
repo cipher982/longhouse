@@ -638,6 +638,19 @@ def run_static_contract(args: argparse.Namespace) -> dict[str, Any]:
     return _status("pass", evidence=result.stdout.strip())
 
 
+def _fake_app_server_cargo_env(repo_root: Path) -> dict[str, str]:
+    """Build into the managed target, where test images prebuild dependencies."""
+    env = os.environ.copy()
+    resolved = _run(
+        ["python3", str(repo_root / "scripts/build/cargo.py"), "target-dir"],
+        cwd=repo_root,
+        timeout=30,
+    )
+    if resolved.returncode == 0 and resolved.stdout.strip():
+        env["CARGO_TARGET_DIR"] = resolved.stdout.strip()
+    return env
+
+
 def run_fake_app_server_unit(args: argparse.Namespace) -> dict[str, Any]:
     cargo_bin = _resolve_executable(args.cargo_bin, "cargo")
     if not cargo_bin:
@@ -661,19 +674,37 @@ def run_fake_app_server_unit(args: argparse.Namespace) -> dict[str, Any]:
         "canary_runs_against_fake_codex_app_server",
         "canary_auto_approves_server_requests",
     )
-    results = []
+    cargo_env = _fake_app_server_cargo_env(args.repo_root)
+    cargo_test = [
+        cargo_bin,
+        "test",
+        "--manifest-path",
+        str(args.repo_root / "engine/Cargo.toml"),
+        "--profile",
+        args.fake_app_server_cargo_profile,
+        "--bin",
+        "longhouse-engine",
+    ]
+    # Compile once under its own budget, then hold each test run to the
+    # fake-app-server budget: a cold compile is not the contract under test.
+    build = _run(
+        [*cargo_test, "--no-run"],
+        cwd=args.repo_root,
+        env=cargo_env,
+        timeout=args.fake_app_server_build_timeout_secs,
+    )
+    results = [{"test": "build", "evidence": _command_evidence(build)}]
+    if build.returncode != 0:
+        return _fail(
+            "fake_app_server_unit_build_failed",
+            "engine test binary for fake app-server unit contract tests failed to build",
+            unit_tests=results,
+        )
     for test_name in tests:
         result = _run(
-            [
-                cargo_bin,
-                "test",
-                "--manifest-path",
-                str(args.repo_root / "engine/Cargo.toml"),
-                "--bin",
-                "longhouse-engine",
-                test_name,
-            ],
+            [*cargo_test, test_name],
             cwd=args.repo_root,
+            env=cargo_env,
             timeout=args.fake_app_server_timeout_secs,
         )
         results.append({"test": test_name, "evidence": _command_evidence(result)})
@@ -683,7 +714,7 @@ def run_fake_app_server_unit(args: argparse.Namespace) -> dict[str, Any]:
                 f"fake app-server unit contract test failed: {test_name}",
                 unit_tests=results,
             )
-    stdout_tail = "\n".join(str(item["evidence"]["stdout"]) for item in results)[-1200:]
+    stdout_tail = "\n".join(str(item["evidence"]["stdout"]) for item in results[1:])[-1200:]
     operation_evidence = {
         "permission_prompt": {
             "status": "pass",
@@ -2187,6 +2218,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--canary-timeout-secs", type=int, default=90)
     parser.add_argument("--fake-app-server-timeout-secs", type=int, default=120)
+    # ci-test is the profile docker/test.dockerfile prebuilds dependencies for.
+    parser.add_argument("--fake-app-server-cargo-profile", default="ci-test")
+    # Measured: a warm-dependency ci-test build of the engine binary took
+    # 33.77 s on a hosted arm runner (run 37672732210). The test target adds
+    # the inline tests (~2x crate) and ubuntu-latest x86 runs ~2x slower per
+    # core, so ~140 s expected; 600 s leaves 4x for runner variance.
+    parser.add_argument("--fake-app-server-build-timeout-secs", type=int, default=600)
     parser.add_argument("--bridge-start-timeout-secs", type=int, default=30)
     parser.add_argument("--live-send-timeout-secs", type=int, default=60)
     parser.add_argument("--live-interrupt-timeout-secs", type=int, default=45)

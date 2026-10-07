@@ -519,3 +519,61 @@ def test_live_interrupt_rejects_state_for_a_different_turn(tmp_path: Path, monke
     assert result["failure_code"] == "managed_live_interrupt_turn_mismatch"
     assert result["interrupted_turn_id"] == "turn-other"
     assert result["send_summary"] == send_summary
+
+
+def test_fake_app_server_unit_compiles_once_then_runs_each_test_on_its_own_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((argv, kwargs))
+        if argv[-1] == "target-dir":
+            return subprocess.CompletedProcess(argv, 0, "/managed/cargo-target\n", "")
+        return subprocess.CompletedProcess(argv, 0, "test result: ok\n", "")
+
+    monkeypatch.setattr(canary, "_run", fake_run)
+    monkeypatch.setattr(canary, "_resolve_executable", lambda _value, name: f"/bin/{name}")
+    args = canary._coerce_args({"repo_root": tmp_path})
+
+    result = canary.run_fake_app_server_unit(args)
+
+    assert result["status"] == "pass"
+    cargo_calls = [(argv, kwargs) for argv, kwargs in calls if argv[0] == "/bin/cargo"]
+    build_argv, build_kwargs = cargo_calls[0]
+    assert build_argv[-1] == "--no-run"
+    assert build_kwargs["timeout"] == 600
+    test_calls = cargo_calls[1:]
+    assert [argv[-1] for argv, _ in test_calls] == [
+        "canary_runs_against_fake_codex_app_server",
+        "canary_auto_approves_server_requests",
+    ]
+    for argv, kwargs in cargo_calls:
+        assert argv[argv.index("--profile") + 1] == "ci-test"
+        env = kwargs["env"]
+        assert isinstance(env, dict) and env["CARGO_TARGET_DIR"] == "/managed/cargo-target"
+    assert all(kwargs["timeout"] == 120 for _, kwargs in test_calls)
+
+
+def test_fake_app_server_unit_reports_a_failed_build_without_running_tests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if argv[-1] == "--no-run":
+            return subprocess.CompletedProcess(argv, 101, "", "error[E0425]")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(canary, "_run", fake_run)
+    monkeypatch.setattr(canary, "_resolve_executable", lambda _value, name: f"/bin/{name}")
+    args = canary._coerce_args({"repo_root": tmp_path})
+
+    result = canary.run_fake_app_server_unit(args)
+
+    assert result["status"] == "fail"
+    assert result["failure_code"] == "fake_app_server_unit_build_failed"
+    assert not any(argv[-1].startswith("canary_") for argv in calls)
