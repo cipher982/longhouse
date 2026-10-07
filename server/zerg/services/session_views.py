@@ -409,13 +409,15 @@ def project_compat_capabilities_from_state(
         disabled_reason = "input_not_supported"
     else:
         disabled_reason = "read_only"
+    # Closed outranks a launch that never landed, as it does in
+    # `_control_unavailable_sentence`; clients render this sentence verbatim.
     composer_disabled_reason = (
-        capabilities.composer_disabled_reason
-        if launch_blocked and capabilities.composer_disabled_reason
-        else None
+        None
         if send_available
         else "This session is closed."
         if closed
+        else capabilities.composer_disabled_reason
+        if launch_blocked and capabilities.composer_disabled_reason
         else _control_unavailable_sentence(session_state)
         if control_offline
         else "This control path cannot accept typed input."

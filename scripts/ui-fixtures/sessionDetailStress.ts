@@ -1287,6 +1287,8 @@ export function buildSessionResumeFixture(): SessionDetailFixture {
     reply_to_live_session_available: false,
     display_label: "Ended on cinder",
     display_tone: "neutral",
+    composer_enabled: false,
+    composer_disabled_reason: "This session is closed.",
   };
   fixture.session.session_state = makeSessionState({
     disposition: { state: "closed", closed_at: endedAt, close_reason: "provider_exit" },

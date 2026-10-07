@@ -667,6 +667,8 @@ describe("SessionDetailPage", () => {
         live_control_available: false,
         host_reattach_available: true,
         reply_to_live_session_available: false,
+        composer_disabled_reason:
+          "Longhouse isn't attached to this session. Reattach to steer it from here.",
       }),
     });
     const model = buildTimelineModel([
@@ -710,7 +712,7 @@ describe("SessionDetailPage", () => {
     expect(continuationNotice).toHaveTextContent("Reattach");
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "Longhouse isn't attached to this Codex session. Reattach to steer it from here.",
+      "Longhouse isn't attached to this session. Reattach to steer it from here.",
     );
   });
 
@@ -1453,6 +1455,8 @@ describe("SessionDetailPage", () => {
         live_control_available: false,
         host_reattach_available: false,
         reply_to_live_session_available: false,
+        composer_disabled_reason:
+          "This imported session is searchable, but Longhouse cannot steer it.",
       }),
     });
     const model = buildTimelineModel([
@@ -1511,8 +1515,7 @@ describe("SessionDetailPage", () => {
     const disabledReason =
       screen.getByTestId("session-chat").getAttribute("data-disabled-reason") ??
       "";
-    expect(disabledReason).toMatch(/Antigravity/);
-    expect(disabledReason.toLowerCase()).toMatch(/unmanaged|read-only|cannot/);
+    expect(disabledReason).toBe("This imported session is searchable, but Longhouse cannot steer it.");
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-launch-command",
       "",
@@ -1563,6 +1566,8 @@ describe("SessionDetailPage", () => {
         live_control_available: false,
         host_reattach_available: false,
         reply_to_live_session_available: false,
+        composer_disabled_reason:
+          "This imported session is searchable, but Longhouse cannot steer it.",
       }),
     });
     const model = buildTimelineModel([
@@ -1627,7 +1632,7 @@ describe("SessionDetailPage", () => {
     ).toHaveTextContent("longhouse codex");
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "This unmanaged Codex session is read-only in Longhouse.",
+      "This imported session is searchable, but Longhouse cannot steer it.",
     );
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-launch-command",

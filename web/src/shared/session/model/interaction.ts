@@ -65,7 +65,6 @@ export function getSessionInteractionCapabilities({
           (isManagedLocalSession && (facts.control.connection !== "connected" || consoleTurnBlocked))
         ? "managed_local_unavailable"
         : "unsupported";
-  const isUnsupportedManagedSession = mode === "unsupported" && isManagedLocalSession;
 
   // Why sending is unavailable, from the blocker the server already typed.
   // "until the engine reconnects" was asserted for every unavailable state,
@@ -81,63 +80,23 @@ export function getSessionInteractionCapabilities({
     facts.disposition.state !== "closed" &&
     facts.host.state !== "offline" &&
     facts.host.state !== "stale";
-  const resumeAction = facts.control.actions.resume;
+  // Why sending is unavailable is the server's sentence
+  // (`_control_unavailable_sentence`): closed, unreachable machine, ended run,
+  // Console blockers, reattach, then the connection state, in that order.
+  // Launch copy stays here because the served reason for a launch is only
+  // "Setting up X." or "Launch failed.", without the host or the error.
+  const servedDisabledReason = session.capabilities.composer_disabled_reason?.trim() || null;
   const controlUnavailableDescription = (() => {
-    // A closed session's label already says Closed, and the server drops its
-    // access label for the same reason. Without this the description fell
-    // through to lease vocabulary and offered "Longhouse can't confirm the
-    // control link" for a session that is simply over.
-    if (facts.disposition.state === "closed") {
-      return `This ${providerLabel} session is closed.`;
-    }
-    if (launchInFlight) {
+    if (facts.disposition.state !== "closed" && launchInFlight) {
       return `Longhouse is starting this ${providerLabel} session on ${sourceHostLabel}.`;
     }
-    if (launchFailed) {
+    if (facts.disposition.state !== "closed" && launchFailed) {
       const detail = facts.launch?.error_message?.trim();
       return detail
         ? `This ${providerLabel} session did not start: ${detail}`
         : `This ${providerLabel} session did not start on ${sourceHostLabel}.`;
     }
-    // An ended Helm run is not a control fault. Ending the run clears the
-    // durable run id, which rejects every run-bound control head by design, so
-    // control reads owned/unknown and this fell through to "Longhouse can't
-    // confirm the control link" — a lease diagnostic shown as a warning for
-    // the ordinary act of exiting a terminal.
-    if (runEnded) {
-      return resumeAction.state === "available"
-        ? `This ${providerLabel} session's run has ended. Resume it to keep going.`
-        : `This ${providerLabel} session's run has ended.`;
-    }
-    if (facts.mode === "console") {
-      switch (facts.control.actions.start_turn?.reason) {
-        case "machine_offline":
-          return `The machine running this ${providerLabel} session is offline. Sending resumes when it reconnects.`;
-        case "adapter_unavailable":
-          return `This session's machine isn't accepting new ${providerLabel} turns.`;
-        case "execution_target_missing":
-          return "Longhouse has no machine and folder recorded to run this in.";
-        default:
-          return `Longhouse cannot start a new ${providerLabel} turn on this session right now.`;
-      }
-    }
-    // Machine reachability before reattach, matching the server and iOS.
-    // Reattach eligibility never consults host state, so an offline machine
-    // could otherwise be told to reattach to something it cannot reach.
-    if (facts.host.state === "offline" || facts.host.state === "stale") {
-      return `The machine running this ${providerLabel} session is offline. Sending resumes when it reconnects.`;
-    }
-    if (hostReattachAvailable) {
-      return `Longhouse isn't attached to this ${providerLabel} session. Reattach to steer it from here.`;
-    }
-    switch (facts.control.connection) {
-      case "degraded":
-        return `Longhouse's control link to this ${providerLabel} session stopped answering.`;
-      case "disconnected":
-        return `Longhouse's control path to this ${providerLabel} session is closed.`;
-      default:
-        return `Longhouse can't confirm the control link to this ${providerLabel} session right now.`;
-    }
+    return servedDisabledReason ?? "Longhouse can't confirm the control link to this session right now.";
   })();
   const controlUnavailableTitle = launchInFlight
     ? "Starting"
@@ -151,11 +110,8 @@ export function getSessionInteractionCapabilities({
     mode === "unsupported" && !isManagedLocalSession
       ? getManagedLaunchSuggestion(session.provider)
       : null;
-  const unsupportedCapabilityDescription = managedLaunchSuggestion
-    ? `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer it.`
-    : isUnsupportedManagedSession
-      ? `This managed ${providerLabel} session is read-only because no current control action is available.`
-      : `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer it.`;
+  const unsupportedCapabilityDescription =
+    servedDisabledReason ?? "This imported session is searchable, but Longhouse cannot steer it.";
   const submitLabel =
     mode === "managed_local"
       ? "Send"
@@ -190,14 +146,7 @@ export function getSessionInteractionCapabilities({
           }
         : null;
 
-  const composerDisabledReason =
-    mode === "managed_local_unavailable"
-      ? notice?.body ?? null
-      : mode === "unsupported"
-        ? managedLaunchSuggestion
-          ? `This unmanaged ${providerLabel} session is read-only in Longhouse.`
-          : notice?.body ?? null
-        : null;
+  const composerDisabledReason = mode === "managed_local" ? null : notice?.body ?? null;
 
   return {
     mode,

@@ -50,6 +50,7 @@ extension APISessionCapabilitiesResponse {
             canSteerActiveTurn: canSteerActiveTurn,
             defaultInputIntent: defaultInputIntent,
             composerPlaceholder: composerPlaceholder,
+            composerDisabledReason: composerDisabledReason,
             attachImages: attachImages
         )
     }

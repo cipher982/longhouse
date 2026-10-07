@@ -604,7 +604,9 @@ describe("getSessionInteractionCapabilities", () => {
           host_state: "offline",
           terminal_reason: null,
         },
-        capabilities: makeCapabilities(),
+        capabilities: makeCapabilities({
+          composer_disabled_reason: "This imported session is searchable, but Longhouse cannot steer it.",
+        }),
         session_state: makeSessionStateFacts({ access: null, activity: "quiescent" }),
       }),
     });
@@ -612,7 +614,9 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.managedLaunchSuggestion).not.toBeNull();
     expect(capabilities.capabilityLabel).toBe("Read only");
-    expect(capabilities.composerDisabledReason).toMatch(/managed Codex session is read-only/i);
+    expect(capabilities.composerDisabledReason).toBe(
+      "This imported session is searchable, but Longhouse cannot steer it.",
+    );
   });
 
   it("keeps managed Antigravity sessions observe-only when agy exposes no send lane", () => {
@@ -642,6 +646,7 @@ describe("getSessionInteractionCapabilities", () => {
         capabilities: makeCapabilities({
           input_mode: "read_only",
           composer_enabled: false,
+          composer_disabled_reason: "This control path cannot accept typed input.",
           can_send_input: false,
           can_interrupt: false,
           can_resume: false,
@@ -657,7 +662,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.capabilityLabel).toBe("Live control");
-    expect(capabilities.composerDisabledReason).toMatch(/managed Antigravity session is read-only/i);
+    expect(capabilities.composerDisabledReason).toBe("This control path cannot accept typed input.");
   });
 
   it("prefers server read-only input mode over host reattach fallback", () => {
@@ -677,8 +682,9 @@ describe("getSessionInteractionCapabilities", () => {
     });
 
     expect(capabilities.mode).toBe("unsupported");
-    expect(capabilities.composerDisabledReason).toMatch(/managed Codex session is read-only/i);
-    expect(capabilities.composerDisabledReason).not.toMatch(/engine reconnects/i);
+    expect(capabilities.composerDisabledReason).toBe(
+      "This live Codex session is connected, but this control path cannot accept typed input.",
+    );
   });
 
   it("surfaces managed-local sessions without runner metadata as host-reattach only", () => {
@@ -692,6 +698,7 @@ describe("getSessionInteractionCapabilities", () => {
         },
         capabilities: makeCapabilities({
           host_reattach_available: true,
+          composer_disabled_reason: "Longhouse isn't attached to this session. Reattach to steer it from here.",
         }),
       }),
     });
@@ -732,7 +739,10 @@ describe("getSessionInteractionCapabilities", () => {
       session: makeSession({
         provider: "codex",
         session_state: endedState,
-        capabilities: makeCapabilities({ host_reattach_available: true }),
+        capabilities: makeCapabilities({
+          host_reattach_available: true,
+          composer_disabled_reason: "This session's run has ended. Resume it to keep going.",
+        }),
       }),
     });
 
@@ -794,7 +804,7 @@ describe("getSessionInteractionCapabilities", () => {
           closed: true,
           launchState: "failed",
         }),
-        capabilities: makeCapabilities(),
+        capabilities: makeCapabilities({ composer_disabled_reason: "This session is closed." }),
       }),
     });
 
@@ -802,7 +812,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.composerDisabledReason).toMatch(/session is closed/i);
   });
 
-  it("lets Closed and an unreachable machine outrank an ended run", () => {
+  it("lets Closed outrank an ended run in the labels", () => {
     const base = makeSessionStateFacts({ access: "reattach" });
     const ended = {
       ...base,
@@ -829,17 +839,6 @@ describe("getSessionInteractionCapabilities", () => {
     });
     expect(closed.capabilityLabel).toBe("Closed");
     expect(closed.notice?.title).not.toBe("Run ended");
-
-    const offline = getSessionInteractionCapabilities({
-      session: makeSession({
-        provider: "codex",
-        session_state: { ...ended, host: { state: "offline" } },
-        capabilities: makeCapabilities({ host_reattach_available: true }),
-      }),
-    });
-    // The machine being unreachable is the fact the user can act on, and it is
-    // why Resume is unavailable. "Run ended" would bury it.
-    expect(offline.composerDisabledReason).toMatch(/machine running this Codex session is offline/i);
   });
 
   it("says a closed session is closed instead of naming a lease", () => {
@@ -852,32 +851,38 @@ describe("getSessionInteractionCapabilities", () => {
           mode: "helm",
           control: { ...base.control, connection: "unknown" },
         },
-        capabilities: makeCapabilities({ host_reattach_available: true }),
+        capabilities: makeCapabilities({
+          host_reattach_available: true,
+          composer_disabled_reason: "This session is closed.",
+        }),
       }),
     });
 
     expect(capabilities.capabilityLabel).toBe("Closed");
-    expect(capabilities.composerDisabledReason).toMatch(/session is closed/i);
-    expect(capabilities.composerDisabledReason).not.toMatch(/confirm the control link/i);
-    expect(capabilities.composerDisabledReason).not.toMatch(/run has ended/i);
+    expect(capabilities.composerDisabledReason).toBe("This session is closed.");
   });
 
-  it("names the offline machine rather than offering a reattach it cannot reach", () => {
-    // Reattach eligibility is projected from a durable connection row that
-    // never consults host state. Server, web and iOS all have to answer this
-    // combination the same way, or the dock and the composer describe one
-    // session differently.
+  it("renders the server's sentence instead of re-deriving it from the facts", () => {
+    // The precedence (closed, unreachable machine, ended run, Console
+    // blockers, reattach, connection) is the server's and is tested there
+    // (`test_control_unavailable_sentence.py`). The facts here say reattach is
+    // available; the served sentence wins.
     const base = makeSessionStateFacts({ access: "reattach" });
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "codex",
         session_state: { ...base, mode: "helm", host: { state: "offline" } },
-        capabilities: makeCapabilities({ host_reattach_available: true }),
+        capabilities: makeCapabilities({
+          host_reattach_available: true,
+          composer_disabled_reason: "The machine running this session is offline. Sending resumes when it reconnects.",
+        }),
       }),
     });
 
-    expect(capabilities.composerDisabledReason).toMatch(/machine running this Codex session is offline/i);
-    expect(capabilities.composerDisabledReason).not.toMatch(/isn't attached/i);
+    expect(capabilities.composerDisabledReason).toBe(
+      "The machine running this session is offline. Sending resumes when it reconnects.",
+    );
+    expect(capabilities.notice?.body).toBe(capabilities.composerDisabledReason);
   });
 
   it("prefers server-owned composer semantics when present", () => {
@@ -930,7 +935,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.capabilityLabel).toBe("Search only");
     expect(capabilities.notice?.title).toBe("Claude session — unmanaged");
     expect(capabilities.composerDisabledReason).toBe(
-      "This unmanaged Claude session is read-only in Longhouse.",
+      "This imported session is searchable, but Longhouse cannot steer it.",
     );
     expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse claude");
   });
@@ -946,7 +951,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.capabilityLabel).toBe("Search only");
     expect(capabilities.composerDisabledReason).toBe(
-      "This unmanaged Antigravity session is read-only in Longhouse.",
+      "This imported session is searchable, but Longhouse cannot steer it.",
     );
     expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse antigravity");
   });

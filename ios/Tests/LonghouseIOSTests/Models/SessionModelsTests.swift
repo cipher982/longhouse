@@ -1281,6 +1281,7 @@ struct SessionModelsTests {
           "home_label": null,
           "origin_label": null,
           "capabilities": {
+            "composer_disabled_reason": "This imported session is searchable, but Longhouse cannot steer it.",
             "live_control_available": false,
             "host_reattach_available": false,
             "reply_to_live_session_available": false,
@@ -1324,7 +1325,7 @@ struct SessionModelsTests {
         #expect(detail.runtimeCapabilityTone == "neutral")
         #expect(detail.runtimeHeadline == "Activity unknown")
         #expect(detail.runtimeDetail == nil)
-        #expect(detail.controlHealthMessage == "Read-only imported session.")
+        #expect(detail.controlHealthMessage == "This imported session is searchable, but Longhouse cannot steer it.")
         #expect(detail.runtimePhaseLabel == "Activity unknown")
     }
 
@@ -1355,7 +1356,7 @@ struct SessionModelsTests {
             "input_mode": "read_only",
             "default_input_intent": "none",
             "composer_enabled": false,
-            "composer_disabled_reason": "This live Codex session is connected, but this control path cannot accept typed input.",
+            "composer_disabled_reason": "This imported session is searchable, but Longhouse cannot steer it.",
             "send_disabled_reason": "input_not_supported"
           },
           "runtime_display": {
@@ -1395,7 +1396,7 @@ struct SessionModelsTests {
         #expect(detail.runtimeCapabilityLabel == "Search only")
         #expect(detail.runtimeCapabilityTone == "neutral")
         #expect(detail.runtimeHeadline == "Activity unknown")
-        #expect(detail.controlHealthMessage == "Read-only imported session.")
+        #expect(detail.controlHealthMessage == "This imported session is searchable, but Longhouse cannot steer it.")
 
         let legacyComposerPayload = String(decoding: json, as: UTF8.self)
             .replacingOccurrences(of: #""composer_enabled": false"#, with: #""composer_enabled": true"#)
@@ -1565,7 +1566,7 @@ struct SessionModelsTests {
             "default_input_intent": "none",
             "composer_enabled": true,
             "composer_placeholder": "Send a message to the live Codex session...",
-            "composer_disabled_reason": "This session has ended."
+            "composer_disabled_reason": "This session is closed."
           },
           "runtime_display": {
             "truth_tier": "managed-local",
@@ -1698,7 +1699,10 @@ struct SessionModelsTests {
             resumeAvailable: true,
             sendInputAvailable: false
         )
-        let detail = try makeDetail(facts: facts)
+        let detail = try makeDetail(
+            facts: facts,
+            json: detailJSON(servedReason: "This session's run has ended. Resume it to keep going.")
+        )
 
         #expect(!detail.canSendLive)
         #expect(detail.controlBlock == .runEnded)
@@ -2054,7 +2058,8 @@ struct SessionModelsTests {
                 label: "Can't send",
                 tone: "inactive",
                 observedAt: nil
-            )
+            ),
+            servedReason: "This session's machine isn't accepting new turns."
         )
 
         #expect(!detail.canSendLive)
@@ -2062,7 +2067,7 @@ struct SessionModelsTests {
         #expect(!detail.isControlOffline)
         #expect(detail.runtimeCapabilityTone == "neutral")
         #expect(detail.runtimeCapabilityLabel == "Can't send")
-        #expect(detail.controlHealthMessage == "This session's machine isn't accepting new Codex turns.")
+        #expect(detail.controlHealthMessage == "This session's machine isn't accepting new turns.")
     }
 
     /// The one Console blocker that IS an outage keeps the loud treatment and
@@ -2077,7 +2082,8 @@ struct SessionModelsTests {
                 label: "Machine offline",
                 tone: "degraded",
                 observedAt: nil
-            )
+            ),
+            servedReason: "The machine running this session is offline. Sending resumes when it reconnects."
         )
 
         #expect(detail.controlBlock == .machineOffline)
@@ -2092,7 +2098,8 @@ struct SessionModelsTests {
     private func makeConsoleDetail(
         startTurnReason: String,
         controlConnection: String,
-        accessLabel: SessionStateLabel
+        accessLabel: SessionStateLabel,
+        servedReason: String? = nil
     ) throws -> SessionDetail {
         let json = """
         {
@@ -2119,7 +2126,7 @@ struct SessionModelsTests {
             "input_mode": "console",
             "default_input_intent": "none",
             "composer_enabled": false,
-            "composer_disabled_reason": null,
+            "composer_disabled_reason": \(servedReason.map { "\"\($0)\"" } ?? "null"),
             "send_disabled_reason": "control_offline"
           },
           "runtime_display": {
@@ -2193,7 +2200,17 @@ struct SessionModelsTests {
         return try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
     }
 
-    private func hostDetailJSON(_ state: String) -> Data {
+    /// The server's `composer_disabled_reason`, which the app renders verbatim.
+    private func detailJSON(servedReason: String) -> Data {
+        String(decoding: minimalDetailJSON, as: UTF8.self)
+            .replacingOccurrences(
+                of: "\"composer_disabled_reason\": null",
+                with: "\"composer_disabled_reason\": \"\(servedReason)\""
+            )
+            .data(using: .utf8)!
+    }
+
+        private func hostDetailJSON(_ state: String) -> Data {
         let text = String(decoding: minimalDetailJSON, as: UTF8.self)
             .replacingOccurrences(of: "\"host_state\": \"online\"", with: "\"host_state\": \"\(state)\"")
         return text.data(using: .utf8)!

@@ -8,6 +8,9 @@ struct SessionCapabilities: Codable, Sendable {
     let canSteerActiveTurn: Bool?
     let defaultInputIntent: String?
     let composerPlaceholder: String?
+    /// The server's sentence for why sending is unavailable
+    /// (`_control_unavailable_sentence`). Rendered verbatim.
+    let composerDisabledReason: String?
     let attachImages: Bool?
 }
 
@@ -213,47 +216,21 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var runtimePhaseLabel: String { stateFacts.primary?.label ?? "" }
 
-    /// Nil rather than a placeholder, so copy can drop the word instead of
-    /// rendering "new new turns".
-    private var providerLabel: String? {
-        let name = provider.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return nil }
-        return name.prefix(1).uppercased() + name.dropFirst()
-    }
-
+    /// The server owns this sentence and its precedence (closed, unreachable
+    /// machine, ended run, Console blockers, reattach, connection). Only a
+    /// launch still in flight keeps local copy: the composer can draft then.
     var controlHealthMessage: String? {
         switch controlBlock {
         case .none:
             return nil
-        case .closed:
-            return "This session is closed."
         case .launching:
             return "Session is still starting."
-        case .machineOffline:
-            return "The machine running this session is offline. Sending resumes when it reconnects."
-        case .controlUnhealthy:
-            return "Longhouse's control link to this session stopped answering."
-        case .controlUnknown:
-            return "Longhouse can't confirm the control link right now."
-        case .noTurnPath:
-            guard let providerLabel else { return "This session's machine isn't accepting new turns." }
-            return "This session's machine isn't accepting new \(providerLabel) turns."
-        case .noExecutionTarget:
-            return "Longhouse has no machine and folder recorded to run this in."
-        case .consoleUnavailable:
-            return "Longhouse can't start a new turn on this session right now."
-        case .reattachable:
-            return "Longhouse isn't attached to this session. Reattach to steer it from here."
-        case .controlClosed:
-            return "Longhouse's control path to this session is closed."
-        case .readOnly:
-            return "This managed session is read-only."
-        case .imported:
-            return "Read-only imported session."
-        case .runEnded:
-            return stateFacts.resume.isAvailable
-                ? "This session's run has ended. Resume it to keep going."
-                : "This session's run has ended."
+        default:
+            if let reason = capabilities.composerDisabledReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !reason.isEmpty {
+                return reason
+            }
+            return "Longhouse can't send to this session right now."
         }
     }
 

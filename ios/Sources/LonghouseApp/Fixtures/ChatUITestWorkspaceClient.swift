@@ -626,6 +626,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 canSteerActiveTurn: isHelmChannelReconcile,
                 defaultInputIntent: "auto",
                 composerPlaceholder: composerPlaceholder,
+                composerDisabledReason: nil,
                 attachImages: false
             ),
             runtimeDisplay: SessionRuntimeDisplay(
