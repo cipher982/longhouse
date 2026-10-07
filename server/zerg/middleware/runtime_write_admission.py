@@ -93,6 +93,12 @@ def _restarting_payload(path: str) -> dict:
 def _wants_event_stream(scope: Scope) -> bool:
     if scope.get("method") != "GET":
         return False
+    # Only the API's stream routes; every other path routes (and authenticates)
+    # normally. The answer carries only the lifecycle claim that every K1
+    # rejection already carries.
+    path = scope.get("path", "")
+    if not path.startswith("/api/") or not path.rstrip("/").endswith(("/stream", "-stream")):
+        return False
     for name, value in scope.get("headers") or ():
         if name == b"accept" and b"text/event-stream" in value:
             return True

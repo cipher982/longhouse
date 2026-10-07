@@ -371,9 +371,15 @@ async def drain_runtime(
         # edge: each poll is a full round trip inside the closed-writes window.
         # Bounded short, so a stuck writer still gets a prompt "draining".
         deadline = time.monotonic() + _DRAIN_ANSWER_WAIT_SECONDS
-        while result.get("state") == "draining" and time.monotonic() < deadline:
+        while result.get("state") == "draining" and time.monotonic() + _DRAIN_ANSWER_POLL_SECONDS < deadline:
             await asyncio.sleep(_DRAIN_ANSWER_POLL_SECONDS)
-            result = await _drain_status(attempt_id, request_id=body.request_id, runtime_epoch=None)
+            try:
+                result = await asyncio.wait_for(
+                    _drain_status(attempt_id, request_id=body.request_id, runtime_epoch=None),
+                    timeout=max(0.01, deadline - time.monotonic()),
+                )
+            except TimeoutError:
+                break  # the last answer stands: still draining
         return _fence_response(result)
     return _fence_response(result)
 

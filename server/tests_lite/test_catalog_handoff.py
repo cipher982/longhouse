@@ -418,3 +418,14 @@ async def test_drain_post_answers_drained_once_writers_finish_instead_of_drainin
     assert response.status_code == 200
     assert payload["state"] == "drained"
     assert payload["request_id"] == "drain-request" and payload["attempt_id"] == "attempt-1"
+
+
+def test_only_api_stream_routes_are_answered_by_the_drain_lifecycle() -> None:
+    from zerg.middleware.runtime_write_admission import _wants_event_stream
+
+    accept = [(b"accept", b"text/event-stream")]
+    assert _wants_event_stream({"method": "GET", "path": "/api/agents/sessions/stream", "headers": accept})
+    assert _wants_event_stream({"method": "GET", "path": "/api/telemetry/canary-stream", "headers": accept})
+    assert not _wants_event_stream({"method": "GET", "path": "/api/agents/sessions", "headers": accept})
+    assert not _wants_event_stream({"method": "GET", "path": "/admin", "headers": accept})
+    assert not _wants_event_stream({"method": "GET", "path": "/api/agents/sessions/stream", "headers": []})
