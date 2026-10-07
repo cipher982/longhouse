@@ -40,7 +40,7 @@ import { RecallPanel } from "./RecallPanel";
 import { TimelineInbox } from "./TimelineInbox";
 import { InboxTuner } from "./InboxTuner";
 import { FilterChip, FilterPopover } from "./SessionsFilter";
-import LaunchSessionModal from "@/features/launch/LaunchSessionModal";
+import { NEW_SESSION_PATH } from "@/features/launch/newSessionPath";
 import ConnectMachine from "@/features/machines/ConnectMachine";
 import { Sparkline } from "@/shared/instruments/Sparkline";
 import { bucketTimestamps } from "@/shared/instruments/activityBuckets";
@@ -367,7 +367,6 @@ export default function SessionsPage() {
     prefetchSessionWorkspace(thread.head.id);
   }, [prefetchSessionWorkspace]);
 
-  const [launchModalOpen, setLaunchModalOpen] = useState(false);
   const headerActions = (
     <div className="sessions-header-actions">
       {threadCards.length > 0 && (
@@ -378,11 +377,10 @@ export default function SessionsPage() {
       <Button
         variant="primary"
         size="sm"
-        onClick={() => setLaunchModalOpen(true)}
-        aria-haspopup="dialog"
+        onClick={() => navigate(NEW_SESSION_PATH, { state: { from: location.pathname + location.search } })}
         data-testid="sessions-start-session"
       >
-        Start a session
+        New session
       </Button>
     </div>
   );
@@ -484,22 +482,13 @@ export default function SessionsPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setLaunchModalOpen(true)}
-              aria-haspopup="dialog"
+              onClick={() => navigate(NEW_SESSION_PATH)}
               data-testid="timeline-empty-start-session"
             >
               Machine already connected? Start a session
             </Button>
           </div>
         </div>
-        <LaunchSessionModal
-          isOpen={launchModalOpen}
-          onClose={() => setLaunchModalOpen(false)}
-          onLaunched={(sessionId) => {
-            setLaunchModalOpen(false);
-            navigate(`/timeline/${sessionId}`);
-          }}
-        />
       </PageShell>
     );
   }
@@ -784,14 +773,6 @@ export default function SessionsPage() {
           </div>
         )}
       </div>
-      <LaunchSessionModal
-        isOpen={launchModalOpen}
-        onClose={() => setLaunchModalOpen(false)}
-        onLaunched={(sessionId) => {
-          setLaunchModalOpen(false);
-          navigate(`/timeline/${sessionId}`);
-        }}
-      />
       <InboxTuner />
     </PageShell>
   );

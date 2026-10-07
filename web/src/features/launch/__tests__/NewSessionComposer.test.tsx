@@ -3,11 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import LaunchSessionModal from "../LaunchSessionModal";
+import NewSessionComposer from "../NewSessionComposer";
 import type { MachineDirectoryEntry } from "@/shared/api/index";
 
 const apiMocks = vi.hoisted(() => ({
   createConsoleSession: vi.fn(),
+  postSessionInput: vi.fn(),
   fetchWorkspaceSuggestions: vi.fn(),
   fetchRecentModels: vi.fn(),
   listMachines: vi.fn(),
@@ -25,20 +26,18 @@ vi.mock("@/shared/api/index", async (importOriginal) => {
 
 });
 
-function renderModal(props: Partial<React.ComponentProps<typeof LaunchSessionModal>> = {}) {
+function renderModal(props: Partial<React.ComponentProps<typeof NewSessionComposer>> = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  const defaultProps: React.ComponentProps<typeof LaunchSessionModal> = {
-    isOpen: true,
-    onClose: vi.fn(),
+  const defaultProps: React.ComponentProps<typeof NewSessionComposer> = {
     onLaunched: vi.fn(),
     ...props,
   };
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
-        <LaunchSessionModal {...defaultProps} />
+        <NewSessionComposer {...defaultProps} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -73,8 +72,11 @@ function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirecto
   };
 }
 
-describe("LaunchSessionModal", () => {
+describe("NewSessionComposer", () => {
   beforeEach(() => {
+    window.localStorage.clear();
+    apiMocks.createConsoleSession.mockReset();
+    apiMocks.postSessionInput.mockReset();
     apiMocks.fetchWorkspaceSuggestions.mockResolvedValue({
       device_id: "cinder",
       workspaces: [],
@@ -173,34 +175,15 @@ describe("LaunchSessionModal", () => {
     expect(screen.getByText("Console launch unavailable")).toBeInTheDocument();
   });
 
-  it("dismisses on Escape", async () => {
-    apiMocks.listMachines.mockResolvedValue({
-      machines: [
-        machine({
-          device_id: "cinder",
-          machine_name: "cinder",
-          online: true,
-        }),
-      ],
-    });
-    const onClose = vi.fn();
-    const user = userEvent.setup();
-    renderModal({ onClose });
-    await screen.findByTestId("launch-cwd-input");
-    await user.keyboard("{Escape}");
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
-  });
-
-  it("supports keyboard navigation and closes the machine chooser before the modal", async () => {
+  it("supports keyboard navigation and closes the machine chooser on Escape", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [
         machine({ device_id: "cinder", machine_name: "cinder" }),
         machine({ device_id: "cube", machine_name: "cube" }),
       ],
     });
-    const onClose = vi.fn();
     const user = userEvent.setup();
-    renderModal({ onClose });
+    renderModal();
 
     const picker = await screen.findByTestId("launch-machine-select");
     await user.click(picker.querySelector("summary")!);
@@ -211,7 +194,7 @@ describe("LaunchSessionModal", () => {
     expect(cube).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(picker).not.toHaveAttribute("open");
-    expect(onClose).not.toHaveBeenCalled();
+    expect(picker.querySelector("summary")).toHaveFocus();
   });
 
   it("keeps offline machines visible below ready machines without build hashes", async () => {
@@ -501,7 +484,7 @@ describe("LaunchSessionModal", () => {
     expect(cwdInput).toHaveValue("/Users/example");
   });
 
-  it("keeps immediate launch failures in the modal instead of navigating", async () => {
+  it("keeps immediate launch failures in the pane instead of navigating", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [
         machine({
@@ -523,6 +506,111 @@ describe("LaunchSessionModal", () => {
 
     expect(await screen.findByTestId("launch-error")).toHaveTextContent("Launch failed");
     expect(onLaunched).not.toHaveBeenCalled();
+  });
+
+  it("sends the prompt as the new session's first message, then opens it", async () => {
+    apiMocks.listMachines.mockResolvedValue({ machines: [machine()] });
+    apiMocks.createConsoleSession.mockResolvedValue({ session_id: "s-1", thread_id: "t-1", created: true });
+    apiMocks.postSessionInput.mockResolvedValue({ disposition: "accepted", outcome: "sent", intent: "auto", queued: [] });
+    const onLaunched = vi.fn();
+    const user = userEvent.setup();
+    renderModal({ onLaunched });
+
+    await user.type(await screen.findByTestId("launch-cwd-input"), "/Users/me/repo");
+    await user.type(screen.getByTestId("launch-prompt"), "Fix the flaky reconnect test{Enter}");
+
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("s-1"));
+    expect(apiMocks.postSessionInput).toHaveBeenCalledWith(
+      "s-1",
+      expect.objectContaining({ text: "Fix the flaky reconnect test", intent: "auto" }),
+    );
+    expect(apiMocks.createConsoleSession.mock.invocationCallOrder[0]).toBeLessThan(
+      apiMocks.postSessionInput.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("starts an idle session without sending anything when the prompt is empty", async () => {
+    apiMocks.listMachines.mockResolvedValue({ machines: [machine()] });
+    apiMocks.createConsoleSession.mockResolvedValue({ session_id: "s-2", thread_id: "t-2", created: true });
+    const onLaunched = vi.fn();
+    const user = userEvent.setup();
+    renderModal({ onLaunched });
+
+    await user.type(await screen.findByTestId("launch-cwd-input"), "/Users/me/repo");
+    await user.click(screen.getByTestId("launch-submit"));
+
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("s-2"));
+    expect(apiMocks.postSessionInput).not.toHaveBeenCalled();
+  });
+
+  it("keeps the prompt and links the session when only the first message fails", async () => {
+    apiMocks.listMachines.mockResolvedValue({ machines: [machine()] });
+    apiMocks.createConsoleSession.mockResolvedValue({ session_id: "s-3", thread_id: "t-3", created: true });
+    apiMocks.postSessionInput.mockRejectedValue(new Error("network"));
+    const onLaunched = vi.fn();
+    const user = userEvent.setup();
+    renderModal({ onLaunched });
+
+    await user.type(await screen.findByTestId("launch-cwd-input"), "/Users/me/repo");
+    await user.type(screen.getByTestId("launch-prompt"), "Run the suite");
+    await user.click(screen.getByTestId("launch-submit"));
+
+    const failure = await screen.findByTestId("launch-first-input-error");
+    expect(failure).toHaveTextContent("The session started");
+    expect(screen.getByRole("link", { name: "Open the session" })).toHaveAttribute("href", "/timeline/s-3");
+    expect(screen.getByTestId("launch-prompt")).toHaveValue("Run the suite");
+    expect(screen.getByTestId("launch-submit")).toBeDisabled();
+    expect(onLaunched).not.toHaveBeenCalled();
+  });
+
+  it("starts where the last launch left off", async () => {
+    window.localStorage.setItem(
+      "longhouse:launch:last",
+      JSON.stringify({ deviceId: "cube", provider: "opencode", model: "glm-5.3", cwd: "/Users/me/git/me" }),
+    );
+    const providers = {
+      control_operations_by_provider: { codex: ["turn_start"], opencode: ["turn_start"] },
+      launch: {
+        blocked_by: null,
+        providers: [{ provider: "codex" }, { provider: "opencode" }],
+        default_provider: "codex",
+      },
+    };
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({ device_id: "cinder", machine_name: "cinder", ...providers }),
+        machine({ device_id: "cube", machine_name: "cube", ...providers }),
+      ],
+    });
+    apiMocks.createConsoleSession.mockResolvedValue({ session_id: "s-4", thread_id: "t-4", created: true });
+    const user = userEvent.setup();
+    renderModal();
+
+    await waitFor(() => expect(screen.getByTestId("launch-cwd-input")).toHaveValue("/Users/me/git/me"));
+    expect(screen.getByRole("option", { name: /cube Ready/ })).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByTestId("launch-submit"));
+    await waitFor(() =>
+      expect(apiMocks.createConsoleSession).toHaveBeenCalledWith(
+        expect.objectContaining({ device_id: "cube", provider: "opencode", model: "glm-5.3", cwd: "/Users/me/git/me" }),
+      ),
+    );
+  });
+
+  it("lets the Machines page's choice win over the last launch", async () => {
+    window.localStorage.setItem(
+      "longhouse:launch:last",
+      JSON.stringify({ deviceId: "cube", provider: "codex", model: "", cwd: "/Users/me/git/me" }),
+    );
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [machine({ device_id: "cinder", machine_name: "cinder" }), machine({ device_id: "cube", machine_name: "cube" })],
+    });
+    renderModal({ initialDeviceId: "cinder" });
+
+    await screen.findByTestId("launch-machine-select");
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: /cinder Ready/ })).toHaveAttribute("aria-selected", "true"),
+    );
+    expect(screen.getByTestId("launch-cwd-input")).toHaveValue("");
   });
 
 

@@ -30,6 +30,7 @@ const MachineDetailPage = lazy(() => import("@/features/machines/MachineDetailPa
 const RunnerDetailPage = lazy(() => import("@/features/runners/RunnerDetailPage"));
 const SessionsPage = lazy(() => import("@/features/timeline/SessionsPage"));
 const SessionDetailPage = lazy(loadSessionDetailPage);
+const NewSessionPage = lazy(() => import("@/features/launch/NewSessionPage"));
 // The docs are public and prerendered, but most visitors never open them, so
 // they are one chunk of their own rather than part of every page's entry.
 const DocsRoutes = lazy(loadDocsRoutes);
@@ -184,6 +185,14 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
           ),
         },
         {
+          path: "/timeline/new",
+          element: (
+            <ErrorBoundary>
+              <NewSessionPage />
+            </ErrorBoundary>
+          ),
+        },
+        {
           path: "/timeline/:sessionId",
           element: (
             <ErrorBoundary>
@@ -305,6 +314,14 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
                 element: (
                   <ErrorBoundary>
                     <SessionsPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/timeline/new",
+                element: (
+                  <ErrorBoundary>
+                    <NewSessionPage />
                   </ErrorBoundary>
                 ),
               },

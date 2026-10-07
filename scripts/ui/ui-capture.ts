@@ -108,6 +108,8 @@ import {
 export const PAGE_DEFINITIONS = {
   timeline: { path: "/timeline" },
   "session-detail": { path: `/timeline/${SESSION_DETAIL_STRESS_SESSION_ID}` },
+  // The new-session composer beside the rail (SCENE=new-session).
+  "new-session": { path: "/timeline/new" },
   machines: { path: "/machines" },
   "machine-detail": { path: "/machines/cinder" },
   settings: { path: "/settings" },
@@ -129,7 +131,8 @@ type PageName = keyof typeof PAGE_DEFINITIONS;
 const PAGES = Object.keys(PAGE_DEFINITIONS) as PageName[];
 const PUBLIC_PAGES: readonly PageName[] = ["landing", "security", "privacy", "docs"];
 const ALL_CAPTURE_PAGES = PAGES.filter(
-  (pageName) => pageName !== "session-detail" && pageName !== "login" && !PUBLIC_PAGES.includes(pageName),
+  (pageName) =>
+    pageName !== "session-detail" && pageName !== "new-session" && pageName !== "login" && !PUBLIC_PAGES.includes(pageName),
 );
 
 const SCENES = [
@@ -147,6 +150,7 @@ const SCENES = [
   "launch-no-machines",
   "launch-model-picker",
   "launch-model-picked",
+  "new-session",
   "session-detail-stress",
   "session-prose-idle",
   "session-research-turn",
@@ -182,7 +186,10 @@ type SceneName = (typeof SCENES)[number];
 /** Curated landing-page showcase data (scripts/ui-fixtures/landingShowcase.ts). */
 const LANDING_TIMELINE_SCENES: readonly SceneName[] = ["landing", "landing-search"];
 // Scenes that render the launch sheet with a machine that has run models.
-const LAUNCH_MODEL_SCENES: readonly SceneName[] = ["launch-model-picker", "launch-model-picked"];
+const LAUNCH_MODEL_SCENES: readonly SceneName[] = ["launch-model-picker", "launch-model-picked", "new-session"];
+// Scenes whose frames show the Hearth fires moving: the Timeline's, and the
+// session rail's beside the new-session composer.
+const HEARTH_MOTION_SCENES: readonly SceneName[] = ["timeline-hearth", "new-session"];
 // The marketing page's provider chart, answered by the certification fixture.
 const PROVIDER_CERTIFICATION_SCENE: SceneName = "provider-certification";
 const LANDING_SCENES: readonly SceneName[] = [...LANDING_TIMELINE_SCENES, "landing-session", PROVIDER_CERTIFICATION_SCENE];
@@ -393,6 +400,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "launch-no-machines" ||
     scene === "launch-model-picker" ||
     scene === "launch-model-picked" ||
+    scene === "new-session" ||
     LANDING_TIMELINE_SCENES.includes(scene) ||
     scene === "landing-session" ||
     scene === PROVIDER_CERTIFICATION_SCENE ||
@@ -1584,7 +1592,7 @@ async function captureBundle(
   await page.waitForTimeout(100);
 
   // Let the fires ignite, reach height, and take a few streamed tool batches.
-  if (scene === "timeline-hearth") {
+  if (HEARTH_MOTION_SCENES.includes(scene)) {
     await page.waitForTimeout(Number(process.env.HEARTH_WAIT_MS ?? 5000));
   }
 
@@ -1754,7 +1762,7 @@ async function main() {
       deviceScaleFactor: opts.viewport.deviceScaleFactor,
       // The hearth scene captures the fires moving (flames, sparks); every
       // other scene freezes motion, which also shows the fires' still frames.
-      reducedMotion: opts.scene === "timeline-hearth" ? "no-preference" : "reduce",
+      reducedMotion: HEARTH_MOTION_SCENES.includes(opts.scene) ? "no-preference" : "reduce",
       timezoneId: "America/Los_Angeles",
       locale: "en-US",
     });

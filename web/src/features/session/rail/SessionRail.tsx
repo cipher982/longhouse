@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Link, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import type { TimelineSessionCard } from "@/shared/api/agents";
 import { useAgentSessions } from "@/shared/api/useAgentSessions";
 import { useMobileNavSlot } from "@/app/headerSlot";
@@ -18,7 +18,11 @@ import { useMediaQuery } from "@/shared/hooks/useMediaQuery";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import type { StatusLampState } from "@/shared/instruments/StatusLamp";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
-import { SearchIcon, XIcon } from "@/shared/ui/icons";
+import { PlusIcon, SearchIcon, XIcon } from "@/shared/ui/icons";
+import { HearthLamp, HearthProvider } from "@/shared/instruments/hearth/Hearth";
+import { hearthModeForLamp, hearthSnapshotFromSession } from "@/shared/instruments/hearth/signals";
+import { NEW_SESSION_PATH } from "@/features/launch/newSessionPath";
+import { getSessionHeaderState } from "../sessionHeaderState";
 import { getRowStatus } from "@/features/timeline/SessionRow";
 import { needsSessionAttention } from "@/shared/session/sessionRuntime";
 import { buildInboxLayout, historySortKey, isAutomationSession } from "@/features/timeline/timelineInboxModel";
@@ -59,6 +63,23 @@ export function railHotkeyIndex(
 
 export function railHotkeyLabel(index: number, mac: boolean): string {
   return mac ? `⌃${index + 1}` : `Alt+${index + 1}`;
+}
+
+/**
+ * New session. ⌘N belongs to the browser (a new window), so like the jump keys
+ * it is ⌃N on a Mac and Alt+N elsewhere. Never taken from a text field: ⌃N
+ * moves the caret down a line there.
+ */
+export function isNewSessionHotkey(
+  event: Pick<KeyboardEvent, "code" | "ctrlKey" | "altKey" | "metaKey" | "shiftKey">,
+  mac: boolean,
+): boolean {
+  if (event.code !== "KeyN" || event.shiftKey || event.metaKey) return false;
+  return mac ? event.ctrlKey && !event.altKey : event.altKey && !event.ctrlKey;
+}
+
+export function newSessionHotkeyLabel(mac: boolean): string {
+  return mac ? "⌃N" : "Alt+N";
 }
 
 /** ⌘K on a Mac, Ctrl+K elsewhere: pages may take this one. */
@@ -126,6 +147,7 @@ function rowFromCard(
 ): RailRow {
   const session = card.head;
   const status = getRowStatus({ thread: card, relativeNowMs: nowMs, unread: group === "attention" });
+  const needsUser = needsSessionAttention(session);
   return {
     id: session.id,
     title: getSessionCardText(session, { titleMaxChars: 96 }).title,
@@ -136,8 +158,10 @@ function rowFromCard(
     lamp: status.lampState,
     statusTone: status.statusTone,
     statusKey: session.session_state.presentation.primary?.key ?? null,
-    needsUser: needsSessionAttention(session),
+    needsUser,
     group,
+    hearth: hearthSnapshotFromSession(session, hearthModeForLamp(status.lampState), nowMs),
+    detail: status.lampState === "working" || needsUser ? getSessionHeaderState(session, nowMs).text : undefined,
   };
 }
 
@@ -168,16 +192,23 @@ export function buildRailRows(
   ];
   if (!active) return rows;
   // The open session's own page has the freshest state; prefer its words.
-  const activeRow = (group: RailGroup): RailRow => ({
-    ...active,
-    lamp: LAMP_FOR_TONE[active.tone],
-    statusKey: active.statusKey ?? null,
-    needsUser: active.needsUser ?? false,
-    group,
-  });
+  // Its fire keeps the listed session's counters, at the page's own mode.
+  const activeRow = (group: RailGroup, listed?: RailRow): RailRow => {
+    const lamp = LAMP_FOR_TONE[active.tone];
+    const needsUser = active.needsUser ?? false;
+    return {
+      ...active,
+      lamp,
+      statusKey: active.statusKey ?? null,
+      needsUser,
+      group,
+      hearth: listed?.hearth ? { ...listed.hearth, mode: hearthModeForLamp(lamp) } : undefined,
+      detail: lamp === "working" || needsUser ? active.stateText : undefined,
+    };
+  };
   const index = rows.findIndex((row) => row.id === active.id);
   if (index === -1) return [activeRow("recent"), ...rows];
-  rows[index] = activeRow(rows[index].group);
+  rows[index] = activeRow(rows[index].group, rows[index]);
   return rows;
 }
 
@@ -204,8 +235,11 @@ function SessionRail({
   onExpandedChange?: (expanded: boolean) => void;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const onNewSession = location.pathname === NEW_SESSION_PATH;
   const nowMs = useWallClock(true);
   const mac = useMemo(isMacPlatform, []);
+  const newSessionKey = newSessionHotkeyLabel(mac);
   const { data } = useAgentSessions(RAIL_SESSION_FILTERS, { refetchInterval: 30_000 });
   const [switcherOpen, setSwitcherOpenState] = useState(false);
   const switcherLabel = mac ? "⌘K" : "Ctrl+K";
@@ -261,9 +295,20 @@ function SessionRail({
     [activeSessionId, navigate, returnTo],
   );
 
+  const openNewSession = useCallback(() => {
+    if (location.pathname === NEW_SESSION_PATH) return;
+    navigate(NEW_SESSION_PATH, { state: { from: returnTo } });
+  }, [location.pathname, navigate, returnTo]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat || event.isComposing) return;
+      if (isNewSessionHotkey(event, mac) && !isEditableTarget(event.target)) {
+        event.preventDefault();
+        setSwitcherOpen(false);
+        openNewSession();
+        return;
+      }
       if (isSwitcherHotkey(event, mac)) {
         event.preventDefault();
         setSwitcherOpen((open) => !open);
@@ -281,7 +326,7 @@ function SessionRail({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mac, openSession, rows, setSwitcherOpen, switcherOpen]);
+  }, [mac, openNewSession, openSession, rows, setSwitcherOpen, switcherOpen]);
 
   const strip = layout === "strip";
   const groups: RailGroup[] = ["live", "attention", "recent"];
@@ -293,11 +338,12 @@ function SessionRail({
     const flag = railStatusFlag(row);
     const dotState = flag === "Failed" ? "failed" : flag ? "waiting" : row.lamp;
     const fullStatus = row.stateText || "status unknown";
+    const detail = strip ? null : row.detail?.trim() || null;
     return (
       <li key={row.id}>
         <button
           type="button"
-          className={`session-rail__row${active ? " is-active" : ""}`}
+          className={`session-rail__row${active ? " is-active" : ""}${detail ? " has-detail" : ""}`}
           aria-current={active ? "page" : undefined}
           aria-keyshortcuts={hotkey ? (mac ? `Control+${index + 1}` : `Alt+${index + 1}`) : undefined}
           aria-label={[row.title, row.host, fullStatus].filter(Boolean).join(", ")}
@@ -322,8 +368,17 @@ function SessionRail({
               {host ? <span className="session-rail__host">{host}</span> : null}
               <span className="session-rail__status" data-state={dotState} aria-hidden="true">
                 {flag ? <span className="session-rail__flag">{flag}</span> : null}
-                <span className="session-rail__dot" data-state={dotState} />
+                {row.hearth ? (
+                  <HearthLamp sessionKey={row.id} snapshot={row.hearth} state={dotState} label="" title={fullStatus} />
+                ) : (
+                  <span className="session-rail__dot" data-state={dotState} />
+                )}
               </span>
+              {detail ? (
+                <span className="session-rail__detail" data-state={dotState} data-testid="session-rail-detail">
+                  {detail}
+                </span>
+              ) : null}
             </>
           )}
         </button>
@@ -386,6 +441,36 @@ function SessionRail({
           </>
         )}
       </div>
+      {strip ? (
+        <button
+          type="button"
+          className={`session-rail__new session-rail__new--icon${onNewSession ? " is-active" : ""}`}
+          onClick={openNewSession}
+          title={`New session (${newSessionKey})`}
+          aria-label="New session"
+          aria-current={onNewSession ? "page" : undefined}
+          aria-keyshortcuts={mac ? "Control+N" : "Alt+N"}
+          data-testid="session-rail-new"
+        >
+          <PlusIcon width={14} height={14} />
+        </button>
+      ) : (
+        <button
+          type="button"
+          className={`session-rail__new${onNewSession ? " is-active" : ""}`}
+          onClick={() => {
+            openNewSession();
+            if (layout === "overlay") onExpandedChange?.(false);
+          }}
+          aria-current={onNewSession ? "page" : undefined}
+          aria-keyshortcuts={mac ? "Control+N" : "Alt+N"}
+          data-testid="session-rail-new"
+        >
+          <PlusIcon width={14} height={14} />
+          <span>New session</span>
+          <kbd className="session-rail__new-key">{newSessionKey}</kbd>
+        </button>
+      )}
       {switcherOpen
         ? createPortal(
             <SessionSwitcher
@@ -401,6 +486,7 @@ function SessionRail({
             document.body,
           )
         : null}
+      <HearthProvider>
       {groups.map((group) => {
         const groupRows = rows
           .map((row, index) => ({ row, index }))
@@ -418,6 +504,7 @@ function SessionRail({
           </section>
         );
       })}
+      </HearthProvider>
     </nav>
   );
 }

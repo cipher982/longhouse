@@ -576,3 +576,121 @@
   background: rgba(0, 0, 0, 0.35);
   cursor: default;
 }
+
+/* --- New session: the first thing in the rail, like a chat app's New chat. */
+.session-rail__new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  margin: 2px 0 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-rail__new:hover {
+  border-color: rgba(233, 185, 73, 0.45);
+}
+
+.session-rail__new:focus-visible {
+  outline: 1px solid var(--color-brand-primary-hover);
+  outline-offset: 1px;
+}
+
+.session-rail__new.is-active {
+  border-color: rgba(233, 185, 73, 0.55);
+  box-shadow: inset 2px 0 0 var(--color-brand-primary);
+}
+
+.session-rail__new svg {
+  flex: none;
+  color: var(--color-brand-primary);
+}
+
+.session-rail__new-key {
+  margin-left: auto;
+  font-family: var(--font-family-mono);
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+}
+
+.session-rail__new--icon {
+  justify-content: center;
+  width: 32px;
+  min-height: 32px;
+  margin: 4px 0 8px;
+  padding: 0;
+}
+
+/* --- Fires: each row's status is a small Hearth fire (the Timeline's
+   instrument at rail size). The flag word beside it carries the state; the
+   lamp's own label is left empty. */
+.session-rail .hearth-host {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-rail__status .hearth-lamp {
+  --hearth-w: 16px;
+  --hearth-h: 22px;
+  gap: 0;
+}
+
+.session-rail__status .hearth-lamp__label:empty {
+  display: none;
+}
+
+/* --- A live or waiting row says what it is doing on a second line. */
+.session-rail__row.has-detail {
+  grid-template-rows: auto auto;
+  row-gap: 1px;
+}
+
+.session-rail__row.has-detail .session-rail__glyph {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+}
+
+.session-rail__row.has-detail .session-rail__title {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.session-rail__row.has-detail .session-rail__host {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.session-rail__row.has-detail .session-rail__status {
+  grid-column: 4;
+  grid-row: 1 / span 2;
+}
+
+.session-rail__detail {
+  grid-column: 2 / 4;
+  grid-row: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.session-rail__detail[data-state="working"] {
+  color: color-mix(in srgb, #ffb25a 70%, var(--color-text-muted));
+}
+
+.session-rail__detail[data-state="waiting"] {
+  color: var(--color-signal-attention-text);
+}

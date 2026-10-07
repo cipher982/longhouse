@@ -7,7 +7,9 @@ import { makeSessionStateFacts } from "@/shared/test/sessionState";
 import {
   SessionRailFrame,
   buildRailRows,
+  isNewSessionHotkey,
   isSwitcherHotkey,
+  newSessionHotkeyLabel,
   railHotkeyIndex,
   railHotkeyLabel,
   railStatusFlag,
@@ -114,6 +116,28 @@ describe("rail hotkeys", () => {
   });
 });
 
+describe("new session hotkey", () => {
+  const press = (mods: Partial<KeyboardEvent>, code = "KeyN") => ({
+    code,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    shiftKey: false,
+    ...mods,
+  });
+
+  it("is Control-N on a Mac, since the browser keeps Command-N, and Alt-N elsewhere", () => {
+    expect(isNewSessionHotkey(press({ ctrlKey: true }), true)).toBe(true);
+    expect(isNewSessionHotkey(press({ metaKey: true }), true)).toBe(false);
+    expect(isNewSessionHotkey(press({ ctrlKey: true, shiftKey: true }), true)).toBe(false);
+    expect(isNewSessionHotkey(press({ altKey: true }), false)).toBe(true);
+    expect(isNewSessionHotkey(press({ ctrlKey: true }), false)).toBe(false);
+    expect(isNewSessionHotkey(press({ ctrlKey: true }, "KeyM"), true)).toBe(false);
+    expect(newSessionHotkeyLabel(true)).toBe("⌃N");
+    expect(newSessionHotkeyLabel(false)).toBe("Alt+N");
+  });
+});
+
 describe("rail status word", () => {
   it("labels questions, authentication, and failures distinctly", () => {
     expect(railStatusFlag({ lamp: "waiting", needsUser: true })).toBe("Needs you");
@@ -187,6 +211,49 @@ describe("SessionRailFrame", () => {
     fireEvent.keyDown(window, { code: "Digit7", ctrlKey: true });
     expect(navigateMock).not.toHaveBeenCalled();
     expect(screen.getByTestId("page")).toBeInTheDocument();
+  });
+
+  it("puts New session first and opens the composer pane on click and on Control-N", async () => {
+    renderRail("a");
+    const button = await screen.findByTestId("session-rail-new");
+    expect(button).toHaveTextContent("New session");
+    expect(button).toHaveAttribute("aria-keyshortcuts", "Control+N");
+    fireEvent.click(button);
+    expect(navigateMock).toHaveBeenCalledWith("/timeline/new", { state: { from: "/timeline" } });
+
+    navigateMock.mockClear();
+    fireEvent.keyDown(window, { code: "KeyN", ctrlKey: true });
+    expect(navigateMock).toHaveBeenCalledWith("/timeline/new", { state: { from: "/timeline" } });
+
+    // Never from a text field, where Control-N moves the caret.
+    navigateMock.mockClear();
+    const field = document.createElement("textarea");
+    document.body.appendChild(field);
+    fireEvent.keyDown(field, { code: "KeyN", ctrlKey: true });
+    field.remove();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a fire for each listed row and a second line only while a session works or waits", async () => {
+    const mixed = list(["a", "b", "c"]);
+    mixed.sessions[1].head = {
+      ...session("b", "Working one"),
+      session_state: makeSessionStateFacts({ access: "live_control", activity: "executing" }),
+    } as AgentSession;
+    mixed.sessions[2].head = {
+      ...session("c", "Asking one"),
+      session_state: makeSessionStateFacts({ access: "live_control", activity: "quiescent", pendingInteraction: true }),
+    } as AgentSession;
+    fetchAgentSessionsMock.mockResolvedValue(mixed);
+    renderRail("a");
+    const rows = await screen.findAllByTestId("session-rail-row");
+    const byId = (id: string) => rows.find((row) => row.getAttribute("data-session-id") === id)!;
+
+    for (const row of rows) expect(row.querySelector(".hearth-lamp")).not.toBeNull();
+    expect(byId("a").querySelector("[data-testid='session-rail-detail']")).toBeNull();
+    expect(byId("b").querySelector("[data-testid='session-rail-detail']")?.textContent).toMatch(/^Using Shell/);
+    expect(byId("c").querySelector("[data-testid='session-rail-detail']")).toHaveTextContent("Needs answer");
+    expect(byId("c").querySelector(".session-rail__flag")).toHaveTextContent("Needs you");
   });
 
   it("warms the other listed sessions while idle, never the open one", async () => {

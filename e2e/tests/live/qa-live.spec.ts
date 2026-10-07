@@ -609,7 +609,7 @@ test("owned imported transcript never exposes live composer", async ({
 // ---------------------------------------------------------------------------
 // Launch picker: workspace suggestions via the browser-cookie surface
 //
-// The iOS launch sheet and web LaunchSessionModal both read workspace
+// The iOS launch sheet and web new-session composer both read workspace
 // suggestions through the cookie-authed /api/timeline/machines/{id}/workspaces
 // endpoint. The /api/agents/* sibling is device-token-only and 401s for those
 // clients. This test exercises the SAME auth path the apps use, so an endpoint

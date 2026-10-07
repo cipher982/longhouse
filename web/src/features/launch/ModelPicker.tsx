@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchRecentModels } from "@/shared/api/index";
 import { getProviderLabel } from "@/shared/lib/providers";
+import "./model-chip.css";
 
 export interface ModelPickerProps {
   deviceId: string | null;

@@ -59,6 +59,7 @@ const JOBS: Job[] = [
   { page: "timeline", scene: "first-run-machine" },
   { page: "timeline", scene: "launch-model-picker" },
   { page: "timeline", scene: "launch-model-picked" },
+  { page: "new-session", scene: "new-session" },
   { page: "timeline", scene: "launch-unavailable" },
   { page: "timeline", scene: "launch-no-machines" },
   { page: "timeline", scene: "landing" },

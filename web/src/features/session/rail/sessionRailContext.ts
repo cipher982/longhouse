@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect } from "react";
 import type { StatusLampState } from "@/shared/instruments/StatusLamp";
+import type { HearthSnapshot } from "@/shared/instruments/hearth/signals";
 
 /** What the open session tells the rail about itself, so the rail can show
  * it even when it is not among the recent sessions the rail lists. */
@@ -20,6 +21,12 @@ export interface RailActiveSession {
 export type RailRow = RailActiveSession & {
   lamp: StatusLampState;
   group: "live" | "attention" | "recent";
+  /** The row's fire, from the listed session's own counters; absent for an
+   * open session the list does not carry, which keeps the plain dot. */
+  hearth?: HearthSnapshot;
+  /** The second line under a live or waiting row: the header's own sentence
+   * ("Using Bash for 41 minutes", "Needs answer"). */
+  detail?: string;
 };
 
 export interface SessionRailContextValue {

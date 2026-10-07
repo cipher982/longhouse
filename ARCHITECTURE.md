@@ -185,7 +185,7 @@ Features import across folders with `@/`; within a folder, relative.
 | `web/src/app/` | Entry (`main.tsx`), routes, `Layout.tsx`, error boundary, global styles and tokens |
 | `web/src/features/timeline/` | Sessions page, rows (`SessionRow.tsx`), inbox model, recall panel, timeline stream hook |
 | `web/src/features/session/` | Session detail page, `TimelinePane.tsx`, runtime strip, header state; the composer is `web/src/features/session/chat/SessionChat.tsx` |
-| `web/src/features/launch/` | Launch modal, model picker, provider sign-in |
+| `web/src/features/launch/` | New-session pane (`/timeline/new`) and its one launch hook, model picker, provider sign-in |
 | `web/src/features/machines/` | Machines page and a machine's page (`MachinesPage.tsx`, `MachineDetailPage.tsx`, status words in `machinePresentation.ts`, served by `/api/timeline/machines/summary` from `server/zerg/services/machines_summary.py`), Devices page, connect-machine flow |
 | `web/src/features/runners/` | Runner detail page (optional shell-command tooling, shown under its machine) and the connect/add-runner modal |
 | `web/src/features/auth/` | Login, profile, settings, auth and token refresh |

@@ -1,11 +1,10 @@
-import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import type { MachineActivity, MachineDirectoryEntry, MachineSummary, Runner } from "@/shared/api/index";
 import { Button, EmptyState, PageShell, Spinner } from "@/shared/ui";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
 import { useReadinessFlag } from "@/shared/lib/readiness-contract";
 import { getProviderLabel } from "@/shared/lib/providers";
-import LaunchSessionModal from "@/features/launch/LaunchSessionModal";
+import { newSessionPath } from "@/features/launch/newSessionPath";
 import ProviderSignInList from "@/features/launch/ProviderSignInList";
 import { useRunners } from "@/features/runners/useRunners";
 import { ActivityBars } from "./ActivityBars";
@@ -168,7 +167,6 @@ export default function MachineDetailPage() {
   const { data: runners } = useRunners({ refetchInterval: 30_000 });
   const directoryMachine = directory.data?.machines?.find((machine) => machine.device_id === deviceId);
   const waitingForDirectory = isError && !data && directory.isLoading;
-  const [launchOpen, setLaunchOpen] = useState(false);
 
   const pageReady = !isLoading && !waitingForDirectory;
   useReadinessFlag({ ready: pageReady || Boolean(directoryMachine), screenshotReady: pageReady });
@@ -247,7 +245,7 @@ export default function MachineDetailPage() {
             Open sessions
           </Link>
           {canLaunch && (
-            <Button variant="primary" data-testid="machine-new-session" aria-haspopup="dialog" onClick={() => setLaunchOpen(true)}>
+            <Button variant="primary" data-testid="machine-new-session" onClick={() => navigate(newSessionPath(machine.device_id))}>
               New session
             </Button>
           )}
@@ -394,17 +392,6 @@ export default function MachineDetailPage() {
         </dl>
       </details>
 
-      {launchOpen && (
-        <LaunchSessionModal
-          isOpen={launchOpen}
-          initialDeviceId={machine.device_id}
-          onClose={() => setLaunchOpen(false)}
-          onLaunched={(sessionId) => {
-            setLaunchOpen(false);
-            navigate(`/timeline/${sessionId}`);
-          }}
-        />
-      )}
     </PageShell>
   );
 }
