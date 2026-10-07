@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -21,7 +23,9 @@ from fastapi import APIRouter
 from fastapi import Header
 from fastapi import HTTPException
 from fastapi import Query
+from fastapi import Request
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from pydantic import Field
 
@@ -35,7 +39,94 @@ from zerg.services.runtime_admission import runtime_admission
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/internal/deployments", tags=["internal-deployments"])
+_request_timing: ContextVar[dict[str, Any] | None] = ContextVar("deployment_request_timing", default=None)
+
+
+@contextmanager
+def _timed_stage(name: str):
+    """Accumulate one handler stage into this request's timing line."""
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        timing = _request_timing.get()
+        if timing is not None:
+            stages = timing["stages"]
+            stages[name] = round(stages.get(name, 0.0) + (time.monotonic() - started) * 1000, 1)
+
+
+def _record_catalog_call(method: str, started: float, outcome: str) -> None:
+    timing = _request_timing.get()
+    if timing is not None:
+        timing["catalog_calls"].append([method, round((time.monotonic() - started) * 1000, 1), outcome])
+
+
+class _TimedDeploymentResponse:
+    """Send the route's response, then log handler and send time as one line."""
+
+    def __init__(self, response, *, route: str, timing: dict[str, Any], started: float, handler_ms: float) -> None:
+        self.response = response
+        self.route = route
+        self.timing = timing
+        self.started = started
+        self.handler_ms = handler_ms
+        self.status_code = getattr(response, "status_code", None)
+        self.background = getattr(response, "background", None)
+
+    async def __call__(self, scope, receive, send) -> None:
+        send_started = time.monotonic()
+        try:
+            await self.response(scope, receive, send)
+        finally:
+            from zerg.services.event_loop_lag import deploy_window_loop_lag
+
+            event = {
+                "event": "deployment_request_timing",
+                "route": self.route,
+                "status_code": self.status_code,
+                "handler_ms": round(self.handler_ms, 1),
+                "send_ms": round((time.monotonic() - send_started) * 1000, 1),
+                "total_ms": round((time.monotonic() - self.started) * 1000, 1),
+                "stages": self.timing["stages"],
+                "catalog_calls": self.timing["catalog_calls"],
+                "loop_lag": deploy_window_loop_lag(),
+            }
+            logger.info("deployment_request_timing %s", json.dumps(event, separators=(",", ":")))
+
+
+class DeploymentTimingRoute(APIRoute):
+    """Time every cutover control request from handler entry to its last byte.
+
+    The deployer measures these phases from outside, through the edge. This is
+    the inside view: per-stage handler time, each catalog call with its outcome,
+    the time to send the response, and event-loop lag in the deploy window.
+    These requests are a handful per cutover, so the line is always logged.
+    """
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+        route = self.path.rsplit("/", 1)[-1]
+
+        async def timed_handler(request: Request):
+            timing: dict[str, Any] = {"stages": {}, "catalog_calls": []}
+            token = _request_timing.set(timing)
+            started = time.monotonic()
+            try:
+                response = await handler(request)
+            finally:
+                _request_timing.reset(token)
+            return _TimedDeploymentResponse(
+                response,
+                route=route,
+                timing=timing,
+                started=started,
+                handler_ms=(time.monotonic() - started) * 1000,
+            )
+
+        return timed_handler
+
+
+router = APIRouter(prefix="/internal/deployments", tags=["internal-deployments"], route_class=DeploymentTimingRoute)
 
 
 class DeploymentFenceRequest(BaseModel):
@@ -350,16 +441,19 @@ async def reopen_runtime(
 ):
     _require_internal_token(x_internal_token)
     runtime = runtime_admission()
-    catalog = await _catalog_admission_probe("status")
+    with _timed_stage("catalog_status"):
+        catalog = await _catalog_admission_probe("status")
     await runtime.update_catalog_admission(catalog)
-    result = await runtime.reopen(
-        body.model_dump(mode="json"),
-        attempt_id=attempt_id,
-        catalog_probe=_catalog_admission_probe,
-        activation_probe=_catalog_activation_probe,
-    )
+    with _timed_stage("reopen"):
+        result = await runtime.reopen(
+            body.model_dump(mode="json"),
+            attempt_id=attempt_id,
+            catalog_probe=_catalog_admission_probe,
+            activation_probe=_catalog_activation_probe,
+        )
     if result.get("state") == "reopened":
-        await _signal_runtime_lifecycle(result)
+        with _timed_stage("signal_lifecycle"):
+            await _signal_runtime_lifecycle(result)
     return _fence_response(result)
 
 
@@ -409,7 +503,8 @@ async def runtime_evidence(
 ):
     _require_internal_token(x_internal_token)
     snapshot = await runtime_admission().snapshot()
-    evidence = _runtime_evidence()
+    with _timed_stage("evidence"):
+        evidence = await asyncio.to_thread(_runtime_evidence)
     payload = {**evidence, "runtime_epoch": snapshot["runtime_epoch"], "admission": snapshot}
     return JSONResponse(status_code=200 if evidence["outcome"] == "ready" else 503, content=payload)
 
@@ -457,11 +552,15 @@ async def runtime_readiness(
     snapshot = await runtime.snapshot()
     lifecycle = runtime.host_lifecycle()
     if lifecycle.get("attempt_id") == attempt_id:
-        await _signal_runtime_lifecycle(
-            {"state": snapshot.get("state"), "attempt_id": attempt_id},
-            lifecycle=lifecycle,
-        )
-    evidence = _runtime_evidence()
+        with _timed_stage("signal_lifecycle"):
+            await _signal_runtime_lifecycle(
+                {"state": snapshot.get("state"), "attempt_id": attempt_id},
+                lifecycle=lifecycle,
+            )
+    # The catalogd ping is a blocking socket call; off the event loop it cannot
+    # stall the clients that reconnect to this candidate at the same moment.
+    with _timed_stage("evidence"):
+        evidence = await asyncio.to_thread(_runtime_evidence)
     schema_version = evidence["schema_version"]
     schema_ok = expected_schema_version is None or str(schema_version) == str(expected_schema_version)
     ready = bool(
@@ -497,47 +596,46 @@ async def runtime_readiness(
 
 
 # A cutover gate is that the candidate's reads are *consistent*, not that a
-# just-started catalogd answers instantly. On a cold start the catalog writer is
-# still coming up, and its RPC deadline is short by design; treating that first
-# timeout as a failed cutover rolled a healthy canary back and paused the
-# deployment, which blocked the release lane for every SHA. The reads are retried
-# inside a bounded budget, and a catalog that never answers still fails.
+# just-started catalogd answers instantly. A catalog that is not answering yet
+# (socket not published, "not ready") is retried quickly inside a bounded
+# budget; one that answers slowly is waited for, never abandoned and resent.
+# The old loop gave each of four reads a 0.75 s timeout and slept 0.25 s after
+# a failure, blocking the event loop for each try: every david010 cutover on
+# 2026-10-07 lost exactly three such cycles (probe 3.26-3.83 s).
 _READ_CONSISTENCY_READY_BUDGET_SECONDS = 6.0
-_READ_CONSISTENCY_POLL_SECONDS = 0.25
+_READ_CONSISTENCY_RETRY_SECONDS = 0.05
 
 
-async def _catalog_reads_for_cutover(catalog_socket) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """Read the catalog through the gateway, waiting out a cold catalogd.
+def _catalog_failure_name(exc: BaseException) -> str:
+    cause = exc.__cause__
+    if isinstance(exc, CatalogRemoteError):
+        return f"{type(exc).__name__}:{exc.code}"
+    return type(exc).__name__ + (f":{type(cause).__name__}" if cause is not None else "")
 
-    The four reads are the same concrete metadata reads as before; only the
-    willingness to retry an unavailable catalog within a bounded window is new.
-    """
+
+async def _catalog_consistency_read(catalog_socket) -> dict[str, Any]:
+    """Read the probe's evidence from one catalog snapshot on the control lane."""
+
     deadline = time.monotonic() + _READ_CONSISTENCY_READY_BUDGET_SECONDS
     while True:
+        started = time.monotonic()
         try:
-            schema = call_catalogd_sync(catalog_socket, "schema.v2", timeout_seconds=0.75)
-            active = call_catalogd_sync(
+            result = await asyncio.to_thread(
+                call_catalogd_sync,
                 catalog_socket,
-                "session.active.list.v2",
-                params={
-                    "limit": 1,
-                    "days_back": 1,
-                    "observed_at": datetime.now(timezone.utc).isoformat(),
-                },
-                timeout_seconds=0.75,
+                "deployment.read_consistency.v2",
+                params={"observed_at": datetime.now(timezone.utc).isoformat()},
+                timeout_seconds=max(0.05, deadline - started),
             )
-            queued = call_catalogd_sync(
-                catalog_socket,
-                "session.input.queued.list.v2",
-                params={"limit": 1},
-                timeout_seconds=0.75,
-            )
-            ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=0.75)
-            return schema, active, queued, ping
-        except (CatalogUnavailable, CatalogRemoteError):
-            if time.monotonic() >= deadline:
+        except (CatalogUnavailable, CatalogRemoteError) as exc:
+            _record_catalog_call("deployment.read_consistency.v2", started, _catalog_failure_name(exc))
+            not_answering_yet = exc.retryable if isinstance(exc, CatalogRemoteError) else not isinstance(exc.__cause__, TimeoutError)
+            if not not_answering_yet or time.monotonic() + _READ_CONSISTENCY_RETRY_SECONDS >= deadline:
                 raise
-            await asyncio.sleep(_READ_CONSISTENCY_POLL_SECONDS)
+            await asyncio.sleep(_READ_CONSISTENCY_RETRY_SECONDS)
+            continue
+        _record_catalog_call("deployment.read_consistency.v2", started, "ok")
+        return result
 
 
 @router.get("/{attempt_id}/read-consistency", response_model=ReadConsistencyResponse)
@@ -573,33 +671,37 @@ async def read_consistency(
     if runtime_epoch != runtime.runtime_epoch:
         base["detail"] = "runtime epoch is no longer served by this process"
         return JSONResponse(status_code=409, content=base)
-    await runtime.renew_claim(claim_deadline=claim_deadline, attempt_id=attempt_id, phase="probe")
+    with _timed_stage("renew_claim"):
+        await runtime.renew_claim(claim_deadline=claim_deadline, attempt_id=attempt_id, phase="probe")
     lifecycle = runtime.host_lifecycle()
     if lifecycle.get("attempt_id") == attempt_id:
-        await _signal_runtime_lifecycle(
-            {"state": runtime.state, "attempt_id": attempt_id},
-            lifecycle=lifecycle,
-        )
+        with _timed_stage("signal_lifecycle"):
+            await _signal_runtime_lifecycle(
+                {"state": runtime.state, "attempt_id": attempt_id},
+                lifecycle=lifecycle,
+            )
     try:
         from zerg.build_info import load as load_build_identity
 
-        build_identity = load_build_identity().as_dict()
-        _database_path, catalog_socket = catalogd_paths()
-        schema, active, queued, ping = await _catalog_reads_for_cutover(catalog_socket)
-        catalog_revision = str(ping.get("commit_seq") or "")
-        served_revision = str(active.get("commit_seq") or "")
-        machine_revision = str(queued.get("commit_seq") or "")
-        schema_matches = schema.get("schema_generation") == ping.get("schema_generation")
-        compatible = catalogd_ping_is_compatible(ping)
-        revisions_comparable = all(revision.isdecimal() for revision in (catalog_revision, served_revision, machine_revision))
+        with _timed_stage("build_identity"):
+            build_identity = load_build_identity().as_dict()
+            _database_path, catalog_socket = catalogd_paths()
+        with _timed_stage("catalog_read"):
+            snapshot = await _catalog_consistency_read(catalog_socket)
+        # One snapshot answers every read, so the served and machine reads share
+        # the catalog's commit coordinate by construction.
+        catalog_revision = str(snapshot.get("commit_seq") or "")
+        served_revision = catalog_revision
+        machine_revision = catalog_revision
+        compatible = catalogd_ping_is_compatible(snapshot)
         snapshot_id = hashlib.sha256(
             json.dumps(
                 {
                     "epoch": runtime.runtime_epoch,
-                    "catalog_id": ping.get("catalog_id"),
-                    "schema_generation": schema.get("schema_generation"),
-                    "active_session_ids": active.get("session_ids", []),
-                    "queued_session_ids": queued.get("session_ids", []),
+                    "catalog_id": snapshot.get("catalog_id"),
+                    "schema_generation": snapshot.get("schema_generation"),
+                    "active_session_ids": snapshot.get("active_session_ids", []),
+                    "queued_session_ids": snapshot.get("queued_session_ids", []),
                     "catalog_revision": catalog_revision,
                     "served_revision": served_revision,
                     "machine_revision": machine_revision,
@@ -607,7 +709,7 @@ async def read_consistency(
                 sort_keys=True,
             ).encode()
         ).hexdigest()
-        if not schema_matches or not compatible or not revisions_comparable or int(machine_revision) < int(served_revision):
+        if not compatible or not catalog_revision.isdecimal():
             base.update(
                 {
                     "outcome": "fail",

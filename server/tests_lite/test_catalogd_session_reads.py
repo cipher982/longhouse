@@ -1537,6 +1537,23 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
             {"limit": 10, "days_back": 7, "observed_at": now.isoformat()},
         )
         assert active["session_ids"] == [first_id, second_id]
+        # The cutover probe reads the same rows from one snapshot on the
+        # control lane, so reconnecting clients that fill the interactive lane
+        # cannot make a deployment wait (david010 probe 3.3 s, 2026-10-07).
+        daemon._read_depth = daemon._read_max_depth
+        with pytest.raises(CatalogRemoteError) as busy:
+            await client.call("session.active.list.v2", {"limit": 1, "days_back": 7, "observed_at": now.isoformat()})
+        assert busy.value.code == "resource_exhausted"
+        consistency = await client.call("deployment.read_consistency.v2", {"observed_at": now.isoformat()})
+        daemon._read_depth = 0
+        ping = await client.call("ping.v2")
+        assert consistency["active_session_ids"] == [first_id]
+        assert consistency["queued_session_ids"] == []
+        assert consistency["commit_seq"] == ping["commit_seq"]
+        assert consistency["catalog_id"] == ping["catalog_id"]
+        assert {key: consistency[key] for key in ("ready", "schema_version", "schema_generation")} == {
+            key: ping[key] for key in ("ready", "schema_version", "schema_generation")
+        }
         pending = await client.call("session.read.v2", {"session_id": pending_id})
         assert pending["found"] is True
         assert pending["facts"]["catalog"]["session_id"] == pending_id

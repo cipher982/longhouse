@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -340,41 +341,44 @@ def test_read_consistency_reports_catalog_failure_as_503_not_conflict(evidence_r
     assert unavailable.json()["outcome"] == "unknown"
 
 
+def _consistency_snapshot() -> dict[str, object]:
+    from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
+    from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
+
+    return {
+        "ready": True,
+        "catalog_id": "11111111-1111-4111-8111-111111111111",
+        "schema_version": CATALOG_SCHEMA_VERSION,
+        "schema_generation": CATALOG_SCHEMA_GENERATION,
+        "commit_seq": "5",
+        "active_session_ids": [],
+        "queued_session_ids": [],
+    }
+
+
 def test_read_consistency_waits_out_a_cold_catalogd(evidence_runtime, monkeypatch):
     """A just-started catalogd is not a failed cutover.
 
     The canary's first probe hit the catalog writer while it was still coming up
-    and rolled a healthy candidate back; the same reads succeed a moment later,
-    so the gate retries inside its budget and then reports the real outcome.
+    and rolled a healthy candidate back; the same read succeeds a moment later,
+    so the gate retries a catalog that is not answering yet inside its budget.
     """
     client, runtime, _ping = evidence_runtime
     # The gate is consistency *of a ready candidate*, so readiness comes first.
     runtime.mark_candidate_ready(attempt_id="owned-attempt")
 
     from zerg.catalogd.client import CatalogUnavailable
-    from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
-    from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
     from zerg.routers import internal_deployments
-
-    def catalogd(method: str) -> dict[str, object]:
-        if method == "schema.v2":
-            return {"schema_generation": CATALOG_SCHEMA_GENERATION}
-        return {
-            "ready": True,
-            "schema_version": CATALOG_SCHEMA_VERSION,
-            "schema_generation": CATALOG_SCHEMA_GENERATION,
-            "commit_seq": "5",
-            "session_ids": [],
-        }
 
     attempts = {"count": 0}
 
     def flaky(socket_path, method, **kwargs):
+        assert method == "deployment.read_consistency.v2"
         attempts["count"] += 1
-        # The first read set lands while catalogd is still starting.
-        if attempts["count"] <= 4:
-            raise CatalogUnavailable(f"catalogd unavailable for {method}")
-        return catalogd(method)
+        # The socket is not published yet: a refusal, not a slow answer.
+        if attempts["count"] <= 3:
+            raise CatalogUnavailable(f"catalogd unavailable for {method}") from ConnectionRefusedError()
+        return _consistency_snapshot()
 
     monkeypatch.setattr(internal_deployments, "call_catalogd_sync", flaky)
     response = client.get(
@@ -383,8 +387,64 @@ def test_read_consistency_waits_out_a_cold_catalogd(evidence_runtime, monkeypatc
         headers={"X-Internal-Token": "evidence-test-only"},
     )
     assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["outcome"] == "pass"
+    assert body["catalog_revision"] == body["served_session_revision"] == body["machine_read_revision"] == "5"
+    assert attempts["count"] == 4
+
+
+def test_read_consistency_waits_for_a_slow_answer_instead_of_resending(evidence_runtime, monkeypatch, caplog):
+    """One read gets the whole budget; a slow catalog is never abandoned.
+
+    Each david010 cutover on 2026-10-07 spent three 0.75 s timeouts plus 0.25 s
+    sleeps before an answer: every abandoned read was resent behind itself.
+    """
+    client, runtime, _ping = evidence_runtime
+    runtime.mark_candidate_ready(attempt_id="owned-attempt")
+    caplog.set_level(logging.INFO, logger="zerg.routers.internal_deployments")
+
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.routers import internal_deployments
+
+    timeouts: list[float] = []
+
+    def slow(socket_path, method, *, params, timeout_seconds):
+        timeouts.append(timeout_seconds)
+        if len(timeouts) == 1:
+            return _consistency_snapshot()
+        raise AssertionError("a read that answered must not be resent")
+
+    monkeypatch.setattr(internal_deployments, "call_catalogd_sync", slow)
+    response = client.get(
+        "/internal/deployments/owned-attempt/read-consistency",
+        params={"runtime_epoch": runtime.runtime_epoch},
+        headers={"X-Internal-Token": "evidence-test-only"},
+    )
     assert response.json()["outcome"] == "pass"
-    assert attempts["count"] > 4
+    assert len(timeouts) == 1 and timeouts[0] > 5.0
+    timing = next(
+        json.loads(record.getMessage().split(" ", 1)[1])
+        for record in caplog.records
+        if record.getMessage().startswith("deployment_request_timing")
+    )
+    assert timing["route"] == "read-consistency"
+    assert timing["status_code"] == 200
+    assert [call[0] for call in timing["catalog_calls"]] == ["deployment.read_consistency.v2"]
+    assert set(timing["stages"]) >= {"renew_claim", "build_identity", "catalog_read"}
+
+    def timed_out(socket_path, method, *, params, timeout_seconds):
+        timeouts.append(timeout_seconds)
+        raise CatalogUnavailable(f"catalogd unavailable for {method}") from TimeoutError()
+
+    monkeypatch.setattr(internal_deployments, "call_catalogd_sync", timed_out)
+    response = client.get(
+        "/internal/deployments/owned-attempt/read-consistency",
+        params={"runtime_epoch": runtime.runtime_epoch},
+        headers={"X-Internal-Token": "evidence-test-only"},
+    )
+    # The whole budget elapsed inside that one read: report it, do not resend.
+    assert response.status_code == 503
+    assert len(timeouts) == 2
 
 
 def _activation_payload(runtime) -> dict[str, object]:

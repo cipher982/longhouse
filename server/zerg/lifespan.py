@@ -245,6 +245,12 @@ async def lifespan(app: FastAPI):
     try:
         logger.info("Storage-v2 mode: retired cold database is not initialized or mounted")
         if not _settings.testing:
+            from zerg.services.event_loop_lag import start_deploy_window_monitor
+            from zerg.services.runtime_admission import runtime_admission
+
+            pending_runtime = runtime_admission()
+            if pending_runtime.admission != "open":
+                app.state.deploy_window_loop_lag_task = start_deploy_window_monitor(lambda: pending_runtime.admission == "open")
             with _timed_startup_step("catalogd_supervisor"):
                 from zerg.services.catalogd_supervisor import start_catalogd_supervisor
 
@@ -439,10 +445,11 @@ async def lifespan(app: FastAPI):
     try:
 
         async def stop_deferred_runtime_startup() -> None:
-            task = getattr(app.state, "deferred_non_gating_startup_task", None)
-            if task is not None and not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+            for name in ("deferred_non_gating_startup_task", "deploy_window_loop_lag_task"):
+                task = getattr(app.state, name, None)
+                if task is not None and not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
 
         async def stop_wal_checkpoints() -> None:
             from zerg.database import stop_wal_checkpoint_loop

@@ -350,6 +350,10 @@ class CatalogDaemon:
                 self._repair_projector_states(),
                 name="catalogd-projector-repair",
             )
+            # The cutover probe's queued-input read imports this module lazily,
+            # and its first import cost 160-250 ms inside the probe. Importing
+            # it here overlaps that with the runtime's own startup instead.
+            threading.Thread(target=_warm_cutover_read_imports, name="catalogd-import-warmup", daemon=True).start()
             _log_startup_stage("total", startup_started)
             return self._meta
         except BaseException:
@@ -667,6 +671,8 @@ class CatalogDaemon:
             return await self._update_session_preferences(request)
         if request.method == "session.active.list.v2":
             return await self._list_active_sessions(request)
+        if request.method == "deployment.read_consistency.v2":
+            return await self._read_cutover_consistency(request)
         if request.method == "session.prefix.resolve.v2":
             return await self._resolve_session_prefix(request)
         if request.method == "session.alias.resolve.v2":
@@ -2735,6 +2741,22 @@ class CatalogDaemon:
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _read_cutover_consistency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"observed_at"}:
+            return self._error(request, "invalid_request", "deployment.read_consistency.v2 requires observed_at")
+        try:
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        # A cutover is control traffic: it must not queue behind the timeline
+        # replays of every reconnecting client, nor behind projector work.
+        result = await self._run_control_read_store(self._store.read_cutover_consistency, observed_at=observed_at)
+        return CatalogRpcResponse(
+            id=request.id,
+            result={**result, "schema_generation": self._schema_generation, "ready": True},
+        )
+
     async def _resolve_session_prefix(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"prefix", "owner_id"}:
             return self._error(request, "invalid_request", "session.prefix.resolve.v2 requires prefix and owner_id")
@@ -4683,6 +4705,13 @@ class CatalogDaemon:
                 details=details or {},
             ),
         )
+
+
+def _warm_cutover_read_imports() -> None:
+    try:
+        import zerg.services.live_session_inputs  # noqa: F401
+    except Exception:
+        logger.exception("catalogd import warm-up failed")
 
 
 def _log_startup_stage(stage: str, started: float, **dimensions) -> None:

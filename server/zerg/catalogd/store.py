@@ -8439,26 +8439,43 @@ class CatalogStore:
     def list_active_session_ids(self, *, limit: int, days_back: int, observed_at: datetime) -> dict[str, Any]:
         """Return bounded recently observed session identities from the live lane."""
 
-        live = LiveSession.__table__
-        catalog = LiveSessionCatalog.__table__
-        cutoff = observed_at - timedelta(days=days_back)
         with _read_snapshot(self.engine) as connection:
-            rows = connection.execute(
-                select(live.c.session_id)
-                .join(catalog, catalog.c.session_id == live.c.session_id)
-                .where(
-                    live.c.state.notin_(("missing", "ended")),
-                    catalog.c.user_state.notin_(("archived", "snoozed")),
-                    catalog.c.user_hidden_from_timeline == 0,
-                    live.c.last_seen_at >= cutoff,
-                )
-                .order_by(live.c.last_seen_at.desc(), live.c.updated_at.desc(), live.c.session_id.desc())
-                .limit(limit)
-            ).all()
             return {
-                "session_ids": [str(row[0]) for row in rows],
+                "session_ids": _active_session_ids(connection, limit=limit, days_back=days_back, observed_at=observed_at),
                 "commit_seq": str(_current_commit_seq(connection)),
             }
+
+    def read_cutover_consistency(self, *, observed_at: datetime) -> dict[str, Any]:
+        """Answer a deployment's read-consistency probe from one read snapshot.
+
+        The probe used to make four calls spread over three read lanes: the
+        active list on the two-worker interactive lane, which reconnecting
+        desktops' timeline replays fill at exactly that moment, and the queued
+        list on the unbounded projector lane, behind background work. The same
+        queries now run once, here, on the control lane.
+        """
+
+        from zerg.services.live_session_inputs import list_session_ids_with_queued_live_receipts
+
+        with _read_snapshot(self.engine) as connection:
+            active_ids = _active_session_ids(connection, limit=1, days_back=1, observed_at=observed_at)
+            orm = Session(bind=connection, expire_on_commit=False)
+            try:
+                queued_ids = list_session_ids_with_queued_live_receipts(orm, limit=1)
+            finally:
+                orm.close()
+            meta = connection.execute(
+                select(catalog_meta.c.catalog_id, catalog_meta.c.schema_version, catalog_meta.c.commit_seq).where(
+                    catalog_meta.c.singleton == 1
+                )
+            ).one()
+        return {
+            "catalog_id": str(meta.catalog_id),
+            "schema_version": meta.schema_version,
+            "commit_seq": str(meta.commit_seq),
+            "active_session_ids": active_ids,
+            "queued_session_ids": [str(session_id) for session_id in queued_ids],
+        }
 
     def reclassify_session_origin(
         self,
@@ -17211,6 +17228,25 @@ def _bind_orphan_subagents_to_parent(
             or 0
         )
     return bound
+
+
+def _active_session_ids(connection, *, limit: int, days_back: int, observed_at: datetime) -> list[str]:
+    live = LiveSession.__table__
+    catalog = LiveSessionCatalog.__table__
+    cutoff = observed_at - timedelta(days=days_back)
+    rows = connection.execute(
+        select(live.c.session_id)
+        .join(catalog, catalog.c.session_id == live.c.session_id)
+        .where(
+            live.c.state.notin_(("missing", "ended")),
+            catalog.c.user_state.notin_(("archived", "snoozed")),
+            catalog.c.user_hidden_from_timeline == 0,
+            live.c.last_seen_at >= cutoff,
+        )
+        .order_by(live.c.last_seen_at.desc(), live.c.updated_at.desc(), live.c.session_id.desc())
+        .limit(limit)
+    ).all()
+    return [str(row[0]) for row in rows]
 
 
 def _current_commit_seq(connection) -> int:
