@@ -189,6 +189,21 @@ struct LonghouseAPITests {
         ])
     }
 
+    // The server picks the window (14 days, or a demo corpus's whole
+    // history); a hardcoded 14 left "Explore the demo" empty.
+    @Test
+    func timelineStreamURLLeavesTheWindowToTheServer() throws {
+        let baseURL = try #require(URL(string: "https://longhouse.ai"))
+
+        let url = TimelineSessionsStream.streamURL(baseURL: baseURL, daysBack: nil, limit: 30, skipInitialReplay: false)
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        #expect(components.queryItems?.contains { $0.name == "days_back" } == false)
+
+        let narrowed = TimelineSessionsStream.streamURL(baseURL: baseURL, daysBack: 7, limit: 30, skipInitialReplay: false)
+        let narrowedItems = try #require(URLComponents(url: narrowed, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(narrowedItems.contains(URLQueryItem(name: "days_back", value: "7")))
+    }
+
     @Test
     func sessionWorkspaceStreamURLSkipsInitialSnapshotByDefault() throws {
         let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))

@@ -217,8 +217,10 @@ struct LonghouseAPI: Sendable {
 
     func timelineSessions(limit: Int, deviceId: String?) async throws -> [SessionSummary] {
         var components = URLComponents(url: baseURL.appendingPathComponent("/api/timeline/sessions"), resolvingAgainstBaseURL: false)!
+        // No days_back: the server's default window applies (14 days, or a
+        // demo corpus's whole history). A hardcoded 14 hid the public demo's
+        // aged sessions, so "Explore the demo" opened an empty timeline.
         var queryItems = [
-            URLQueryItem(name: "days_back", value: "14"),
             URLQueryItem(name: "limit", value: String(limit)),
         ]
         if let deviceId, !deviceId.isEmpty {

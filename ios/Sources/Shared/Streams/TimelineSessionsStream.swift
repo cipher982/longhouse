@@ -45,7 +45,7 @@ actor TimelineSessionsStream {
     }
 
     private let baseURL: URL
-    private let daysBack: Int
+    private let daysBack: Int?
     private let limit: Int
     private let deviceId: String?
     private let skipInitialReplay: Bool
@@ -57,7 +57,7 @@ actor TimelineSessionsStream {
 
     init(
         baseURL: URL,
-        daysBack: Int = 14,
+        daysBack: Int? = nil,
         limit: Int = 40,
         skipInitialReplay: Bool = true,
         staleTimeoutSeconds: TimeInterval = 45,
@@ -73,7 +73,7 @@ actor TimelineSessionsStream {
 
     static func streamURL(
         baseURL: URL,
-        daysBack: Int,
+        daysBack: Int?,
         limit: Int,
         skipInitialReplay: Bool,
         deviceId: String? = nil
@@ -82,11 +82,14 @@ actor TimelineSessionsStream {
             url: baseURL.appendingPathComponent("/api/timeline/sessions/stream"),
             resolvingAgainstBaseURL: false
         )!
+        // nil: the server's default window, as the snapshot request uses.
         var queryItems = [
-            URLQueryItem(name: "days_back", value: String(daysBack)),
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "skip_initial_replay", value: skipInitialReplay ? "true" : "false"),
         ]
+        if let daysBack {
+            queryItems.insert(URLQueryItem(name: "days_back", value: String(daysBack)), at: 0)
+        }
         if let deviceId, !deviceId.isEmpty {
             queryItems.append(URLQueryItem(name: "device_id", value: deviceId))
         }
