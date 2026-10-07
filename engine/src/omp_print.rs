@@ -1216,11 +1216,14 @@ pub async fn recover_omp_print_turns(
                 if cleanup_recovered_process_group(&claim.run_id, &claim, claim.process_group_id)
                     .await
                 {
-                    registry.record_invocation_state(
+                    if let Err(error) = registry.record_invocation_state(
                         &claim.run_id,
                         "closed",
                         claim.pending_count,
-                    )?;
+                    ) {
+                        tracing::warn!(%error, run_id = %claim.run_id, "OMP recovery claim remains retryable");
+                        continue;
+                    }
                     if let Some(launch_id) = claim.launch_id.as_deref() {
                         closed_launch_ids.insert(launch_id.to_string());
                     }
@@ -1232,7 +1235,12 @@ pub async fn recover_omp_print_turns(
                 }
             }
             ClaimLiveness::Gone | ClaimLiveness::Live => {
-                registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)?;
+                if let Err(error) =
+                    registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)
+                {
+                    tracing::warn!(%error, run_id = %claim.run_id, "OMP recovery claim remains retryable");
+                    continue;
+                }
                 if let Some(launch_id) = claim.launch_id.as_deref() {
                     closed_launch_ids.insert(launch_id.to_string());
                 }
@@ -1244,7 +1252,7 @@ pub async fn recover_omp_print_turns(
         }
     }
     for launch_id in closed_launch_ids {
-        settle_omp_claims_for_launch(
+        if let Err(error) = settle_omp_claims_for_launch(
             &registry,
             &launch_id,
             machine_name,
@@ -1252,7 +1260,10 @@ pub async fn recover_omp_print_turns(
             "queued OMP user turn was not started before Machine Agent recovery",
             "run_cancelled",
         )
-        .await?;
+        .await
+        {
+            tracing::warn!(%error, launch_id, "OMP recovered invocation retains unsettled claims");
+        }
     }
     for claim in registry.list_nonterminal()? {
         if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER) || claim.state != "spawned" {
@@ -1465,6 +1476,13 @@ async fn monitor_omp_print(
                 None,
             )
             .await;
+            if !cleanup_verified {
+                if let Ok(claims) = crate::turn_claims::default_registry() {
+                    let binding = invocation.latest_turn();
+                    let _ = claims
+                        .record_shutdown_survived(&binding.run_id, invocation.pending_count());
+                }
+            }
             invocation.process_exited();
             crate::console_lifecycle::unregister(&invocation.launch_id);
             return;
@@ -1898,14 +1916,26 @@ async fn settle_omp_claims_for_launch(
             continue;
         }
         if claim.state == "terminal" || claim.state == "failed" {
-            registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)?;
+            if let Err(error) =
+                registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)
+            {
+                tracing::warn!(%error, run_id = %claim.run_id, "OMP invocation claim remains retryable");
+            }
             continue;
         }
         let sink = match sink_for_claim(&claim, machine_name, local_db_path.clone(), true) {
             Ok(sink) => sink,
             Err(error) => {
-                registry.mark_terminal(&claim.run_id, "run_failed", Some(error.to_string()))?;
-                registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)?;
+                if let Err(write_error) =
+                    registry.mark_terminal(&claim.run_id, "run_failed", Some(error.to_string()))
+                {
+                    tracing::warn!(%write_error, run_id = %claim.run_id, "OMP failed claim remains retryable");
+                }
+                if let Err(write_error) =
+                    registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)
+                {
+                    tracing::warn!(%write_error, run_id = %claim.run_id, "OMP failed invocation remains retryable");
+                }
                 continue;
             }
         };
@@ -5482,5 +5512,66 @@ for line in sys.stdin:
             .contains("did not acknowledge the prompt"));
         let _ = provider.wait().await;
         restore_test_longhouse_home(previous);
+    }
+    #[test]
+    fn one_unwritable_parked_claim_does_not_abort_other_omp_recovery() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            runtime.block_on(async {
+                let registry = crate::turn_claims::default_registry().unwrap();
+                let bad = uuid::Uuid::new_v4().to_string();
+                let good = uuid::Uuid::new_v4().to_string();
+                for run_id in [&bad, &good] {
+                    registry
+                        .claim(
+                            run_id,
+                            &uuid::Uuid::new_v4().to_string(),
+                            &uuid::Uuid::new_v4().to_string(),
+                            None,
+                            None,
+                            "omp",
+                        )
+                        .unwrap();
+                    registry
+                        .mark_spawned(
+                            run_id,
+                            Some(u32::MAX),
+                            Some(i32::MAX),
+                            Some("old-birth".into()),
+                            OMP_PRINT_ADAPTER,
+                            serde_json::json!({}),
+                        )
+                        .unwrap();
+                    registry
+                        .record_invocation_state(run_id, "parked", 2)
+                        .unwrap();
+                    registry
+                        .mark_terminal(run_id, "run_completed", None)
+                        .unwrap();
+                }
+                let lock_path = crate::config::get_agent_dir()
+                    .unwrap()
+                    .join("turn-claims")
+                    .join(format!(".{bad}.lock"));
+                std::fs::remove_file(&lock_path).unwrap();
+                std::fs::create_dir(&lock_path).unwrap();
+                recover_omp_print_turns("omp-recovery-test", None)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    registry.read(&bad).unwrap().invocation_state.as_deref(),
+                    Some("parked")
+                );
+                assert_eq!(
+                    registry.read(&good).unwrap().invocation_state.as_deref(),
+                    Some("closed")
+                );
+            });
+        });
     }
 }

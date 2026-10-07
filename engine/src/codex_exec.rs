@@ -3310,11 +3310,23 @@ impl CodexExecRuntimeSink {
                 );
                 // A semantic conflict must not bypass the immutable response
                 // through the direct pump or fallback outbox.
-                let terminal_event = crate::turn_claims::default_registry()
+                let claim = match crate::turn_claims::default_registry()
                     .and_then(|registry| registry.read(&self.run_id))
-                    .ok()
-                    .and_then(|claim| claim.terminal_event)
-                    .unwrap_or(terminal_event);
+                {
+                    Ok(claim) => claim,
+                    Err(read_error) => {
+                        eprintln!(
+                            "[codex-exec] cannot resolve the authoritative terminal for {} run {}: {read_error:#}; not publishing an uncertain outcome",
+                            self.session_id, self.run_id
+                        );
+                        return;
+                    }
+                };
+                let terminal_event = match claim.terminal_event {
+                    Some(_) if claim.terminal_event_handed_off => return,
+                    Some(event) => event,
+                    None => terminal_event,
+                };
                 match crate::config::get_agent_runtime_events_outbox_dir().and_then(|outbox| {
                     crate::outbox::enqueue_runtime_event_for_handoff(&outbox, &terminal_event)
                 }) {

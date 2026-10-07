@@ -401,10 +401,28 @@ impl TurnClaimRegistry {
         pending_count: usize,
     ) -> Result<TurnClaim> {
         let (_lock, mut claim) = self.read_for_update(run_id)?;
-        if claim.invocation_close_event_handed_off {
+        if claim.invocation_state.as_deref() == Some("closed") {
             return Ok(claim);
         }
         claim.invocation_state = Some(invocation_state.to_string());
+        claim.pending_count = pending_count;
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim)
+    }
+
+    /// Explicit recovery rollback after owned-process shutdown was not verified.
+    /// Ordinary late lifecycle callbacks cannot reopen a closed invocation.
+    pub fn record_shutdown_survived(
+        &self,
+        run_id: &str,
+        pending_count: usize,
+    ) -> Result<TurnClaim> {
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
+        if claim.invocation_close_event_handed_off {
+            return Ok(claim);
+        }
+        claim.invocation_state = Some("parked".to_string());
         claim.pending_count = pending_count;
         claim.updated_at = Utc::now().to_rfc3339();
         self.write(&claim)?;
@@ -635,7 +653,7 @@ impl TurnClaimRegistry {
         }
         if let Some(invocation) = event
             .pointer("/payload/invocation")
-            .filter(|_| !claim.invocation_close_event_handed_off)
+            .filter(|_| claim.invocation_state.as_deref() != Some("closed"))
         {
             if let Some(state) = invocation.get("state").and_then(Value::as_str) {
                 claim.invocation_state = Some(state.to_string());
@@ -1312,6 +1330,12 @@ mod tests {
         registry
             .record_invocation_state(&run_id, "parked", 2)
             .unwrap();
+        assert_eq!(
+            registry.read(&run_id).unwrap().invocation_state.as_deref(),
+            Some("closed"),
+            "ordinary late state cannot reopen a closed invocation"
+        );
+        registry.record_shutdown_survived(&run_id, 2).unwrap();
         let recoverable = registry.read(&run_id).unwrap();
         assert_eq!(recoverable.invocation_state.as_deref(), Some("parked"));
         assert_eq!(recoverable.pending_count, 2);

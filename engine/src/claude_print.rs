@@ -1318,11 +1318,8 @@ async fn monitor_claude_print(
                     );
                     if let Ok(claims) = crate::turn_claims::default_registry() {
                         let binding = invocation.latest_turn();
-                        let _ = claims.record_invocation_state(
-                            &binding.run_id,
-                            "parked",
-                            invocation.pending_count(),
-                        );
+                        let _ = claims
+                            .record_shutdown_survived(&binding.run_id, invocation.pending_count());
                     }
                     return;
                 }
@@ -1397,11 +1394,7 @@ async fn close_invocation(
         eprintln!("[claude-print] process group {process_group_id} survived shutdown");
         if let Ok(claims) = crate::turn_claims::default_registry() {
             let binding = invocation.latest_turn();
-            let _ = claims.record_invocation_state(
-                &binding.run_id,
-                "parked",
-                invocation.pending_count(),
-            );
+            let _ = claims.record_shutdown_survived(&binding.run_id, invocation.pending_count());
         }
         return;
     }
