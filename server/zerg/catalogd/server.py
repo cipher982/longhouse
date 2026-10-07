@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import fcntl
 import json
 import logging
@@ -201,6 +202,14 @@ class CatalogReaderBusy(CatalogDaemonError):
 
 class CatalogWriterExpired(CatalogDaemonError):
     pass
+
+
+@dataclasses.dataclass(frozen=True)
+class _Route:
+    handler: str
+    params: frozenset[str] | None = None
+    invalid_message: str | None = None
+    kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
 class CatalogDaemon:
@@ -505,6 +514,609 @@ class CatalogDaemon:
             except OSError:
                 pass
 
+    # Methods _dispatch answers itself after the table (writer admission and
+    # catalog metadata).
+    _INLINE_METHODS = frozenset(
+        {
+            "writer.admission.close.v2",
+            "writer.admission.open.v2",
+            "writer.admission.activation.read.v2",
+            "writer.admission.activation.record.v2",
+            "ping.v2",
+            "schema.v2",
+        }
+    )
+
+    # RPC method -> handler. A route that declares ``params`` has its exact
+    # key set checked here, before the handler runs, with the handler's
+    # historical message; ``None`` means the handler validates its own keys.
+    _METHODS: dict[str, _Route] = {
+        "auth.device.validate.v2": _Route("_authenticate_device", frozenset({"token_hash"}), "auth.device.validate.v2 requires token_hash"),
+        "auth.device.resolve.v2": _Route(
+            "_resolve_device",
+            frozenset({"token_hash", "touch_interval_seconds", "touch_last_used"}),
+            "auth.device.resolve.v2 requires token_hash, touch_last_used, and touch_interval_seconds",
+        ),
+        "auth.device.create.v2": _Route(
+            "_create_device",
+            frozenset({"device_id", "owner_id", "token_hash", "token_id"}),
+            "auth.device.create.v2 requires owner_id, token_id, device_id, and token_hash",
+        ),
+        "auth.device.list.v2": _Route(
+            "_list_devices", frozenset({"include_revoked", "owner_id"}), "auth.device.list.v2 requires owner_id and include_revoked"
+        ),
+        "auth.device.revoke.v2": _Route(
+            "_revoke_device", frozenset({"owner_id", "token_id"}), "auth.device.revoke.v2 requires owner_id and token_id"
+        ),
+        "auth.user.get.v2": _Route(
+            "_get_user", frozenset({"touch_last_login", "user_id"}), "auth.user.get.v2 requires user_id and touch_last_login"
+        ),
+        "auth.owner.get.v2": _Route("_get_active_owner", frozenset(), "auth.owner.get.v2 accepts no parameters"),
+        "auth.single_tenant.ensure.v2": _Route(
+            "_ensure_single_tenant_owner",
+            frozenset({"email", "provider", "provider_user_id"}),
+            "auth.single_tenant.ensure.v2 has invalid parameters",
+        ),
+        "auth.user.get_cp.v2": _Route(
+            "_get_cp_user",
+            frozenset({"avatar_url", "cp_user_id", "display_name", "email", "email_verified"}),
+            "auth.user.get_cp.v2 requires cp_user_id, email, email_verified, display_name, and avatar_url",
+        ),
+        "auth.user.resolve_cp.v2": _Route(
+            "_resolve_cp_user",
+            frozenset({"avatar_url", "cp_user_id", "display_name", "email", "email_verified"}),
+            "auth.user.resolve_cp.v2 requires cp_user_id, email, email_verified, display_name, and avatar_url",
+        ),
+        "auth.user.resolve_local.v2": _Route(
+            "_resolve_local_user",
+            frozenset(
+                {"adopt_existing", "email", "max_users", "promote_role", "provider", "provider_user_id", "require_email_match", "role"}
+            ),
+            "auth.user.resolve_local.v2 has invalid parameters",
+        ),
+        "auth.user.update.v2": _Route(
+            "_update_user",
+            frozenset({"avatar_url", "display_name", "prefs", "update_mask", "user_id"}),
+            "auth.user.update.v2 has invalid parameters",
+        ),
+        "runner.operation.v2": _Route(
+            "_runner_operation", frozenset({"operation", "params"}), "runner.operation.v2 has invalid parameters"
+        ),
+        "auth.refresh.create.v2": _Route(
+            "_create_refresh",
+            frozenset({"absolute_expires_at", "created_at", "family_id", "idle_expires_at", "parent_id", "token_hash", "user_id"}),
+            "auth.refresh.create.v2 has invalid parameters",
+        ),
+        "auth.refresh.rotate.v2": _Route(
+            "_rotate_refresh",
+            frozenset({"idle_expires_at", "next_token_hash", "now", "reuse_grace_seconds", "token_hash"}),
+            "auth.refresh.rotate.v2 has invalid parameters",
+        ),
+        "auth.refresh.revoke_family.v2": _Route("_revoke_refresh_family"),
+        "machine.heartbeat.apply.v2": _Route("_apply_machine_heartbeat"),
+        "notification.presence.upsert.v2": _Route(
+            "_upsert_notification_presence",
+            frozenset({"client_id", "client_type", "observed_at", "owner_id", "route", "session_id", "visible"}),
+            "notification.presence.upsert.v2 has invalid parameters",
+        ),
+        "notification.presence.visible.read.v2": _Route(
+            "_read_visible_notification_presence",
+            frozenset({"owner_id", "threshold"}),
+            "notification.presence.visible.read.v2 has invalid parameters",
+        ),
+        "machine.presence.policy.v2": _Route(
+            "_read_machine_presence_policy", frozenset({"owner_id"}), "machine.presence.policy.v2 requires owner_id"
+        ),
+        "machine.presence.upsert.v2": _Route(
+            "_upsert_machine_presence",
+            frozenset({"device_id", "idle_seconds", "measured_at", "owner_id", "received_at", "source", "state"}),
+            "machine.presence.upsert.v2 has invalid parameters",
+        ),
+        "notification.apns.device.upsert.v2": _Route(
+            "_upsert_apns_device",
+            frozenset({"app_build_id", "device_token", "observed_at", "owner_id", "platform", "push_environment", "registration_id"}),
+            "notification.apns.device.upsert.v2 has invalid parameters",
+        ),
+        "notification.apns.live_activity.upsert.v2": _Route(
+            "_upsert_apns_live_activity",
+            frozenset(
+                {
+                    "activity_id",
+                    "app_build_id",
+                    "observed_at",
+                    "owner_id",
+                    "push_environment",
+                    "push_token",
+                    "registration_id",
+                    "session_id",
+                }
+            ),
+            "notification.apns.live_activity.upsert.v2 has invalid parameters",
+        ),
+        "notification.apns.live_activity.end.v2": _Route(
+            "_end_apns_live_activity",
+            frozenset({"activity_id", "ended_at", "owner_id"}),
+            "notification.apns.live_activity.end.v2 has invalid parameters",
+        ),
+        "directed_input.create.v2": _Route(
+            "_create_directed_input",
+            frozenset({"client_request_id", "created_at", "owner_id", "reply_to_id", "source_session_id", "target_session_id", "text"}),
+            "directed_input.create.v2 has invalid parameters",
+        ),
+        "directed_input.link_receipt.v2": _Route(
+            "_link_directed_input_receipt",
+            frozenset({"directed_input_id", "input_receipt_id", "observed_at", "owner_id"}),
+            "directed_input.link_receipt.v2 has invalid parameters",
+        ),
+        "directed_input.list.v2": _Route(
+            "_list_directed_inputs",
+            frozenset({"after_id", "direction", "limit", "owner_id", "session_id"}),
+            "directed_input.list.v2 has invalid parameters",
+        ),
+        "directed_input.read.v2": _Route(
+            "_read_directed_input", frozenset({"directed_input_id", "owner_id"}), "directed_input.read.v2 has invalid parameters"
+        ),
+        "session.runtime.apply.v2": _Route(
+            "_apply_session_runtime", frozenset({"events"}), "session.runtime.apply.v2 has invalid parameters"
+        ),
+        "control.command_result.apply.v2": _Route(
+            "_apply_control_command_result",
+            frozenset({"device_id", "message", "owner_id"}),
+            "control.command_result.apply.v2 has invalid parameters",
+        ),
+        "control.command.prepare.v2": _Route(
+            "_prepare_control_command",
+            frozenset(
+                {
+                    "capability",
+                    "command_id",
+                    "command_type",
+                    "device_id",
+                    "operation_id",
+                    "owner_id",
+                    "provider",
+                    "request_payload",
+                    "session_id",
+                    "timeout_secs",
+                }
+            ),
+            "control.command.prepare.v2 has invalid parameters",
+        ),
+        "control.operation.finish.v2": _Route(
+            "_finish_control_operation",
+            frozenset({"error", "operation_id", "result", "status"}),
+            "control.operation.finish.v2 has invalid parameters",
+        ),
+        "session.console.create.v2": _Route("_create_console_session"),
+        "session.branch.create.v2": _Route("_create_branch_session"),
+        "session.console.turn.enqueue.v2": _Route("_enqueue_console_turn"),
+        "session.console.turn.current.v2": _Route("_read_current_console_turn"),
+        "session.console.turn.starting_for_device.v2": _Route(
+            "_list_starting_console_turns_for_device",
+            frozenset({"device_id", "owner_id"}),
+            "session.console.turn.starting_for_device.v2 requires owner_id and device_id",
+        ),
+        "session.console.turn.update.v2": _Route("_update_console_turn"),
+        "session.launch.local.create.v2": _Route(
+            "_create_local_launch", frozenset({"launch"}), "session.launch.local.create.v2 requires launch"
+        ),
+        "session.launch.local.resume.v2": _Route(
+            "_resume_local_launch", frozenset({"resume"}), "session.launch.local.resume.v2 requires resume"
+        ),
+        "session.launch.local.finish.v2": _Route(
+            "_finish_local_launch", frozenset({"outcome"}), "session.launch.local.finish.v2 requires outcome"
+        ),
+        "catalogd.session.reclassify_origin.v2": _Route(
+            "_reclassify_session_origin",
+            frozenset({"observed_at", "origin_kind", "session_id"}),
+            "catalogd.session.reclassify_origin.v2 has invalid parameters",
+        ),
+        "catalogd.device.automation.set.v2": _Route(
+            "_set_device_automation",
+            frozenset({"automation", "device_id", "observed_at", "owner_id"}),
+            "catalogd.device.automation.set.v2 has invalid parameters",
+        ),
+        "catalogd.session.reconcile_visibility.v2": _Route(
+            "_reconcile_session_visibility",
+            frozenset({"observed_at", "session_id", "system_hidden"}),
+            "catalogd.session.reconcile_visibility.v2 has invalid parameters",
+        ),
+        "catalogd.session.reconcile_visibility_all.v2": _Route(
+            "_reconcile_all_session_visibility",
+            frozenset({"apply", "observed_at"}),
+            "catalogd.session.reconcile_visibility_all.v2 has invalid parameters",
+        ),
+        "session.repair.codex_launch_visibility.v2": _Route(
+            "_repair_codex_launch_visibility",
+            frozenset({"dry_run", "expected_fingerprint", "session_id"}),
+            "session.repair.codex_launch_visibility.v2 has invalid parameters",
+        ),
+        "interaction.register.v2": _Route(
+            "_register_interaction", frozenset({"interaction"}), "interaction.register.v2 requires interaction"
+        ),
+        "interaction.list.v2": _Route(
+            "_list_interactions", frozenset({"limit", "session_id", "status"}), "interaction.list.v2 has invalid parameters"
+        ),
+        "interaction.resolve.v2": _Route(
+            "_resolve_interaction",
+            frozenset({"interaction_id", "resolved_at", "response_payload", "response_text", "session_id", "status"}),
+            "interaction.resolve.v2 has invalid parameters",
+        ),
+        "interaction.expire_due.v2": _Route("_expire_due_interactions"),
+        "interaction.repair.expire.v2": _Route(
+            "_repair_expire_interaction",
+            frozenset(
+                {"dry_run", "expected_reply_transport", "expected_source", "expected_updated_at", "interaction_id", "now", "session_id"}
+            ),
+            "interaction.repair.expire.v2 has invalid parameters",
+        ),
+        "interaction.decision.read.v2": _Route(
+            "_read_interaction_decision",
+            frozenset({"interaction_id", "request_key", "session_id"}),
+            "interaction.decision.read.v2 has invalid parameters",
+        ),
+        "session.input.queued.list.v2": _Route(
+            "_list_queued_input_sessions", frozenset({"limit"}), "session.input.queued.list.v2 requires limit"
+        ),
+        "session.input.claim.v2": _Route(
+            "_claim_queued_input", frozenset({"delivery_request_id", "session_id"}), "session.input.claim.v2 has invalid parameters"
+        ),
+        "session.input.activity.read.v2": _Route(
+            "_read_session_input_activity",
+            frozenset({"owner_id", "session_id"}),
+            "session.input.activity.read.v2 requires session_id and owner_id",
+        ),
+        "session.input.finish.v2": _Route(
+            "_finish_queued_input",
+            frozenset({"delivery_request_id", "error", "receipt_id", "status"}),
+            "session.input.finish.v2 has invalid parameters",
+        ),
+        "session.input.attachment.create.v2": _Route(
+            "_create_input_attachment",
+            frozenset({"allow_unbound", "attachment"}),
+            "session.input.attachment.create.v2 requires attachment and allow_unbound",
+        ),
+        "session.input.attachment.delete.v2": _Route(
+            "_delete_input_attachments",
+            frozenset({"input_receipt_id", "owner_id", "session_id"}),
+            "session.input.attachment.delete.v2 has invalid parameters",
+        ),
+        "session.input.attachment.read.v2": _Route(
+            "_read_input_attachment",
+            frozenset({"attachment_id", "input_receipt_id", "owner_id", "session_id"}),
+            "session.input.attachment.read.v2 has invalid parameters",
+        ),
+        "session.input.receipt.upsert.v2": _Route(
+            "_upsert_input_receipt", frozenset({"receipt"}), "session.input.receipt.upsert.v2 requires receipt"
+        ),
+        "session.input.receipt.read.v2": _Route(
+            "_read_input_receipt",
+            frozenset({"client_request_id", "owner_id", "session_id"}),
+            "session.input.receipt.read.v2 has invalid parameters",
+        ),
+        "session.input.recent.list.v2": _Route("_list_recent_input_receipts"),
+        "session.input.receipts.list.v2": _Route("_list_session_input_receipts"),
+        "session.provider_facts.list.v2": _Route("_list_session_provider_facts"),
+        "session.provider_facts.insert.v2": _Route("_insert_session_provider_facts"),
+        "session.input.link_events.v2": _Route("_link_input_receipts_to_events"),
+        "session.input.cancel.v2": _Route(
+            "_cancel_input_receipt", frozenset({"receipt_id", "session_id"}), "session.input.cancel.v2 has invalid parameters"
+        ),
+        "session.timeline.list.v2": _Route("_list_session_timeline"),
+        "session.titles.search.v2": _Route("_search_session_titles"),
+        "session.read.v2": _Route("_read_session"),
+        "session.shadow_state.read.v2": _Route(
+            "_read_shadow_session_state",
+            frozenset({"owner_id", "session_id"}),
+            "session.shadow_state.read.v2 requires session_id and owner_id",
+        ),
+        "session.shadow_state.read.batch.v2": _Route(
+            "_read_shadow_sessions_state",
+            frozenset({"owner_id", "session_ids"}),
+            "session.shadow_state.read.batch.v2 requires session_ids and owner_id",
+        ),
+        "session.shadow_state.health.v2": _Route(
+            "_read_shadow_session_state_health", frozenset({"owner_id"}), "session.shadow_state.health.v2 requires owner_id"
+        ),
+        "session.read.batch.v2": _Route("_read_sessions"),
+        "session.preferences.update.v2": _Route("_update_session_preferences"),
+        "session.active.list.v2": _Route(
+            "_list_active_sessions", frozenset({"days_back", "limit", "observed_at"}), "session.active.list.v2 has invalid parameters"
+        ),
+        "deployment.read_consistency.v2": _Route(
+            "_read_cutover_consistency", frozenset({"observed_at"}), "deployment.read_consistency.v2 requires observed_at"
+        ),
+        "session.prefix.resolve.v2": _Route(
+            "_resolve_session_prefix", frozenset({"owner_id", "prefix"}), "session.prefix.resolve.v2 requires prefix and owner_id"
+        ),
+        "session.alias.resolve.v2": _Route(
+            "_resolve_session_alias",
+            frozenset({"owner_id", "provider_session_id"}),
+            "session.alias.resolve.v2 requires provider_session_id and owner_id",
+        ),
+        "session.subagents.list.v2": _Route("_list_session_subagents"),
+        "machine.enrollment.list.v2": _Route(
+            "_list_machine_enrollments", frozenset({"owner_id"}), "machine.enrollment.list.v2 requires owner_id"
+        ),
+        "machine.health.list.v2": _Route(
+            "_list_machine_heartbeats",
+            frozenset({"device_id", "limit", "owner_id", "recent_after"}),
+            "machine.health.list.v2 has invalid parameters",
+        ),
+        "machine.activity.summary.v2": _Route(
+            "_summarize_machine_activity",
+            frozenset({"days_back", "owner_id", "utc_offset_minutes"}),
+            "machine.activity.summary.v2 has invalid parameters",
+        ),
+        "machine.enrollment.rename.v2": _Route(
+            "_rename_machine_enrollment",
+            frozenset({"device_id", "machine_name", "owner_id"}),
+            "machine.enrollment.rename.v2 has invalid parameters",
+        ),
+        "machine.workspace.list.v2": _Route(
+            "_list_machine_workspaces",
+            frozenset({"days_back", "device_id", "limit", "owner_id"}),
+            "machine.workspace.list.v2 has invalid parameters",
+        ),
+        "machine.models.list.v2": _Route(
+            "_list_machine_models",
+            frozenset({"days_back", "device_id", "limit", "owner_id", "provider"}),
+            "machine.models.list.v2 has invalid parameters",
+        ),
+        "backup.snapshot.create.v2": _Route(
+            "_create_backup_snapshot", frozenset({"data_root", "output_dir"}), "backup.snapshot.create.v2 has invalid parameters"
+        ),
+        "storage.source_epoch.open.v2": _Route(
+            "_open_source_epoch",
+            frozenset(
+                {
+                    "machine_id",
+                    "opaque_source_id",
+                    "opened_at",
+                    "predecessor_source_epoch",
+                    "provider",
+                    "range_kind",
+                    "source_epoch",
+                    "tenant_id",
+                }
+            ),
+            "storage.source_epoch.open.v2 has invalid parameters",
+        ),
+        "storage.raw_object.commit.v2": _Route("_commit_raw_object"),
+        "storage.source_epoch.manifest.v2": _Route(
+            "_read_source_epoch_manifest",
+            frozenset({"after_position", "limit", "source_epoch"}),
+            "storage.source_epoch.manifest.v2 has invalid parameters",
+        ),
+        "storage.raw_object.exists.batch.v2": _Route(
+            "_raw_objects_exist_batch", frozenset({"envelope_ids"}), "storage.raw_object.exists.batch.v2 requires envelope_ids"
+        ),
+        "storage.session.read.v2": _Route(
+            "_read_storage_session", frozenset({"session_id"}), "storage.session.read.v2 requires session_id"
+        ),
+        "storage.session.projector.read.v2": _Route(
+            "_read_storage_session_for_projector", frozenset({"session_id"}), "storage.session.projector.read.v2 requires session_id"
+        ),
+        "storage.session.canary.lookup.v2": _Route(
+            "_lookup_storage_canary_session",
+            frozenset({"max_age_seconds", "observed_at"}),
+            "storage.session.canary.lookup.v2 requires observed_at and max_age_seconds",
+        ),
+        "storage.session.title.candidates.v2": _Route("_list_storage_title_candidates"),
+        "storage.session.title.complete.v2": _Route("_complete_storage_title"),
+        "storage.session.title.fail.v2": _Route(
+            "_fail_storage_title", frozenset({"failed_at", "reason", "session_id"}), "title failure has invalid parameters"
+        ),
+        "storage.session.title.dependency.reconcile.v2": _Route(
+            "_reconcile_storage_title_dependency",
+            frozenset({"credential_binding", "credential_generation", "model", "observed_at", "provider"}),
+            "title dependency reconcile has invalid parameters",
+        ),
+        "storage.session.title.dependency.acquire.v2": _Route(
+            "_acquire_storage_title_dependency",
+            frozenset(
+                {
+                    "credential_binding",
+                    "credential_generation",
+                    "lease_seconds",
+                    "model",
+                    "observed_at",
+                    "probe_token",
+                    "provider",
+                    "session_id",
+                }
+            ),
+            "title dependency acquire has invalid parameters",
+        ),
+        "storage.session.title.dependency.fail.v2": _Route(
+            "_fail_storage_title_dependency",
+            frozenset(
+                {
+                    "credential_binding",
+                    "credential_generation",
+                    "failed_at",
+                    "failure_class",
+                    "model",
+                    "probe_token",
+                    "provider",
+                    "reason",
+                    "session_id",
+                }
+            ),
+            "title dependency failure has invalid parameters",
+        ),
+        "storage.session.title.dependency.recover.v2": _Route(
+            "_recover_storage_title_dependency",
+            frozenset({"credential_binding", "credential_generation", "incident_id", "model", "probe_token", "provider", "recovered_at"}),
+            "title dependency recovery has invalid parameters",
+        ),
+        "storage.session.title.dependency.health.v2": _Route(
+            "_read_storage_title_dependency_health", frozenset(), "title dependency health takes no parameters"
+        ),
+        "storage.session.delete.v2": _Route(
+            "_delete_storage_session",
+            frozenset({"deleted_at", "deletion_id", "reason", "session_id"}),
+            "storage.session.delete.v2 has invalid parameters",
+        ),
+        "storage.session.relinked_legacy.reconcile.v2": _Route(
+            "_reconcile_relinked_legacy_session",
+            frozenset({"observed_at", "session_id"}),
+            "storage.session.relinked_legacy.reconcile.v2 has invalid parameters",
+        ),
+        "storage.session.render_generation.restore.v2": _Route(
+            "_restore_storage_render_generation",
+            frozenset({"generation_id", "observed_at", "session_id"}),
+            "storage.session.render_generation.restore.v2 has invalid parameters",
+        ),
+        "storage.session.timeline.list.v2": _Route(
+            "_list_storage_sessions",
+            frozenset({"before_last_activity_at", "before_session_id", "include_test", "limit", "owner_id", "project", "provider"}),
+            "storage.session.timeline.list.v2 has invalid parameters",
+        ),
+        "storage.health.v2": _Route("_read_storage_health"),
+        "tenant.funnel.facts.read.v2": _Route("_read_tenant_funnel_facts"),
+        "storage.telemetry.summary.v2": _Route(
+            "_read_storage_telemetry_summary", frozenset(), "storage.telemetry.summary.v2 takes no parameters"
+        ),
+        "storage.session.raw_manifest.v2": _Route(
+            "_read_storage_session_raw_manifest",
+            frozenset({"after_source_key", "limit", "owner_id", "session_id"}),
+            "storage.session.raw_manifest.v2 has invalid parameters",
+        ),
+        "storage.session.raw_neighborhood.v2": _Route(
+            "_read_storage_session_raw_neighborhood",
+            frozenset({"envelope_id", "owner_id", "session_id"}),
+            "storage.session.raw_neighborhood.v2 has invalid parameters",
+        ),
+        "storage.session.projector.raw_manifest.v2": _Route(
+            "_read_storage_session_raw_manifest",
+            frozenset({"after_source_key", "limit", "owner_id", "session_id"}),
+            "storage.session.projector.raw_manifest.v2 has invalid parameters",
+            {"projector": True},
+        ),
+        "storage.session.render_manifest.v2": _Route("_read_storage_session_render_manifest"),
+        "storage.session.render_objects.list.v2": _Route(
+            "_list_storage_session_render_objects",
+            frozenset({"after_object_id", "generation_id", "limit", "session_id", "snapshot_revision"}),
+            "storage.session.render_objects.list.v2 has invalid parameters",
+        ),
+        "storage.session.purge_manifest.v2": _Route(
+            "_read_session_purge_manifest",
+            frozenset({"after_key", "after_kind", "limit", "session_id"}),
+            "storage.session.purge_manifest.v2 has invalid parameters",
+        ),
+        "storage.session.owned.list.v2": _Route(
+            "_list_owned_sessions",
+            frozenset({"after_session_id", "limit", "owner_id"}),
+            "storage.session.owned.list.v2 has invalid parameters",
+        ),
+        "storage.session.semantic_projection.repair.v2": _Route(
+            "_repair_storage_semantic_projection",
+            frozenset({"generation_id", "objects", "observed_at", "owner_id", "session_id"}),
+            "storage.session.semantic_projection.repair.v2 has invalid parameters",
+        ),
+        "storage.cursor.activity.repair.v2": _Route(
+            "_repair_cursor_activity",
+            frozenset(
+                {
+                    "dry_run",
+                    "expected_last_activity_at",
+                    "expected_started_at",
+                    "now",
+                    "session_id",
+                    "source_last_activity_at",
+                    "source_started_at",
+                }
+            ),
+            "storage.cursor.activity.repair.v2 has invalid parameters",
+        ),
+        "storage.media.commit.v2": _Route("_commit_media_object"),
+        "storage.media.read.v2": _Route(
+            "_read_media_object",
+            frozenset({"limit", "media_hash", "owner_id", "session_id"}),
+            "storage.media.read.v2 has invalid parameters",
+        ),
+        "storage.media.exists.batch.v2": _Route(
+            "_media_objects_exist_batch",
+            frozenset({"media_hashes", "owner_id"}),
+            "storage.media.exists.batch.v2 requires media_hashes and owner_id",
+        ),
+        "projector.state.advance.v2": _Route(
+            "_advance_projector_state",
+            frozenset({"desired_revision", "observed_at", "projector", "session_id"}),
+            "projector.state.advance.v2 has invalid parameters",
+        ),
+        "projector.state.claim.v2": _Route(
+            "_claim_projector_lag",
+            frozenset({"claim_token", "lease_seconds", "limit", "now", "projector", "worker_id"}),
+            "projector.state.claim.v2 has invalid parameters",
+        ),
+        "projector.state.complete.v2": _Route(
+            "_complete_projector_claim",
+            frozenset({"claim_token", "completed_at", "completed_revision", "projector", "session_id"}),
+            "projector.state.complete.v2 has invalid parameters",
+        ),
+        "projector.state.fail.v2": _Route(
+            "_fail_projector_claim",
+            frozenset({"claim_token", "error_code", "error_message", "failed_at", "projector", "retry_at", "session_id"}),
+            "projector.state.fail.v2 has invalid parameters",
+        ),
+        "projector.state.list_lag.v2": _Route(
+            "_list_projector_lag",
+            frozenset({"after_session_id", "limit", "projector"}),
+            "projector.state.list_lag.v2 has invalid parameters",
+        ),
+        "projector.coverage.read.v2": _Route(
+            "_read_projector_coverage", frozenset({"projector"}), "projector.coverage.read.v2 has invalid parameters"
+        ),
+        "projector.state.requeue.v2": _Route(
+            "_requeue_projector_states",
+            frozenset({"observed_at", "projector", "session_ids"}),
+            "projector.state.requeue.v2 has invalid parameters",
+        ),
+        "projector.store.bind.v2": _Route(
+            "_bind_projector_store",
+            frozenset({"observed_at", "projector", "schema_generation", "store_id"}),
+            "projector.store.bind.v2 has invalid parameters",
+        ),
+        "migration.run.create.v2": _Route(
+            "_create_migration_run",
+            frozenset({"created_at", "expected_session_count", "legacy_high_watermark", "run_id"}),
+            "migration.run.create.v2 has invalid parameters",
+        ),
+        "migration.run.read.v2": _Route("_read_migration_run", frozenset({"run_id"}), "migration.run.read.v2 requires run_id"),
+        "migration.session.register.batch.v2": _Route(
+            "_register_migration_sessions",
+            frozenset({"registered_at", "run_id", "sessions"}),
+            "migration.session.register.batch.v2 has invalid parameters",
+        ),
+        "migration.session.claim.v2": _Route(
+            "_claim_migration_sessions",
+            frozenset({"claim_token", "lease_seconds", "limit", "now", "run_id", "worker_id"}),
+            "migration.session.claim.v2 has invalid parameters",
+        ),
+        "migration.session.complete.v2": _Route("_complete_migration_session"),
+        "migration.session.fail.v2": _Route(
+            "_fail_migration_session",
+            frozenset({"claim_token", "error_code", "error_message", "failed_at", "retry_at", "run_id", "session_id"}),
+            "migration.session.fail.v2 has invalid parameters",
+        ),
+        "migration.render.repair.v2": _Route(
+            "_repair_migration_render",
+            frozenset({"observed_at", "ordering_revision", "parser_revision", "run_id", "session_ids"}),
+            "migration.render.repair.v2 has invalid parameters",
+        ),
+        "migration.run.reconcile.v2": _Route(
+            "_reconcile_migration_run",
+            frozenset({"observed_at", "release_claims", "run_id"}),
+            "migration.run.reconcile.v2 has invalid parameters",
+        ),
+        "migration.run.summary.v2": _Route("_summarize_migration_run", frozenset({"run_id"}), "migration.run.summary.v2 requires run_id"),
+        "migration.gaps.list.v2": _Route(
+            "_list_migration_gaps", frozenset({"after_session_id", "limit", "run_id"}), "migration.gaps.list.v2 has invalid parameters"
+        ),
+    }
+
     async def _dispatch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if time.monotonic_ns() > int(request.deadline_mono_ns):
             return self._error(request, "deadline_exceeded", "request deadline exceeded", retryable=True)
@@ -517,284 +1129,11 @@ class CatalogDaemon:
                 id=request.id,
                 result=await self._run_store(self._store.reset_e2e_user_data),
             )
-        if request.method == "auth.device.validate.v2":
-            return await self._authenticate_device(request)
-        if request.method == "auth.device.resolve.v2":
-            return await self._resolve_device(request)
-        if request.method == "auth.device.create.v2":
-            return await self._create_device(request)
-        if request.method == "auth.device.list.v2":
-            return await self._list_devices(request)
-        if request.method == "auth.device.revoke.v2":
-            return await self._revoke_device(request)
-        if request.method == "auth.user.get.v2":
-            return await self._get_user(request)
-        if request.method == "auth.owner.get.v2":
-            return await self._get_active_owner(request)
-        if request.method == "auth.single_tenant.ensure.v2":
-            return await self._ensure_single_tenant_owner(request)
-        if request.method == "auth.user.get_cp.v2":
-            return await self._get_cp_user(request)
-        if request.method == "auth.user.resolve_cp.v2":
-            return await self._resolve_cp_user(request)
-        if request.method == "auth.user.resolve_local.v2":
-            return await self._resolve_local_user(request)
-        if request.method == "auth.user.update.v2":
-            return await self._update_user(request)
-        if request.method == "runner.operation.v2":
-            return await self._runner_operation(request)
-        if request.method == "auth.refresh.create.v2":
-            return await self._create_refresh(request)
-        if request.method == "auth.refresh.rotate.v2":
-            return await self._rotate_refresh(request)
-        if request.method == "auth.refresh.revoke_family.v2":
-            return await self._revoke_refresh_family(request)
-        if request.method == "machine.heartbeat.apply.v2":
-            return await self._apply_machine_heartbeat(request)
-        if request.method == "notification.presence.upsert.v2":
-            return await self._upsert_notification_presence(request)
-        if request.method == "notification.presence.visible.read.v2":
-            return await self._read_visible_notification_presence(request)
-        if request.method == "machine.presence.policy.v2":
-            return await self._read_machine_presence_policy(request)
-        if request.method == "machine.presence.upsert.v2":
-            return await self._upsert_machine_presence(request)
-        if request.method == "notification.apns.device.upsert.v2":
-            return await self._upsert_apns_device(request)
-        if request.method == "notification.apns.live_activity.upsert.v2":
-            return await self._upsert_apns_live_activity(request)
-        if request.method == "notification.apns.live_activity.end.v2":
-            return await self._end_apns_live_activity(request)
-        if request.method == "directed_input.create.v2":
-            return await self._create_directed_input(request)
-        if request.method == "directed_input.link_receipt.v2":
-            return await self._link_directed_input_receipt(request)
-        if request.method == "directed_input.list.v2":
-            return await self._list_directed_inputs(request)
-        if request.method == "directed_input.read.v2":
-            return await self._read_directed_input(request)
-        if request.method == "session.runtime.apply.v2":
-            return await self._apply_session_runtime(request)
-        if request.method == "control.command_result.apply.v2":
-            return await self._apply_control_command_result(request)
-        if request.method == "control.command.prepare.v2":
-            return await self._prepare_control_command(request)
-        if request.method == "control.operation.finish.v2":
-            return await self._finish_control_operation(request)
-        if request.method == "session.console.create.v2":
-            return await self._create_console_session(request)
-        if request.method == "session.branch.create.v2":
-            return await self._create_branch_session(request)
-        if request.method == "session.console.turn.enqueue.v2":
-            return await self._enqueue_console_turn(request)
-        if request.method == "session.console.turn.current.v2":
-            return await self._read_current_console_turn(request)
-        if request.method == "session.console.turn.starting_for_device.v2":
-            return await self._list_starting_console_turns_for_device(request)
-        if request.method == "session.console.turn.update.v2":
-            return await self._update_console_turn(request)
-        if request.method == "session.launch.local.create.v2":
-            return await self._create_local_launch(request)
-        if request.method == "session.launch.local.resume.v2":
-            return await self._resume_local_launch(request)
-        if request.method == "session.launch.local.finish.v2":
-            return await self._finish_local_launch(request)
-        if request.method == "catalogd.session.reclassify_origin.v2":
-            return await self._reclassify_session_origin(request)
-        if request.method == "catalogd.device.automation.set.v2":
-            return await self._set_device_automation(request)
-        if request.method == "catalogd.session.reconcile_visibility.v2":
-            return await self._reconcile_session_visibility(request)
-        if request.method == "catalogd.session.reconcile_visibility_all.v2":
-            return await self._reconcile_all_session_visibility(request)
-        if request.method == "session.repair.codex_launch_visibility.v2":
-            return await self._repair_codex_launch_visibility(request)
-        if request.method == "interaction.register.v2":
-            return await self._register_interaction(request)
-        if request.method == "interaction.list.v2":
-            return await self._list_interactions(request)
-        if request.method == "interaction.resolve.v2":
-            return await self._resolve_interaction(request)
-        if request.method == "interaction.expire_due.v2":
-            return await self._expire_due_interactions(request)
-        if request.method == "interaction.repair.expire.v2":
-            return await self._repair_expire_interaction(request)
-        if request.method == "interaction.decision.read.v2":
-            return await self._read_interaction_decision(request)
-        if request.method == "session.input.queued.list.v2":
-            return await self._list_queued_input_sessions(request)
-        if request.method == "session.input.claim.v2":
-            return await self._claim_queued_input(request)
-        if request.method == "session.input.activity.read.v2":
-            return await self._read_session_input_activity(request)
-        if request.method == "session.input.finish.v2":
-            return await self._finish_queued_input(request)
-        if request.method == "session.input.attachment.create.v2":
-            return await self._create_input_attachment(request)
-        if request.method == "session.input.attachment.delete.v2":
-            return await self._delete_input_attachments(request)
-        if request.method == "session.input.attachment.read.v2":
-            return await self._read_input_attachment(request)
-        if request.method == "session.input.receipt.upsert.v2":
-            return await self._upsert_input_receipt(request)
-        if request.method == "session.input.receipt.read.v2":
-            return await self._read_input_receipt(request)
-        if request.method == "session.input.recent.list.v2":
-            return await self._list_recent_input_receipts(request)
-        if request.method == "session.input.receipts.list.v2":
-            return await self._list_session_input_receipts(request)
-        if request.method == "session.provider_facts.list.v2":
-            return await self._list_session_provider_facts(request)
-        if request.method == "session.provider_facts.insert.v2":
-            return await self._insert_session_provider_facts(request)
-        if request.method == "session.input.link_events.v2":
-            return await self._link_input_receipts_to_events(request)
-        if request.method == "session.input.cancel.v2":
-            return await self._cancel_input_receipt(request)
-        if request.method == "session.timeline.list.v2":
-            return await self._list_session_timeline(request)
-        if request.method == "session.titles.search.v2":
-            return await self._search_session_titles(request)
-        if request.method == "session.read.v2":
-            return await self._read_session(request)
-        if request.method == "session.shadow_state.read.v2":
-            return await self._read_shadow_session_state(request)
-        if request.method == "session.shadow_state.read.batch.v2":
-            return await self._read_shadow_sessions_state(request)
-        if request.method == "session.shadow_state.health.v2":
-            return await self._read_shadow_session_state_health(request)
-        if request.method == "session.read.batch.v2":
-            return await self._read_sessions(request)
-        if request.method == "session.preferences.update.v2":
-            return await self._update_session_preferences(request)
-        if request.method == "session.active.list.v2":
-            return await self._list_active_sessions(request)
-        if request.method == "deployment.read_consistency.v2":
-            return await self._read_cutover_consistency(request)
-        if request.method == "session.prefix.resolve.v2":
-            return await self._resolve_session_prefix(request)
-        if request.method == "session.alias.resolve.v2":
-            return await self._resolve_session_alias(request)
-        if request.method == "session.subagents.list.v2":
-            return await self._list_session_subagents(request)
-        if request.method == "machine.enrollment.list.v2":
-            return await self._list_machine_enrollments(request)
-        if request.method == "machine.health.list.v2":
-            return await self._list_machine_heartbeats(request)
-        if request.method == "machine.activity.summary.v2":
-            return await self._summarize_machine_activity(request)
-        if request.method == "machine.enrollment.rename.v2":
-            return await self._rename_machine_enrollment(request)
-        if request.method == "machine.workspace.list.v2":
-            return await self._list_machine_workspaces(request)
-        if request.method == "machine.models.list.v2":
-            return await self._list_machine_models(request)
-        if request.method == "backup.snapshot.create.v2":
-            return await self._create_backup_snapshot(request)
-        if request.method == "storage.source_epoch.open.v2":
-            return await self._open_source_epoch(request)
-        if request.method == "storage.raw_object.commit.v2":
-            return await self._commit_raw_object(request)
-        if request.method == "storage.source_epoch.manifest.v2":
-            return await self._read_source_epoch_manifest(request)
-        if request.method == "storage.raw_object.exists.batch.v2":
-            return await self._raw_objects_exist_batch(request)
-        if request.method == "storage.session.read.v2":
-            return await self._read_storage_session(request)
-        if request.method == "storage.session.projector.read.v2":
-            return await self._read_storage_session_for_projector(request)
-        if request.method == "storage.session.canary.lookup.v2":
-            return await self._lookup_storage_canary_session(request)
-        if request.method == "storage.session.title.candidates.v2":
-            return await self._list_storage_title_candidates(request)
-        if request.method == "storage.session.title.complete.v2":
-            return await self._complete_storage_title(request)
-        if request.method == "storage.session.title.fail.v2":
-            return await self._fail_storage_title(request)
-        if request.method == "storage.session.title.dependency.reconcile.v2":
-            return await self._reconcile_storage_title_dependency(request)
-        if request.method == "storage.session.title.dependency.acquire.v2":
-            return await self._acquire_storage_title_dependency(request)
-        if request.method == "storage.session.title.dependency.fail.v2":
-            return await self._fail_storage_title_dependency(request)
-        if request.method == "storage.session.title.dependency.recover.v2":
-            return await self._recover_storage_title_dependency(request)
-        if request.method == "storage.session.title.dependency.health.v2":
-            return await self._read_storage_title_dependency_health(request)
-        if request.method == "storage.session.delete.v2":
-            return await self._delete_storage_session(request)
-        if request.method == "storage.session.relinked_legacy.reconcile.v2":
-            return await self._reconcile_relinked_legacy_session(request)
-        if request.method == "storage.session.render_generation.restore.v2":
-            return await self._restore_storage_render_generation(request)
-        if request.method == "storage.session.timeline.list.v2":
-            return await self._list_storage_sessions(request)
-        if request.method == "storage.health.v2":
-            return await self._read_storage_health(request)
-        if request.method == "tenant.funnel.facts.read.v2":
-            return await self._read_tenant_funnel_facts(request)
-        if request.method == "storage.telemetry.summary.v2":
-            return await self._read_storage_telemetry_summary(request)
-        if request.method == "storage.session.raw_manifest.v2":
-            return await self._read_storage_session_raw_manifest(request)
-        if request.method == "storage.session.raw_neighborhood.v2":
-            return await self._read_storage_session_raw_neighborhood(request)
-        if request.method == "storage.session.projector.raw_manifest.v2":
-            return await self._read_storage_session_raw_manifest(request, projector=True)
-        if request.method == "storage.session.render_manifest.v2":
-            return await self._read_storage_session_render_manifest(request)
-        if request.method == "storage.session.render_objects.list.v2":
-            return await self._list_storage_session_render_objects(request)
-        if request.method == "storage.session.purge_manifest.v2":
-            return await self._read_session_purge_manifest(request)
-        if request.method == "storage.session.owned.list.v2":
-            return await self._list_owned_sessions(request)
-        if request.method == "storage.session.semantic_projection.repair.v2":
-            return await self._repair_storage_semantic_projection(request)
-        if request.method == "storage.cursor.activity.repair.v2":
-            return await self._repair_cursor_activity(request)
-        if request.method == "storage.media.commit.v2":
-            return await self._commit_media_object(request)
-        if request.method == "storage.media.read.v2":
-            return await self._read_media_object(request)
-        if request.method == "storage.media.exists.batch.v2":
-            return await self._media_objects_exist_batch(request)
-        if request.method == "projector.state.advance.v2":
-            return await self._advance_projector_state(request)
-        if request.method == "projector.state.claim.v2":
-            return await self._claim_projector_lag(request)
-        if request.method == "projector.state.complete.v2":
-            return await self._complete_projector_claim(request)
-        if request.method == "projector.state.fail.v2":
-            return await self._fail_projector_claim(request)
-        if request.method == "projector.state.list_lag.v2":
-            return await self._list_projector_lag(request)
-        if request.method == "projector.coverage.read.v2":
-            return await self._read_projector_coverage(request)
-        if request.method == "projector.state.requeue.v2":
-            return await self._requeue_projector_states(request)
-        if request.method == "projector.store.bind.v2":
-            return await self._bind_projector_store(request)
-        if request.method == "migration.run.create.v2":
-            return await self._create_migration_run(request)
-        if request.method == "migration.run.read.v2":
-            return await self._read_migration_run(request)
-        if request.method == "migration.session.register.batch.v2":
-            return await self._register_migration_sessions(request)
-        if request.method == "migration.session.claim.v2":
-            return await self._claim_migration_sessions(request)
-        if request.method == "migration.session.complete.v2":
-            return await self._complete_migration_session(request)
-        if request.method == "migration.session.fail.v2":
-            return await self._fail_migration_session(request)
-        if request.method == "migration.render.repair.v2":
-            return await self._repair_migration_render(request)
-        if request.method == "migration.run.reconcile.v2":
-            return await self._reconcile_migration_run(request)
-        if request.method == "migration.run.summary.v2":
-            return await self._summarize_migration_run(request)
-        if request.method == "migration.gaps.list.v2":
-            return await self._list_migration_gaps(request)
+        route = self._METHODS.get(request.method)
+        if route is not None:
+            if route.params is not None and set(request.params) != route.params:
+                return self._error(request, "invalid_request", route.invalid_message)
+            return await getattr(self, route.handler)(request, **route.kwargs)
         if request.method in {"writer.admission.close.v2", "writer.admission.open.v2"}:
             if request.params:
                 return self._error(request, "invalid_request", f"{request.method} accepts no parameters")
@@ -945,12 +1284,6 @@ class CatalogDaemon:
         return self._error(request, "unknown_method", f"unknown catalog method: {request.method}")
 
     async def _authenticate_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"token_hash"}:
-            return self._error(
-                request,
-                "invalid_request",
-                "auth.device.validate.v2 requires token_hash",
-            )
         token_hash = request.params["token_hash"]
         if not isinstance(token_hash, str) or len(token_hash) != 64 or any(character not in "0123456789abcdef" for character in token_hash):
             return self._error(request, "invalid_request", "token_hash must be 64 lowercase hexadecimal characters")
@@ -962,8 +1295,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _get_user(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"user_id", "touch_last_login"}:
-            return self._error(request, "invalid_request", "auth.user.get.v2 requires user_id and touch_last_login")
         user_id = request.params["user_id"]
         touch = request.params["touch_last_login"]
         if type(user_id) is not int or user_id <= 0:
@@ -984,8 +1315,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _get_active_owner(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if request.params:
-            return self._error(request, "invalid_request", "auth.owner.get.v2 accepts no parameters")
         assert self._store is not None
         return CatalogRpcResponse(
             id=request.id,
@@ -993,8 +1322,6 @@ class CatalogDaemon:
         )
 
     async def _ensure_single_tenant_owner(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"email", "provider", "provider_user_id"}:
-            return self._error(request, "invalid_request", "auth.single_tenant.ensure.v2 has invalid parameters")
         params = dict(request.params)
         if not _is_string(params["email"], maximum=320) or not _is_string(params["provider"], maximum=64):
             return self._error(request, "invalid_request", "email and provider must be non-empty bounded strings")
@@ -1012,13 +1339,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"token_hash", "touch_last_used", "touch_interval_seconds"}
-        if set(request.params) != expected:
-            return self._error(
-                request,
-                "invalid_request",
-                "auth.device.resolve.v2 requires token_hash, touch_last_used, and touch_interval_seconds",
-            )
         token_hash = request.params["token_hash"]
         touch = request.params["touch_last_used"]
         interval = request.params["touch_interval_seconds"]
@@ -1045,13 +1365,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _get_cp_user(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"cp_user_id", "email", "email_verified", "display_name", "avatar_url"}
-        if set(request.params) != expected:
-            return self._error(
-                request,
-                "invalid_request",
-                "auth.user.get_cp.v2 requires cp_user_id, email, email_verified, display_name, and avatar_url",
-            )
         params = request.params
         if type(params["cp_user_id"]) is not int or params["cp_user_id"] <= 0:
             return self._error(request, "invalid_request", "cp_user_id must be a positive integer")
@@ -1067,13 +1380,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_cp_user(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"cp_user_id", "email", "email_verified", "display_name", "avatar_url"}
-        if set(request.params) != expected:
-            return self._error(
-                request,
-                "invalid_request",
-                "auth.user.resolve_cp.v2 requires cp_user_id, email, email_verified, display_name, and avatar_url",
-            )
         params = request.params
         if type(params["cp_user_id"]) is not int or params["cp_user_id"] <= 0:
             return self._error(request, "invalid_request", "cp_user_id must be a positive integer")
@@ -1091,18 +1397,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_local_user(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "email",
-            "provider",
-            "provider_user_id",
-            "role",
-            "adopt_existing",
-            "require_email_match",
-            "max_users",
-            "promote_role",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "auth.user.resolve_local.v2 has invalid parameters")
         params = request.params
         if not _is_string(params["email"], maximum=320) or not _is_string(params["provider"], maximum=64):
             return self._error(request, "invalid_request", "email and provider must be non-empty bounded strings")
@@ -1122,9 +1416,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _update_user(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"user_id", "display_name", "avatar_url", "prefs", "update_mask"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "auth.user.update.v2 has invalid parameters")
         params = request.params
         if type(params["user_id"]) is not int or params["user_id"] <= 0:
             return self._error(request, "invalid_request", "user_id must be a positive integer")
@@ -1146,17 +1437,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _create_refresh(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "user_id",
-            "token_hash",
-            "family_id",
-            "parent_id",
-            "created_at",
-            "absolute_expires_at",
-            "idle_expires_at",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "auth.refresh.create.v2 has invalid parameters")
         params = dict(request.params)
         if type(params["user_id"]) is not int or params["user_id"] <= 0 or not _is_hash(params["token_hash"]):
             return self._error(request, "invalid_request", "user_id or token_hash is invalid")
@@ -1190,9 +1470,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _rotate_refresh(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"token_hash", "next_token_hash", "now", "idle_expires_at", "reuse_grace_seconds"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "auth.refresh.rotate.v2 has invalid parameters")
         params = dict(request.params)
         if not _is_hash(params["token_hash"]) or not _is_hash(params["next_token_hash"]):
             return self._error(request, "invalid_request", "refresh token hashes must be lowercase hexadecimal SHA-256 values")
@@ -1225,12 +1502,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _revoke_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "token_id"}:
-            return self._error(
-                request,
-                "invalid_request",
-                "auth.device.revoke.v2 requires owner_id and token_id",
-            )
         owner_id = request.params["owner_id"]
         token_id = request.params["token_id"]
         if type(owner_id) is not int or owner_id <= 0:
@@ -1246,13 +1517,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _create_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        required = {"owner_id", "token_id", "device_id", "token_hash"}
-        if set(request.params) != required:
-            return self._error(
-                request,
-                "invalid_request",
-                "auth.device.create.v2 requires owner_id, token_id, device_id, and token_hash",
-            )
         owner_id = request.params["owner_id"]
         token_id = request.params["token_id"]
         device_id = request.params["device_id"]
@@ -1284,12 +1548,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_devices(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "include_revoked"}:
-            return self._error(
-                request,
-                "invalid_request",
-                "auth.device.list.v2 requires owner_id and include_revoked",
-            )
         owner_id = request.params["owner_id"]
         include_revoked = request.params["include_revoked"]
         if type(owner_id) is not int or owner_id <= 0:
@@ -1354,9 +1612,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _upsert_notification_presence(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"owner_id", "client_id", "client_type", "visible", "route", "session_id", "observed_at"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "notification.presence.upsert.v2 has invalid parameters")
         params = dict(request.params)
         if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -1381,8 +1636,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _reclassify_session_origin(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "origin_kind", "observed_at"}:
-            return self._error(request, "invalid_request", "catalogd.session.reclassify_origin.v2 has invalid parameters")
         params = dict(request.params)
         if not isinstance(params["session_id"], str) or not params["session_id"]:
             return self._error(request, "invalid_request", "session_id must be a non-empty string")
@@ -1397,8 +1650,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _set_device_automation(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "device_id", "automation", "observed_at"}:
-            return self._error(request, "invalid_request", "catalogd.device.automation.set.v2 has invalid parameters")
         params = dict(request.params)
         if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -1415,8 +1666,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _reconcile_session_visibility(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "system_hidden", "observed_at"}:
-            return self._error(request, "invalid_request", "catalogd.session.reconcile_visibility.v2 has invalid parameters")
         params = dict(request.params)
         if not isinstance(params["session_id"], str) or not params["session_id"]:
             return self._error(request, "invalid_request", "session_id must be a non-empty string")
@@ -1431,8 +1680,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _reconcile_all_session_visibility(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"apply", "observed_at"}:
-            return self._error(request, "invalid_request", "catalogd.session.reconcile_visibility_all.v2 has invalid parameters")
         params = dict(request.params)
         if type(params["apply"]) is not bool:
             return self._error(request, "invalid_request", "apply must be a boolean")
@@ -1445,12 +1692,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_visible_notification_presence(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "threshold"}:
-            return self._error(
-                request,
-                "invalid_request",
-                "notification.presence.visible.read.v2 has invalid parameters",
-            )
         owner_id = request.params["owner_id"]
         if type(owner_id) is not int or owner_id <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -1467,8 +1708,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_machine_presence_policy(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id"}:
-            return self._error(request, "invalid_request", "machine.presence.policy.v2 requires owner_id")
         owner_id = request.params["owner_id"]
         if type(owner_id) is not int or owner_id <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -1477,9 +1716,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _upsert_machine_presence(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"owner_id", "device_id", "state", "source", "idle_seconds", "measured_at", "received_at"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "machine.presence.upsert.v2 has invalid parameters")
         params = dict(request.params)
         if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -1500,17 +1736,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _upsert_apns_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "registration_id",
-            "owner_id",
-            "platform",
-            "device_token",
-            "push_environment",
-            "app_build_id",
-            "observed_at",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "notification.apns.device.upsert.v2 has invalid parameters")
         params = dict(request.params)
         if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -1532,22 +1757,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _upsert_apns_live_activity(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "registration_id",
-            "owner_id",
-            "session_id",
-            "activity_id",
-            "push_token",
-            "push_environment",
-            "app_build_id",
-            "observed_at",
-        }
-        if set(request.params) != expected:
-            return self._error(
-                request,
-                "invalid_request",
-                "notification.apns.live_activity.upsert.v2 has invalid parameters",
-            )
         params = dict(request.params)
         if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -1568,8 +1777,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _end_apns_live_activity(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "activity_id", "ended_at"}:
-            return self._error(request, "invalid_request", "notification.apns.live_activity.end.v2 has invalid parameters")
         owner_id = request.params["owner_id"]
         if type(owner_id) is not int or owner_id <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -1588,17 +1795,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _create_directed_input(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "owner_id",
-            "source_session_id",
-            "target_session_id",
-            "text",
-            "reply_to_id",
-            "client_request_id",
-            "created_at",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "directed_input.create.v2 has invalid parameters")
         params = dict(request.params)
         if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -1623,9 +1819,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _link_directed_input_receipt(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"owner_id", "directed_input_id", "input_receipt_id", "observed_at"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "directed_input.link_receipt.v2 has invalid parameters")
         params = dict(request.params)
         if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -1645,9 +1838,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_directed_inputs(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"owner_id", "session_id", "direction", "after_id", "limit"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "directed_input.list.v2 has invalid parameters")
         params = dict(request.params)
         if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -1668,8 +1858,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_directed_input(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "directed_input_id"}:
-            return self._error(request, "invalid_request", "directed_input.read.v2 has invalid parameters")
         owner_id = request.params["owner_id"]
         directed_input_id = request.params["directed_input_id"]
         if type(owner_id) is not int or owner_id <= 0:
@@ -1687,8 +1875,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _apply_session_runtime(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"events"}:
-            return self._error(request, "invalid_request", "session.runtime.apply.v2 has invalid parameters")
         from pydantic import ValidationError
 
         from zerg.services.session_runtime import CATALOG_RUNTIME_APPLY_LIMIT
@@ -1716,8 +1902,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _apply_control_command_result(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "device_id", "message"}:
-            return self._error(request, "invalid_request", "control.command_result.apply.v2 has invalid parameters")
         owner_id = request.params["owner_id"]
         device_id = request.params["device_id"]
         message = request.params["message"]
@@ -1739,20 +1923,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _prepare_control_command(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "operation_id",
-            "owner_id",
-            "session_id",
-            "device_id",
-            "provider",
-            "command_type",
-            "command_id",
-            "capability",
-            "request_payload",
-            "timeout_secs",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "control.command.prepare.v2 has invalid parameters")
         params = dict(request.params)
         for field in ("operation_id", "session_id"):
             value = params[field]
@@ -1780,8 +1950,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _finish_control_operation(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"operation_id", "status", "result", "error"}:
-            return self._error(request, "invalid_request", "control.operation.finish.v2 has invalid parameters")
         operation_id = request.params["operation_id"]
         try:
             parsed = uuid.UUID(operation_id) if isinstance(operation_id, str) else None
@@ -1892,12 +2060,6 @@ class CatalogDaemon:
         )
 
     async def _list_starting_console_turns_for_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "device_id"}:
-            return self._error(
-                request,
-                "invalid_request",
-                "session.console.turn.starting_for_device.v2 requires owner_id and device_id",
-            )
         try:
             owner_id = int(request.params["owner_id"])
         except (TypeError, ValueError):
@@ -1962,8 +2124,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=await self._run_store(self._store.update_console_turn, data=data))
 
     async def _create_local_launch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"launch"}:
-            return self._error(request, "invalid_request", "session.launch.local.create.v2 requires launch")
         try:
             launch = _validate_local_launch_rpc(request.params["launch"])
         except ValueError as exc:
@@ -1978,8 +2138,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resume_local_launch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"resume"}:
-            return self._error(request, "invalid_request", "session.launch.local.resume.v2 requires resume")
         try:
             resume = _validate_local_resume_rpc(request.params["resume"])
         except ValueError as exc:
@@ -1992,8 +2150,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _finish_local_launch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"outcome"}:
-            return self._error(request, "invalid_request", "session.launch.local.finish.v2 requires outcome")
         try:
             outcome = _validate_local_launch_outcome_rpc(request.params["outcome"])
         except ValueError as exc:
@@ -2007,8 +2163,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _register_interaction(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"interaction"}:
-            return self._error(request, "invalid_request", "interaction.register.v2 requires interaction")
         try:
             interaction = _validate_interaction_registration(request.params["interaction"])
         except ValueError as exc:
@@ -2025,8 +2179,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_interactions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "status", "limit"}:
-            return self._error(request, "invalid_request", "interaction.list.v2 has invalid parameters")
         session_id = request.params["session_id"]
         status_value = request.params["status"]
         limit = request.params["limit"]
@@ -2047,9 +2199,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_interaction(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"session_id", "interaction_id", "status", "response_payload", "response_text", "resolved_at"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "interaction.resolve.v2 has invalid parameters")
         params = dict(request.params)
         if not _is_canonical_uuid(params["session_id"]) or not _is_canonical_uuid(params["interaction_id"]):
             return self._error(request, "invalid_request", "session_id and interaction_id must be canonical UUIDs")
@@ -2089,17 +2238,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _repair_cursor_activity(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "session_id",
-            "expected_started_at",
-            "source_started_at",
-            "expected_last_activity_at",
-            "source_last_activity_at",
-            "now",
-            "dry_run",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "storage.cursor.activity.repair.v2 has invalid parameters")
         params = dict(request.params)
         if not _is_canonical_uuid(params["session_id"]) or type(params["dry_run"]) is not bool:
             return self._error(request, "invalid_request", "session_id must be a canonical UUID and dry_run a boolean")
@@ -2113,17 +2251,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _repair_expire_interaction(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "session_id",
-            "interaction_id",
-            "expected_updated_at",
-            "expected_source",
-            "expected_reply_transport",
-            "now",
-            "dry_run",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "interaction.repair.expire.v2 has invalid parameters")
         params = dict(request.params)
         if not _is_canonical_uuid(params["session_id"]) or not _is_canonical_uuid(params["interaction_id"]):
             return self._error(request, "invalid_request", "session_id and interaction_id must be canonical UUIDs")
@@ -2142,13 +2269,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _repair_codex_launch_visibility(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"session_id", "dry_run", "expected_fingerprint"}
-        if set(request.params) != expected:
-            return self._error(
-                request,
-                "invalid_request",
-                "session.repair.codex_launch_visibility.v2 has invalid parameters",
-            )
         params = dict(request.params)
         if not _is_canonical_uuid(params["session_id"]):
             return self._error(request, "invalid_request", "session_id must be a canonical UUID")
@@ -2165,8 +2285,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_interaction_decision(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "interaction_id", "request_key"}:
-            return self._error(request, "invalid_request", "interaction.decision.read.v2 has invalid parameters")
         params = dict(request.params)
         if not _is_canonical_uuid(params["session_id"]):
             return self._error(request, "invalid_request", "session_id must be a canonical UUID")
@@ -2182,8 +2300,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_queued_input_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"limit"}:
-            return self._error(request, "invalid_request", "session.input.queued.list.v2 requires limit")
         limit = request.params["limit"]
         if type(limit) is not int or not 1 <= limit <= 100:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 100")
@@ -2194,8 +2310,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _claim_queued_input(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "delivery_request_id"}:
-            return self._error(request, "invalid_request", "session.input.claim.v2 has invalid parameters")
         session_id = request.params["session_id"]
         try:
             parsed = uuid.UUID(session_id) if isinstance(session_id, str) else None
@@ -2215,8 +2329,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_session_input_activity(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "owner_id"}:
-            return self._error(request, "invalid_request", "session.input.activity.read.v2 requires session_id and owner_id")
         owner_id = request.params["owner_id"]
         if type(owner_id) is not int or owner_id <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -2232,8 +2344,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _finish_queued_input(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"receipt_id", "delivery_request_id", "status", "error"}:
-            return self._error(request, "invalid_request", "session.input.finish.v2 has invalid parameters")
         receipt_id = request.params["receipt_id"]
         try:
             parsed = uuid.UUID(receipt_id) if isinstance(receipt_id, str) else None
@@ -2264,8 +2374,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _upsert_input_receipt(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"receipt"}:
-            return self._error(request, "invalid_request", "session.input.receipt.upsert.v2 requires receipt")
         try:
             receipt = _validate_input_receipt(request.params["receipt"])
         except ValueError as exc:
@@ -2275,13 +2383,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _create_input_attachment(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"attachment", "allow_unbound"}
-        if set(request.params) != expected:
-            return self._error(
-                request,
-                "invalid_request",
-                "session.input.attachment.create.v2 requires attachment and allow_unbound",
-            )
         allow_unbound = request.params["allow_unbound"]
         if type(allow_unbound) is not bool:
             return self._error(request, "invalid_request", "allow_unbound must be a boolean")
@@ -2298,9 +2399,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _delete_input_attachments(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"owner_id", "session_id", "input_receipt_id"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "session.input.attachment.delete.v2 has invalid parameters")
         owner_id = request.params["owner_id"]
         if type(owner_id) is not int or owner_id <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -2317,9 +2415,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_input_attachment(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"owner_id", "session_id", "input_receipt_id", "attachment_id"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "session.input.attachment.read.v2 has invalid parameters")
         if type(request.params["owner_id"]) is not int or request.params["owner_id"] <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
         for field in ("session_id", "input_receipt_id", "attachment_id"):
@@ -2330,8 +2425,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_input_receipt(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "session_id", "client_request_id"}:
-            return self._error(request, "invalid_request", "session.input.receipt.read.v2 has invalid parameters")
         owner_id = request.params["owner_id"]
         if type(owner_id) is not int or owner_id <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -2436,8 +2529,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _cancel_input_receipt(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "receipt_id"}:
-            return self._error(request, "invalid_request", "session.input.cancel.v2 has invalid parameters")
         if not _is_canonical_uuid(request.params["session_id"]):
             return self._error(request, "invalid_request", "session_id must be a canonical UUID")
         if not _is_canonical_uuid(request.params["receipt_id"]):
@@ -2569,12 +2660,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_shadow_session_state(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "owner_id"}:
-            return self._error(
-                request,
-                "invalid_request",
-                "session.shadow_state.read.v2 requires session_id and owner_id",
-            )
         session_id = request.params["session_id"]
         owner_id = request.params["owner_id"]
         if not _is_canonical_uuid(session_id):
@@ -2591,8 +2676,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_shadow_session_state_health(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id"}:
-            return self._error(request, "invalid_request", "session.shadow_state.health.v2 requires owner_id")
         owner_id = request.params["owner_id"]
         if type(owner_id) is not int or owner_id <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -2601,12 +2684,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_shadow_sessions_state(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_ids", "owner_id"}:
-            return self._error(
-                request,
-                "invalid_request",
-                "session.shadow_state.read.batch.v2 requires session_ids and owner_id",
-            )
         session_ids = request.params["session_ids"]
         owner_id = request.params["owner_id"]
         if not isinstance(session_ids, list) or not 1 <= len(session_ids) <= 20:
@@ -2686,8 +2763,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_active_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"limit", "days_back", "observed_at"}:
-            return self._error(request, "invalid_request", "session.active.list.v2 has invalid parameters")
         limit = request.params["limit"]
         days_back = request.params["days_back"]
         if type(limit) is not int or not 1 <= limit <= 1_000:
@@ -2708,8 +2783,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_cutover_consistency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"observed_at"}:
-            return self._error(request, "invalid_request", "deployment.read_consistency.v2 requires observed_at")
         try:
             observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
         except ValueError as exc:
@@ -2724,8 +2797,6 @@ class CatalogDaemon:
         )
 
     async def _resolve_session_prefix(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"prefix", "owner_id"}:
-            return self._error(request, "invalid_request", "session.prefix.resolve.v2 requires prefix and owner_id")
         prefix = request.params["prefix"]
         owner_id = request.params["owner_id"]
         if (
@@ -2742,8 +2813,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_session_alias(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"provider_session_id", "owner_id"}:
-            return self._error(request, "invalid_request", "session.alias.resolve.v2 requires provider_session_id and owner_id")
         provider_session_id = request.params["provider_session_id"]
         owner_id = request.params["owner_id"]
         # Provider-native ids are UUIDs for Claude but provider-shaped strings
@@ -2787,8 +2856,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_machine_enrollments(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id"}:
-            return self._error(request, "invalid_request", "machine.enrollment.list.v2 requires owner_id")
         owner_id = request.params["owner_id"]
         if type(owner_id) is not int or owner_id <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -2799,8 +2866,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_machine_heartbeats(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "device_id", "recent_after", "limit"}:
-            return self._error(request, "invalid_request", "machine.health.list.v2 has invalid parameters")
         owner_id = request.params["owner_id"]
         device_id = request.params["device_id"]
         recent_after = request.params["recent_after"]
@@ -2827,8 +2892,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _summarize_machine_activity(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "days_back", "utc_offset_minutes"}:
-            return self._error(request, "invalid_request", "machine.activity.summary.v2 has invalid parameters")
         owner_id = request.params["owner_id"]
         days_back = request.params["days_back"]
         utc_offset_minutes = request.params["utc_offset_minutes"]
@@ -2861,8 +2924,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _rename_machine_enrollment(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "device_id", "machine_name"}:
-            return self._error(request, "invalid_request", "machine.enrollment.rename.v2 has invalid parameters")
         owner_id = request.params["owner_id"]
         device_id = request.params["device_id"]
         machine_name = request.params["machine_name"]
@@ -2882,9 +2943,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_machine_models(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"owner_id", "device_id", "provider", "limit", "days_back"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "machine.models.list.v2 has invalid parameters")
         params = dict(request.params)
         if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -2901,9 +2959,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_machine_workspaces(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"owner_id", "device_id", "limit", "days_back"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "machine.workspace.list.v2 has invalid parameters")
         params = dict(request.params)
         if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
@@ -2918,18 +2973,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _open_source_epoch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "tenant_id",
-            "machine_id",
-            "provider",
-            "opaque_source_id",
-            "source_epoch",
-            "range_kind",
-            "predecessor_source_epoch",
-            "opened_at",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "storage.source_epoch.open.v2 has invalid parameters")
         params = dict(request.params)
         try:
             _validate_storage_identity_fields(params)
@@ -3043,8 +3086,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_source_epoch_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"source_epoch", "after_position", "limit"}:
-            return self._error(request, "invalid_request", "storage.source_epoch.manifest.v2 has invalid parameters")
         try:
             source_epoch = _canonical_uuid(request.params["source_epoch"], "source_epoch")
         except ValueError as exc:
@@ -3069,8 +3110,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _raw_objects_exist_batch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"envelope_ids"}:
-            return self._error(request, "invalid_request", "storage.raw_object.exists.batch.v2 requires envelope_ids")
         try:
             envelope_ids = _validate_hash_batch(request.params["envelope_ids"], field="envelope_ids")
         except ValueError as exc:
@@ -3080,8 +3119,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id"}:
-            return self._error(request, "invalid_request", "storage.session.read.v2 requires session_id")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
         except ValueError as exc:
@@ -3096,8 +3133,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session_for_projector(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id"}:
-            return self._error(request, "invalid_request", "storage.session.projector.read.v2 requires session_id")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
         except ValueError as exc:
@@ -3107,12 +3142,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _lookup_storage_canary_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"observed_at", "max_age_seconds"}:
-            return self._error(
-                request,
-                "invalid_request",
-                "storage.session.canary.lookup.v2 requires observed_at and max_age_seconds",
-            )
         max_age_seconds = request.params["max_age_seconds"]
         if type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 3_600:
             return self._error(
@@ -3165,8 +3194,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _fail_storage_title(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "reason", "failed_at"}:
-            return self._error(request, "invalid_request", "title failure has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
             reason = _bounded_text(request.params["reason"], "reason", 128)
@@ -3187,9 +3214,6 @@ class CatalogDaemon:
         }
 
     async def _reconcile_storage_title_dependency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"provider", "model", "credential_binding", "credential_generation", "observed_at"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "title dependency reconcile has invalid parameters")
         try:
             params = self._storage_title_dependency_identity(request.params)
             params["observed_at"] = _parse_datetime(request.params["observed_at"], "observed_at")
@@ -3201,18 +3225,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _acquire_storage_title_dependency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "session_id",
-            "provider",
-            "model",
-            "credential_binding",
-            "credential_generation",
-            "probe_token",
-            "observed_at",
-            "lease_seconds",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "title dependency acquire has invalid parameters")
         try:
             params = self._storage_title_dependency_identity(request.params)
             params["session_id"] = _canonical_uuid(request.params["session_id"], "session_id")
@@ -3232,19 +3244,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _fail_storage_title_dependency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "session_id",
-            "provider",
-            "model",
-            "credential_binding",
-            "credential_generation",
-            "probe_token",
-            "failure_class",
-            "reason",
-            "failed_at",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "title dependency failure has invalid parameters")
         try:
             params = self._storage_title_dependency_identity(request.params)
             params["session_id"] = _canonical_uuid(request.params["session_id"], "session_id")
@@ -3265,17 +3264,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _recover_storage_title_dependency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "provider",
-            "model",
-            "credential_binding",
-            "credential_generation",
-            "incident_id",
-            "probe_token",
-            "recovered_at",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "title dependency recovery has invalid parameters")
         try:
             params = self._storage_title_dependency_identity(request.params)
             params["incident_id"] = _canonical_uuid(request.params["incident_id"], "incident_id")
@@ -3293,8 +3281,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_title_dependency_health(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if request.params:
-            return self._error(request, "invalid_request", "title dependency health takes no parameters")
         assert self._store is not None
         now = time.monotonic()
         cached = self._title_health_cache
@@ -3308,8 +3294,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _delete_storage_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "deletion_id", "reason", "deleted_at"}:
-            return self._error(request, "invalid_request", "storage.session.delete.v2 has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
             deletion_id = _canonical_uuid(request.params["deletion_id"], "deletion_id")
@@ -3329,12 +3313,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _reconcile_relinked_legacy_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "observed_at"}:
-            return self._error(
-                request,
-                "invalid_request",
-                "storage.session.relinked_legacy.reconcile.v2 has invalid parameters",
-            )
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
             observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
@@ -3358,12 +3336,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _restore_storage_render_generation(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "generation_id", "observed_at"}:
-            return self._error(
-                request,
-                "invalid_request",
-                "storage.session.render_generation.restore.v2 has invalid parameters",
-            )
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
             generation_id = _canonical_uuid(request.params["generation_id"], "generation_id")
@@ -3389,17 +3361,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_storage_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "owner_id",
-            "before_last_activity_at",
-            "before_session_id",
-            "project",
-            "provider",
-            "include_test",
-            "limit",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "storage.session.timeline.list.v2 has invalid parameters")
         owner_id = request.params["owner_id"]
         if not _is_string(owner_id, maximum=64):
             return self._error(request, "invalid_request", "owner_id must be a bounded non-empty string")
@@ -3454,8 +3415,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_telemetry_summary(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if request.params:
-            return self._error(request, "invalid_request", "storage.telemetry.summary.v2 takes no parameters")
         assert self._store is not None
         result = await self._run_projector_read_store(self._store.read_storage_telemetry_summary)
         return CatalogRpcResponse(id=request.id, result=result)
@@ -3466,8 +3425,6 @@ class CatalogDaemon:
         *,
         projector: bool = False,
     ) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "owner_id", "after_source_key", "limit"}:
-            return self._error(request, "invalid_request", f"{request.method} has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
         except ValueError as exc:
@@ -3518,8 +3475,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session_raw_neighborhood(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "owner_id", "envelope_id"}:
-            return self._error(request, "invalid_request", f"{request.method} has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
         except ValueError as exc:
@@ -3602,9 +3557,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_storage_session_render_objects(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"session_id", "generation_id", "snapshot_revision", "after_object_id", "limit"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "storage.session.render_objects.list.v2 has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
             generation_id = (
@@ -3635,9 +3587,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_session_purge_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"session_id", "after_kind", "after_key", "limit"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "storage.session.purge_manifest.v2 has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
         except ValueError as exc:
@@ -3666,9 +3615,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_owned_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"owner_id", "after_session_id", "limit"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "storage.session.owned.list.v2 has invalid parameters")
         owner_id = request.params["owner_id"]
         if not _is_string(owner_id, maximum=64):
             return self._error(request, "invalid_request", "owner_id must be a bounded non-empty string")
@@ -3691,13 +3637,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _repair_storage_semantic_projection(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"session_id", "owner_id", "generation_id", "objects", "observed_at"}
-        if set(request.params) != expected:
-            return self._error(
-                request,
-                "invalid_request",
-                "storage.session.semantic_projection.repair.v2 has invalid parameters",
-            )
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
             generation_id = _canonical_uuid(request.params["generation_id"], "generation_id")
@@ -3784,8 +3723,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_media_object(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"media_hash", "session_id", "owner_id", "limit"}:
-            return self._error(request, "invalid_request", "storage.media.read.v2 has invalid parameters")
         media_hash = request.params["media_hash"]
         if not _is_hash(media_hash):
             return self._error(request, "invalid_request", "media_hash must be lowercase SHA-256 hex")
@@ -3808,8 +3745,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _media_objects_exist_batch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"media_hashes", "owner_id"}:
-            return self._error(request, "invalid_request", "storage.media.exists.batch.v2 requires media_hashes and owner_id")
         try:
             media_hashes = _validate_hash_batch(request.params["media_hashes"], field="media_hashes")
             owner_id = _bounded_text(request.params["owner_id"], "owner_id", 64)
@@ -3824,9 +3759,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _create_migration_run(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"run_id", "legacy_high_watermark", "expected_session_count", "created_at"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "migration.run.create.v2 has invalid parameters")
         try:
             params = {
                 "run_id": _canonical_uuid(request.params["run_id"], "run_id"),
@@ -3843,8 +3775,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_migration_run(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"run_id"}:
-            return self._error(request, "invalid_request", "migration.run.read.v2 requires run_id")
         try:
             run_id = _canonical_uuid(request.params["run_id"], "run_id")
         except ValueError as exc:
@@ -3854,8 +3784,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _register_migration_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"run_id", "sessions", "registered_at"}:
-            return self._error(request, "invalid_request", "migration.session.register.batch.v2 has invalid parameters")
         try:
             run_id = _canonical_uuid(request.params["run_id"], "run_id")
             sessions = _validate_migration_inventory(request.params["sessions"])
@@ -3876,9 +3804,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _claim_migration_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"run_id", "worker_id", "claim_token", "now", "lease_seconds", "limit"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "migration.session.claim.v2 has invalid parameters")
         try:
             params = {
                 "run_id": _canonical_uuid(request.params["run_id"], "run_id"),
@@ -3962,9 +3887,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _fail_migration_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"run_id", "session_id", "claim_token", "error_code", "error_message", "failed_at", "retry_at"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "migration.session.fail.v2 has invalid parameters")
         try:
             message = request.params["error_message"]
             params = {
@@ -3989,9 +3911,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _repair_migration_render(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"run_id", "session_ids", "parser_revision", "ordering_revision", "observed_at"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "migration.render.repair.v2 has invalid parameters")
         try:
             run_id = _canonical_uuid(request.params["run_id"], "run_id")
             session_ids = request.params["session_ids"]
@@ -4024,8 +3943,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _summarize_migration_run(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"run_id"}:
-            return self._error(request, "invalid_request", "migration.run.summary.v2 requires run_id")
         try:
             run_id = _canonical_uuid(request.params["run_id"], "run_id")
         except ValueError as exc:
@@ -4037,8 +3954,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _reconcile_migration_run(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"run_id", "observed_at", "release_claims"}:
-            return self._error(request, "invalid_request", "migration.run.reconcile.v2 has invalid parameters")
         try:
             run_id = _canonical_uuid(request.params["run_id"], "run_id")
             observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
@@ -4059,8 +3974,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_migration_gaps(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"run_id", "after_session_id", "limit"}:
-            return self._error(request, "invalid_request", "migration.gaps.list.v2 has invalid parameters")
         try:
             run_id = _canonical_uuid(request.params["run_id"], "run_id")
             after = request.params["after_session_id"]
@@ -4079,8 +3992,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _advance_projector_state(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"projector", "session_id", "desired_revision", "observed_at"}:
-            return self._error(request, "invalid_request", "projector.state.advance.v2 has invalid parameters")
         try:
             params = _validate_projector_identity(request.params)
             params["desired_revision"] = _revision(request.params["desired_revision"], "desired_revision")
@@ -4099,9 +4010,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _claim_projector_lag(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"projector", "worker_id", "claim_token", "now", "lease_seconds", "limit"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "projector.state.claim.v2 has invalid parameters")
         params = dict(request.params)
         try:
             params["projector"] = _projector_name(params["projector"])
@@ -4121,9 +4029,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _complete_projector_claim(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"projector", "session_id", "claim_token", "completed_revision", "completed_at"}
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "projector.state.complete.v2 has invalid parameters")
         try:
             params = _validate_projector_identity(request.params)
             params["claim_token"] = str(_canonical_uuid(request.params["claim_token"], "claim_token"))
@@ -4138,17 +4043,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _fail_projector_claim(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
-            "projector",
-            "session_id",
-            "claim_token",
-            "error_code",
-            "error_message",
-            "failed_at",
-            "retry_at",
-        }
-        if set(request.params) != expected:
-            return self._error(request, "invalid_request", "projector.state.fail.v2 has invalid parameters")
         try:
             params = _validate_projector_identity(request.params)
             params["claim_token"] = str(_canonical_uuid(request.params["claim_token"], "claim_token"))
@@ -4168,8 +4062,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_projector_lag(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"projector", "after_session_id", "limit"}:
-            return self._error(request, "invalid_request", "projector.state.list_lag.v2 has invalid parameters")
         try:
             projector = _projector_name(request.params["projector"])
             after = request.params["after_session_id"]
@@ -4189,8 +4081,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_projector_coverage(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"projector"}:
-            return self._error(request, "invalid_request", "projector.coverage.read.v2 has invalid parameters")
         try:
             projector = _projector_name(request.params["projector"])
         except ValueError as exc:
@@ -4203,8 +4093,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _requeue_projector_states(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"projector", "session_ids", "observed_at"}:
-            return self._error(request, "invalid_request", "projector.state.requeue.v2 has invalid parameters")
         try:
             projector = _projector_name(request.params["projector"])
             raw_session_ids = request.params["session_ids"]
@@ -4228,8 +4116,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _bind_projector_store(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"projector", "store_id", "schema_generation", "observed_at"}:
-            return self._error(request, "invalid_request", "projector.store.bind.v2 has invalid parameters")
         try:
             projector = _projector_name(request.params["projector"])
             store_id = _canonical_uuid(request.params["store_id"], "store_id")
@@ -4353,8 +4239,6 @@ class CatalogDaemon:
                 )
 
     async def _runner_operation(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"operation", "params"}:
-            return self._error(request, "invalid_request", "runner.operation.v2 has invalid parameters")
         operation = request.params["operation"]
         params = request.params["params"]
         if not isinstance(operation, str) or not operation or len(operation) > 64 or not isinstance(params, dict):
@@ -4369,8 +4253,6 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _create_backup_snapshot(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"output_dir", "data_root"}:
-            return self._error(request, "invalid_request", "backup.snapshot.create.v2 has invalid parameters")
         values: dict[str, Path] = {}
         for field in ("output_dir", "data_root"):
             value = request.params[field]

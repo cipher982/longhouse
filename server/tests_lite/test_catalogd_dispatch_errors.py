@@ -80,3 +80,9 @@ async def test_every_method_rejects_malformed_params_exactly_as_recorded(daemon_
     if os.getenv("LONGHOUSE_WRITE_DISPATCH_GOLDEN") == "1":
         GOLDEN.write_text(json.dumps(observed, indent=1, sort_keys=True) + "\n")
     assert observed == golden
+
+
+def test_golden_covers_every_routed_method():
+    golden = json.loads(GOLDEN.read_text())
+    routed = set(CatalogDaemon._METHODS) | set(CatalogDaemon._INLINE_METHODS)
+    assert set(golden) - set(_UNKNOWN) == routed
