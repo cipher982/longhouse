@@ -393,12 +393,15 @@ pub async fn start_claude_print_turn(
         invocation.take_active_turn();
         let _ = registry.record_invocation_state(&config.run_id, "closed", 0);
         invocation.close_input().await.ok();
-        crate::process_group::shutdown_owned_child(
+        let shutdown = crate::process_group::shutdown_owned_child(
             &mut child,
             Some(process_group_id),
             crate::process_group::DEFAULT_GRACE,
         )
         .await;
+        if !shutdown.is_gone() {
+            let _ = registry.record_shutdown_survived(&config.run_id, invocation.pending_count());
+        }
         drop(lock);
         invocation.process_exited();
         crate::console_lifecycle::unregister(&launch_id);

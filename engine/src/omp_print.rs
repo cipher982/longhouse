@@ -1265,6 +1265,9 @@ pub async fn recover_omp_print_turns(
             tracing::warn!(%error, launch_id, "OMP recovered invocation retains unsettled claims");
         }
     }
+    // Cleanup may have killed a process even when its claim write failed.
+    // Reattach only against a fresh inventory after those shutdown attempts.
+    let inventory = crate::process_identity::try_collect_process_facts_by_pid();
     for claim in registry.list_nonterminal()? {
         if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER) || claim.state != "spawned" {
             continue;

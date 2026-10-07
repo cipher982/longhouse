@@ -2582,6 +2582,28 @@ async fn run_app_server_turn(
     turn_outcome.context("Codex app-server turn timed out")??;
     Ok(())
 }
+fn retain_surviving_codex_invocation(pgid: Option<i32>) {
+    let Some(pgid) = pgid.filter(|pgid| *pgid > 0) else {
+        return;
+    };
+    let recovery = (|| -> Result<()> {
+        let registry = crate::turn_claims::default_registry()?;
+        let claims = registry.list_all_shared()?;
+        if let Some(claim) = claims.iter().rev().find(|claim| {
+            claim.provider == "codex"
+                && claim.adapter.as_deref() == Some(CODEX_EXEC_ADAPTER)
+                && claim.process_group_id == Some(pgid)
+                && claim.process_group_is_from_this_boot()
+        }) {
+            registry.record_shutdown_survived(&claim.run_id, claim.pending_count)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = recovery {
+        tracing::warn!(%error, pgid, "Could not retain surviving Codex invocation for recovery");
+    }
+}
+
 async fn shutdown_worker_process_group(child: &mut Child, pgid: Option<i32>) -> Result<()> {
     let outcome = crate::process_group::shutdown_owned_child(
         child,
@@ -2595,6 +2617,7 @@ async fn shutdown_worker_process_group(child: &mut Child, pgid: Option<i32>) -> 
             outcome = outcome.as_str(),
             "Codex worker process group survived SIGKILL"
         );
+        retain_surviving_codex_invocation(pgid);
     }
     Ok(())
 }
@@ -2671,6 +2694,7 @@ async fn shutdown_codex_console_worker_pool_within(budget: Duration) {
                 outcome = outcome.as_str(),
                 "Codex console process group survived SIGKILL during shutdown"
             );
+            retain_surviving_codex_invocation(Some(pgid));
         }
     }
     for mut worker in workers {
@@ -3307,41 +3331,50 @@ impl CodexExecRuntimeSink {
                     self.session_id,
                     self.run_id
                 );
-                // A semantic conflict must not bypass the immutable response
-                // through the direct pump or fallback outbox.
-                let claim = match crate::turn_claims::default_registry()
+                let conflict = error
+                    .downcast_ref::<crate::turn_claims::TerminalEventConflict>()
+                    .is_some();
+                let (event, already_durable) = match crate::turn_claims::default_registry()
                     .and_then(|registry| registry.read(&self.run_id))
                 {
-                    Ok(claim) => claim,
+                    Ok(claim) => match claim.terminal_event {
+                        Some(_) if claim.terminal_event_handed_off => (None, true),
+                        Some(event) => (Some(event), false),
+                        None if conflict => (None, false),
+                        None => (Some(terminal_event), false),
+                    },
                     Err(read_error) => {
                         eprintln!(
-                            "[codex-exec] cannot resolve the authoritative terminal for {} run {}: {read_error:#}; not publishing an uncertain outcome",
+                            "[codex-exec] terminal claim unreadable for {} run {}: {read_error:#}",
                             self.session_id, self.run_id
                         );
-                        return;
+                        // A known conflict cannot publish the replacement.
+                        // IO failure must still preserve the observed native
+                        // outcome in the independent durable outbox.
+                        if conflict {
+                            (None, false)
+                        } else {
+                            (Some(terminal_event), false)
+                        }
                     }
                 };
-                let terminal_event = match claim.terminal_event {
-                    Some(_) if claim.terminal_event_handed_off => return,
-                    Some(event) => event,
-                    None => terminal_event,
+                let durable = if let Some(event) = event.as_ref() {
+                    match crate::config::get_agent_runtime_events_outbox_dir().and_then(|outbox| {
+                        crate::outbox::enqueue_runtime_event_for_handoff(&outbox, event)
+                    }) {
+                        Ok(durable) => durable,
+                        Err(error) => {
+                            eprintln!(
+                                "[codex-exec] fallback terminal outbox write failed for {} run {}: {error:#}",
+                                self.session_id, self.run_id
+                            );
+                            false
+                        }
+                    }
+                } else {
+                    already_durable
                 };
-                match crate::config::get_agent_runtime_events_outbox_dir().and_then(|outbox| {
-                    crate::outbox::enqueue_runtime_event_for_handoff(&outbox, &terminal_event)
-                }) {
-                    Ok(true) => {}
-                    Ok(false) => eprintln!(
-                        "[codex-exec] terminal outbox write was dropped for {} run {}; keeping the status slot",
-                        self.session_id,
-                        self.run_id
-                    ),
-                    Err(error) => eprintln!(
-                        "[codex-exec] terminal record enqueue failed for {} run {}: {error:#}; keeping the status slot",
-                        self.session_id,
-                        self.run_id
-                    ),
-                }
-                (Some(terminal_event), false)
+                (event, durable)
             }
         };
         if safe_to_retire {
@@ -6164,5 +6197,79 @@ for line in sys.stdin:
             registry.read(&good).unwrap().invocation_state.as_deref(),
             Some("closed")
         );
+    }
+    #[test]
+    fn missing_terminal_claim_preserves_the_outcome_in_the_independent_outbox() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            runtime.block_on(async {
+                let mut sink = runtime_sink(None);
+                sink.session_id = uuid::Uuid::new_v4().to_string();
+                sink.run_id = uuid::Uuid::new_v4().to_string();
+                sink.post_phase("thinking", None).await;
+                sink.post_terminal(
+                    "run_completed",
+                    Some(0),
+                    None,
+                    "invocation",
+                    InvocationState::Parked,
+                    2,
+                )
+                .await;
+                let outbox = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
+                let terminal = fs::read_dir(&outbox)
+                    .unwrap()
+                    .flatten()
+                    .filter_map(|entry| fs::read(entry.path()).ok())
+                    .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                    .find(|event| {
+                        event["kind"] == "terminal_signal" && event["run_id"] == sink.run_id
+                    })
+                    .unwrap();
+                assert_eq!(terminal["payload"]["terminal_state"], "run_completed");
+                assert_eq!(terminal["payload"]["invocation"]["state"], "parked");
+                assert_eq!(terminal["payload"]["invocation"]["pending_count"], 2);
+                assert!(
+                    crate::status_slot::read_all(&crate::status_slot::status_slot_dir(
+                        &crate::config::get_agent_dir().unwrap()
+                    ),)
+                    .iter()
+                    .all(|slot| slot.run_id != sink.run_id)
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn surviving_codex_worker_remains_eligible_for_restart_recovery() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            let registry = crate::turn_claims::default_registry().unwrap();
+            let run_id = uuid::Uuid::new_v4().to_string();
+            seed_codex_claim(&registry, &run_id, Some(424242), Some("known-birth".into()));
+            registry
+                .record_invocation_state(&run_id, "closed", 2)
+                .unwrap();
+            registry
+                .mark_terminal(&run_id, "run_completed", None)
+                .unwrap();
+            retain_surviving_codex_invocation(Some(424242));
+            let survivor = registry.read(&run_id).unwrap();
+            assert_eq!(survivor.invocation_state.as_deref(), Some("parked"));
+            assert_eq!(
+                survivor.result.as_ref().unwrap()["terminal_state"],
+                "run_completed"
+            );
+            assert!(codex_recovery_claims(&registry)
+                .unwrap()
+                .iter()
+                .any(|claim| claim.run_id == run_id));
+        });
     }
 }

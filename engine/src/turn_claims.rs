@@ -87,6 +87,12 @@ pub struct OwnedProcessIdentity {
     pub process_start_time: Option<String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("conflicting exact terminal event for run {run_id}")]
+pub struct TerminalEventConflict {
+    pub run_id: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TurnClaim {
     pub schema_version: u32,
@@ -627,13 +633,16 @@ impl TurnClaimRegistry {
 
         let (_lock, mut claim) = self.read_for_update(run_id)?;
         if let Some(retained) = claim.terminal_event.as_ref() {
-            anyhow::ensure!(
-                retained
-                    .pointer("/payload/terminal_state")
-                    .and_then(Value::as_str)
-                    == Some(terminal_state),
-                "conflicting exact terminal event for run {run_id}"
-            );
+            if retained
+                .pointer("/payload/terminal_state")
+                .and_then(Value::as_str)
+                != Some(terminal_state)
+            {
+                return Err(TerminalEventConflict {
+                    run_id: run_id.to_string(),
+                }
+                .into());
+            }
             return Ok(if claim.terminal_event_handed_off {
                 None
             } else {
