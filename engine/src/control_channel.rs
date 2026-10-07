@@ -13,8 +13,6 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::process::Stdio;
-use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
@@ -63,7 +61,6 @@ const COMMAND_TURN_START: &str = "session.turn.start";
 const COMMAND_INVOCATION_CLOSE: &str = "session.invocation.close";
 const COMMAND_TURN_INTERRUPT: &str = "session.turn.interrupt";
 const COMMAND_TURN_STEER: &str = "session.turn.steer";
-const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
 const COMMAND_PROVIDER_SIGN_IN_START: &str = "provider.sign_in.start";
 const COMMAND_PROVIDER_SIGN_IN_CODE: &str = "provider.sign_in.code";
 const COMMAND_PROVIDER_SIGN_IN_CANCEL: &str = "provider.sign_in.cancel";
@@ -601,13 +598,6 @@ fn control_supports_for_path_with_env(
                     .map(str::to_string),
             );
         }
-        if longhouse_available {
-            if let Some(provider) = contract.get("provider").and_then(Value::as_str) {
-                if provider_live_proof_supported_provider(provider) {
-                    supports.push(format!("{provider}.live_proof"));
-                }
-            }
-        }
         // The CLI is present (checked above), so its own login can be relayed.
         if crate::sign_in::declared_sign_in(contract).is_some() {
             if let Some(provider) = contract.get("provider").and_then(Value::as_str) {
@@ -616,21 +606,6 @@ fn control_supports_for_path_with_env(
         }
     }
     supports
-}
-
-fn provider_live_proof_supported_provider(provider: &str) -> bool {
-    // Was `matches!(provider, "claude" | "opencode")`, one of three hand-copies
-    // of this set. The Python request body and provider_live_proof.py both said
-    // claude/opencode/antigravity, so an antigravity live proof was accepted on
-    // the wire and always failed here. The manifest now carries `live_proof`
-    // and every copy derives from it.
-    managed_provider_contract_items().iter().any(|item| {
-        item.get("provider").and_then(Value::as_str) == Some(provider)
-            && item
-                .get("live_proof")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-    })
 }
 
 fn control_supports_for_path(path_value: Option<&OsStr>) -> Vec<String> {
@@ -1291,9 +1266,6 @@ async fn execute_command(
     let command_type = required_string(frame, "command_type")?;
     let payload = frame.get("payload").cloned().unwrap_or_else(|| json!({}));
 
-    if command_type == COMMAND_PROVIDER_LIVE_PROOF {
-        return run_provider_live_proof_command(&payload).await;
-    }
     if command_type == COMMAND_PROVIDER_SIGN_IN_START
         || command_type == COMMAND_PROVIDER_SIGN_IN_CODE
         || command_type == COMMAND_PROVIDER_SIGN_IN_CANCEL
@@ -3214,66 +3186,6 @@ fn claude_pause_answer_values(value: &Value) -> Vec<String> {
     }
 }
 
-struct CliCommandOutput {
-    exit_code: i32,
-    stdout: String,
-    stderr: String,
-}
-
-async fn run_longhouse_command(
-    args: Vec<String>,
-    timeout_secs: u64,
-    envs: Vec<(&str, String)>,
-) -> std::result::Result<CliCommandOutput, CommandError> {
-    let mut command = Command::new(DEFAULT_LONGHOUSE_BIN);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    // `kill_on_drop` reaches the leader only. These invocations start providers
-    // that spawn their own children, so a timeout would drop the handle, kill
-    // `longhouse`, and leave the tree it started running with no owner.
-    #[cfg(unix)]
-    command.process_group(0);
-    for (key, value) in envs {
-        command.env(key, value);
-    }
-
-    let child = command.spawn().map_err(|err| CommandError {
-        code: "provider_launch_failed".to_string(),
-        message: format!("failed to start longhouse command: {err}"),
-    })?;
-    // Read the group before `wait_with_output` consumes the child.
-    let pgid = child.id().and_then(crate::process_group::leader_group_for);
-    let output =
-        match tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output())
-            .await
-        {
-            Ok(result) => result.map_err(|err| CommandError {
-                code: "provider_launch_failed".to_string(),
-                message: format!("longhouse command failed: {err}"),
-            })?,
-            Err(_) => {
-                if let Some(pgid) = pgid {
-                    crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE)
-                        .await;
-                }
-                return Err(CommandError {
-                    code: "provider_launch_failed".to_string(),
-                    message: format!("longhouse command timed out after {timeout_secs} seconds"),
-                });
-            }
-        };
-
-    Ok(CliCommandOutput {
-        exit_code: output.status.code().unwrap_or(1),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-    })
-}
-
 async fn run_provider_sign_in_command(
     command_type: &str,
     payload: &Value,
@@ -3319,195 +3231,6 @@ async fn run_provider_sign_in_command(
             Ok(crate::sign_in::cancel(&attempt_id))
         }
     }
-}
-
-async fn run_provider_live_proof_command(
-    payload: &Value,
-) -> std::result::Result<Value, CommandError> {
-    let provider = payload_required_string(payload, "provider")?;
-    if !provider_live_proof_supported_provider(&provider) {
-        return Err(CommandError {
-            code: "provider_unsupported".to_string(),
-            message: format!("provider={provider} is not supported for provider live proof"),
-        });
-    }
-    let publish = payload_optional_bool(payload, "publish").unwrap_or(true);
-    let timeout_secs = payload_optional_u64(payload, "timeout_secs", 1, 900).unwrap_or(120);
-    let run_live_token_contract =
-        payload_optional_bool(payload, "run_live_token_contract").unwrap_or(false);
-    let live_token_timeout_secs = payload_optional_u64(payload, "live_token_timeout_secs", 1, 600);
-    let expected_provider_version = payload_optional_string(payload, "expected_provider_version");
-
-    let mut args = vec![
-        "provider-live".to_string(),
-        if publish {
-            "publish".to_string()
-        } else {
-            "canary".to_string()
-        },
-        "--provider".to_string(),
-        provider.clone(),
-        "--json".to_string(),
-    ];
-    if run_live_token_contract {
-        args.push("--run-live-token-contract".to_string());
-        if let Some(value) = live_token_timeout_secs {
-            args.push("--live-token-timeout-secs".to_string());
-            args.push(value.to_string());
-        }
-    }
-
-    let output = run_longhouse_command(args, timeout_secs, Vec::new()).await?;
-    let payload_json: Value =
-        serde_json::from_str(output.stdout.trim()).map_err(|err| CommandError {
-            code: "provider_live_proof_failed".to_string(),
-            message: format!(
-                "provider-live returned invalid JSON: {err}; exit_code={}; stderr={}",
-                output.exit_code,
-                output.stderr.trim()
-            ),
-        })?;
-    let artifact = if publish {
-        read_published_provider_live_artifact(&payload_json, &provider)?
-    } else {
-        payload_json.clone()
-    };
-    let version_match =
-        provider_live_proof_version_match(expected_provider_version.as_deref(), &artifact)?;
-
-    Ok(json!({
-        "provider": provider,
-        "transport": "provider_live_proof",
-        "publish": publish,
-        "expected_provider_version": expected_provider_version,
-        "provider_version_match": version_match,
-        "exit_code": output.exit_code,
-        "stderr": output.stderr,
-        "payload": payload_json,
-        "artifact": artifact,
-    }))
-}
-
-fn read_published_provider_live_artifact(
-    payload: &Value,
-    provider: &str,
-) -> std::result::Result<Value, CommandError> {
-    let result = payload
-        .get("results")
-        .and_then(Value::as_array)
-        .and_then(|items| {
-            items
-                .iter()
-                .find(|item| item.get("provider").and_then(Value::as_str) == Some(provider))
-        })
-        .ok_or_else(|| CommandError {
-            code: "provider_live_proof_failed".to_string(),
-            message: format!("provider-live publish did not return a result for {provider}"),
-        })?;
-    let stable_path = result
-        .get("stable_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CommandError {
-            code: "provider_live_proof_failed".to_string(),
-            message: format!("provider-live publish did not return stable_path for {provider}"),
-        })?;
-    let text = std::fs::read_to_string(stable_path).map_err(|err| CommandError {
-        code: "provider_live_proof_failed".to_string(),
-        message: format!("failed to read provider live proof artifact {stable_path}: {err}"),
-    })?;
-    serde_json::from_str(&text).map_err(|err| CommandError {
-        code: "provider_live_proof_failed".to_string(),
-        message: format!("provider live proof artifact {stable_path} is invalid JSON: {err}"),
-    })
-}
-
-fn provider_live_proof_version_match(
-    expected_provider_version: Option<&str>,
-    artifact: &Value,
-) -> std::result::Result<Value, CommandError> {
-    let expected_raw = match expected_provider_version
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(value) => value,
-        None => return Ok(json!({"status": "not_requested"})),
-    };
-    let artifact_raw = artifact
-        .get("provider_version")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim();
-    let normalized_expected = normalize_provider_version(expected_raw);
-    let normalized_artifact = normalize_provider_version(artifact_raw);
-    let matches = normalized_expected.is_some()
-        && normalized_artifact.is_some()
-        && normalized_expected == normalized_artifact;
-    let details = json!({
-        "status": if matches { "match" } else { "mismatch" },
-        "expected_provider_version": expected_raw,
-        "artifact_provider_version": artifact_raw,
-        "normalized_expected_provider_version": normalized_expected,
-        "normalized_artifact_provider_version": normalized_artifact,
-    });
-    if matches {
-        Ok(details)
-    } else {
-        Err(CommandError {
-            code: "provider_version_mismatch".to_string(),
-            message: format!(
-                "provider live proof version mismatch: expected {expected_raw}, artifact reported {}",
-                if artifact_raw.is_empty() { "<missing>" } else { artifact_raw }
-            ),
-        })
-    }
-}
-
-fn normalize_provider_version(raw: &str) -> Option<String> {
-    let value = raw.trim();
-    if value.is_empty() {
-        return None;
-    }
-    let chars: Vec<char> = value.chars().collect();
-    for start in 0..chars.len() {
-        if !chars[start].is_ascii_digit() {
-            continue;
-        }
-        let mut idx = start;
-        let mut dot_count = 0;
-        while idx < chars.len() {
-            let ch = chars[idx];
-            if ch.is_ascii_digit() {
-                idx += 1;
-                continue;
-            }
-            if ch == '.' && idx + 1 < chars.len() && chars[idx + 1].is_ascii_digit() {
-                dot_count += 1;
-                idx += 1;
-                continue;
-            }
-            break;
-        }
-        if dot_count < 2 {
-            continue;
-        }
-        if idx < chars.len() && (chars[idx] == '-' || chars[idx] == '+') {
-            idx += 1;
-            while idx < chars.len()
-                && (chars[idx].is_ascii_alphanumeric() || matches!(chars[idx], '.' | '-' | '+'))
-            {
-                idx += 1;
-            }
-        }
-        return Some(
-            chars[start..idx]
-                .iter()
-                .collect::<String>()
-                .to_ascii_lowercase(),
-        );
-    }
-    Some(value.trim_start_matches('v').to_ascii_lowercase())
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -4030,17 +3753,6 @@ fn payload_optional_string(payload: &Value, key: &'static str) -> Option<String>
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-}
-
-fn payload_optional_bool(payload: &Value, key: &'static str) -> Option<bool> {
-    payload.get(key).and_then(Value::as_bool)
-}
-
-fn payload_optional_u64(payload: &Value, key: &'static str, min: u64, max: u64) -> Option<u64> {
-    payload
-        .get(key)
-        .and_then(Value::as_u64)
-        .map(|value| value.clamp(min, max))
 }
 
 fn command_error(command_id: &str, code: &str, message: &str) -> Value {
@@ -5768,7 +5480,6 @@ mod tests {
                 "opencode.turn_start".to_string(),
                 "opencode.turn_interrupt".to_string(),
                 "opencode.turn_steer".to_string(),
-                "opencode.live_proof".to_string(),
             ]
         );
 
@@ -5789,7 +5500,6 @@ mod tests {
         assert!(supports.contains(&"codex.run_once".to_string()));
         assert!(supports.contains(&"codex.resume_run_once".to_string()));
         assert!(supports.contains(&"codex.turn_start".to_string()));
-        assert!(!supports.contains(&"codex.live_proof".to_string()));
 
         // Capability discovery and Console dispatch resolve the same exact
         // staged Claude executable even though no binary named `claude`
@@ -5827,9 +5537,6 @@ mod tests {
                     .map(str::to_string),
             );
             let provider = contract.get("provider").and_then(Value::as_str).unwrap();
-            if provider_live_proof_supported_provider(provider) {
-                expected.push(format!("{provider}.live_proof"));
-            }
             if crate::sign_in::declared_sign_in(contract).is_some() {
                 expected.push(format!("{provider}.sign_in"));
             }
@@ -5855,10 +5562,6 @@ mod tests {
         assert!(supports.contains(&"opencode.terminate".to_string()));
         assert!(supports.contains(&"opencode.turn_start".to_string()));
         assert!(supports.contains(&"antigravity.send".to_string()));
-        assert!(supports.contains(&"claude.live_proof".to_string()));
-        assert!(supports.contains(&"opencode.live_proof".to_string()));
-        assert!(!supports.contains(&"antigravity.live_proof".to_string()));
-        assert!(!supports.contains(&"codex.live_proof".to_string()));
         assert!(!supports.contains(&"antigravity.interrupt".to_string()));
         assert!(!supports.contains(&"antigravity.steer".to_string()));
         assert!(!supports.contains(&"antigravity.launch".to_string()));
@@ -6410,230 +6113,6 @@ mod tests {
 
         assert_eq!(result["ok"], false);
         assert_eq!(result["error"]["code"], "unsupported_command");
-    }
-
-    #[tokio::test]
-    async fn handle_command_frame_routes_provider_live_proof_without_session_id() {
-        let _guard = crate::console_adapter::agent_state_guard();
-        let unique = format!(
-            "lh-provider-live-proof-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let dir = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&dir).unwrap();
-        let args_path = dir.join("args.txt");
-        let stable_path = dir.join("claude.json");
-        std::fs::write(
-            &stable_path,
-            r#"{"artifact_kind":"provider_live_canary","provider":"claude","provider_version":"Claude Code 2.1.153","verdict":"green"}"#,
-        )
-        .unwrap();
-        write_test_executable(
-            &dir.join("longhouse"),
-            r#"#!/bin/sh
-printf '%s\n' "$@" > "$LONGHOUSE_ARGS_OUT"
-printf '{"artifact_kind":"provider_live_proof_publish","results":[{"provider":"claude","stable_path":"%s","verdict":"green"}]}\n' "$LONGHOUSE_STABLE_ARTIFACT"
-exit 0
-"#,
-        );
-
-        let old_path = std::env::var_os("PATH");
-        let old_args_out = std::env::var_os("LONGHOUSE_ARGS_OUT");
-        let old_stable = std::env::var_os("LONGHOUSE_STABLE_ARTIFACT");
-        std::env::set_var("PATH", dir.as_os_str());
-        std::env::set_var("LONGHOUSE_ARGS_OUT", args_path.as_os_str());
-        std::env::set_var("LONGHOUSE_STABLE_ARTIFACT", stable_path.as_os_str());
-        let mut cache = command_cache();
-        let result = handle_command_frame(
-            json!({
-                "type": "command",
-                "command_id": "cmd-provider-live-proof",
-                "command_type": COMMAND_PROVIDER_LIVE_PROOF,
-                "payload": {
-                    "provider": "claude",
-                    "expected_provider_version": "2.1.153",
-                    "timeout_secs": 30,
-                    "run_live_token_contract": true,
-                    "live_token_timeout_secs": 25,
-                },
-            }),
-            &mut cache,
-            &test_config(),
-        )
-        .await;
-        if let Some(value) = old_path {
-            std::env::set_var("PATH", value);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(value) = old_args_out {
-            std::env::set_var("LONGHOUSE_ARGS_OUT", value);
-        } else {
-            std::env::remove_var("LONGHOUSE_ARGS_OUT");
-        }
-        if let Some(value) = old_stable {
-            std::env::set_var("LONGHOUSE_STABLE_ARTIFACT", value);
-        } else {
-            std::env::remove_var("LONGHOUSE_STABLE_ARTIFACT");
-        }
-
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["result"]["provider"], "claude");
-        assert_eq!(result["result"]["transport"], "provider_live_proof");
-        assert_eq!(result["result"]["artifact"]["verdict"], "green");
-        assert_eq!(
-            result["result"]["provider_version_match"]["status"],
-            "match"
-        );
-        assert_eq!(
-            result["result"]["provider_version_match"]["normalized_expected_provider_version"],
-            "2.1.153"
-        );
-        let args = std::fs::read_to_string(&args_path).unwrap();
-        assert_eq!(
-            args.lines().collect::<Vec<_>>(),
-            vec![
-                "provider-live",
-                "publish",
-                "--provider",
-                "claude",
-                "--json",
-                "--run-live-token-contract",
-                "--live-token-timeout-secs",
-                "25",
-            ]
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[tokio::test]
-    async fn provider_live_proof_rejects_expected_version_mismatch() {
-        let _guard = crate::console_adapter::agent_state_guard();
-        let unique = format!(
-            "lh-provider-live-proof-version-mismatch-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let dir = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&dir).unwrap();
-        let stable_path = dir.join("claude.json");
-        std::fs::write(
-            &stable_path,
-            r#"{"artifact_kind":"provider_live_canary","provider":"claude","provider_version":"Claude Code 2.1.154","verdict":"green"}"#,
-        )
-        .unwrap();
-        write_test_executable(
-            &dir.join("longhouse"),
-            r#"#!/bin/sh
-printf '{"artifact_kind":"provider_live_proof_publish","results":[{"provider":"claude","stable_path":"%s","verdict":"green"}]}\n' "$LONGHOUSE_STABLE_ARTIFACT"
-exit 0
-"#,
-        );
-
-        let old_path = std::env::var_os("PATH");
-        let old_stable = std::env::var_os("LONGHOUSE_STABLE_ARTIFACT");
-        std::env::set_var("PATH", dir.as_os_str());
-        std::env::set_var("LONGHOUSE_STABLE_ARTIFACT", stable_path.as_os_str());
-        let mut cache = command_cache();
-        let result = handle_command_frame(
-            json!({
-                "type": "command",
-                "command_id": "cmd-provider-live-proof-version-mismatch",
-                "command_type": COMMAND_PROVIDER_LIVE_PROOF,
-                "payload": {
-                    "provider": "claude",
-                    "expected_provider_version": "2.1.153",
-                },
-            }),
-            &mut cache,
-            &test_config(),
-        )
-        .await;
-        if let Some(value) = old_path {
-            std::env::set_var("PATH", value);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(value) = old_stable {
-            std::env::set_var("LONGHOUSE_STABLE_ARTIFACT", value);
-        } else {
-            std::env::remove_var("LONGHOUSE_STABLE_ARTIFACT");
-        }
-
-        assert_eq!(result["ok"], false);
-        assert_eq!(result["error"]["code"], "provider_version_mismatch");
-        assert!(result["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("expected 2.1.153"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[tokio::test]
-    async fn provider_live_proof_returns_valid_red_artifact_as_command_success() {
-        let _guard = crate::console_adapter::agent_state_guard();
-        let unique = format!(
-            "lh-provider-live-proof-red-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let dir = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&dir).unwrap();
-        let stable_path = dir.join("claude.json");
-        std::fs::write(
-            &stable_path,
-            r#"{"artifact_kind":"provider_live_canary","provider":"claude","provider_version":"test","verdict":"red"}"#,
-        )
-        .unwrap();
-        write_test_executable(
-            &dir.join("longhouse"),
-            r#"#!/bin/sh
-printf '{"artifact_kind":"provider_live_proof_publish","results":[{"provider":"claude","stable_path":"%s","verdict":"red"}]}\n' "$LONGHOUSE_STABLE_ARTIFACT"
-exit 1
-"#,
-        );
-
-        let old_path = std::env::var_os("PATH");
-        let old_stable = std::env::var_os("LONGHOUSE_STABLE_ARTIFACT");
-        std::env::set_var("PATH", dir.as_os_str());
-        std::env::set_var("LONGHOUSE_STABLE_ARTIFACT", stable_path.as_os_str());
-        let mut cache = command_cache();
-        let result = handle_command_frame(
-            json!({
-                "type": "command",
-                "command_id": "cmd-provider-live-proof-red",
-                "command_type": COMMAND_PROVIDER_LIVE_PROOF,
-                "payload": {"provider": "claude"},
-            }),
-            &mut cache,
-            &test_config(),
-        )
-        .await;
-        if let Some(value) = old_path {
-            std::env::set_var("PATH", value);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(value) = old_stable {
-            std::env::set_var("LONGHOUSE_STABLE_ARTIFACT", value);
-        } else {
-            std::env::remove_var("LONGHOUSE_STABLE_ARTIFACT");
-        }
-
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["result"]["exit_code"], 1);
-        assert_eq!(result["result"]["artifact"]["verdict"], "red");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
