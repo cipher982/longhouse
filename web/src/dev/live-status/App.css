@@ -243,11 +243,7 @@
   border-top: 1px solid var(--lab-line);
   padding-top: 16px;
 }
-.lab-app .lab-explanation {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--lab-secondary);
-}
+
 .lab-app .lab-compact-note {
   display: none;
 }
@@ -633,17 +629,7 @@
   background: var(--lab-surface);
   border-color: var(--lab-line);
 }
-.lab-app .tl-action__accent {
-  background: var(--lab-secondary) !important;
-  width: 2px;
-  opacity: 0.6;
-}
-.lab-app .tl-action__accent[data-tone="pending"] {
-  background: var(--lab-sage) !important;
-}
-.lab-app .tl-action__accent[data-tone="error"] {
-  background: var(--lab-amber) !important;
-}
+
 .lab-app .tl-action__icon,
 .lab-app .tl-context__label,
 .lab-app .tl-noise__item-label {
@@ -690,10 +676,7 @@
   font-size: 13px;
   max-width: 100%;
 }
-.lab-app .tl-failure-preview {
-  background: var(--lab-surface);
-  border-color: var(--lab-line);
-}
+
 .lab-app .tl-question {
   background: var(--lab-surface);
   border-color: var(--lab-line);

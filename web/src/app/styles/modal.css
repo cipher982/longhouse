@@ -29,10 +29,6 @@
     box-shadow: var(--shadow-xl);
   }
 
-  .modal-container.modal-large {
-    max-width: 600px;
-  }
-
   .modal-header {
     display: flex;
     justify-content: space-between;
@@ -347,21 +343,6 @@
     font-weight: 400;
   }
 
-  .launch-path-suggestions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-  }
-
-  .launch-machine-picker {
-    display: grid;
-    gap: 0.35rem;
-    padding: 0.45rem;
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--color-surface-elevated) 84%, transparent);
-  }
-
   .launch-machine-group-label {
     padding: 0.35rem 0.5rem 0.15rem;
     color: var(--color-text-muted);
@@ -431,35 +412,6 @@
     background: var(--color-intent-error);
   }
 
-  .launch-path-chip {
-    max-width: 100%;
-    border: 1px solid var(--color-border-primary);
-    border-radius: var(--radius-md);
-    background: var(--color-surface-secondary);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    font-family: var(--font-family-mono);
-    font-size: var(--font-size-xs);
-    line-height: 1.2;
-    overflow: hidden;
-    padding: var(--space-2) var(--space-3);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .launch-path-chip:hover,
-  .launch-path-chip:focus-visible {
-    border-color: var(--color-brand-primary);
-    color: var(--color-text-primary);
-    outline: none;
-  }
-
-  .launch-path-chip.is-selected {
-    border-color: var(--color-brand-primary);
-    color: var(--color-text-primary);
-    background: var(--color-surface-tertiary, var(--color-surface-secondary));
-  }
-
   .launch-workspace-search {
     margin-top: var(--space-2);
   }
@@ -500,41 +452,6 @@
 
   .launch-advanced .form-field {
     margin-top: var(--space-3);
-  }
-
-  .launch-mode-segment {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-1);
-    width: 100%;
-    padding: var(--space-1);
-    border: 1px solid var(--color-border-primary);
-    border-radius: var(--radius-md);
-    background: var(--color-surface-secondary);
-  }
-
-  .launch-mode-option {
-    min-height: 36px;
-    border: 0;
-    border-radius: calc(var(--radius-md) - 2px);
-    background: transparent;
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--font-size-sm);
-    line-height: 1.2;
-    padding: var(--space-2) var(--space-3);
-  }
-
-  .launch-mode-option.is-selected {
-    background: var(--color-surface-primary);
-    color: var(--color-text-primary);
-    box-shadow: var(--shadow-sm);
-  }
-
-  .launch-mode-option:disabled {
-    cursor: not-allowed;
-    opacity: 0.45;
   }
 
   .modal-loading,
@@ -669,38 +586,6 @@
     position: absolute;
     top: var(--space-3);
     right: var(--space-3);
-  }
-
-  /* Instructions */
-
-  .enrollment-instructions {
-    background: var(--color-surface-secondary);
-    border: 1px solid var(--color-border-primary);
-    border-radius: var(--radius-lg);
-    padding: var(--space-6);
-    margin-bottom: var(--space-6);
-  }
-
-  .enrollment-instructions h3 {
-    font-size: var(--font-size-md);
-    font-weight: var(--font-weight-semibold);
-    margin: 0 0 var(--space-4) 0;
-    color: var(--color-text-primary);
-  }
-
-  .enrollment-instructions ol {
-    margin: 0;
-    padding-left: var(--space-6);
-    color: var(--color-text-secondary);
-  }
-
-  .enrollment-instructions li {
-    margin-bottom: var(--space-3);
-    line-height: var(--font-line-height-relaxed);
-  }
-
-  .enrollment-instructions li:last-child {
-    margin-bottom: 0;
   }
 
   /* Modal Actions */

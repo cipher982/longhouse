@@ -11,10 +11,6 @@
     box-sizing: border-box;
   }
 
-  .spacer {
-    flex: 1 1 auto;
-  }
-
   /* --------------------------------------------------------- */
   /* Application grid layout (header, tabs, content, status)   */
   /* --------------------------------------------------------- */
@@ -90,21 +86,7 @@
   }
 
   /* --------------------------------------------------------- */
-  /* Page loader for lazy-loaded routes                        */
-  /* --------------------------------------------------------- */
 
-  .page-loader {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 200px;
-    height: 100%;
-  }
-
-  .page-loader-spinner {
-    border-color: var(--color-border-subtle, #333);
-    border-top-color: var(--color-brand-primary, #E9B949);
-  }
 }
 @layer components {
   .host-link-banner {

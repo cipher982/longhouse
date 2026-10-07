@@ -21,32 +21,6 @@
   justify-content: flex-start;
 }
 
-/* More specific selector to override .header-button base styles
-   (shelf-toggle elements have both classes applied) */
-.header-button.shelf-toggle {
-  display: inline-flex;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--color-text-muted);
-  border: 1px solid transparent;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition:
-    background var(--motion-duration-fast) var(--motion-easing-standard),
-    color var(--motion-duration-fast) var(--motion-easing-standard),
-    border-color var(--motion-duration-fast) var(--motion-easing-standard);
-  padding: 0; /* Override header-button padding */
-}
-
-.header-button.shelf-toggle:hover {
-  background: #261F18;
-  color: var(--color-text-primary);
-  border-color: var(--color-border-primary);
-}
-
 .header-brand {
   display: flex;
   align-items: center;
@@ -144,35 +118,6 @@
   align-items: center;
   gap: 16px;
   justify-content: flex-end;
-}
-
-.header-button {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  background: #1E1812;
-  border: 1px solid var(--color-border-muted);
-  color: var(--color-text-secondary);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-sm);
-  text-decoration: none;
-  transition:
-    background var(--motion-duration-normal) var(--motion-easing-standard),
-    border-color var(--motion-duration-normal) var(--motion-easing-standard),
-    color var(--motion-duration-normal) var(--motion-easing-standard),
-    box-shadow var(--motion-duration-normal) var(--motion-easing-standard),
-    transform var(--motion-duration-normal) var(--motion-easing-standard);
-  cursor: pointer;
-  font-family: var(--font-family-base);
-}
-
-.header-button:hover {
-  background: #261F18;
-  border-color: var(--color-brand-primary);
-  color: var(--color-text-primary);
-  box-shadow: var(--shadow-glow);
-  transform: translateY(-1px);
 }
 
 /* =============================================================================
@@ -520,8 +465,7 @@
     gap: var(--space-2);
   }
 
-  .mobile-menu-toggle,
-  .header-button.shelf-toggle {
+  .mobile-menu-toggle {
     width: 36px;
     height: 36px;
   }
@@ -544,8 +488,7 @@
     padding: 8px 10px;
   }
 
-  .mobile-menu-toggle,
-  .header-button.shelf-toggle {
+  .mobile-menu-toggle {
     width: 34px;
     height: 34px;
   }

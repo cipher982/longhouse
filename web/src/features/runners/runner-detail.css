@@ -92,7 +92,6 @@
       font-family: var(--font-family-mono);
     }
 
-
     .detail-help-text {
       color: var(--color-text-secondary);
       font-size: 0.875rem;
@@ -597,11 +596,6 @@
 
     .runner-detail-container .runner-job-list {
       gap: 0.875rem;
-    }
-
-    .runner-detail-container .runner-title-row {
-      flex-direction: column;
-      align-items: flex-start;
     }
 
     .runner-detail-container .capabilities-actions {

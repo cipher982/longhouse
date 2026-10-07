@@ -180,9 +180,3 @@
 .recall-card-open:hover {
   color: var(--text-primary);
 }
-
-/* Smart fallback indicator (lives here since it relates to the search experience) */
-.sessions-smart-fallback {
-  padding: 0.375rem 0;
-  margin-bottom: 0.5rem;
-}
