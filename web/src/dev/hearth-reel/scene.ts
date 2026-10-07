@@ -252,6 +252,7 @@ export function cardsAt(t: number, wallAt: (sceneS: number) => number, gen: numb
       git_branch: s.branch,
       device_id: "device-cinder",
       summary_title: s.title,
+      timeline_title: s.title,
       summary: s.summary,
       first_user_message: s.summary,
       user_messages: userMessages,

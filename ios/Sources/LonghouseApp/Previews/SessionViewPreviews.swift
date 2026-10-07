@@ -94,6 +94,7 @@ private extension SessionDetail {
           "cwd": "/Users/example/code",
           "gitBranch": "main",
           "summary": "Backup architecture restore",
+          "title": "Backup Architecture Restore",
           "summaryTitle": "Backup Architecture Restore",
           "presenceState": "\(executing ? "running" : "idle")",
           "userState": "active",

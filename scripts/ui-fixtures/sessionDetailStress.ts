@@ -256,7 +256,7 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   const now = SESSION_DETAIL_STRESS_NOW;
-  return {
+  const session: AgentSession = {
     session_state: makeSessionState(),
     id: "session-detail-base",
     provider: "codex",
@@ -316,6 +316,8 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     user_state: undefined,
     ...overrides,
   };
+  // A real server always serves timeline_title; clients render it verbatim.
+  return { ...session, timeline_title: session.timeline_title ?? session.summary_title ?? "Session" };
 }
 
 export function makeEvent(
@@ -2274,6 +2276,7 @@ export function buildSessionResearchTurnFixture(): SessionDetailFixture {
   fixture.session.project = "zeta";
   fixture.session.cwd = "/Users/example/git/zeta";
   fixture.session.summary_title = "Context fabric repo link request";
+  fixture.session.timeline_title = "Context fabric repo link request";
   fixture.session.summary = "Find the repos behind Context Fabric and draft a reply.";
   fixture.session.started_at = "2026-04-15T15:58:00Z";
   fixture.session.last_activity_at = now;
@@ -2380,6 +2383,7 @@ export function buildSessionRunningCallFixture(expired: boolean): SessionDetailF
   const observedAt = expired ? "2026-04-15T16:09:00Z" : "2026-04-15T16:11:56Z";
   const validUntil = expired ? "2026-04-15T16:10:00Z" : "2026-04-15T16:20:00Z";
   fixture.session.summary_title = "RL task for AI-designed languages";
+  fixture.session.timeline_title = "RL task for AI-designed languages";
   fixture.session.last_activity_at = observedAt;
   fixture.session.timeline_anchor_at = observedAt;
   fixture.session.tool_calls = 427;

@@ -56,17 +56,10 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     /// ``usageLatest``, which describes the provider's last completed turn.
     var selectedModel: String? = nil
 
+    /// The server's `timeline_title`, carried in `title` by the API adapter.
     var displayTitle: String {
-        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
-            return title
-        }
-        if let summaryTitle = summaryTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !summaryTitle.isEmpty {
-            return summaryTitle
-        }
-        if let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
-            return summary
-        }
-        return provider
+        let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Untitled session" : trimmed
     }
 
     var isClosed: Bool { stateFacts.dispositionState == "closed" }

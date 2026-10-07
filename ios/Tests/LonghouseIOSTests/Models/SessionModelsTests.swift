@@ -525,15 +525,17 @@ struct SessionModelsTests {
     }
 
     @Test
-    func sessionDetailDisplayTitleFallsBackToFirstUserMessageBeforeGeneratedTitle() throws {
+    func sessionDetailHasNoClientTitleLadder() throws {
+        // The server always serves timeline_title; summary_title and the first
+        // message are its inputs, not a second ladder in the app.
         let json = apiSessionJSON()
             .replacingOccurrences(
                 of: #""summary_title": "Timeline contract","#,
-                with: #""summary_title": null, "timeline_title": null, "first_user_message": "Fix the menu bar hover lag","#
+                with: #""summary_title": "Generated", "timeline_title": null, "first_user_message": "Fix the menu bar hover lag","#
             )
         let decoded = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
 
-        #expect(decoded.displayTitle == "Fix the menu bar hover lag")
+        #expect(decoded.displayTitle == "Untitled session")
     }
 
     @Test
@@ -1154,6 +1156,7 @@ struct SessionModelsTests {
           "summary": null,
           "summary_status": "pending",
           "first_user_message": "Investigate stuck generated summary cards.",
+          "timeline_title": "Investigate stuck generated summary cards.",
           """#
             )
         let pendingJSON = """

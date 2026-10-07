@@ -35,18 +35,14 @@ describe("getSessionCardText", () => {
     expect(b.title).toBe(anchor);
   });
 
-  it("falls back to summary_title when no timeline_title (pre-anchor payloads)", () => {
-    const text = getSessionCardText(makeSession({ summary_title: "Debug Bedrock Race" }));
-    expect(text.title).toBe("Debug Bedrock Race");
-  });
-
-  it("falls back to the first user message, then a structured label", () => {
-    expect(getSessionCardText(makeSession({ first_user_message: "add an endpoint" })).title).toBe(
-      "add an endpoint",
+  it("has no client title ladder: a payload without timeline_title reads as untitled", () => {
+    // The server always serves timeline_title; summary_title and the first
+    // message are its inputs, not a second ladder here.
+    const text = getSessionCardText(
+      makeSession({ summary_title: "Debug Bedrock Race", first_user_message: "add an endpoint" }),
     );
-    expect(getSessionCardText(makeSession({ project: "zerg", provider: "codex" })).title).toBe(
-      "New Codex session in zerg",
-    );
+    expect(text.title).toBe("Untitled session");
+    expect(text.titleSource).toBe("fallback");
   });
 
   it("shows the served headline once when the server says it is the prompt cut short", () => {

@@ -135,6 +135,8 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     tool_calls: 2,
     summary: "Shipped session cleanup.",
     summary_title: "Cleanup sessions page",
+    // The server's resolved headline; the card renders it verbatim.
+    timeline_title: "Cleanup sessions page",
     first_user_message: "clean this up",
     match_event_id: null,
     match_snippet: null,
@@ -1135,6 +1137,7 @@ describe("SessionsPage", () => {
             ended_at: null,
             summary: "Older generated summary.",
             summary_title: "Generated subject",
+            timeline_title: "Generated subject",
             first_user_message: "Original user prompt for this session.",
             capabilities: makeCapabilities({
               live_control_available: true,
@@ -1285,6 +1288,7 @@ describe("SessionsPage", () => {
             project: "zerg",
             summary: null,
             summary_title: null,
+            timeline_title: "zerg · Empty session",
             first_user_message: null,
             user_messages: 0,
             assistant_messages: 0,
@@ -1301,7 +1305,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("New Claude session in zerg")).toBeInTheDocument();
+    expect(await screen.findByText("zerg · Empty session")).toBeInTheDocument();
     expect(screen.queryByText(/Generating summary/)).not.toBeInTheDocument();
   });
 

@@ -2726,6 +2726,7 @@ struct SessionViewModelTests {
             "id": "session-1",
             "provider": "codex",
             "summary_title": \(encodedSummaryTitle),
+            "title": \(encodedSummaryTitle),
             "user_state": "active",\(inputReceiptsField)\(recapField)
             "capabilities": {
               "live_control_available": true,

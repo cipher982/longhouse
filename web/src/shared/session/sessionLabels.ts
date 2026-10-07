@@ -60,90 +60,47 @@ export interface SessionCardText {
   subheading: string | null;
 }
 
-function isGeneratedSessionTitle(
-  value: string | null | undefined,
-): value is string {
-  const title = compactText(value);
-  if (!title) return false;
-  const normalized = title.toLowerCase();
-  if (normalized === "untitled session") return false;
-  if (normalized === "generating summary") return false;
-  if (normalized === "generating title") return false;
-  return true;
-}
-
 export function getSessionCardText(
   session: AgentSession,
   options: {
     titleMaxChars?: number;
     subheadingMaxChars?: number;
-    preferGenerated?: boolean;
   } = {},
 ): SessionCardText {
   const titleMaxChars = options.titleMaxChars ?? 96;
   const subheadingMaxChars = options.subheadingMaxChars ?? 180;
-  const preferGenerated = options.preferGenerated ?? true;
   // The prompt as a one-line preview: paste/attachment/image wrappers named,
   // not printed (promptPreview.ts).
   const firstUser = cleanPromptPreview(session.first_user_message);
 
-  // The server resolves a single sanitized, frozen headline (timeline_title) so
-  // iOS/web/widget render identical text and the row stays stable as the live
-  // summary drifts. Prefer it; the ladder below is only for pre-anchor payloads.
+  // The server resolves one sanitized, frozen headline (`timeline_title`,
+  // always non-empty: anchor, else first message, else a structured or
+  // empty-session label) so iOS, web and the widget render identical text and
+  // the row stays stable as the live summary drifts. No client ladder.
   // A headline cut from the prompt carries the prompt's wrappers too.
   const resolved =
     session.title_source === "prompt"
       ? cleanPromptPreview(session.timeline_title)
       : compactText(session.timeline_title);
-  if (preferGenerated && resolved) {
-    // With no title model the server's headline is the first prompt cut to a few
-    // words (`title_source: "prompt"`), and the subheading is the whole prompt:
-    // the same sentence twice on every row. Render the served headline once,
-    // verbatim as on iOS, and drop the echo. A generated title keeps the prompt
-    // as its subheading even when it happens to open with the same words.
-    if (firstUser && session.title_source === "prompt") {
-      return {
-        title: truncateText(resolved, titleMaxChars),
-        titleSource: "prompt",
-        subheading: null,
-      };
-    }
+  if (!resolved) {
+    return { title: "Untitled session", titleSource: "fallback", subheading: null };
+  }
+  // With no title model the server's headline is the first prompt cut to a few
+  // words (`title_source: "prompt"`), and the subheading is the whole prompt:
+  // the same sentence twice on every row. Render the served headline once,
+  // verbatim as on iOS, and drop the echo. A generated title keeps the prompt
+  // as its subheading even when it happens to open with the same words.
+  if (firstUser && session.title_source === "prompt") {
     return {
       title: truncateText(resolved, titleMaxChars),
-      titleSource: "generated",
-      subheading: firstUser
-        ? truncateText(firstUser, subheadingMaxChars)
-        : null,
-    };
-  }
-
-  if (preferGenerated && isGeneratedSessionTitle(session.summary_title)) {
-    return {
-      title: truncateText(compactText(session.summary_title), titleMaxChars),
-      titleSource: "generated",
-      subheading: firstUser
-        ? truncateText(firstUser, subheadingMaxChars)
-        : null,
-    };
-  }
-
-  if (firstUser) {
-    return {
-      title: truncateText(firstUser, titleMaxChars),
       titleSource: "prompt",
       subheading: null,
     };
   }
-
-  const project = getProjectLabel(session);
-  const provider = formatProviderName(session.provider);
   return {
-    title:
-      project && project !== session.provider
-        ? `New ${provider} session in ${project}`
-        : `New ${provider} session`,
-    titleSource: "fallback",
-    subheading: null,
+    title: truncateText(resolved, titleMaxChars),
+    titleSource: "generated",
+    subheading: firstUser ? truncateText(firstUser, subheadingMaxChars) : null,
   };
 }
 
@@ -184,14 +141,4 @@ function compactText(value: string | null | undefined): string {
 function truncateText(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
   return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}...`;
-}
-
-function formatProviderName(provider: string | null | undefined): string {
-  const value = compactText(provider);
-  if (!value) return "agent";
-  if (value.toLowerCase() === "codex") return "Codex";
-  if (value.toLowerCase() === "claude") return "Claude";
-  if (value.toLowerCase() === "antigravity") return "Antigravity";
-
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }

@@ -2652,14 +2652,6 @@
       ]
     },
     {
-      "path": "web/src/shared/session/sessionLabels.ts",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex"
-      ]
-    },
-    {
       "path": "web/src/shared/ui/ProviderGlyph.tsx",
       "providers": [
         "antigravity",
