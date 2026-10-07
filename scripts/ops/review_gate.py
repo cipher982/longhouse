@@ -297,7 +297,9 @@ def open_findings(events: list[dict], receipt: dict) -> list[dict]:
 
 
 def remote_main_shas(repo: str | Path) -> list[str]:
-    return git(repo, "for-each-ref", "--format=%(objectname)", f"refs/remotes/*/{DEFAULT_BRANCH}", check=False).split()
+    """The main this repo lands on (PUSH_READINESS_REMOTE, default origin), never a fork's or a stale mirror's."""
+    remote = os.environ.get("PUSH_READINESS_REMOTE", "").strip() or "origin"
+    return git(repo, "for-each-ref", "--format=%(objectname)", f"refs/remotes/{remote}/{DEFAULT_BRANCH}", check=False).split()
 
 
 class Landed:
@@ -328,8 +330,12 @@ class Landed:
         for rev in revs:
             if rev == "--not":
                 negate = True
-            elif "..." in rev or (rev.startswith("--") and not rev.startswith("--glob=")):
-                raise GateError(f"cannot read a landed history from {rev!r} (A..B, ^X, --not and --glob= only)")
+            elif rev.startswith("--") and not rev.startswith("--glob="):
+                raise GateError(f"cannot read a landed history from {rev!r} (A..B, A...B, ^X, --not and --glob= only)")
+            elif "..." in rev:
+                a, b = (resolve(repo, x or "HEAD") for x in rev.split("...", 1))
+                tips += [a, b]
+                excludes += git(repo, "merge-base", "--all", a, b, check=False).split()
             elif ".." in rev:
                 a, b = rev.split("..", 1)
                 excludes.append(a or "HEAD")
@@ -465,7 +471,8 @@ class Receipts:
 
     def _entry_files(self, r: dict, entry: dict) -> list[str] | None:
         sha = entry.get("sha")
-        if sha not in self._files:
+        key = f"{r['id']}:{sha}" if entry.get("merge") else sha  # a merge's files come from its own receipt
+        if key not in self._files:
             files = None
             try:
                 if entry.get("merge"):
@@ -476,8 +483,8 @@ class Receipts:
                     files = [n for n in out.splitlines() if n.strip()] if out.strip() else None
             except GateError:
                 files = None
-            self._files[sha] = files
-        return self._files[sha]
+            self._files[key] = files
+        return self._files[key]
 
     def about(self, r: dict, finding: dict) -> set[str]:
         """The keys (SHAs and patch-ids) of the commits a finding is about."""
@@ -508,7 +515,8 @@ class Receipts:
         mine = {r["id"]: [f for f in self.open(r) if self.is_about(r, f, commit)] for r in covering}
         out = []
         for r in covering:
-            later_clean = [r2 for r2 in covering if self.order[r2["id"]] > self.order[r["id"]]
+            # Only a review whose head landed can vouch for a fix: a clean proposal's "fix" may never have landed.
+            later_clean = [r2 for r2 in covering if self.order[r2["id"]] > self.order[r["id"]] and self.relevant(r2)
                            and r2.get("state") == "complete" and not mine[r2["id"]]]
             out += [(r, f) for f in mine[r["id"]] if not any(self.reads_fix(r, f, r2) for r2 in later_clean)]
         return out

@@ -894,6 +894,26 @@ class PromotionRuleTests(unittest.TestCase):
         self.repo.receipt(self.served, other)  # x plus an unrelated commit, clean: nothing fixed x
         self.assertEqual([v.commit.sha for v in self.promote()], [x])
 
+    def test_a_fix_that_never_landed_supersedes_nothing(self):
+        x = self.repo.commit("feature x", {"server/zerg/x.py": "1"})
+        self.repo.receipt(self.served, x, findings=[self.located("F1", "blocking", "server/zerg/x.py")])
+        self.repo.git("checkout", "-q", "-b", "proposal")
+        fix = self.repo.commit("fix x", {"server/zerg/x.py": "2"})
+        self.repo.receipt(self.served, fix)  # clean, but the fix is only a proposal
+        self.repo.git("checkout", "-q", "main")
+        self.repo.git("branch", "-q", "-D", "proposal")
+        self.assertEqual([v.commit.sha for v in self.promote(target=x)], [x])
+
+    def test_a_forks_main_is_not_landed_history(self):
+        a = self.repo.commit("feature a", {"server/zerg/a.py": "1"})
+        self.repo.git("checkout", "-q", "-b", "fork")
+        b = self.repo.commit("fork work", {"server/zerg/b.py": "1"})
+        self.repo.receipt(self.served, b, findings=[self.located("F1", "blocking", "server/zerg/b.py")])
+        self.repo.git("update-ref", "refs/remotes/fork/main", b)
+        self.repo.git("checkout", "-q", "main")
+        # Not origin's main: the proposal has no say, so a needs its own review rather than b's verdict.
+        self.assertEqual([(v.commit.sha, v.reasons) for v in self.promote(target=a)], [(a, ["no review receipt"])])
+
     def test_a_finding_attributed_to_its_whole_receipt_is_superseded_by_a_review_reaching_past_it(self):
         x = self.repo.commit("feature x", {"server/zerg/x.py": "1"})
         self.repo.receipt(self.served, x, findings=[finding("F1", "blocking")])  # names no file x changed
