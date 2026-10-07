@@ -1624,8 +1624,9 @@ async function captureBundle(
 
   // Capture screenshot
   const screenshotPath = path.join(outputDir, `${frameName}.png`);
+  const shotStarted = Date.now();
   await page.screenshot({ path: screenshotPath, fullPage: false });
-  console.log(`  Screenshot: ${screenshotPath}`);
+  console.log(`  Screenshot: ${screenshotPath} (${((Date.now() - shotStarted) / 1000).toFixed(1)}s)`);
 
   if (probe.length > 0) {
     // Evaluated from a string so esbuild's keepNames helper is not injected.
@@ -1750,11 +1751,13 @@ async function main() {
   try {
     // Launch browser
     console.log("\nLaunching browser...");
-    // SwiftShader gives headless Chromium WebGL2 with float render targets,
-    // so the timeline's Hearth fires render instead of their static glyphs.
-    browser = await chromium.launch({
-      args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
-    });
+    // Headless Chromium has no GPU: this lets WebGL fall back to SwiftShader
+    // (WebGL2 with float render targets), so the timeline's Hearth fires
+    // render instead of their static glyphs. Only WebGL: forcing
+    // --use-gl=angle --use-angle=swiftshader also put the compositor on
+    // SwiftShader, and the first screenshot of every page then took 2.5 s on
+    // an idle 4-vCPU guest and past the 30 s timeout on CI's (2026-10-07).
+    browser = await chromium.launch({ args: ["--enable-unsafe-swiftshader"] });
     context = await browser.newContext({
       viewport: { width: opts.viewport.width, height: opts.viewport.height },
       isMobile: opts.viewport.isMobile,
