@@ -250,43 +250,20 @@ def derive_session_liveness_facts(
     )
 
 
-def build_session_timeline_card_response(
-    *,
-    runtime_view: SessionRuntimeView | None,
-    runtime_display: SessionRuntimeDisplayResponse,
-    session_state: SessionStateFacts | None = None,
-) -> TimelineCardPresentationResponse:
-    """Derive the timeline card entirely from the public runtime_display projection.
-
-    The runtime_view supplies the observation timestamps (presence_updated_at,
-    last_progress_at, last_live_at). All semantic axes — control_path,
-    lifecycle, state, tone, signal_tier — come from runtime_display, which is
-    the single source of presentation truth.
-    """
-    if session_state is not None:
-        primary = session_state.presentation.primary
-        status = TimelineStatusPresentationResponse(
-            label=primary.label if primary is not None else "Activity unknown",
-            tone=primary.tone if primary is not None else "inactive",
-            seen_at=primary.observed_at if primary is not None else None,
-            seen_at_prefix="Closed" if primary is not None and primary.key == "closed" else "Updated",
-        )
-        return TimelineCardPresentationResponse(
-            ownership=TimelineBadgePresentationResponse(
-                label="Managed" if session_state.control.ownership == "owned" else "Unmanaged",
-                tone="neutral",
-            ),
-            status=status,
-            border_tone=status.tone,
-        )
-
-    ownership = TimelineBadgePresentationResponse(
-        label="Managed" if runtime_display.control_path == ControlPath.MANAGED else "Unmanaged",
-        tone="neutral",
+def build_session_timeline_card_response(*, session_state: SessionStateFacts) -> TimelineCardPresentationResponse:
+    """Derive the timeline card from the served session state's presentation."""
+    primary = session_state.presentation.primary
+    status = TimelineStatusPresentationResponse(
+        label=primary.label if primary is not None else "Activity unknown",
+        tone=primary.tone if primary is not None else "inactive",
+        seen_at=primary.observed_at if primary is not None else None,
+        seen_at_prefix="Closed" if primary is not None and primary.key == "closed" else "Updated",
     )
-    status = _timeline_status_from_display(runtime_display, runtime_view=runtime_view)
     return TimelineCardPresentationResponse(
-        ownership=ownership,
+        ownership=TimelineBadgePresentationResponse(
+            label="Managed" if session_state.control.ownership == "owned" else "Unmanaged",
+            tone="neutral",
+        ),
         status=status,
         border_tone=status.tone,
     )
@@ -572,85 +549,6 @@ def project_compat_capabilities_from_state(
             "attach_images": capabilities.attach_images and send_available,
         }
     )
-
-
-def _timeline_status_from_display(
-    runtime_display: SessionRuntimeDisplayResponse,
-    *,
-    runtime_view: SessionRuntimeView | None,
-) -> TimelineStatusPresentationResponse:
-    state = runtime_display.state.value if runtime_display.state is not None else None
-    presence_at = normalize_utc(runtime_view.presence_updated_at) if runtime_view is not None else None
-    progress_at = normalize_utc(runtime_view.last_progress_at) if runtime_view is not None else None
-    last_live_at = normalize_utc(runtime_view.last_live_at) if runtime_view is not None else None
-
-    if runtime_display.pause_request is not None and runtime_display.pause_request.status == "pending":
-        return TimelineStatusPresentationResponse(
-            label="Needs answer",
-            tone="blocked",
-            seen_at=presence_at or runtime_display.pause_request.last_seen_at,
-            seen_at_prefix="Updated",
-        )
-    if runtime_display.lifecycle == Lifecycle.CLOSED:
-        return TimelineStatusPresentationResponse(
-            label="Closed",
-            tone="closed",
-            seen_at=progress_at or last_live_at,
-            seen_at_prefix="Closed",
-        )
-    if state in {"thinking", "running", "idle", "needs_user", "blocked", "stalled"}:
-        return TimelineStatusPresentationResponse(
-            label=_phase_status_label(state, runtime_display.compact_tool_label),
-            tone=_phase_tone(state),
-            seen_at=presence_at,
-            seen_at_prefix="Updated",
-        )
-    if (
-        runtime_display.signal_tier == SignalTier.PROCESS_BINDING
-        and runtime_display.host_state == HostState.ONLINE
-        and runtime_display.lifecycle == Lifecycle.OPEN
-    ):
-        return TimelineStatusPresentationResponse(
-            label="Running",
-            tone="inactive",
-            seen_at=progress_at or last_live_at,
-            seen_at_prefix="Verified",
-        )
-    last_signal = presence_at or last_live_at
-    return TimelineStatusPresentationResponse(
-        label="Activity unknown",
-        tone="inactive",
-        seen_at=last_signal,
-        seen_at_prefix="Last signal" if last_signal is not None else "Checked",
-    )
-
-
-def _phase_status_label(kind: str, compact_tool: str | None) -> str:
-    phase = "idle" if kind == "needs_user" else kind.replace("_", " ").replace("-", " ")
-    if compact_tool and kind == "running":
-        return f"Using {compact_tool}"
-    if compact_tool and kind == "blocked":
-        return f"{_title_case_words(phase)} {compact_tool}"
-    return _title_case_words(phase)
-
-
-def _phase_tone(kind: str) -> str:
-    if kind in {"thinking", "running", "blocked", "stalled"}:
-        return kind
-    if kind in {"idle", "needs_user"}:
-        return "idle"
-    return "inactive"
-
-
-def _title_case_words(value: str) -> str:
-    words = [word for word in value.split() if word]
-    out: list[str] = []
-    for word in words:
-        if len(word) <= 3 and word == word.upper():
-            out.append(word)
-        else:
-            out.append(word[:1].upper() + word[1:])
-    return " ".join(out)
 
 
 def build_session_control_response(
@@ -2473,11 +2371,7 @@ def build_live_launch_placeholder_response(
         session_state=session_state,
         runtime_display=runtime_display,
         transcript_preview=transcript_preview_response,
-        timeline_card=build_session_timeline_card_response(
-            runtime_view=None,
-            runtime_display=runtime_display,
-            session_state=session_state,
-        ),
+        timeline_card=build_session_timeline_card_response(session_state=session_state),
         user_state=user_state,
         execution_lifetime=launch_readiness.execution_lifetime,
         sharer=sharer,
