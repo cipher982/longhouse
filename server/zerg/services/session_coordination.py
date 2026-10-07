@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
@@ -25,8 +24,9 @@ from zerg.models.live_store import LiveTimelineCard
 from zerg.services.agents.kernel_capabilities import project_capabilities_from_rows
 from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalog_facts import hydrate_catalog_row
+from zerg.services.live_catalog_timeline import project_catalog_timeline_row
 from zerg.services.provisional_events import durable_transcript_event_predicate
-from zerg.services.session_runtime import build_runtime_view
+from zerg.services.session_runtime_display import SignalTier
 from zerg.services.session_views import WallSessionResponse
 
 
@@ -50,6 +50,7 @@ def project_storage_v2_wall(
     if limit <= 0:
         return []
     repo_lower = repo.lower() if repo else None
+    commit_seq = int(snapshot.get("commit_seq") or 0)
 
     items: list[WallSessionResponse] = []
     for row in snapshot.get("rows") or []:
@@ -64,7 +65,6 @@ def project_storage_v2_wall(
         ):
             continue
         card = hydrate_catalog_row(LiveTimelineCard, facts.get("card"))
-        runtime = hydrate_catalog_row(LiveRuntimeState, facts.get("runtime"))
         thread = hydrate_catalog_row(LiveSessionThread, facts.get("primary_thread"))
         run = hydrate_catalog_row(LiveSessionRun, facts.get("latest_run"))
         connections = [
@@ -79,7 +79,10 @@ def project_storage_v2_wall(
             connections=connections,
             now=observed_at,
         )
-        runtime_view = build_runtime_view(state=runtime, session=session, now=observed_at) if runtime is not None else None
+        # Presence comes from the same served projection as the timeline card,
+        # and only while its evidence is current: expired evidence is unknown.
+        served = project_catalog_timeline_row(row, observed_at=observed_at, commit_seq=commit_seq, surface="wall")
+        presence_state = served.presence_state if served.runtime_display.signal_tier == SignalTier.PHASE_SIGNAL else None
         last_activity_at = (card.last_activity_at if card is not None else None) or session.last_activity_at
         session_id = str(session.session_id)
 
@@ -96,8 +99,8 @@ def project_storage_v2_wall(
                 summary_title=(card.summary_title if card is not None else None) or session.summary_title,
                 started_at=session.started_at,
                 last_event_at=last_activity_at,
-                has_live_presence=runtime_view is not None and runtime_view.presence_state is not None,
-                presence_state=runtime_view.presence_state if runtime_view is not None else None,
+                has_live_presence=presence_state is not None,
+                presence_state=presence_state,
                 kernel_control_label=capabilities.control_label,
                 kernel_live_control_available=capabilities.live_control_available,
                 kernel_host_reattach_available=capabilities.host_reattach_available,

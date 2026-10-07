@@ -26,6 +26,10 @@ from sqlalchemy.orm import Session
 from tests_lite.live_catalog_harness import LiveCatalog
 from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
+from tests_lite.test_delegation_lifecycle import DEVICE_ID as DELEGATION_DEVICE_ID
+from tests_lite.test_delegation_lifecycle import PROVIDER as DELEGATION_PROVIDER
+from tests_lite.test_delegation_lifecycle import _seed_running_session
+from zerg.auth.hosted import session_cookie_name
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
@@ -254,43 +258,84 @@ def test_wall_filters_by_project(live_catalog, live_catalog_client):
     assert data["sessions"][0]["project"] == "zerg"
 
 
-def test_wall_uses_runtime_state_for_live_presence(live_catalog, live_catalog_client):
-    """Wall uses live runtime state as the single source of presence truth."""
-    owner_id = live_catalog.create_user("owner@wall.test")
-    headers = _headers(live_catalog, owner_id, device_id="shipper-demo")
-    _ship(
-        live_catalog,
-        live_catalog_client,
-        owner_id=owner_id,
-        device_id="shipper-demo",
-        git_repo="runtime-only",
-        project="zerg",
-    )
-    session_id = _ship(
-        live_catalog,
-        live_catalog_client,
-        owner_id=owner_id,
-        device_id="shipper-demo",
-        git_repo="runtime-only",
-        project="zerg",
-    )
-    presence = live_catalog_client.post(
+def _timeline_heads(live_catalog: LiveCatalog, client, *, owner_id: int, email: str) -> dict[str, dict]:
+    client.cookies.set(session_cookie_name(False), live_catalog.browser_cookie(owner_id=owner_id, email=email))
+    try:
+        response = client.get("/timeline/sessions?days_back=7")
+    finally:
+        client.cookies.clear()
+    assert response.status_code == 200, response.text
+    return {card["head"]["id"]: card["head"] for card in response.json()["sessions"]}
+
+
+def test_wall_presence_agrees_with_the_served_timeline(live_catalog, live_catalog_client):
+    """Wall/peers presence is the timeline's served state, never a second derivation.
+
+    A hook presence post on a session with no owned run is not served activity:
+    the timeline reads it as unknown, so the wall must too. The wall used to
+    overlay the legacy runtime row and report ``needs_user`` here while the
+    timeline said "Imported". A session with a durable run that reports a tool
+    is served as running on both surfaces.
+    """
+    email = "owner@wall.test"
+    owner_id = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id=DELEGATION_DEVICE_ID)
+    headers = {"X-Agents-Token": token}
+
+    imported = _ship(live_catalog, live_catalog_client, owner_id=owner_id, device_id=DELEGATION_DEVICE_ID, git_repo="agree")
+    response = live_catalog_client.post(
         "/agents/presence",
-        json={"session_id": str(session_id), "state": "needs_user", "cwd": "/tmp", "provider": "codex"},
+        json={"session_id": str(imported), "state": "needs_user", "cwd": "/tmp", "provider": "codex"},
         headers=headers,
     )
-    assert presence.status_code == 204, presence.text
+    assert response.status_code == 204, response.text
 
-    resp = live_catalog_client.get("/agents/sessions/wall", headers=headers)
-    assert resp.status_code == 200, resp.text
-    rows = {row["session_id"]: row for row in resp.json()["sessions"]}
-    signalled = rows[str(session_id)]
-    assert signalled["has_live_presence"] is True
-    assert signalled["presence_state"] == "needs_user"
-    # The session that never signalled stays quiet rather than inheriting it.
-    quiet = next(row for session_id_, row in rows.items() if session_id_ != str(session_id))
-    assert quiet["has_live_presence"] is False
-    assert quiet["presence_state"] is None
+    running, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner_id)
+    started = live_catalog.rpc(
+        "session.console.turn.update.v2",
+        {
+            "turn": {
+                "run_id": run_id,
+                "owner_id": owner_id,
+                "session_id": str(running),
+                "thread_id": str(thread_id),
+                "provider": DELEGATION_PROVIDER,
+                "device_id": DELEGATION_DEVICE_ID,
+                "state": "active",
+                "expected_state": "starting",
+                "error_code": None,
+                "error": None,
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+        },
+    )
+    assert started, started
+    response = live_catalog_client.post(
+        "/agents/presence",
+        json={
+            "session_id": str(running),
+            "provider": DELEGATION_PROVIDER,
+            "run_id": run_id,
+            "state": "running",
+            "tool_name": "Read",
+            "occurred_at": datetime.now(UTC).isoformat(),
+        },
+        headers=headers,
+    )
+    assert response.status_code == 204, response.text
+
+    heads = _timeline_heads(live_catalog, live_catalog_client, owner_id=owner_id, email=email)
+    wall_response = live_catalog_client.get("/agents/sessions/wall", headers=headers)
+    assert wall_response.status_code == 200, wall_response.text
+    wall = {row["session_id"]: row for row in wall_response.json()["sessions"]}
+
+    assert heads[str(imported)]["presence_state"] is None
+    assert wall[str(imported)]["presence_state"] is None
+    assert wall[str(imported)]["has_live_presence"] is False
+
+    assert heads[str(running)]["presence_state"] == "running"
+    assert wall[str(running)]["presence_state"] == "running"
+    assert wall[str(running)]["has_live_presence"] is True
 
 
 def test_wall_includes_kernel_control_buckets(live_catalog, live_catalog_client):

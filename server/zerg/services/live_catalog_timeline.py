@@ -488,11 +488,7 @@ def _pending_response_from_catalog(
             "capabilities": capabilities,
             "session_state": session_state,
             "runtime_display": runtime_display,
-            "timeline_card": build_session_timeline_card_response(
-                runtime_view=None,
-                runtime_display=runtime_display,
-                session_state=session_state,
-            ),
+            "timeline_card": build_session_timeline_card_response(session_state=session_state),
             "user_state": session.user_state or "active",
             "execution_lifetime": execution_lifetime,
         }
@@ -620,11 +616,7 @@ def _response_from_catalog(
         capabilities=capabilities,
         session_state=session_state,
         runtime_display=runtime_display,
-        timeline_card=build_session_timeline_card_response(
-            runtime_view=None,
-            runtime_display=runtime_display,
-            session_state=session_state,
-        ),
+        timeline_card=build_session_timeline_card_response(session_state=session_state),
         user_state=session.user_state or "active",
         user_hidden_from_timeline=bool(session.user_hidden_from_timeline),
         execution_lifetime=readiness.execution_lifetime if readiness is not None else None,
@@ -687,6 +679,29 @@ def _bounded_heads(row: Mapping[str, Any], *, surface: str) -> Any:
     return []
 
 
+def project_catalog_timeline_row(
+    row: Mapping[str, Any],
+    *,
+    observed_at: datetime,
+    commit_seq: int,
+    surface: str,
+) -> SessionResponse:
+    """Project one timeline snapshot row through the served state projector.
+
+    Every surface that lists sessions from a timeline snapshot (the timeline
+    itself, the wall and the peers built on it) goes through this, so they
+    cannot disagree about a session's state.
+    """
+
+    canonical_heads = _bounded_heads(row, surface=surface)
+    return project_catalog_session_facts(
+        row["facts"],
+        observed_at=observed_at,
+        canonical_heads=canonical_heads if isinstance(canonical_heads, list) else None,
+        commit_seq=commit_seq if isinstance(canonical_heads, list) else None,
+    )
+
+
 def project_catalog_timeline_snapshot(snapshot: dict[str, Any]) -> TimelineSessionsListResponse:
     """Project a raw catalogd timeline snapshot without any storage access."""
 
@@ -696,13 +711,7 @@ def project_catalog_timeline_snapshot(snapshot: dict[str, Any]) -> TimelineSessi
     cards: list[TimelineSessionCardResponse] = []
     commit_seq = int(snapshot.get("commit_seq") or 0)
     for row in snapshot.get("rows") or []:
-        canonical_heads = _bounded_heads(row, surface="timeline")
-        projected = project_catalog_session_facts(
-            row["facts"],
-            observed_at=observed_at,
-            canonical_heads=canonical_heads if isinstance(canonical_heads, list) else None,
-            commit_seq=commit_seq if isinstance(canonical_heads, list) else None,
-        )
+        projected = project_catalog_timeline_row(row, observed_at=observed_at, commit_seq=commit_seq, surface="timeline")
         thread_id = str(row.get("thread_id") or projected.id)
         cards.append(
             TimelineSessionCardResponse(

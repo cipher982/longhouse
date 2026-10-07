@@ -6,6 +6,7 @@ from datetime import timezone
 
 import pytest
 
+from zerg.services.live_catalog_timeline import project_catalog_timeline_snapshot
 from zerg.services.session_coordination import project_storage_v2_wall
 
 NOW = datetime(2026, 7, 13, 18, 0, tzinfo=timezone.utc)
@@ -122,8 +123,12 @@ def test_project_storage_v2_wall_uses_bounded_facts_only():
     assert item.last_event_at == NOW - timedelta(seconds=5)
     assert item.last_user_message_at is None
     assert item.last_tool_call_at is None
-    assert item.has_live_presence is True
-    assert item.presence_state == "needs_user"
+    # A legacy runtime row is not served evidence: with no state fact heads the
+    # timeline reads this session as unknown, and the wall agrees with it.
+    [card] = project_catalog_timeline_snapshot(snapshot).sessions
+    assert card.head.presence_state is None
+    assert item.has_live_presence is False
+    assert item.presence_state is None
     assert item.kernel_control_label == "live"
     assert item.kernel_live_control_available is True
     assert item.kernel_host_reattach_available is True
