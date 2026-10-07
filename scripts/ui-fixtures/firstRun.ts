@@ -21,7 +21,7 @@ function importedState(headline: { key: string; label: string; tone: string }): 
   const unavailable = (reason: string) => ({ state: "unavailable", reason });
   return {
     state_contract_version: 4,
-    presentation_policy_version: 7,
+    presentation_policy_version: 8,
     mode: "shadow",
     disposition: { state: "open", closed_at: null, close_reason: null },
     launch: null,

@@ -32,7 +32,7 @@ from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.utils.time import normalize_utc
 
 STATE_CONTRACT_VERSION = 4
-PRESENTATION_POLICY_VERSION = 7
+PRESENTATION_POLICY_VERSION = 8
 
 PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "closed",
@@ -40,11 +40,11 @@ PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "starting",
     "needs_answer",
     "needs_approval",
-    "provider_auth_required",
     "thinking",
     "executing",
-    "delegated_work",
     "stalled",
+    "delegated_work",
+    "provider_auth_required",
     "idle",
     "ended",
     "ready",
@@ -1175,13 +1175,6 @@ def _primary(
             tone="blocked",
             observed_at=interaction.opened_at,
         )
-    if run is not None and run.lifecycle == "ended" and run.end_reason == "provider_auth_required":
-        return SessionPresentationLabel(
-            key="provider_auth_required",
-            label="Provider authentication required",
-            tone="blocked",
-            observed_at=run.ended_at,
-        )
     if activity.state == "thinking":
         return SessionPresentationLabel(key="thinking", label="Thinking", tone="thinking", observed_at=activity.observed_at)
     if activity.state == "executing":
@@ -1204,6 +1197,16 @@ def _primary(
             label=_delegation_label(delegation),
             tone="active",
             observed_at=delegation.observed_at,
+        )
+
+    # Authentication is primary only when no answerable interaction or fresh
+    # activity/delegation claim describes work the user can still continue.
+    if run is not None and run.lifecycle == "ended" and run.end_reason == "provider_auth_required":
+        return SessionPresentationLabel(
+            key="provider_auth_required",
+            label="Provider authentication required",
+            tone="blocked",
+            observed_at=run.ended_at,
         )
     # A run records one attempt. Fresh activity and live delegated work above
     # remain the session's primary until their own evidence expires.

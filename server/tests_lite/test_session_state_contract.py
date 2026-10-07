@@ -1090,8 +1090,14 @@ def test_a_failed_run_with_a_sentence_for_a_reason_still_reads_as_failed():
     assert facts.presentation.primary.label == "Run failed"
 
 
-@pytest.mark.parametrize(("phase", "confidence"), [(None, "stale"), ("thinking", "live")])
-def test_provider_auth_failure_is_actionable_without_closing_the_session(phase, confidence):
+@pytest.mark.parametrize(
+    ("phase", "confidence", "expected_key", "expected_label", "expected_tone"),
+    [
+        (None, "stale", "provider_auth_required", "Provider authentication required", "blocked"),
+        ("thinking", "live", "thinking", "Thinking", "thinking"),
+    ],
+)
+def test_provider_auth_failure_yields_to_fresher_activity(phase, confidence, expected_key, expected_label, expected_tone):
     facts = _facts(
         runtime=_runtime(
             phase=phase,
@@ -1111,9 +1117,9 @@ def test_provider_auth_failure_is_actionable_without_closing_the_session(phase, 
 
     assert facts.disposition.state == "open"
     assert facts.presentation.primary is not None
-    assert facts.presentation.primary.key == "provider_auth_required"
-    assert facts.presentation.primary.label == "Provider authentication required"
-    assert facts.presentation.primary.tone == "blocked"
+    assert facts.presentation.primary.key == expected_key
+    assert facts.presentation.primary.label == expected_label
+    assert facts.presentation.primary.tone == expected_tone
 
     assert facts.pending_interaction is not None
     assert facts.pending_interaction.can_respond is False
@@ -1149,20 +1155,27 @@ def test_answerable_interaction_owns_primary_over_provider_auth_failure():
     assert facts.has_answerable_pending_interaction is True
 
 
-def test_provider_auth_failure_outranks_a_recent_activity_observation():
+def test_live_delegation_outlives_provider_auth_failure():
+    delegation = SessionDelegationFacts(
+        state="pending",
+        count=1,
+        kinds={"subagent": 1},
+        observed_at=NOW - timedelta(seconds=5),
+        valid_until=NOW + timedelta(minutes=5),
+    )
     facts = _facts(
         runtime=_runtime(
-            phase="thinking",
+            phase="idle",
             confidence="live",
             terminal_state="run_failed",
             terminal_reason="provider_auth_required",
         ),
         session=_session(ended_at=NOW - timedelta(seconds=2)),
+        delegation=delegation,
     )
 
-    assert facts.activity.state == "thinking"
     assert facts.presentation.primary is not None
-    assert facts.presentation.primary.key == "provider_auth_required"
+    assert facts.presentation.primary.key == "delegated_work"
 
 
 def test_explicit_user_close_dominates_all_other_axes():

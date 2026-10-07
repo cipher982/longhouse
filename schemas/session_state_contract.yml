@@ -1,6 +1,6 @@
 schema_version: 1
 state_contract_version: 4
-presentation_policy_version: 7
+presentation_policy_version: 8
 
 # Canonical state vocabulary. Provider adapters may retain raw evidence, but
 # every product surface projects only these values.
@@ -53,11 +53,11 @@ presentation:
     - starting
     - needs_answer
     - needs_approval
-    - provider_auth_required
     - thinking
     - executing
-    - delegated_work
     - stalled
+    - delegated_work
+    - provider_auth_required
     - idle
     - ended
     - ready

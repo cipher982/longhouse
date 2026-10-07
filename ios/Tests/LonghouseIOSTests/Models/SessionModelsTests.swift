@@ -504,9 +504,9 @@ struct SessionModelsTests {
         #expect(pauseRequest.questions.first?.options.first?.value == "sqlite")
     }
 
-    @MainActor
     @Test
     func runtimeDockExpandsOnlyForAnswerableInteractions() throws {
+        let now = LonghouseDateParser.parse("2026-09-25T16:05:00Z")!
         for canRespond in [false, true] {
             let response = canRespond ? "true" : "false"
             let interaction = #""activity": {"state": "quiescent"}, "pending_interaction": {"id": "pause-dock", "kind": "question", "can_respond": \#(response)}"#
@@ -521,9 +521,9 @@ struct SessionModelsTests {
             let detail = try JSONDecoder.snakeCase
                 .decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8))
                 .sessionDetail
-            let dock = SessionRuntimeDock(detail: detail, activity: ActivityPulseStore())
+            let ledger = detail.ledgerEvidence(asOf: now)
 
-            #expect(dock.shouldExpand == canRespond)
+            #expect(sessionRuntimeDockShouldExpand(detail: detail, ledger: ledger) == canRespond)
         }
     }
 

@@ -29,6 +29,14 @@ extension SessionStateFacts {
             && pendingInteractionCanRespond == true
             && (primary?.key == "needs_answer" || primary?.key == "needs_approval")
     }
+
+    var terminalFailureLabel: String? {
+        guard let primary else { return nil }
+        guard primary.key == "launch_failed" || (primary.key == "ended" && primary.tone == "blocked") else {
+            return nil
+        }
+        return primary.label
+    }
     /// Is the served activity evidence still inside its window?
     ///
     /// Mirrors `web/src/shared/session/activityEvidence.ts`. Expired evidence becomes

@@ -6,6 +6,7 @@ import {
   resolveSessionOwnershipLabel,
   resolveSessionRuntimeState,
   resolveTimelineSignal,
+  sessionHasFailedRun,
   timelineSignalLabel,
 } from "../sessionRuntime";
 import { getRuntimeDisplayCopy } from "../sessionRuntimeDisplay";
@@ -204,6 +205,14 @@ describe("resolveSessionRuntimeState", () => {
     expect(resolveSessionRuntimeState(session).needsAttention).toBe(false);
     expect(resolveTimelineSignal(session)).toBe("quiet");
   });
+
+  it("does not mark a closed session failed from its retained run outcome", () => {
+    const session_state = makeSessionStateFacts({ closed: true });
+    session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
+    const session = makeSession({ session_state, user_state: "active" });
+
+    expect(sessionHasFailedRun(session)).toBe(false);
+  });
   it("does not signal a question that Longhouse cannot answer", () => {
     const session_state = makeSessionStateFacts({
       pendingInteraction: true,
@@ -265,6 +274,18 @@ describe("resolveTimelineSignal", () => {
   it("a stall is attention; a raw provider block without a key is not", () => {
     expect(sig({ tone: "stalled" })).toBe("attention");
     expect(sig({ tone: "blocked" })).toBe("unknown");
+  });
+
+  it("keeps a failed run out of blocked-activity attention", () => {
+    const session_state = makeSessionStateFacts({ activity: "blocked" });
+    session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
+    session_state.presentation.primary = {
+      key: "ended",
+      label: "Run failed",
+      tone: "blocked",
+      observed_at: null,
+    };
+    expect(resolveTimelineSignal({ session_state, user_state: "active" })).toBe("quiet");
   });
 
   it("idle is quiet", () => {

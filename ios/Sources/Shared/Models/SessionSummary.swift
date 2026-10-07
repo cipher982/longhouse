@@ -291,9 +291,8 @@ extension SessionSummary {
     /// reader's clock is spoken as "Activity uncertain", never as the cached
     /// "Using Bash" (the ledger's `.uncertain` verdict).
     func spokenStatusLabel(asOf now: Date = Date()) -> String {
-        if let primary = stateFacts.primary,
-           primary.key == "launch_failed" || (primary.key == "ended" && primary.tone == "blocked") {
-            return primary.label
+        if let failureLabel = stateFacts.terminalFailureLabel {
+            return failureLabel
         }
         if !isClosed, stateFacts.workClaimExpired(asOf: now) {
             return "Activity uncertain"

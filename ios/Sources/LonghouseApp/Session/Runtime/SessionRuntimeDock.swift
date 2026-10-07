@@ -53,6 +53,13 @@ struct SessionLedgerNoticeState {
     }
 }
 
+func sessionRuntimeDockShouldExpand(detail: SessionDetail, ledger: SessionLedgerEvidence) -> Bool {
+    ledger == .uncertain
+        || detail.stateFacts.hasAnswerablePendingInteraction
+        || detail.controlBlock.isFault
+        || detail.isTranscriptSyncing
+}
+
 /// The integrated Ledger status row of the control card: provider headline,
 /// elapsed observation and scoped stream state. Receipt history belongs to the
 /// enclosing Balanced signal field. Literal work context is visible at rest;
@@ -597,11 +604,8 @@ struct SessionRuntimeDock: View {
         !detail.isClosed && detail.stateFacts.workingSet == "open"
     }
 
-    var shouldExpand: Bool {
-        ledger(asOf: providerEvidenceNow) == .uncertain
-            || detail.stateFacts.hasAnswerablePendingInteraction
-            || detail.controlBlock.isFault
-            || detail.isTranscriptSyncing
+    private var shouldExpand: Bool {
+        sessionRuntimeDockShouldExpand(detail: detail, ledger: ledger(asOf: providerEvidenceNow))
     }
 
 

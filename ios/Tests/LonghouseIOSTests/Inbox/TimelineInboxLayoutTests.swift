@@ -112,6 +112,23 @@ struct TimelineInboxLayoutTests {
     }
 
     @Test
+    func failedRunRetainsItsLabelWithoutAWaitingSignal() {
+        let now = LonghouseDateParser.parse("2026-09-25T16:05:00Z")!
+        let failed = session(
+            id: "failed-run",
+            facts: makeSessionStateFacts(
+                activity: "blocked",
+                workingSet: "open",
+                activityValidUntil: "2026-09-25T16:10:00Z",
+                primaryOverride: SessionStateLabel(key: "ended", label: "Run failed", tone: "blocked", observedAt: nil)
+            )
+        )
+
+        #expect(TimelineSignal.resolve(for: failed, asOf: now) == .quiet)
+        #expect(failed.spokenStatusLabel(asOf: now) == "Run failed")
+    }
+
+    @Test
     func sectionsKeepAFrozenOrderWhileTheEvidenceClockMoves() {
         // Two snapshots of the same two open sessions. Between them every
         // anchor moved — the engine re-stamps heads for idle sessions too, so
