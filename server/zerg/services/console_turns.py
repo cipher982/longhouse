@@ -191,6 +191,20 @@ async def interrupt_console_turn(
         elif message.get("ok") is not True:
             detail = message.get("error") if isinstance(message.get("error"), dict) else {}
             error = str(detail.get("message") or response.error or "Console invocation close failed")
+        if error is None:
+            result = message.get("result") if isinstance(message.get("result"), dict) else {}
+            if result.get("closed") is not True:
+                # The engine found no parked invocation for this run (already
+                # closed, drained, or its claim is gone): nothing was stopped.
+                raise ConsoleTurnUnavailable("no_active_turn", "Session has no parked Console invocation to close")
+            if result.get("error_note"):
+                # Closed, but a survivor or an unverifiable process group was
+                # left to the managed-process janitor.
+                logger.warning(
+                    "Console invocation %s closed with a note: %s",
+                    result.get("invocation_id"),
+                    result.get("error_note"),
+                )
         return ConsoleTurnInterrupt(
             turn_id=UUID(str(parked["turn_id"])),
             run_id=run_id,

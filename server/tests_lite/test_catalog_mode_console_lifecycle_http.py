@@ -71,6 +71,7 @@ class _MachineRegistry:
         self.crash_next_start = False
         self.interrupt_supported = True
         self.invocation_close_supported = True
+        self.invocation_close_result: dict[str, object] = {"closed": True, "invocation_id": "invocation", "stopped": []}
         self.commands: list[dict[str, object]] = []
 
     @staticmethod
@@ -97,6 +98,8 @@ class _MachineRegistry:
             raise RuntimeError("simulated Runtime Host crash after durable FIFO claim")
         if kwargs["command_type"] == "session.turn.start" and self.start_transport_timeout:
             return SimpleNamespace(transport_ok=False, message={}, error="control response timed out")
+        if kwargs["command_type"] == "session.invocation.close":
+            return SimpleNamespace(transport_ok=True, message={"ok": True, "result": self.invocation_close_result}, error=None)
         return SimpleNamespace(transport_ok=True, message={"ok": True, "result": {}}, error=None)
 
 
@@ -596,6 +599,23 @@ def test_catalog_mode_http_interrupt_closes_parked_invocation_and_refuses_idle(t
             idle = client.post(f"/sessions/{session_id}/turns/current/interrupt")
             assert idle.status_code == 409, idle.text
             assert idle.json()["detail"]["code"] == "no_active_turn"
+    finally:
+        api_app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_catalog_mode_http_parked_stop_that_closed_nothing_is_not_reported_as_dispatched(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    engine, _store, registry = _catalog_http_stack(tmp_path, monkeypatch, name="console-stop-nothing")
+    try:
+        with TestClient(api_app, raise_server_exceptions=False) as client:
+            session_id, _thread_id, _run_id = _create_parked_console_session(client)
+            registry.invocation_close_result = {"closed": False, "invocation_id": None, "stopped": []}
+            stopped = client.post(f"/sessions/{session_id}/turns/current/interrupt")
+            assert stopped.status_code == 409, stopped.text
+            assert stopped.json()["detail"]["code"] == "no_active_turn"
+            assert registry.commands[-1]["command_type"] == "session.invocation.close"
     finally:
         api_app.dependency_overrides.clear()
         engine.dispose()
