@@ -342,3 +342,39 @@ async def test_evidence_is_not_ready_while_the_handoff_is_pending(monkeypatch, t
     response = await routes.runtime_evidence("secret")
     assert response.status_code == 503
     assert json.loads(response.body)["outcome"] == "not_ready"
+
+
+@pytest.mark.asyncio
+async def test_a_stream_opened_on_a_draining_process_ends_with_the_lifecycle(monkeypatch) -> None:
+    from zerg.services import runtime_admission as admission_module
+
+    runtime = RuntimeAdmission()
+    runtime._state = "drained"
+    monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
+
+    async def app(scope, receive, send):
+        raise AssertionError("a drained process must not open a new long-lived stream")
+
+    sent: list[dict] = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {"type": "http", "method": "GET", "path": "/api/agents/sessions/stream", "headers": [(b"accept", b"text/event-stream")]}
+    await RuntimeWriteAdmissionMiddleware(app)(scope, receive, send)
+    assert sent[0]["status"] == 200
+    assert sent[1]["body"].startswith(b"event: host_lifecycle\ndata: ")
+
+    runtime._state = "open"
+    served: list[str] = []
+
+    async def serving_app(scope, receive, send):
+        served.append(scope["path"])
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    await RuntimeWriteAdmissionMiddleware(serving_app)(scope, receive, send)
+    assert served == ["/api/agents/sessions/stream"]

@@ -90,12 +90,53 @@ def _restarting_payload(path: str) -> dict:
     return runtime_admission().restarting_payload(path=path)
 
 
+def _wants_event_stream(scope: Scope) -> bool:
+    if scope.get("method") != "GET":
+        return False
+    for name, value in scope.get("headers") or ():
+        if name == b"accept" and b"text/event-stream" in value:
+            return True
+    return False
+
+
+async def _end_stream_with_lifecycle(scope: Scope, receive: Receive, send: Send) -> bool:
+    """A stream opened on a draining process gets the lifecycle and ends at once.
+
+    Streams open at drain completion are ended the same way. One opened later
+    (a client reconnecting before the edge moves) would otherwise stay open and
+    hold this process's shutdown for uvicorn's whole graceful timeout (5 s),
+    and with it the catalog lock a warm candidate is waiting for.
+    """
+    from zerg.services.runtime_admission import runtime_admission
+
+    runtime = runtime_admission()
+    if getattr(runtime, "state", None) not in {"draining", "drained"}:
+        return False
+    lifecycle = runtime.host_lifecycle()
+    body = f"event: host_lifecycle\ndata: {json.dumps(lifecycle, separators=(',', ':'))}\n\n".encode()
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [
+                (b"content-type", b"text/event-stream; charset=utf-8"),
+                (b"cache-control", b"no-cache"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+    return True
+
+
 class RuntimeWriteAdmissionMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = scope.get("path", "")
+        if scope["type"] == "http" and _wants_event_stream(scope) and await _end_stream_with_lifecycle(scope, receive, send):
+            return
         if scope["type"] in {"http", "websocket"} and not path.startswith(_INTERNAL_CONTROL_PREFIXES):
             if not await _await_catalog_handoff():
                 content = _restarting_payload(path)
