@@ -177,7 +177,7 @@ it does not compare clocks on different hosts. Producer and observer share a hos
 clock for end-to-end SSE timing in the supervised bundle.
 
 The authenticated `/api/telemetry/selfcheck` requires fresh ingest and SSE observations,
-an absolute sequence gap below ten, and actual SSE latency samples with p95 at most 400 ms.
+an absolute sequence gap below ten, and actual SSE latency samples with p95 at most 300 ms.
 Render observations are optional. Its sample summary is bounded to fifteen minutes;
 missing samples are unhealthy, not zero latency.
 
