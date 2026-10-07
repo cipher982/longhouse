@@ -393,7 +393,7 @@ fn transcript_len(input: &serde_json::Value) -> Option<u64> {
 /// an identical later steer from matching an earlier one.
 fn steer_recorded_since(input: &serde_json::Value, offset: u64, text: &str) -> bool {
     use std::io::{Read, Seek, SeekFrom};
-    const MAX_SCAN_BYTES: u64 = 32 * 1024 * 1024;
+    const MAX_SCAN_BYTES: u64 = 8 * 1024 * 1024;
     let Some(path) = input
         .get("transcript_path")
         .and_then(serde_json::Value::as_str)
@@ -535,6 +535,11 @@ fn turn_control_at(
             // The turn stays active, and the marker keeps Stop from blocking twice.
             let mut pending = read_steer(&steer)?;
             let text = steer_text(&pending)?;
+            if pending.get("transcript_offset").is_none() {
+                if let Some(len) = transcript_len(input) {
+                    pending["transcript_offset"] = json!(len);
+                }
+            }
             pending["boundary_delivery_attempted"] = json!(true);
             let _ = std::fs::write(&steer, serde_json::to_vec(&pending).unwrap_or_default());
             Some(json!({"decision": "block", "reason": steer_context(&text)}))
@@ -1169,6 +1174,22 @@ mod tests {
             .unwrap();
         use std::io::Write as _;
         writeln!(log, "{row}").unwrap();
+        assert_eq!(
+            turn_control_at(SESSION_ID, "PostToolUse", &post, Some(temp.path())),
+            None
+        );
+        assert!(!steer.exists());
+
+        // Delivered first by Stop (no tool boundary yet), then recorded: the
+        // next tool boundary must not deliver it a second time.
+        std::fs::write(&steer, br#"{"text":"stop first"}"#).unwrap();
+        let block = turn_control_at(SESSION_ID, "Stop", &post, Some(temp.path())).unwrap();
+        let reason = block["reason"].as_str().unwrap().to_string();
+        let stop_row = json!({
+            "type": "attachment",
+            "attachment": {"type": "hook_blocking_error", "content": reason},
+        });
+        writeln!(log, "{stop_row}").unwrap();
         assert_eq!(
             turn_control_at(SESSION_ID, "PostToolUse", &post, Some(temp.path())),
             None

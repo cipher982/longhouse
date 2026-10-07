@@ -4655,11 +4655,7 @@ fn longhouse_steer_event(
     let kind = attachment.get("type").and_then(Value::as_str)?;
     if !matches!(
         kind,
-        "hook_additional_context"
-            | "hook_blocking_error"
-            | "hook_stopped_continuation"
-            | "hook_success"
-            | "hook_system_message"
+        "hook_additional_context" | "hook_blocking_error" | "hook_stopped_continuation"
     ) {
         return None;
     }
