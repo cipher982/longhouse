@@ -4142,9 +4142,9 @@ describe("SessionChat composer status", () => {
     const input = screen.getByLabelText("Next instruction");
     expect(input).toHaveAttribute("placeholder", expect.stringMatching(/^Idle since .+ — message to continue$/));
     // The evidence chip rides on the input's own line, so an idle Helm
-    // composer is one line tall; the chips row is only for a model picker.
+    // composer is one line tall; the toolbar row is only for a model picker.
     expect(input.parentElement).toContainElement(screen.getByTestId("evidence-accessory"));
-    expect(screen.queryByTestId("session-chat-composer-chips")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("session-chat-composer-toolbar")).not.toBeInTheDocument();
   });
 
   it("keeps the caller's placeholder on a closed session that still takes input", () => {

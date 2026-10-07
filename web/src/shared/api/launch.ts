@@ -53,6 +53,8 @@ export async function fetchWorkspaceSuggestions(
 export type RecentModel = {
   model: string;
   last_used_at: string | null;
+  /** Server-owned short name ("opus 5.5"), the same naming as usage_latest.label. */
+  label?: string | null;
 };
 
 export type RecentModelsResponse = {

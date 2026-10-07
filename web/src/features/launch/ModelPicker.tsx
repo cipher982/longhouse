@@ -1,4 +1,4 @@
-import { useRef, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchRecentModels } from "@/shared/api/index";
 import { getProviderLabel } from "@/shared/lib/providers";
@@ -58,20 +58,32 @@ export default function ModelPicker({
   // "Codex / Coding agent" looked like a duplicate row. Say what the row IS,
   // and why no model name appears when one is not pinned: the agent's own
   // config on that machine decides.
-  const caption = compact
-    ? "Model"
-    : selectedModel
-      ? "Model · set for this session"
-      : `Model · let ${providerLabel} on this machine choose`;
+  const caption = selectedModel
+    ? "Model · set for this session"
+    : `Model · let ${providerLabel} on this machine choose`;
 
   const choose = (model: string) => {
     onChange(model);
     if (detailsRef.current) detailsRef.current.open = false;
   };
+  if (compact) {
+    return (
+      <CompactModelPicker
+        detailsRef={detailsRef}
+        testId={testId}
+        providerLabel={providerLabel}
+        selectedModel={selectedModel}
+        value={value}
+        models={recentModelsQuery.data?.models ?? []}
+        onChange={onChange}
+        choose={choose}
+      />
+    );
+  }
   return (
     <details
       ref={detailsRef}
-      className={`launch-choice launch-choice--nested${compact ? " model-picker--compact" : ""}`}
+      className="launch-choice launch-choice--nested"
       data-testid={testId}
     >
       <summary aria-haspopup="listbox">
@@ -120,5 +132,129 @@ export default function ModelPicker({
         </label>
       </div>
     </details>
+  );
+}
+
+interface CompactModelPickerProps {
+  detailsRef: RefObject<HTMLDetailsElement | null>;
+  testId: string;
+  providerLabel: string;
+  selectedModel: string;
+  value: string;
+  models: { model: string; last_used_at: string | null; label?: string | null }[];
+  onChange: (model: string) => void;
+  choose: (model: string) => void;
+}
+
+// The composer's model chip. It sits at the bottom of the window, so its menu
+// opens upward; a menu that opened downward from here landed below the
+// viewport (2026-10-06). The chip names the model the way the session header
+// does ("opus 5.5") and the menu keeps the exact id under each name.
+function CompactModelPicker({
+  detailsRef,
+  testId,
+  providerLabel,
+  selectedModel,
+  value,
+  models,
+  onChange,
+  choose,
+}: CompactModelPickerProps) {
+  useEffect(() => {
+    const close = (event: Event) => {
+      const details = detailsRef.current;
+      if (!details?.open) return;
+      if (event instanceof KeyboardEvent) {
+        if (event.key !== "Escape") return;
+        details.open = false;
+        details.querySelector("summary")?.focus();
+        return;
+      }
+      if (event.target instanceof Node && !details.contains(event.target)) {
+        details.open = false;
+      }
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [detailsRef]);
+
+  // The free-text box holds only an id the list does not already show.
+  const isListed = models.some((recent) => recent.model === selectedModel);
+  const selectedLabel = selectedModel
+    ? models.find((recent) => recent.model === selectedModel)?.label || selectedModel
+    : "Default model";
+  return (
+    <details ref={detailsRef} className="model-chip" data-testid={testId}>
+      <summary
+        aria-haspopup="listbox"
+        aria-label={`Model: ${selectedLabel}`}
+        title={selectedModel || `${providerLabel} on this machine chooses`}
+      >
+        <span className="model-chip__label">{selectedLabel}</span>
+        <svg className="model-chip__caret" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M2 6.5 5 3.5l3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </summary>
+      <div className="model-chip__panel" data-popover-panel>
+        <div className="model-chip__heading">Model for the next turn</div>
+        {models.map((recent) => {
+          const selected = recent.model === selectedModel;
+          return (
+            <button
+              key={recent.model}
+              type="button"
+              className={`model-chip__option${selected ? " is-selected" : ""}`}
+              aria-pressed={selected}
+              onClick={() => choose(recent.model)}
+            >
+              <span className="model-chip__option-copy">
+                <span className="model-chip__option-name">{recent.label || recent.model}</span>
+                <small>
+                  <code>{recent.model}</code> · {lastUsedLabel(recent.last_used_at)}
+                </small>
+              </span>
+              {selected ? <CheckIcon /> : null}
+            </button>
+          );
+        })}
+        {models.length > 0 ? <div className="model-chip__divider" /> : null}
+        <button
+          type="button"
+          className={`model-chip__option${!selectedModel ? " is-selected" : ""}`}
+          aria-pressed={!selectedModel}
+          onClick={() => choose("")}
+        >
+          <span className="model-chip__option-copy">
+            <span className="model-chip__option-name">Default</span>
+            <small>{providerLabel}'s config on this machine decides</small>
+          </span>
+          {!selectedModel ? <CheckIcon /> : null}
+        </button>
+        <label className="model-chip__manual">
+          <span>Other model id</span>
+          <input
+            type="text"
+            value={isListed ? "" : value}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder="provider/model-id"
+            autoComplete="off"
+            spellCheck={false}
+            data-testid={`${testId}-input`}
+          />
+        </label>
+      </div>
+    </details>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg className="model-chip__check" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+      <path d="M3 7.5 5.8 10 11 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }

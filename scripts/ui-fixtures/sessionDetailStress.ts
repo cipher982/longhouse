@@ -1868,6 +1868,73 @@ export function buildSessionProseIdleFixture(): SessionDetailFixture {
 }
 
 /**
+ * The prose-idle session run as Console (headless, a fresh dispatch per turn),
+ * which is the only mode whose composer offers a model for the next turn. No
+ * other scene rendered that picker, so its menu opening off-screen went
+ * unseen (2026-10-06).
+ */
+export function buildSessionConsoleFixture(): SessionDetailFixture {
+  const fixture = buildSessionProseIdleFixture();
+  const now = "2026-04-15T16:02:40Z";
+  fixture.session.selected_model = "claude-opus-5-5";
+  fixture.session.control = {
+    ...(fixture.session.control as JsonObject),
+    managed_transport: "claude_console",
+  };
+  fixture.session.capabilities = {
+    ...(fixture.session.capabilities as JsonObject),
+    control_label: "console",
+    can_start_turn: true,
+    can_steer_active_turn: false,
+    display_label: "Console on cinder",
+  };
+  fixture.session.session_state = makeSessionState({
+    mode: "console",
+    run: { id: "console-run-fixture", lifecycle: "ended", started_at: "2026-04-15T15:39:00Z", ended_at: now },
+    working_set: "open",
+    activity: {
+      state: "quiescent",
+      raw_kind: "idle",
+      tool: null,
+      source: "claude_console",
+      observed_at: now,
+      valid_until: null,
+    },
+    delegation: {
+      state: "none",
+      count: 0,
+      kinds: {},
+      source: "claude_console",
+      observed_at: now,
+      valid_until: null,
+      items: [],
+      recent_items: [],
+    },
+    control: {
+      ownership: "owned",
+      connection: "connected",
+      actions: {
+        start_turn: { state: "available" },
+        send_input: { state: "unavailable", reason: "use_start_turn" },
+        interrupt: { state: "unavailable", reason: "no_active_turn" },
+        terminate: { state: "unavailable", reason: "unsupported" },
+        reattach: { state: "unavailable", reason: "not_helm" },
+        resume: { state: "unavailable", reason: "not_helm" },
+        branch: { state: "unavailable", reason: "not_supported" },
+      },
+    },
+    presentation: {
+      primary: { key: "idle", label: "Idle", tone: "idle", observed_at: now },
+      access: { key: "live_control", label: "Live control", tone: "live", observed_at: now },
+      transcript: null,
+    },
+  });
+  fixture.thread.sessions = [fixture.session];
+  fixture.workspace = { ...fixture.workspace, session: fixture.session, thread: fixture.thread };
+  return fixture;
+}
+
+/**
  * The session rail's list: the timeline's first page, with the open session
  * plus neighbours in every state a rail row shows (running, needs you,
  * idle, ended, uncertain), across providers and machines.

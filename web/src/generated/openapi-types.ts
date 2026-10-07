@@ -6481,6 +6481,11 @@ export interface components {
              * @description When this model was last reported by a completed turn.
              */
             last_used_at: string;
+            /**
+             * Label
+             * @description Short display name ('opus 5.5'), the same naming as usage_latest.label; clients render it verbatim.
+             */
+            label?: string | null;
         };
         /** RecentModelsResponse */
         RecentModelsResponse: {

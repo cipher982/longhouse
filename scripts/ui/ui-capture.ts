@@ -14,7 +14,13 @@
  * nothing is listening on FRONTEND_URL. Demo-data scenes still need the backend.
  *
  * Usage:
- *   bunx tsx scripts/ui/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2] [--wheel-map] [--css-variant=X] [--action=step;step]
+ *   bunx tsx scripts/ui/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2] [--wheel-map] [--css-variant=X] [--action=step;step] [--sweep]
+ *
+ * --sweep opens every menu and disclosure on the page after the screenshot
+ * and fails the capture if anything it opens as an overlay is off-screen,
+ * covered or clipped (scripts/ui/popover-sweep.ts); <page>-popovers.json
+ * lists what it opened and what failed. SWEEP_SHOTS=1 also saves a frame of
+ * each opened overlay.
  *
  * --action runs steps after the page settles and before the screenshot, so a
  * frame can show an opened popover or dialog: `click:<selector>` or
@@ -56,12 +62,14 @@ import { execSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
+import { sweepPopovers, type PopoverFailure } from "./popover-sweep";
 import { ensureFrontend, REPO_ROOT } from "./frontend";
 import {
   buildSessionBackgroundNoticesFixture,
   buildSessionDetailStressFixture,
   buildSessionParkedCloseFixture,
   buildSessionProseIdleFixture,
+  buildSessionConsoleFixture,
   buildRailSessionsFixture,
   buildSessionQuestionFixture,
   buildSessionAttentionFixture,
@@ -132,6 +140,7 @@ const SCENES = [
   "launch-model-picked",
   "session-detail-stress",
   "session-prose-idle",
+  "session-console",
   "session-input-outbox",
   "session-remote-image-outbox",
   "session-wake-origin",
@@ -188,6 +197,7 @@ const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "landing-session",
   "session-detail-stress",
   "session-prose-idle",
+  "session-console",
   "session-input-outbox",
   "session-remote-image-outbox",
   "session-wake-origin",
@@ -256,6 +266,7 @@ interface Options {
   wheelMap: boolean;
   cssVariant: string | null;
   actions: string[];
+  sweep: boolean;
 }
 
 type A11yFormat = "json" | "yaml" | "none";
@@ -265,6 +276,7 @@ interface CaptureResult {
   a11yPath?: string;
   a11yFormat: A11yFormat;
   error?: string;
+  popoverFailures?: PopoverFailure[];
 }
 
 function formatError(error: unknown): { message: string; detail: string } {
@@ -295,6 +307,7 @@ function parseArgs(): Options {
   const wheelMap = args.includes("--wheel-map");
   const cssVariant = args.find((a) => a.startsWith("--css-variant="))?.slice("--css-variant=".length) || null;
   const actionArg = args.find((a) => a.startsWith("--action="))?.slice("--action=".length) ?? "";
+  const sweep = args.includes("--sweep");
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const parsedViewport = parseViewport(viewportArg);
@@ -313,6 +326,7 @@ function parseArgs(): Options {
     wheelMap,
     cssVariant,
     actions: actionArg.split(";").map((step) => step.trim()).filter(Boolean),
+    sweep,
   };
 }
 
@@ -362,6 +376,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === PROVIDER_CERTIFICATION_SCENE ||
     scene === "session-detail-stress" ||
     scene === "session-prose-idle" ||
+    scene === "session-console" ||
     scene === "session-input-outbox" ||
     scene === "session-remote-image-outbox" ||
     scene === "session-wake-origin" ||
@@ -528,6 +543,8 @@ export async function installSceneMocks(
         ? buildSessionResumeFixture()
         : scene === "session-prose-idle"
           ? buildSessionProseIdleFixture()
+        : scene === "session-console"
+          ? buildSessionConsoleFixture()
         : scene === "session-question"
           ? buildSessionQuestionFixture()
           : scene === "session-attention"
@@ -644,6 +661,24 @@ export async function installSceneMocks(
         return;
       }
 
+      if (scene === "session-console" && pathname.includes("/providers/") && pathname.endsWith("/models")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            device_id: "device-cinder",
+            provider: "claude",
+            days_back: 90,
+            models: [
+              { model: "claude-opus-5-5", label: "opus 5.5", last_used_at: hoursBeforeFixtureNow(0.05) },
+              { model: "claude-sonnet-5-5", label: "sonnet 5.5", last_used_at: hoursBeforeFixtureNow(72) },
+              { model: "claude-fable-5-1", label: "fable 5.1", last_used_at: hoursBeforeFixtureNow(24 * 8) },
+            ],
+          }),
+        });
+        return;
+      }
+
       if (pathname === `/api/sessions/${fixture.session.id}/lock`) {
         await route.fulfill({
           status: 200,
@@ -653,7 +688,7 @@ export async function installSceneMocks(
         return;
       }
 
-      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && (scene === "landing-session" || scene === "session-prose-idle")) {
+      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && (scene === "landing-session" || scene === "session-prose-idle" || scene === "session-console")) {
         await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
         return;
       }
@@ -1357,6 +1392,7 @@ async function captureBundle(
   wheelMap = false,
   cssVariant: string | null = null,
   actions: string[] = [],
+  sweep = false,
 ): Promise<CaptureResult> {
   const query = scene === "landing-search" ? `?query=${encodeURIComponent(LANDING_SEARCH_QUERY)}` : "";
   const url = `${baseUrl}${PAGE_DEFINITIONS[pageName].path}${query}`;
@@ -1564,7 +1600,25 @@ async function captureBundle(
     console.warn(`  Warning: a11y snapshot failed: ${message}`);
   }
 
-  return { screenshotPath, a11yPath, a11yFormat };
+  let popoverFailures: PopoverFailure[] | undefined;
+  if (sweep) {
+    // Frames of every opened overlay go next to the report when a failure needs a look.
+    const report = await sweepPopovers(
+      page,
+      process.env.SWEEP_SHOTS === "1" ? path.join(outputDir, `${frameName}-popover`) : undefined,
+    );
+    const sweepPath = path.join(outputDir, `${frameName}-popovers.json`);
+    writeFileSync(sweepPath, JSON.stringify(report, null, 2));
+    console.log(
+      `  Popovers: ${report.triggers} triggers, ${report.overlaysChecked} overlays checked, ${report.failures.length} failing (${sweepPath})`,
+    );
+    for (const failure of report.failures) {
+      console.log(`    FAIL ${failure.rule}: ${failure.overlay} from ${failure.trigger}: ${failure.detail}`);
+    }
+    popoverFailures = report.failures;
+  }
+
+  return { screenshotPath, a11yPath, a11yFormat, popoverFailures };
 }
 
 function getGitInfo(): { sha: string; branch: string; dirty: boolean } {
@@ -1697,7 +1751,12 @@ async function main() {
           opts.wheelMap,
           opts.cssVariant,
           opts.actions,
+          opts.sweep,
         );
+        const popoverFailures = artifacts[frameName].popoverFailures ?? [];
+        if (popoverFailures.length > 0) {
+          errors.push(`[${frameName}] ${popoverFailures.length} popover(s) off-screen, covered or clipped`);
+        }
       } catch (error) {
         const { message, detail } = formatError(error);
         errors.push(`[${frameName}] ${message}`);

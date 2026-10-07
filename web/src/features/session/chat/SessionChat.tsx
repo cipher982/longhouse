@@ -2545,6 +2545,129 @@ export function SessionChat({
       </div>
     ) : null;
 
+  // Console sessions pick a model per turn, so their dock composer is two
+  // rows: the text, then a toolbar holding attach, the model chip and the
+  // actions. Helm keeps the one-row composer; a second row appears only for a
+  // control the user can change.
+  const hasComposerToolbar = session.session_state.mode === "console";
+  const composerAttachButton = attachImagesEnabled ? (
+    <AttachmentTray
+      showThumbs={false}
+      attachments={composerAttachments.attachments}
+      onAddFiles={composerAttachments.addFiles}
+      onRemove={composerAttachments.removeAttachment}
+      isCompressing={composerAttachments.isCompressing}
+      disabled={isSubmitting}
+      addDisabled={!attachmentInputEnabled}
+    />
+  ) : null;
+  const composerActions = (
+    <>
+      {isManagedLocal && sentConfirmation && !outboxInTranscript ? (
+        <span className="session-chat-sent-notice">Sent</span>
+      ) : null}
+      {showInlineInterrupt ? (
+        <Button
+          type="button"
+          variant="danger"
+          size="sm"
+          className="session-chat-btn session-chat-btn--stop"
+          aria-label={isInterrupting ? "Stopping" : interruptActionLabel}
+          title={parkedBackgroundWork ? "Stop background work owned by this provider" : "Interrupt the active turn"}
+          onClick={() => void handleInterrupt()}
+          disabled={isInterrupting}
+          data-testid="session-chat-interrupt"
+        >
+          <span className="session-chat-action-label">
+            {isInterrupting ? "Stopping" : interruptActionLabel}
+          </span>
+          <svg
+            className="session-chat-action-icon"
+            width="18"
+            height="18"
+            viewBox="0 0 18 18"
+            aria-hidden="true"
+          >
+            <rect
+              x="5"
+              y="5"
+              width="8"
+              height="8"
+              rx="1"
+              fill="currentColor"
+            />
+          </svg>
+        </Button>
+      ) : null}
+      {canSteerNow && canQueueNow ? (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="session-chat-btn session-chat-btn--queue"
+          onClick={() => void handleSecondaryQueue()}
+          disabled={
+            isComposerDisabled || !draft.trim() || isSubmitting
+          }
+          aria-label="Queue next"
+          title="Queue for the next turn boundary"
+        >
+          <span className="session-chat-action-label">
+            Queue next
+          </span>
+          <svg
+            className="session-chat-action-icon"
+            width="18"
+            height="18"
+            viewBox="0 0 18 18"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            aria-hidden="true"
+          >
+            <circle cx="9" cy="9" r="6" />
+            <path d="M9 5v4l3 2" />
+          </svg>
+        </Button>
+      ) : null}
+      <Button
+        type="submit"
+        variant="primary"
+        className="session-chat-btn session-chat-btn--send"
+        aria-label={submitButtonLabel}
+        size="sm"
+        disabled={
+          isComposerDisabled ||
+          !hasComposerContent ||
+          isSubmitting ||
+          isSendBlocked ||
+          attachmentSendBlocked ||
+          composerAttachments.isCompressing
+        }
+        title={
+          composerDisabledReason ||
+          (isSendLocked ? turnNoticeText : undefined)
+        }
+      >
+        <span className="session-chat-action-label">
+          {submitButtonLabel}
+        </span>
+        <svg
+          className="session-chat-action-icon"
+          width="18"
+          height="18"
+          viewBox="0 0 18 18"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          aria-hidden="true"
+        >
+          <path d="M9 14V4M4.5 8.5 9 4l4.5 4.5" />
+        </svg>
+      </Button>
+    </>
+  );
+
   return (
     <div
       className={`session-chat${isDock ? " session-chat--dock" : ""}`}
@@ -2947,18 +3070,12 @@ export function SessionChat({
               />
             ) : null}
             {isDock ? (
-              <div className="session-chat-composer-row">
-                {attachImagesEnabled ? (
-                  <AttachmentTray
-                    showThumbs={false}
-                    attachments={composerAttachments.attachments}
-                    onAddFiles={composerAttachments.addFiles}
-                    onRemove={composerAttachments.removeAttachment}
-                    isCompressing={composerAttachments.isCompressing}
-                    disabled={isSubmitting}
-                    addDisabled={!attachmentInputEnabled}
-                  />
-                ) : null}
+              <div
+                className={`session-chat-composer-row${
+                  hasComposerToolbar ? " session-chat-composer-row--stacked" : ""
+                }`}
+              >
+                {hasComposerToolbar ? null : composerAttachButton}
                 <div className="session-chat-composer-input">
                   <div className="session-chat-composer-line">
                     <textarea
@@ -2982,124 +3099,27 @@ export function SessionChat({
                       </span>
                     ) : null}
                   </div>
-                  {session.session_state.mode === "console" ? (
-                    <div
-                      className="session-chat-composer-chips"
-                      data-testid="session-chat-composer-chips"
-                    >
-                      <ModelPicker
-                        deviceId={session.device_id}
-                        provider={session.provider}
-                        value={selectedModel}
-                        onChange={handleSelectedModelChange}
-                        compact
-                        testId="session-model-select"
-                      />
-                    </div>
-                  ) : null}
                 </div>
-                {isManagedLocal && sentConfirmation && !outboxInTranscript ? (
-                  <span className="session-chat-sent-notice">Sent</span>
-                ) : null}
-                {showInlineInterrupt ? (
-                  <Button
-                    type="button"
-                    variant="danger"
-                    size="sm"
-                    className="session-chat-btn session-chat-btn--stop"
-                    aria-label={isInterrupting ? "Stopping" : interruptActionLabel}
-                    title={parkedBackgroundWork ? "Stop background work owned by this provider" : "Interrupt the active turn"}
-                    onClick={() => void handleInterrupt()}
-                    disabled={isInterrupting}
-                    data-testid="session-chat-interrupt"
+                {hasComposerToolbar ? (
+                  <div
+                    className="session-chat-composer-toolbar"
+                    data-testid="session-chat-composer-toolbar"
                   >
-                    <span className="session-chat-action-label">
-                      {isInterrupting ? "Stopping" : interruptActionLabel}
-                    </span>
-                    <svg
-                      className="session-chat-action-icon"
-                      width="18"
-                      height="18"
-                      viewBox="0 0 18 18"
-                      aria-hidden="true"
-                    >
-                      <rect
-                        x="5"
-                        y="5"
-                        width="8"
-                        height="8"
-                        rx="1"
-                        fill="currentColor"
-                      />
-                    </svg>
-                  </Button>
-                ) : null}
-                {canSteerNow && canQueueNow ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    className="session-chat-btn session-chat-btn--queue"
-                    onClick={() => void handleSecondaryQueue()}
-                    disabled={
-                      isComposerDisabled || !draft.trim() || isSubmitting
-                    }
-                    aria-label="Queue next"
-                    title="Queue for the next turn boundary"
-                  >
-                    <span className="session-chat-action-label">
-                      Queue next
-                    </span>
-                    <svg
-                      className="session-chat-action-icon"
-                      width="18"
-                      height="18"
-                      viewBox="0 0 18 18"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.4"
-                      aria-hidden="true"
-                    >
-                      <circle cx="9" cy="9" r="6" />
-                      <path d="M9 5v4l3 2" />
-                    </svg>
-                  </Button>
-                ) : null}
-                <Button
-                  type="submit"
-                  variant="primary"
-                  className="session-chat-btn session-chat-btn--send"
-                  aria-label={submitButtonLabel}
-                  size="sm"
-                  disabled={
-                    isComposerDisabled ||
-                    !hasComposerContent ||
-                    isSubmitting ||
-                    isSendBlocked ||
-                    attachmentSendBlocked ||
-                    composerAttachments.isCompressing
-                  }
-                  title={
-                    composerDisabledReason ||
-                    (isSendLocked ? turnNoticeText : undefined)
-                  }
-                >
-                  <span className="session-chat-action-label">
-                    {submitButtonLabel}
-                  </span>
-                  <svg
-                    className="session-chat-action-icon"
-                    width="18"
-                    height="18"
-                    viewBox="0 0 18 18"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    aria-hidden="true"
-                  >
-                    <path d="M9 14V4M4.5 8.5 9 4l4.5 4.5" />
-                  </svg>
-                </Button>
+                    {composerAttachButton}
+                    <ModelPicker
+                      deviceId={session.device_id}
+                      provider={session.provider}
+                      value={selectedModel}
+                      onChange={handleSelectedModelChange}
+                      compact
+                      testId="session-model-select"
+                    />
+                    <span className="session-chat-composer-toolbar__spacer" />
+                    {composerActions}
+                  </div>
+                ) : (
+                  composerActions
+                )}
               </div>
             ) : (
               <>

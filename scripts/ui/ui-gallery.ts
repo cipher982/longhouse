@@ -11,8 +11,12 @@
  * ios-ui-shot, and sim-shot's artifacts/sim) are linked at the end. Nothing is
  * dispatched.
  *
+ * --sweep also opens every menu on every frame and fails the run if one
+ * lands off-screen, covered or clipped (scripts/ui/popover-sweep.ts); that is
+ * what `make ui-sweep` and CI run.
+ *
  * Usage:
- *   bunx tsx scripts/ui/ui-gallery.ts [--jobs=4] [--only=session] [--output=DIR]
+ *   bunx tsx scripts/ui/ui-gallery.ts [--jobs=4] [--only=session] [--output=DIR] [--sweep]
  */
 
 import { execSync, spawn, type ChildProcess } from "child_process";
@@ -35,6 +39,7 @@ type Job = { page: string; scene: string; variant?: string };
 const JOBS: Job[] = [
   { page: "session-detail", scene: "session-prose-idle" },
   { page: "session-detail", scene: "session-prose-idle", variant: "terminal" },
+  { page: "session-detail", scene: "session-console" },
   { page: "session-detail", scene: "session-detail-stress" },
   { page: "session-detail", scene: "session-detail-stress", variant: "terminal" },
   { page: "session-detail", scene: "session-tones" },
@@ -81,6 +86,8 @@ function jobKey(job: Job): string {
   return [job.page, job.scene, job.variant].filter(Boolean).join("--");
 }
 
+const SWEEP = process.argv.includes("--sweep");
+
 const children = new Set<ChildProcess>();
 // Set on Ctrl-C: no new capture starts once the sweep is stopping.
 let stopping = false;
@@ -106,8 +113,11 @@ function reapGroup(pgid: number): void {
 function runCapture(job: Job, viewport: ViewportKey, outDir: string, frontendUrl: string): Promise<Capture> {
   const dir = path.join(outDir, jobKey(job), viewport);
   mkdirSync(dir, { recursive: true });
+  // Under bun (the CI lane, whose guest has no network to fetch tsx) bun runs
+  // the capture itself; under tsx, tsx does.
+  const [command, ...prefix] = process.versions.bun ? ["bun"] : ["bunx", "tsx"];
   const args = [
-    "tsx",
+    ...prefix,
     "scripts/ui/ui-capture.ts",
     job.page,
     `--scene=${job.scene}`,
@@ -115,11 +125,12 @@ function runCapture(job: Job, viewport: ViewportKey, outDir: string, frontendUrl
     `--output=${dir}`,
     "--no-trace",
     ...(job.variant ? [`--css-variant=${job.variant}`] : []),
+    ...(SWEEP ? ["--sweep"] : []),
   ];
   const started = Date.now();
   return new Promise((resolve) => {
     const log = createWriteStream(path.join(dir, "capture.log"));
-    const child = spawn("bunx", args, {
+    const child = spawn(command, args, {
       cwd: REPO_ROOT,
       env: { ...process.env, FRONTEND_URL: frontendUrl },
       stdio: ["ignore", "pipe", "pipe"],
@@ -373,6 +384,23 @@ async function main() {
   const meta = `${new Date().toISOString()} · ${commit} · ${captures.length} captures in ${elapsed}s`;
   const indexPath = path.join(outDir, "index.html");
   writeFileSync(indexPath, renderIndex(outDir, captures, iosSets, meta));
+
+  if (SWEEP) {
+    let opened = 0;
+    const lines: string[] = [];
+    for (const capture of captures) {
+      const dir = path.join(outDir, jobKey(capture.job), capture.viewport);
+      for (const file of existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith("-popovers.json")) : []) {
+        const report = JSON.parse(readFileSync(path.join(dir, file), "utf-8"));
+        opened += report.overlaysChecked;
+        for (const failure of report.failures) {
+          lines.push(`  ${jobKey(capture.job)} ${capture.viewport}: ${failure.rule} ${failure.overlay} from ${failure.trigger}: ${failure.detail}`);
+        }
+      }
+    }
+    console.log(`\nPopover sweep: ${opened} overlays opened, ${lines.length} failing`);
+    for (const line of lines) console.log(line);
+  }
 
   const failed = captures.filter((capture) => capture.error);
   for (const capture of failed) {

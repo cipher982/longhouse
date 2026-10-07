@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
+from pydantic import model_validator
 
 from zerg.utils.time import UTCBaseModel
 
@@ -203,6 +204,19 @@ class WorkspaceSuggestionsResponse(UTCBaseModel):
 class RecentModel(UTCBaseModel):
     model: str = Field(..., description="Provider model id, preserving the provider's exact casing.")
     last_used_at: datetime = Field(..., description="When this model was last reported by a completed turn.")
+    label: str | None = Field(
+        None,
+        description="Short display name ('opus 5.5'), the same naming as usage_latest.label; clients render it verbatim.",
+    )
+
+    @model_validator(mode="after")
+    def _derive_label(self) -> "RecentModel":
+        if self.label is None:
+            # Lazy: the services package imports schemas.
+            from zerg.services.session_provider_facts import short_model_name
+
+            self.label = short_model_name(self.model)
+        return self
 
 
 class RecentModelsResponse(UTCBaseModel):

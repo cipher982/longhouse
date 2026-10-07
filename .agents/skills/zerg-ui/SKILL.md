@@ -23,6 +23,7 @@ shown to you. Use it.
 | Web page or row | `make ui-capture PAGE=<page> SCENE=<scene>` | Here, ~7s from cold, nothing needs to be running | Playwright screenshot plus accessibility snapshot |
 | Web composer in every live state | `make ui-capture PAGE=session-detail SCENE=session-tones` | Here, ~7s, one PNG per tone | running, thinking, active, idle, stalled, blocked, closed, unknown side by side |
 | Every web page and state at once | `make ui-gallery` (`ONLY=session` narrows it) | Here, ~3 min for ~105 captures, one Vite, 4 at a time | One `index.html` contact sheet under `/tmp/agents/ui-gallery/<stamp>/`: each fixture scene at 1440x900, 2000x1200 and phone, plus the newest downloaded iOS renders |
+| Every menu opened, at every size | `make ui-sweep` (`ONLY=`, `JOBS=`); CI runs it as "UI popover sweep" | Here, ~5 min | Fails when any menu, popover or dialog lands off-screen, covered or clipped; each frame's `<page>-popovers.json` lists what opened. `ui-capture ... --sweep` (with `SWEEP_SHOTS=1` for a PNG per opened overlay) checks one scene. A new popup or scene needs no new test, but a control that only exists in one session mode needs a fixture scene (as `session-console` does for the model chip) |
 
 **Dispatched targets** (`ios-previews`, `ios-ui-shot`, `simlab-run`, `test-ios`,
 `menubar-harness`) run in a fresh GitHub-hosted macOS VM and refuse a dirty or

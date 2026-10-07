@@ -558,17 +558,17 @@
 /* Phone width: while typing, the input takes the whole first line and the
    buttons wrap under it. */
 @media (max-width: 640px) {
-  .session-chat-composer-row:focus-within,
-  .session-chat-composer-row:has(textarea:not(:placeholder-shown)) {
+  .session-chat-composer-row:not(.session-chat-composer-row--stacked):focus-within,
+  .session-chat-composer-row:not(.session-chat-composer-row--stacked):has(textarea:not(:placeholder-shown)) {
     flex-wrap: wrap;
     justify-content: flex-end;
   }
-  .session-chat-composer-row:focus-within .session-chat-composer-input,
-  .session-chat-composer-row:has(textarea:not(:placeholder-shown)) .session-chat-composer-input {
+  .session-chat-composer-row:not(.session-chat-composer-row--stacked):focus-within .session-chat-composer-input,
+  .session-chat-composer-row:not(.session-chat-composer-row--stacked):has(textarea:not(:placeholder-shown)) .session-chat-composer-input {
     flex-basis: 100%;
   }
 }
-.session-chat-composer-row > .ui-button { min-height: 36px; }
+:is(.session-chat-composer-row, .session-chat-composer-toolbar) > .ui-button { min-height: 36px; }
 
 .session-chat-composer-row textarea {
   flex: 1;
@@ -577,8 +577,8 @@
   overflow-y: auto;
 }
 
-.session-chat-composer-row > button,
-.session-chat-composer-row > .badge {
+:is(.session-chat-composer-row, .session-chat-composer-toolbar) > button,
+:is(.session-chat-composer-row, .session-chat-composer-toolbar) > .badge {
   flex-shrink: 0;
 }
 .session-chat-action-icon { display: none; }
@@ -653,14 +653,216 @@
   box-shadow: none;
 }
 
-.session-chat-composer-chips {
+/* Console composer: one frame, two rows. The text has no box of its own
+   (the dock is the frame), and the toolbar under it carries attach, the
+   model chip and the actions. */
+.session-chat-composer-row--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.session-chat-composer-row--stacked .session-chat-composer-input,
+.session-chat-composer-row--stacked .session-chat-composer-input:focus-within {
+  background: transparent;
+  box-shadow: none;
+}
+
+.session-chat-composer-toolbar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 0 8px 5px;
+}
+
+.session-chat-composer-toolbar__spacer {
+  flex: 1 1 auto;
+}
+
+.session-chat-composer-toolbar .session-chat-attachment-tray--add-only .session-chat-attachment-tray__add {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--color-text-secondary);
+}
+
+.session-chat-composer-toolbar .session-chat-attachment-tray--add-only .session-chat-attachment-tray__add:hover:not(:disabled) {
+  background: var(--color-surface-elevated);
+}
+
+/* The model chip. The composer sits at the bottom of the window, so the
+   menu opens upward. It is anchored to the toolbar, not the chip, so at
+   phone width it can never run past the composer's edges. */
+.model-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.model-chip > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 15px;
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.model-chip > summary::-webkit-details-marker {
+  display: none;
+}
+
+.model-chip > summary:hover,
+.model-chip[open] > summary {
+  border-color: rgba(233, 185, 73, 0.45);
+}
+
+.model-chip > summary:focus-visible {
+  outline: 2px solid rgba(233, 185, 73, 0.6);
+  outline-offset: 2px;
+}
+
+.model-chip__label {
+  min-width: 0;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-chip__caret {
+  flex: none;
+  color: var(--color-text-secondary);
+  transform: rotate(180deg);
+  transition: transform 0.12s;
+}
+
+.model-chip[open] .model-chip__caret {
+  transform: none;
+}
+
+.model-chip__panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: min(21rem, 100%);
+  max-height: min(26rem, calc(100vh - 160px));
+  overflow-y: auto;
+  padding: 6px;
+  box-sizing: border-box;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 10px;
+  background: var(--color-surface-overlay);
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.6);
+}
+
+.model-chip__heading {
+  padding: 6px 10px 6px;
   font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--color-text-muted);
+}
+
+.model-chip__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-chip__option:hover,
+.model-chip__option:focus-visible,
+.model-chip__option.is-selected {
+  background: var(--color-surface-elevated);
+  outline: none;
+}
+
+.model-chip__option-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.model-chip__option-name {
+  font-size: 14px;
+}
+
+.model-chip__option.is-selected .model-chip__option-name {
+  font-weight: 600;
+}
+
+.model-chip__option small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.model-chip__option small code {
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+}
+
+.model-chip__check {
+  flex: none;
+  color: var(--color-brand-primary);
+}
+
+.model-chip__divider {
+  height: 1px;
+  margin: 4px;
+  background: var(--color-border-subtle);
+}
+
+.model-chip__manual {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 6px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.model-chip__manual input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  background: var(--color-surface-well);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+}
+
+.model-chip__manual input:focus-visible {
+  outline: none;
+  border-color: rgba(233, 185, 73, 0.58);
 }
 
 .session-chat-composer-line {
@@ -697,18 +899,18 @@
 }
 
 /* Gold wash, never a solid fill — the shared recipe from the restyle spec. */
-.session-chat-composer--dock .session-chat-composer-row > .ui-button--primary:not(:disabled) {
+.session-chat-composer--dock :is(.session-chat-composer-row, .session-chat-composer-toolbar) > .ui-button--primary:not(:disabled) {
   border-color: rgba(233, 185, 73, 0.45);
   background: linear-gradient(180deg, rgba(233, 185, 73, 0.24), rgba(233, 185, 73, 0.1));
   color: var(--color-brand-primary-hover);
   box-shadow: inset 0 0 0 1px rgba(233, 185, 73, 0.45);
 }
 
-.session-chat-composer--dock .session-chat-composer-row > .ui-button--primary:not(:disabled):hover {
+.session-chat-composer--dock :is(.session-chat-composer-row, .session-chat-composer-toolbar) > .ui-button--primary:not(:disabled):hover {
   background: linear-gradient(180deg, rgba(233, 185, 73, 0.32), rgba(233, 185, 73, 0.16));
 }
 
-.session-chat-composer--dock .session-chat-composer-row > .ui-button--secondary:not(:disabled) {
+.session-chat-composer--dock :is(.session-chat-composer-row, .session-chat-composer-toolbar) > .ui-button--secondary:not(:disabled) {
   border-color: rgba(70, 54, 41, 0.9);
   background: transparent;
   color: var(--color-text-secondary);
@@ -716,13 +918,13 @@
 
 /* Stop: plain ember text, no fill — the composer is legible, the frame
    carries the ornament. */
-.session-chat-composer--dock .session-chat-composer-row > .ui-button--danger:not(:disabled) {
+.session-chat-composer--dock :is(.session-chat-composer-row, .session-chat-composer-toolbar) > .ui-button--danger:not(:disabled) {
   border-color: transparent;
   background: transparent;
   color: var(--color-intent-error);
 }
 
-.session-chat-composer--dock .session-chat-composer-row > .ui-button--danger:not(:disabled):hover {
+.session-chat-composer--dock :is(.session-chat-composer-row, .session-chat-composer-toolbar) > .ui-button--danger:not(:disabled):hover {
   background: rgba(228, 87, 46, 0.08);
 }
 
@@ -846,7 +1048,7 @@
     gap: 6px;
   }
 
-  .session-chat-composer--dock .session-chat-composer-row > .ui-button {
+  .session-chat-composer--dock :is(.session-chat-composer-row, .session-chat-composer-toolbar) > .ui-button {
     min-height: 44px;
     padding-inline: 10px;
   }
@@ -859,7 +1061,7 @@
   }
   .session-chat-composer-row .session-chat-action-label { display: none; }
   .session-chat-composer-row .session-chat-action-icon { display: block; }
-  .session-chat-composer-row > .ui-button { width: 44px; padding-inline: 0; }
+  :is(.session-chat-composer-row, .session-chat-composer-toolbar) > .ui-button { width: 44px; padding-inline: 0; }
   .session-chat-composer-row textarea { min-width: 0; }
 
   .session-chat-pending-message {

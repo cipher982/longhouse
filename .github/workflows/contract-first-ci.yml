@@ -584,6 +584,40 @@ jobs:
       - name: Run Frontend and Runner Tests in one isolated container
         run: make test-frontend-runner
 
+  ui-sweep:
+    timeout-minutes: 25
+    needs: [changes, prepare-test-image]
+    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-24.04-arm
+    # Opens every menu on every fixture scene at three sizes and fails when one
+    # lands off-screen, covered or clipped (scripts/ui/popover-sweep.ts). A
+    # browser check verifies after the fact: it is not in Deploy and Verify's
+    # required_jobs, like Core E2E.
+    name: "UI popover sweep"
+    env:
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
+      # The hosted arm64 runner has 4 vCPUs; the guest defaults to 2.
+      LONGHOUSE_TEST_CPUS: "4"
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/hosted-docker-disk
+
+      - name: Open every menu at desktop, wide and phone sizes
+        run: make test-ui-sweep
+
+      - name: Upload the sweep's frames and reports (on failure)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-sweep-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/test-isolation
+          retention-days: 3
+
   ios-tests:
     needs: changes
     if: ${{ needs.changes.outputs.ios == 'true' || github.event_name == 'workflow_dispatch' }}

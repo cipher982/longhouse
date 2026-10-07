@@ -357,3 +357,14 @@ def test_recent_models_dedupes_orders_and_serves_both_machine_routes(live_catalo
         )
         assert browser.status_code == 200, browser.text
         assert [item["model"] for item in browser.json()["models"]] == ["model-a", "Model-B"]
+        # Display names use the session header's naming, so the composer's
+        # model chip and usage_latest.label never disagree.
+        for response in (agents, browser):
+            assert [item["label"] for item in response.json()["models"]] == ["model a", "model b"]
+
+
+def test_recent_model_label_matches_usage_label_naming():
+    from zerg.schemas.machines import RecentModel
+
+    assert RecentModel(model="claude-opus-5-5", last_used_at="2026-10-06T00:00:00Z").label == "opus 5.5"
+    assert RecentModel(model="openai/gpt-6.1-sol", last_used_at="2026-10-06T00:00:00Z").label == "gpt 6.1 sol"
