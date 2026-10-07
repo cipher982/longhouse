@@ -394,6 +394,15 @@ struct SessionModelsTests {
         #expect(idle.spokenStatusLabel(asOf: later) == "Idle")
         let closed = summary(makeSessionStateFacts(activity: "executing", closed: true, activityValidUntil: "2026-08-23T12:10:00Z"))
         #expect(closed.spokenStatusLabel(asOf: later) == "Closed")
+
+        // An older host or cache without the served signal holds no valid
+        // claim: an open row is spoken as uncertain, a closed one as closed.
+        var unsignalledFacts = makeSessionStateFacts(activity: "executing", tool: "Bash", activityValidUntil: "2026-08-23T12:10:00Z")
+        unsignalledFacts.signal = nil
+        #expect(summary(unsignalledFacts).spokenStatusLabel(asOf: now) == "Activity uncertain")
+        var unsignalledClosed = makeSessionStateFacts(activity: "executing", closed: true, activityValidUntil: "2026-08-23T12:10:00Z")
+        unsignalledClosed.signal = nil
+        #expect(summary(unsignalledClosed).spokenStatusLabel(asOf: now) == "Closed")
     }
 
     @Test
