@@ -80,7 +80,7 @@ class _MachineRegistry:
     def supports(self, *, owner_id, device_id, capability):
         if owner_id != 1 or device_id != "cinder":
             return False
-        if capability == "claude.turn_start":
+        if capability in {"claude.turn_start", "codex.turn_start"}:
             return True
         if capability == "claude.turn_interrupt":
             return self.interrupt_supported
