@@ -19,12 +19,13 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
 use crate::console_adapter::{claim_process_liveness, stderr_tail, ClaimLiveness};
+use crate::console_sink::{ConsoleProvider, ConsoleRun};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use uuid::Uuid;
@@ -68,17 +69,28 @@ pub struct AntigravityPrintRunSummary {
 
 #[derive(Clone)]
 struct AntigravityPrintSink {
-    session_id: String,
-    thread_id: String,
-    turn_id: Option<String>,
-    run_id: String,
-    client_request_id: Option<String>,
-    launch_id: String,
-    process_group_id: Option<i32>,
+    run: ConsoleRun,
     stdout_path: PathBuf,
-    machine_name: String,
-    local_db_path: Option<PathBuf>,
-    runtime_events_outbox_dir: PathBuf,
+}
+
+static ANTIGRAVITY_CONSOLE: ConsoleProvider = ConsoleProvider {
+    provider: "antigravity",
+    adapter: ANTIGRAVITY_PRINT_ADAPTER,
+    tag: "antigravity-print",
+    lifetime: "one_shot",
+};
+
+impl std::ops::Deref for AntigravityPrintSink {
+    type Target = ConsoleRun;
+    fn deref(&self) -> &ConsoleRun {
+        &self.run
+    }
+}
+
+impl std::ops::DerefMut for AntigravityPrintSink {
+    fn deref_mut(&mut self) -> &mut ConsoleRun {
+        &mut self.run
+    }
 }
 
 pub async fn start_antigravity_print_turn(
@@ -167,17 +179,20 @@ pub async fn start_antigravity_print_turn(
     let process_group_id =
         i32::try_from(pid).context("Antigravity pid exceeds process-group range")?;
     let sink = AntigravityPrintSink {
-        session_id: config.session_id.clone(),
-        thread_id: config.thread_id.clone(),
-        turn_id: config.turn_id.clone(),
-        run_id: config.run_id.clone(),
-        client_request_id: config.client_request_id.clone(),
-        launch_id: launch_id.clone(),
-        process_group_id: Some(process_group_id),
+        run: ConsoleRun {
+            provider: &ANTIGRAVITY_CONSOLE,
+            session_id: config.session_id.clone(),
+            thread_id: config.thread_id.clone(),
+            turn_id: config.turn_id.clone(),
+            run_id: config.run_id.clone(),
+            client_request_id: config.client_request_id.clone(),
+            launch_id: launch_id.clone(),
+            process_group_id: Some(process_group_id),
+            machine_name: config.machine_name.clone(),
+            local_db_path: config.local_db_path.clone(),
+            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+        },
         stdout_path: stdout_path.clone(),
-        machine_name: config.machine_name.clone(),
-        local_db_path: config.local_db_path.clone(),
-        runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
     };
     let result = json!({
         "session_id": config.session_id,
@@ -259,17 +274,20 @@ pub async fn recover_antigravity_print_turns(
             .map(PathBuf::from)
             .unwrap_or_else(|| stdout_path.with_file_name("stderr.log"));
         let sink = AntigravityPrintSink {
-            session_id: claim.session_id.clone(),
-            thread_id: claim.thread_id.clone(),
-            turn_id: claim.turn_id.clone(),
-            run_id: claim.run_id.clone(),
-            client_request_id: claim.client_request_id.clone(),
-            launch_id: claim.launch_id.clone().unwrap_or_default(),
-            process_group_id: claim.process_group_id,
+            run: ConsoleRun {
+                provider: &ANTIGRAVITY_CONSOLE,
+                session_id: claim.session_id.clone(),
+                thread_id: claim.thread_id.clone(),
+                turn_id: claim.turn_id.clone(),
+                run_id: claim.run_id.clone(),
+                client_request_id: claim.client_request_id.clone(),
+                launch_id: claim.launch_id.clone().unwrap_or_default(),
+                process_group_id: claim.process_group_id,
+                machine_name: machine_name.to_string(),
+                local_db_path: local_db_path.clone(),
+                runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+            },
             stdout_path,
-            machine_name: machine_name.to_string(),
-            local_db_path: local_db_path.clone(),
-            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         };
         match recovered_claim_liveness(&claim, &sink.stdout_path, inventory.as_ref()).await {
             ClaimLiveness::Live => {
@@ -1031,45 +1049,14 @@ impl AntigravityPrintSink {
     }
 
     async fn post_binding(&self, provider_session_id: &str, transcript: &Path) {
-        self.post_events(vec![json!({
-            "runtime_key": format!("antigravity:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "antigravity",
-            "device_id": self.machine_name,
-            "source": ANTIGRAVITY_PRINT_ADAPTER,
-            "kind": "binding_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!(
-                "antigravity-print:{}:{}:binding",
-                self.session_id, self.launch_id
-            ),
-            "payload": {
-                "provider_session_id": provider_session_id,
-                "source_path": transcript.to_string_lossy(),
-                "managed_transport": ANTIGRAVITY_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot"
-            }
-        })])
-        .await;
+        self.post_event(&self.binding_event(json!({
+            "provider_session_id": provider_session_id,
+            "source_path": transcript.to_string_lossy(),
+        })));
     }
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
-        // One slot per session: the daemon records the local ledger from
-        // it and sends it. Only records no later event can restate —
-        // binding, terminal — stay on the durable queue.
-        let observed_at = Utc::now();
-        crate::status_slot::publish_console_phase(
-            "antigravity",
-            ANTIGRAVITY_PRINT_ADAPTER,
-            &self.session_id,
-            &self.run_id,
-            &observed_at.to_rfc3339(),
-            phase,
-            tool_name.as_deref(),
-            json!({"execution_lifetime": "one_shot", "thread_id": self.thread_id, "device_id": self.machine_name}),
-        );
+        self.publish_phase(phase, tool_name.as_deref(), None);
     }
 
     async fn post_terminal(
@@ -1079,97 +1066,13 @@ impl AntigravityPrintSink {
         stderr: Option<String>,
     ) {
         self.persist_local_phase("finished", None, Utc::now());
-        let terminal_event = json!({
-            "runtime_key": format!("antigravity:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "antigravity",
-            "device_id": self.machine_name,
-            "source": ANTIGRAVITY_PRINT_ADAPTER,
-            "kind": "terminal_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!(
-                "antigravity-print:{}:{}:terminal",
-                self.session_id, self.run_id
-            ),
-            "payload": {
-                "managed_transport": ANTIGRAVITY_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot",
-                "terminal_state": terminal_state,
-                "terminal_reason": terminal_state,
-                "terminal_source": ANTIGRAVITY_PRINT_ADAPTER,
-                "exit_code": exit_code,
-                "stderr_tail": stderr,
-                "turn_id": self.turn_id,
-                "client_request_id": self.client_request_id
-            }
-        });
+        let payload =
+            self.terminal_payload(terminal_state, terminal_state, exit_code, stderr.as_deref());
+        let terminal_event = self.run_event("terminal_signal", "terminal", payload);
         let terminal_error = (terminal_state == "run_failed")
             .then(|| stderr.clone())
             .flatten();
-        let handoff = crate::turn_claims::default_registry().and_then(|registry| {
-            crate::outbox::retain_and_enqueue_terminal_event(
-                &registry,
-                &self.runtime_events_outbox_dir,
-                &self.run_id,
-                terminal_state,
-                terminal_error,
-                terminal_event.clone(),
-            )
-        });
-        match handoff {
-            Ok((_, true)) => crate::status_slot::retire_console_run(
-                "antigravity",
-                ANTIGRAVITY_PRINT_ADAPTER,
-                &self.session_id,
-                &self.run_id,
-            ),
-            Ok((_, false)) => eprintln!(
-                "[antigravity-print] terminal record remains pending for {} run {}; keeping the status slot",
-                self.session_id,
-                self.run_id
-            ),
-            Err(error) => {
-                eprintln!(
-                    "[antigravity-print] terminal claim write failed for {} run {}: {error:#}; keeping the status slot",
-                    self.session_id,
-                    self.run_id
-                );
-                if let Err(error) = crate::outbox::enqueue_runtime_event(
-                    &self.runtime_events_outbox_dir,
-                    &terminal_event,
-                ) {
-                    eprintln!("[antigravity-print] runtime outbox write failed: {error}");
-                }
-            }
-        }
-    }
-
-    fn persist_local_phase(
-        &self,
-        phase: &str,
-        tool_name: Option<String>,
-        observed_at: DateTime<Utc>,
-    ) {
-        let Some(db_path) = self.local_db_path.as_deref() else {
-            return;
-        };
-        if let Err(err) = crate::hook_outbox::enqueue_local_phase(
-            db_path,
-            &self.session_id,
-            "antigravity",
-            phase,
-            tool_name.as_deref(),
-            ANTIGRAVITY_PRINT_ADAPTER,
-            &observed_at.to_rfc3339(),
-            Some(self.run_id.as_str()),
-        ) {
-            eprintln!(
-                "[antigravity-print] enqueue local phase failed for {}: {err}",
-                self.session_id
-            );
-        }
+        self.hand_off_terminal(terminal_state, terminal_error, terminal_event);
     }
 
     #[cfg(unix)]
@@ -1223,16 +1126,6 @@ impl AntigravityPrintSink {
         _turn_ended: bool,
     ) {
     }
-
-    async fn post_events(&self, events: Vec<Value>) {
-        for event in events {
-            if let Err(error) =
-                crate::outbox::enqueue_runtime_event(&self.runtime_events_outbox_dir, &event)
-            {
-                eprintln!("[antigravity-print] runtime outbox write failed: {error}");
-            }
-        }
-    }
 }
 
 /// agy leaks `run_command` children on signal, so this provider leans on the
@@ -1280,17 +1173,20 @@ mod tests {
     ) -> AntigravityPrintSink {
         use crate::console_sink::golden::*;
         AntigravityPrintSink {
-            session_id: SESSION.to_string(),
-            thread_id: THREAD.to_string(),
-            turn_id: Some(TURN.to_string()),
-            run_id: RUN.to_string(),
-            client_request_id: Some(CLIENT_REQUEST.to_string()),
-            launch_id: LAUNCH.to_string(),
-            process_group_id: None,
+            run: ConsoleRun {
+                provider: &ANTIGRAVITY_CONSOLE,
+                session_id: SESSION.to_string(),
+                thread_id: THREAD.to_string(),
+                turn_id: Some(TURN.to_string()),
+                run_id: RUN.to_string(),
+                client_request_id: Some(CLIENT_REQUEST.to_string()),
+                launch_id: LAUNCH.to_string(),
+                process_group_id: None,
+                machine_name: MACHINE.to_string(),
+                local_db_path: Some(home.local_db()),
+                runtime_events_outbox_dir: home.outbox(),
+            },
             stdout_path: home.temp.path().join("stdout.jsonl"),
-            machine_name: MACHINE.to_string(),
-            local_db_path: Some(home.local_db()),
-            runtime_events_outbox_dir: home.outbox(),
         }
     }
 
@@ -1670,17 +1566,20 @@ mod tests {
                 let run_dir = agent_dir.join("antigravity-console").join(&session_id).join(&run_id);
                 std::fs::create_dir_all(&run_dir).unwrap();
                 AntigravityPrintSink {
-                    session_id: session_id.clone(),
-                    thread_id,
-                    turn_id: None,
-                    run_id,
-                    client_request_id: None,
-                    launch_id: Uuid::new_v4().to_string(),
-                    process_group_id: None,
+                    run: ConsoleRun {
+                        provider: &ANTIGRAVITY_CONSOLE,
+                        session_id: session_id.clone(),
+                        thread_id,
+                        turn_id: None,
+                        run_id,
+                        client_request_id: None,
+                        launch_id: Uuid::new_v4().to_string(),
+                        process_group_id: None,
+                        machine_name: "test".to_string(),
+                        local_db_path: Some(db_path.clone()),
+                        runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir().unwrap(),
+                    },
                     stdout_path: run_dir.join("stdout.log"),
-                    machine_name: "test".to_string(),
-                    local_db_path: Some(db_path.clone()),
-                    runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir().unwrap(),
                 }
             };
             let sink = make_sink();
@@ -1803,17 +1702,20 @@ mod tests {
         let stderr = dir.join("stderr.log");
         std::fs::write(&stderr, b"").unwrap();
         let sink = AntigravityPrintSink {
-            session_id: Uuid::new_v4().to_string(),
-            thread_id: Uuid::new_v4().to_string(),
-            turn_id: None,
-            run_id: Uuid::new_v4().to_string(),
-            client_request_id: None,
-            launch_id: Uuid::new_v4().to_string(),
-            process_group_id: None,
+            run: ConsoleRun {
+                provider: &ANTIGRAVITY_CONSOLE,
+                session_id: Uuid::new_v4().to_string(),
+                thread_id: Uuid::new_v4().to_string(),
+                turn_id: None,
+                run_id: Uuid::new_v4().to_string(),
+                client_request_id: None,
+                launch_id: Uuid::new_v4().to_string(),
+                process_group_id: None,
+                machine_name: "test".to_string(),
+                local_db_path: None,
+                runtime_events_outbox_dir: dir.join("outbox"),
+            },
             stdout_path: stdout,
-            machine_name: "test".to_string(),
-            local_db_path: None,
-            runtime_events_outbox_dir: dir.join("outbox"),
         };
         settle_antigravity_claim(&sink, true, Some(0), &stderr).await;
         let events = read_outbox_events(&dir.join("outbox"));
@@ -1834,17 +1736,20 @@ mod tests {
         let stderr = dir.join("stderr.log");
         std::fs::write(&stderr, b"agy: model call failed\n").unwrap();
         let sink = AntigravityPrintSink {
-            session_id: Uuid::new_v4().to_string(),
-            thread_id: Uuid::new_v4().to_string(),
-            turn_id: None,
-            run_id: Uuid::new_v4().to_string(),
-            client_request_id: None,
-            launch_id: Uuid::new_v4().to_string(),
-            process_group_id: None,
+            run: ConsoleRun {
+                provider: &ANTIGRAVITY_CONSOLE,
+                session_id: Uuid::new_v4().to_string(),
+                thread_id: Uuid::new_v4().to_string(),
+                turn_id: None,
+                run_id: Uuid::new_v4().to_string(),
+                client_request_id: None,
+                launch_id: Uuid::new_v4().to_string(),
+                process_group_id: None,
+                machine_name: "test".to_string(),
+                local_db_path: None,
+                runtime_events_outbox_dir: dir.join("outbox"),
+            },
             stdout_path: stdout,
-            machine_name: "test".to_string(),
-            local_db_path: None,
-            runtime_events_outbox_dir: dir.join("outbox"),
         };
         settle_antigravity_claim(&sink, false, Some(1), &stderr).await;
         let events = read_outbox_events(&dir.join("outbox"));
@@ -1993,17 +1898,20 @@ mod tests {
                     .claim(&run_id, &session_id, &thread_id, None, None, "antigravity")
                     .unwrap();
                 let sink = AntigravityPrintSink {
-                    session_id: session_id.clone(),
-                    thread_id,
-                    turn_id: None,
-                    run_id: run_id.clone(),
-                    client_request_id: None,
-                    launch_id: Uuid::new_v4().to_string(),
-                    process_group_id: None,
+                    run: ConsoleRun {
+                        provider: &ANTIGRAVITY_CONSOLE,
+                        session_id: session_id.clone(),
+                        thread_id,
+                        turn_id: None,
+                        run_id: run_id.clone(),
+                        client_request_id: None,
+                        launch_id: Uuid::new_v4().to_string(),
+                        process_group_id: None,
+                        machine_name: "test".to_string(),
+                        local_db_path: None,
+                        runtime_events_outbox_dir: outbox.clone(),
+                    },
                     stdout_path: temp.path().join("stdout.jsonl"),
-                    machine_name: "test".to_string(),
-                    local_db_path: None,
-                    runtime_events_outbox_dir: outbox.clone(),
                 };
 
                 sink.post_phase("thinking", None).await;
