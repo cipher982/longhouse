@@ -18,7 +18,7 @@
 //! review found four independent ways it could destroy live work:
 //!
 //! 1. A provider scan that fails resolves to an empty observation vector via
-//!    `unwrap_or_default` (`daemon.rs:3350-3363`, `:3444-3460`). `ps` succeeding
+//!    `unwrap_or_default` (the managed observation scan in `daemon/`). `ps` succeeding
 //!    proves the process inventory is valid; it proves nothing about whether
 //!    the five provider scanners ran. Every live session of a provider whose
 //!    scan failed would read as unretained.

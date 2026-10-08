@@ -157,6 +157,36 @@ mod tests {
         // that does not exist. The producer may live outside the daemon, so the
         // invariant is asserted in two parts: the producer exists where it is
         // claimed to, and the daemon names the entry point that schedules it.
+        // The concat below must cover every file of the daemon module, or a
+        // scheduler moved into a new submodule would escape this check.
+        let daemon_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/daemon");
+        let mut on_disk: Vec<String> = std::fs::read_dir(&daemon_dir)
+            .expect("read src/daemon")
+            .map(|entry| {
+                entry
+                    .expect("daemon dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name.ends_with(".rs"))
+            .collect();
+        on_disk.sort();
+        assert_eq!(
+            on_disk,
+            [
+                "archive_repair.rs",
+                "discovery_scans.rs",
+                "managed_observation.rs",
+                "mod.rs",
+                "path_jobs.rs",
+                "projection.rs",
+                "startup.rs",
+                "status_slots.rs",
+                "transcript_wake.rs",
+            ],
+            "add the new daemon file to this list and to the concat! below"
+        );
         let daemon = concat!(
             include_str!("../daemon/mod.rs"),
             include_str!("../daemon/archive_repair.rs"),

@@ -120,7 +120,7 @@ impl UpdatePolicy {
 
 /// Operator override read from `~/.longhouse/agent/update-control.json`.
 ///
-/// Modelled on `ArchiveRepairControl` in `daemon.rs`, including its expiry
+/// Modelled on `ArchiveRepairControl` in `daemon/archive_repair.rs`, including its expiry
 /// rule: a directive that carries `expires_at` stops applying once that time
 /// passes, so a control record left behind by a one-off intervention cannot
 /// silently govern the machine forever. `off` is sticky without an expiry,
