@@ -8,9 +8,11 @@ name: Archive Runtime Image
 # production promotion requires the receipt: scripts/ops/promotion_gates.py,
 # gate `archive` (control-plane docs/specs/release-rings.md, "Production").
 #
-# Re-archive one publication by hand (runs whose receipt artifact carries
-# build-identity.json, i.e. from this workflow's introduction on):
+# Archive (or re-receipt) one publication by hand:
 #   gh workflow run runtime-image-archive.yml --ref main -f publish_run_id=<run id>
+# A publication from before this workflow existed was archived inside its own
+# run and its receipt artifact has no build inputs; for it this reads the
+# sealed manifest back from the store instead of publishing.
 
 on:
   workflow_run:
@@ -40,14 +42,6 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     runs-on: cube-gate
     timeout-minutes: 30
-    env:
-      # Only this job receives the scoped archive authority, as ordinary
-      # environment values. Public code never names a secret manager.
-      RUNTIME_ARTIFACT_S3_ENDPOINT: ${{ secrets.RUNTIME_ARTIFACT_S3_ENDPOINT }}
-      RUNTIME_ARTIFACT_S3_BUCKET: ${{ secrets.RUNTIME_ARTIFACT_S3_BUCKET }}
-      RUNTIME_ARTIFACT_S3_PREFIX: ${{ secrets.RUNTIME_ARTIFACT_S3_PREFIX }}
-      RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID: ${{ secrets.RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID }}
-      RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY: ${{ secrets.RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY }}
     steps:
       # The archive tooling comes from this workflow's own commit (main), not
       # from the commit whose image is archived.
@@ -92,9 +86,7 @@ jobs:
           mkdir -p "$dir"
           api --output "$RUNNER_TEMP/publication.zip" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip"
           unzip -q -o "$RUNNER_TEMP/publication.zip" -d "$dir"
-          for member in runtime-publication.json build-identity.json qualification.json; do
-            [[ -s "$dir/$member" ]] || { echo "artifact $name has no $member (published before the archive moved off the publish path?)" >&2; exit 1; }
-          done
+          [[ -s "$dir/runtime-publication.json" ]] || { echo "artifact $name has no runtime-publication.json" >&2; exit 1; }
           validated="$(python3 scripts/ops/release-artifacts.py verify-publication \
             --receipt "$dir/runtime-publication.json" \
             --source-sha "$sha" \
@@ -117,27 +109,39 @@ jobs:
           PUB_DIR: ${{ steps.pub.outputs.dir }}
           REGISTRY_USERNAME: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          # The scoped archive authority, for this step only, as ordinary
+          # environment values. Public code never names a secret manager.
+          RUNTIME_ARTIFACT_S3_ENDPOINT: ${{ secrets.RUNTIME_ARTIFACT_S3_ENDPOINT }}
+          RUNTIME_ARTIFACT_S3_BUCKET: ${{ secrets.RUNTIME_ARTIFACT_S3_BUCKET }}
+          RUNTIME_ARTIFACT_S3_PREFIX: ${{ secrets.RUNTIME_ARTIFACT_S3_PREFIX }}
+          RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID: ${{ secrets.RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID }}
+          RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY: ${{ secrets.RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/runtime-oci-archive"
-          uv run --project server python scripts/ops/release-artifacts.py publish \
-            --image "$IMAGE_REF" \
-            --source-sha "$SOURCE_SHA" \
-            --build-run-id "$BUILD_RUN_ID" \
-            --build-attempt "$BUILD_ATTEMPT" \
-            --build-identity "$PUB_DIR/build-identity.json" \
-            --qualification-json "$PUB_DIR/qualification.json" \
-            --qualification-id "runtime-image-${BUILD_RUN_ID}-${BUILD_ATTEMPT}" \
-            > "$RUNNER_TEMP/runtime-oci-archive/runtime-oci-archive.json"
+          out="$RUNNER_TEMP/runtime-oci-archive/runtime-oci-archive.json"
+          mkdir -p "$(dirname "$out")"
+          if [[ -s "$PUB_DIR/build-identity.json" && -s "$PUB_DIR/qualification.json" ]]; then
+            uv run --project server python scripts/ops/release-artifacts.py publish \
+              --image "$IMAGE_REF" \
+              --source-sha "$SOURCE_SHA" \
+              --build-run-id "$BUILD_RUN_ID" \
+              --build-attempt "$BUILD_ATTEMPT" \
+              --build-identity "$PUB_DIR/build-identity.json" \
+              --qualification-json "$PUB_DIR/qualification.json" \
+              --qualification-id "runtime-image-${BUILD_RUN_ID}-${BUILD_ATTEMPT}" \
+              > "$out"
+          else
+            echo "The publication carries no archive inputs (it archived inside its own run); reading its sealed manifest back."
+            uv run --project server python scripts/ops/release-artifacts.py receipt \
+              --image-digest "${IMAGE_REF##*@}" > "$out"
+          fi
           jq -e --arg digest "${IMAGE_REF##*@}" --arg sha "$SOURCE_SHA" '
             .schema == "longhouse.runtime-oci-archive.v1" and .sealed == true
-            and .image_digest == $digest and .source_sha == $sha' \
-            "$RUNNER_TEMP/runtime-oci-archive/runtime-oci-archive.json" >/dev/null || {
-            echo "the archive helper did not return a sealed receipt for $IMAGE_REF" >&2
+            and .image_digest == $digest and .source_sha == $sha' "$out" >/dev/null || {
+            echo "no sealed archive receipt for $IMAGE_REF" >&2
             exit 1
           }
-          jq -c '{image_digest, source_sha, blob_count, blobs_written, manifest_reused, manifest_key}' \
-            "$RUNNER_TEMP/runtime-oci-archive/runtime-oci-archive.json"
+          jq -c '{image_digest, source_sha, blob_count, blobs_written, manifest_reused, manifest_key}' "$out"
 
       - name: Upload the archive receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

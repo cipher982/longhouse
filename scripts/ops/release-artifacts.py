@@ -10,6 +10,7 @@ Commands:
   publish             Fetch a registry digest and seal its archive manifest.
   inspect             Read source/schema labels from one exact registry image config.
   fetch               Rebuild an OCI image layout using the archive store only.
+  receipt             Print the sealed archive manifest already stored for a digest.
   verify-publication  Validate a publication or post-canary verification receipt.
 The object store uses ordinary AWS credentials (AWS_ACCESS_KEY_ID,
 AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_REGION) and an explicit
@@ -996,6 +997,23 @@ def _validate_layout_closure(manifest: Mapping[str, Any], objects: Mapping[str, 
     walk(root)
 
 
+def sealed_receipt(*, store: ArchiveStore, image_digest: str) -> dict[str, Any]:
+    """The sealed manifest an earlier `publish` stored for this digest, in publish's receipt shape.
+
+    Read-only: it proves an archive exists (the manifest is written last, so a
+    readable sealed manifest means the closure was complete) without the build
+    inputs `publish` needs.
+    """
+    image_digest = normalize_digest(image_digest)
+    manifest = _json_object(store.get(manifest_key(image_digest)), "sealed archive manifest")
+    if manifest.get("schema") != SCHEMA or manifest.get("image_digest") != image_digest or manifest.get("sealed") is not True:
+        raise ArtifactError("stored archive manifest is not a sealed archive of this digest")
+    blobs = manifest.get("blobs")
+    if not isinstance(blobs, list) or not blobs:
+        raise ArtifactError("stored archive manifest has no blob closure")
+    return {**manifest, "manifest_key": manifest_key(image_digest), "blob_count": len(blobs), "blobs_written": 0, "manifest_reused": True}
+
+
 def fetch_archive(*, store: ArchiveStore, image_digest: str, output: Path, overwrite: bool = False) -> dict[str, Any]:
     image_digest = normalize_digest(image_digest)
     manifest_data = store.get(manifest_key(image_digest))
@@ -1123,6 +1141,10 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--require-verification", action="store_true")
 
 
+    receipt = subparsers.add_parser("receipt", help="print the sealed archive manifest already stored for a digest")
+    receipt.add_argument("--image-digest", required=True)
+    _store_arguments(receipt)
+
     fetch = subparsers.add_parser("fetch", help="restore an archived digest into an OCI layout")
     fetch.add_argument("--image-digest", required=True)
     fetch.add_argument("--output", required=True, type=Path)
@@ -1170,6 +1192,8 @@ def main(argv: list[str] | None = None) -> int:
                     qualification=qualification,
                     qualification_id=args.qualification_id,
                 )
+            elif args.command == "receipt":
+                result = sealed_receipt(store=store, image_digest=args.image_digest)
             else:
                 result = fetch_archive(
                     store=store,

@@ -122,6 +122,30 @@ def test_publish_and_fetch_complete_closure_without_registry() -> None:
         assert layout["manifests"][0]["digest"] == root
         assert registry.fetches == fetch_count
 
+def test_receipt_reads_back_a_sealed_archive_and_refuses_a_missing_one() -> None:
+    registry, root, identity = _fixture()
+    store = MemoryStore()
+    try:
+        release_artifacts.sealed_receipt(store=store, image_digest=root)
+        raise AssertionError("an absent archive must not produce a receipt")
+    except release_artifacts.ArtifactError:
+        pass
+    published = release_artifacts.publish_archive(
+        registry=registry, store=store, image_digest=root, source_sha=SOURCE_SHA,
+        build_run_id="1001", build_attempt=1, build_identity=identity,
+    )
+    receipt = release_artifacts.sealed_receipt(store=store, image_digest=root)
+    assert receipt["sealed"] is True and receipt["image_digest"] == root and receipt["source_sha"] == SOURCE_SHA
+    assert receipt["blob_count"] == published["blob_count"] and receipt["manifest_key"] == published["manifest_key"]
+    other = "sha256:" + "f" * 64
+    store.objects[release_artifacts.manifest_key(other)] = store.objects[release_artifacts.manifest_key(root)]
+    try:
+        release_artifacts.sealed_receipt(store=store, image_digest=other)
+        raise AssertionError("a manifest of another digest must not pass")
+    except release_artifacts.ArtifactError:
+        pass
+
+
 def test_inspect_runtime_schema_reads_exact_image_config_labels() -> None:
     registry, root, _identity = _fixture()
     assert release_artifacts.inspect_runtime_schema(registry=registry, image_digest=root) == {
@@ -321,6 +345,7 @@ def test_registry_redirect_uses_destination_authority_without_credentials() -> N
 
 if __name__ == "__main__":
     test_publish_and_fetch_complete_closure_without_registry()
+    test_receipt_reads_back_a_sealed_archive_and_refuses_a_missing_one()
     test_inspect_runtime_schema_reads_exact_image_config_labels()
     test_inspect_runtime_schema_rejects_missing_labels_with_bootstrap_error()
     test_fetch_accepts_oci_index_root_without_layers_field()
