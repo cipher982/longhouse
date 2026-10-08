@@ -5,7 +5,7 @@ produced two sessions for one conversation (the native copy under a different
 session id), so the timeline showed it twice. A legacy session qualifies for
 retirement only when every check below holds against exactly one native twin:
 
-- same provider and machine; the twin renders, has native raw and no legacy raw;
+- same owner, provider and machine; the twin renders, has native raw and no legacy raw;
 - the same provider session id when both carry one, else start times within
   ``window_seconds``;
 - every distinct assistant text and every distinct user text of the legacy render
@@ -150,14 +150,14 @@ class _Corpus:
         rows = self.connection.execute(
             """
             SELECT s.* FROM sessions s
-            WHERE s.session_id != ? AND s.provider = ? AND s.machine_id IS ? AND s.render_state = 'ready'
+            WHERE s.session_id != ? AND s.owner_id IS ? AND s.provider = ? AND s.machine_id IS ? AND s.render_state = 'ready'
               AND EXISTS (SELECT 1 FROM raw_objects r WHERE r.session_id = s.session_id
                           AND r.retired_at IS NULL AND r.provenance_kind = 'native')
               AND NOT EXISTS (SELECT 1 FROM raw_objects r WHERE r.session_id = s.session_id
                               AND r.retired_at IS NULL AND r.provenance_kind LIKE 'legacy\\_%' ESCAPE '\\')
               AND NOT EXISTS (SELECT 1 FROM session_tombstones t WHERE t.session_id = s.session_id)
             """,
-            (legacy["session_id"], legacy["provider"], legacy["machine_id"]),
+            (legacy["session_id"], legacy["owner_id"], legacy["provider"], legacy["machine_id"]),
         ).fetchall()
         legacy_identity = legacy["provider_session_id"]
         legacy_start = _parse_time(legacy["started_at"])
