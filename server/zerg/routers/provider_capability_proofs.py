@@ -635,24 +635,39 @@ def get_provider_version_evidence(
         available = store.available_blob_digests(records=shown)
         report = store.integrity_report(provider, records=shown, available=available)
         integrity = {item.artifact_id: item for item in report.artifacts}
-    # A verdict is the newest failure of a cell; a later pass of the same cell
-    # (any version) supersedes it, exactly as the chart's fold does. Verdicts
-    # carry no provider version, so they are provider-scoped facts.
-    newest_pass: dict[tuple[str, str, str, str | None], datetime] = {}
+    # Facts, not a fold: a failing verdict is returned with the newest pass of the
+    # same cell (any version) and the newest store-admissible one, so a caller can
+    # tell a verdict a later pass superseded from a live one. Whether a pass also
+    # qualifies for the chart (sha, epoch, age) is the projection's call, not this
+    # route's. Verdicts carry no provider version.
+    newest_pass: dict[tuple[str, str, str, str | None], ProviderCapabilityProofRecord] = {}
     for record in provider_records:
         if record.outcome.value != "pass":
             continue
         key = (record.provider, record.assertion_id, record.scenario_id, record.assertion_variant)
-        moment = _evidence_moment(record.generated_at)
-        if moment > newest_pass.get(key, datetime.min.replace(tzinfo=UTC)):
-            newest_pass[key] = moment
-    failing = [
-        verdict.serialize()
+        current = newest_pass.get(key)
+        if current is None or _evidence_moment(record.generated_at) > _evidence_moment(current.generated_at):
+            newest_pass[key] = record
+    verdicts = [
+        verdict
         for verdict in (_cell_verdict_store().verdicts().values() if known else ())
-        if verdict.provider == provider
-        and verdict.consecutive_failures >= REVOKING_CONSECUTIVE_FAILURES
-        and verdict.observed_at > newest_pass.get(verdict.key, datetime.min.replace(tzinfo=UTC))
+        if verdict.provider == provider and verdict.consecutive_failures >= REVOKING_CONSECUTIVE_FAILURES
     ]
+    pass_records = tuple(newest_pass[v.key] for v in verdicts if v.key in newest_pass)
+    pass_admissible: dict[str, bool] = {}
+    if pass_records:
+        report = store.integrity_report(provider, records=pass_records, available=store.available_blob_digests(records=pass_records))
+        pass_admissible = {item.artifact_id: bool(item.admissible) for item in report.artifacts}
+    failing = []
+    for verdict in verdicts:
+        latest = newest_pass.get(verdict.key)
+        failing.append(
+            {
+                **verdict.serialize(),
+                "newest_pass_at": latest.generated_at if latest else None,
+                "newest_pass_admissible": pass_admissible.get(latest.artifact_id) if latest else None,
+            }
+        )
     return {
         "schema_version": 1,
         "artifact_kind": "provider_version_evidence",
@@ -668,10 +683,8 @@ def get_provider_version_evidence(
                 "longhouse_git_sha": record.longhouse_git_sha,
                 "generated_at": record.generated_at,
                 "store_integrity": {
-                    "admissible": bool(integrity.get(record.artifact_id) and integrity[record.artifact_id].admissible),
-                    "reason_codes": list(integrity[record.artifact_id].reason_codes)
-                    if record.artifact_id in integrity
-                    else ["integrity_unknown"],
+                    "admissible": bool(integrity[record.artifact_id].admissible),
+                    "reason_codes": list(integrity[record.artifact_id].reason_codes),
                 },
             }
             for record in shown
