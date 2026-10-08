@@ -975,7 +975,7 @@ class CatalogDaemon:
         ),
         "storage.session.legacy_twin.retire.v2": _Route(
             "_retire_legacy_twin_session",
-            frozenset({"observed_at", "session_id", "twin_session_id"}),
+            frozenset({"observed_at", "session_id", "twin_session_id", "window_seconds"}),
             "storage.session.legacy_twin.retire.v2 has invalid parameters",
         ),
         "storage.session.render_generation.restore.v2": _Route(
@@ -3297,6 +3297,9 @@ class CatalogDaemon:
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
             twin_session_id = _canonical_uuid(request.params["twin_session_id"], "twin_session_id")
+            window_seconds = request.params["window_seconds"]
+            if type(window_seconds) is not int or not 1 <= window_seconds <= 600:
+                raise ValueError("window_seconds must be an integer from 1 to 600")
             observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
@@ -3305,6 +3308,7 @@ class CatalogDaemon:
             self._store.retire_legacy_twin_session,
             session_id=session_id,
             twin_session_id=twin_session_id,
+            window_seconds=window_seconds,
             observed_at=observed_at,
         )
         if result.get("session_missing"):

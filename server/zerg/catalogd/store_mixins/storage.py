@@ -335,12 +335,14 @@ class StorageMixin:
         *,
         session_id: UUID,
         twin_session_id: UUID,
+        window_seconds: int,
         observed_at: datetime,
     ) -> dict[str, Any]:
         """Retire a legacy-converted session whose conversation a native session already holds.
 
         The caller supplies the content evidence (``storage-migrate reconcile-legacy-twins``);
-        this re-checks the structural half under the writer lock. Nothing is deleted:
+        this re-checks owner, provider, machine, identity or start window and
+        provenance under the writer lock. Nothing is deleted:
         raw objects stay active and the render is retired, so the copy leaves the
         timeline and search but stays on disk.
         """
@@ -365,8 +367,17 @@ class StorageMixin:
                 return conflict("twin_missing")
             if connection.execute(select(tombstones.c.session_id).where(tombstones.c.session_id.in_([session_key, twin_key]))).first():
                 return conflict("session_tombstoned")
-            if twin["provider"] != session["provider"] or twin["machine_id"] != session["machine_id"]:
+            if (
+                twin["owner_id"] != session["owner_id"]
+                or twin["provider"] != session["provider"]
+                or twin["machine_id"] != session["machine_id"]
+            ):
                 return conflict("twin_identity_mismatch")
+            if session["provider_session_id"] and twin["provider_session_id"]:
+                if twin["provider_session_id"] != session["provider_session_id"]:
+                    return conflict("twin_identity_mismatch")
+            elif abs((_as_aware_utc(twin["started_at"]) - _as_aware_utc(session["started_at"])).total_seconds()) > window_seconds:
+                return conflict("twin_outside_window")
             if twin["render_state"] != "ready":
                 return conflict("twin_not_ready")
 

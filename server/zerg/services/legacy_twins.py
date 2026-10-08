@@ -9,14 +9,16 @@ retirement only when every check below holds against exactly one native twin:
 - the same provider session id when both carry one, else start times within
   ``window_seconds``;
 - every distinct assistant text and every distinct user text of the legacy render
-  appears in the twin's thread (the twin plus its native subagent sessions, which
-  the legacy conversion had merged into the parent), compared after collapsing
-  whitespace and Cursor's ``<timestamp>``/``<user_query>`` wrappers;
-- the thread's native raw record count is at least the legacy raw archive's
-  unique line count for the session.
+  appears with the same role in the twin's thread (the twin plus its native
+  subagent sessions, which the legacy conversion had merged into the parent),
+  compared after collapsing whitespace and Cursor's ``<timestamp>``/``<user_query>``
+  wrappers;
+- the legacy raw archive holds chunks for the session, and the thread's native raw
+  record count is at least the archive's unique line count.
 
 This module only reads. Retirement goes through catalogd
-(``storage.session.legacy_twin.retire.v2``), which re-checks the structural half.
+(``storage.session.legacy_twin.retire.v2``), which re-checks owner, provider,
+machine, identity or start window, and provenance under the writer lock.
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ class TwinEvidence:
     legacy_user_texts: int
     missing_user_texts: int
     native_records: int
-    archive_unique_lines: int
+    archive_unique_lines: int | None
     reasons: list[str] = field(default_factory=list)
     ambiguous: bool = False
 
@@ -112,9 +114,14 @@ class _Corpus:
         ).fetchone()
         return int(row[0])
 
-    def archive_unique_lines(self, session_id: str) -> int:
+    def archive_unique_lines(self, session_id: str) -> int | None:
+        """Unique raw lines the legacy archive holds for the session, or None when it has none."""
+
+        chunks = sorted(self.archive_root.glob(f"tenants/*/sessions/{session_id}/chunks/*.jsonl.zst"))
+        if not chunks:
+            return None
         hashes: set[str] = set()
-        for chunk in sorted(self.archive_root.glob(f"tenants/*/sessions/{session_id}/chunks/*.jsonl.zst")):
+        for chunk in chunks:
             payload = zstandard.ZstdDecompressor().decompress(chunk.read_bytes(), max_output_size=1 << 31)
             for line in payload.splitlines():
                 if line.strip():
@@ -200,7 +207,7 @@ def find_legacy_twins(
                 children = corpus.subagents(twin_id)
                 thread = [twin_id, *children]
                 thread_assistant = corpus.texts(thread, {"assistant"})
-                thread_any = corpus.texts(thread, {"user", "assistant", "system", "tool"})
+                thread_user = corpus.texts(thread, {"user"})
                 native_records = corpus.native_records(thread)
                 item = TwinEvidence(
                     legacy_session_id=legacy_id,
@@ -213,7 +220,7 @@ def find_legacy_twins(
                     legacy_assistant_texts=len(legacy_assistant),
                     missing_assistant_texts=len(legacy_assistant - thread_assistant),
                     legacy_user_texts=len(legacy_user),
-                    missing_user_texts=len(legacy_user - thread_any),
+                    missing_user_texts=len(legacy_user - thread_user),
                     native_records=native_records,
                     archive_unique_lines=archive_lines,
                 )
@@ -223,7 +230,9 @@ def find_legacy_twins(
                     item.reasons.append("assistant_text_missing_from_twin")
                 if item.missing_user_texts:
                     item.reasons.append("user_text_missing_from_twin")
-                if native_records < archive_lines:
+                if archive_lines is None:
+                    item.reasons.append("archive_lines_unavailable")
+                elif native_records < archive_lines:
                     item.reasons.append("native_records_below_archive_lines")
                 pair_evidence.append(item)
             if sum(item.qualifies for item in pair_evidence) > 1:

@@ -125,6 +125,7 @@ def reconcile_legacy_twins(
                             {
                                 "session_id": item.legacy_session_id,
                                 "twin_session_id": item.twin_session_id,
+                                "window_seconds": window_seconds,
                                 "observed_at": datetime.now(UTC).isoformat(),
                             },
                             timeout_seconds=30.0,

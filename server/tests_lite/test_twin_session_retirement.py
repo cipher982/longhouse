@@ -171,7 +171,7 @@ async def test_a_legacy_copy_qualifies_only_against_a_twin_that_holds_all_of_it(
         ("assistant", "Looking at the failing step."),
         ("assistant", "Fixed: the image now builds."),
     ]
-    legacy, twin, partial_legacy, partial_twin = uuid4(), uuid4(), uuid4(), uuid4()
+    legacy, twin, partial_legacy, partial_twin, unarchived, unarchived_twin = (uuid4() for _ in range(6))
     try:
         await _commit(
             client, objects, session_id=legacy, provenance="legacy_normalized_event", texts=conversation, records=3, started_at=START
@@ -200,12 +200,19 @@ async def test_a_legacy_copy_qualifies_only_against_a_twin_that_holds_all_of_it(
             client, objects, session_id=partial_twin, provenance="native", texts=native_conversation[:2], records=2, started_at=later
         )
         _archive(archive, partial_legacy, lines=5)
+        far = START + timedelta(hours=2)
+        await _commit(
+            client, objects, session_id=unarchived, provenance="legacy_normalized_event", texts=conversation, records=3, started_at=far
+        )
+        await _commit(
+            client, objects, session_id=unarchived_twin, provenance="native", texts=native_conversation, records=8, started_at=far
+        )
     finally:
         await client.close()
         await daemon.close()
 
     evidence = {item.legacy_session_id: item for item in find_legacy_twins(live_database=live, object_root=objects, archive_root=archive)}
-    assert set(evidence) == {str(legacy), str(partial_legacy)}
+    assert set(evidence) == {str(legacy), str(partial_legacy), str(unarchived)}
 
     full = evidence[str(legacy)]
     assert full.twin_session_id == str(twin)
@@ -214,6 +221,9 @@ async def test_a_legacy_copy_qualifies_only_against_a_twin_that_holds_all_of_it(
     partial = evidence[str(partial_legacy)]
     assert not partial.qualifies
     assert set(partial.reasons) == {"assistant_text_missing_from_twin", "native_records_below_archive_lines"}
+
+    # Without archive evidence the record-count check cannot be made, so it never passes silently.
+    assert evidence[str(unarchived)].reasons == ["archive_lines_unavailable"]
 
     # Nothing outside the window counts as a twin.
     assert find_legacy_twins(live_database=live, object_root=objects, archive_root=archive, session_ids=[str(legacy)], window_seconds=1)[

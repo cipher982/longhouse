@@ -3981,7 +3981,7 @@ async def test_source_epoch_replacement_advances_retired_projectors(daemon_paths
 async def test_legacy_twin_retirement_requires_a_native_twin_and_keeps_raw_objects(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
-    legacy_session, native_session, other_provider = uuid4(), uuid4(), uuid4()
+    legacy_session, native_session, other_provider, late_native = uuid4(), uuid4(), uuid4(), uuid4()
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
@@ -4012,6 +4012,7 @@ async def test_legacy_twin_retirement_requires_a_native_twin_and_keeps_raw_objec
         await commit(
             other_provider, (b"other\n",), provenance="native", opaque="other.jsonl", seed=b"other-render", provider="claude", offset=2
         )
+        await commit(late_native, (b"late\n",), provenance="native", opaque="late.jsonl", seed=b"late-render", offset=600)
 
         def retire(session_id, twin_id, offset):
             return client.call(
@@ -4019,6 +4020,7 @@ async def test_legacy_twin_retirement_requires_a_native_twin_and_keeps_raw_objec
                 {
                     "session_id": str(session_id),
                     "twin_session_id": str(twin_id),
+                    "window_seconds": 120,
                     "observed_at": (now + timedelta(seconds=offset)).isoformat(),
                 },
             )
@@ -4028,6 +4030,7 @@ async def test_legacy_twin_retirement_requires_a_native_twin_and_keeps_raw_objec
             (native_session, legacy_session, "active_nonlegacy_source_present"),
             (legacy_session, other_provider, "twin_identity_mismatch"),
             (legacy_session, legacy_session, "twin_is_session"),
+            (legacy_session, late_native, "twin_outside_window"),
         ):
             with pytest.raises(CatalogRemoteError) as conflict:
                 await retire(session_id, twin_id, 3)
