@@ -401,7 +401,7 @@ mod tests {
         let text = format!("LIVE_PROOF_{}", Uuid::new_v4().simple());
 
         // This is the exact production function `session.send_text` calls
-        // for provider "antigravity" in control_channel.rs.
+        // for provider "antigravity" in control_channel/dispatch.rs.
         let enqueued = enqueue(&session_id, &text).unwrap();
 
         let hook_payload = json!({

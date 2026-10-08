@@ -876,7 +876,7 @@ async def steer_text_to_managed_local_session(
     # not reliably produce a fresh persisted user event or a new active hook
     # phase (Codex app-server steer returns no turn_id; Claude channel steer
     # injects into an already-running turn), so persisted-prompt verification
-    # here would manufacture false failures. See engine control_channel.rs
+    # here would manufacture false failures. See engine control_channel/dispatch.rs
     # COMMAND_STEER_TEXT.
     return ManagedLocalSendResult(ok=True, exit_code=0)
 

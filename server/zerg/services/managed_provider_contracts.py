@@ -516,7 +516,7 @@ def live_proof_supported_providers() -> tuple[str, ...]:
 
     Three hand-copies disagreed: `provider_live_proof.py` and the Pydantic
     Literal on the public request body both said claude/opencode/antigravity,
-    while `control_channel.rs` -- the side that executes it -- said
+    while `control_channel/dispatch.rs` -- the side that executes it -- said
     claude/opencode. `provider_live_canary.py` implements exactly those two, so
     the Rust set was right and the request body accepted a provider that always
     failed `provider_unsupported`.

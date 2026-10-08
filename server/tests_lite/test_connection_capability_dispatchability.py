@@ -11,7 +11,7 @@ file*. Claude and Codex declare `terminate: true` and carry no
 `claude.terminate` / `codex.terminate` support, so every managed Claude and
 Codex session advertised a terminate control that
 `managed_control_dispatcher._session_uses_engine_control` refused before the
-engine was contacted — and which `control_channel.rs` COMMAND_TERMINATE does
+engine was contacted — and which `control_channel/dispatch.rs` COMMAND_TERMINATE does
 not implement for those providers either. Absent at three layers, advertised at
 the fourth.
 
@@ -72,7 +72,7 @@ def test_terminate_is_honest_for_every_provider() -> None:
     """Pin the specific regression, by name, so it cannot silently return.
 
     Cursor and OpenCode carry a real remote terminate. Claude and Codex do not:
-    `machine_control_supports` omits it and `control_channel.rs`
+    `machine_control_supports` omits it and `control_channel/dispatch.rs`
     COMMAND_TERMINATE implements only opencode and cursor. Whichever way that
     product decision goes, the advertisement must follow the implementation.
     """

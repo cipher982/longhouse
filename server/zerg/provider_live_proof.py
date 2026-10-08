@@ -26,7 +26,7 @@ from zerg.services.managed_provider_contracts import managed_provider_names
 
 LIVE_PROOF_ARTIFACT_KIND = "provider_live_canary"
 # Derived from schemas/managed_providers.yml. This was a hand-written tuple
-# including antigravity while control_channel.rs -- the side that executes the
+# including antigravity while control_channel/dispatch.rs -- the side that executes the
 # command -- accepted only claude and opencode, so requesting an antigravity
 # live proof always failed provider_unsupported at the engine.
 SUPPORTED_LIVE_PROOF_PROVIDERS = live_proof_supported_providers()
