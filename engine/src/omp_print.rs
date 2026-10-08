@@ -12,7 +12,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -2538,17 +2538,27 @@ async fn settle_recovered_dead_claim(
 /// Ask the installed binary instead of assuming, and keep the answer for a few
 /// minutes so a turn does not pay for a second process start. A binary that
 /// cannot be asked is assumed current: the launch then fails loudly on its own.
+/// The cache is keyed on the executable's identity (canonical path, length and
+/// mtime), not on the name: `omp` on PATH changes under a running engine when
+/// OMP is updated or a Nix profile switches, and the old answer must not survive.
 fn omp_supports_no_ui(omp_bin: &str) -> bool {
     // no managed identity: this only runs `omp --help` to read the flag list. It
     // starts no agent and no session, so there is nothing for the overlay to claim.
     const TTL: Duration = Duration::from_secs(600);
+    type ExecutableIdentity = (PathBuf, u64, SystemTime);
     static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<String, (Instant, bool)>>,
+        std::sync::Mutex<std::collections::HashMap<ExecutableIdentity, (Instant, bool)>>,
     > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    if let Some((asked_at, supported)) = cache.lock().ok().and_then(|c| c.get(omp_bin).copied()) {
-        if asked_at.elapsed() < TTL {
-            return supported;
+    // Without an identity there is no safe key: ask every time.
+    let identity = executable_identity(omp_bin);
+    if let Some(identity) = &identity {
+        if let Some((asked_at, supported)) =
+            cache.lock().ok().and_then(|c| c.get(identity).copied())
+        {
+            if asked_at.elapsed() < TTL {
+                return supported;
+            }
         }
     }
     let supported = std::process::Command::new(omp_bin)
@@ -2560,10 +2570,22 @@ fn omp_supports_no_ui(omp_bin: &str) -> bool {
         .filter(|output| output.status.success())
         .map(|output| help_advertises_no_ui(&String::from_utf8_lossy(&output.stdout)))
         .unwrap_or(true);
-    if let Ok(mut cache) = cache.lock() {
-        cache.insert(omp_bin.to_string(), (Instant::now(), supported));
+    if let Some(identity) = identity {
+        if let Ok(mut cache) = cache.lock() {
+            cache.retain(|_, (asked_at, _)| asked_at.elapsed() < TTL);
+            cache.insert(identity, (Instant::now(), supported));
+        }
     }
     supported
+}
+
+/// The file a launch of `omp_bin` runs, as (canonical path, length, mtime).
+/// Resolves a bare name the way the engine resolves provider binaries.
+fn executable_identity(omp_bin: &str) -> Option<(PathBuf, u64, SystemTime)> {
+    let resolved = crate::omp_helm_launcher::resolve_binary(Some(omp_bin.to_string())).ok()?;
+    let path = std::fs::canonicalize(resolved).ok()?;
+    let metadata = std::fs::metadata(&path).ok()?;
+    Some((path, metadata.len(), metadata.modified().ok()?))
 }
 
 fn help_advertises_no_ui(help: &str) -> bool {
@@ -3888,6 +3910,45 @@ mod tests {
         assert!(!help_advertises_no_ui(old));
         // A mention in prose is not the flag.
         assert!(!help_advertises_no_ui("use --no-ui to hide dialogs"));
+    }
+
+    const NO_UI_HELP_LINE: &str = "      --no-ui          With --mode rpc: run extensions headless";
+    const OLD_HELP_LINE: &str = "      --no-tools       Disable all built-in tools";
+
+    /// A fake `omp` whose `--help` prints one flag line. The length differs
+    /// between the two lines so a same-second rewrite still changes identity.
+    fn write_fake_omp_help(path: &Path, flag_line: &str) {
+        std::fs::write(path, format!("#!/bin/sh\nprintf '%s\\n' '{flag_line}'\n")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn no_ui_probe_follows_the_executable_replaced_at_the_same_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_omp = temp.path().join("omp");
+        write_fake_omp_help(&fake_omp, NO_UI_HELP_LINE);
+        let path = fake_omp.to_string_lossy().into_owned();
+        assert!(omp_supports_no_ui(&path));
+        // Same path, new file: the cached answer for the old identity must not
+        // be reused, and this happens well inside the 600 s TTL.
+        write_fake_omp_help(&fake_omp, OLD_HELP_LINE);
+        assert!(!omp_supports_no_ui(&path));
+    }
+
+    #[test]
+    fn no_ui_probe_answers_independently_for_different_executables() {
+        let temp = tempfile::tempdir().unwrap();
+        let with_ui = temp.path().join("with-ui");
+        let without_ui = temp.path().join("without-ui");
+        std::fs::create_dir_all(&with_ui).unwrap();
+        std::fs::create_dir_all(&without_ui).unwrap();
+        write_fake_omp_help(&with_ui.join("omp"), NO_UI_HELP_LINE);
+        write_fake_omp_help(&without_ui.join("omp"), OLD_HELP_LINE);
+        let new_path = with_ui.join("omp").to_string_lossy().into_owned();
+        let old_path = without_ui.join("omp").to_string_lossy().into_owned();
+        assert!(omp_supports_no_ui(&new_path));
+        assert!(!omp_supports_no_ui(&old_path));
+        assert!(omp_supports_no_ui(&new_path));
     }
 
     /// The stream of a console run whose OpenAI key was refused (recorded
