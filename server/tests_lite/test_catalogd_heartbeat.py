@@ -15,6 +15,8 @@ from sqlalchemy import event
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import SQLAlchemyError
 
+from tests_lite._catalog_store_patch import patch_store_global
+
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
@@ -1044,7 +1046,7 @@ async def test_shadow_reducer_statement_failure_aborts_the_whole_observation(dae
         original_reduce(*args, **kwargs)
         raise SQLAlchemyError("forced reducer statement failure")
 
-    monkeypatch.setattr(catalog_store, "reduce_fact_batch_setwise", fail_after_reducer_writes)
+    patch_store_global(monkeypatch, "reduce_fact_batch_setwise", fail_after_reducer_writes)
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
@@ -1093,7 +1095,7 @@ async def test_unusable_evidence_still_lets_the_heartbeat_commit(daemon_paths, m
     def reject_evidence(*_args, **_kwargs):
         raise ValueError("unusable machine evidence")
 
-    monkeypatch.setattr(catalog_store, "reduce_fact_batch_setwise", reject_evidence)
+    patch_store_global(monkeypatch, "reduce_fact_batch_setwise", reject_evidence)
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
@@ -1139,7 +1141,7 @@ async def test_shadow_reducer_invalidated_connection_aborts_outer_heartbeat(daem
             connection_invalidated=True,
         )
 
-    monkeypatch.setattr(catalog_store, "reduce_fact_batch_setwise", fail_with_invalidated_connection)
+    patch_store_global(monkeypatch, "reduce_fact_batch_setwise", fail_with_invalidated_connection)
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
@@ -1465,7 +1467,7 @@ async def test_shadow_parity_failure_rolls_back_only_parity_savepoint(daemon_pat
         original_record_delta(*args, **kwargs)
         raise SQLAlchemyError("forced parity write failure")
 
-    monkeypatch.setattr(catalog_store, "_record_shadow_parity_delta", fail_after_delta_insert)
+    patch_store_global(monkeypatch, "_record_shadow_parity_delta", fail_after_delta_insert)
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
@@ -1588,7 +1590,7 @@ async def test_shadow_parity_explicitly_reports_activity_as_unsupported(daemon_p
 
 
 def test_shadow_parity_deltas_are_globally_bounded(tmp_path, monkeypatch):
-    monkeypatch.setattr(catalog_store, "_MAX_PARITY_DELTAS", 2)
+    patch_store_global(monkeypatch, "_MAX_PARITY_DELTAS", 2)
     engine = create_catalog_engine(tmp_path / "bounded-parity.db")
     initialize_catalog_schema(engine)
     now = datetime.now(UTC).replace(microsecond=0)

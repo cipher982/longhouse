@@ -25,6 +25,7 @@ from sqlalchemy import insert
 from sqlalchemy import select
 from sqlalchemy import update
 
+from tests_lite._catalog_store_patch import patch_store_global
 from zerg.catalogd import store as catalog_store
 from zerg.catalogd.models import ProjectorState
 from zerg.catalogd.models import StorageSession
@@ -177,7 +178,7 @@ def test_idle_claim_poll_does_not_take_a_write_transaction(store: CatalogStore, 
     def refuse_write(*_args, **_kwargs):
         raise AssertionError("idle projector poll took a write transaction")
 
-    monkeypatch.setattr(catalog_store, "_write_transaction", refuse_write)
+    patch_store_global(monkeypatch, "_write_transaction", refuse_write)
     result = store.claim_projector_lag(
         projector="search-v2",
         worker_id="worker-a",
@@ -195,7 +196,7 @@ def test_idle_claim_poll_does_not_take_a_write_transaction(store: CatalogStore, 
 def test_search_projector_claims_newest_session_activity_first(
     store: CatalogStore, monkeypatch: pytest.MonkeyPatch, walk_backlog: int
 ) -> None:
-    monkeypatch.setattr(catalog_store, "SEARCH_CLAIM_WALK_BACKLOG", walk_backlog)
+    patch_store_global(monkeypatch, "SEARCH_CLAIM_WALK_BACKLOG", walk_backlog)
     older, newer = str(uuid4()), str(uuid4())
     now = datetime.now(UTC)
     with store.engine.begin() as connection:
@@ -239,7 +240,7 @@ def test_search_projector_claims_newest_session_activity_first(
 def test_walked_search_claims_resume_below_the_head_and_restart_for_new_activity(
     store: CatalogStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(catalog_store, "SEARCH_CLAIM_WALK_BACKLOG", 1)
+    patch_store_global(monkeypatch, "SEARCH_CLAIM_WALK_BACKLOG", 1)
     now = datetime.now(UTC)
     newest, middle, oldest = str(uuid4()), str(uuid4()), str(uuid4())
     with store.engine.begin() as connection:

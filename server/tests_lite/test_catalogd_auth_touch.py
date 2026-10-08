@@ -24,7 +24,7 @@ from sqlalchemy import insert
 from sqlalchemy import select
 from sqlalchemy import update
 
-from zerg.catalogd import store as catalog_store
+from tests_lite._catalog_store_patch import patch_store_global
 from zerg.catalogd.schema import catalog_meta
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
@@ -79,7 +79,7 @@ def forbid_write_transaction(monkeypatch):
     def _refuse(*_args, **_kwargs):
         raise AssertionError("took a write transaction for a read that owes no stamp")
 
-    monkeypatch.setattr(catalog_store, "_write_transaction", _refuse)
+    patch_store_global(monkeypatch, "_write_transaction", _refuse)
 
 
 def _commit_seq(store: CatalogStore) -> int:

@@ -10,6 +10,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.orm import Session
 
+from tests_lite._catalog_store_patch import patch_store_global
+
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
@@ -1094,13 +1096,13 @@ def test_console_run_terminal_settles_turn_run_and_fifo_in_one_runtime_transacti
     def _crash(*args, **kwargs):
         raise RuntimeError("simulated catalog failure mid-settlement")
 
-    monkeypatch.setattr(store_module, "_settle_console_turn", _crash)
+    patch_store_global(monkeypatch, "_settle_console_turn", _crash)
     with pytest.raises(RuntimeError):
         store.apply_session_runtime(events=[terminal])
     with Session(engine) as db:
         assert db.get(LiveConsoleTurn, first["turn_id"]).state == "active"
         assert db.get(LiveSessionRun, first["run_id"]).ended_at is None
-    monkeypatch.setattr(store_module, "_settle_console_turn", real_settle)
+    patch_store_global(monkeypatch, "_settle_console_turn", real_settle)
 
     applied = store.apply_session_runtime(events=[terminal])
     [claimed] = applied["console_next_turns"]

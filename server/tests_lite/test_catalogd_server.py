@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests_lite._catalog_store_patch import patch_store_global
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.protocol import CatalogRpcRequest
@@ -541,7 +542,7 @@ def test_device_list_holds_real_sqlite_snapshot_across_commit_seq_and_rows(daemo
                 writer.dispose()
         return value
 
-    monkeypatch.setattr(store_module, "_current_commit_seq", read_seq_then_commit_other_writer)
+    patch_store_global(monkeypatch, "_current_commit_seq", read_seq_then_commit_other_writer)
     try:
         result = CatalogStore(engine).list_devices(owner_id=7, include_revoked=True)
     finally:
@@ -557,8 +558,6 @@ def test_device_list_holds_real_sqlite_snapshot_across_commit_seq_and_rows(daemo
 
 
 def test_device_create_limit_counts_only_active_credentials(daemon_paths, monkeypatch):
-    from zerg.catalogd import store as store_module
-
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
@@ -594,7 +593,7 @@ def test_device_create_limit_counts_only_active_credentials(daemon_paths, monkey
             ],
         )
 
-    monkeypatch.setattr(store_module, "DEVICE_TOKEN_LIMIT_PER_OWNER", 2)
+    patch_store_global(monkeypatch, "DEVICE_TOKEN_LIMIT_PER_OWNER", 2)
     try:
         created = CatalogStore(engine).create_device(
             owner_id=7,

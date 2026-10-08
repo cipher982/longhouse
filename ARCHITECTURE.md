@@ -254,6 +254,7 @@ Python modules stay flat by design; services group by file prefix.
 | `server/zerg/services/session_processing/` | Pure event processing: summaries, tokens, embeddings |
 | `server/zerg/services/shipper/` | Python JSONL parser and hook helpers beside the Rust shipper |
 | `server/zerg/catalogd/` | Single-writer catalog daemon; served session facts come from its snapshots |
+| `server/zerg/catalogd/store_mixins/` | `CatalogStore` methods by responsibility (accounts, machines, interactions, launch, inputs, sessions, ingest, storage, projectors, legacy); helpers stay in `server/zerg/catalogd/store.py`, the only import path |
 | `server/zerg/searchd/` | Search daemon |
 | `server/zerg/storage_v2/` | Raw and render object store |
 | `server/zerg/models/` | SQLAlchemy models (`AgentsBase` for agent infrastructure) |
