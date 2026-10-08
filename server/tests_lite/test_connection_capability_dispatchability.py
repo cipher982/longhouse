@@ -13,7 +13,7 @@ Codex session advertised a terminate control that
 `managed_control_dispatcher._session_uses_engine_control` refused before the
 engine was contacted — and which `control_channel/dispatch.rs` COMMAND_TERMINATE does
 not implement for those providers either. Absent at three layers, advertised at
-the fourth.
+the fourth. (Claude has since gained a real `claude.terminate`; Codex has not.)
 
 That is the same shape as the `longhouse cursor` coordination outage: a
 declaration the executing code does not honor. These tests force the two

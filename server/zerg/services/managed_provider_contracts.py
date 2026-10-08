@@ -151,9 +151,10 @@ class ManagedProviderContract:
         # client reads to decide whether to offer the control. They are only
         # true when the machine control channel will actually carry the command,
         # which is `machine_control_supports`, not the bare operation flag.
-        # Claude and Codex declare `terminate: true` and carry no
-        # `<provider>.terminate` support, so the flag advertised a control the
-        # dispatcher refuses before the engine is ever contacted
+        # Codex declares `terminate: true` and carries no `codex.terminate`
+        # support (Claude did too until it gained `claude.terminate`), so the
+        # flag alone would advertise a control the dispatcher refuses before
+        # the engine is ever contacted
         # (managed_control_dispatcher.py `_session_uses_engine_control`).
         # tail_output and resume have no machine-control operation; they stay on
         # the flag.
