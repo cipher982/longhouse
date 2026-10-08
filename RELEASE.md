@@ -58,7 +58,7 @@ If any of these are missing, a stable-tier release will fail fast with a clear e
 
 ## Runtime image (`runtime-v*`)
 
-The runtime image is built on a `main` push that touches runtime paths (`server/`, `web/`, `engine/`, `config/`, the runtime Dockerfile; see `.github/workflows/runtime-image.yml`), tagged with the commit SHA and `:latest`, and separately on `runtime-v*` tags (adds the semantic tag). Hosted tenants always receive the digest-pinned image through a deployment, never `:latest`.
+The runtime image is built on a `main` push that touches runtime paths (`server/`, `web/`, `engine/`, `config/`, the runtime Dockerfile; see `.github/workflows/runtime-image.yml`), tagged with the commit SHA (Archive Runtime Image then moves `:latest` to it if it is still main's head), and separately on `runtime-v*` tags (adds the semantic tag). Hosted tenants always receive the digest-pinned image through a deployment, never `:latest`.
 
 You normally do not cut `runtime-v*` tags. Cut one only when you want a pinned runtime image outside the normal main push cadence.
 

@@ -100,7 +100,7 @@ def archive_receipt(*, sha: str = SHA, digest: str = DIGEST, sealed: bool = True
         "build_run_id": "555",
         "build_attempt": 1,
         "sealed": sealed,
-        "manifest_key": "images/sha256/" + digest.rsplit(":", 1)[-1] + ".json",
+        "manifest_key": "images/sha256/" + digest.rsplit(":", 1)[-1] + "/manifest.json",
         "blob_count": 9,
     }
 
