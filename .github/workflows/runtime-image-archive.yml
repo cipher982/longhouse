@@ -187,4 +187,4 @@ jobs:
             exit 0
           fi
           docker buildx imagetools create --tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}@${DIGEST}"
-          docker buildx imagetools inspect "${IMAGE_NAME}:latest" | head -3
+          docker buildx imagetools inspect --format '{{json .Manifest}}' "${IMAGE_NAME}:latest" | jq -c '{digest, mediaType}'
