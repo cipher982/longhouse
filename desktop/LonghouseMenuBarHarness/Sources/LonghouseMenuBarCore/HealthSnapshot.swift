@@ -793,7 +793,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
                 let detail = error.flatMap { $0.isEmpty ? nil : String($0.prefix(140)) }
                 return "\(backlog) transcript \(noun) blocked after \(retryCount) failed attempt\(retryCount == 1 ? "" : "s")."
                     + (detail.map { " Last error: \($0)" }
-                        ?? " Longhouse will retry when the source or Runtime Host can make progress.")
+                        ?? " Longhouse will retry when the source or your Longhouse server can make progress.")
             }
             var parts = ["\(backlog) transcript range\(backlog == 1 ? "" : "s")"]
             if outboxFiles > 0 {

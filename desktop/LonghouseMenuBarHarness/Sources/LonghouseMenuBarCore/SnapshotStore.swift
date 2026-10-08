@@ -490,7 +490,7 @@ public final class SnapshotStore: ObservableObject {
                     self.projectionState = self.projectionState.recordingFailure(
                         ProducerRefreshFailure(
                             message: message,
-                            command: "Runtime Host session projection",
+                            command: "Longhouse server session view",
                             observedAt: Date()
                         )
                     )

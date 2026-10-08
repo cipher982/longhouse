@@ -892,7 +892,7 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(facts.first(where: { $0.id == "local-agent" })?.value == "Running")
         #expect(facts.first(where: { $0.id == "transport" })?.value == "Unknown")
-        #expect(facts.first(where: { $0.id == "transport" })?.detail?.contains("Runtime Host") == true)
+        #expect(facts.first(where: { $0.id == "transport" })?.detail?.contains("Longhouse server") == true)
     }
     @Test
     func expiredProjectionUsesInspectHeadlineWithoutLocalRepair() {
@@ -910,7 +910,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(presentation.headline == "Remote session view unavailable")
         #expect(presentation.facts.first(where: { $0.id == "local-agent" })?.value == "Running")
         #expect(presentation.facts.first(where: { $0.id == "transport" })?.value == "Unknown")
-        #expect(presentation.facts.first(where: { $0.id == "transport" })?.detail?.contains("Runtime Host") == true)
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.detail?.contains("Longhouse server") == true)
     }
 
 

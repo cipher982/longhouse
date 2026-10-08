@@ -464,7 +464,7 @@ extension HealthSnapshot {
         if !hasEngineEvidence || localEvidenceUnavailable || projectionUnavailable {
             transportValue = "Unknown"
             transportDetail = projectionUnavailable
-                ? "Runtime Host projection is unavailable"
+                ? "Longhouse server view is unavailable"
                 : localEvidenceUnavailable ? "local status evidence is unavailable" : "no engine evidence"
             transportPromotion = .unavailable
         } else if engineStatus?.fresh == false {
@@ -523,7 +523,7 @@ extension HealthSnapshot {
             ),
             MenuBarSystemFact(
                 id: "remote-control", label: "Remote control", value: controlValue,
-                detail: hostValueLabel == "-" ? nil : "Runtime Host · \(hostValueLabel)",
+                detail: hostValueLabel == "-" ? nil : "Server · \(hostValueLabel)",
                 promotion: controlPromotion
             ),
             MenuBarSystemFact(
@@ -556,11 +556,11 @@ extension HealthSnapshot {
                 promotion = .unavailable
             } else if heartbeatPostFailed {
                 value = "POST failed"
-                detail = heartbeat.lastError ?? "The Runtime Host has not acknowledged this machine's heartbeat."
+                detail = heartbeat.lastError ?? "Your Longhouse server has not acknowledged this machine's heartbeat."
                 promotion = .inspect
             } else if heartbeatEvidenceRejected {
                 value = "Evidence refused"
-                detail = "The Runtime Host is reachable, but session evidence was not applied."
+                detail = "Your Longhouse server is reachable, but session evidence was not applied."
                 promotion = .inspect
             } else if heartbeat.evidenceState == "applied" {
                 value = "Accepted"

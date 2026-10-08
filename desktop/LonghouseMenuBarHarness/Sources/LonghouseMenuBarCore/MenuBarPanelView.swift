@@ -1122,7 +1122,7 @@ public struct MenuBarPanelView: View {
             return "The local Longhouse engine is \(snapshot.serviceStatusLabel), so this Mac is not shipping. Repair restarts it."
         }
         if !projectionTrust.isCurrent {
-            return "The Runtime Host session view is unavailable. The local agent and durable upload facts remain separate; refresh to retry the remote view."
+            return "The session view from your Longhouse server is unavailable. The local agent and durable upload facts remain separate; refresh to retry the remote view."
         }
         if shouldRetryLocalStatus {
             return "The local agent is running, but its status evidence is stale. Refresh to retry; repair is not indicated."

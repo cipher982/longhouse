@@ -155,7 +155,7 @@ struct LoginView: View {
             }
             .accessibilityIdentifier("login.continueWithLonghouse")
 
-            Text("Hosted instances sign in through the Longhouse control plane.")
+            Text("Hosted instances sign in with your Longhouse account.")
                 .font(.caption)
                 .foregroundStyle(LoginInk.muted)
                 .multilineTextAlignment(.center)
@@ -237,7 +237,7 @@ struct LoginView: View {
         }
         .accessibilityIdentifier("login.continueWithLonghouse")
 
-        Text("Hosted Longhouse accounts sign in through the control plane. Custom or self-hosted servers can still be set from the server icon.")
+        Text("Hosted Longhouse instances sign in with your Longhouse account. Custom or self-hosted servers can still be set from the server icon.")
             .font(.caption)
             .foregroundStyle(LoginInk.muted)
             .multilineTextAlignment(.center)
