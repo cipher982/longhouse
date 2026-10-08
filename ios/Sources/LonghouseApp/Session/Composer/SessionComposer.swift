@@ -194,7 +194,8 @@ struct SessionComposerActionMenu: View {
             .contentShape(Rectangle())
         }
         .tint(Ember.textSecondary)
-        .disabled(isSending)
+        // Not disabled while sending: Stop lives here too, and attach already
+        // has its own !isSending gate.
         .accessibilityLabel("Message actions")
         .accessibilityIdentifier("session-chat-compose-actions")
     }
@@ -408,12 +409,12 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { evidenceNow = Date() } else { disarmStop() }
         }
-        // An armed Stop belongs to one turn and one draft. Any of these ends it;
-        // routine observation updates deliberately do not.
+        // An armed Stop belongs to one session and one draft. Any of these ends
+        // it. Turn observation is deliberately not a trigger: a streaming turn
+        // refreshes its observed_at with every delta, which would disarm Stop.
         .onChange(of: text) { _, _ in disarmStop() }
         .onChange(of: attachmentIsEmpty) { _, _ in disarmStop() }
         .onChange(of: detail.id) { _, _ in disarmStop() }
-        .onChange(of: detail.activityStartedAt) { _, _ in disarmStop() }
         .onChange(of: stopLabel == nil) { _, unavailable in
             if unavailable { disarmStop() }
         }
