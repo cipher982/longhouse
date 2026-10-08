@@ -90,6 +90,11 @@ def wait_for_claude_channel_state(
             except (json.JSONDecodeError, OSError, ValueError):
                 time.sleep(poll_interval_secs)
                 continue
+            if last_state.get("exited_at"):
+                # A tombstone: the bridge has exited, so the channel is not attached.
+                last_state = None
+                time.sleep(poll_interval_secs)
+                continue
             if not require_ready or bool(last_state.get("ready")):
                 return last_state
         time.sleep(poll_interval_secs)

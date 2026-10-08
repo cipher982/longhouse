@@ -6834,6 +6834,154 @@ mod tests {
         );
     }
 
+    const EXITED_SESSION_ID: &str = "44444444-4444-4444-8444-444444444444";
+    const EXITED_RUN_ID: &str = "55555555-5555-4555-8555-555555555555";
+
+    /// A fake Claude and a fake bridge: `sleep` under the names the channel
+    /// scan matches, so the scan reads real process identities.
+    #[cfg(unix)]
+    fn spawn_fake_claude_pair(dir: &Path) -> (std::process::Child, std::process::Child) {
+        let claude_bin = dir.join("claude");
+        let bridge_bin = dir.join("longhouse-claude-channel-serve");
+        std::os::unix::fs::symlink("/bin/sleep", &claude_bin).unwrap();
+        std::os::unix::fs::symlink("/bin/sleep", &bridge_bin).unwrap();
+        let claude = std::process::Command::new(&claude_bin)
+            .arg("600")
+            .spawn()
+            .unwrap();
+        let bridge = std::process::Command::new(&bridge_bin)
+            .arg("600")
+            .spawn()
+            .unwrap();
+        (claude, bridge)
+    }
+
+    #[cfg(unix)]
+    fn write_fake_claude_state(
+        state_dir: &Path,
+        claude_pid: u32,
+        bridge_pid: u32,
+        exited_at: Option<&str>,
+    ) {
+        std::fs::create_dir_all(state_dir).unwrap();
+        let mut payload = serde_json::json!({
+            "session_id": EXITED_SESSION_ID,
+            "run_id": EXITED_RUN_ID,
+            "provider_session_id": "claude-provider-exit",
+            "cwd": "/Users/test/git/acme",
+            "claude_pid": claude_pid,
+            "bridge_pid": bridge_pid,
+            "ready": true,
+            "started_at": Utc::now().to_rfc3339(),
+            "updated_at": Utc::now().to_rfc3339(),
+        });
+        if let Some(exited_at) = exited_at {
+            payload["exited_at"] = serde_json::json!(exited_at);
+        }
+        std::fs::write(
+            state_dir.join(format!("{EXITED_SESSION_ID}.json")),
+            payload.to_string(),
+        )
+        .unwrap();
+    }
+
+    /// Run ids that end as `process_gone` in the machine evidence built from
+    /// the channel state directory.
+    #[cfg(unix)]
+    fn process_gone_run_ids(state_dir: &Path) -> Vec<String> {
+        let observations = crate::managed_claude_scan::collect_observations_from(state_dir);
+        machine_evidence_from_observations(
+            "machine-exit-test",
+            &[],
+            &[],
+            &observations,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            true,
+            true,
+            Utc::now(),
+            None,
+            0,
+        )
+        .run
+        .into_iter()
+        .filter(|run| run.end_reason == "process_gone")
+        .map(|run| run.run_id)
+        .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn killed_claude_with_tombstone_ends_its_run_as_process_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("sessions");
+        let (mut claude, mut bridge) = spawn_fake_claude_pair(dir.path());
+        let (claude_pid, bridge_pid) = (claude.id(), bridge.id());
+        claude.kill().unwrap();
+        bridge.kill().unwrap();
+        claude.wait().unwrap();
+        bridge.wait().unwrap();
+
+        // The bridge's exit leaves this tombstone instead of deleting the file.
+        write_fake_claude_state(
+            &state_dir,
+            claude_pid,
+            bridge_pid,
+            Some(&Utc::now().to_rfc3339()),
+        );
+
+        assert_eq!(
+            process_gone_run_ids(&state_dir),
+            vec![EXITED_RUN_ID.to_string()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn killed_claude_with_deleted_state_leaves_no_run_evidence() {
+        // Old behaviour: the bridge deleted its file on exit, so the engine
+        // never learns the pids and the run is never ended by process_gone.
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("sessions");
+        let (mut claude, mut bridge) = spawn_fake_claude_pair(dir.path());
+        let (claude_pid, bridge_pid) = (claude.id(), bridge.id());
+        write_fake_claude_state(&state_dir, claude_pid, bridge_pid, None);
+        claude.kill().unwrap();
+        bridge.kill().unwrap();
+        claude.wait().unwrap();
+        bridge.wait().unwrap();
+        std::fs::remove_file(state_dir.join(format!("{EXITED_SESSION_ID}.json"))).unwrap();
+
+        assert!(process_gone_run_ids(&state_dir).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_claude_with_tombstone_is_not_ended() {
+        // A tombstone is not evidence on its own: identity governs, and these
+        // processes are alive.
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("sessions");
+        let (mut claude, mut bridge) = spawn_fake_claude_pair(dir.path());
+        write_fake_claude_state(
+            &state_dir,
+            claude.id(),
+            bridge.id(),
+            Some(&Utc::now().to_rfc3339()),
+        );
+
+        let ended = process_gone_run_ids(&state_dir);
+        claude.kill().unwrap();
+        bridge.kill().unwrap();
+        claude.wait().unwrap();
+        bridge.wait().unwrap();
+
+        assert!(ended.is_empty());
+    }
+
     #[test]
     fn exact_process_exit_requires_complete_run_and_process_identity() {
         let terminal = exact_process_exit_evidence(

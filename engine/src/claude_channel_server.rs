@@ -129,6 +129,11 @@ struct BridgeStatePayload {
     ready: bool,
     started_at: String,
     updated_at: String,
+    /// Set on the tombstone a bridge leaves when its stdio closes. Its presence
+    /// tells every control reader the channel is gone; the scan still reads the
+    /// pids so the engine can end the run as process_gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exited_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -233,7 +238,7 @@ where
     let cleanup_result = if coordination {
         Ok(())
     } else {
-        state.remove_state()
+        state.mark_exited()
     };
     loop_result?;
     cleanup_result?;
@@ -1117,6 +1122,7 @@ impl BridgeState {
             ready: inner.ready,
             started_at: inner.started_at.to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
+            exited_at: None,
         }
     }
 
@@ -1162,27 +1168,50 @@ impl BridgeState {
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
         let _lock = lock_state_path(&path)?;
-        let raw = serde_json::to_vec_pretty(&self.payload())?;
-        let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
-        write_private_file(&tmp, [&raw[..], b"\n"].concat().as_slice())
-            .with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &path)
-            .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
-        set_private_file_mode(&path);
-        Ok(())
+        write_payload_at(&path, &self.payload())
     }
 
-    fn remove_state(&self) -> Result<()> {
+    /// Leave a tombstone instead of deleting the state file: the engine scan
+    /// is the only way it learns this session's pids, and the run's
+    /// process_gone fact needs them after the bridge has gone. A file that a
+    /// newer bridge for this session already wrote is left alone.
+    fn mark_exited(&self) -> Result<()> {
         let Some(path) = self.state_file()? else {
             return Ok(());
         };
         let _lock = lock_state_path(&path)?;
-        match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(err).with_context(|| format!("removing {}", path.display())),
+        let Ok(raw) = std::fs::read(&path) else {
+            return Ok(());
+        };
+        let payload = self.payload();
+        let owned = serde_json::from_slice::<Value>(&raw).is_ok_and(|current| {
+            current.get("run_id").and_then(Value::as_str) == Some(payload.run_id.as_str())
+                && current.get("bridge_pid").and_then(Value::as_u64)
+                    == Some(u64::from(payload.bridge_pid))
+        });
+        if !owned {
+            return Ok(());
         }
+        write_payload_at(
+            &path,
+            &BridgeStatePayload {
+                exited_at: Some(Utc::now().to_rfc3339()),
+                ..payload
+            },
+        )
     }
+}
+
+/// Atomically replace a state file. The caller holds the state lock.
+fn write_payload_at(path: &Path, payload: &BridgeStatePayload) -> Result<()> {
+    let raw = serde_json::to_vec_pretty(payload)?;
+    let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    write_private_file(&tmp, [&raw[..], b"\n"].concat().as_slice())
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
+    set_private_file_mode(path);
+    Ok(())
 }
 
 struct HttpServerHandle {
@@ -1570,7 +1599,7 @@ fn set_private_file_mode(path: &Path) {
     }
 }
 
-fn lock_state_path(path: &Path) -> Result<std::fs::File> {
+pub(crate) fn lock_state_path(path: &Path) -> Result<std::fs::File> {
     let lock_path = path.with_extension("json.lock");
     if let Some(parent) = lock_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -1848,7 +1877,70 @@ mod tests {
 
         drop(stdin_client);
         task.await.unwrap().unwrap();
-        assert!(!state_path(temp.path()).exists());
+        let tombstone: Value =
+            serde_json::from_slice(&std::fs::read(state_path(temp.path())).unwrap()).unwrap();
+        assert!(tombstone["exited_at"].as_str().is_some());
+    }
+
+    #[test]
+    fn mark_exited_leaves_tombstone_with_the_bridge_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = BridgeState::new(test_config(temp.path())).unwrap();
+        state.set_port(1234).unwrap();
+        state.write_state().unwrap();
+
+        state.mark_exited().unwrap();
+
+        let payload: Value =
+            serde_json::from_slice(&std::fs::read(state_path(temp.path())).unwrap()).unwrap();
+        assert!(payload["exited_at"].as_str().is_some());
+        assert_eq!(payload["run_id"], "22222222-2222-4222-8222-222222222222");
+        assert_eq!(payload["bridge_pid"], std::process::id());
+        assert_eq!(payload["claude_pid"], std::process::id());
+        assert_eq!(payload["port"], 1234);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(state_path(temp.path()))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
+    #[test]
+    fn mark_exited_does_not_tombstone_a_newer_bridge_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = BridgeState::new(test_config(temp.path())).unwrap();
+        old.write_state().unwrap();
+        let mut newer_config = test_config(temp.path());
+        newer_config.run_id = Some("33333333-3333-4333-8333-333333333333".to_string());
+        let newer = BridgeState::new(newer_config).unwrap();
+        newer.write_state().unwrap();
+
+        old.mark_exited().unwrap();
+
+        let payload: Value =
+            serde_json::from_slice(&std::fs::read(state_path(temp.path())).unwrap()).unwrap();
+        assert_eq!(payload["run_id"], "33333333-3333-4333-8333-333333333333");
+        assert!(payload.get("exited_at").is_none());
+    }
+
+    #[test]
+    fn relaunch_overwrites_a_tombstone_with_a_live_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = BridgeState::new(test_config(temp.path())).unwrap();
+        first.write_state().unwrap();
+        first.mark_exited().unwrap();
+
+        let relaunched = BridgeState::new(test_config(temp.path())).unwrap();
+        relaunched.write_state().unwrap();
+
+        let payload: Value =
+            serde_json::from_slice(&std::fs::read(state_path(temp.path())).unwrap()).unwrap();
+        assert!(payload.get("exited_at").is_none());
     }
 
     #[test]

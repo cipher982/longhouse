@@ -6,8 +6,11 @@
 //! cwd, and readiness metadata.
 //!
 //! The engine validates process *identity* (not just PID existence) against
-//! the recorded `started_at`. State files are untrusted hints, never authority;
-//! only their owning bridge removes them, avoiding races with atomic rewrites.
+//! the recorded `started_at`. State files are untrusted hints, never authority.
+//!
+//! A bridge whose stdio closes leaves a tombstone (`exited_at` set) rather than
+//! deleting its file, so the engine still learns the pids and can end the run
+//! as `process_gone`. Tombstones are collected here once they are a day old.
 
 use std::collections::HashMap;
 use std::fs;
@@ -24,6 +27,10 @@ use crate::process_identity::collect_process_facts_by_pid;
 use crate::process_identity::{
     command_contains_basename, parse_rfc3339, started_before_or_near_recorded, ProcessFact,
 };
+
+/// How long a tombstone stays on disk. The engine may be down when Claude
+/// dies, so it has to be able to find the exit when it comes back.
+const EXITED_STATE_RETENTION: chrono::Duration = chrono::Duration::hours(24);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeChannelObservation {
@@ -60,6 +67,7 @@ struct ClaudeChannelStateFile {
     ready: Option<bool>,
     started_at: Option<String>,
     updated_at: Option<String>,
+    exited_at: Option<String>,
 }
 
 pub fn default_claude_channel_state_dir() -> Option<PathBuf> {
@@ -106,6 +114,13 @@ pub(crate) fn collect_observations_from_paths(
         let Ok(state) = serde_json::from_slice::<ClaudeChannelStateFile>(&bytes) else {
             continue;
         };
+        let now = Utc::now();
+        if tombstone_expired(&state, now) {
+            // Re-checked under the bridge's lock: a relaunch may have replaced
+            // the tombstone, and that live state is read on the next pass.
+            remove_expired_tombstone(path, now);
+            continue;
+        }
         let session_id = state
             .session_id
             .clone()
@@ -175,7 +190,7 @@ pub(crate) fn collect_observations_from_paths(
             cwd,
             claude_pid: state.claude_pid,
             bridge_pid: state.bridge_pid,
-            ready: state.ready.unwrap_or(false),
+            ready: state.ready.unwrap_or(false) && state.exited_at.is_none(),
             started_at,
             updated_at: state.updated_at.clone().unwrap_or_default(),
             claude_alive,
@@ -185,6 +200,31 @@ pub(crate) fn collect_observations_from_paths(
     }
     out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     out
+}
+
+fn tombstone_expired(state: &ClaudeChannelStateFile, now: DateTime<Utc>) -> bool {
+    state
+        .exited_at
+        .as_deref()
+        .and_then(parse_rfc3339)
+        .is_some_and(|exited| now - exited >= EXITED_STATE_RETENTION)
+}
+
+/// Delete a tombstone that has outlived its retention. The bridge rewrites the
+/// file under this same lock, so the age is read again under it.
+fn remove_expired_tombstone(path: &Path, now: DateTime<Utc>) {
+    let Ok(_lock) = crate::claude_channel_server::lock_state_path(path) else {
+        return;
+    };
+    let Ok(bytes) = fs::read(path) else {
+        return;
+    };
+    let Ok(state) = serde_json::from_slice::<ClaudeChannelStateFile>(&bytes) else {
+        return;
+    };
+    if tombstone_expired(&state, now) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 /// One parsed channel state file, held until the pass knows which of them need
@@ -518,6 +558,78 @@ mod tests {
             !observations[0].claude_alive,
             "a PID that started after started_at must be treated as reused"
         );
+    }
+
+    fn write_tombstone(dir: &Path, name: &str, exited_at: DateTime<Utc>) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(
+            &path,
+            format!(
+                r#"{{
+                  "session_id": "09b68f98-1e31-458e-b78a-6dfd062ead75",
+                  "run_id": "22222222-2222-4222-8222-222222222222",
+                  "claude_pid": 101,
+                  "bridge_pid": 102,
+                  "ready": true,
+                  "started_at": "2026-05-07T20:03:50Z",
+                  "updated_at": "2026-05-07T20:03:50Z",
+                  "exited_at": "{}"
+                }}"#,
+                exited_at.to_rfc3339()
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn tombstone_reads_as_dead_observation_and_is_not_ready() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_tombstone(tmp.path(), "session.json", Utc::now());
+
+        let observations = collect_observations_from_processes(tmp.path(), &HashMap::new());
+
+        assert_eq!(observations.len(), 1);
+        let obs = &observations[0];
+        assert_eq!(
+            obs.run_id.as_deref(),
+            Some("22222222-2222-4222-8222-222222222222")
+        );
+        assert_eq!(obs.claude_pid, Some(101));
+        assert_eq!(obs.bridge_pid, Some(102));
+        assert!(!obs.ready);
+        assert!(!obs.claude_alive);
+        assert!(!obs.bridge_alive);
+    }
+
+    #[test]
+    fn tombstone_older_than_retention_is_collected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tombstone(
+            tmp.path(),
+            "session.json",
+            Utc::now() - chrono::Duration::hours(25),
+        );
+
+        let observations = collect_observations_from_processes(tmp.path(), &HashMap::new());
+
+        assert!(observations.is_empty());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn tombstone_younger_than_retention_is_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tombstone(
+            tmp.path(),
+            "session.json",
+            Utc::now() - chrono::Duration::hours(23),
+        );
+
+        let observations = collect_observations_from_processes(tmp.path(), &HashMap::new());
+
+        assert_eq!(observations.len(), 1);
+        assert!(path.exists());
     }
 
     #[test]

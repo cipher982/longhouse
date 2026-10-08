@@ -80,6 +80,8 @@ struct ClaudeChannelState {
     claude_pid: Option<i32>,
     ready: Option<bool>,
     started_at: Option<String>,
+    /// Set by the bridge when its stdio closed; such a file is not attached.
+    exited_at: Option<String>,
 }
 
 pub async fn send_text(
@@ -744,6 +746,9 @@ enum StateReadError {
     Invalid(String),
 }
 
+/// A tombstone (`exited_at` set) reads as a missing file: the channel is gone,
+/// so control fails with the same not-attached error as before the bridge
+/// left tombstones instead of deleting its file.
 fn read_state_file(path: &Path) -> Result<ClaudeChannelState, StateReadError> {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
@@ -752,8 +757,12 @@ fn read_state_file(path: &Path) -> Result<ClaudeChannelState, StateReadError> {
         }
         Err(err) => return Err(StateReadError::Invalid(err.to_string())),
     };
-    serde_json::from_str(&raw)
-        .map_err(|err| StateReadError::Invalid(format!("state is invalid JSON: {err}")))
+    let state: ClaudeChannelState = serde_json::from_str(&raw)
+        .map_err(|err| StateReadError::Invalid(format!("state is invalid JSON: {err}")))?;
+    if state.exited_at.is_some() {
+        return Err(StateReadError::Missing);
+    }
+    Ok(state)
 }
 
 fn read_state_value(path: &Path) -> Result<serde_json::Value, StateReadError> {
@@ -764,8 +773,15 @@ fn read_state_value(path: &Path) -> Result<serde_json::Value, StateReadError> {
         }
         Err(err) => return Err(StateReadError::Invalid(err.to_string())),
     };
-    serde_json::from_str(&raw)
-        .map_err(|err| StateReadError::Invalid(format!("state is invalid JSON: {err}")))
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|err| StateReadError::Invalid(format!("state is invalid JSON: {err}")))?;
+    if value
+        .get("exited_at")
+        .is_some_and(|exited| !exited.is_null())
+    {
+        return Err(StateReadError::Missing);
+    }
+    Ok(value)
 }
 
 fn verify_claude_interrupt_target(
@@ -1006,6 +1022,71 @@ mod tests {
             err,
             ClaudeChannelControlError::SessionNotAttached { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn exited_state_fails_like_missing_state() {
+        let missing = tempfile::tempdir().unwrap();
+        let exited = tempfile::tempdir().unwrap();
+        write_state(
+            exited.path(),
+            SESSION_ID,
+            json!({
+                "session_id": SESSION_ID,
+                "port": 9,
+                "auth_token": "bridge-token",
+                "claude_pid": std::process::id(),
+                "ready": true,
+                "started_at": "2020-01-01T00:00:00Z",
+                "exited_at": "2026-10-08T12:00:00Z",
+            }),
+        );
+
+        let send = |root: &Path| ClaudeChannelSendConfig {
+            session_id: SESSION_ID.to_string(),
+            text: "hello".to_string(),
+            meta: vec![],
+            state_root: Some(root.to_path_buf()),
+            wait_timeout: Some(Duration::from_millis(10)),
+        };
+        let missing_err = send_text(send(missing.path())).await.unwrap_err();
+        let exited_err = send_text(send(exited.path())).await.unwrap_err();
+        assert!(matches!(
+            exited_err,
+            ClaudeChannelControlError::SessionNotAttached { .. }
+        ));
+        assert_eq!(
+            exited_err
+                .to_string()
+                .replace(&exited.path().display().to_string(), "<root>"),
+            missing_err
+                .to_string()
+                .replace(&missing.path().display().to_string(), "<root>"),
+        );
+
+        let interrupt_config = |root: &Path| ClaudeChannelInterruptConfig {
+            session_id: SESSION_ID.to_string(),
+            state_root: Some(root.to_path_buf()),
+            wait_timeout: Some(Duration::from_millis(10)),
+        };
+        let missing_err = interrupt(interrupt_config(missing.path()))
+            .await
+            .unwrap_err();
+        let exited_err = interrupt(interrupt_config(exited.path()))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            exited_err,
+            ClaudeChannelControlError::SessionNotAttached { .. }
+        ));
+        assert_eq!(
+            exited_err
+                .to_string()
+                .replace(&exited.path().display().to_string(), "<root>"),
+            missing_err
+                .to_string()
+                .replace(&missing.path().display().to_string(), "<root>"),
+        );
     }
 
     #[tokio::test]
