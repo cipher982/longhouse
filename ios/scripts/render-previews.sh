@@ -59,6 +59,18 @@ xcodebuild test \
 TEST_EXIT=$?
 set -e
 
+# -quiet hides assertion text and the xcresult is not retained, so print each
+# failing preview's message here; otherwise a failure names only the test.
+if [ "$TEST_EXIT" -ne 0 ]; then
+  echo ">> Failure messages"
+  xcrun xcresulttool get test-results summary --path "$RESULT_BUNDLE" 2>/dev/null \
+    | python3 -c '
+import json, sys
+for f in json.load(sys.stdin).get("testFailures", []):
+    print(f"  {f.get(\"testName\")}: {f.get(\"failureText\")}")
+' || echo "  (could not read $RESULT_BUNDLE)"
+fi
+
 echo ">> Extracting attachments"
 xcrun xcresulttool export attachments \
   --path "$RESULT_BUNDLE" \
