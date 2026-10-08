@@ -15,6 +15,10 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 const DEFAULT_READY_WAIT: Duration = Duration::from_secs(10);
+
+fn default_ready_wait() -> Duration {
+    crate::control_wait::control_wait(DEFAULT_READY_WAIT)
+}
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -81,7 +85,7 @@ struct ClaudeChannelState {
 pub async fn send_text(
     config: ClaudeChannelSendConfig,
 ) -> Result<ClaudeChannelSendSummary, ClaudeChannelControlError> {
-    let wait_timeout = config.wait_timeout.unwrap_or(DEFAULT_READY_WAIT);
+    let wait_timeout = config.wait_timeout.unwrap_or_else(default_ready_wait);
     let state = wait_for_ready_state(
         &config.session_id,
         config.state_root.as_deref(),
@@ -256,7 +260,7 @@ async fn inject(
 pub async fn interrupt(
     config: ClaudeChannelInterruptConfig,
 ) -> Result<ClaudeChannelInterruptSummary, ClaudeChannelControlError> {
-    let wait_timeout = config.wait_timeout.unwrap_or(DEFAULT_READY_WAIT);
+    let wait_timeout = config.wait_timeout.unwrap_or_else(default_ready_wait);
     let state = wait_for_ready_state(
         &config.session_id,
         config.state_root.as_deref(),
@@ -568,7 +572,7 @@ fn turn_control_at(
 pub async fn terminate(
     config: ClaudeChannelInterruptConfig,
 ) -> Result<ClaudeChannelTerminateSummary, ClaudeChannelControlError> {
-    let wait_timeout = config.wait_timeout.unwrap_or(DEFAULT_READY_WAIT);
+    let wait_timeout = config.wait_timeout.unwrap_or_else(default_ready_wait);
     let state = wait_for_ready_state(
         &config.session_id,
         config.state_root.as_deref(),
@@ -655,7 +659,7 @@ fn write_qa_fault_receipt(session_id: &str, state_root: Option<&Path>, receipt: 
 pub async fn inspect_state(
     config: ClaudeChannelInspectConfig,
 ) -> Result<serde_json::Value, ClaudeChannelControlError> {
-    let wait_timeout = config.wait_timeout.unwrap_or(DEFAULT_READY_WAIT);
+    let wait_timeout = config.wait_timeout.unwrap_or_else(default_ready_wait);
     let path = state_file_path(&config.session_id, config.state_root.as_deref())?;
     let deadline = Instant::now() + wait_timeout;
     loop {

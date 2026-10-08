@@ -1057,6 +1057,20 @@ pub(super) async fn execute_invocation_close(
         });
     }
 
+    // Only the adapters that park work have an invocation to close; any other
+    // provider is refused outright rather than answered with a no-op.
+    let expected_adapter = match provider.as_str() {
+        "claude" => CLAUDE_PRINT_ADAPTER,
+        "codex" => CODEX_EXEC_ADAPTER,
+        "omp" => OMP_PRINT_ADAPTER,
+        _ => {
+            return Err(CommandError {
+                code: "provider_unsupported".to_string(),
+                message: format!("provider={provider} has no parked Console invocation to close"),
+            });
+        }
+    };
+
     let registry = default_turn_claim_registry().map_err(CommandError::command_failed)?;
     let claim = match registry.read(&run_id) {
         Ok(claim) => claim,
@@ -1069,14 +1083,7 @@ pub(super) async fn execute_invocation_close(
         }
     };
     let invocation_id = claim.launch_id.clone();
-    let expected_adapter = match provider.as_str() {
-        "claude" => CLAUDE_PRINT_ADAPTER,
-        "codex" => CODEX_EXEC_ADAPTER,
-        "omp" => OMP_PRINT_ADAPTER,
-        _ => "",
-    };
-    if expected_adapter.is_empty()
-        || claim.session_id != session_id
+    if claim.session_id != session_id
         || claim.thread_id != thread_id
         || claim.provider != provider
         || claim.adapter.as_deref() != Some(expected_adapter)

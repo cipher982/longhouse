@@ -775,72 +775,6 @@ mod tests {
             .collect()
     }
 
-    // This is a manually maintained mirror of the provider branches in
-    // `execute_command`; it is not authoritative production dispatch logic.
-    // Keep it synchronized by hand until parity can invoke the real handlers
-    // hermetically without triggering provider side effects.
-    const ENGINE_DISPATCH_SUPPORTS: &[(&str, &str, &str)] = &[
-        ("codex", "send", COMMAND_SEND_TEXT),
-        ("codex", "interrupt", COMMAND_INTERRUPT),
-        ("codex", "steer", COMMAND_STEER_TEXT),
-        ("codex", "answer_pause", COMMAND_ANSWER_PAUSE),
-        ("codex", "run_once", COMMAND_RUN_ONCE),
-        ("codex", "resume_run_once", COMMAND_RUN_ONCE),
-        ("codex", "turn_start", COMMAND_TURN_START),
-        ("codex", "turn_steer", COMMAND_TURN_STEER),
-        ("codex", "turn_interrupt", COMMAND_TURN_INTERRUPT),
-        ("codex", "invocation_close", COMMAND_INVOCATION_CLOSE),
-        ("opencode", "turn_start", COMMAND_TURN_START),
-        ("opencode", "turn_interrupt", COMMAND_TURN_INTERRUPT),
-        ("opencode", "answer_pause", COMMAND_ANSWER_PAUSE),
-        ("claude", "send", COMMAND_SEND_TEXT),
-        ("claude", "interrupt", COMMAND_INTERRUPT),
-        ("claude", "steer", COMMAND_STEER_TEXT),
-        ("claude", "terminate", COMMAND_TERMINATE),
-        ("claude", "answer_pause", COMMAND_ANSWER_PAUSE),
-        ("claude", "turn_start", COMMAND_TURN_START),
-        ("claude", "turn_interrupt", COMMAND_TURN_INTERRUPT),
-        ("claude", "turn_steer", COMMAND_TURN_STEER),
-        ("claude", "invocation_close", COMMAND_INVOCATION_CLOSE),
-        ("opencode", "send", COMMAND_SEND_TEXT),
-        ("opencode", "interrupt", COMMAND_INTERRUPT),
-        ("opencode", "steer", COMMAND_STEER_TEXT),
-        ("opencode", "terminate", COMMAND_TERMINATE),
-        ("antigravity", "send", COMMAND_SEND_TEXT),
-        ("antigravity", "turn_start", COMMAND_TURN_START),
-        ("cursor", "send", COMMAND_SEND_TEXT),
-        ("cursor", "interrupt", COMMAND_INTERRUPT),
-        ("cursor", "steer", COMMAND_STEER_TEXT),
-        ("cursor", "terminate", COMMAND_TERMINATE),
-        ("cursor", "turn_start", COMMAND_TURN_START),
-        ("cursor", "turn_interrupt", COMMAND_TURN_INTERRUPT),
-        ("pi", "turn_start", COMMAND_TURN_START),
-        ("pi", "turn_interrupt", COMMAND_TURN_INTERRUPT),
-        ("pi", "turn_steer", COMMAND_TURN_STEER),
-        ("pi", "send", COMMAND_SEND_TEXT),
-        ("pi", "steer", COMMAND_STEER_TEXT),
-        ("pi", "interrupt", COMMAND_INTERRUPT),
-        ("pi", "terminate", COMMAND_TERMINATE),
-        ("omp", "send", COMMAND_SEND_TEXT),
-        ("omp", "interrupt", COMMAND_INTERRUPT),
-        ("omp", "steer", COMMAND_STEER_TEXT),
-        ("omp", "terminate", COMMAND_TERMINATE),
-        ("omp", "turn_start", COMMAND_TURN_START),
-        ("omp", "turn_interrupt", COMMAND_TURN_INTERRUPT),
-        ("omp", "turn_steer", COMMAND_TURN_STEER),
-        ("omp", "invocation_close", COMMAND_INVOCATION_CLOSE),
-        ("opencode", "turn_steer", COMMAND_TURN_STEER),
-    ];
-
-    fn support_dispatch_command(provider: &str, operation: &str) -> Option<&'static str> {
-        ENGINE_DISPATCH_SUPPORTS
-            .iter()
-            .find(|(supported_provider, supported_operation, _command)| {
-                provider == *supported_provider && operation == *supported_operation
-            })
-            .map(|(_, _, command)| *command)
-    }
-
     #[derive(Debug)]
     struct RecordedHttpRequest {
         target: String,
@@ -1875,39 +1809,129 @@ mod tests {
         let error = validate_managed_provider_contract_manifest(&payload).unwrap_err();
         assert!(error.contains("invocation_close is only admitted"));
     }
-    #[test]
-    fn manifest_machine_control_supports_have_engine_dispatch_paths() {
-        for support in manifest_machine_control_supports() {
-            let (provider, operation) = support
-                .split_once('.')
-                .unwrap_or_else(|| panic!("support {support} must be provider.operation"));
-            assert!(
-                support_dispatch_command(provider, operation).is_some(),
-                "manifest advertises {support}, but engine dispatch has no provider operation path"
-            );
-        }
+    /// Operations the engine routes although the manifest does not advertise
+    /// them. Safe in one direction only: the Runtime Host sends a control
+    /// command only when the machine advertises it, so an unadvertised path is
+    /// never reached. Each entry is a deliberate decision, not drift.
+    const DISPATCHED_BUT_UNADVERTISED: &[(&str, &str, &str)] = &[(
+        "antigravity",
+        "turn_interrupt",
+        // b8b09e7da: the schema ties turn_interrupt to the session-level
+        // interrupt capability, which Antigravity does not have; the Console
+        // adapter can cancel its own one-shot turn and stays reachable for
+        // when interrupt lands.
+        "turn_interrupt rides on the unbuilt session interrupt",
+    )];
+
+    /// One (command, payload) probe per manifest operation, shaped so the real
+    /// dispatcher reaches its provider routing and then fails harmlessly: no
+    /// session, run or claim exists, cwd does not exist, and PATH is empty.
+    fn dispatch_probe(provider: &str, operation: &str) -> Value {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let thread_id = uuid::Uuid::new_v4().to_string();
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let missing_cwd = "/nonexistent/longhouse-dispatch-parity";
+        let (command_type, command_id, payload) = match operation {
+            "send" => (
+                COMMAND_SEND_TEXT,
+                uuid::Uuid::new_v4().to_string(),
+                json!({"provider": provider, "text": "probe"}),
+            ),
+            "interrupt" => (
+                COMMAND_INTERRUPT,
+                uuid::Uuid::new_v4().to_string(),
+                json!({"provider": provider}),
+            ),
+            "steer" => (
+                COMMAND_STEER_TEXT,
+                uuid::Uuid::new_v4().to_string(),
+                json!({"provider": provider, "text": "probe"}),
+            ),
+            "terminate" => (
+                COMMAND_TERMINATE,
+                uuid::Uuid::new_v4().to_string(),
+                json!({"provider": provider}),
+            ),
+            "answer_pause" => (
+                COMMAND_ANSWER_PAUSE,
+                uuid::Uuid::new_v4().to_string(),
+                json!({"provider": provider, "request_key": "probe", "provider_request_id": "probe", "decision": "answer"}),
+            ),
+            "run_once" => (
+                COMMAND_RUN_ONCE,
+                uuid::Uuid::new_v4().to_string(),
+                json!({"provider": provider, "cwd": missing_cwd, "initial_prompt": "probe", "run_id": run_id}),
+            ),
+            "resume_run_once" => (
+                COMMAND_RUN_ONCE,
+                uuid::Uuid::new_v4().to_string(),
+                json!({
+                    "provider": provider,
+                    "cwd": missing_cwd,
+                    "initial_prompt": "probe",
+                    "run_id": run_id,
+                    "resume_thread_id": thread_id,
+                }),
+            ),
+            "turn_start" => (
+                COMMAND_TURN_START,
+                run_id.clone(),
+                json!({"provider": provider, "run_id": run_id, "thread_id": thread_id, "cwd": missing_cwd}),
+            ),
+            "turn_steer" => (
+                COMMAND_TURN_STEER,
+                uuid::Uuid::new_v4().to_string(),
+                json!({"provider": provider, "run_id": run_id, "text": "probe"}),
+            ),
+            "turn_interrupt" => (
+                COMMAND_TURN_INTERRUPT,
+                uuid::Uuid::new_v4().to_string(),
+                json!({"provider": provider, "run_id": run_id, "turn_id": turn_id, "thread_id": thread_id}),
+            ),
+            "invocation_close" => (
+                COMMAND_INVOCATION_CLOSE,
+                format!("{run_id}:close"),
+                json!({"provider": provider, "run_id": run_id, "thread_id": thread_id, "reason": "user_stop"}),
+            ),
+            other => panic!("no dispatch probe for manifest operation {other}; add one"),
+        };
+        json!({
+            "command_type": command_type,
+            "command_id": command_id,
+            "session_id": session_id,
+            "payload": payload,
+        })
     }
 
-    /// `ENGINE_DISPATCH_SUPPORTS` is a hand-kept mirror, so the tests above can
-    /// agree with it while `execute_command` disagrees. This one drives the
-    /// real dispatcher: for every manifest provider, `session.terminate` against
-    /// a session that does not exist either reaches that provider's terminate
-    /// path (any error but `unsupported_command`) or falls through to
-    /// `unsupported_command`. Which one must match `<provider>.terminate` in the
-    /// manifest, in both directions.
+    /// The manifest is the only list of what each provider supports. This
+    /// drives the real `execute_command` for every manifest provider and every
+    /// operation the manifest knows, and requires the dispatcher to refuse
+    /// (`unsupported_command` or `provider_unsupported`) exactly when
+    /// `<provider>.<operation>` is undeclared, apart from the documented
+    /// `DISPATCHED_BUT_UNADVERTISED` entries.
     #[test]
-    fn terminate_dispatch_matches_manifest_terminate_support_for_every_provider() {
+    fn dispatch_matches_manifest_for_every_provider_operation() {
         let supports = manifest_machine_control_supports();
         let providers: std::collections::BTreeSet<String> = managed_provider_contract_items()
             .iter()
             .filter_map(|contract| contract.get("provider").and_then(Value::as_str))
             .map(str::to_string)
             .collect();
-        assert!(!providers.is_empty());
-        // Same isolation as the other tests that reach provider control code:
-        // a private agent state dir and an empty PATH, so no provider binary or
-        // real session can be found. Claude's path still waits its full
-        // DEFAULT_READY_WAIT (10 s) for a channel that never appears.
+        let operations: std::collections::BTreeSet<String> = supports
+            .iter()
+            .filter_map(|support| support.split_once('.').map(|(_, op)| op.to_string()))
+            .collect();
+        assert!(!providers.is_empty() && !operations.is_empty());
+        for (provider, operation, _reason) in DISPATCHED_BUT_UNADVERTISED {
+            assert!(
+                !supports.contains(&format!("{provider}.{operation}")),
+                "{provider}.{operation} is advertised now; drop it from DISPATCHED_BUT_UNADVERTISED"
+            );
+        }
+        // A private agent state dir and an empty PATH, so no provider binary or
+        // real session can be found; handshake waits (Claude channel ready,
+        // Antigravity hook claim) are shortened on this thread only.
         let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let empty_path = tempfile::tempdir().unwrap();
@@ -1915,35 +1939,53 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        for provider in providers {
-            let frame = json!({
-                "command_type": COMMAND_TERMINATE,
-                "command_id": uuid::Uuid::new_v4().to_string(),
-                "session_id": uuid::Uuid::new_v4().to_string(),
-                "payload": {"provider": provider},
-            });
-            let outcome = temp_env::with_vars(
-                [
-                    ("LONGHOUSE_HOME", Some(temp.path().as_os_str())),
-                    ("HOME", Some(temp.path().as_os_str())),
-                    ("PATH", Some(empty_path.path().as_os_str())),
-                    ("LONGHOUSE_CODEX_BIN", None::<&std::ffi::OsStr>),
-                    ("LONGHOUSE_CLAUDE_BIN", None::<&std::ffi::OsStr>),
-                    ("LONGHOUSE_OPENCODE_BIN", None::<&std::ffi::OsStr>),
-                    ("LONGHOUSE_ANTIGRAVITY_BIN", None::<&std::ffi::OsStr>),
-                    ("LONGHOUSE_CURSOR_BIN", None::<&std::ffi::OsStr>),
-                    ("LONGHOUSE_PI_BIN", None::<&std::ffi::OsStr>),
-                    ("LONGHOUSE_OMP_BIN", None::<&std::ffi::OsStr>),
-                ],
-                || runtime.block_on(execute_command(&frame, &ShipperConfig::default())),
-            );
-            let dispatched = !matches!(&outcome, Err(error) if error.code == "unsupported_command");
-            let declared = supports.contains(&format!("{provider}.terminate"));
-            assert_eq!(
-                dispatched, declared,
-                "{provider}: execute_command terminate dispatched={dispatched}, manifest declares {provider}.terminate={declared} ({outcome:?})"
-            );
+        let mut mismatches = Vec::new();
+        for provider in &providers {
+            for operation in &operations {
+                let frame = dispatch_probe(provider, operation);
+                let outcome = temp_env::with_vars(
+                    [
+                        ("LONGHOUSE_HOME", Some(temp.path().as_os_str())),
+                        ("HOME", Some(temp.path().as_os_str())),
+                        ("PATH", Some(empty_path.path().as_os_str())),
+                        ("LONGHOUSE_CODEX_BIN", None::<&std::ffi::OsStr>),
+                        ("LONGHOUSE_CLAUDE_BIN", None::<&std::ffi::OsStr>),
+                        ("LONGHOUSE_OPENCODE_BIN", None::<&std::ffi::OsStr>),
+                        ("LONGHOUSE_ANTIGRAVITY_BIN", None::<&std::ffi::OsStr>),
+                        ("LONGHOUSE_CURSOR_BIN", None::<&std::ffi::OsStr>),
+                        ("LONGHOUSE_PI_BIN", None::<&std::ffi::OsStr>),
+                        ("LONGHOUSE_OMP_BIN", None::<&std::ffi::OsStr>),
+                    ],
+                    || {
+                        crate::control_wait::with_test_control_wait(
+                            std::time::Duration::from_millis(50),
+                            || runtime.block_on(execute_command(&frame, &ShipperConfig::default())),
+                        )
+                    },
+                );
+                let refused = matches!(
+                    &outcome,
+                    Err(error) if error.code == "unsupported_command" || error.code == "provider_unsupported"
+                );
+                let declared = supports.contains(&format!("{provider}.{operation}"));
+                let exempt = DISPATCHED_BUT_UNADVERTISED
+                    .iter()
+                    .any(|(p, op, _)| p == provider && op == operation);
+                // Declared → must dispatch; undeclared → must refuse, except the
+                // documented exemptions, which must still dispatch.
+                let expect_refused = !declared && !exempt;
+                if refused != expect_refused {
+                    mismatches.push(format!(
+                        "{provider}.{operation}: declared={declared} refused={refused} ({outcome:?})"
+                    ));
+                }
+            }
         }
+        assert!(
+            mismatches.is_empty(),
+            "dispatch disagrees with the manifest:\n{}",
+            mismatches.join("\n")
+        );
     }
 
     #[test]
@@ -1966,36 +2008,15 @@ mod tests {
     }
 
     #[test]
-    fn managed_engine_dispatch_paths_are_manifest_backed() {
-        let supports = manifest_machine_control_supports();
-        for (provider, operation, _command) in ENGINE_DISPATCH_SUPPORTS {
-            let support = format!("{provider}.{operation}");
-            assert!(
-                supports.contains(&support),
-                "engine dispatch path {support} must be declared in managed provider manifest"
-            );
-            assert!(
-                support_dispatch_command(provider, operation).is_some(),
-                "engine dispatch path {support} must map to a control command"
-            );
-        }
-    }
-
-    #[test]
     fn invocation_close_support_is_limited_to_work_owning_adapters() {
         let supports = manifest_machine_control_supports();
         for provider in ["claude", "codex", "omp"] {
             let support = format!("{provider}.invocation_close");
             assert!(supports.contains(&support), "missing {support}");
-            assert_eq!(
-                support_dispatch_command(provider, "invocation_close"),
-                Some(COMMAND_INVOCATION_CLOSE)
-            );
         }
         for provider in ["antigravity", "cursor", "opencode", "pi"] {
             let support = format!("{provider}.invocation_close");
             assert!(!supports.contains(&support), "unexpected {support}");
-            assert_eq!(support_dispatch_command(provider, "invocation_close"), None);
         }
     }
 
@@ -2249,11 +2270,6 @@ mod tests {
             assert!(
                 !supports.contains(&support),
                 "manifest must not advertise unsupported dispatch path {support}"
-            );
-            assert_eq!(
-                support_dispatch_command(provider, operation),
-                None,
-                "engine dispatch table must not route unsupported path {support}"
             );
         }
     }

@@ -29,6 +29,7 @@ mod console_sink_golden;
 mod console_lifecycle;
 mod console_rpc;
 mod control_channel;
+mod control_wait;
 mod cursor_helm_control;
 mod cursor_helm_launcher;
 mod cursor_hooks;

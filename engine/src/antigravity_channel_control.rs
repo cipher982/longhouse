@@ -187,7 +187,9 @@ async fn wait_for_claim(claim_path: &Path, wait_claimed_secs: f64) -> Option<Str
 /// message and fails if no claim shows up in time, matching the retired
 /// `longhouse antigravity-channel send` CLI's behavior.
 pub async fn send_text(session_id: &str, text: &str) -> Result<AntigravitySendOutcome> {
-    send_text_with_timeout(session_id, text, DEFAULT_WAIT_CLAIMED_SECS).await
+    let wait =
+        crate::control_wait::control_wait(Duration::from_secs_f64(DEFAULT_WAIT_CLAIMED_SECS));
+    send_text_with_timeout(session_id, text, wait.as_secs_f64()).await
 }
 
 async fn send_text_with_timeout(
