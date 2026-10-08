@@ -1108,9 +1108,10 @@ export interface paths {
         };
         /**
          * Get Provider Version Evidence
-         * @description Facts only: the proof records and failing cell verdicts one provider
-         *     version has, plus the assertions the chip certification requires. The
-         *     caller decides what they add up to; nothing here is a verdict.
+         * @description Facts only: the proof records one provider version has (with store
+         *     integrity) and the assertions the chip certification requires. Whether a cell
+         *     is failing now is the certification's fold (/public/provider-certification),
+         *     not this route's: cell verdicts carry no version and a second fold would drift.
          */
         get: operations["get_provider_version_evidence_agents_provider_version_evidence_get"];
         put?: never;

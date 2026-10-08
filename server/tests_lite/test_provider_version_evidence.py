@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import os
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,22 +20,9 @@ from tests_lite.test_provider_capability_proof_routes import _write_trusted
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.routers import provider_capability_proofs as routes
-from zerg.services.provider_capability_cell_verdicts import CellVerdict
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
 
 URL = "/api/agents/provider-version-evidence"
-
-
-def _verdict(provider: str, assertion_id: str, failures: int) -> CellVerdict:
-    return CellVerdict(
-        provider=provider,
-        assertion_id=assertion_id,
-        scenario_id="helm_scenario",
-        variant="default",
-        outcome="infrastructure_error",
-        observed_at=datetime.now(UTC),
-        consecutive_failures=failures,
-    )
 
 
 def _seed(store: ProviderCapabilityProofStore) -> None:
