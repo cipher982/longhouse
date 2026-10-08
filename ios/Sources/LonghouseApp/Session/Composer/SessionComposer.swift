@@ -216,6 +216,9 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     @State private var evidenceNow = Date()
     /// Set by the first Stop tap; nil whenever Stop is not armed.
     @State private var stopArmedAt: Date?
+    /// The provider run the arm was made against. A confirm for a different
+    /// run must not interrupt it, even inside the window.
+    @State private var stopArmedRunId: String?
     @State private var stopRingProgress: Double = 1
     @State private var stopArmTick = 0
     @State private var stopConfirmTick = 0
@@ -409,12 +412,13 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { evidenceNow = Date() } else { disarmStop() }
         }
-        // An armed Stop belongs to one session and one draft. Any of these ends
-        // it. Turn observation is deliberately not a trigger: a streaming turn
-        // refreshes its observed_at with every delta, which would disarm Stop.
+        // An armed Stop belongs to one session, one provider run and one draft.
+        // Any of these ends it. Turn observation is deliberately not a trigger:
+        // a streaming turn refreshes its observed_at with every delta.
         .onChange(of: text) { _, _ in disarmStop() }
         .onChange(of: attachmentIsEmpty) { _, _ in disarmStop() }
         .onChange(of: detail.id) { _, _ in disarmStop() }
+        .onChange(of: detail.stateFacts.runId) { _, _ in disarmStop() }
         .onChange(of: stopLabel == nil) { _, unavailable in
             if unavailable { disarmStop() }
         }
@@ -509,14 +513,16 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     private func armStop() {
         guard !isStopping, SessionComposerControlState.stopActionLabel(for: detail) != nil else { return }
         stopArmTick += 1
+        stopArmedRunId = detail.stateFacts.runId
         withAnimation(reduceMotion ? nil : .smooth(duration: 0.28)) { stopArmedAt = Date() }
     }
 
     private func confirmStop() {
-        // Recheck the window and capability on the confirming tap: a stale arm
-        // must not interrupt a turn the user is no longer looking at.
+        // Recheck the window, the run and the capability on the confirming tap:
+        // a stale arm must not interrupt a turn the user is no longer looking at.
         guard let armedAt = stopArmedAt,
               !isStopping,
+              stopArmedRunId == detail.stateFacts.runId,
               SessionComposerControlState.stopActionLabel(for: detail) != nil,
               Date().timeIntervalSince(armedAt) < SessionComposerControlState.stopConfirmWindow else {
             disarmStop()
@@ -528,6 +534,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     }
 
     private func disarmStop() {
+        stopArmedRunId = nil
         guard stopArmedAt != nil else { return }
         withAnimation(reduceMotion ? nil : .smooth(duration: 0.2)) { stopArmedAt = nil }
     }
