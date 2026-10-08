@@ -1473,8 +1473,15 @@ def test_connect_daemon_exits_cleanly_on_shutdown_signal(server, tmp_path, sig):
     daemon = _start_connect_daemon(server, tmp_path, project_name="shutdown-project", machine_name="shipper-e2e")
     proc = daemon["proc"]
     log_dir = daemon["log_dir"]
+    status_path = daemon["longhouse_home"] / "agent" / "engine-status.json"
     try:
         _wait_for_log_contains(log_dir, "Daemon ready")
+        # "Daemon ready" is logged before the signal handlers are installed; the
+        # status file is only written from inside the loop, after them.
+        deadline = time.monotonic() + 30
+        while not status_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert status_path.exists(), "daemon loop never started (no engine status file)"
         os.kill(proc.pid, sig)
         try:
             returncode = proc.wait(timeout=20)
@@ -1498,6 +1505,7 @@ def test_connect_daemon_exits_cleanly_on_shutdown_signal(server, tmp_path, sig):
         shutil.rmtree(daemon["longhouse_home"], ignore_errors=True)
 
 
+@pytest.mark.timeout(200)
 def test_connect_daemon_timers_reach_runtime_host_and_status_file(server, tmp_path):
     """Pins the daemon loop's timer arms end to end: the local status file is
     written, a heartbeat reaches the Runtime Host, and the periodic machine
