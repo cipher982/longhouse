@@ -360,3 +360,293 @@ pub(super) fn history_runtime_work_active(
                 || (!sealed_current && (scheduler.ready_scan > 0 || scheduler.in_flight_scan > 0))
         })
 }
+
+impl DaemonState {
+    pub(super) fn on_projection_build_done(
+        &mut self,
+        config: &ConnectConfig,
+        projection_build_result: Option<Result<ProjectionBuildResult, tokio::task::JoinError>>,
+    ) {
+        match projection_build_result {
+            Some(Ok(result)) => {
+                let is_current = self.managed_observation_valid
+                    && result.generation == self.projection_generation
+                    && result.managed_observation_generation == self.managed_observation_generation
+                    && result.managed_scan_partial == self.last_projected_managed_scan_partial
+                    && result.managed_snapshot_complete
+                        == self.last_projected_managed_snapshot_complete
+                    && result.unmanaged_snapshot_complete
+                        == self.last_projected_unmanaged_snapshot_complete;
+                match result.result {
+                    Ok((mut projection, next_snapshot_state)) => {
+                        if result.elapsed_ms > LOCAL_STATUS_BUDGET_MS {
+                            self.projection_over_budget_ticks =
+                                self.projection_over_budget_ticks.saturating_add(1);
+                            self.projection_worst_elapsed_ms =
+                                self.projection_worst_elapsed_ms.max(result.elapsed_ms);
+                            let due = self.projection_budget_reported_at.is_none_or(|at| {
+                                at.elapsed() >= LOCAL_STATUS_BUDGET_REPORT_INTERVAL
+                            });
+                            if due {
+                                tracing::warn!(
+                                    over_budget_ticks = self.projection_over_budget_ticks,
+                                    worst_elapsed_ms = self.projection_worst_elapsed_ms,
+                                    budget_ms = LOCAL_STATUS_BUDGET_MS,
+                                    "Local status projection exceeded background budget"
+                                );
+                                self.projection_over_budget_ticks = 0;
+                                self.projection_worst_elapsed_ms = 0;
+                                self.projection_budget_reported_at = Some(Instant::now());
+                            }
+                        }
+                        if !is_current {
+                            tracing::debug!(
+                                generation = result.generation,
+                                latest_generation = self.projection_generation,
+                                managed_scan_partial = result.managed_scan_partial,
+                                latest_managed_scan_partial =
+                                    self.last_projected_managed_scan_partial,
+                                unmanaged_snapshot_complete = result.unmanaged_snapshot_complete,
+                                latest_unmanaged_snapshot_complete =
+                                    self.last_projected_unmanaged_snapshot_complete,
+                                "Discarded stale local status projection"
+                            );
+                        } else {
+                            self.session_snapshot_state = next_snapshot_state;
+                            if result.managed_scan_partial {
+                                self.managed_reconciliation =
+                                    heartbeat::ProjectionReconciliation::failed(
+                                        "provider_state_partial",
+                                    );
+                            } else if result.managed_snapshot_complete
+                                && result.unmanaged_snapshot_complete
+                                && self.managed_observation_scan_tasks.is_empty()
+                                && self.unmanaged_binding_refresh_tasks.is_empty()
+                                && !self.unmanaged_binding_refresh_failed
+                            {
+                                // Only a complete paired observation clears a failure.
+                                // A cached/managed-only projection is not recovery.
+                                self.managed_reconciliation =
+                                    heartbeat::ProjectionReconciliation::idle();
+                            }
+                            self.shipping_progress.observe_pending_work(
+                                heartbeat::payload_has_pending_work(&projection.payload)
+                                    || known_pending_local_work(
+                                        &self.scheduler,
+                                        &self.deferred_retries,
+                                        archive_repair_is_paused(config.archive_repair_mode),
+                                    ),
+                                Instant::now(),
+                            );
+                            projection.set_heartbeat_transport(self.heartbeat_transport.clone());
+                            projection.set_host_link(self.host_link.snapshot());
+                            projection
+                                .set_runtime_event_outbox(self.latest_runtime_event_outbox.clone());
+                            if let Some(evidence) = projection.payload.machine_evidence.as_ref() {
+                                self.acknowledged_machine_evidence
+                                    .prune_to_current(&evidence.candidate_identities);
+                            } else {
+                                self.acknowledged_machine_evidence.prune_to_current(&[]);
+                            }
+                            heartbeat::write_status_file(
+                                &mut projection,
+                                serde_json::to_value(self.control_channel_status.snapshot()).ok(),
+                                &self.managed_reconciliation,
+                                &mut self.shipping_progress,
+                                self.offline.is_offline,
+                                &self.status_path,
+                            );
+                            let payload = projection.payload.clone();
+                            self.last_status_projection = Some(projection);
+                            let signature = runtime_truth_signature(&payload);
+                            if !self.offline.is_offline {
+                                if runtime_truth_changed(
+                                    self.last_runtime_truth_signature.as_deref(),
+                                    &signature,
+                                ) {
+                                    let now = Instant::now();
+                                    let due =
+                                        truth_heartbeat_due_at(self.last_truth_heartbeat_at, now);
+                                    if self.heartbeat_post_tasks.is_empty() && due <= now {
+                                        self.heartbeat_transport
+                                            .record_attempt(chrono::Utc::now().to_rfc3339());
+                                        publish_heartbeat_transport_status(
+                                            &self.heartbeat_transport,
+                                            &mut self.last_status_projection,
+                                            serde_json::to_value(
+                                                self.control_channel_status.snapshot(),
+                                            )
+                                            .ok(),
+                                            &self.managed_reconciliation,
+                                            &mut self.shipping_progress,
+                                            self.offline.is_offline,
+                                            &self.host_link,
+                                            &self.status_path,
+                                        );
+                                        spawn_heartbeat_post(
+                                            &mut self.heartbeat_post_tasks,
+                                            self.client.clone(),
+                                            payload,
+                                            signature.clone(),
+                                            "runtime_truth_change",
+                                            &mut self.acknowledged_machine_evidence,
+                                        );
+                                        self.last_truth_heartbeat_at = Some(now);
+                                        self.last_runtime_truth_signature = Some(signature);
+                                        self.pending_truth_heartbeat = None;
+                                    } else {
+                                        self.pending_truth_heartbeat =
+                                            Some(PendingTruthHeartbeat { payload, signature });
+                                    }
+                                } else {
+                                    self.pending_truth_heartbeat = None;
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Local status projection build failed");
+                        if is_current {
+                            self.managed_reconciliation =
+                                heartbeat::ProjectionReconciliation::failed("projection_build");
+                        }
+                    }
+                }
+            }
+            Some(Err(error)) => {
+                tracing::warn!(error = %error, "Local status projection task failed");
+                if !self.projection_build_pending {
+                    self.managed_reconciliation =
+                        heartbeat::ProjectionReconciliation::failed("projection_build");
+                }
+            }
+            None => {}
+        }
+
+        if self.projection_build_pending && self.managed_observation_valid {
+            self.projection_build_pending = false;
+            let input = ProjectionBuildInput {
+                generation: self.projection_generation,
+                managed_observation_generation: self.managed_observation_generation,
+                managed_scan_partial: self.last_projected_managed_scan_partial,
+                managed_snapshot_complete: self.last_projected_managed_snapshot_complete,
+                managed_captured_at: self.last_managed_captured_at.clone(),
+                unmanaged_snapshot_complete: self.last_projected_unmanaged_snapshot_complete,
+                db_path: self.projection_db_path.clone(),
+                parse_tracker: self.parse_tracker.clone(),
+                ship_stats: self.ship_stats.clone(),
+                is_offline: self.offline.is_offline,
+                last_ship_at: self.last_ship_at.clone(),
+                machine_id: config.shipper_config.machine_name.clone(),
+                managed: self.last_projected_managed_observations.clone(),
+                unmanaged: self
+                    .last_unmanaged_session_bindings
+                    .clone()
+                    .unwrap_or_default(),
+                limiter: self.adaptive_limiter.snapshot(),
+                scheduler: self.scheduler.snapshot(),
+                archive_repair_mode: config.archive_repair_mode,
+                last_full_reconciled_at: self.last_full_reconciled_at.clone(),
+                continuation: self.last_resume_contracts.clone(),
+                session_snapshot_state: self.session_snapshot_state.clone(),
+            };
+            let _ = maybe_start_projection_build(&mut self.projection_build_tasks, input);
+        }
+    }
+
+    pub(super) fn on_phase_projection_due(&mut self, config: &ConnectConfig) {
+        self.phase_projection_pending = false;
+        // Only after the first full projection: before that the
+        // managed snapshot is empty, and projecting would ship a
+        // sessionless digest that the first real scan immediately
+        // replaces.
+        if self.last_status_projection.is_some() && self.managed_observation_valid {
+            let input = ProjectionBuildInput {
+                generation: self.projection_generation,
+                managed_observation_generation: self.managed_observation_generation,
+                managed_scan_partial: self.last_projected_managed_scan_partial,
+                managed_snapshot_complete: self.last_projected_managed_snapshot_complete,
+                managed_captured_at: self.last_managed_captured_at.clone(),
+                unmanaged_snapshot_complete: self.last_projected_unmanaged_snapshot_complete,
+                db_path: self.projection_db_path.clone(),
+                parse_tracker: self.parse_tracker.clone(),
+                ship_stats: self.ship_stats.clone(),
+                is_offline: self.offline.is_offline,
+                last_ship_at: self.last_ship_at.clone(),
+                machine_id: config.shipper_config.machine_name.clone(),
+                managed: self.last_projected_managed_observations.clone(),
+                unmanaged: self
+                    .last_unmanaged_session_bindings
+                    .clone()
+                    .unwrap_or_default(),
+                limiter: self.adaptive_limiter.snapshot(),
+                scheduler: self.scheduler.snapshot(),
+                archive_repair_mode: config.archive_repair_mode,
+                last_full_reconciled_at: self.last_full_reconciled_at.clone(),
+                continuation: self.last_resume_contracts.clone(),
+                session_snapshot_state: self.session_snapshot_state.clone(),
+            };
+            if !maybe_start_projection_build(&mut self.projection_build_tasks, input) {
+                self.projection_build_pending = true;
+            }
+        }
+    }
+
+    pub(super) async fn on_local_status_tick(&mut self) {
+        if let Some(gap) = self
+            .wake_gap_detector
+            .observe(SystemTime::now(), Instant::now())
+        {
+            self.shipping_progress.reset_after_sleep(Instant::now());
+            tracing::info!(
+                wake_gap_ms = gap.as_millis() as u64,
+                "Detected system wake gap"
+            );
+            if maybe_start_managed_observation_scan(
+                self.projection_db_path.clone(),
+                &mut self.managed_observation_scan_tasks,
+                "wake",
+                true,
+                &self.last_managed_observations,
+            ) {
+                self.managed_full_reconciliation_not_before =
+                    Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                self.managed_reconciliation
+                    .start("wake", chrono::Utc::now().to_rfc3339());
+            } else {
+                self.pending_wake_reconciliation = true;
+                self.managed_reconciliation
+                    .start("wake", chrono::Utc::now().to_rfc3339());
+            }
+        }
+        let host_link_status = self.host_link.snapshot();
+        if matches!(host_link_status.state.as_str(), "updating" | "slow_update")
+            && self.host_link_poll_tasks.len() < 3
+        {
+            let client = self.client.clone();
+            self.host_link_poll_tasks
+                .spawn_local(async move { client.poll_runtime_admission().await });
+        }
+        if let Some(projection) = self.last_status_projection.as_mut() {
+            projection.set_heartbeat_transport(self.heartbeat_transport.clone());
+            projection.set_host_link(host_link_status.clone());
+            heartbeat::write_status_file(
+                projection,
+                serde_json::to_value(self.control_channel_status.snapshot()).ok(),
+                &self.managed_reconciliation,
+                &mut self.shipping_progress,
+                self.offline.is_offline,
+                &self.status_path,
+            );
+        } else {
+            heartbeat::refresh_existing_status_pulse(
+                &self.managed_reconciliation,
+                &mut self.shipping_progress,
+                self.offline.is_offline,
+                &self.status_path,
+                &self.heartbeat_transport,
+                Some(&host_link_status),
+            );
+        }
+    }
+}

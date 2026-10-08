@@ -491,3 +491,31 @@ pub(super) fn find_transcript_path(
         }
     }
 }
+
+impl DaemonState {
+    pub(super) fn on_transcript_wake(
+        &mut self,
+        config: &ConnectConfig,
+        signal: TranscriptWakeSignal,
+    ) {
+        if enqueue_transcript_wake_signal(
+            &self.conn,
+            &mut self.scheduler,
+            &mut self.latest_transcript_wake_observed,
+            &mut self.deferred_retries,
+            signal,
+        )
+        .is_some()
+        {
+            pump_ready_local_work(
+                &mut self.scheduler,
+                &mut self.in_flight,
+                &self.task_context,
+                &mut self.deferred_retries,
+                &mut self.shipping_progress,
+                self.offline.is_offline,
+                archive_repair_is_paused(config.archive_repair_mode),
+            );
+        }
+    }
+}

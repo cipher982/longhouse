@@ -322,3 +322,189 @@ pub(super) const STARVED_LIVE_TRANSCRIPT_BYTES: u64 = 256 * 1024;
 /// few bytes per second crosses any byte bound only after hours. Staleness
 /// catches that case at the timescale a user would notice.
 pub(super) const STARVED_LIVE_TRANSCRIPT_STALE_SECONDS: i64 = 120;
+
+impl DaemonState {
+    pub(super) fn on_discovery_done(
+        &mut self,
+        config: &ConnectConfig,
+        discovery_result: Option<Result<DiscoveryTaskResult, tokio::task::JoinError>>,
+    ) {
+        match discovery_result {
+            Some(Ok(result)) => {
+                let reconciliation_paths = result
+                    .enqueue_files
+                    .then(|| result.files.iter().map(|file| file.path.clone()).collect());
+                let previous_inventory_generation =
+                    crate::state::source_inventory::load_inventory(&self.conn)
+                        .ok()
+                        .flatten()
+                        .map(|inventory| inventory.generation);
+                let inventory =
+                    crate::state::source_inventory::persist_inventory(&self.conn, result.inventory);
+                if result.enqueue_files {
+                    let queued = enqueue_discovered_files(
+                        &mut self.scheduler,
+                        result.files,
+                        result.priority,
+                        &mut self.deferred_retries,
+                    );
+                    tracing::debug!("Queued {} paths for {}", queued, result.reason);
+                }
+                match inventory {
+                    Ok(snapshot) => {
+                        tracing::info!(
+                            generation = snapshot.generation,
+                            source_count = snapshot.source_count,
+                            footprint_bytes = snapshot.footprint_bytes,
+                            scan_error_count = snapshot.scan_error_count,
+                            "Updated durable transcript source inventory"
+                        );
+                        if let Some(remaining_paths) = reconciliation_paths {
+                            match crate::state::source_inventory::begin_reconciliation(
+                                &mut self.conn,
+                                &snapshot,
+                            ) {
+                                Ok(Some(attempt)) => {
+                                    self.open_history_reconciliation =
+                                        Some(OpenHistoryReconciliation {
+                                            attempt_id: attempt.attempt_id,
+                                            remaining_paths,
+                                        });
+                                }
+                                Ok(None) => self.open_history_reconciliation = None,
+                                Err(error) => {
+                                    self.open_history_reconciliation = None;
+                                    tracing::warn!(
+                                        error = %error,
+                                        "Failed to begin transcript reconciliation seal"
+                                    );
+                                }
+                            }
+                            maybe_seal_history_reconciliation(
+                                &mut self.conn,
+                                &mut self.open_history_reconciliation,
+                                &self.scheduler,
+                                &self.deferred_retries,
+                                self.discovery_tasks.is_empty(),
+                            );
+                        }
+                        if inventory_change_requires_projection(
+                            previous_inventory_generation,
+                            snapshot.generation,
+                            self.last_unmanaged_session_bindings.is_some(),
+                        ) && self.managed_observation_valid
+                        {
+                            self.projection_generation =
+                                self.projection_generation.saturating_add(1);
+                            let input = ProjectionBuildInput {
+                                generation: self.projection_generation,
+                                managed_observation_generation: self.managed_observation_generation,
+                                managed_scan_partial: self.last_projected_managed_scan_partial,
+                                managed_snapshot_complete: self
+                                    .last_projected_managed_snapshot_complete,
+                                managed_captured_at: self.last_managed_captured_at.clone(),
+                                unmanaged_snapshot_complete: self
+                                    .last_projected_unmanaged_snapshot_complete,
+                                db_path: self.projection_db_path.clone(),
+                                parse_tracker: self.parse_tracker.clone(),
+                                ship_stats: self.ship_stats.clone(),
+                                is_offline: self.offline.is_offline,
+                                last_ship_at: self.last_ship_at.clone(),
+                                machine_id: config.shipper_config.machine_name.clone(),
+                                managed: self.last_projected_managed_observations.clone(),
+                                unmanaged: self
+                                    .last_unmanaged_session_bindings
+                                    .clone()
+                                    .unwrap_or_default(),
+                                limiter: self.adaptive_limiter.snapshot(),
+                                scheduler: self.scheduler.snapshot(),
+                                archive_repair_mode: config.archive_repair_mode,
+                                last_full_reconciled_at: self.last_full_reconciled_at.clone(),
+                                continuation: self.last_resume_contracts.clone(),
+                                session_snapshot_state: self.session_snapshot_state.clone(),
+                            };
+                            if !maybe_start_projection_build(
+                                &mut self.projection_build_tasks,
+                                input,
+                            ) {
+                                self.projection_build_pending = true;
+                            }
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        error = %error,
+                        "Failed to persist transcript source inventory"
+                    ),
+                }
+            }
+            Some(Err(e)) => {
+                tracing::warn!("Background discovery task failed: {}", e);
+            }
+            None => {}
+        }
+    }
+
+    pub(super) fn on_startup_reconciliation_due(&mut self, config: &ConnectConfig) {
+        self.startup_reconciliation_pending = false;
+        maybe_start_reconciliation_scan(
+            &mut self.discovery_tasks,
+            &self.providers,
+            &self.scheduler,
+            &self.deferred_retries,
+            config.archive_repair_mode,
+            "startup reconciliation",
+        );
+    }
+
+    pub(super) fn on_scope_tick(&mut self) {
+        let current = crate::import_scope::fingerprint(&self.scope_dir);
+        if current != self.last_scope_fingerprint {
+            self.last_scope_fingerprint = current;
+            if current.is_none() {
+                // The file was deleted under a running daemon. What it
+                // enforces did not change (it keeps the scope it last
+                // knew), so put the file back rather than rescan.
+                if crate::config::restore_lost_scope_file(&self.scope_dir) {
+                    tracing::warn!(
+                        "The import scope file was deleted; restored it from the running scope"
+                    );
+                }
+            } else {
+                let scope = crate::config::import_scope();
+                crate::config::record_import_scope(&self.conn, &scope);
+                tracing::info!("Import scope: {}", scope.describe());
+                start_discovery_task(
+                    &mut self.discovery_tasks,
+                    &self.providers,
+                    WorkPriority::Scan,
+                    "import scope changed",
+                );
+            }
+        }
+    }
+
+    pub(super) fn on_provider_roots_tick(&mut self) {
+        if self
+            .watcher
+            .refresh_provider_roots(&mut self.providers, &mut self.pending_provider_roots)
+        {
+            start_discovery_task(
+                &mut self.discovery_tasks,
+                &self.providers,
+                WorkPriority::Scan,
+                "new provider transcript root",
+            );
+        }
+    }
+
+    pub(super) fn on_fallback_tick(&mut self, config: &ConnectConfig) {
+        maybe_start_reconciliation_scan(
+            &mut self.discovery_tasks,
+            &self.providers,
+            &self.scheduler,
+            &self.deferred_retries,
+            config.archive_repair_mode,
+            "reconciliation scan",
+        );
+    }
+}

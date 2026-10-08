@@ -531,3 +531,185 @@ pub(super) fn finish_path_task(mut result: PathTaskResult, started: Instant) -> 
     result.processing_elapsed = started.elapsed();
     result
 }
+
+impl DaemonState {
+    pub(super) fn on_path_task_done(
+        &mut self,
+        task_result: Option<Result<Option<PathTaskResult>, tokio::task::JoinError>>,
+    ) -> Result<()> {
+        {
+            match task_result {
+                Some(Ok(Some(result))) => {
+                    let retry_path = result.job.path.clone();
+                    let retry_provider = result.job.provider;
+                    let reconciled_to_head = result.reconciled_to_head
+                        && result.rerun_priority.is_none()
+                        && result.local_retry_after.is_none();
+                    if result.local_retry_after.is_some() {
+                        self.scheduler.complete_without_rerun(&retry_path);
+                    } else {
+                        self.scheduler.complete(&retry_path, result.rerun_priority);
+                    }
+                    if let Some(delay) = result.local_retry_after {
+                        let priority = result.local_retry_priority.unwrap_or(result.job.priority);
+                        self.deferred_retries.insert(
+                            retry_path.clone(),
+                            DeferredRetry {
+                                due_at: Instant::now() + delay,
+                                provider: retry_provider,
+                                priority,
+                                observation: result.job.observation.clone(),
+                            },
+                        );
+                    }
+                    // Checking an unchanged source head advances reconciliation
+                    // without creating a new upload receipt.
+                    if reconciled_to_head || result.events_shipped > 0 || result.bytes_shipped > 0 {
+                        self.shipping_progress.record_progress(Instant::now());
+                    }
+                    if result.had_connect_error {
+                        if self.offline.record_connect_error() {
+                            self.shipping_progress.reset_after_sleep(Instant::now());
+                            tracing::warn!(
+                                    threshold = OFFLINE_CONNECT_FAILURE_THRESHOLD,
+                                    "Connection error threshold reached while processing {} — entering offline mode",
+                                    result.job.path.display()
+                                );
+                        } else {
+                            tracing::warn!(
+                                    consecutive_connect_errors = self.offline.consecutive_connect_failures,
+                                    threshold = OFFLINE_CONNECT_FAILURE_THRESHOLD,
+                                    "Connection error while processing {}; keeping local shipping active",
+                                    result.job.path.display()
+                                );
+                        }
+                    } else if result.events_shipped > 0 || result.bytes_shipped > 0 {
+                        self.last_ship_at = Some(chrono::Utc::now().to_rfc3339());
+                        if let Some(duration) = self.offline.mark_online() {
+                            self.last_runtime_truth_signature = None;
+                            tracing::info!(
+                                "Back online after {:.0}s — resuming shipping",
+                                duration.as_secs_f64()
+                            );
+                        }
+                    }
+                    if reconciled_to_head
+                        && !self.scheduler.has_path(&retry_path)
+                        && !self.deferred_retries.contains_key(&retry_path)
+                    {
+                        if let Some(open) = self.open_history_reconciliation.as_mut() {
+                            open.remaining_paths.remove(&retry_path);
+                        }
+                    }
+                    maybe_seal_history_reconciliation(
+                        &mut self.conn,
+                        &mut self.open_history_reconciliation,
+                        &self.scheduler,
+                        &self.deferred_retries,
+                        self.discovery_tasks.is_empty(),
+                    );
+                }
+                Some(Err(e)) => {
+                    return Err(anyhow::anyhow!("path task failed: {}", e));
+                }
+                None => {}
+                Some(Ok(None)) => {}
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) async fn on_watcher_event(
+        &mut self,
+        config: &ConnectConfig,
+        first_event: WatcherEvent,
+    ) {
+        let managed_state_changes = handle_live_transcript_file_events(
+            &mut self.watcher,
+            first_event,
+            &self.providers,
+            &self.managed_state_dirs,
+            &self.conn,
+            &mut self.transcript_wake_rx,
+            &mut self.scheduler,
+            &mut self.latest_transcript_wake_observed,
+            &mut self.deferred_retries,
+            &mut self.in_flight,
+            &self.task_context,
+            &mut self.shipping_progress,
+            self.offline.is_offline,
+            archive_repair_is_paused(config.archive_repair_mode),
+        )
+        .await;
+        if !managed_state_changes.is_empty() {
+            let requires_discovery = managed_state_changes_require_full_reconciliation(
+                &self.last_managed_observations,
+                &managed_state_changes,
+            );
+            if requires_discovery {
+                // A watcher burst can contain many transient paths while
+                // a provider is writing one session. Queue one bounded
+                // full walk; the 5s observation tick starts it after the
+                // burst instead of starting one walk per event batch.
+                self.projection_generation = self.projection_generation.saturating_add(1);
+                self.pending_full_reconciliation = true;
+                tracing::debug!(
+                    event_count = managed_state_changes.len(),
+                    "Queued managed state discovery for coalesced observation"
+                );
+            } else {
+                tracing::debug!(
+                    event_count = managed_state_changes.len(),
+                    "Known managed state changed; bounded periodic observation owns refresh"
+                );
+            }
+        }
+    }
+
+    pub(super) fn on_failed_ship_retry_tick(&mut self, config: &ConnectConfig) {
+        let mut queued_retries = 0usize;
+        match queue_storage_v2_pending_retry_paths(
+            &mut self.scheduler,
+            &self.conn,
+            config.archive_repair_mode,
+            &mut self.deferred_retries,
+        ) {
+            Ok(queued) => queued_retries = queued_retries.saturating_add(queued),
+            Err(error) => tracing::warn!(
+                error = %error,
+                "Immutable storage-v2 retry error"
+            ),
+        }
+        // Copied Cursor bytes are only needed until the host receipts
+        // them; nothing deleted them before, so they grew to 8.5GB of
+        // a 9.7GB local database. Run one bounded batch in the existing
+        // single-flight maintenance worker, after retry queueing above
+        // makes owed envelopes visible to the safety predicate. Never
+        // put this writer on the event-loop connection: even a bounded
+        // batch must not pause live transcript scheduling.
+        if self.storage_maintenance_tasks.is_empty() {
+            let db_path = self.projection_db_path.clone();
+            self.storage_maintenance_tasks.spawn_blocking(move || {
+                let result = crate::state::db::open_connection(&db_path).and_then(|conn| {
+                    crate::state::cursor_store_records::drain_receipted_cursor_records(&conn)
+                });
+                match result {
+                    Ok(0) => {}
+                    Ok(drained) => {
+                        tracing::info!(drained, "drained bounded batch of receipted Cursor records")
+                    }
+                    Err(error) => tracing::warn!(
+                        error = %error,
+                        "Cursor record drain error"
+                    ),
+                }
+            });
+        }
+        if queued_retries > 0 {
+            tracing::debug!(
+                queued_retries,
+                "Queued durable retry paths on periodic refill"
+            );
+        }
+    }
+}

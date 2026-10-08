@@ -785,3 +785,604 @@ pub(super) fn defer_managed_pair_retry(projection_generation: &mut u64, pending_
     *projection_generation = projection_generation.saturating_add(1);
     *pending_full = true;
 }
+
+impl DaemonState {
+    pub(super) fn on_unmanaged_binding_refresh_done(
+        &mut self,
+        config: &ConnectConfig,
+        unmanaged_binding_refresh_result: Option<
+            Result<UnmanagedBindingRefreshResult, tokio::task::JoinError>,
+        >,
+    ) {
+        let refresh_generation = self.unmanaged_binding_refresh_generation.take();
+        match unmanaged_binding_refresh_result {
+            Some(Ok(result)) => {
+                let stale = result.generation != self.projection_generation;
+                let managed_observation_current =
+                    result.managed_observation_generation == self.managed_observation_generation;
+                if stale {
+                    tracing::debug!(
+                        generation = result.generation,
+                        latest_generation = self.projection_generation,
+                        "Discarded stale unmanaged reconciliation result"
+                    );
+                } else if !managed_observation_current {
+                    tracing::debug!(
+                        result_managed_observation_generation =
+                            result.managed_observation_generation,
+                        latest_managed_observation_generation = self.managed_observation_generation,
+                        "Applying unmanaged result without replacing newer managed observations"
+                    );
+                }
+                if !stale && self.managed_observation_valid {
+                    match result.result {
+                        Ok(bindings) => {
+                            if result.elapsed_ms > 1_000 {
+                                tracing::warn!(
+                                    reason = result.reason,
+                                    binding_count = bindings.len(),
+                                    elapsed_ms = result.elapsed_ms,
+                                    "Unmanaged binding refresh was slow"
+                                );
+                            } else {
+                                tracing::debug!(
+                                    reason = result.reason,
+                                    binding_count = bindings.len(),
+                                    elapsed_ms = result.elapsed_ms,
+                                    "Unmanaged binding refresh completed"
+                                );
+                            }
+                            if managed_observation_current {
+                                self.last_projected_managed_observations = result.managed;
+                                self.last_projected_managed_scan_partial =
+                                    result.managed_scan_partial;
+                                self.last_projected_managed_snapshot_complete =
+                                    result.full_reconciliation_candidate;
+                                self.last_projected_unmanaged_snapshot_complete =
+                                    result.full_reconciliation_candidate;
+                                self.unmanaged_binding_refresh_failed = false;
+                                if result.full_reconciliation_candidate {
+                                    self.last_full_reconciled_at =
+                                        Some(chrono::Utc::now().to_rfc3339());
+                                }
+                            } else {
+                                self.last_projected_unmanaged_snapshot_complete = false;
+                            }
+                            self.last_unmanaged_session_bindings = Some(bindings);
+                        }
+                        Err(err) if !managed_observation_current => {
+                            tracing::debug!(
+                                reason = result.reason,
+                                "Discarded stale unmanaged binding refresh failure: {}",
+                                err
+                            );
+                        }
+                        Err(err) => {
+                            // Managed state files are authoritative for Helm ownership.
+                            // Optional Shadow process discovery must not suppress a newly
+                            // observed managed run. Publish that managed truth with the
+                            // last-known unmanaged bindings, but mark only the unmanaged
+                            // scope incomplete so the Runtime Host cannot close missing
+                            // Shadow sessions from this partial observation.
+                            if managed_observation_current {
+                                self.last_projected_managed_observations = result.managed;
+                                self.last_projected_managed_scan_partial =
+                                    result.managed_scan_partial;
+                                self.last_projected_managed_snapshot_complete =
+                                    result.full_reconciliation_candidate;
+                            }
+                            self.last_projected_unmanaged_snapshot_complete = false;
+                            // Shadow discovery is optional. Do not turn a
+                            // per-pid lsof failure into an immediate full
+                            // managed scan, which would repeatedly advance
+                            // projection generations and starve managed
+                            // truth. The scheduled full observation is the
+                            // retry path; keep this projection incomplete
+                            // so missing Shadow sessions remain unknown.
+                            self.pending_full_reconciliation = false;
+                            self.unmanaged_binding_refresh_failed = true;
+                            // Shadow discovery is optional evidence. Keep the
+                            // retained managed projection usable and mark the
+                            // retry as in progress; a single lsof failure
+                            // must not turn local health into a failed
+                            // reconciliation or erase current sessions.
+                            self.managed_reconciliation
+                                .start("unmanaged_binding", chrono::Utc::now().to_rfc3339());
+                            tracing::warn!(
+                                reason = result.reason,
+                                elapsed_ms = result.elapsed_ms,
+                                "Unmanaged binding refresh failed: {}",
+                                err
+                            );
+                        }
+                    }
+                    let input = ProjectionBuildInput {
+                        generation: self.projection_generation,
+                        managed_observation_generation: self.managed_observation_generation,
+                        managed_scan_partial: self.last_projected_managed_scan_partial,
+                        managed_snapshot_complete: self.last_projected_managed_snapshot_complete,
+                        managed_captured_at: self.last_managed_captured_at.clone(),
+                        unmanaged_snapshot_complete: self
+                            .last_projected_unmanaged_snapshot_complete,
+                        db_path: self.projection_db_path.clone(),
+                        parse_tracker: self.parse_tracker.clone(),
+                        ship_stats: self.ship_stats.clone(),
+                        is_offline: self.offline.is_offline,
+                        last_ship_at: self.last_ship_at.clone(),
+                        machine_id: config.shipper_config.machine_name.clone(),
+                        managed: self.last_projected_managed_observations.clone(),
+                        unmanaged: self
+                            .last_unmanaged_session_bindings
+                            .clone()
+                            .unwrap_or_default(),
+                        limiter: self.adaptive_limiter.snapshot(),
+                        scheduler: self.scheduler.snapshot(),
+                        archive_repair_mode: config.archive_repair_mode,
+                        last_full_reconciled_at: self.last_full_reconciled_at.clone(),
+                        continuation: self.last_resume_contracts.clone(),
+                        session_snapshot_state: self.session_snapshot_state.clone(),
+                    };
+                    if !maybe_start_projection_build(&mut self.projection_build_tasks, input) {
+                        self.projection_build_pending = true;
+                    }
+                }
+            }
+            Some(Err(err)) => {
+                let refresh_is_current = refresh_generation
+                    == Some((
+                        self.projection_generation,
+                        self.managed_observation_generation,
+                    ));
+                if refresh_is_current {
+                    self.unmanaged_binding_refresh_failed = true;
+                    // This task only refreshes optional Shadow bindings.
+                    // Preserve the last coherent managed projection and
+                    // expose the retry as reconciling rather than making
+                    // the whole local session inventory failed.
+                    self.managed_reconciliation
+                        .start("unmanaged_binding", chrono::Utc::now().to_rfc3339());
+                    heartbeat::refresh_existing_status_pulse(
+                        &self.managed_reconciliation,
+                        &mut self.shipping_progress,
+                        self.offline.is_offline,
+                        &self.status_path,
+                        &self.heartbeat_transport,
+                        Some(&self.host_link.snapshot()),
+                    );
+                    tracing::warn!("Unmanaged binding refresh task failed: {}", err);
+                } else {
+                    tracing::debug!(
+                        refresh_generation = ?refresh_generation,
+                        latest_generation = self.projection_generation,
+                        latest_managed_observation_generation =
+                            self.managed_observation_generation,
+                        "Discarded stale unmanaged binding task failure: {}",
+                        err
+                    );
+                }
+            }
+            None => {}
+        }
+        if self.unmanaged_binding_refresh_tasks.is_empty()
+            && self.managed_observation_scan_tasks.is_empty()
+        {
+            if self.pending_wake_reconciliation
+                && maybe_start_managed_observation_scan(
+                    self.projection_db_path.clone(),
+                    &mut self.managed_observation_scan_tasks,
+                    "wake",
+                    true,
+                    &self.last_managed_observations,
+                )
+            {
+                self.pending_wake_reconciliation = false;
+                self.managed_full_reconciliation_not_before =
+                    Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                self.managed_reconciliation
+                    .start("wake", chrono::Utc::now().to_rfc3339());
+            } else if managed_full_reconciliation_ready(
+                self.pending_full_reconciliation
+                    || certificate_needs_refresh(self.last_certified_at, Instant::now()),
+                self.managed_observation_scan_tasks.is_empty(),
+                Instant::now(),
+                self.managed_full_reconciliation_not_before,
+            ) && maybe_start_managed_observation_scan(
+                self.projection_db_path.clone(),
+                &mut self.managed_observation_scan_tasks,
+                "full_reconciliation",
+                true,
+                &self.last_managed_observations,
+            ) {
+                self.pending_full_reconciliation = false;
+                self.managed_full_reconciliation_not_before =
+                    Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                self.managed_reconciliation
+                    .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
+            }
+        }
+    }
+
+    pub(super) fn on_managed_observation_scan_done(
+        &mut self,
+        config: &ConnectConfig,
+        managed_observation_scan_result: Option<
+            Result<ManagedObservationScanResult, tokio::task::JoinError>,
+        >,
+    ) {
+        match managed_observation_scan_result {
+            Some(Ok(mut result)) => {
+                self.last_status_owners_at = result.status_owner_snapshot_at;
+                self.last_status_owners = Arc::new(std::mem::take(&mut result.status_owners));
+                if result.elapsed_ms > 250 {
+                    tracing::warn!(
+                        reason = result.reason,
+                        full_reconciliation = result.full_reconciliation,
+                        process_inventory_valid = result.process_inventory_valid,
+                        codex_count = result.codex_observations.len(),
+                        antigravity_count = result.antigravity_observations.len(),
+                        claude_count = result.claude_observations.len(),
+                        opencode_count = result.opencode_observations.len(),
+                        cursor_count = result.cursor_observations.len(),
+                        pi_count = result.pi_observations.len(),
+                        omp_count = result.omp_observations.len(),
+                        omp_live_count = result
+                            .omp_observations
+                            .iter()
+                            .filter(|observation| observation.live)
+                            .count(),
+                        process_inventory_ms = result.process_inventory_ms,
+                        codex_elapsed_ms = result.codex_elapsed_ms,
+                        antigravity_elapsed_ms = result.antigravity_elapsed_ms,
+                        claude_elapsed_ms = result.claude_elapsed_ms,
+                        opencode_elapsed_ms = result.opencode_elapsed_ms,
+                        cursor_elapsed_ms = result.cursor_elapsed_ms,
+                        pi_elapsed_ms = result.pi_elapsed_ms,
+                        omp_elapsed_ms = result.omp_elapsed_ms,
+                        retained_stale_rows = result.retained_stale_rows,
+                        elapsed_ms = result.elapsed_ms,
+                        "Managed observation scan was slow"
+                    );
+                } else {
+                    tracing::debug!(
+                        reason = result.reason,
+                        full_reconciliation = result.full_reconciliation,
+                        process_inventory_valid = result.process_inventory_valid,
+                        codex_count = result.codex_observations.len(),
+                        antigravity_count = result.antigravity_observations.len(),
+                        claude_count = result.claude_observations.len(),
+                        opencode_count = result.opencode_observations.len(),
+                        cursor_count = result.cursor_observations.len(),
+                        pi_count = result.pi_observations.len(),
+                        omp_count = result.omp_observations.len(),
+                        omp_live_count = result
+                            .omp_observations
+                            .iter()
+                            .filter(|observation| observation.live)
+                            .count(),
+                        process_inventory_ms = result.process_inventory_ms,
+                        codex_elapsed_ms = result.codex_elapsed_ms,
+                        antigravity_elapsed_ms = result.antigravity_elapsed_ms,
+                        claude_elapsed_ms = result.claude_elapsed_ms,
+                        opencode_elapsed_ms = result.opencode_elapsed_ms,
+                        cursor_elapsed_ms = result.cursor_elapsed_ms,
+                        pi_elapsed_ms = result.pi_elapsed_ms,
+                        omp_elapsed_ms = result.omp_elapsed_ms,
+                        retained_stale_rows = result.retained_stale_rows,
+                        elapsed_ms = result.elapsed_ms,
+                        "Managed observation scan completed"
+                    );
+                }
+                // Report only. `process_inventory_valid` proves `ps`
+                // ran; it does not prove the five provider scanners
+                // did, and a scanner that fails is indistinguishable
+                // from a provider with no sessions. Killing on that
+                // basis would destroy live work.
+                if !result.orphan_processes.is_empty() {
+                    crate::managed_process_janitor::report_orphan_processes(
+                        &result.orphan_processes,
+                    );
+                }
+                if !result.process_inventory_valid {
+                    self.managed_observation_valid = false;
+                    self.projection_generation = self.projection_generation.saturating_add(1);
+                    tracing::warn!(
+                                reason = result.reason,
+                                "Managed observation scan retained prior truth because process inventory failed"
+                            );
+                    self.managed_reconciliation =
+                        heartbeat::ProjectionReconciliation::failed("process_inventory");
+                    self.managed_reconciliation
+                        .start("process_inventory", chrono::Utc::now().to_rfc3339());
+                    heartbeat::refresh_existing_status_pulse(
+                        &self.managed_reconciliation,
+                        &mut self.shipping_progress,
+                        self.offline.is_offline,
+                        &self.status_path,
+                        &self.heartbeat_transport,
+                        Some(&self.host_link.snapshot()),
+                    );
+                    if self.pending_wake_reconciliation {
+                        if maybe_start_managed_observation_scan(
+                            self.projection_db_path.clone(),
+                            &mut self.managed_observation_scan_tasks,
+                            "wake",
+                            true,
+                            &self.last_managed_observations,
+                        ) {
+                            self.pending_wake_reconciliation = false;
+                        }
+                    } else if managed_full_reconciliation_ready(
+                        self.pending_full_reconciliation
+                            || certificate_needs_refresh(self.last_certified_at, Instant::now()),
+                        self.managed_observation_scan_tasks.is_empty(),
+                        Instant::now(),
+                        self.managed_full_reconciliation_not_before,
+                    ) && maybe_start_managed_observation_scan(
+                        self.projection_db_path.clone(),
+                        &mut self.managed_observation_scan_tasks,
+                        "full_reconciliation",
+                        true,
+                        &self.last_managed_observations,
+                    ) {
+                        self.pending_full_reconciliation = false;
+                        self.managed_full_reconciliation_not_before =
+                            Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                    }
+                    return;
+                }
+                self.managed_observation_valid = true;
+                if result.full_reconciliation {
+                    // Start-time gating does not prevent a long scan
+                    // from immediately retriggering on events observed
+                    // during its own walk. Hold the next full pass for
+                    // one observation interval after completion.
+                    self.managed_full_reconciliation_not_before =
+                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                }
+                if let Some(continuation) = &result.continuation {
+                    self.last_resume_contracts = Some(continuation.clone());
+                }
+                let next_managed_observations =
+                    ManagedObservationSnapshot::from_result(&result).current_only();
+                let managed_observations_changed = !next_managed_observations
+                    .projection_equivalent(&self.last_managed_observations);
+                let (managed_scan_partial, managed_snapshot_complete) =
+                    managed_scan_certificate(&result);
+                if managed_snapshot_complete {
+                    self.last_certified_at = Some(Instant::now());
+                    self.certificate_keepalive_warned = false;
+                } else if let Some(refreshed_at) = self.last_certified_at {
+                    // Keep the last claim only while it is still inside
+                    // the keepalive; past that the beat ships without
+                    // absence authority, which fails closed.
+                    if refreshed_at.elapsed()
+                        > Duration::from_secs(MANAGED_CERTIFICATE_KEEPALIVE_SECS)
+                        && !self.certificate_keepalive_warned
+                    {
+                        self.certificate_keepalive_warned = true;
+                        tracing::warn!(
+                                    reason = result.reason,
+                                    retained_stale_rows = result.retained_stale_rows,
+                                    "Managed enumeration has not certified within the keepalive window; beats ship without absence authority"
+                                );
+                    }
+                }
+                let managed_evidence_changed = managed_observations_changed
+                    || result.full_reconciliation
+                    || managed_scan_partial != self.last_projected_managed_scan_partial;
+                if managed_evidence_changed {
+                    self.managed_observation_generation =
+                        self.managed_observation_generation.saturating_add(1);
+                }
+                self.last_managed_observations = next_managed_observations;
+                project_binding_liveness(&self.conn, &self.last_managed_observations);
+                pump_ready_local_work(
+                    &mut self.scheduler,
+                    &mut self.in_flight,
+                    &self.task_context,
+                    &mut self.deferred_retries,
+                    &mut self.shipping_progress,
+                    self.offline.is_offline,
+                    archive_repair_is_paused(config.archive_repair_mode),
+                );
+                let managed_process_pids = managed_process_pids_from_observations(
+                    &result.codex_observations,
+                    &result.claude_observations,
+                    &result.opencode_observations,
+                    &result.cursor_observations,
+                    &result.pi_observations,
+                    &result.omp_observations,
+                );
+                let should_refresh_unmanaged =
+                    result.full_reconciliation || managed_observations_changed;
+                let paired_generation = self.projection_generation.saturating_add(1);
+                let paired_refresh_started = should_refresh_unmanaged
+                    && maybe_start_unmanaged_binding_refresh(
+                        &mut self.unmanaged_binding_refresh_tasks,
+                        config.shipper_config.db_path.clone(),
+                        config.shipper_config.machine_name.clone(),
+                        managed_process_pids.clone(),
+                        result.process_inventory.clone(),
+                        result.reason,
+                        paired_generation,
+                        self.managed_observation_generation,
+                        self.last_managed_observations.clone(),
+                        managed_scan_partial,
+                        managed_scan_certificate(&result).1,
+                    );
+                if paired_refresh_started {
+                    self.projection_generation = paired_generation;
+                    self.unmanaged_binding_refresh_generation = Some((
+                        self.projection_generation,
+                        self.managed_observation_generation,
+                    ));
+                } else if result.full_reconciliation {
+                    if result.reason == "wake" {
+                        self.pending_wake_reconciliation = true;
+                    } else {
+                        self.pending_full_reconciliation = true;
+                    }
+                } else if managed_observations_changed {
+                    defer_managed_pair_retry(
+                        &mut self.projection_generation,
+                        &mut self.pending_full_reconciliation,
+                    );
+                }
+
+                // A valid managed scan is fresh evidence even when the
+                // optional unmanaged/Shadow refresh is still running.
+                // Publish it with the cached Shadow rows only as
+                // incomplete evidence; the refresh result can replace
+                // this projection later without blocking managed truth.
+                self.last_projected_managed_observations = self.last_managed_observations.clone();
+                self.last_managed_captured_at = result.captured_at.clone();
+                self.last_projected_managed_scan_partial = managed_scan_partial;
+                self.last_projected_managed_snapshot_complete = managed_snapshot_complete;
+                self.last_projected_unmanaged_snapshot_complete = false;
+                let input = ProjectionBuildInput {
+                    generation: self.projection_generation,
+                    managed_observation_generation: self.managed_observation_generation,
+                    managed_scan_partial: self.last_projected_managed_scan_partial,
+                    managed_snapshot_complete: self.last_projected_managed_snapshot_complete,
+                    managed_captured_at: self.last_managed_captured_at.clone(),
+                    unmanaged_snapshot_complete: self.last_projected_unmanaged_snapshot_complete,
+                    db_path: self.projection_db_path.clone(),
+                    parse_tracker: self.parse_tracker.clone(),
+                    ship_stats: self.ship_stats.clone(),
+                    is_offline: self.offline.is_offline,
+                    last_ship_at: self.last_ship_at.clone(),
+                    machine_id: config.shipper_config.machine_name.clone(),
+                    managed: self.last_projected_managed_observations.clone(),
+                    unmanaged: self
+                        .last_unmanaged_session_bindings
+                        .clone()
+                        .unwrap_or_default(),
+                    limiter: self.adaptive_limiter.snapshot(),
+                    scheduler: self.scheduler.snapshot(),
+                    archive_repair_mode: config.archive_repair_mode,
+                    last_full_reconciled_at: self.last_full_reconciled_at.clone(),
+                    continuation: self.last_resume_contracts.clone(),
+                    session_snapshot_state: self.session_snapshot_state.clone(),
+                };
+                if !maybe_start_projection_build(&mut self.projection_build_tasks, input) {
+                    self.projection_build_pending = true;
+                }
+                maybe_start_opencode_title_refresh(
+                    &mut self.opencode_title_refresh_tasks,
+                    config.shipper_config.db_path.clone(),
+                    result.opencode_observations.clone(),
+                );
+                if self.pending_wake_reconciliation
+                    && self.unmanaged_binding_refresh_tasks.is_empty()
+                    && maybe_start_managed_observation_scan(
+                        self.projection_db_path.clone(),
+                        &mut self.managed_observation_scan_tasks,
+                        "wake",
+                        true,
+                        &self.last_managed_observations,
+                    )
+                {
+                    self.pending_wake_reconciliation = false;
+                    self.managed_full_reconciliation_not_before =
+                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                    self.managed_reconciliation
+                        .start("wake", chrono::Utc::now().to_rfc3339());
+                } else if managed_full_reconciliation_ready(
+                    self.pending_full_reconciliation,
+                    self.unmanaged_binding_refresh_tasks.is_empty()
+                        && self.managed_observation_scan_tasks.is_empty(),
+                    Instant::now(),
+                    self.managed_full_reconciliation_not_before,
+                ) && maybe_start_managed_observation_scan(
+                    self.projection_db_path.clone(),
+                    &mut self.managed_observation_scan_tasks,
+                    "full_reconciliation",
+                    true,
+                    &self.last_managed_observations,
+                ) {
+                    self.pending_full_reconciliation = false;
+                    self.managed_full_reconciliation_not_before =
+                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                    self.managed_reconciliation
+                        .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
+                }
+            }
+            Some(Err(err)) => {
+                self.managed_observation_valid = false;
+                self.projection_generation = self.projection_generation.saturating_add(1);
+                tracing::warn!("Managed observation scan task failed: {}", err);
+                self.managed_reconciliation = heartbeat::ProjectionReconciliation::failed(
+                    self.managed_reconciliation
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| "managed_observation".to_string()),
+                );
+                heartbeat::refresh_existing_status_pulse(
+                    &self.managed_reconciliation,
+                    &mut self.shipping_progress,
+                    self.offline.is_offline,
+                    &self.status_path,
+                    &self.heartbeat_transport,
+                    Some(&self.host_link.snapshot()),
+                );
+            }
+            None => {}
+        }
+    }
+
+    pub(super) fn on_managed_full_reconciliation_tick(&mut self) {
+        if managed_full_reconciliation_ready(
+            !self.pending_wake_reconciliation,
+            self.managed_observation_scan_tasks.is_empty(),
+            Instant::now(),
+            self.managed_full_reconciliation_not_before,
+        ) && maybe_start_managed_observation_scan(
+            self.projection_db_path.clone(),
+            &mut self.managed_observation_scan_tasks,
+            "full_reconciliation",
+            true,
+            &self.last_managed_observations,
+        ) {
+            self.managed_full_reconciliation_not_before =
+                Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+            self.managed_reconciliation
+                .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
+        } else {
+            self.pending_full_reconciliation = true;
+            self.managed_reconciliation
+                .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
+        }
+    }
+
+    pub(super) fn on_managed_observation_tick(&mut self) {
+        // Coalesce a periodic tick and watcher burst while a full scan
+        // is running. A queued full request wins on the next tick, but
+        // the cooldown prevents a completion/event feedback loop.
+        if managed_full_reconciliation_ready(
+            self.pending_full_reconciliation,
+            self.managed_observation_scan_tasks.is_empty(),
+            Instant::now(),
+            self.managed_full_reconciliation_not_before,
+        ) && maybe_start_managed_observation_scan(
+            self.projection_db_path.clone(),
+            &mut self.managed_observation_scan_tasks,
+            "full_reconciliation",
+            true,
+            &self.last_managed_observations,
+        ) {
+            self.pending_full_reconciliation = false;
+            self.managed_full_reconciliation_not_before =
+                Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+            self.managed_reconciliation
+                .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
+        } else if !self.pending_full_reconciliation && !self.pending_wake_reconciliation {
+            maybe_start_managed_observation_scan(
+                self.projection_db_path.clone(),
+                &mut self.managed_observation_scan_tasks,
+                "periodic",
+                self.last_resume_contracts.is_none(),
+                &self.last_managed_observations,
+            );
+        }
+    }
+}

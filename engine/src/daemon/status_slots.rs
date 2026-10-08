@@ -979,3 +979,61 @@ pub(super) fn retry_pending_terminal_claim_handoffs() {
         );
     }
 }
+
+impl DaemonState {
+    pub(super) async fn on_status_slot_done(
+        &mut self,
+        status_slot_result: Option<Result<StatusSlotResult, tokio::task::JoinError>>,
+    ) {
+        match status_slot_result {
+            Some(Ok(result)) => {
+                self.status_owner_refresh_cursor = result.owner_refresh_cursor;
+                self.managed_owner_refresh_cursor = result.managed_owner_refresh_cursor;
+                if result.elapsed_ms > 100 {
+                    tracing::warn!(
+                        elapsed_ms = result.elapsed_ms,
+                        slots = result.slots.len(),
+                        recorded = result.recorded.len(),
+                        "Status slot pass was slow"
+                    );
+                }
+                let live: HashSet<String> = result
+                    .slots
+                    .iter()
+                    .map(|slot| slot.session_id.clone())
+                    .collect();
+                for (session_id, version) in result.recorded {
+                    self.status_recorded.insert(session_id, version);
+                }
+                // A session with no slot has no current status, so
+                // neither map needs to remember it.
+                self.status_recorded
+                    .retain(|session_id, _| live.contains(session_id));
+                self.status_ledger.retain_live(&result.slots);
+                let pending = self.status_ledger.pending(result.slots, Instant::now());
+                if !pending.is_empty() && self.status_post_tasks.is_empty() {
+                    let client = self.client.clone();
+                    self.status_post_tasks
+                        .spawn(async move { post_status_slots(&client, pending).await });
+                }
+            }
+            Some(Err(err)) => {
+                tracing::warn!("Status slot task failed: {}", err);
+            }
+            None => {}
+        }
+    }
+
+    pub(super) fn on_status_post_done(
+        &mut self,
+        status_post_result: Option<Result<StatusPostResult, tokio::task::JoinError>>,
+    ) {
+        match status_post_result {
+            Some(Ok(result)) => self.status_ledger.settle(result, Instant::now()),
+            Some(Err(err)) => {
+                tracing::warn!("Status slot POST task failed: {}", err);
+            }
+            None => {}
+        }
+    }
+}
