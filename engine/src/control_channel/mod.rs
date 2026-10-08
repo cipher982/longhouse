@@ -1904,7 +1904,13 @@ mod tests {
             .map(str::to_string)
             .collect();
         assert!(!providers.is_empty());
+        // Same isolation as the other tests that reach provider control code:
+        // a private agent state dir and an empty PATH, so no provider binary or
+        // real session can be found. Claude's path still waits its full
+        // DEFAULT_READY_WAIT (10 s) for a channel that never appears.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
+        let empty_path = tempfile::tempdir().unwrap();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1920,6 +1926,14 @@ mod tests {
                 [
                     ("LONGHOUSE_HOME", Some(temp.path().as_os_str())),
                     ("HOME", Some(temp.path().as_os_str())),
+                    ("PATH", Some(empty_path.path().as_os_str())),
+                    ("LONGHOUSE_CODEX_BIN", None::<&std::ffi::OsStr>),
+                    ("LONGHOUSE_CLAUDE_BIN", None::<&std::ffi::OsStr>),
+                    ("LONGHOUSE_OPENCODE_BIN", None::<&std::ffi::OsStr>),
+                    ("LONGHOUSE_ANTIGRAVITY_BIN", None::<&std::ffi::OsStr>),
+                    ("LONGHOUSE_CURSOR_BIN", None::<&std::ffi::OsStr>),
+                    ("LONGHOUSE_PI_BIN", None::<&std::ffi::OsStr>),
+                    ("LONGHOUSE_OMP_BIN", None::<&std::ffi::OsStr>),
                 ],
                 || runtime.block_on(execute_command(&frame, &ShipperConfig::default())),
             );
