@@ -156,19 +156,12 @@ impl HistoryImportSnapshot {
         }
     }
 
-    pub fn apply_runtime_state(
-        &mut self,
-        offline: bool,
-        paused: bool,
-        backpressured: bool,
-        background_active: bool,
-        archive_blocked: bool,
-    ) {
+    pub fn apply_runtime_state(&mut self, offline: bool, paused: bool, background_active: bool) {
         if self.inventory.is_none() || self.state == "unavailable" {
             return;
         }
         let progress = self.progress.as_ref();
-        let blocked = archive_blocked || progress.is_some_and(|item| item.blocked_source_count > 0);
+        let blocked = progress.is_some_and(|item| item.blocked_source_count > 0);
         let has_work = background_active || progress.is_some_and(progress_has_work);
         self.state = if blocked {
             "blocked_source"
@@ -176,8 +169,6 @@ impl HistoryImportSnapshot {
             "offline"
         } else if paused && has_work {
             "paused"
-        } else if backpressured && has_work {
-            "backpressured"
         } else if has_work {
             "importing"
         } else if self.state == "current" {
@@ -1091,13 +1082,13 @@ mod tests {
                 ..StorageV2OutboxSnapshot::default()
             },
         );
-        snapshot.apply_runtime_state(true, true, true, true, false);
+        snapshot.apply_runtime_state(true, true, true);
         assert_eq!(snapshot.state, "blocked_source");
 
         let mut snapshot = HistoryImportSnapshot::load(&conn, &StorageV2OutboxSnapshot::default());
-        snapshot.apply_runtime_state(false, true, false, true, false);
+        snapshot.apply_runtime_state(false, true, true);
         assert_eq!(snapshot.state, "paused");
-        snapshot.apply_runtime_state(true, false, false, true, false);
+        snapshot.apply_runtime_state(true, false, true);
         assert_eq!(snapshot.state, "offline");
     }
 }

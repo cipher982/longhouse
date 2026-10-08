@@ -949,7 +949,6 @@ impl ArchiveRepairControl {
     fn is_paused(&self, default_mode: ArchiveRepairMode) -> bool {
         self.normalized_mode(default_mode).is_paused()
     }
-
 }
 
 fn read_archive_repair_control() -> ArchiveRepairControl {
@@ -4569,9 +4568,7 @@ fn build_local_status_projection_with_omp(
     payload.history_import.apply_runtime_state(
         is_offline,
         payload.archive_backlog.mode == "paused",
-        !sealed_current && payload.archive_backlog.state == "blocked",
         background_active,
-        !sealed_current && payload.archive_backlog.dead_ranges > 0,
     );
     let now = chrono::Utc::now();
     payload.managed_sessions = heartbeat::leases_from_observations(machine_id, observations, now);
@@ -11326,5 +11323,4 @@ mod tests {
             },
         );
     }
-
 }
