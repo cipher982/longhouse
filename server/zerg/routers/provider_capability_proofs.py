@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Query
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
@@ -36,6 +37,7 @@ from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBl
 from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBlobTampered
 from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBlobUnavailable
 from zerg.services.provider_capability_blob_resolver import resolver_from_settings
+from zerg.services.provider_capability_cell_verdicts import REVOKING_CONSECUTIVE_FAILURES
 from zerg.services.provider_capability_cell_verdicts import VERDICT_BUNDLE_KIND
 from zerg.services.provider_capability_cell_verdicts import VERDICT_SCHEMA_VERSION
 from zerg.services.provider_capability_cell_verdicts import CellVerdictStore
@@ -591,6 +593,68 @@ def list_provider_capability_proofs(
         "trusted_artifact_ids": trusted_ids,
         "total_records": total,
         "truncated": total > len(records),
+    }
+
+
+_MAX_VERSION_EVIDENCE_RECORDS = 5000
+
+
+def _required_assertion_ids(provider: str) -> list[str]:
+    """The assertion ids the public chip certification counts for one provider."""
+
+    try:
+        edges = load_chip_edge_assertions()
+    except SystemExit as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    return sorted({assertion.assertion_id for chip in edges.get(provider, {}).values() if chip for assertion in chip})
+
+
+@router.get("/agents/provider-version-evidence", dependencies=[Depends(_refuse_evidence_on_public_demo)])
+def get_provider_version_evidence(
+    provider: str = Query(min_length=1, max_length=64),
+    version: str = Query(min_length=1, max_length=128),
+    _auth: object = Depends(verify_agents_caller),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, Any]:
+    """Facts only: the proof records and failing cell verdicts one provider
+    version has, plus the assertions the chip certification requires. The
+    caller decides what they add up to; nothing here is a verdict."""
+
+    known = provider in managed_provider_names()
+    records: list[ProviderCapabilityProofRecord] = []
+    if known:
+        records = [record for record in _proof_store().records(provider) if record.provider_version == version]
+    records.sort(key=lambda record: (record.generated_at, record.artifact_id), reverse=True)
+    truncated = len(records) > _MAX_VERSION_EVIDENCE_RECORDS
+    failing = (
+        [
+            verdict.serialize()
+            for verdict in _cell_verdict_store().verdicts().values()
+            if verdict.provider == provider and verdict.consecutive_failures >= REVOKING_CONSECUTIVE_FAILURES
+        ]
+        if known
+        else []
+    )
+    return {
+        "schema_version": 1,
+        "artifact_kind": "provider_version_evidence",
+        "provider": provider,
+        "version": version,
+        "records": [
+            {
+                "assertion_id": record.assertion_id,
+                "scenario_id": record.scenario_id,
+                "variant": record.assertion_variant,
+                "outcome": record.outcome.value,
+                "evidence_class": record.evidence_class.value,
+                "longhouse_git_sha": record.longhouse_git_sha,
+                "generated_at": record.generated_at,
+            }
+            for record in records[:_MAX_VERSION_EVIDENCE_RECORDS]
+        ],
+        "truncated": truncated,
+        "failing_verdicts": failing,
+        "required_assertions": _required_assertion_ids(provider) if known else [],
     }
 
 

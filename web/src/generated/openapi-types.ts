@@ -1099,6 +1099,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/provider-version-evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Provider Version Evidence
+         * @description Facts only: the proof records and failing cell verdicts one provider
+         *     version has, plus the assertions the chip certification requires. The
+         *     caller decides what they add up to; nothing here is a verdict.
+         */
+        get: operations["get_provider_version_evidence_agents_provider_version_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/provider-capability-proofs/blobs/{sha256}": {
         parameters: {
             query?: never;
@@ -12011,6 +12033,40 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    get_provider_version_evidence_agents_provider_version_evidence_get: {
+        parameters: {
+            query: {
+                provider: string;
+                version: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
