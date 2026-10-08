@@ -104,3 +104,47 @@ def test_demo_corpus_lists_all_of_its_aged_sessions(monkeypatch, tmp_path):
     finally:
         engine.dispose()
     assert page["total"] > 0
+
+
+def test_demo_corpus_is_built_straight_into_storage_v2_with_stable_ids(tmp_path, monkeypatch):
+    """Every seeded demo event renders, under session ids that do not change between builds."""
+    from datetime import UTC
+    from datetime import datetime
+
+    from sqlalchemy import select
+
+    from zerg.catalogd.models import RenderObject
+    from zerg.catalogd.models import StorageSession
+    from zerg.services.demo_seed import DEMO_PRESENTATION
+    from zerg.services.demo_sessions import build_demo_agent_sessions
+
+    anchor = datetime(2026, 1, 15, 9, 41, tzinfo=UTC)
+    built = []
+    for name in ("first", "second"):
+        monkeypatch.setenv("LONGHOUSE_STORAGE_V2_ROOT", str(tmp_path / name / "objects"))
+        paths = build_demo_database(tmp_path / name / "longhouse-demo.db", anchor=anchor)
+        engine = create_catalog_engine(paths["live"])
+        try:
+            with engine.connect() as connection:
+                sessions = {str(row["session_id"]): row for row in connection.execute(select(StorageSession.__table__)).mappings()}
+                events = {
+                    session_id: sum(
+                        int(count)
+                        for (count,) in connection.execute(
+                            select(RenderObject.__table__.c.event_count).where(
+                                RenderObject.__table__.c.session_id == session_id,
+                                RenderObject.__table__.c.generation_id == row["current_render_generation"],
+                            )
+                        )
+                    )
+                    for session_id, row in sessions.items()
+                }
+        finally:
+            engine.dispose()
+        built.append((sessions, events))
+
+    (first, first_events), (second, _) = built
+    assert set(first) == set(second)
+    assert {row["render_state"] for row in first.values()} == {"ready"}
+    assert {row["summary_title"] for row in first.values()} == {title for title, _ in DEMO_PRESENTATION.values()}
+    assert sum(first_events.values()) == sum(len(session.events) for session in build_demo_agent_sessions(anchor))

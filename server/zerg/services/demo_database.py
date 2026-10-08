@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
+from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 from uuid import NAMESPACE_URL
 from uuid import UUID
 from uuid import uuid5
 
 from sqlalchemy import select
 from sqlalchemy import update
-from sqlalchemy.orm import sessionmaker
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.models import FactHead
@@ -30,11 +30,6 @@ from zerg.database import Base
 from zerg.database import _ensure_agents_fts
 from zerg.database import make_engine
 from zerg.machine_evidence import canonical_evidence_hash
-from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSession
-from zerg.models.agents import AgentSourceLine
-from zerg.models.agents import SessionThread
-from zerg.models.agents import SessionThreadAlias
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveRuntimeState
@@ -48,12 +43,27 @@ from zerg.models.live_store import LiveUser
 from zerg.searchd.store import SearchStore
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
+from zerg.services.agents import SessionIngest
 from zerg.services.demo_seed import DEMO_PRESENTATION
-from zerg.services.demo_seed import seed_missing_demo_sessions
-from zerg.services.legacy_corpus_migration import LegacyCorpusConverter
-from zerg.services.legacy_corpus_migration import _normalized_event_source
-from zerg.services.legacy_corpus_migration import create_inventory_run
+from zerg.services.demo_sessions import build_demo_agent_sessions
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.raw_json_compression import decode_raw_json
+from zerg.storage_v2.normalized_events import ORDERING_REVISION
+from zerg.storage_v2.normalized_events import PARSER_REVISION
+from zerg.storage_v2.normalized_events import aware
+from zerg.storage_v2.normalized_events import normalized_event_source
+from zerg.storage_v2.normalized_events import opaque_source_id
+from zerg.storage_v2.normalized_events import optional_text
+from zerg.storage_v2.normalized_events import render_order_key
+from zerg.storage_v2.normalized_events import render_record
+from zerg.storage_v2.normalized_events import stable_uuid
+from zerg.storage_v2.raw_objects import RawObjectSpec
+from zerg.storage_v2.raw_objects import RawRecord
+from zerg.storage_v2.raw_objects import seal_raw_object
+from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
+from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import read_render_object
+from zerg.storage_v2.render_objects import seal_render_object
 from zerg.utils.time import utc_now_naive
 
 _TENANT_ID = "demo-tenant"
@@ -99,7 +109,7 @@ def _remove_database_family(path: Path) -> None:
         candidate.unlink(missing_ok=True)
 
 
-def _ensure_legacy_owner(db, email: str) -> None:
+def _ensure_owner(db, email: str) -> None:
     if get_user_by_email(db, email) is not None:
         return
     now = utc_now_naive()
@@ -119,28 +129,58 @@ def _ensure_legacy_owner(db, email: str) -> None:
     db.commit()
 
 
-def _build_legacy_source(output_path: Path, *, owner_email: str, anchor: datetime) -> sessionmaker:
+def _build_main_database(output_path: Path, *, owner_email: str) -> None:
+    """Create the runtime's main database with its schema and owner; sessions live in storage-v2."""
+
     engine = make_engine(f"sqlite:///{output_path}").execution_options(schema_translate_map={"zerg": None, "agents": None})
-    Base.metadata.create_all(bind=engine)
-    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
-    db = factory()
     try:
-        _ensure_legacy_owner(db, owner_email)
+        Base.metadata.create_all(bind=engine)
         _ensure_agents_fts(engine)
-        seeded_count, failed_count = seed_missing_demo_sessions(db, now=anchor)
-        if failed_count:
-            raise RuntimeError(f"failed to seed {failed_count} demo sessions")
-        if seeded_count != len(DEMO_PRESENTATION):
-            raise RuntimeError(f"expected {len(DEMO_PRESENTATION)} demo sessions, seeded {seeded_count}")
-        _complete_demo_tool_call_pairs(db)
-        _add_lossless_demo_source_lines(db, anchor=anchor)
+        with engine.connect() as connection:
+            from sqlalchemy.orm import Session
+
+            with Session(bind=connection) as db:
+                _ensure_owner(db, owner_email)
+            connection.commit()
     finally:
-        db.close()
-    return factory
+        engine.dispose()
 
 
-def _complete_demo_tool_call_pairs(db) -> None:
-    """Link every authored demo tool call to its result before storage-v2 migration.
+@dataclass
+class _DemoEvent:
+    """A parsed demo event in the shape the normalized-event renderer reads."""
+
+    id: int
+    thread_id: UUID
+    branch_id: int
+    role: str
+    content_text: str | None
+    tool_name: str | None
+    tool_input_json: Any
+    tool_output_text: str | None
+    tool_call_id: str | None
+    timestamp: datetime
+    source_path: str | None
+    source_offset: int | None
+    raw_json: str | None
+    raw_json_codec: int = 0
+    raw_json_z: bytes | None = None
+
+
+@dataclass
+class _DemoSession:
+    session_id: UUID
+    branch_id: int
+    data: SessionIngest
+    events: list[_DemoEvent]
+
+
+def _demo_session_id(provider_session_id: str) -> UUID:
+    return uuid5(NAMESPACE_URL, f"longhouse-demo-session:{provider_session_id}")
+
+
+def _complete_demo_tool_call_pairs(session: _DemoSession) -> None:
+    """Link every authored demo tool call to its result.
 
     The workspace derives the durable ``completed`` state from matching call IDs.
     The seed intentionally omits IDs on some simple tool exchanges, so restore
@@ -148,69 +188,65 @@ def _complete_demo_tool_call_pairs(db) -> None:
     Existing IDs remain authoritative and result timestamps provide the duration.
     """
 
-    sessions = db.query(AgentSession.id).order_by(AgentSession.id.asc()).all()
-    for (session_id,) in sessions:
-        events = (
-            db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc()).all()
-        )
-        pending_calls: list[AgentEvent] = []
-        calls_by_id: dict[str, AgentEvent] = {}
-        for event in events:
-            if event.role == "assistant" and event.tool_name:
-                if not event.tool_call_id:
-                    event.tool_call_id = f"demo-tool-{event.id}"
-                pending_calls.append(event)
-                calls_by_id[str(event.tool_call_id)] = event
-                continue
-            if event.role != "tool":
-                continue
-
-            matched = calls_by_id.pop(str(event.tool_call_id), None) if event.tool_call_id else None
-            if matched is None and not event.tool_call_id and pending_calls:
-                matched = pending_calls.pop(0)
-                event.tool_call_id = matched.tool_call_id
-                calls_by_id.pop(str(matched.tool_call_id), None)
-            elif matched is not None:
-                pending_calls.remove(matched)
-
-        if pending_calls:
-            missing_results = ", ".join(str(event.id) for event in pending_calls)
-            raise RuntimeError(f"demo tool calls without results in {session_id}: {missing_results}")
-    db.commit()
+    pending_calls: list[_DemoEvent] = []
+    calls_by_id: dict[str, _DemoEvent] = {}
+    for event in sorted(session.events, key=lambda item: (item.timestamp, item.id)):
+        if event.role == "assistant" and event.tool_name:
+            if not event.tool_call_id:
+                event.tool_call_id = f"demo-tool-{event.id}"
+            pending_calls.append(event)
+            calls_by_id[str(event.tool_call_id)] = event
+            continue
+        if event.role != "tool":
+            continue
+        matched = calls_by_id.pop(str(event.tool_call_id), None) if event.tool_call_id else None
+        if matched is None and not event.tool_call_id and pending_calls:
+            matched = pending_calls.pop(0)
+            event.tool_call_id = matched.tool_call_id
+            calls_by_id.pop(str(matched.tool_call_id), None)
+        elif matched is not None:
+            pending_calls.remove(matched)
+    if pending_calls:
+        missing_results = ", ".join(str(event.id) for event in pending_calls)
+        raise RuntimeError(f"demo tool calls without results in {session.session_id}: {missing_results}")
 
 
-def _add_lossless_demo_source_lines(db, *, anchor: datetime) -> None:
-    """Give the build-time migration a lossless source inventory.
+def _demo_sessions(anchor: datetime) -> list[_DemoSession]:
+    """The demo corpus with stable session ids and globally ordered event ids."""
 
-    The normal synthetic seed intentionally stores parsed events only. The
-    migration contract distinguishes byte-covered source records from its
-    normalized fallback, so add invented normalized source lines to the
-    disposable staging DB before converting it to storage-v2.
-    """
-
-    events = db.query(AgentEvent).order_by(AgentEvent.id.asc()).all()
-    for offset, event in enumerate(events):
-        raw_value = _normalized_event_source((event,))
-        if raw_value is None:
-            raise RuntimeError(f"could not normalize demo event {event.id}")
-        encoded = raw_value.encode("utf-8")
-        db.add(
-            AgentSourceLine(
-                session_id=event.session_id,
-                thread_id=event.thread_id,
-                source_path=f"demo/{event.session_id}.jsonl",
-                source_offset=offset,
-                branch_id=int(event.branch_id or 0),
-                revision=1,
-                is_branch_copy=0,
-                raw_json=raw_value,
-                raw_json_z=None,
-                raw_json_codec=0,
-                line_hash=hashlib.sha256(encoded).hexdigest(),
-                created_at=anchor,
+    sessions: list[_DemoSession] = []
+    next_event_id = 1
+    for branch_id, data in enumerate(build_demo_agent_sessions(anchor), start=1):
+        if not data.provider_session_id or data.provider_session_id not in DEMO_PRESENTATION:
+            raise RuntimeError(f"demo session is missing from the presentation contract: {data.provider_session_id}")
+        session_id = _demo_session_id(data.provider_session_id)
+        thread_id = stable_uuid("demo-thread", str(session_id))
+        events: list[_DemoEvent] = []
+        for item in data.events:
+            events.append(
+                _DemoEvent(
+                    id=next_event_id,
+                    thread_id=thread_id,
+                    branch_id=branch_id,
+                    role=item.role,
+                    content_text=item.content_text,
+                    tool_name=item.tool_name,
+                    tool_input_json=item.tool_input_json,
+                    tool_output_text=item.tool_output_text,
+                    tool_call_id=item.tool_call_id,
+                    timestamp=aware(item.timestamp),
+                    source_path=item.source_path,
+                    source_offset=item.source_offset,
+                    raw_json=item.raw_json,
+                )
             )
-        )
-    db.commit()
+            next_event_id += 1
+        session = _DemoSession(session_id=session_id, branch_id=branch_id, data=data, events=events)
+        _complete_demo_tool_call_pairs(session)
+        sessions.append(session)
+    if len(sessions) != len(DEMO_PRESENTATION):
+        raise RuntimeError(f"expected {len(DEMO_PRESENTATION)} demo sessions, built {len(sessions)}")
+    return sessions
 
 
 def _object_root() -> Path:
@@ -244,13 +280,90 @@ def _initialize_live_catalog(live_path: Path, *, owner_email: str) -> None:
     engine.dispose()
 
 
-async def _migrate_legacy_source(
-    legacy_factory: sessionmaker,
-    live_path: Path,
-    object_root: Path,
+def _demo_raw_commit(
+    session: _DemoSession,
+    raw_spec: RawObjectSpec,
+    sealed_raw,
+    render_spec: RenderObjectSpec,
+    sealed_render,
     *,
-    anchor: datetime,
-) -> None:
+    owner_id: str,
+) -> dict[str, Any]:
+    data = session.data
+    started_at = aware(data.started_at)
+    last_activity_at = max((event.timestamp for event in session.events), default=started_at)
+    return {
+        "protocol_version": 2,
+        "tenant_id": _TENANT_ID,
+        "owner_id": owner_id,
+        "session_id": str(session.session_id),
+        "machine_id": raw_spec.machine_id,
+        "provider": raw_spec.provider,
+        "opaque_source_id": raw_spec.opaque_source_id,
+        "source_epoch": str(raw_spec.source_epoch),
+        "predecessor_source_epoch": None,
+        "epoch_opened_at": started_at.isoformat(),
+        "range_kind": raw_spec.range_kind,
+        "range_start": raw_spec.range_start,
+        "range_end": raw_spec.range_end,
+        "record_hashes": list(sealed_raw.record_hashes),
+        "envelope_id": sealed_raw.envelope_id,
+        "object_hash": sealed_raw.object_hash,
+        "payload_hash": sealed_raw.payload_hash,
+        "compressed_hash": sealed_raw.compressed_hash,
+        "object_path": sealed_raw.object_path,
+        "uncompressed_size": sealed_raw.uncompressed_size,
+        "compressed_size": sealed_raw.compressed_size,
+        "provenance_kind": raw_spec.provenance_kind,
+        "render_state": "ready",
+        "media_refs": [],
+        "projectors": [],
+        "render_manifest": {
+            "generation_id": str(render_spec.render_generation),
+            "parser_revision": render_spec.parser_revision,
+            "ordering_revision": render_spec.ordering_revision,
+            "object_id": sealed_render.object_id,
+            "object_hash": sealed_render.object_hash,
+            "payload_hash": sealed_render.payload_hash,
+            "object_path": sealed_render.object_path,
+            "uncompressed_size": sealed_render.uncompressed_size,
+            "compressed_size": sealed_render.compressed_size,
+            "event_count": sealed_render.event_count,
+            "first_order_key": sealed_render.first_order_key,
+            "last_order_key": sealed_render.last_order_key,
+            "user_messages": sealed_render.user_messages,
+            "assistant_messages": sealed_render.assistant_messages,
+            "tool_calls": sealed_render.tool_calls,
+            "abandoned_events": sealed_render.abandoned_events,
+            "first_user_message_preview": sealed_render.first_user_message_preview,
+            "last_visible_text_preview": sealed_render.last_visible_text_preview,
+            "semantic_projection_version": SEMANTIC_PROJECTION_VERSION,
+        },
+        "session_facts": {
+            "environment": data.environment,
+            "project": optional_text(data.project),
+            "cwd": optional_text(data.cwd),
+            "git_repo": optional_text(data.git_repo),
+            "git_branch": optional_text(data.git_branch),
+            "started_at": started_at.isoformat(),
+            "last_activity_at": last_activity_at.isoformat(),
+            "ended_at": None,
+            "origin_kind": None,
+            # Demo samples are sessions a visitor should see. Automation/test
+            # launch labels are what the timeline hides as QA noise, so leave
+            # them unset; _seed_live_catalog labels the managed ones.
+            "hidden_from_default_timeline": False,
+            "launch_actor": None,
+            "launch_surface": None,
+        },
+        "conversation_resets": [],
+        "sealed_at": datetime.now(UTC).isoformat(),
+    }
+
+
+async def _import_demo_sessions(sessions: list[_DemoSession], live_path: Path, object_root: Path) -> None:
+    """Commit each demo session as one normalized-event raw object with its ready render."""
+
     # Catalogd enforces the portable Unix socket limit. The demo path under a
     # repository checkout is long enough to exceed it on macOS.
     socket_dir = Path("/tmp") / f"lhcd-demo-{os.getpid()}"
@@ -260,34 +373,76 @@ async def _migrate_legacy_source(
     await daemon.start()
     catalog = CatalogClient(socket_path)
     try:
-        with legacy_factory() as db:
-            inventory = await create_inventory_run(db, catalog, created_at=anchor)
-        converter = LegacyCorpusConverter(
-            session_factory=legacy_factory,
-            catalog=catalog,
-            object_root=object_root,
-            tenant_id=_TENANT_ID,
-        )
-        summary = await converter.migrate_run(UUID(inventory["run_id"]), workers=1)
-        counts = (summary.get("summary") or {}).get("state_counts") or {}
-        if counts.get("verified") != len(DEMO_PRESENTATION) or any(counts.get(state, 0) for state in ("pending", "migrating", "degraded")):
-            raise RuntimeError(f"demo storage migration did not verify: {counts}")
+        owner = await catalog.call("auth.owner.get.v2", {}, timeout_seconds=5.0)
+        if owner.get("found") is not True or owner.get("owner_id") is None:
+            raise RuntimeError("demo corpus requires an active catalog owner")
+        owner_id = str(owner["owner_id"])
+        for session in sessions:
+            data = session.data
+            events = sorted(session.events, key=lambda item: (item.timestamp, item.id))
+            source_path = f"legacy-unmatched-events:{session.session_id}"
+            records: list[RawRecord] = []
+            for position, event in enumerate(events):
+                normalized = normalized_event_source((event,))
+                if normalized is None:
+                    raise RuntimeError(f"could not normalize demo event {event.id}")
+                records.append(RawRecord(source_position=position, data=normalized.encode("utf-8")))
+            sequence_context: dict[str, Any] = {}
+            if str(data.provider or "").strip().lower() == "claude":
+                seed_provider_interaction_sequence_context(data.provider, [decode_raw_json(event) for event in events], sequence_context)
+            render_records = sorted(
+                (
+                    render_record(
+                        event,
+                        position,
+                        position,
+                        session.session_id,
+                        head_branch_id=session.branch_id,
+                        provider=data.provider,
+                        sequence_context=sequence_context,
+                    )
+                    for position, event in enumerate(events)
+                ),
+                key=render_order_key,
+            )
+            opaque_id = opaque_source_id(session.session_id, source_path, "legacy_normalized_event")
+            source_epoch = stable_uuid("demo-source", str(session.session_id))
+            raw_spec = RawObjectSpec(
+                tenant_id=_TENANT_ID,
+                machine_id=data.device_id or "legacy",
+                session_id=session.session_id,
+                provider=data.provider,
+                opaque_source_id=opaque_id,
+                source_epoch=source_epoch,
+                range_kind="record_ordinal",
+                range_start=0,
+                range_end=len(records),
+                records=tuple(records),
+                provenance_kind="legacy_normalized_event",
+            )
+            sealed_raw = await asyncio.to_thread(seal_raw_object, object_root, raw_spec)
+            render_spec = RenderObjectSpec(
+                session_id=session.session_id,
+                render_generation=stable_uuid("demo-render", str(session.session_id)),
+                parser_revision=PARSER_REVISION,
+                ordering_revision=ORDERING_REVISION,
+                machine_id=raw_spec.machine_id,
+                provider=data.provider,
+                opaque_source_id=opaque_id,
+                source_epoch=source_epoch,
+                source_envelope_id=sealed_raw.envelope_id,
+                records=tuple(render_records),
+            )
+            sealed_render = await asyncio.to_thread(seal_render_object, object_root, render_spec)
+            await catalog.call(
+                "storage.raw_object.commit.v2",
+                _demo_raw_commit(session, raw_spec, sealed_raw, render_spec, sealed_render, owner_id=owner_id),
+                timeout_seconds=10.0,
+            )
     finally:
         await catalog.close()
         await daemon.close()
         socket_dir.rmdir()
-
-
-def _legacy_session_ids(legacy_factory: sessionmaker) -> dict[str, AgentSession]:
-    with legacy_factory() as db:
-        rows = (
-            db.query(AgentSession, SessionThreadAlias.alias_value)
-            .join(SessionThread, SessionThread.session_id == AgentSession.id)
-            .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
-            .filter(SessionThread.is_primary == 1, SessionThreadAlias.alias_kind == "provider_session_id")
-            .all()
-        )
-        return {str(alias): session for session, alias in rows}
 
 
 def _fact_head(
@@ -324,29 +479,29 @@ def _fact_head(
     )
 
 
-def _seed_live_catalog(live_path: Path, legacy_factory: sessionmaker, *, anchor: datetime) -> None:
-    legacy_by_provider_id = _legacy_session_ids(legacy_factory)
+def _seed_live_catalog(live_path: Path, sessions: list[_DemoSession], *, anchor: datetime) -> None:
+    session_ids = {str(session.data.provider_session_id): session.session_id for session in sessions}
     engine = create_catalog_engine(live_path)
     managed_by_id = {
-        provider_id: (legacy_by_provider_id[provider_id], config)
-        for provider_id, config in _MANAGED_SESSIONS.items()
-        if provider_id in legacy_by_provider_id
+        provider_id: (session_ids[provider_id], config) for provider_id, config in _MANAGED_SESSIONS.items() if provider_id in session_ids
     }
     if len(managed_by_id) != len(_MANAGED_SESSIONS):
         missing = sorted(set(_MANAGED_SESSIONS) - set(managed_by_id))
-        raise RuntimeError(f"managed demo sessions are missing from legacy source: {missing}")
+        raise RuntimeError(f"managed demo sessions are missing from the demo corpus: {missing}")
 
     with engine.begin() as connection:
         storage_rows = {str(row["session_id"]): row for row in connection.execute(select(StorageSession.__table__)).mappings()}
         for provider_id, (title, _summary) in DEMO_PRESENTATION.items():
-            session_id = str(legacy_by_provider_id[provider_id].id)
+            session_id = str(session_ids[provider_id])
             connection.execute(
                 update(StorageSession.__table__)
                 .where(StorageSession.__table__.c.session_id == session_id)
-                .values(summary_title=title, anchor_title=title)
+                # Each demo window is complete, so Claude's hold for later
+                # local-command evidence (semantic version 0) does not apply.
+                .values(summary_title=title, anchor_title=title, semantic_projection_version=SEMANTIC_PROJECTION_VERSION)
             )
-        for provider_id, (legacy_session, config) in managed_by_id.items():
-            session_id = str(legacy_session.id)
+        for provider_id, (demo_session_id, config) in managed_by_id.items():
+            session_id = str(demo_session_id)
             storage = storage_rows[session_id]
             thread_id = str(uuid5(NAMESPACE_URL, f"demo-thread:{provider_id}"))
             run_id = str(uuid5(NAMESPACE_URL, f"demo-run:{provider_id}"))
@@ -695,7 +850,7 @@ def _build_search_index(live_path: Path, search_path: Path, object_root: Path) -
 
 
 def build_demo_database(output_path: Path, *, owner_email: str = "local@zerg", anchor: datetime | None = None) -> dict[str, Path]:
-    """Build the legacy staging DB plus the live catalog and derived search DB."""
+    """Build the main DB, the storage-v2 live catalog and the derived search DB."""
 
     output_path = output_path.expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -712,16 +867,14 @@ def build_demo_database(output_path: Path, *, owner_email: str = "local@zerg", a
     object_root = _object_root()
     object_root.mkdir(mode=0o700, parents=True, exist_ok=True)
 
-    legacy_factory = _build_legacy_source(output_path, owner_email=owner_email, anchor=observed_at)
-    try:
-        _initialize_live_catalog(live_path, owner_email=owner_email)
-        asyncio.run(_migrate_legacy_source(legacy_factory, live_path, object_root, anchor=observed_at))
-        _seed_live_catalog(live_path, legacy_factory, anchor=observed_at)
-        _build_search_index(live_path, search_path, object_root)
-    finally:
-        legacy_factory.kw["bind"].dispose()
+    sessions = _demo_sessions(observed_at)
+    _build_main_database(output_path, owner_email=owner_email)
+    _initialize_live_catalog(live_path, owner_email=owner_email)
+    asyncio.run(_import_demo_sessions(sessions, live_path, object_root))
+    _seed_live_catalog(live_path, sessions, anchor=observed_at)
+    _build_search_index(live_path, search_path, object_root)
 
-    return {"legacy": output_path, "live": live_path, "search": search_path, "objects": object_root}
+    return {"main": output_path, "live": live_path, "search": search_path, "objects": object_root}
 
 
 __all__ = ["build_demo_database"]

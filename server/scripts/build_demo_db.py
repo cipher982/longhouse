@@ -56,7 +56,7 @@ def main() -> int:
 
     paths = build_demo_database(output_path, owner_email=args.owner_email, anchor=anchor)
     print(
-        f"Demo corpus created: {paths['legacy']} (legacy), {paths['live']} (storage-v2), "
+        f"Demo corpus created: {paths['main']} (main), {paths['live']} (storage-v2), "
         f"{paths['search']} (searchd)"
     )
     return 0
