@@ -1513,565 +1513,794 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // and SQLite reads, so do not let a ready timer win the select race
             // while a turn-completion wake is already waiting.
             Some(signal) = state.transcript_wake_rx.recv() => {
-                if enqueue_transcript_wake_signal(
-                    &state.conn,
-                    &mut state.scheduler,
-                    &mut state.latest_transcript_wake_observed,
-                    &mut state.deferred_retries,
-                    signal,
-                ).is_some() {
-                    pump_ready_local_work(
-                        &mut state.scheduler,
-                        &mut state.in_flight,
-                        &state.task_context,
-                        &mut state.deferred_retries,
-                        &mut state.shipping_progress,
-                        state.offline.is_offline,
-                        archive_repair_is_paused(config.archive_repair_mode),
-                    );
-                }
+                state.on_transcript_wake(&config, signal);
             }
 
             task_result = state.in_flight.join_next(), if state.scheduler.has_in_flight() => {
-                match task_result {
-                    Some(Ok(Some(result))) => {
-                        let retry_path = result.job.path.clone();
-                        let retry_provider = result.job.provider;
-                        let reconciled_to_head = result.reconciled_to_head
-                            && result.rerun_priority.is_none()
-                            && result.local_retry_after.is_none();
-                        if result.local_retry_after.is_some() {
-                            state.scheduler.complete_without_rerun(&retry_path);
-                        } else {
-                            state.scheduler.complete(&retry_path, result.rerun_priority);
-                        }
-                        if let Some(delay) = result.local_retry_after {
-                            let priority = result.local_retry_priority.unwrap_or(result.job.priority);
-                            state.deferred_retries.insert(retry_path.clone(), DeferredRetry {
+                state.on_path_task_done(task_result)?;
+            }
+
+            discovery_result = state.discovery_tasks.join_next(), if !state.discovery_tasks.is_empty() => {
+                state.on_discovery_done(&config, discovery_result);
+            }
+
+            outbox_collect_result = state.outbox_collect_tasks.join_next(), if !state.outbox_collect_tasks.is_empty() => {
+                state.on_outbox_collect_done(phase_projection_timer.as_mut(), outbox_collect_result).await;
+            }
+
+            status_slot_result = state.status_slot_tasks.join_next(), if !state.status_slot_tasks.is_empty() => {
+                state.on_status_slot_done(status_slot_result).await;
+            }
+            status_post_result = state.status_post_tasks.join_next(), if !state.status_post_tasks.is_empty() => {
+                state.on_status_post_done(status_post_result);
+            }
+
+            runtime_collect_result = state.runtime_collect_tasks.join_next(), if !state.runtime_collect_tasks.is_empty() => {
+                state.on_runtime_collect_done(runtime_collect_result).await;
+            }
+
+            runtime_sweep_result = state.runtime_sweep_tasks.join_next(), if !state.runtime_sweep_tasks.is_empty() => {
+                state.on_runtime_sweep_done(runtime_sweep_result);
+            }
+
+            outbox_post_result = state.outbox_post_tasks.join_next(), if !state.outbox_post_tasks.is_empty() => {
+                state.on_outbox_post_done(outbox_post_result);
+            }
+
+            runtime_outbox_post_result = state.runtime_outbox_post_tasks.join_next(), if !state.runtime_outbox_post_tasks.is_empty() => {
+                state.on_runtime_outbox_post_done(runtime_outbox_post_result);
+            }
+
+            heartbeat_post_result = state.heartbeat_post_tasks.join_next(), if !state.heartbeat_post_tasks.is_empty() => {
+                state.on_heartbeat_post_done(heartbeat_post_result);
+            }
+
+            machine_presence_post_result = state.machine_presence_post_tasks.join_next(), if !state.machine_presence_post_tasks.is_empty() => {
+                state.on_machine_presence_post_done(machine_presence_post_result);
+            }
+            host_link_poll_result = state.host_link_poll_tasks.join_next(), if !state.host_link_poll_tasks.is_empty() => {
+                state.on_host_link_poll_done(host_link_poll_result);
+            }
+            host_link_event = state.host_link_changed.changed() => {
+                state.on_host_link_changed(host_link_event);
+            }
+            _ = state.storage_maintenance_tasks.join_next(), if !state.storage_maintenance_tasks.is_empty() => {}
+            _ = state.daily_maintenance_tasks.join_next(), if !state.daily_maintenance_tasks.is_empty() => {}
+
+            unmanaged_binding_refresh_result = state.unmanaged_binding_refresh_tasks.join_next(), if !state.unmanaged_binding_refresh_tasks.is_empty() => {
+                state.on_unmanaged_binding_refresh_done(&config, unmanaged_binding_refresh_result)?;
+            }
+
+            managed_observation_scan_result = state.managed_observation_scan_tasks.join_next(), if !state.managed_observation_scan_tasks.is_empty() => {
+                state.on_managed_observation_scan_done(&config, managed_observation_scan_result);
+            }
+
+            opencode_title_refresh_result = state.opencode_title_refresh_tasks.join_next(), if !state.opencode_title_refresh_tasks.is_empty() => {
+                state.on_opencode_title_refresh_done(opencode_title_refresh_result);
+            }
+
+            projection_build_result = state.projection_build_tasks.join_next(), if !state.projection_build_tasks.is_empty() => {
+                state.on_projection_build_done(&config, projection_build_result);
+            }
+
+            // Debounced projection rebuild for phase-ledger writes. If a build
+            // is already running, `projection_build_pending` makes it run
+            // exactly once more afterwards, so a phase observed mid-build is
+            // never stranded until the next reconciliation.
+            _ = &mut phase_projection_timer, if state.phase_projection_pending => {
+                state.on_phase_projection_due(&config);
+            }
+
+            _ = &mut startup_reconciliation_timer, if state.startup_reconciliation_pending && !state.offline.is_offline => {
+                state.on_startup_reconciliation_due(&config);
+            }
+
+            // Health check when offline (every 60s)
+            _ = state.health_timer.tick(), if state.offline.is_offline => {
+                state.on_health_tick().await;
+            }
+
+            // Live transcript lane (primary path): provider file appends enqueue
+            // WorkPriority::Live. Managed wake signals can pre-empt the small
+            // filesystem coalescing window.
+            Some(first_event) = state.watcher.next_event() => {
+                state.on_watcher_event(&config, first_event).await;
+            }
+
+            _ = state.scope_timer.tick() => {
+                state.on_scope_tick();
+            }
+
+            _ = state.provider_roots_timer.tick(), if !state.pending_provider_roots.is_empty() => {
+                state.on_provider_roots_tick();
+            }
+
+            // Periodic reconciliation scan — repair missed file-watch work after
+            // restarts, sleeps, or dropped OS notifications.
+            _ = state.fallback_timer.tick(), if !state.offline.is_offline => {
+                state.on_fallback_tick(&config);
+            }
+
+            // Retry lane: storage-v2 pending envelopes. Never the primary live
+            // transcript lane.
+            _ = state.failed_ship_retry_timer.tick(), if !state.offline.is_offline => {
+                state.on_failed_ship_retry_tick(&config);
+            }
+
+            // Outbox drain: presence events written by hooks. These are runtime
+            // overlay signals only; transcript shipping is owned by filesystem
+            // events plus reconciliation scans.
+            _ = state.outbox_timer.tick() => {
+                state.on_outbox_tick(&config, phase_projection_timer.as_mut());
+            }
+
+            // Wake the loop when delayed local retry work may now be ready.
+            _ = state.local_retry_timer.tick(), if !state.deferred_retries.is_empty() => {}
+
+            _ = state.flight_sample_timer.tick(), if state.flight_recorder.is_some() => {
+                state.on_flight_sample_tick(&config);
+            }
+
+            _ = state.disk_guard_timer.tick(), if state.disk_guard.is_some() => {
+                state.on_disk_guard_tick(&config).await;
+            }
+
+            // Daily: prune stale file_state and session_binding entries
+            _ = state.update_check_timer.tick() => {
+                state.on_update_check_tick().await;
+            }
+            _ = state.prune_timer.tick() => {
+                state.on_prune_tick();
+            }
+
+            // Frequent local status file refresh for ambient UX and debugging
+            _ = state.local_status_timer.tick() => {
+                state.on_local_status_tick().await;
+            }
+
+            _ = state.managed_full_reconciliation_timer.tick() => {
+                state.on_managed_full_reconciliation_tick();
+            }
+
+            _ = state.managed_observation_timer.tick() => {
+                state.on_managed_observation_tick();
+            }
+
+            _ = state.machine_presence_timer.tick() => {
+                state.on_machine_presence_tick();
+            }
+
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                truth_heartbeat_due_at(state.last_truth_heartbeat_at, Instant::now()),
+            )), if state.pending_truth_heartbeat.is_some() && state.heartbeat_post_tasks.is_empty() => {
+                state.on_truth_heartbeat_due();
+            }
+            // Periodic server heartbeat
+            _ = state.heartbeat_timer.tick() => {
+                state.on_heartbeat_tick();
+            }
+        }
+    }
+
+    state.path_shutdown.send_replace(true);
+    state.in_flight.abort_all();
+    while state.in_flight.join_next().await.is_some() {}
+    if let Some(task) = state.control_channel_task {
+        task.abort();
+    }
+    if let Some(task) = state.transcript_wake_task {
+        task.abort();
+    }
+    crate::codex_exec::shutdown_codex_console_worker_pool().await;
+    tracing::info!("Daemon shutdown complete");
+    Ok(())
+}
+
+impl DaemonState {
+    fn on_transcript_wake(&mut self, config: &ConnectConfig, signal: TranscriptWakeSignal) {
+        if enqueue_transcript_wake_signal(
+            &self.conn,
+            &mut self.scheduler,
+            &mut self.latest_transcript_wake_observed,
+            &mut self.deferred_retries,
+            signal,
+        )
+        .is_some()
+        {
+            pump_ready_local_work(
+                &mut self.scheduler,
+                &mut self.in_flight,
+                &self.task_context,
+                &mut self.deferred_retries,
+                &mut self.shipping_progress,
+                self.offline.is_offline,
+                archive_repair_is_paused(config.archive_repair_mode),
+            );
+        }
+    }
+    fn on_path_task_done(
+        &mut self,
+        task_result: Option<Result<Option<PathTaskResult>, tokio::task::JoinError>>,
+    ) -> Result<()> {
+        {
+            match task_result {
+                Some(Ok(Some(result))) => {
+                    let retry_path = result.job.path.clone();
+                    let retry_provider = result.job.provider;
+                    let reconciled_to_head = result.reconciled_to_head
+                        && result.rerun_priority.is_none()
+                        && result.local_retry_after.is_none();
+                    if result.local_retry_after.is_some() {
+                        self.scheduler.complete_without_rerun(&retry_path);
+                    } else {
+                        self.scheduler.complete(&retry_path, result.rerun_priority);
+                    }
+                    if let Some(delay) = result.local_retry_after {
+                        let priority = result.local_retry_priority.unwrap_or(result.job.priority);
+                        self.deferred_retries.insert(
+                            retry_path.clone(),
+                            DeferredRetry {
                                 due_at: Instant::now() + delay,
                                 provider: retry_provider,
                                 priority,
                                 observation: result.job.observation.clone(),
-                            });
-                        }
-                        // Checking an unchanged source head advances reconciliation
-                        // without creating a new upload receipt.
-                        if reconciled_to_head || result.events_shipped > 0 || result.bytes_shipped > 0 {
-                            state.shipping_progress.record_progress(Instant::now());
-                        }
-                        if result.had_connect_error {
-                            if state.offline.record_connect_error() {
-                                state.shipping_progress.reset_after_sleep(Instant::now());
-                                tracing::warn!(
+                            },
+                        );
+                    }
+                    // Checking an unchanged source head advances reconciliation
+                    // without creating a new upload receipt.
+                    if reconciled_to_head || result.events_shipped > 0 || result.bytes_shipped > 0 {
+                        self.shipping_progress.record_progress(Instant::now());
+                    }
+                    if result.had_connect_error {
+                        if self.offline.record_connect_error() {
+                            self.shipping_progress.reset_after_sleep(Instant::now());
+                            tracing::warn!(
                                     threshold = OFFLINE_CONNECT_FAILURE_THRESHOLD,
                                     "Connection error threshold reached while processing {} — entering offline mode",
                                     result.job.path.display()
                                 );
-                            } else {
-                                tracing::warn!(
-                                    consecutive_connect_errors = state.offline.consecutive_connect_failures,
+                        } else {
+                            tracing::warn!(
+                                    consecutive_connect_errors = self.offline.consecutive_connect_failures,
                                     threshold = OFFLINE_CONNECT_FAILURE_THRESHOLD,
                                     "Connection error while processing {}; keeping local shipping active",
                                     result.job.path.display()
                                 );
-                            }
-                        } else if result.events_shipped > 0 || result.bytes_shipped > 0 {
-                            state.last_ship_at = Some(chrono::Utc::now().to_rfc3339());
-                            if let Some(duration) = state.offline.mark_online() {
-                                state.last_runtime_truth_signature = None;
-                                tracing::info!(
-                                    "Back online after {:.0}s — resuming shipping",
-                                    duration.as_secs_f64()
-                                );
-                            }
                         }
-                        if reconciled_to_head
-                            && !state.scheduler.has_path(&retry_path)
-                            && !state.deferred_retries.contains_key(&retry_path)
-                        {
-                            if let Some(open) = state.open_history_reconciliation.as_mut() {
-                                open.remaining_paths.remove(&retry_path);
-                            }
-                        }
-                        maybe_seal_history_reconciliation(
-                            &mut state.conn,
-                            &mut state.open_history_reconciliation,
-                            &state.scheduler,
-                            &state.deferred_retries,
-                            state.discovery_tasks.is_empty(),
-                        );
-                    }
-                    Some(Err(e)) => {
-                        return Err(anyhow::anyhow!("path task failed: {}", e));
-                    }
-                    None => {}
-                    Some(Ok(None)) => {}
-                }
-            }
-
-            discovery_result = state.discovery_tasks.join_next(), if !state.discovery_tasks.is_empty() => {
-                match discovery_result {
-                    Some(Ok(result)) => {
-                        let reconciliation_paths = result
-                            .enqueue_files
-                            .then(|| result.files.iter().map(|file| file.path.clone()).collect());
-                        let previous_inventory_generation =
-                            crate::state::source_inventory::load_inventory(&state.conn)
-                                .ok()
-                                .flatten()
-                                .map(|inventory| inventory.generation);
-                        let inventory = crate::state::source_inventory::persist_inventory(
-                            &state.conn,
-                            result.inventory,
-                        );
-                        if result.enqueue_files {
-                            let queued = enqueue_discovered_files(
-                                &mut state.scheduler,
-                                result.files,
-                                result.priority,
-                                &mut state.deferred_retries,
+                    } else if result.events_shipped > 0 || result.bytes_shipped > 0 {
+                        self.last_ship_at = Some(chrono::Utc::now().to_rfc3339());
+                        if let Some(duration) = self.offline.mark_online() {
+                            self.last_runtime_truth_signature = None;
+                            tracing::info!(
+                                "Back online after {:.0}s — resuming shipping",
+                                duration.as_secs_f64()
                             );
-                            tracing::debug!("Queued {} paths for {}", queued, result.reason);
                         }
-                        match inventory {
-                            Ok(snapshot) => {
-                                tracing::info!(
-                                    generation = snapshot.generation,
-                                    source_count = snapshot.source_count,
-                                    footprint_bytes = snapshot.footprint_bytes,
-                                    scan_error_count = snapshot.scan_error_count,
-                                    "Updated durable transcript source inventory"
-                                );
-                                if let Some(remaining_paths) = reconciliation_paths {
-                                    match crate::state::source_inventory::begin_reconciliation(
-                                        &mut state.conn,
-                                        &snapshot,
-                                    ) {
-                                        Ok(Some(attempt)) => {
-                                            state.open_history_reconciliation =
-                                                Some(OpenHistoryReconciliation {
-                                                    attempt_id: attempt.attempt_id,
-                                                    remaining_paths,
-                                                });
-                                        }
-                                        Ok(None) => state.open_history_reconciliation = None,
-                                        Err(error) => {
-                                            state.open_history_reconciliation = None;
-                                            tracing::warn!(
-                                                error = %error,
-                                                "Failed to begin transcript reconciliation seal"
-                                            );
-                                        }
-                                    }
-                                    maybe_seal_history_reconciliation(
-                                        &mut state.conn,
-                                        &mut state.open_history_reconciliation,
-                                        &state.scheduler,
-                                        &state.deferred_retries,
-                                        state.discovery_tasks.is_empty(),
+                    }
+                    if reconciled_to_head
+                        && !self.scheduler.has_path(&retry_path)
+                        && !self.deferred_retries.contains_key(&retry_path)
+                    {
+                        if let Some(open) = self.open_history_reconciliation.as_mut() {
+                            open.remaining_paths.remove(&retry_path);
+                        }
+                    }
+                    maybe_seal_history_reconciliation(
+                        &mut self.conn,
+                        &mut self.open_history_reconciliation,
+                        &self.scheduler,
+                        &self.deferred_retries,
+                        self.discovery_tasks.is_empty(),
+                    );
+                }
+                Some(Err(e)) => {
+                    return Err(anyhow::anyhow!("path task failed: {}", e));
+                }
+                None => {}
+                Some(Ok(None)) => {}
+            }
+        }
+        Ok(())
+    }
+    fn on_discovery_done(
+        &mut self,
+        config: &ConnectConfig,
+        discovery_result: Option<Result<DiscoveryTaskResult, tokio::task::JoinError>>,
+    ) {
+        match discovery_result {
+            Some(Ok(result)) => {
+                let reconciliation_paths = result
+                    .enqueue_files
+                    .then(|| result.files.iter().map(|file| file.path.clone()).collect());
+                let previous_inventory_generation =
+                    crate::state::source_inventory::load_inventory(&self.conn)
+                        .ok()
+                        .flatten()
+                        .map(|inventory| inventory.generation);
+                let inventory =
+                    crate::state::source_inventory::persist_inventory(&self.conn, result.inventory);
+                if result.enqueue_files {
+                    let queued = enqueue_discovered_files(
+                        &mut self.scheduler,
+                        result.files,
+                        result.priority,
+                        &mut self.deferred_retries,
+                    );
+                    tracing::debug!("Queued {} paths for {}", queued, result.reason);
+                }
+                match inventory {
+                    Ok(snapshot) => {
+                        tracing::info!(
+                            generation = snapshot.generation,
+                            source_count = snapshot.source_count,
+                            footprint_bytes = snapshot.footprint_bytes,
+                            scan_error_count = snapshot.scan_error_count,
+                            "Updated durable transcript source inventory"
+                        );
+                        if let Some(remaining_paths) = reconciliation_paths {
+                            match crate::state::source_inventory::begin_reconciliation(
+                                &mut self.conn,
+                                &snapshot,
+                            ) {
+                                Ok(Some(attempt)) => {
+                                    self.open_history_reconciliation =
+                                        Some(OpenHistoryReconciliation {
+                                            attempt_id: attempt.attempt_id,
+                                            remaining_paths,
+                                        });
+                                }
+                                Ok(None) => self.open_history_reconciliation = None,
+                                Err(error) => {
+                                    self.open_history_reconciliation = None;
+                                    tracing::warn!(
+                                        error = %error,
+                                        "Failed to begin transcript reconciliation seal"
                                     );
                                 }
-                                if inventory_change_requires_projection(
-                                    previous_inventory_generation,
-                                    snapshot.generation,
-                                    state.last_unmanaged_session_bindings.is_some(),
-                                ) && state.managed_observation_valid {
-                                    state.projection_generation = state.projection_generation.saturating_add(1);
-                                    let input = ProjectionBuildInput {
-                                        generation: state.projection_generation,
-                                        managed_observation_generation: state.managed_observation_generation,
-                                        managed_scan_partial: state.last_projected_managed_scan_partial,
-                                        managed_snapshot_complete:
-                                            state.last_projected_managed_snapshot_complete,
-                                        managed_captured_at: state.last_managed_captured_at.clone(),
-                                        unmanaged_snapshot_complete:
-                                            state.last_projected_unmanaged_snapshot_complete,
-                                        db_path: state.projection_db_path.clone(),
-                                        parse_tracker: state.parse_tracker.clone(),
-                                        ship_stats: state.ship_stats.clone(),
-                                        is_offline: state.offline.is_offline,
-                                        last_ship_at: state.last_ship_at.clone(),
-                                        machine_id: config.shipper_config.machine_name.clone(),
-                                        managed: state.last_projected_managed_observations.clone(),
-                                        unmanaged: state.last_unmanaged_session_bindings.clone().unwrap_or_default(),
-                                        limiter: state.adaptive_limiter.snapshot(),
-                                        scheduler: state.scheduler.snapshot(),
-                                        archive_repair_mode: config.archive_repair_mode,
-                                        last_full_reconciled_at: state.last_full_reconciled_at.clone(),
-                                        continuation: state.last_resume_contracts.clone(),
-                                        session_snapshot_state: state.session_snapshot_state.clone(),
-                                    };
-                                    if !maybe_start_projection_build(&mut state.projection_build_tasks, input) {
-                                        state.projection_build_pending = true;
-                                    }
+                            }
+                            maybe_seal_history_reconciliation(
+                                &mut self.conn,
+                                &mut self.open_history_reconciliation,
+                                &self.scheduler,
+                                &self.deferred_retries,
+                                self.discovery_tasks.is_empty(),
+                            );
+                        }
+                        if inventory_change_requires_projection(
+                            previous_inventory_generation,
+                            snapshot.generation,
+                            self.last_unmanaged_session_bindings.is_some(),
+                        ) && self.managed_observation_valid
+                        {
+                            self.projection_generation =
+                                self.projection_generation.saturating_add(1);
+                            let input = ProjectionBuildInput {
+                                generation: self.projection_generation,
+                                managed_observation_generation: self.managed_observation_generation,
+                                managed_scan_partial: self.last_projected_managed_scan_partial,
+                                managed_snapshot_complete: self
+                                    .last_projected_managed_snapshot_complete,
+                                managed_captured_at: self.last_managed_captured_at.clone(),
+                                unmanaged_snapshot_complete: self
+                                    .last_projected_unmanaged_snapshot_complete,
+                                db_path: self.projection_db_path.clone(),
+                                parse_tracker: self.parse_tracker.clone(),
+                                ship_stats: self.ship_stats.clone(),
+                                is_offline: self.offline.is_offline,
+                                last_ship_at: self.last_ship_at.clone(),
+                                machine_id: config.shipper_config.machine_name.clone(),
+                                managed: self.last_projected_managed_observations.clone(),
+                                unmanaged: self
+                                    .last_unmanaged_session_bindings
+                                    .clone()
+                                    .unwrap_or_default(),
+                                limiter: self.adaptive_limiter.snapshot(),
+                                scheduler: self.scheduler.snapshot(),
+                                archive_repair_mode: config.archive_repair_mode,
+                                last_full_reconciled_at: self.last_full_reconciled_at.clone(),
+                                continuation: self.last_resume_contracts.clone(),
+                                session_snapshot_state: self.session_snapshot_state.clone(),
+                            };
+                            if !maybe_start_projection_build(
+                                &mut self.projection_build_tasks,
+                                input,
+                            ) {
+                                self.projection_build_pending = true;
+                            }
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        error = %error,
+                        "Failed to persist transcript source inventory"
+                    ),
+                }
+            }
+            Some(Err(e)) => {
+                tracing::warn!("Background discovery task failed: {}", e);
+            }
+            None => {}
+        }
+    }
+    async fn on_outbox_collect_done(
+        &mut self,
+        mut phase_projection_timer: std::pin::Pin<&mut tokio::time::Sleep>,
+        outbox_collect_result: Option<Result<OutboxCollectResult, tokio::task::JoinError>>,
+    ) {
+        match outbox_collect_result {
+            Some(Ok(result)) => {
+                if result.elapsed_ms > 100 {
+                    tracing::warn!(
+                        elapsed_ms = result.elapsed_ms,
+                        presence_posts = result.presence.posts.len(),
+                        "Outbox collection was slow"
+                    );
+                }
+                if !result.presence.signals.is_empty() {
+                    tracing::debug!(
+                        signal_count = result.presence.signals.len(),
+                        "Ignoring hook outbox transcript catch-up signals"
+                    );
+                    // The phase ledger just moved, which is the only
+                    // evidence a turn boundary produces. Arm the
+                    // debounce rather than projecting per signal.
+                    if arm_phase_projection(&mut self.phase_projection_pending) {
+                        phase_projection_timer
+                            .as_mut()
+                            .reset(tokio::time::Instant::now() + PHASE_PROJECTION_DEBOUNCE);
+                    }
+                }
+                if !result.presence.posts.is_empty() {
+                    if self.outbox_post_tasks.is_empty() {
+                        let client = self.client.clone();
+                        let posts = result.presence.posts;
+                        let post_count = posts.len();
+                        // spawn, not spawn_local: the wrapper only awaits
+                        // the worker task, and a local task is polled on
+                        // the LocalSet's driving thread. Multi-second work
+                        // there (a full reconciliation pass is 10-20s) then
+                        // holds this gate closed while the network is idle.
+                        self.outbox_post_tasks.spawn(async move {
+                            let join_started = Instant::now();
+                            let post_task = tokio::spawn(async move {
+                                let task_started = Instant::now();
+                                let (sent, kept) =
+                                    outbox::post_pending_presence_files(&client, posts).await;
+                                (sent, kept, task_started.elapsed().as_millis() as u64)
+                            });
+                            match post_task.await {
+                                Ok((sent, kept, task_elapsed_ms)) => (
+                                    sent,
+                                    kept,
+                                    join_started.elapsed().as_millis() as u64,
+                                    task_elapsed_ms,
+                                ),
+                                Err(err) => {
+                                    tracing::warn!(
+                                        post_count,
+                                        "Outbox presence POST worker task failed: {}",
+                                        err
+                                    );
+                                    (
+                                        0,
+                                        post_count,
+                                        join_started.elapsed().as_millis() as u64,
+                                        join_started.elapsed().as_millis() as u64,
+                                    )
                                 }
                             }
-                            Err(error) => tracing::warn!(
-                                error = %error,
-                                "Failed to persist transcript source inventory"
-                            ),
-                        }
+                        });
+                    } else {
+                        tracing::debug!(
+                            pending_posts = result.presence.posts.len(),
+                            "Skipping outbox presence POST while previous POST is still in flight"
+                        );
                     }
-                    Some(Err(e)) => {
-                        tracing::warn!("Background discovery task failed: {}", e);
-                    }
-                    None => {}
                 }
             }
-
-            outbox_collect_result = state.outbox_collect_tasks.join_next(), if !state.outbox_collect_tasks.is_empty() => {
-                match outbox_collect_result {
-                    Some(Ok(result)) => {
-                        if result.elapsed_ms > 100 {
-                            tracing::warn!(
-                                elapsed_ms = result.elapsed_ms,
-                                presence_posts = result.presence.posts.len(),
-                                "Outbox collection was slow"
-                            );
-                        }
-                        if !result.presence.signals.is_empty() {
-                            tracing::debug!(
-                                signal_count = result.presence.signals.len(),
-                                "Ignoring hook outbox transcript catch-up signals"
-                            );
-                            // The phase ledger just moved, which is the only
-                            // evidence a turn boundary produces. Arm the
-                            // debounce rather than projecting per signal.
-                            if arm_phase_projection(&mut state.phase_projection_pending) {
-                                phase_projection_timer
-                                    .as_mut()
-                                    .reset(tokio::time::Instant::now() + PHASE_PROJECTION_DEBOUNCE);
-                            }
-                        }
-                        if !result.presence.posts.is_empty() {
-                            if state.outbox_post_tasks.is_empty() {
-                                let client = state.client.clone();
-                                let posts = result.presence.posts;
-                                let post_count = posts.len();
-                                // spawn, not spawn_local: the wrapper only awaits
-                                // the worker task, and a local task is polled on
-                                // the LocalSet's driving thread. Multi-second work
-                                // there (a full reconciliation pass is 10-20s) then
-                                // holds this gate closed while the network is idle.
-                                state.outbox_post_tasks.spawn(async move {
-                                    let join_started = Instant::now();
-                                    let post_task = tokio::spawn(async move {
-                                        let task_started = Instant::now();
-                                        let (sent, kept) =
-                                            outbox::post_pending_presence_files(&client, posts).await;
-                                        (sent, kept, task_started.elapsed().as_millis() as u64)
-                                    });
-                                    match post_task.await {
-                                        Ok((sent, kept, task_elapsed_ms)) => (
-                                            sent,
-                                            kept,
-                                            join_started.elapsed().as_millis() as u64,
-                                            task_elapsed_ms,
-                                        ),
-                                        Err(err) => {
-                                            tracing::warn!(
-                                                post_count,
-                                                "Outbox presence POST worker task failed: {}",
-                                                err
-                                            );
-                                            (
-                                                0,
-                                                post_count,
-                                                join_started.elapsed().as_millis() as u64,
-                                                join_started.elapsed().as_millis() as u64,
-                                            )
-                                        }
-                                    }
-                                });
-                            } else {
-                                tracing::debug!(
-                                    pending_posts = result.presence.posts.len(),
-                                    "Skipping outbox presence POST while previous POST is still in flight"
-                                );
-                            }
-                        }
-                    }
-                    Some(Err(err)) => {
-                        tracing::warn!("Outbox collection task failed: {}", err);
-                    }
-                    None => {}
+            Some(Err(err)) => {
+                tracing::warn!("Outbox collection task failed: {}", err);
+            }
+            None => {}
+        }
+    }
+    async fn on_status_slot_done(
+        &mut self,
+        status_slot_result: Option<Result<StatusSlotResult, tokio::task::JoinError>>,
+    ) {
+        match status_slot_result {
+            Some(Ok(result)) => {
+                self.status_owner_refresh_cursor = result.owner_refresh_cursor;
+                self.managed_owner_refresh_cursor = result.managed_owner_refresh_cursor;
+                if result.elapsed_ms > 100 {
+                    tracing::warn!(
+                        elapsed_ms = result.elapsed_ms,
+                        slots = result.slots.len(),
+                        recorded = result.recorded.len(),
+                        "Status slot pass was slow"
+                    );
+                }
+                let live: HashSet<String> = result
+                    .slots
+                    .iter()
+                    .map(|slot| slot.session_id.clone())
+                    .collect();
+                for (session_id, version) in result.recorded {
+                    self.status_recorded.insert(session_id, version);
+                }
+                // A session with no slot has no current status, so
+                // neither map needs to remember it.
+                self.status_recorded
+                    .retain(|session_id, _| live.contains(session_id));
+                self.status_ledger.retain_live(&result.slots);
+                let pending = self.status_ledger.pending(result.slots, Instant::now());
+                if !pending.is_empty() && self.status_post_tasks.is_empty() {
+                    let client = self.client.clone();
+                    self.status_post_tasks
+                        .spawn(async move { post_status_slots(&client, pending).await });
                 }
             }
-
-            status_slot_result = state.status_slot_tasks.join_next(), if !state.status_slot_tasks.is_empty() => {
-                match status_slot_result {
-                    Some(Ok(result)) => {
-                        state.status_owner_refresh_cursor = result.owner_refresh_cursor;
-                        state.managed_owner_refresh_cursor = result.managed_owner_refresh_cursor;
-                        if result.elapsed_ms > 100 {
-                            tracing::warn!(
-                                elapsed_ms = result.elapsed_ms,
-                                slots = result.slots.len(),
-                                recorded = result.recorded.len(),
-                                "Status slot pass was slow"
-                            );
-                        }
-                        let live: HashSet<String> = result
-                            .slots
-                            .iter()
-                            .map(|slot| slot.session_id.clone())
-                            .collect();
-                        for (session_id, version) in result.recorded {
-                            state.status_recorded.insert(session_id, version);
-                        }
-                        // A session with no slot has no current status, so
-                        // neither map needs to remember it.
-                        state.status_recorded.retain(|session_id, _| live.contains(session_id));
-                        state.status_ledger.retain_live(&result.slots);
-                        let pending = state.status_ledger.pending(result.slots, Instant::now());
-                        if !pending.is_empty() && state.status_post_tasks.is_empty() {
-                            let client = state.client.clone();
-                            state.status_post_tasks.spawn(async move {
-                                post_status_slots(&client, pending).await
-                            });
-                        }
-                    }
-                    Some(Err(err)) => {
-                        tracing::warn!("Status slot task failed: {}", err);
-                    }
-                    None => {}
-                }
+            Some(Err(err)) => {
+                tracing::warn!("Status slot task failed: {}", err);
             }
-            status_post_result = state.status_post_tasks.join_next(), if !state.status_post_tasks.is_empty() => {
-                match status_post_result {
-                    Some(Ok(result)) => state.status_ledger.settle(result, Instant::now()),
-                    Some(Err(err)) => {
-                        tracing::warn!("Status slot POST task failed: {}", err);
-                    }
-                    None => {}
-                }
+            None => {}
+        }
+    }
+    fn on_status_post_done(
+        &mut self,
+        status_post_result: Option<Result<StatusPostResult, tokio::task::JoinError>>,
+    ) {
+        match status_post_result {
+            Some(Ok(result)) => self.status_ledger.settle(result, Instant::now()),
+            Some(Err(err)) => {
+                tracing::warn!("Status slot POST task failed: {}", err);
             }
-
-            runtime_collect_result = state.runtime_collect_tasks.join_next(), if !state.runtime_collect_tasks.is_empty() => {
-                match runtime_collect_result {
-                    Some(Ok(result)) => {
-                        state.latest_runtime_event_outbox = result.measurement;
-                        if let Some(projection) = state.last_status_projection.as_mut() {
-                            projection
-                                .set_runtime_event_outbox(state.latest_runtime_event_outbox.clone());
-                        }
-                        // A saturated pass means the directory holds more than
-                        // one pass can inspect, so the newest observation is
-                        // not reliably in it. Reduce it to current status in a
-                        // task of its own: the live lane must keep collecting
-                        // and posting while that runs.
-                        if result.saturated
-                            && state.runtime_sweep_tasks.is_empty()
-                            && state.runtime_sweep_quiet_until.is_none_or(|until| Instant::now() >= until)
-                        {
-                            let runtime_events_outbox_dir = state.runtime_events_outbox_dir.clone();
-                            state.runtime_sweep_tasks.spawn_blocking(move || {
-                                outbox::sweep_runtime_event_outbox(
-                                    &runtime_events_outbox_dir,
-                                    outbox::RUNTIME_EVENT_SWEEP_LIMIT,
+            None => {}
+        }
+    }
+    async fn on_runtime_collect_done(
+        &mut self,
+        runtime_collect_result: Option<Result<RuntimeCollectResult, tokio::task::JoinError>>,
+    ) {
+        match runtime_collect_result {
+            Some(Ok(result)) => {
+                self.latest_runtime_event_outbox = result.measurement;
+                if let Some(projection) = self.last_status_projection.as_mut() {
+                    projection.set_runtime_event_outbox(self.latest_runtime_event_outbox.clone());
+                }
+                // A saturated pass means the directory holds more than
+                // one pass can inspect, so the newest observation is
+                // not reliably in it. Reduce it to current status in a
+                // task of its own: the live lane must keep collecting
+                // and posting while that runs.
+                if result.saturated
+                    && self.runtime_sweep_tasks.is_empty()
+                    && self
+                        .runtime_sweep_quiet_until
+                        .is_none_or(|until| Instant::now() >= until)
+                {
+                    let runtime_events_outbox_dir = self.runtime_events_outbox_dir.clone();
+                    self.runtime_sweep_tasks.spawn_blocking(move || {
+                        outbox::sweep_runtime_event_outbox(
+                            &runtime_events_outbox_dir,
+                            outbox::RUNTIME_EVENT_SWEEP_LIMIT,
+                        )
+                    });
+                }
+                if result.elapsed_ms > 100 {
+                    tracing::warn!(
+                        elapsed_ms = result.elapsed_ms,
+                        runtime_posts = result.posts.len(),
+                        "Runtime-event collection was slow"
+                    );
+                }
+                if !result.posts.is_empty() {
+                    let retry_due = self
+                        .runtime_outbox_retry_after
+                        .map(|retry_at| Instant::now() >= retry_at)
+                        .unwrap_or(true);
+                    if self.runtime_outbox_post_tasks.is_empty() && retry_due {
+                        let client = self.client.clone();
+                        let runtime_posts = result.posts;
+                        let post_count = runtime_posts.len();
+                        // spawn, not spawn_local: see the presence path
+                        // above. This is the live-transcript lane, so a
+                        // starved wrapper here shows up as minutes-stale
+                        // events on every client.
+                        self.runtime_outbox_post_tasks.spawn(async move {
+                            let join_started = Instant::now();
+                            let post_task = tokio::spawn(async move {
+                                let task_started = Instant::now();
+                                let (sent, kept) = outbox::post_pending_runtime_event_files(
+                                    &client,
+                                    runtime_posts,
                                 )
+                                .await;
+                                (sent, kept, task_started.elapsed().as_millis() as u64)
                             });
-                        }
-                        if result.elapsed_ms > 100 {
-                            tracing::warn!(
-                                elapsed_ms = result.elapsed_ms,
-                                runtime_posts = result.posts.len(),
-                                "Runtime-event collection was slow"
-                            );
-                        }
-                        if !result.posts.is_empty() {
-                            let retry_due = state.runtime_outbox_retry_after
-                                .map(|retry_at| Instant::now() >= retry_at)
-                                .unwrap_or(true);
-                            if state.runtime_outbox_post_tasks.is_empty() && retry_due {
-                                let client = state.client.clone();
-                                let runtime_posts = result.posts;
-                                let post_count = runtime_posts.len();
-                                // spawn, not spawn_local: see the presence path
-                                // above. This is the live-transcript lane, so a
-                                // starved wrapper here shows up as minutes-stale
-                                // events on every client.
-                                state.runtime_outbox_post_tasks.spawn(async move {
-                                    let join_started = Instant::now();
-                                    let post_task = tokio::spawn(async move {
-                                        let task_started = Instant::now();
-                                        let (sent, kept) =
-                                            outbox::post_pending_runtime_event_files(&client, runtime_posts)
-                                                .await;
-                                        (sent, kept, task_started.elapsed().as_millis() as u64)
-                                    });
-                                    match post_task.await {
-                                        Ok((sent, kept, task_elapsed_ms)) => (
-                                            sent,
-                                            kept,
-                                            join_started.elapsed().as_millis() as u64,
-                                            task_elapsed_ms,
-                                        ),
-                                        Err(err) => {
-                                            tracing::warn!(
-                                                post_count,
-                                                "Outbox runtime-event POST worker task failed: {}",
-                                                err
-                                            );
-                                            (
-                                                0,
-                                                post_count,
-                                                join_started.elapsed().as_millis() as u64,
-                                                join_started.elapsed().as_millis() as u64,
-                                            )
-                                        }
-                                    }
-                                });
-                            } else {
-                                tracing::debug!(
+                            match post_task.await {
+                                Ok((sent, kept, task_elapsed_ms)) => (
+                                    sent,
+                                    kept,
+                                    join_started.elapsed().as_millis() as u64,
+                                    task_elapsed_ms,
+                                ),
+                                Err(err) => {
+                                    tracing::warn!(
+                                        post_count,
+                                        "Outbox runtime-event POST worker task failed: {}",
+                                        err
+                                    );
+                                    (
+                                        0,
+                                        post_count,
+                                        join_started.elapsed().as_millis() as u64,
+                                        join_started.elapsed().as_millis() as u64,
+                                    )
+                                }
+                            }
+                        });
+                    } else {
+                        tracing::debug!(
                                     pending_posts = result.posts.len(),
                                     "Skipping outbox runtime-event POST while previous POST is still in flight"
                                 );
-                            }
-                        }
                     }
-                    Some(Err(err)) => {
-                        tracing::warn!("Runtime-event collection task failed: {}", err);
-                    }
-                    None => {}
                 }
             }
-
-            runtime_sweep_result = state.runtime_sweep_tasks.join_next(), if !state.runtime_sweep_tasks.is_empty() => {
-                match runtime_sweep_result {
-                    Some(Ok(sweep)) => {
-                        tracing::warn!(
-                            inspected = sweep.inspected,
-                            discarded = sweep.discarded,
-                            more = sweep.more,
-                            "Swept superseded runtime status out of a flooded outbox"
+            Some(Err(err)) => {
+                tracing::warn!("Runtime-event collection task failed: {}", err);
+            }
+            None => {}
+        }
+    }
+    fn on_runtime_sweep_done(
+        &mut self,
+        runtime_sweep_result: Option<Result<outbox::RuntimeOutboxSweep, tokio::task::JoinError>>,
+    ) {
+        match runtime_sweep_result {
+            Some(Ok(sweep)) => {
+                tracing::warn!(
+                    inspected = sweep.inspected,
+                    discarded = sweep.discarded,
+                    more = sweep.more,
+                    "Swept superseded runtime status out of a flooded outbox"
+                );
+                // More work does not mean another pass right now. The
+                // next saturated collection arms the next sweep on the
+                // ordinary tick; chaining blocking passes back to back
+                // would starve every other lane on this loop.
+                self.runtime_sweep_quiet_until = (sweep.discarded == 0)
+                    .then(|| Instant::now() + RUNTIME_SWEEP_QUIET_AFTER_NOTHING);
+            }
+            Some(Err(err)) => {
+                tracing::warn!("Runtime-event outbox sweep task failed: {}", err);
+            }
+            None => {}
+        }
+    }
+    fn on_outbox_post_done(
+        &mut self,
+        outbox_post_result: Option<Result<(usize, usize, u64, u64), tokio::task::JoinError>>,
+    ) {
+        match outbox_post_result {
+            Some(Ok((sent, kept, join_elapsed_ms, task_elapsed_ms))) => {
+                let local_join_delay_ms = join_elapsed_ms.saturating_sub(task_elapsed_ms);
+                if kept > 0 {
+                    if self.host_link.is_updating() {
+                        tracing::debug!(
+                            sent,
+                            kept,
+                            task_elapsed_ms,
+                            join_elapsed_ms,
+                            local_join_delay_ms,
+                            "Outbox presence POST deferred during Runtime Host update"
                         );
-                        // More work does not mean another pass right now. The
-                        // next saturated collection arms the next sweep on the
-                        // ordinary tick; chaining blocking passes back to back
-                        // would starve every other lane on this loop.
-                        state.runtime_sweep_quiet_until = (sweep.discarded == 0)
-                            .then(|| Instant::now() + RUNTIME_SWEEP_QUIET_AFTER_NOTHING);
+                    } else {
+                        tracing::warn!(
+                            sent,
+                            kept,
+                            task_elapsed_ms,
+                            join_elapsed_ms,
+                            local_join_delay_ms,
+                            "Outbox presence POST kept files for retry"
+                        );
                     }
-                    Some(Err(err)) => {
-                        tracing::warn!("Runtime-event outbox sweep task failed: {}", err);
+                } else if join_elapsed_ms > 1_000 {
+                    if self.host_link.is_updating() {
+                        tracing::debug!(
+                            sent,
+                            task_elapsed_ms,
+                            join_elapsed_ms,
+                            local_join_delay_ms,
+                            "Outbox presence POST was delayed during Runtime Host update"
+                        );
+                    } else {
+                        tracing::warn!(
+                            sent,
+                            task_elapsed_ms,
+                            join_elapsed_ms,
+                            local_join_delay_ms,
+                            "Outbox presence POST was slow"
+                        );
                     }
-                    None => {}
+                } else if sent > 0 {
+                    tracing::debug!(
+                        sent,
+                        task_elapsed_ms,
+                        join_elapsed_ms,
+                        "Outbox presence POST sent files"
+                    );
                 }
             }
-
-            outbox_post_result = state.outbox_post_tasks.join_next(), if !state.outbox_post_tasks.is_empty() => {
-                match outbox_post_result {
-                    Some(Ok((sent, kept, join_elapsed_ms, task_elapsed_ms))) => {
-                        let local_join_delay_ms = join_elapsed_ms.saturating_sub(task_elapsed_ms);
-                        if kept > 0 {
-                            if state.host_link.is_updating() {
-                                tracing::debug!(
-                                    sent,
-                                    kept,
-                                    task_elapsed_ms,
-                                    join_elapsed_ms,
-                                    local_join_delay_ms,
-                                    "Outbox presence POST deferred during Runtime Host update"
-                                );
-                            } else {
-                                tracing::warn!(
-                                    sent,
-                                    kept,
-                                    task_elapsed_ms,
-                                    join_elapsed_ms,
-                                    local_join_delay_ms,
-                                    "Outbox presence POST kept files for retry"
-                                );
-                            }
-                        } else if join_elapsed_ms > 1_000 {
-                            if state.host_link.is_updating() {
-                                tracing::debug!(
-                                    sent,
-                                    task_elapsed_ms,
-                                    join_elapsed_ms,
-                                    local_join_delay_ms,
-                                    "Outbox presence POST was delayed during Runtime Host update"
-                                );
-                            } else {
-                                tracing::warn!(
-                                    sent,
-                                    task_elapsed_ms,
-                                    join_elapsed_ms,
-                                    local_join_delay_ms,
-                                    "Outbox presence POST was slow"
-                                );
-                            }
-                        } else if sent > 0 {
-                            tracing::debug!(
-                                sent,
-                                task_elapsed_ms,
-                                join_elapsed_ms,
-                                "Outbox presence POST sent files"
-                            );
-                        }
-                    }
-                    Some(Err(err)) => {
-                        if state.host_link.explains_failure(&err.to_string()) {
-                            tracing::debug!("Outbox presence POST task deferred during Runtime Host update: {}", err);
-                        } else {
-                            tracing::warn!("Outbox presence POST task failed: {}", err);
-                        }
-                    }
-                    None => {}
+            Some(Err(err)) => {
+                if self.host_link.explains_failure(&err.to_string()) {
+                    tracing::debug!(
+                        "Outbox presence POST task deferred during Runtime Host update: {}",
+                        err
+                    );
+                } else {
+                    tracing::warn!("Outbox presence POST task failed: {}", err);
                 }
             }
-
-            runtime_outbox_post_result = state.runtime_outbox_post_tasks.join_next(), if !state.runtime_outbox_post_tasks.is_empty() => {
-                match runtime_outbox_post_result {
-                    Some(Ok((sent, kept, join_elapsed_ms, task_elapsed_ms))) => {
-                        let local_join_delay_ms = join_elapsed_ms.saturating_sub(task_elapsed_ms);
-                        // A mixed result proves the Runtime Host is accepting
-                        // work. Do not let one session's retained event throttle
-                        // every other session; back off only when this pass made
-                        // no progress at all.
-                        if kept > 0 && sent == 0 {
-                            state.runtime_outbox_consecutive_failures =
-                                state.runtime_outbox_consecutive_failures.saturating_add(1);
-                            let backoff_multiplier = 1u64
-                                << state.runtime_outbox_consecutive_failures.min(4);
-                            let delay = LIVE_LOCAL_RETRY_DELAY
-                                .saturating_mul(backoff_multiplier as u32)
-                                .min(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
-                            state.runtime_outbox_retry_after = Some(Instant::now() + delay);
-                            if state.host_link.is_updating() {
-                                tracing::debug!(
-                                    sent,
-                                    kept,
-                                    task_elapsed_ms,
-                                    join_elapsed_ms,
-                                    local_join_delay_ms,
-                                    retry_delay_ms = delay.as_millis() as u64,
-                                    "Runtime-event outbox deferred during Runtime Host update"
-                                );
-                            } else {
-                                tracing::warn!(
-                                    sent,
-                                    kept,
-                                    task_elapsed_ms,
-                                    join_elapsed_ms,
-                                    local_join_delay_ms,
-                                    retry_delay_ms = delay.as_millis() as u64,
-                                    "Outbox runtime-event POST kept all files for retry"
-                                );
-                            }
-                        } else {
-                            state.runtime_outbox_consecutive_failures = 0;
-                            state.runtime_outbox_retry_after = None;
-                            // Delivery made progress, so more may be waiting:
-                            // collect again now rather than on the next tick.
-                            // An empty outbox ends this, because a pass that
-                            // finds nothing starts no POST.
-                            if sent > 0 {
-                                state.outbox_timer.reset_immediately();
-                            }
-                            if kept > 0 {
-                                tracing::warn!(
+            None => {}
+        }
+    }
+    fn on_runtime_outbox_post_done(
+        &mut self,
+        runtime_outbox_post_result: Option<
+            Result<(usize, usize, u64, u64), tokio::task::JoinError>,
+        >,
+    ) {
+        match runtime_outbox_post_result {
+            Some(Ok((sent, kept, join_elapsed_ms, task_elapsed_ms))) => {
+                let local_join_delay_ms = join_elapsed_ms.saturating_sub(task_elapsed_ms);
+                // A mixed result proves the Runtime Host is accepting
+                // work. Do not let one session's retained event throttle
+                // every other session; back off only when this pass made
+                // no progress at all.
+                if kept > 0 && sent == 0 {
+                    self.runtime_outbox_consecutive_failures =
+                        self.runtime_outbox_consecutive_failures.saturating_add(1);
+                    let backoff_multiplier =
+                        1u64 << self.runtime_outbox_consecutive_failures.min(4);
+                    let delay = LIVE_LOCAL_RETRY_DELAY
+                        .saturating_mul(backoff_multiplier as u32)
+                        .min(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
+                    self.runtime_outbox_retry_after = Some(Instant::now() + delay);
+                    if self.host_link.is_updating() {
+                        tracing::debug!(
+                            sent,
+                            kept,
+                            task_elapsed_ms,
+                            join_elapsed_ms,
+                            local_join_delay_ms,
+                            retry_delay_ms = delay.as_millis() as u64,
+                            "Runtime-event outbox deferred during Runtime Host update"
+                        );
+                    } else {
+                        tracing::warn!(
+                            sent,
+                            kept,
+                            task_elapsed_ms,
+                            join_elapsed_ms,
+                            local_join_delay_ms,
+                            retry_delay_ms = delay.as_millis() as u64,
+                            "Outbox runtime-event POST kept all files for retry"
+                        );
+                    }
+                } else {
+                    self.runtime_outbox_consecutive_failures = 0;
+                    self.runtime_outbox_retry_after = None;
+                    // Delivery made progress, so more may be waiting:
+                    // collect again now rather than on the next tick.
+                    // An empty outbox ends this, because a pass that
+                    // finds nothing starts no POST.
+                    if sent > 0 {
+                        self.outbox_timer.reset_immediately();
+                    }
+                    if kept > 0 {
+                        tracing::warn!(
                                     sent,
                                     kept,
                                     task_elapsed_ms,
@@ -2079,285 +2308,310 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     local_join_delay_ms,
                                     "Outbox runtime-event POST kept some files while other files progressed"
                                 );
-                            } else if join_elapsed_ms > 1_000 {
-                                if state.host_link.is_updating() {
-                                    tracing::debug!(
-                                        sent,
-                                        task_elapsed_ms,
-                                        join_elapsed_ms,
-                                        local_join_delay_ms,
-                                        "Runtime-event outbox POST was delayed during Runtime Host update"
-                                    );
-                                } else {
-                                    tracing::warn!(
-                                        sent,
-                                        task_elapsed_ms,
-                                        join_elapsed_ms,
-                                        local_join_delay_ms,
-                                        "Outbox runtime-event POST was slow"
-                                    );
-                                }
-                            } else if sent > 0 {
-                                tracing::debug!(
-                                    sent,
-                                    task_elapsed_ms,
-                                    join_elapsed_ms,
-                                    "Outbox runtime-event POST sent files"
-                                );
-                            }
-                        }
-                    }
-                    Some(Err(err)) => {
-                        state.runtime_outbox_consecutive_failures =
-                            state.runtime_outbox_consecutive_failures.saturating_add(1);
-                        state.runtime_outbox_retry_after =
-                            Some(Instant::now() + LIVE_LOCAL_RETRY_DELAY);
-                        if state.host_link.explains_failure(&err.to_string()) {
-                            tracing::debug!("Runtime-event outbox task deferred during Runtime Host update: {}", err);
-                        } else {
-                            tracing::warn!("Outbox runtime-event POST task failed: {}", err);
-                        }
-                    }
-                    None => {}
-                }
-            }
-
-            heartbeat_post_result = state.heartbeat_post_tasks.join_next(), if !state.heartbeat_post_tasks.is_empty() => {
-                match heartbeat_post_result {
-                    Some(Ok(result)) => {
-                        state.heartbeat_transport.record_send_metrics(
-                            result.reason,
-                            result.metrics.raw_bytes,
-                            result.metrics.wire_bytes,
-                            result.metrics.latency_ms,
-                        );
-                        let local_join_delay_ms =
-                            result.join_elapsed_ms.saturating_sub(result.task_elapsed_ms);
-                        if result.task_elapsed_ms > 1_000 || local_join_delay_ms > 1_000 {
-                            if state.host_link.is_updating() {
-                                tracing::debug!(
-                                    reason = result.reason,
-                                    task_elapsed_ms = result.task_elapsed_ms,
-                                    join_elapsed_ms = result.join_elapsed_ms,
-                                    local_join_delay_ms,
-                                    "Heartbeat POST was delayed during Runtime Host update"
-                                );
-                            } else {
-                                tracing::warn!(
-                                    reason = result.reason,
-                                    task_elapsed_ms = result.task_elapsed_ms,
-                                    join_elapsed_ms = result.join_elapsed_ms,
-                                    local_join_delay_ms,
-                                    "Heartbeat POST was slow"
-                                );
-                            }
-                        }
-                        state.acknowledged_machine_evidence.record_send_result(
-                            &result.result,
-                            &result.sent_evidence_identities,
-                        );
-                        if let Some(evidence) = state.last_status_projection
-                            .as_ref()
-                            .and_then(|projection| projection.payload.machine_evidence.as_ref())
-                        {
-                            state.acknowledged_machine_evidence
-                                .prune_to_current(&evidence.candidate_identities);
-                        } else {
-                            state.acknowledged_machine_evidence.prune_to_current(&[]);
-                        }
-                        match result.result {
-                            Ok(ack) => {
-                                let evidence_was_refused = state.heartbeat_transport.evidence_refused();
-                                let evidence_changed = state.heartbeat_transport
-                                    .record_evidence_ack(ack.evidence_ack.as_deref());
-                                let evidence_refused = state.heartbeat_transport.evidence_refused();
-                                let recovered = state.heartbeat_transport
-                                    .record_success(chrono::Utc::now().to_rfc3339());
-                                tracing::debug!(
-                                    reason = result.reason,
-                                    task_elapsed_ms = result.task_elapsed_ms,
-                                    join_elapsed_ms = result.join_elapsed_ms,
-                                    evidence_state = %state.heartbeat_transport.evidence_state,
-                                    "Runtime truth snapshot sent after local process/control change"
-                                );
-                                if evidence_changed && evidence_refused {
-                                    tracing::warn!(
-                                        reason = result.reason,
-                                        evidence_state = %state.heartbeat_transport.evidence_state,
-                                        "Heartbeat machine evidence was refused"
-                                    );
-                                } else if evidence_was_refused && state.heartbeat_transport.evidence_state == "applied" {
-                                    tracing::info!("Heartbeat machine evidence recovered");
-                                }
-                                if recovered {
-                                    tracing::info!("Heartbeat POST recovered");
-                                }
-                                state.last_runtime_truth_signature = Some(result.signature.clone());
-                                if state.pending_truth_heartbeat
-                                    .as_ref()
-                                    .is_some_and(|pending| pending.signature == result.signature)
-                                {
-                                    state.pending_truth_heartbeat = None;
-                                }
-                            }
-                            Err(err) => {
-                                let error = heartbeat::bounded_heartbeat_error(&err);
-                                let transitioned = state.heartbeat_transport.record_failure(
-                                    chrono::Utc::now().to_rfc3339(),
-                                    &error,
-                                );
-                                if state.pending_truth_heartbeat
-                                    .as_ref()
-                                    .is_some_and(|pending| pending.signature == result.signature)
-                                {
-                                    state.pending_truth_heartbeat = None;
-                                }
-                                // The failed send did not deliver this truth: forget it, so the
-                                // next projection retries it (after the 1 s window) instead of
-                                // waiting for the 60 s periodic heartbeat.
-                                if state.last_runtime_truth_signature.as_deref() == Some(result.signature.as_str()) {
-                                    state.last_runtime_truth_signature = None;
-                                }
-                                if state.host_link.explains_failure(&error) {
-                                    tracing::debug!(
-                                        reason = result.reason,
-                                        error = %error,
-                                        retry_after_secs = result.metrics.retry_after
-                                            .map(|delay| delay.as_secs_f64()),
-                                        "Heartbeat POST deferred during Runtime Host update"
-                                    );
-                                } else if transitioned {
-                                    tracing::warn!(
-                                        reason = result.reason,
-                                        error = %error,
-                                        "Heartbeat POST failed"
-                                    );
-                                } else {
-                                    tracing::debug!(
-                                        reason = result.reason,
-                                        error = %error,
-                                        "Heartbeat POST remains degraded"
-                                    );
-                                }
-                            }
-                        }
-                        publish_heartbeat_transport_status(
-                            &state.heartbeat_transport,
-                            &mut state.last_status_projection,
-                            serde_json::to_value(state.control_channel_status.snapshot()).ok(),
-                            &state.managed_reconciliation,
-                            &mut state.shipping_progress,
-                            state.offline.is_offline,
-                            &state.host_link,
-                            &state.status_path,
-                        );
-                    }
-                    Some(Err(err)) => {
-                        let error = heartbeat::bounded_heartbeat_error(&err.to_string());
-                        let transitioned = state.heartbeat_transport.record_failure(
-                            chrono::Utc::now().to_rfc3339(),
-                            &error,
-                        );
-                        if state.host_link.explains_failure(&error) {
-                            tracing::debug!(error = %error, "Heartbeat POST task deferred during Runtime Host update");
-                        } else if transitioned {
-                            tracing::warn!(error = %error, "Heartbeat POST task failed");
-                        } else {
-                            tracing::debug!(error = %error, "Heartbeat POST task remains degraded");
-                        }
-                        publish_heartbeat_transport_status(
-                            &state.heartbeat_transport,
-                            &mut state.last_status_projection,
-                            serde_json::to_value(state.control_channel_status.snapshot()).ok(),
-                            &state.managed_reconciliation,
-                            &mut state.shipping_progress,
-                            state.offline.is_offline,
-                            &state.host_link,
-                            &state.status_path,
-                        );
-                    }
-                    None => {}
-                }
-            }
-
-            machine_presence_post_result = state.machine_presence_post_tasks.join_next(), if !state.machine_presence_post_tasks.is_empty() => {
-                match machine_presence_post_result {
-                    Some(Ok(result)) => {
-                        match result.result {
-                            Ok(true) => {
-                                tracing::debug!(task_elapsed_ms = result.task_elapsed_ms, "Machine presence POST sent");
-                            }
-                            Ok(false) => {
-                                tracing::debug!(task_elapsed_ms = result.task_elapsed_ms, "Machine presence collection disabled");
-                            }
-                            Err(err) => {
-                                tracing::debug!("Machine presence POST failed: {}", err);
-                            }
-                        }
-                    }
-                    Some(Err(err)) => {
-                        tracing::warn!("Machine presence POST task failed: {}", err);
-                    }
-                    None => {}
-                }
-            }
-            host_link_poll_result = state.host_link_poll_tasks.join_next(), if !state.host_link_poll_tasks.is_empty() => {
-                match host_link_poll_result {
-                    Some(Ok(Ok(()))) | None => {}
-                    Some(Ok(Err(error))) => {
-                        tracing::debug!(%error, "Runtime Host admission poll failed");
-                    }
-                    Some(Err(error)) => {
-                        tracing::debug!(%error, "Runtime Host admission poll task failed");
-                    }
-                }
-            }
-            host_link_event = state.host_link_changed.changed() => {
-                if host_link_event.is_ok() {
-                    let serving_generation = state.host_link.serving_generation();
-                    if serving_generation > state.last_serving_generation {
-                        state.last_serving_generation = serving_generation;
-                        let now = Instant::now();
-                        for retry in state.deferred_retries.values_mut() {
-                            retry.due_at = now;
-                        }
-                        state.runtime_outbox_consecutive_failures = 0;
-                        state.runtime_outbox_retry_after = None;
-                        state.adaptive_limiter.reset_backpressure_cooldown();
-                        state.outbox_timer.reset_immediately();
-                        state.failed_ship_retry_timer.reset_immediately();
-                        state.heartbeat_timer.reset_immediately();
-                        state.pending_truth_heartbeat = None;
-                    }
-                }
-            }
-            _ = state.storage_maintenance_tasks.join_next(), if !state.storage_maintenance_tasks.is_empty() => {}
-            _ = state.daily_maintenance_tasks.join_next(), if !state.daily_maintenance_tasks.is_empty() => {}
-
-            unmanaged_binding_refresh_result = state.unmanaged_binding_refresh_tasks.join_next(), if !state.unmanaged_binding_refresh_tasks.is_empty() => {
-                let refresh_generation = state.unmanaged_binding_refresh_generation.take();
-                match unmanaged_binding_refresh_result {
-                    Some(Ok(result)) => {
-                        let stale = result.generation != state.projection_generation;
-                        let managed_observation_current =
-                            result.managed_observation_generation == state.managed_observation_generation;
-                        if stale {
+                    } else if join_elapsed_ms > 1_000 {
+                        if self.host_link.is_updating() {
                             tracing::debug!(
-                                generation = result.generation,
-                                latest_generation = state.projection_generation,
-                                "Discarded stale unmanaged reconciliation result"
+                                sent,
+                                task_elapsed_ms,
+                                join_elapsed_ms,
+                                local_join_delay_ms,
+                                "Runtime-event outbox POST was delayed during Runtime Host update"
                             );
-                        } else if !managed_observation_current {
+                        } else {
+                            tracing::warn!(
+                                sent,
+                                task_elapsed_ms,
+                                join_elapsed_ms,
+                                local_join_delay_ms,
+                                "Outbox runtime-event POST was slow"
+                            );
+                        }
+                    } else if sent > 0 {
+                        tracing::debug!(
+                            sent,
+                            task_elapsed_ms,
+                            join_elapsed_ms,
+                            "Outbox runtime-event POST sent files"
+                        );
+                    }
+                }
+            }
+            Some(Err(err)) => {
+                self.runtime_outbox_consecutive_failures =
+                    self.runtime_outbox_consecutive_failures.saturating_add(1);
+                self.runtime_outbox_retry_after = Some(Instant::now() + LIVE_LOCAL_RETRY_DELAY);
+                if self.host_link.explains_failure(&err.to_string()) {
+                    tracing::debug!(
+                        "Runtime-event outbox task deferred during Runtime Host update: {}",
+                        err
+                    );
+                } else {
+                    tracing::warn!("Outbox runtime-event POST task failed: {}", err);
+                }
+            }
+            None => {}
+        }
+    }
+    fn on_heartbeat_post_done(
+        &mut self,
+        heartbeat_post_result: Option<Result<HeartbeatPostResult, tokio::task::JoinError>>,
+    ) {
+        match heartbeat_post_result {
+            Some(Ok(result)) => {
+                self.heartbeat_transport.record_send_metrics(
+                    result.reason,
+                    result.metrics.raw_bytes,
+                    result.metrics.wire_bytes,
+                    result.metrics.latency_ms,
+                );
+                let local_join_delay_ms = result
+                    .join_elapsed_ms
+                    .saturating_sub(result.task_elapsed_ms);
+                if result.task_elapsed_ms > 1_000 || local_join_delay_ms > 1_000 {
+                    if self.host_link.is_updating() {
+                        tracing::debug!(
+                            reason = result.reason,
+                            task_elapsed_ms = result.task_elapsed_ms,
+                            join_elapsed_ms = result.join_elapsed_ms,
+                            local_join_delay_ms,
+                            "Heartbeat POST was delayed during Runtime Host update"
+                        );
+                    } else {
+                        tracing::warn!(
+                            reason = result.reason,
+                            task_elapsed_ms = result.task_elapsed_ms,
+                            join_elapsed_ms = result.join_elapsed_ms,
+                            local_join_delay_ms,
+                            "Heartbeat POST was slow"
+                        );
+                    }
+                }
+                self.acknowledged_machine_evidence
+                    .record_send_result(&result.result, &result.sent_evidence_identities);
+                if let Some(evidence) = self
+                    .last_status_projection
+                    .as_ref()
+                    .and_then(|projection| projection.payload.machine_evidence.as_ref())
+                {
+                    self.acknowledged_machine_evidence
+                        .prune_to_current(&evidence.candidate_identities);
+                } else {
+                    self.acknowledged_machine_evidence.prune_to_current(&[]);
+                }
+                match result.result {
+                    Ok(ack) => {
+                        let evidence_was_refused = self.heartbeat_transport.evidence_refused();
+                        let evidence_changed = self
+                            .heartbeat_transport
+                            .record_evidence_ack(ack.evidence_ack.as_deref());
+                        let evidence_refused = self.heartbeat_transport.evidence_refused();
+                        let recovered = self
+                            .heartbeat_transport
+                            .record_success(chrono::Utc::now().to_rfc3339());
+                        tracing::debug!(
+                            reason = result.reason,
+                            task_elapsed_ms = result.task_elapsed_ms,
+                            join_elapsed_ms = result.join_elapsed_ms,
+                            evidence_state = %self.heartbeat_transport.evidence_state,
+                            "Runtime truth snapshot sent after local process/control change"
+                        );
+                        if evidence_changed && evidence_refused {
+                            tracing::warn!(
+                                reason = result.reason,
+                                evidence_state = %self.heartbeat_transport.evidence_state,
+                                "Heartbeat machine evidence was refused"
+                            );
+                        } else if evidence_was_refused
+                            && self.heartbeat_transport.evidence_state == "applied"
+                        {
+                            tracing::info!("Heartbeat machine evidence recovered");
+                        }
+                        if recovered {
+                            tracing::info!("Heartbeat POST recovered");
+                        }
+                        self.last_runtime_truth_signature = Some(result.signature.clone());
+                        if self
+                            .pending_truth_heartbeat
+                            .as_ref()
+                            .is_some_and(|pending| pending.signature == result.signature)
+                        {
+                            self.pending_truth_heartbeat = None;
+                        }
+                    }
+                    Err(err) => {
+                        let error = heartbeat::bounded_heartbeat_error(&err);
+                        let transitioned = self
+                            .heartbeat_transport
+                            .record_failure(chrono::Utc::now().to_rfc3339(), &error);
+                        if self
+                            .pending_truth_heartbeat
+                            .as_ref()
+                            .is_some_and(|pending| pending.signature == result.signature)
+                        {
+                            self.pending_truth_heartbeat = None;
+                        }
+                        // The failed send did not deliver this truth: forget it, so the
+                        // next projection retries it (after the 1 s window) instead of
+                        // waiting for the 60 s periodic heartbeat.
+                        if self.last_runtime_truth_signature.as_deref()
+                            == Some(result.signature.as_str())
+                        {
+                            self.last_runtime_truth_signature = None;
+                        }
+                        if self.host_link.explains_failure(&error) {
                             tracing::debug!(
+                                reason = result.reason,
+                                error = %error,
+                                retry_after_secs = result.metrics.retry_after
+                                    .map(|delay| delay.as_secs_f64()),
+                                "Heartbeat POST deferred during Runtime Host update"
+                            );
+                        } else if transitioned {
+                            tracing::warn!(
+                                reason = result.reason,
+                                error = %error,
+                                "Heartbeat POST failed"
+                            );
+                        } else {
+                            tracing::debug!(
+                                reason = result.reason,
+                                error = %error,
+                                "Heartbeat POST remains degraded"
+                            );
+                        }
+                    }
+                }
+                publish_heartbeat_transport_status(
+                    &self.heartbeat_transport,
+                    &mut self.last_status_projection,
+                    serde_json::to_value(self.control_channel_status.snapshot()).ok(),
+                    &self.managed_reconciliation,
+                    &mut self.shipping_progress,
+                    self.offline.is_offline,
+                    &self.host_link,
+                    &self.status_path,
+                );
+            }
+            Some(Err(err)) => {
+                let error = heartbeat::bounded_heartbeat_error(&err.to_string());
+                let transitioned = self
+                    .heartbeat_transport
+                    .record_failure(chrono::Utc::now().to_rfc3339(), &error);
+                if self.host_link.explains_failure(&error) {
+                    tracing::debug!(error = %error, "Heartbeat POST task deferred during Runtime Host update");
+                } else if transitioned {
+                    tracing::warn!(error = %error, "Heartbeat POST task failed");
+                } else {
+                    tracing::debug!(error = %error, "Heartbeat POST task remains degraded");
+                }
+                publish_heartbeat_transport_status(
+                    &self.heartbeat_transport,
+                    &mut self.last_status_projection,
+                    serde_json::to_value(self.control_channel_status.snapshot()).ok(),
+                    &self.managed_reconciliation,
+                    &mut self.shipping_progress,
+                    self.offline.is_offline,
+                    &self.host_link,
+                    &self.status_path,
+                );
+            }
+            None => {}
+        }
+    }
+    fn on_machine_presence_post_done(
+        &mut self,
+        machine_presence_post_result: Option<
+            Result<MachinePresencePostResult, tokio::task::JoinError>,
+        >,
+    ) {
+        match machine_presence_post_result {
+            Some(Ok(result)) => match result.result {
+                Ok(true) => {
+                    tracing::debug!(
+                        task_elapsed_ms = result.task_elapsed_ms,
+                        "Machine presence POST sent"
+                    );
+                }
+                Ok(false) => {
+                    tracing::debug!(
+                        task_elapsed_ms = result.task_elapsed_ms,
+                        "Machine presence collection disabled"
+                    );
+                }
+                Err(err) => {
+                    tracing::debug!("Machine presence POST failed: {}", err);
+                }
+            },
+            Some(Err(err)) => {
+                tracing::warn!("Machine presence POST task failed: {}", err);
+            }
+            None => {}
+        }
+    }
+    fn on_host_link_poll_done(
+        &mut self,
+        host_link_poll_result: Option<Result<Result<()>, tokio::task::JoinError>>,
+    ) {
+        match host_link_poll_result {
+            Some(Ok(Ok(()))) | None => {}
+            Some(Ok(Err(error))) => {
+                tracing::debug!(%error, "Runtime Host admission poll failed");
+            }
+            Some(Err(error)) => {
+                tracing::debug!(%error, "Runtime Host admission poll task failed");
+            }
+        }
+    }
+    fn on_host_link_changed(&mut self, host_link_event: Result<(), watch::error::RecvError>) {
+        if host_link_event.is_ok() {
+            let serving_generation = self.host_link.serving_generation();
+            if serving_generation > self.last_serving_generation {
+                self.last_serving_generation = serving_generation;
+                let now = Instant::now();
+                for retry in self.deferred_retries.values_mut() {
+                    retry.due_at = now;
+                }
+                self.runtime_outbox_consecutive_failures = 0;
+                self.runtime_outbox_retry_after = None;
+                self.adaptive_limiter.reset_backpressure_cooldown();
+                self.outbox_timer.reset_immediately();
+                self.failed_ship_retry_timer.reset_immediately();
+                self.heartbeat_timer.reset_immediately();
+                self.pending_truth_heartbeat = None;
+            }
+        }
+    }
+    fn on_unmanaged_binding_refresh_done(
+        &mut self,
+        config: &ConnectConfig,
+        unmanaged_binding_refresh_result: Option<
+            Result<UnmanagedBindingRefreshResult, tokio::task::JoinError>,
+        >,
+    ) -> Result<()> {
+        {
+            let refresh_generation = self.unmanaged_binding_refresh_generation.take();
+            match unmanaged_binding_refresh_result {
+                Some(Ok(result)) => {
+                    let stale = result.generation != self.projection_generation;
+                    let managed_observation_current = result.managed_observation_generation
+                        == self.managed_observation_generation;
+                    if stale {
+                        tracing::debug!(
+                            generation = result.generation,
+                            latest_generation = self.projection_generation,
+                            "Discarded stale unmanaged reconciliation result"
+                        );
+                    } else if !managed_observation_current {
+                        tracing::debug!(
                                 result_managed_observation_generation =
                                     result.managed_observation_generation,
                                 latest_managed_observation_generation =
-                                    state.managed_observation_generation,
+                                    self.managed_observation_generation,
                                 "Applying unmanaged result without replacing newer managed observations"
                             );
-                        }
-                        if !stale && state.managed_observation_valid {
-                            match result.result {
+                    }
+                    if !stale && self.managed_observation_valid {
+                        match result.result {
                             Ok(bindings) => {
                                 if result.elapsed_ms > 1_000 {
                                     tracing::warn!(
@@ -2375,22 +2629,22 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     );
                                 }
                                 if managed_observation_current {
-                                    state.last_projected_managed_observations = result.managed;
-                                    state.last_projected_managed_scan_partial =
+                                    self.last_projected_managed_observations = result.managed;
+                                    self.last_projected_managed_scan_partial =
                                         result.managed_scan_partial;
-                                    state.last_projected_managed_snapshot_complete =
+                                    self.last_projected_managed_snapshot_complete =
                                         result.full_reconciliation_candidate;
-                                    state.last_projected_unmanaged_snapshot_complete =
+                                    self.last_projected_unmanaged_snapshot_complete =
                                         result.full_reconciliation_candidate;
-                                    state.unmanaged_binding_refresh_failed = false;
+                                    self.unmanaged_binding_refresh_failed = false;
                                     if result.full_reconciliation_candidate {
-                                        state.last_full_reconciled_at =
+                                        self.last_full_reconciled_at =
                                             Some(chrono::Utc::now().to_rfc3339());
                                     }
                                 } else {
-                                    state.last_projected_unmanaged_snapshot_complete = false;
+                                    self.last_projected_unmanaged_snapshot_complete = false;
                                 }
-                                state.last_unmanaged_session_bindings = Some(bindings);
+                                self.last_unmanaged_session_bindings = Some(bindings);
                             }
                             Err(err) if !managed_observation_current => {
                                 tracing::debug!(
@@ -2407,13 +2661,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 // scope incomplete so the Runtime Host cannot close missing
                                 // Shadow sessions from this partial observation.
                                 if managed_observation_current {
-                                    state.last_projected_managed_observations = result.managed;
-                                    state.last_projected_managed_scan_partial =
+                                    self.last_projected_managed_observations = result.managed;
+                                    self.last_projected_managed_scan_partial =
                                         result.managed_scan_partial;
-                                    state.last_projected_managed_snapshot_complete =
+                                    self.last_projected_managed_snapshot_complete =
                                         result.full_reconciliation_candidate;
                                 }
-                                state.last_projected_unmanaged_snapshot_complete = false;
+                                self.last_projected_unmanaged_snapshot_complete = false;
                                 // Shadow discovery is optional. Do not turn a
                                 // per-pid lsof failure into an immediate full
                                 // managed scan, which would repeatedly advance
@@ -2421,17 +2675,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 // truth. The scheduled full observation is the
                                 // retry path; keep this projection incomplete
                                 // so missing Shadow sessions remain unknown.
-                                state.pending_full_reconciliation = false;
-                                state.unmanaged_binding_refresh_failed = true;
+                                self.pending_full_reconciliation = false;
+                                self.unmanaged_binding_refresh_failed = true;
                                 // Shadow discovery is optional evidence. Keep the
                                 // retained managed projection usable and mark the
                                 // retry as in progress; a single lsof failure
                                 // must not turn local health into a failed
                                 // reconciliation or erase current sessions.
-                                state.managed_reconciliation.start(
-                                    "unmanaged_binding",
-                                    chrono::Utc::now().to_rfc3339(),
-                                );
+                                self.managed_reconciliation
+                                    .start("unmanaged_binding", chrono::Utc::now().to_rfc3339());
                                 tracing::warn!(
                                     reason = result.reason,
                                     elapsed_ms = result.elapsed_ms,
@@ -2439,1286 +2691,1245 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     err
                                 );
                             }
-                            }
-                            let input = ProjectionBuildInput {
-                                generation: state.projection_generation,
-                                managed_observation_generation: state.managed_observation_generation,
-                                managed_scan_partial: state.last_projected_managed_scan_partial,
-                                managed_snapshot_complete:
-                                    state.last_projected_managed_snapshot_complete,
-                                managed_captured_at: state.last_managed_captured_at.clone(),
-                                unmanaged_snapshot_complete:
-                                    state.last_projected_unmanaged_snapshot_complete,
-                                db_path: state.projection_db_path.clone(),
-                                parse_tracker: state.parse_tracker.clone(),
-                                ship_stats: state.ship_stats.clone(),
-                                is_offline: state.offline.is_offline,
-                                last_ship_at: state.last_ship_at.clone(),
-                                machine_id: config.shipper_config.machine_name.clone(),
-                                managed: state.last_projected_managed_observations.clone(),
-                                unmanaged: state.last_unmanaged_session_bindings
-                                    .clone()
-                                    .unwrap_or_default(),
-                                limiter: state.adaptive_limiter.snapshot(),
-                                scheduler: state.scheduler.snapshot(),
-                                archive_repair_mode: config.archive_repair_mode,
-                                last_full_reconciled_at: state.last_full_reconciled_at.clone(),
-                                continuation: state.last_resume_contracts.clone(),
-                                session_snapshot_state: state.session_snapshot_state.clone(),
-                            };
-                            if !maybe_start_projection_build(&mut state.projection_build_tasks, input) {
-                                state.projection_build_pending = true;
-                            }
+                        }
+                        let input = ProjectionBuildInput {
+                            generation: self.projection_generation,
+                            managed_observation_generation: self.managed_observation_generation,
+                            managed_scan_partial: self.last_projected_managed_scan_partial,
+                            managed_snapshot_complete: self
+                                .last_projected_managed_snapshot_complete,
+                            managed_captured_at: self.last_managed_captured_at.clone(),
+                            unmanaged_snapshot_complete: self
+                                .last_projected_unmanaged_snapshot_complete,
+                            db_path: self.projection_db_path.clone(),
+                            parse_tracker: self.parse_tracker.clone(),
+                            ship_stats: self.ship_stats.clone(),
+                            is_offline: self.offline.is_offline,
+                            last_ship_at: self.last_ship_at.clone(),
+                            machine_id: config.shipper_config.machine_name.clone(),
+                            managed: self.last_projected_managed_observations.clone(),
+                            unmanaged: self
+                                .last_unmanaged_session_bindings
+                                .clone()
+                                .unwrap_or_default(),
+                            limiter: self.adaptive_limiter.snapshot(),
+                            scheduler: self.scheduler.snapshot(),
+                            archive_repair_mode: config.archive_repair_mode,
+                            last_full_reconciled_at: self.last_full_reconciled_at.clone(),
+                            continuation: self.last_resume_contracts.clone(),
+                            session_snapshot_state: self.session_snapshot_state.clone(),
+                        };
+                        if !maybe_start_projection_build(&mut self.projection_build_tasks, input) {
+                            self.projection_build_pending = true;
                         }
                     }
-                    Some(Err(err)) => {
-                        let refresh_is_current = refresh_generation
-                            == Some((state.projection_generation, state.managed_observation_generation));
-                        if refresh_is_current {
-                            state.unmanaged_binding_refresh_failed = true;
-                            // This task only refreshes optional Shadow bindings.
-                            // Preserve the last coherent managed projection and
-                            // expose the retry as reconciling rather than making
-                            // the whole local session inventory failed.
-                            state.managed_reconciliation.start(
-                                "unmanaged_binding",
-                                chrono::Utc::now().to_rfc3339(),
-                            );
-                            heartbeat::refresh_existing_status_pulse(
-                                &state.managed_reconciliation,
-                                &mut state.shipping_progress,
-                                state.offline.is_offline,
-                                &state.status_path,
-                                &state.heartbeat_transport,
-                                Some(&state.host_link.snapshot()),
-                            );
-                            tracing::warn!("Unmanaged binding refresh task failed: {}", err);
-                        } else {
-                            tracing::debug!(
-                                refresh_generation = ?refresh_generation,
-                                latest_generation = state.projection_generation,
-                                latest_managed_observation_generation =
-                                    state.managed_observation_generation,
-                                "Discarded stale unmanaged binding task failure: {}",
-                                err
-                            );
-                        }
-                    }
-                    None => {}
                 }
-                if state.unmanaged_binding_refresh_tasks.is_empty()
-                    && state.managed_observation_scan_tasks.is_empty()
-                {
-                    if state.pending_wake_reconciliation
-                        && maybe_start_managed_observation_scan(
-                            state.projection_db_path.clone(),
-                            &mut state.managed_observation_scan_tasks,
-                            "wake",
-                            true,
-                            &state.last_managed_observations,
-                        )
-                    {
-                        state.pending_wake_reconciliation = false;
-                        state.managed_full_reconciliation_not_before =
-                            Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                        state.managed_reconciliation.start(
-                            "wake",
-                            chrono::Utc::now().to_rfc3339(),
+                Some(Err(err)) => {
+                    let refresh_is_current = refresh_generation
+                        == Some((
+                            self.projection_generation,
+                            self.managed_observation_generation,
+                        ));
+                    if refresh_is_current {
+                        self.unmanaged_binding_refresh_failed = true;
+                        // This task only refreshes optional Shadow bindings.
+                        // Preserve the last coherent managed projection and
+                        // expose the retry as reconciling rather than making
+                        // the whole local session inventory failed.
+                        self.managed_reconciliation
+                            .start("unmanaged_binding", chrono::Utc::now().to_rfc3339());
+                        heartbeat::refresh_existing_status_pulse(
+                            &self.managed_reconciliation,
+                            &mut self.shipping_progress,
+                            self.offline.is_offline,
+                            &self.status_path,
+                            &self.heartbeat_transport,
+                            Some(&self.host_link.snapshot()),
                         );
-                    } else if managed_full_reconciliation_ready(
-                        state.pending_full_reconciliation || certificate_needs_refresh(state.last_certified_at, Instant::now()),
-                        state.managed_observation_scan_tasks.is_empty(),
-                        Instant::now(),
-                        state.managed_full_reconciliation_not_before,
-                    )
-                        && maybe_start_managed_observation_scan(
-                            state.projection_db_path.clone(),
-                            &mut state.managed_observation_scan_tasks,
-                            "full_reconciliation",
-                            true,
-                            &state.last_managed_observations,
-                        )
-                    {
-                        state.pending_full_reconciliation = false;
-                        state.managed_full_reconciliation_not_before =
-                            Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                        state.managed_reconciliation.start(
-                            "full_reconciliation",
-                            chrono::Utc::now().to_rfc3339(),
+                        tracing::warn!("Unmanaged binding refresh task failed: {}", err);
+                    } else {
+                        tracing::debug!(
+                            refresh_generation = ?refresh_generation,
+                            latest_generation = self.projection_generation,
+                            latest_managed_observation_generation =
+                                self.managed_observation_generation,
+                            "Discarded stale unmanaged binding task failure: {}",
+                            err
                         );
                     }
+                }
+                None => {}
+            }
+            if self.unmanaged_binding_refresh_tasks.is_empty()
+                && self.managed_observation_scan_tasks.is_empty()
+            {
+                if self.pending_wake_reconciliation
+                    && maybe_start_managed_observation_scan(
+                        self.projection_db_path.clone(),
+                        &mut self.managed_observation_scan_tasks,
+                        "wake",
+                        true,
+                        &self.last_managed_observations,
+                    )
+                {
+                    self.pending_wake_reconciliation = false;
+                    self.managed_full_reconciliation_not_before =
+                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                    self.managed_reconciliation
+                        .start("wake", chrono::Utc::now().to_rfc3339());
+                } else if managed_full_reconciliation_ready(
+                    self.pending_full_reconciliation
+                        || certificate_needs_refresh(self.last_certified_at, Instant::now()),
+                    self.managed_observation_scan_tasks.is_empty(),
+                    Instant::now(),
+                    self.managed_full_reconciliation_not_before,
+                ) && maybe_start_managed_observation_scan(
+                    self.projection_db_path.clone(),
+                    &mut self.managed_observation_scan_tasks,
+                    "full_reconciliation",
+                    true,
+                    &self.last_managed_observations,
+                ) {
+                    self.pending_full_reconciliation = false;
+                    self.managed_full_reconciliation_not_before =
+                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                    self.managed_reconciliation
+                        .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
                 }
             }
-
-            managed_observation_scan_result = state.managed_observation_scan_tasks.join_next(), if !state.managed_observation_scan_tasks.is_empty() => {
-                match managed_observation_scan_result {
-                    Some(Ok(mut result)) => {
-                        state.last_status_owners_at = result.status_owner_snapshot_at;
-                        state.last_status_owners = Arc::new(std::mem::take(&mut result.status_owners));
-                        if result.elapsed_ms > 250 {
-                            tracing::warn!(
-                                reason = result.reason,
-                                full_reconciliation = result.full_reconciliation,
-                                process_inventory_valid = result.process_inventory_valid,
-                                codex_count = result.codex_observations.len(),
-                                antigravity_count = result.antigravity_observations.len(),
-                                claude_count = result.claude_observations.len(),
-                                opencode_count = result.opencode_observations.len(),
-                                cursor_count = result.cursor_observations.len(),
-                                pi_count = result.pi_observations.len(),
-                                omp_count = result.omp_observations.len(),
-                                omp_live_count = result.omp_observations.iter().filter(|observation| observation.live).count(),
-                                process_inventory_ms = result.process_inventory_ms,
-                                codex_elapsed_ms = result.codex_elapsed_ms,
-                                antigravity_elapsed_ms = result.antigravity_elapsed_ms,
-                                claude_elapsed_ms = result.claude_elapsed_ms,
-                                opencode_elapsed_ms = result.opencode_elapsed_ms,
-                                cursor_elapsed_ms = result.cursor_elapsed_ms,
-                                pi_elapsed_ms = result.pi_elapsed_ms,
-                                omp_elapsed_ms = result.omp_elapsed_ms,
-                                retained_stale_rows = result.retained_stale_rows,
-                                elapsed_ms = result.elapsed_ms,
-                                "Managed observation scan was slow"
-                            );
-                        } else {
-                            tracing::debug!(
-                                reason = result.reason,
-                                full_reconciliation = result.full_reconciliation,
-                                process_inventory_valid = result.process_inventory_valid,
-                                codex_count = result.codex_observations.len(),
-                                antigravity_count = result.antigravity_observations.len(),
-                                claude_count = result.claude_observations.len(),
-                                opencode_count = result.opencode_observations.len(),
-                                cursor_count = result.cursor_observations.len(),
-                                pi_count = result.pi_observations.len(),
-                                omp_count = result.omp_observations.len(),
-                                omp_live_count = result.omp_observations.iter().filter(|observation| observation.live).count(),
-                                process_inventory_ms = result.process_inventory_ms,
-                                codex_elapsed_ms = result.codex_elapsed_ms,
-                                antigravity_elapsed_ms = result.antigravity_elapsed_ms,
-                                claude_elapsed_ms = result.claude_elapsed_ms,
-                                opencode_elapsed_ms = result.opencode_elapsed_ms,
-                                cursor_elapsed_ms = result.cursor_elapsed_ms,
-                                pi_elapsed_ms = result.pi_elapsed_ms,
-                                omp_elapsed_ms = result.omp_elapsed_ms,
-                                retained_stale_rows = result.retained_stale_rows,
-                                elapsed_ms = result.elapsed_ms,
-                                "Managed observation scan completed"
-                            );
-                        }
-                        // Report only. `process_inventory_valid` proves `ps`
-                        // ran; it does not prove the five provider scanners
-                        // did, and a scanner that fails is indistinguishable
-                        // from a provider with no sessions. Killing on that
-                        // basis would destroy live work.
-                        if !result.orphan_processes.is_empty() {
-                            crate::managed_process_janitor::report_orphan_processes(
-                                &result.orphan_processes,
-                            );
-                        }
-                        if !result.process_inventory_valid {
-                            state.managed_observation_valid = false;
-                            state.projection_generation = state.projection_generation.saturating_add(1);
-                            tracing::warn!(
+        }
+        Ok(())
+    }
+    fn on_managed_observation_scan_done(
+        &mut self,
+        config: &ConnectConfig,
+        managed_observation_scan_result: Option<
+            Result<ManagedObservationScanResult, tokio::task::JoinError>,
+        >,
+    ) {
+        match managed_observation_scan_result {
+            Some(Ok(mut result)) => {
+                self.last_status_owners_at = result.status_owner_snapshot_at;
+                self.last_status_owners = Arc::new(std::mem::take(&mut result.status_owners));
+                if result.elapsed_ms > 250 {
+                    tracing::warn!(
+                        reason = result.reason,
+                        full_reconciliation = result.full_reconciliation,
+                        process_inventory_valid = result.process_inventory_valid,
+                        codex_count = result.codex_observations.len(),
+                        antigravity_count = result.antigravity_observations.len(),
+                        claude_count = result.claude_observations.len(),
+                        opencode_count = result.opencode_observations.len(),
+                        cursor_count = result.cursor_observations.len(),
+                        pi_count = result.pi_observations.len(),
+                        omp_count = result.omp_observations.len(),
+                        omp_live_count = result
+                            .omp_observations
+                            .iter()
+                            .filter(|observation| observation.live)
+                            .count(),
+                        process_inventory_ms = result.process_inventory_ms,
+                        codex_elapsed_ms = result.codex_elapsed_ms,
+                        antigravity_elapsed_ms = result.antigravity_elapsed_ms,
+                        claude_elapsed_ms = result.claude_elapsed_ms,
+                        opencode_elapsed_ms = result.opencode_elapsed_ms,
+                        cursor_elapsed_ms = result.cursor_elapsed_ms,
+                        pi_elapsed_ms = result.pi_elapsed_ms,
+                        omp_elapsed_ms = result.omp_elapsed_ms,
+                        retained_stale_rows = result.retained_stale_rows,
+                        elapsed_ms = result.elapsed_ms,
+                        "Managed observation scan was slow"
+                    );
+                } else {
+                    tracing::debug!(
+                        reason = result.reason,
+                        full_reconciliation = result.full_reconciliation,
+                        process_inventory_valid = result.process_inventory_valid,
+                        codex_count = result.codex_observations.len(),
+                        antigravity_count = result.antigravity_observations.len(),
+                        claude_count = result.claude_observations.len(),
+                        opencode_count = result.opencode_observations.len(),
+                        cursor_count = result.cursor_observations.len(),
+                        pi_count = result.pi_observations.len(),
+                        omp_count = result.omp_observations.len(),
+                        omp_live_count = result
+                            .omp_observations
+                            .iter()
+                            .filter(|observation| observation.live)
+                            .count(),
+                        process_inventory_ms = result.process_inventory_ms,
+                        codex_elapsed_ms = result.codex_elapsed_ms,
+                        antigravity_elapsed_ms = result.antigravity_elapsed_ms,
+                        claude_elapsed_ms = result.claude_elapsed_ms,
+                        opencode_elapsed_ms = result.opencode_elapsed_ms,
+                        cursor_elapsed_ms = result.cursor_elapsed_ms,
+                        pi_elapsed_ms = result.pi_elapsed_ms,
+                        omp_elapsed_ms = result.omp_elapsed_ms,
+                        retained_stale_rows = result.retained_stale_rows,
+                        elapsed_ms = result.elapsed_ms,
+                        "Managed observation scan completed"
+                    );
+                }
+                // Report only. `process_inventory_valid` proves `ps`
+                // ran; it does not prove the five provider scanners
+                // did, and a scanner that fails is indistinguishable
+                // from a provider with no sessions. Killing on that
+                // basis would destroy live work.
+                if !result.orphan_processes.is_empty() {
+                    crate::managed_process_janitor::report_orphan_processes(
+                        &result.orphan_processes,
+                    );
+                }
+                if !result.process_inventory_valid {
+                    self.managed_observation_valid = false;
+                    self.projection_generation = self.projection_generation.saturating_add(1);
+                    tracing::warn!(
                                 reason = result.reason,
                                 "Managed observation scan retained prior truth because process inventory failed"
                             );
-                            state.managed_reconciliation =
-                                heartbeat::ProjectionReconciliation::failed("process_inventory");
-                            state.managed_reconciliation.start(
-                                "process_inventory",
-                                chrono::Utc::now().to_rfc3339(),
-                            );
-                            heartbeat::refresh_existing_status_pulse(
-                                &state.managed_reconciliation,
-                                &mut state.shipping_progress,
-                                state.offline.is_offline,
-                                &state.status_path,
-                                &state.heartbeat_transport,
-                                Some(&state.host_link.snapshot()),
-                            );
-                            if state.pending_wake_reconciliation {
-                                if maybe_start_managed_observation_scan(
-                                    state.projection_db_path.clone(),
-                                    &mut state.managed_observation_scan_tasks,
-                                    "wake",
-                                    true,
-                                    &state.last_managed_observations,
-                                ) {
-                                    state.pending_wake_reconciliation = false;
-                                }
-                            } else if managed_full_reconciliation_ready(
-                                state.pending_full_reconciliation
-                                    || certificate_needs_refresh(state.last_certified_at, Instant::now()),
-                                state.managed_observation_scan_tasks.is_empty(),
-                                Instant::now(),
-                                state.managed_full_reconciliation_not_before,
-                            )
-                                && maybe_start_managed_observation_scan(
-                                    state.projection_db_path.clone(),
-                                    &mut state.managed_observation_scan_tasks,
-                                    "full_reconciliation",
-                                    true,
-                                    &state.last_managed_observations,
-                                )
-                            {
-                                state.pending_full_reconciliation = false;
-                                state.managed_full_reconciliation_not_before =
-                                    Instant::now()
-                                        + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                            }
-                            continue;
+                    self.managed_reconciliation =
+                        heartbeat::ProjectionReconciliation::failed("process_inventory");
+                    self.managed_reconciliation
+                        .start("process_inventory", chrono::Utc::now().to_rfc3339());
+                    heartbeat::refresh_existing_status_pulse(
+                        &self.managed_reconciliation,
+                        &mut self.shipping_progress,
+                        self.offline.is_offline,
+                        &self.status_path,
+                        &self.heartbeat_transport,
+                        Some(&self.host_link.snapshot()),
+                    );
+                    if self.pending_wake_reconciliation {
+                        if maybe_start_managed_observation_scan(
+                            self.projection_db_path.clone(),
+                            &mut self.managed_observation_scan_tasks,
+                            "wake",
+                            true,
+                            &self.last_managed_observations,
+                        ) {
+                            self.pending_wake_reconciliation = false;
                         }
-                        state.managed_observation_valid = true;
-                        if result.full_reconciliation {
-                            // Start-time gating does not prevent a long scan
-                            // from immediately retriggering on events observed
-                            // during its own walk. Hold the next full pass for
-                            // one observation interval after completion.
-                            state.managed_full_reconciliation_not_before =
-                                Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                        }
-                        if let Some(continuation) = &result.continuation {
-                            state.last_resume_contracts = Some(continuation.clone());
-                        }
-                        let next_managed_observations =
-                            ManagedObservationSnapshot::from_result(&result).current_only();
-                        let managed_observations_changed = !next_managed_observations
-                            .projection_equivalent(&state.last_managed_observations);
-                        let (managed_scan_partial, managed_snapshot_complete) =
-                            managed_scan_certificate(&result);
-                        if managed_snapshot_complete {
-                            state.last_certified_at = Some(Instant::now());
-                            state.certificate_keepalive_warned = false;
-                        } else if let Some(refreshed_at) = state.last_certified_at {
-                            // Keep the last claim only while it is still inside
-                            // the keepalive; past that the beat ships without
-                            // absence authority, which fails closed.
-                            if refreshed_at.elapsed() > Duration::from_secs(MANAGED_CERTIFICATE_KEEPALIVE_SECS)
-                                && !state.certificate_keepalive_warned
-                            {
-                                state.certificate_keepalive_warned = true;
-                                tracing::warn!(
+                    } else if managed_full_reconciliation_ready(
+                        self.pending_full_reconciliation
+                            || certificate_needs_refresh(self.last_certified_at, Instant::now()),
+                        self.managed_observation_scan_tasks.is_empty(),
+                        Instant::now(),
+                        self.managed_full_reconciliation_not_before,
+                    ) && maybe_start_managed_observation_scan(
+                        self.projection_db_path.clone(),
+                        &mut self.managed_observation_scan_tasks,
+                        "full_reconciliation",
+                        true,
+                        &self.last_managed_observations,
+                    ) {
+                        self.pending_full_reconciliation = false;
+                        self.managed_full_reconciliation_not_before =
+                            Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                    }
+                    return;
+                }
+                self.managed_observation_valid = true;
+                if result.full_reconciliation {
+                    // Start-time gating does not prevent a long scan
+                    // from immediately retriggering on events observed
+                    // during its own walk. Hold the next full pass for
+                    // one observation interval after completion.
+                    self.managed_full_reconciliation_not_before =
+                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                }
+                if let Some(continuation) = &result.continuation {
+                    self.last_resume_contracts = Some(continuation.clone());
+                }
+                let next_managed_observations =
+                    ManagedObservationSnapshot::from_result(&result).current_only();
+                let managed_observations_changed = !next_managed_observations
+                    .projection_equivalent(&self.last_managed_observations);
+                let (managed_scan_partial, managed_snapshot_complete) =
+                    managed_scan_certificate(&result);
+                if managed_snapshot_complete {
+                    self.last_certified_at = Some(Instant::now());
+                    self.certificate_keepalive_warned = false;
+                } else if let Some(refreshed_at) = self.last_certified_at {
+                    // Keep the last claim only while it is still inside
+                    // the keepalive; past that the beat ships without
+                    // absence authority, which fails closed.
+                    if refreshed_at.elapsed()
+                        > Duration::from_secs(MANAGED_CERTIFICATE_KEEPALIVE_SECS)
+                        && !self.certificate_keepalive_warned
+                    {
+                        self.certificate_keepalive_warned = true;
+                        tracing::warn!(
                                     reason = result.reason,
                                     retained_stale_rows = result.retained_stale_rows,
                                     "Managed enumeration has not certified within the keepalive window; beats ship without absence authority"
                                 );
-                            }
-                        }
-                        let managed_evidence_changed = managed_observations_changed
-                            || result.full_reconciliation
-                            || managed_scan_partial != state.last_projected_managed_scan_partial;
-                        if managed_evidence_changed {
-                            state.managed_observation_generation =
-                                state.managed_observation_generation.saturating_add(1);
-                        }
-                        state.last_managed_observations = next_managed_observations;
-                        project_binding_liveness(&state.conn, &state.last_managed_observations);
-                        pump_ready_local_work(
-                            &mut state.scheduler,
-                            &mut state.in_flight,
-                            &state.task_context,
-                            &mut state.deferred_retries,
-                            &mut state.shipping_progress,
-                            state.offline.is_offline,
-                            archive_repair_is_paused(config.archive_repair_mode),
-                        );
-                        let managed_process_pids = managed_process_pids_from_observations(
-                            &result.codex_observations,
-                            &result.claude_observations,
-                            &result.opencode_observations,
-                            &result.cursor_observations,
-                            &result.pi_observations,
-                            &result.omp_observations,
-                        );
-                        let should_refresh_unmanaged =
-                            result.full_reconciliation || managed_observations_changed;
-                        let paired_generation = state.projection_generation.saturating_add(1);
-                        let paired_refresh_started = should_refresh_unmanaged
-                            && maybe_start_unmanaged_binding_refresh(
-                                &mut state.unmanaged_binding_refresh_tasks,
-                                config.shipper_config.db_path.clone(),
-                                config.shipper_config.machine_name.clone(),
-                                managed_process_pids.clone(),
-                                result.process_inventory.clone(),
-                                result.reason,
-                                paired_generation,
-                                state.managed_observation_generation,
-                                state.last_managed_observations.clone(),
-                                managed_scan_partial,
-                                managed_scan_certificate(&result).1,
-                            );
-                        if paired_refresh_started {
-                            state.projection_generation = paired_generation;
-                            state.unmanaged_binding_refresh_generation =
-                                Some((state.projection_generation, state.managed_observation_generation));
-                        } else if result.full_reconciliation {
-                            if result.reason == "wake" {
-                                state.pending_wake_reconciliation = true;
-                            } else {
-                                state.pending_full_reconciliation = true;
-                            }
-                        } else if managed_observations_changed {
-                            defer_managed_pair_retry(
-                                &mut state.projection_generation,
-                                &mut state.pending_full_reconciliation,
-                            );
-                        }
+                    }
+                }
+                let managed_evidence_changed = managed_observations_changed
+                    || result.full_reconciliation
+                    || managed_scan_partial != self.last_projected_managed_scan_partial;
+                if managed_evidence_changed {
+                    self.managed_observation_generation =
+                        self.managed_observation_generation.saturating_add(1);
+                }
+                self.last_managed_observations = next_managed_observations;
+                project_binding_liveness(&self.conn, &self.last_managed_observations);
+                pump_ready_local_work(
+                    &mut self.scheduler,
+                    &mut self.in_flight,
+                    &self.task_context,
+                    &mut self.deferred_retries,
+                    &mut self.shipping_progress,
+                    self.offline.is_offline,
+                    archive_repair_is_paused(config.archive_repair_mode),
+                );
+                let managed_process_pids = managed_process_pids_from_observations(
+                    &result.codex_observations,
+                    &result.claude_observations,
+                    &result.opencode_observations,
+                    &result.cursor_observations,
+                    &result.pi_observations,
+                    &result.omp_observations,
+                );
+                let should_refresh_unmanaged =
+                    result.full_reconciliation || managed_observations_changed;
+                let paired_generation = self.projection_generation.saturating_add(1);
+                let paired_refresh_started = should_refresh_unmanaged
+                    && maybe_start_unmanaged_binding_refresh(
+                        &mut self.unmanaged_binding_refresh_tasks,
+                        config.shipper_config.db_path.clone(),
+                        config.shipper_config.machine_name.clone(),
+                        managed_process_pids.clone(),
+                        result.process_inventory.clone(),
+                        result.reason,
+                        paired_generation,
+                        self.managed_observation_generation,
+                        self.last_managed_observations.clone(),
+                        managed_scan_partial,
+                        managed_scan_certificate(&result).1,
+                    );
+                if paired_refresh_started {
+                    self.projection_generation = paired_generation;
+                    self.unmanaged_binding_refresh_generation = Some((
+                        self.projection_generation,
+                        self.managed_observation_generation,
+                    ));
+                } else if result.full_reconciliation {
+                    if result.reason == "wake" {
+                        self.pending_wake_reconciliation = true;
+                    } else {
+                        self.pending_full_reconciliation = true;
+                    }
+                } else if managed_observations_changed {
+                    defer_managed_pair_retry(
+                        &mut self.projection_generation,
+                        &mut self.pending_full_reconciliation,
+                    );
+                }
 
-                        // A valid managed scan is fresh evidence even when the
-                        // optional unmanaged/Shadow refresh is still running.
-                        // Publish it with the cached Shadow rows only as
-                        // incomplete evidence; the refresh result can replace
-                        // this projection later without blocking managed truth.
-                        state.last_projected_managed_observations = state.last_managed_observations.clone();
-                        state.last_managed_captured_at = result.captured_at.clone();
-                        state.last_projected_managed_scan_partial = managed_scan_partial;
-                        state.last_projected_managed_snapshot_complete = managed_snapshot_complete;
-                        state.last_projected_unmanaged_snapshot_complete = false;
-                        let input = ProjectionBuildInput {
-                            generation: state.projection_generation,
-                            managed_observation_generation: state.managed_observation_generation,
-                            managed_scan_partial: state.last_projected_managed_scan_partial,
-                            managed_snapshot_complete:
-                                state.last_projected_managed_snapshot_complete,
-                            managed_captured_at: state.last_managed_captured_at.clone(),
-                            unmanaged_snapshot_complete:
-                                state.last_projected_unmanaged_snapshot_complete,
-                            db_path: state.projection_db_path.clone(),
-                            parse_tracker: state.parse_tracker.clone(),
-                            ship_stats: state.ship_stats.clone(),
-                            is_offline: state.offline.is_offline,
-                            last_ship_at: state.last_ship_at.clone(),
-                            machine_id: config.shipper_config.machine_name.clone(),
-                            managed: state.last_projected_managed_observations.clone(),
-                            unmanaged: state.last_unmanaged_session_bindings
-                                .clone()
-                                .unwrap_or_default(),
-                            limiter: state.adaptive_limiter.snapshot(),
-                            scheduler: state.scheduler.snapshot(),
-                            archive_repair_mode: config.archive_repair_mode,
-                            last_full_reconciled_at: state.last_full_reconciled_at.clone(),
-                            continuation: state.last_resume_contracts.clone(),
-                            session_snapshot_state: state.session_snapshot_state.clone(),
-                        };
-                        if !maybe_start_projection_build(&mut state.projection_build_tasks, input) {
-                            state.projection_build_pending = true;
-                        }
-                        maybe_start_opencode_title_refresh(
-                            &mut state.opencode_title_refresh_tasks,
-                            config.shipper_config.db_path.clone(),
-                            result.opencode_observations.clone(),
-                        );
-                        if state.pending_wake_reconciliation
-                            && state.unmanaged_binding_refresh_tasks.is_empty()
-                            && maybe_start_managed_observation_scan(
-                                state.projection_db_path.clone(),
-                                &mut state.managed_observation_scan_tasks,
-                                "wake",
-                                true,
-                                &state.last_managed_observations,
-                            )
-                        {
-                            state.pending_wake_reconciliation = false;
-                            state.managed_full_reconciliation_not_before =
-                                Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                            state.managed_reconciliation.start(
-                                "wake",
-                                chrono::Utc::now().to_rfc3339(),
-                            );
-                        } else if managed_full_reconciliation_ready(
-                            state.pending_full_reconciliation,
-                            state.unmanaged_binding_refresh_tasks.is_empty()
-                                && state.managed_observation_scan_tasks.is_empty(),
-                            Instant::now(),
-                            state.managed_full_reconciliation_not_before,
-                        )
-                            && maybe_start_managed_observation_scan(
-                                state.projection_db_path.clone(),
-                                &mut state.managed_observation_scan_tasks,
-                                "full_reconciliation",
-                                true,
-                                &state.last_managed_observations,
-                            )
-                        {
-                            state.pending_full_reconciliation = false;
-                            state.managed_full_reconciliation_not_before =
-                                Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                            state.managed_reconciliation.start(
-                                "full_reconciliation",
-                                chrono::Utc::now().to_rfc3339(),
-                            );
-                        }
-                    }
-                    Some(Err(err)) => {
-                        state.managed_observation_valid = false;
-                        state.projection_generation = state.projection_generation.saturating_add(1);
-                        tracing::warn!("Managed observation scan task failed: {}", err);
-                        state.managed_reconciliation = heartbeat::ProjectionReconciliation::failed(
-                            state.managed_reconciliation
-                                .reason
-                                .clone()
-                                .unwrap_or_else(|| "managed_observation".to_string()),
-                        );
-                        heartbeat::refresh_existing_status_pulse(
-                            &state.managed_reconciliation,
-                            &mut state.shipping_progress,
-                            state.offline.is_offline,
-                            &state.status_path,
-                            &state.heartbeat_transport,
-                            Some(&state.host_link.snapshot()),
-                        );
-                    }
-                    None => {}
+                // A valid managed scan is fresh evidence even when the
+                // optional unmanaged/Shadow refresh is still running.
+                // Publish it with the cached Shadow rows only as
+                // incomplete evidence; the refresh result can replace
+                // this projection later without blocking managed truth.
+                self.last_projected_managed_observations = self.last_managed_observations.clone();
+                self.last_managed_captured_at = result.captured_at.clone();
+                self.last_projected_managed_scan_partial = managed_scan_partial;
+                self.last_projected_managed_snapshot_complete = managed_snapshot_complete;
+                self.last_projected_unmanaged_snapshot_complete = false;
+                let input = ProjectionBuildInput {
+                    generation: self.projection_generation,
+                    managed_observation_generation: self.managed_observation_generation,
+                    managed_scan_partial: self.last_projected_managed_scan_partial,
+                    managed_snapshot_complete: self.last_projected_managed_snapshot_complete,
+                    managed_captured_at: self.last_managed_captured_at.clone(),
+                    unmanaged_snapshot_complete: self.last_projected_unmanaged_snapshot_complete,
+                    db_path: self.projection_db_path.clone(),
+                    parse_tracker: self.parse_tracker.clone(),
+                    ship_stats: self.ship_stats.clone(),
+                    is_offline: self.offline.is_offline,
+                    last_ship_at: self.last_ship_at.clone(),
+                    machine_id: config.shipper_config.machine_name.clone(),
+                    managed: self.last_projected_managed_observations.clone(),
+                    unmanaged: self
+                        .last_unmanaged_session_bindings
+                        .clone()
+                        .unwrap_or_default(),
+                    limiter: self.adaptive_limiter.snapshot(),
+                    scheduler: self.scheduler.snapshot(),
+                    archive_repair_mode: config.archive_repair_mode,
+                    last_full_reconciled_at: self.last_full_reconciled_at.clone(),
+                    continuation: self.last_resume_contracts.clone(),
+                    session_snapshot_state: self.session_snapshot_state.clone(),
+                };
+                if !maybe_start_projection_build(&mut self.projection_build_tasks, input) {
+                    self.projection_build_pending = true;
+                }
+                maybe_start_opencode_title_refresh(
+                    &mut self.opencode_title_refresh_tasks,
+                    config.shipper_config.db_path.clone(),
+                    result.opencode_observations.clone(),
+                );
+                if self.pending_wake_reconciliation
+                    && self.unmanaged_binding_refresh_tasks.is_empty()
+                    && maybe_start_managed_observation_scan(
+                        self.projection_db_path.clone(),
+                        &mut self.managed_observation_scan_tasks,
+                        "wake",
+                        true,
+                        &self.last_managed_observations,
+                    )
+                {
+                    self.pending_wake_reconciliation = false;
+                    self.managed_full_reconciliation_not_before =
+                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                    self.managed_reconciliation
+                        .start("wake", chrono::Utc::now().to_rfc3339());
+                } else if managed_full_reconciliation_ready(
+                    self.pending_full_reconciliation,
+                    self.unmanaged_binding_refresh_tasks.is_empty()
+                        && self.managed_observation_scan_tasks.is_empty(),
+                    Instant::now(),
+                    self.managed_full_reconciliation_not_before,
+                ) && maybe_start_managed_observation_scan(
+                    self.projection_db_path.clone(),
+                    &mut self.managed_observation_scan_tasks,
+                    "full_reconciliation",
+                    true,
+                    &self.last_managed_observations,
+                ) {
+                    self.pending_full_reconciliation = false;
+                    self.managed_full_reconciliation_not_before =
+                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                    self.managed_reconciliation
+                        .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
                 }
             }
-
-            opencode_title_refresh_result = state.opencode_title_refresh_tasks.join_next(), if !state.opencode_title_refresh_tasks.is_empty() => {
-                match opencode_title_refresh_result {
-                    Some(Ok(Ok(()))) | None => {}
-                    Some(Ok(Err(err))) => tracing::warn!(error = %err, "OpenCode title refresh failed"),
-                    Some(Err(err)) => tracing::warn!(error = %err, "OpenCode title refresh task failed"),
-                }
+            Some(Err(err)) => {
+                self.managed_observation_valid = false;
+                self.projection_generation = self.projection_generation.saturating_add(1);
+                tracing::warn!("Managed observation scan task failed: {}", err);
+                self.managed_reconciliation = heartbeat::ProjectionReconciliation::failed(
+                    self.managed_reconciliation
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| "managed_observation".to_string()),
+                );
+                heartbeat::refresh_existing_status_pulse(
+                    &self.managed_reconciliation,
+                    &mut self.shipping_progress,
+                    self.offline.is_offline,
+                    &self.status_path,
+                    &self.heartbeat_transport,
+                    Some(&self.host_link.snapshot()),
+                );
             }
-
-            projection_build_result = state.projection_build_tasks.join_next(), if !state.projection_build_tasks.is_empty() => {
-                match projection_build_result {
-                    Some(Ok(result)) => {
-                        let is_current = state.managed_observation_valid
-                            && result.generation == state.projection_generation
-                            && result.managed_observation_generation
-                                == state.managed_observation_generation
-                            && result.managed_scan_partial
-                                == state.last_projected_managed_scan_partial
-                            && result.managed_snapshot_complete
-                                == state.last_projected_managed_snapshot_complete
-                            && result.unmanaged_snapshot_complete
-                                == state.last_projected_unmanaged_snapshot_complete;
-                        match result.result {
-                        Ok((mut projection, next_snapshot_state)) => {
-                            if result.elapsed_ms > LOCAL_STATUS_BUDGET_MS {
-                                state.projection_over_budget_ticks =
-                                    state.projection_over_budget_ticks.saturating_add(1);
-                                state.projection_worst_elapsed_ms =
-                                    state.projection_worst_elapsed_ms.max(result.elapsed_ms);
-                                let due = state.projection_budget_reported_at.is_none_or(|at| {
-                                    at.elapsed() >= LOCAL_STATUS_BUDGET_REPORT_INTERVAL
-                                });
-                                if due {
-                                    tracing::warn!(
-                                        over_budget_ticks = state.projection_over_budget_ticks,
-                                        worst_elapsed_ms = state.projection_worst_elapsed_ms,
-                                        budget_ms = LOCAL_STATUS_BUDGET_MS,
-                                        "Local status projection exceeded background budget"
-                                    );
-                                    state.projection_over_budget_ticks = 0;
-                                    state.projection_worst_elapsed_ms = 0;
-                                    state.projection_budget_reported_at = Some(Instant::now());
-                                }
-                            }
-                            if !is_current {
-                                tracing::debug!(
-                                    generation = result.generation,
-                                    latest_generation = state.projection_generation,
-                                    managed_scan_partial = result.managed_scan_partial,
-                                    latest_managed_scan_partial =
-                                        state.last_projected_managed_scan_partial,
-                                    unmanaged_snapshot_complete =
-                                        result.unmanaged_snapshot_complete,
-                                    latest_unmanaged_snapshot_complete =
-                                        state.last_projected_unmanaged_snapshot_complete,
-                                    "Discarded stale local status projection"
+            None => {}
+        }
+    }
+    fn on_opencode_title_refresh_done(
+        &mut self,
+        opencode_title_refresh_result: Option<Result<Result<()>, tokio::task::JoinError>>,
+    ) {
+        match opencode_title_refresh_result {
+            Some(Ok(Ok(()))) | None => {}
+            Some(Ok(Err(err))) => tracing::warn!(error = %err, "OpenCode title refresh failed"),
+            Some(Err(err)) => tracing::warn!(error = %err, "OpenCode title refresh task failed"),
+        }
+    }
+    fn on_projection_build_done(
+        &mut self,
+        config: &ConnectConfig,
+        projection_build_result: Option<Result<ProjectionBuildResult, tokio::task::JoinError>>,
+    ) {
+        match projection_build_result {
+            Some(Ok(result)) => {
+                let is_current = self.managed_observation_valid
+                    && result.generation == self.projection_generation
+                    && result.managed_observation_generation == self.managed_observation_generation
+                    && result.managed_scan_partial == self.last_projected_managed_scan_partial
+                    && result.managed_snapshot_complete
+                        == self.last_projected_managed_snapshot_complete
+                    && result.unmanaged_snapshot_complete
+                        == self.last_projected_unmanaged_snapshot_complete;
+                match result.result {
+                    Ok((mut projection, next_snapshot_state)) => {
+                        if result.elapsed_ms > LOCAL_STATUS_BUDGET_MS {
+                            self.projection_over_budget_ticks =
+                                self.projection_over_budget_ticks.saturating_add(1);
+                            self.projection_worst_elapsed_ms =
+                                self.projection_worst_elapsed_ms.max(result.elapsed_ms);
+                            let due = self.projection_budget_reported_at.is_none_or(|at| {
+                                at.elapsed() >= LOCAL_STATUS_BUDGET_REPORT_INTERVAL
+                            });
+                            if due {
+                                tracing::warn!(
+                                    over_budget_ticks = self.projection_over_budget_ticks,
+                                    worst_elapsed_ms = self.projection_worst_elapsed_ms,
+                                    budget_ms = LOCAL_STATUS_BUDGET_MS,
+                                    "Local status projection exceeded background budget"
                                 );
-                            } else {
-                            state.session_snapshot_state = next_snapshot_state;
+                                self.projection_over_budget_ticks = 0;
+                                self.projection_worst_elapsed_ms = 0;
+                                self.projection_budget_reported_at = Some(Instant::now());
+                            }
+                        }
+                        if !is_current {
+                            tracing::debug!(
+                                generation = result.generation,
+                                latest_generation = self.projection_generation,
+                                managed_scan_partial = result.managed_scan_partial,
+                                latest_managed_scan_partial =
+                                    self.last_projected_managed_scan_partial,
+                                unmanaged_snapshot_complete = result.unmanaged_snapshot_complete,
+                                latest_unmanaged_snapshot_complete =
+                                    self.last_projected_unmanaged_snapshot_complete,
+                                "Discarded stale local status projection"
+                            );
+                        } else {
+                            self.session_snapshot_state = next_snapshot_state;
                             if result.managed_scan_partial {
-                                state.managed_reconciliation =
-                                    heartbeat::ProjectionReconciliation::failed("provider_state_partial");
+                                self.managed_reconciliation =
+                                    heartbeat::ProjectionReconciliation::failed(
+                                        "provider_state_partial",
+                                    );
                             } else if result.managed_snapshot_complete
                                 && result.unmanaged_snapshot_complete
-                                && state.managed_observation_scan_tasks.is_empty()
-                                && state.unmanaged_binding_refresh_tasks.is_empty()
-                                && !state.unmanaged_binding_refresh_failed
+                                && self.managed_observation_scan_tasks.is_empty()
+                                && self.unmanaged_binding_refresh_tasks.is_empty()
+                                && !self.unmanaged_binding_refresh_failed
                             {
                                 // Only a complete paired observation clears a failure.
                                 // A cached/managed-only projection is not recovery.
-                                state.managed_reconciliation =
+                                self.managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::idle();
                             }
-                            state.shipping_progress.observe_pending_work(
+                            self.shipping_progress.observe_pending_work(
                                 heartbeat::payload_has_pending_work(&projection.payload)
                                     || known_pending_local_work(
-                                        &state.scheduler,
-                                        &state.deferred_retries,
+                                        &self.scheduler,
+                                        &self.deferred_retries,
                                         archive_repair_is_paused(config.archive_repair_mode),
                                     ),
                                 Instant::now(),
                             );
-                            projection.set_heartbeat_transport(state.heartbeat_transport.clone());
-                            projection.set_host_link(state.host_link.snapshot());
+                            projection.set_heartbeat_transport(self.heartbeat_transport.clone());
+                            projection.set_host_link(self.host_link.snapshot());
                             projection
-                                .set_runtime_event_outbox(state.latest_runtime_event_outbox.clone());
-                            if let Some(evidence) =
-                                projection.payload.machine_evidence.as_ref()
-                            {
-                                state.acknowledged_machine_evidence
+                                .set_runtime_event_outbox(self.latest_runtime_event_outbox.clone());
+                            if let Some(evidence) = projection.payload.machine_evidence.as_ref() {
+                                self.acknowledged_machine_evidence
                                     .prune_to_current(&evidence.candidate_identities);
                             } else {
-                                state.acknowledged_machine_evidence.prune_to_current(&[]);
+                                self.acknowledged_machine_evidence.prune_to_current(&[]);
                             }
                             heartbeat::write_status_file(
                                 &mut projection,
-                                serde_json::to_value(state.control_channel_status.snapshot()).ok(),
-                                &state.managed_reconciliation,
-                                &mut state.shipping_progress,
-                                state.offline.is_offline,
-                                &state.status_path,
+                                serde_json::to_value(self.control_channel_status.snapshot()).ok(),
+                                &self.managed_reconciliation,
+                                &mut self.shipping_progress,
+                                self.offline.is_offline,
+                                &self.status_path,
                             );
                             let payload = projection.payload.clone();
-                            state.last_status_projection = Some(projection);
+                            self.last_status_projection = Some(projection);
                             let signature = runtime_truth_signature(&payload);
-                            if !state.offline.is_offline {
+                            if !self.offline.is_offline {
                                 if runtime_truth_changed(
-                                    state.last_runtime_truth_signature.as_deref(),
+                                    self.last_runtime_truth_signature.as_deref(),
                                     &signature,
                                 ) {
                                     let now = Instant::now();
-                                    let due = truth_heartbeat_due_at(state.last_truth_heartbeat_at, now);
-                                    if state.heartbeat_post_tasks.is_empty() && due <= now {
-                                        state.heartbeat_transport.record_attempt(
-                                            chrono::Utc::now().to_rfc3339(),
-                                        );
+                                    let due =
+                                        truth_heartbeat_due_at(self.last_truth_heartbeat_at, now);
+                                    if self.heartbeat_post_tasks.is_empty() && due <= now {
+                                        self.heartbeat_transport
+                                            .record_attempt(chrono::Utc::now().to_rfc3339());
                                         publish_heartbeat_transport_status(
-                                            &state.heartbeat_transport,
-                                            &mut state.last_status_projection,
-                                            serde_json::to_value(state.control_channel_status.snapshot()).ok(),
-                                            &state.managed_reconciliation,
-                                            &mut state.shipping_progress,
-                                            state.offline.is_offline,
-                                            &state.host_link,
-                                            &state.status_path,
+                                            &self.heartbeat_transport,
+                                            &mut self.last_status_projection,
+                                            serde_json::to_value(
+                                                self.control_channel_status.snapshot(),
+                                            )
+                                            .ok(),
+                                            &self.managed_reconciliation,
+                                            &mut self.shipping_progress,
+                                            self.offline.is_offline,
+                                            &self.host_link,
+                                            &self.status_path,
                                         );
                                         spawn_heartbeat_post(
-                                            &mut state.heartbeat_post_tasks,
-                                            state.client.clone(),
+                                            &mut self.heartbeat_post_tasks,
+                                            self.client.clone(),
                                             payload,
                                             signature.clone(),
                                             "runtime_truth_change",
-                                            &mut state.acknowledged_machine_evidence,
+                                            &mut self.acknowledged_machine_evidence,
                                         );
-                                        state.last_truth_heartbeat_at = Some(now);
-                                        state.last_runtime_truth_signature = Some(signature);
-                                        state.pending_truth_heartbeat = None;
+                                        self.last_truth_heartbeat_at = Some(now);
+                                        self.last_runtime_truth_signature = Some(signature);
+                                        self.pending_truth_heartbeat = None;
                                     } else {
-                                        state.pending_truth_heartbeat = Some(PendingTruthHeartbeat {
-                                            payload,
-                                            signature,
-                                        });
+                                        self.pending_truth_heartbeat =
+                                            Some(PendingTruthHeartbeat { payload, signature });
                                     }
                                 } else {
-                                    state.pending_truth_heartbeat = None;
+                                    self.pending_truth_heartbeat = None;
                                 }
                             }
                         }
-                        }
-                        Err(error) => {
-                            tracing::warn!(error = %error, "Local status projection build failed");
-                            if is_current {
-                                state.managed_reconciliation =
-                                    heartbeat::ProjectionReconciliation::failed("projection_build");
-                            }
-                        }
                     }
-                    },
-                    Some(Err(error)) => {
-                        tracing::warn!(error = %error, "Local status projection task failed");
-                        if !state.projection_build_pending {
-                            state.managed_reconciliation =
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Local status projection build failed");
+                        if is_current {
+                            self.managed_reconciliation =
                                 heartbeat::ProjectionReconciliation::failed("projection_build");
                         }
                     }
-                    None => {}
                 }
+            }
+            Some(Err(error)) => {
+                tracing::warn!(error = %error, "Local status projection task failed");
+                if !self.projection_build_pending {
+                    self.managed_reconciliation =
+                        heartbeat::ProjectionReconciliation::failed("projection_build");
+                }
+            }
+            None => {}
+        }
 
-                if state.projection_build_pending && state.managed_observation_valid {
-                    state.projection_build_pending = false;
-                    let input = ProjectionBuildInput {
-                        generation: state.projection_generation,
-                        managed_observation_generation: state.managed_observation_generation,
-                        managed_scan_partial: state.last_projected_managed_scan_partial,
-                        managed_snapshot_complete:
-                            state.last_projected_managed_snapshot_complete,
-                        managed_captured_at: state.last_managed_captured_at.clone(),
-                        unmanaged_snapshot_complete:
-                            state.last_projected_unmanaged_snapshot_complete,
-                        db_path: state.projection_db_path.clone(),
-                        parse_tracker: state.parse_tracker.clone(),
-                        ship_stats: state.ship_stats.clone(),
-                        is_offline: state.offline.is_offline,
-                        last_ship_at: state.last_ship_at.clone(),
-                        machine_id: config.shipper_config.machine_name.clone(),
-                        managed: state.last_projected_managed_observations.clone(),
-                        unmanaged: state.last_unmanaged_session_bindings.clone().unwrap_or_default(),
-                        limiter: state.adaptive_limiter.snapshot(),
-                        scheduler: state.scheduler.snapshot(),
-                        archive_repair_mode: config.archive_repair_mode,
-                        last_full_reconciled_at: state.last_full_reconciled_at.clone(),
-                        continuation: state.last_resume_contracts.clone(),
-                        session_snapshot_state: state.session_snapshot_state.clone(),
-                    };
-                    let _ = maybe_start_projection_build(&mut state.projection_build_tasks, input);
-                }
-            }
-
-            // Debounced projection rebuild for phase-ledger writes. If a build
-            // is already running, `projection_build_pending` makes it run
-            // exactly once more afterwards, so a phase observed mid-build is
-            // never stranded until the next reconciliation.
-            _ = &mut phase_projection_timer, if state.phase_projection_pending => {
-                state.phase_projection_pending = false;
-                // Only after the first full projection: before that the
-                // managed snapshot is empty, and projecting would ship a
-                // sessionless digest that the first real scan immediately
-                // replaces.
-                if state.last_status_projection.is_some() && state.managed_observation_valid {
-                    let input = ProjectionBuildInput {
-                        generation: state.projection_generation,
-                        managed_observation_generation: state.managed_observation_generation,
-                        managed_scan_partial: state.last_projected_managed_scan_partial,
-                        managed_snapshot_complete:
-                            state.last_projected_managed_snapshot_complete,
-                        managed_captured_at: state.last_managed_captured_at.clone(),
-                        unmanaged_snapshot_complete:
-                            state.last_projected_unmanaged_snapshot_complete,
-                        db_path: state.projection_db_path.clone(),
-                        parse_tracker: state.parse_tracker.clone(),
-                        ship_stats: state.ship_stats.clone(),
-                        is_offline: state.offline.is_offline,
-                        last_ship_at: state.last_ship_at.clone(),
-                        machine_id: config.shipper_config.machine_name.clone(),
-                        managed: state.last_projected_managed_observations.clone(),
-                        unmanaged: state.last_unmanaged_session_bindings.clone().unwrap_or_default(),
-                        limiter: state.adaptive_limiter.snapshot(),
-                        scheduler: state.scheduler.snapshot(),
-                        archive_repair_mode: config.archive_repair_mode,
-                        last_full_reconciled_at: state.last_full_reconciled_at.clone(),
-                        continuation: state.last_resume_contracts.clone(),
-                        session_snapshot_state: state.session_snapshot_state.clone(),
-                    };
-                    if !maybe_start_projection_build(&mut state.projection_build_tasks, input) {
-                        state.projection_build_pending = true;
-                    }
-                }
-            }
-
-            _ = &mut startup_reconciliation_timer, if state.startup_reconciliation_pending && !state.offline.is_offline => {
-                state.startup_reconciliation_pending = false;
-                maybe_start_reconciliation_scan(
-                    &mut state.discovery_tasks,
-                    &state.providers,
-                    &state.scheduler,
-                    &state.deferred_retries,
-                    config.archive_repair_mode,
-                    "startup reconciliation",
-                );
-            }
-
-            // Health check when offline (every 60s)
-            _ = state.health_timer.tick(), if state.offline.is_offline => {
-                match state.client.health_check().await {
-                    Ok(true) => {
-                        if let Some(duration) = state.offline.mark_online() {
-                            state.shipping_progress.reset_after_sleep(Instant::now());
-                            state.last_runtime_truth_signature = None;
-                            tracing::info!(
-                                "Back online after {:.0}s — resuming shipping",
-                                duration.as_secs_f64()
-                            );
-                        }
-                    }
-                    _ => {
-                        tracing::debug!("Still offline (health check failed)");
-                    }
-                }
-            }
-
-            // Live transcript lane (primary path): provider file appends enqueue
-            // WorkPriority::Live. Managed wake signals can pre-empt the small
-            // filesystem coalescing window.
-            Some(first_event) = state.watcher.next_event() => {
-                let managed_state_changes = handle_live_transcript_file_events(
-                    &mut state.watcher,
-                    first_event,
-                    &state.providers,
-                    &state.managed_state_dirs,
-                    &state.conn,
-                    &mut state.transcript_wake_rx,
-                    &mut state.scheduler,
-                    &mut state.latest_transcript_wake_observed,
-                    &mut state.deferred_retries,
-                    &mut state.in_flight,
-                    &state.task_context,
-                    &mut state.shipping_progress,
-                    state.offline.is_offline,
-                    archive_repair_is_paused(config.archive_repair_mode),
-                ).await;
-                if !managed_state_changes.is_empty() {
-                    let requires_discovery = managed_state_changes_require_full_reconciliation(
-                        &state.last_managed_observations,
-                        &managed_state_changes,
-                    );
-                    if requires_discovery {
-                        // A watcher burst can contain many transient paths while
-                        // a provider is writing one session. Queue one bounded
-                        // full walk; the 5s observation tick starts it after the
-                        // burst instead of starting one walk per event batch.
-                        state.projection_generation = state.projection_generation.saturating_add(1);
-                        state.pending_full_reconciliation = true;
-                        tracing::debug!(
-                            event_count = managed_state_changes.len(),
-                            "Queued managed state discovery for coalesced observation"
-                        );
-                    } else {
-                        tracing::debug!(
-                            event_count = managed_state_changes.len(),
-                            "Known managed state changed; bounded periodic observation owns refresh"
-                        );
-                    }
-                }
-            }
-
-            _ = state.scope_timer.tick() => {
-                let current = crate::import_scope::fingerprint(&state.scope_dir);
-                if current != state.last_scope_fingerprint {
-                    state.last_scope_fingerprint = current;
-                    if current.is_none() {
-                        // The file was deleted under a running daemon. What it
-                        // enforces did not change (it keeps the scope it last
-                        // knew), so put the file back rather than rescan.
-                        if crate::config::restore_lost_scope_file(&state.scope_dir) {
-                            tracing::warn!(
-                                "The import scope file was deleted; restored it from the running scope"
-                            );
-                        }
-                    } else {
-                        let scope = crate::config::import_scope();
-                        crate::config::record_import_scope(&state.conn, &scope);
-                        tracing::info!("Import scope: {}", scope.describe());
-                        start_discovery_task(
-                            &mut state.discovery_tasks,
-                            &state.providers,
-                            WorkPriority::Scan,
-                            "import scope changed",
-                        );
-                    }
-                }
-            }
-
-            _ = state.provider_roots_timer.tick(), if !state.pending_provider_roots.is_empty() => {
-                if state.watcher.refresh_provider_roots(&mut state.providers, &mut state.pending_provider_roots) {
-                    start_discovery_task(
-                        &mut state.discovery_tasks,
-                        &state.providers,
-                        WorkPriority::Scan,
-                        "new provider transcript root",
-                    );
-                }
-            }
-
-            // Periodic reconciliation scan — repair missed file-watch work after
-            // restarts, sleeps, or dropped OS notifications.
-            _ = state.fallback_timer.tick(), if !state.offline.is_offline => {
-                maybe_start_reconciliation_scan(
-                    &mut state.discovery_tasks,
-                    &state.providers,
-                    &state.scheduler,
-                    &state.deferred_retries,
-                    config.archive_repair_mode,
-                    "reconciliation scan",
-                );
-            }
-
-            // Retry lane: storage-v2 pending envelopes. Never the primary live
-            // transcript lane.
-            _ = state.failed_ship_retry_timer.tick(), if !state.offline.is_offline => {
-                let mut queued_retries = 0usize;
-                match queue_storage_v2_pending_retry_paths(
-                    &mut state.scheduler,
-                    &state.conn,
-                    config.archive_repair_mode,
-                    &mut state.deferred_retries,
-                ) {
-                    Ok(queued) => queued_retries = queued_retries.saturating_add(queued),
-                    Err(error) => tracing::warn!(
-                        error = %error,
-                        "Immutable storage-v2 retry error"
-                    ),
-                }
-                // Copied Cursor bytes are only needed until the host receipts
-                // them; nothing deleted them before, so they grew to 8.5GB of
-                // a 9.7GB local database. Run one bounded batch in the existing
-                // single-flight maintenance worker, after retry queueing above
-                // makes owed envelopes visible to the safety predicate. Never
-                // put this writer on the event-loop connection: even a bounded
-                // batch must not pause live transcript scheduling.
-                if state.storage_maintenance_tasks.is_empty() {
-                    let db_path = state.projection_db_path.clone();
-                    state.storage_maintenance_tasks.spawn_blocking(move || {
-                        let result = crate::state::db::open_connection(&db_path).and_then(|conn| {
-                            crate::state::cursor_store_records::drain_receipted_cursor_records(&conn)
-                        });
-                        match result {
-                            Ok(0) => {}
-                            Ok(drained) => tracing::info!(
-                                drained,
-                                "drained bounded batch of receipted Cursor records"
-                            ),
-                            Err(error) => tracing::warn!(
-                                error = %error,
-                                "Cursor record drain error"
-                            ),
-                        }
-                    });
-                }
-                if queued_retries > 0 {
-                    tracing::debug!(
-                        queued_retries,
-                        "Queued durable retry paths on periodic refill"
-                    );
-                }
-            }
-
-            // Outbox drain: presence events written by hooks. These are runtime
-            // overlay signals only; transcript shipping is owned by filesystem
-            // events plus reconciliation scans.
-            _ = state.outbox_timer.tick() => {
-                // The hook outbox is only one of five phase-ledger writers. The
-                // Codex bridge, both Console adapters, and OpenCode all run as
-                // separate processes and write the shared ledger directly, so
-                // the daemon never sees their phases through the outbox at all
-                // — those transitions fell through to the 60s reconciliation
-                // and produced the long tail that survived the debounce.
-                //
-                // Watching the ledger watermark covers every producer at once,
-                // including any added later, without each one having to signal
-                // the daemon. One MAX() over a table with one row per session.
-                if let Some(watermark) = latest_phase_watermark(&state.conn) {
-                    if state.last_phase_watermark != Some(watermark) {
-                        state.last_phase_watermark = Some(watermark);
-                        if arm_phase_projection(&mut state.phase_projection_pending) {
-                            phase_projection_timer
-                                .as_mut()
-                                .reset(tokio::time::Instant::now() + PHASE_PROJECTION_DEBOUNCE);
-                        }
-                    }
-                }
-                // Files remain durable while a POST is in flight. Do not scan,
-                // parse, and persist them again every 100ms until that attempt
-                // has either removed them or made them eligible for retry.
-                if state.outbox_collect_tasks.is_empty() && state.outbox_post_tasks.is_empty() {
-                    let outbox_dir = state.outbox_dir.clone();
-                    let db_path = config.shipper_config.db_path.clone();
-                    state.outbox_collect_tasks.spawn_blocking(move || {
-                        let started = Instant::now();
-                        let presence = outbox::collect_outbox_with_local_state_result(
-                            &outbox_dir,
-                            db_path.as_deref(),
-                        );
-                        OutboxCollectResult {
-                            presence,
-                            elapsed_ms: started.elapsed().as_millis() as u64,
-                        }
-                    });
-                }
-                if state.status_slot_tasks.is_empty() {
-                    let agent_dir = state.runtime_events_outbox_dir
-                        .parent()
-                        .map(Path::to_path_buf)
-                        .unwrap_or_else(|| state.runtime_events_outbox_dir.clone());
-                    let db_path = config.shipper_config.db_path.clone();
-                    let already_recorded = state.status_recorded.clone();
-                    let owner_evidence = state.last_status_owners.clone();
-                    let owner_evidence_fresh = status_owner_snapshot_is_fresh(state.last_status_owners_at);
-                    let owner_refresh_cursor = state.status_owner_refresh_cursor;
-                    let managed_refresh_cursor = state.managed_owner_refresh_cursor;
-                    state.status_slot_tasks.spawn_blocking(move || {
-                        let started = Instant::now();
-                        let dir = crate::status_slot::status_slot_dir(&agent_dir);
-                        let slots = crate::status_slot::read_all(&dir);
-                        let claims = read_status_slot_claims_for_slots(&slots);
-                        let (owners, owner_refresh_cursor, next_managed_refresh_cursor) =
-                            status_owner_evidence_for_slots(
-                                &slots,
-                                &claims,
-                                owner_evidence.as_ref(),
-                                owner_evidence_fresh,
-                                crate::heartbeat::machine_boot_id().as_deref(),
-                                owner_refresh_cursor,
-                                managed_refresh_cursor,
-                            );
-                        let slots = reconcile_status_slots(&dir, slots, &owners);
-                        // The phase ledger is local truth, and the daemon is
-                        // its single writer. Recording here is what lets a
-                        // provider callback stop writing a file per frame.
-                        let recorded =
-                            record_status_slot_phases(db_path.as_deref(), &slots, &already_recorded);
-                        StatusSlotResult {
-                            slots,
-                            recorded,
-                            owner_refresh_cursor,
-                            managed_owner_refresh_cursor: next_managed_refresh_cursor,
-                            elapsed_ms: started.elapsed().as_millis() as u64,
-                        }
-                    });
-                }
-                if state.runtime_collect_tasks.is_empty()
-                    && state.runtime_outbox_post_tasks.is_empty()
-                    && state.runtime_outbox_retry_after
-                        .map(|retry_at| Instant::now() >= retry_at)
-                        .unwrap_or(true)
-                {
-                    let runtime_events_outbox_dir = state.runtime_events_outbox_dir.clone();
-                    state.runtime_collect_tasks.spawn_blocking(move || {
-                        let started = Instant::now();
-                        let pass =
-                            outbox::collect_runtime_event_outbox_pass(&runtime_events_outbox_dir);
-                        let measurement = heartbeat::RuntimeEventOutboxSnapshot {
-                            pending_count: pass.pending_count,
-                            pending_count_is_lower_bound: pass.pending_count_is_lower_bound,
-                            inspected_count: pass.inspected_count,
-                            saturated: pass.saturated,
-                            oldest_pending_at: pass.oldest_pending_at.map(|at| at.to_rfc3339()),
-                            observed_at: pass.observed_at.map(|at| at.to_rfc3339()),
-                        };
-                        RuntimeCollectResult {
-                            posts: pass.posts,
-                            measurement,
-                            elapsed_ms: started.elapsed().as_millis() as u64,
-                            saturated: pass.saturated,
-                        }
-                    });
-                }
-            }
-
-            // Wake the loop when delayed local retry work may now be ready.
-            _ = state.local_retry_timer.tick(), if !state.deferred_retries.is_empty() => {}
-
-            _ = state.flight_sample_timer.tick(), if state.flight_recorder.is_some() => {
-                if let Some(recorder) = state.flight_recorder.as_ref() {
-                    record_flight_sample(
-                        recorder,
-                        &state.outbox_dir,
-                        &state.runtime_events_outbox_dir,
-                        &state.control_channel_status,
-                        &state.ship_stats,
-                        &config.shipper_config.machine_name,
-                        state.in_flight.len(),
-                        state.scheduler.has_pending_work(),
-                        state.deferred_retries.len(),
-                        state.offline.is_offline,
-                    );
-                }
-            }
-
-            _ = state.disk_guard_timer.tick(), if state.disk_guard.is_some() => {
-                if let Some(guard) = state.disk_guard.as_mut() {
-                    let outcome = guard.tick(&disk_guard_sessions(&state.last_managed_observations));
-                    if let Some((title, body)) = outcome.notify.as_ref() {
-                        crate::disk_guard::notify_desktop(title, body);
-                    }
-                    for steer in outcome.steers {
-                        let shipper_config = config.shipper_config.clone();
-                        tokio::spawn(async move {
-                            if let Err(error) = crate::control_channel::steer_local_session(
-                                &shipper_config,
-                                &steer.provider,
-                                &steer.session_id,
-                                &steer.text,
-                            )
-                            .await
-                            {
-                                tracing::info!(
-                                    session_id = %steer.session_id,
-                                    provider = %steer.provider,
-                                    %error,
-                                    "Disk guard could not steer session"
-                                );
-                            }
-                        });
-                    }
-                }
-            }
-
-            // Daily: prune stale file_state and session_binding entries
-            _ = state.update_check_timer.tick() => {
-                // Spawned, not awaited. A download runs for as long as the
-                // transfer takes, and awaiting it here would stop shipping,
-                // heartbeat, and control work for that whole window.
-                //
-                // Runtime Host reachability is deliberately not consulted:
-                // `offline` describes the Longhouse transport, which says
-                // nothing about whether GitHub is reachable, and gating on it
-                // would hide a stale machine whose own Runtime Host is down.
-                let client = state.update_http_client.clone();
-                tokio::task::spawn(async move {
-                    crate::update::run_check_tick(&client).await;
-                });
-            }
-            _ = state.prune_timer.tick() => {
-                let fs = FileState::new(&state.conn);
-                match fs.prune_stale(30) {
-                    Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale file_state entries", n),
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("Daily prune error: {}", e),
-                }
-                let sb = crate::state::session_binding::SessionBinding::new(&state.conn);
-                match sb.prune_stale(30) {
-                    Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale session_binding entries", n),
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("Session binding prune error: {}", e),
-                }
-                if state.daily_maintenance_tasks.is_empty() {
-                    let db_path = state.projection_db_path.clone();
-                    state.daily_maintenance_tasks.spawn_blocking(move || {
-                        crate::state::recover::run_daily_storage_maintenance(&db_path);
-                    });
-                }
-            }
-
-            // Frequent local status file refresh for ambient UX and debugging
-            _ = state.local_status_timer.tick() => {
-                if let Some(gap) = state.wake_gap_detector.observe(SystemTime::now(), Instant::now()) {
-                    state.shipping_progress.reset_after_sleep(Instant::now());
-                    tracing::info!(wake_gap_ms = gap.as_millis() as u64, "Detected system wake gap");
-                    if maybe_start_managed_observation_scan(
-                        state.projection_db_path.clone(),
-                        &mut state.managed_observation_scan_tasks,
-                        "wake",
-                        true,
-                        &state.last_managed_observations,
-                    ) {
-                        state.managed_full_reconciliation_not_before =
-                            Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                        state.managed_reconciliation.start(
-                            "wake",
-                            chrono::Utc::now().to_rfc3339(),
-                        );
-                    } else {
-                        state.pending_wake_reconciliation = true;
-                        state.managed_reconciliation.start(
-                            "wake",
-                            chrono::Utc::now().to_rfc3339(),
-                        );
-                    }
-                }
-                let host_link_status = state.host_link.snapshot();
-                if matches!(host_link_status.state.as_str(), "updating" | "slow_update")
-                    && state.host_link_poll_tasks.len() < 3
-                {
-                    let client = state.client.clone();
-                    state.host_link_poll_tasks.spawn_local(async move {
-                        client.poll_runtime_admission().await
-                    });
-                }
-                if let Some(projection) = state.last_status_projection.as_mut() {
-                    projection.set_heartbeat_transport(state.heartbeat_transport.clone());
-                    projection.set_host_link(host_link_status.clone());
-                    heartbeat::write_status_file(
-                        projection,
-                        serde_json::to_value(state.control_channel_status.snapshot()).ok(),
-                        &state.managed_reconciliation,
-                        &mut state.shipping_progress,
-                        state.offline.is_offline,
-                        &state.status_path,
-                    );
-                } else {
-                    heartbeat::refresh_existing_status_pulse(
-                        &state.managed_reconciliation,
-                        &mut state.shipping_progress,
-                        state.offline.is_offline,
-                        &state.status_path,
-                        &state.heartbeat_transport,
-                        Some(&host_link_status),
-                    );
-            }
-            }
-
-            _ = state.managed_full_reconciliation_timer.tick() => {
-                if managed_full_reconciliation_ready(
-                    !state.pending_wake_reconciliation,
-                    state.managed_observation_scan_tasks.is_empty(),
-                    Instant::now(),
-                    state.managed_full_reconciliation_not_before,
-                )
-                    && maybe_start_managed_observation_scan(
-                    state.projection_db_path.clone(),
-                    &mut state.managed_observation_scan_tasks,
-                    "full_reconciliation",
-                    true,
-                    &state.last_managed_observations,
-                ) {
-                    state.managed_full_reconciliation_not_before =
-                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                    state.managed_reconciliation.start(
-                        "full_reconciliation",
-                        chrono::Utc::now().to_rfc3339(),
-                    );
-                } else {
-                    state.pending_full_reconciliation = true;
-                    state.managed_reconciliation.start(
-                        "full_reconciliation",
-                        chrono::Utc::now().to_rfc3339(),
-                    );
-                }
-            }
-
-            _ = state.managed_observation_timer.tick() => {
-                // Coalesce a periodic tick and watcher burst while a full scan
-                // is running. A queued full request wins on the next tick, but
-                // the cooldown prevents a completion/event feedback loop.
-                if managed_full_reconciliation_ready(
-                    state.pending_full_reconciliation,
-                    state.managed_observation_scan_tasks.is_empty(),
-                    Instant::now(),
-                    state.managed_full_reconciliation_not_before,
-                )
-                    && maybe_start_managed_observation_scan(
-                        state.projection_db_path.clone(),
-                        &mut state.managed_observation_scan_tasks,
-                        "full_reconciliation",
-                        true,
-                        &state.last_managed_observations,
-                    )
-                {
-                    state.pending_full_reconciliation = false;
-                    state.managed_full_reconciliation_not_before =
-                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                    state.managed_reconciliation.start(
-                        "full_reconciliation",
-                        chrono::Utc::now().to_rfc3339(),
-                    );
-                } else if !state.pending_full_reconciliation && !state.pending_wake_reconciliation {
-                    maybe_start_managed_observation_scan(
-                        state.projection_db_path.clone(),
-                        &mut state.managed_observation_scan_tasks,
-                        "periodic",
-                        state.last_resume_contracts.is_none(),
-                        &state.last_managed_observations,
-                    );
-                }
-            }
-
-            _ = state.machine_presence_timer.tick() => {
-                if !state.offline.is_offline {
-                    if state.machine_presence_post_tasks.is_empty() {
-                        spawn_machine_presence_post(
-                            &mut state.machine_presence_post_tasks,
-                            state.client.clone(),
-                        );
-                    } else {
-                        tracing::debug!("Skipping machine presence POST while previous POST is still in flight");
-                    }
-                }
-            }
-
-            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
-                truth_heartbeat_due_at(state.last_truth_heartbeat_at, Instant::now()),
-            )), if state.pending_truth_heartbeat.is_some() && state.heartbeat_post_tasks.is_empty() => {
-                if let Some(pending) = state.pending_truth_heartbeat.take() {
-                    if !state.offline.is_offline
-                        && runtime_truth_changed(
-                            state.last_runtime_truth_signature.as_deref(),
-                            &pending.signature,
-                        )
-                    {
-                        let now = Instant::now();
-                        state.heartbeat_transport.record_attempt(chrono::Utc::now().to_rfc3339());
-                        publish_heartbeat_transport_status(
-                            &state.heartbeat_transport,
-                            &mut state.last_status_projection,
-                            serde_json::to_value(state.control_channel_status.snapshot()).ok(),
-                            &state.managed_reconciliation,
-                            &mut state.shipping_progress,
-                            state.offline.is_offline,
-                            &state.host_link,
-                            &state.status_path,
-                        );
-                        spawn_heartbeat_post(
-                            &mut state.heartbeat_post_tasks,
-                            state.client.clone(),
-                            pending.payload,
-                            pending.signature.clone(),
-                            "runtime_truth_change",
-                            &mut state.acknowledged_machine_evidence,
-                        );
-                        state.last_truth_heartbeat_at = Some(now);
-                        state.last_runtime_truth_signature = Some(pending.signature);
-                    }
-                }
-            }
-            // Periodic server heartbeat
-            _ = state.heartbeat_timer.tick() => {
-                if let Some(projection) = state.last_status_projection.as_mut() {
-                    projection.set_heartbeat_transport(state.heartbeat_transport.clone());
-                    projection.set_host_link(state.host_link.snapshot());
-                    heartbeat::write_status_file(
-                        projection,
-                        serde_json::to_value(state.control_channel_status.snapshot()).ok(),
-                        &state.managed_reconciliation,
-                        &mut state.shipping_progress,
-                        state.offline.is_offline,
-                        &state.status_path,
-                    );
-                    if !state.offline.is_offline {
-                        if state.heartbeat_post_tasks.is_empty() {
-                            state.heartbeat_transport.record_attempt(
-                                chrono::Utc::now().to_rfc3339(),
-                            );
-                            projection.set_heartbeat_transport(state.heartbeat_transport.clone());
-                            projection.set_host_link(state.host_link.snapshot());
-                            heartbeat::write_status_file(
-                                projection,
-                                serde_json::to_value(state.control_channel_status.snapshot()).ok(),
-                                &state.managed_reconciliation,
-                                &mut state.shipping_progress,
-                                state.offline.is_offline,
-                                &state.status_path,
-                            );
-                            let payload = projection.payload.clone();
-                            let signature = runtime_truth_signature(&payload);
-                            state.last_runtime_truth_signature = Some(signature.clone());
-                            state.pending_truth_heartbeat = None;
-                            spawn_heartbeat_post(
-                                &mut state.heartbeat_post_tasks,
-                                state.client.clone(),
-                                payload,
-                                signature,
-                                "periodic_heartbeat",
-                                &mut state.acknowledged_machine_evidence,
-                            );
-                        } else {
-                            tracing::debug!("Skipping periodic heartbeat while a heartbeat POST is still in flight");
-                        }
-                    }
-                } else {
-                    tracing::debug!("Skipping periodic heartbeat until the startup managed observation scan completes");
-                }
+        if self.projection_build_pending && self.managed_observation_valid {
+            self.projection_build_pending = false;
+            let input = ProjectionBuildInput {
+                generation: self.projection_generation,
+                managed_observation_generation: self.managed_observation_generation,
+                managed_scan_partial: self.last_projected_managed_scan_partial,
+                managed_snapshot_complete: self.last_projected_managed_snapshot_complete,
+                managed_captured_at: self.last_managed_captured_at.clone(),
+                unmanaged_snapshot_complete: self.last_projected_unmanaged_snapshot_complete,
+                db_path: self.projection_db_path.clone(),
+                parse_tracker: self.parse_tracker.clone(),
+                ship_stats: self.ship_stats.clone(),
+                is_offline: self.offline.is_offline,
+                last_ship_at: self.last_ship_at.clone(),
+                machine_id: config.shipper_config.machine_name.clone(),
+                managed: self.last_projected_managed_observations.clone(),
+                unmanaged: self
+                    .last_unmanaged_session_bindings
+                    .clone()
+                    .unwrap_or_default(),
+                limiter: self.adaptive_limiter.snapshot(),
+                scheduler: self.scheduler.snapshot(),
+                archive_repair_mode: config.archive_repair_mode,
+                last_full_reconciled_at: self.last_full_reconciled_at.clone(),
+                continuation: self.last_resume_contracts.clone(),
+                session_snapshot_state: self.session_snapshot_state.clone(),
+            };
+            let _ = maybe_start_projection_build(&mut self.projection_build_tasks, input);
+        }
+    }
+    fn on_phase_projection_due(&mut self, config: &ConnectConfig) {
+        self.phase_projection_pending = false;
+        // Only after the first full projection: before that the
+        // managed snapshot is empty, and projecting would ship a
+        // sessionless digest that the first real scan immediately
+        // replaces.
+        if self.last_status_projection.is_some() && self.managed_observation_valid {
+            let input = ProjectionBuildInput {
+                generation: self.projection_generation,
+                managed_observation_generation: self.managed_observation_generation,
+                managed_scan_partial: self.last_projected_managed_scan_partial,
+                managed_snapshot_complete: self.last_projected_managed_snapshot_complete,
+                managed_captured_at: self.last_managed_captured_at.clone(),
+                unmanaged_snapshot_complete: self.last_projected_unmanaged_snapshot_complete,
+                db_path: self.projection_db_path.clone(),
+                parse_tracker: self.parse_tracker.clone(),
+                ship_stats: self.ship_stats.clone(),
+                is_offline: self.offline.is_offline,
+                last_ship_at: self.last_ship_at.clone(),
+                machine_id: config.shipper_config.machine_name.clone(),
+                managed: self.last_projected_managed_observations.clone(),
+                unmanaged: self
+                    .last_unmanaged_session_bindings
+                    .clone()
+                    .unwrap_or_default(),
+                limiter: self.adaptive_limiter.snapshot(),
+                scheduler: self.scheduler.snapshot(),
+                archive_repair_mode: config.archive_repair_mode,
+                last_full_reconciled_at: self.last_full_reconciled_at.clone(),
+                continuation: self.last_resume_contracts.clone(),
+                session_snapshot_state: self.session_snapshot_state.clone(),
+            };
+            if !maybe_start_projection_build(&mut self.projection_build_tasks, input) {
+                self.projection_build_pending = true;
             }
         }
     }
-
-    state.path_shutdown.send_replace(true);
-    state.in_flight.abort_all();
-    while state.in_flight.join_next().await.is_some() {}
-    if let Some(task) = state.control_channel_task {
-        task.abort();
+    fn on_startup_reconciliation_due(&mut self, config: &ConnectConfig) {
+        self.startup_reconciliation_pending = false;
+        maybe_start_reconciliation_scan(
+            &mut self.discovery_tasks,
+            &self.providers,
+            &self.scheduler,
+            &self.deferred_retries,
+            config.archive_repair_mode,
+            "startup reconciliation",
+        );
     }
-    if let Some(task) = state.transcript_wake_task {
-        task.abort();
+    async fn on_health_tick(&mut self) {
+        match self.client.health_check().await {
+            Ok(true) => {
+                if let Some(duration) = self.offline.mark_online() {
+                    self.shipping_progress.reset_after_sleep(Instant::now());
+                    self.last_runtime_truth_signature = None;
+                    tracing::info!(
+                        "Back online after {:.0}s — resuming shipping",
+                        duration.as_secs_f64()
+                    );
+                }
+            }
+            _ => {
+                tracing::debug!("Still offline (health check failed)");
+            }
+        }
     }
-    crate::codex_exec::shutdown_codex_console_worker_pool().await;
-    tracing::info!("Daemon shutdown complete");
-    Ok(())
+    async fn on_watcher_event(&mut self, config: &ConnectConfig, first_event: WatcherEvent) {
+        let managed_state_changes = handle_live_transcript_file_events(
+            &mut self.watcher,
+            first_event,
+            &self.providers,
+            &self.managed_state_dirs,
+            &self.conn,
+            &mut self.transcript_wake_rx,
+            &mut self.scheduler,
+            &mut self.latest_transcript_wake_observed,
+            &mut self.deferred_retries,
+            &mut self.in_flight,
+            &self.task_context,
+            &mut self.shipping_progress,
+            self.offline.is_offline,
+            archive_repair_is_paused(config.archive_repair_mode),
+        )
+        .await;
+        if !managed_state_changes.is_empty() {
+            let requires_discovery = managed_state_changes_require_full_reconciliation(
+                &self.last_managed_observations,
+                &managed_state_changes,
+            );
+            if requires_discovery {
+                // A watcher burst can contain many transient paths while
+                // a provider is writing one session. Queue one bounded
+                // full walk; the 5s observation tick starts it after the
+                // burst instead of starting one walk per event batch.
+                self.projection_generation = self.projection_generation.saturating_add(1);
+                self.pending_full_reconciliation = true;
+                tracing::debug!(
+                    event_count = managed_state_changes.len(),
+                    "Queued managed state discovery for coalesced observation"
+                );
+            } else {
+                tracing::debug!(
+                    event_count = managed_state_changes.len(),
+                    "Known managed state changed; bounded periodic observation owns refresh"
+                );
+            }
+        }
+    }
+    fn on_scope_tick(&mut self) {
+        let current = crate::import_scope::fingerprint(&self.scope_dir);
+        if current != self.last_scope_fingerprint {
+            self.last_scope_fingerprint = current;
+            if current.is_none() {
+                // The file was deleted under a running daemon. What it
+                // enforces did not change (it keeps the scope it last
+                // knew), so put the file back rather than rescan.
+                if crate::config::restore_lost_scope_file(&self.scope_dir) {
+                    tracing::warn!(
+                        "The import scope file was deleted; restored it from the running scope"
+                    );
+                }
+            } else {
+                let scope = crate::config::import_scope();
+                crate::config::record_import_scope(&self.conn, &scope);
+                tracing::info!("Import scope: {}", scope.describe());
+                start_discovery_task(
+                    &mut self.discovery_tasks,
+                    &self.providers,
+                    WorkPriority::Scan,
+                    "import scope changed",
+                );
+            }
+        }
+    }
+    fn on_provider_roots_tick(&mut self) {
+        if self
+            .watcher
+            .refresh_provider_roots(&mut self.providers, &mut self.pending_provider_roots)
+        {
+            start_discovery_task(
+                &mut self.discovery_tasks,
+                &self.providers,
+                WorkPriority::Scan,
+                "new provider transcript root",
+            );
+        }
+    }
+    fn on_fallback_tick(&mut self, config: &ConnectConfig) {
+        maybe_start_reconciliation_scan(
+            &mut self.discovery_tasks,
+            &self.providers,
+            &self.scheduler,
+            &self.deferred_retries,
+            config.archive_repair_mode,
+            "reconciliation scan",
+        );
+    }
+    fn on_failed_ship_retry_tick(&mut self, config: &ConnectConfig) {
+        let mut queued_retries = 0usize;
+        match queue_storage_v2_pending_retry_paths(
+            &mut self.scheduler,
+            &self.conn,
+            config.archive_repair_mode,
+            &mut self.deferred_retries,
+        ) {
+            Ok(queued) => queued_retries = queued_retries.saturating_add(queued),
+            Err(error) => tracing::warn!(
+                error = %error,
+                "Immutable storage-v2 retry error"
+            ),
+        }
+        // Copied Cursor bytes are only needed until the host receipts
+        // them; nothing deleted them before, so they grew to 8.5GB of
+        // a 9.7GB local database. Run one bounded batch in the existing
+        // single-flight maintenance worker, after retry queueing above
+        // makes owed envelopes visible to the safety predicate. Never
+        // put this writer on the event-loop connection: even a bounded
+        // batch must not pause live transcript scheduling.
+        if self.storage_maintenance_tasks.is_empty() {
+            let db_path = self.projection_db_path.clone();
+            self.storage_maintenance_tasks.spawn_blocking(move || {
+                let result = crate::state::db::open_connection(&db_path).and_then(|conn| {
+                    crate::state::cursor_store_records::drain_receipted_cursor_records(&conn)
+                });
+                match result {
+                    Ok(0) => {}
+                    Ok(drained) => {
+                        tracing::info!(drained, "drained bounded batch of receipted Cursor records")
+                    }
+                    Err(error) => tracing::warn!(
+                        error = %error,
+                        "Cursor record drain error"
+                    ),
+                }
+            });
+        }
+        if queued_retries > 0 {
+            tracing::debug!(
+                queued_retries,
+                "Queued durable retry paths on periodic refill"
+            );
+        }
+    }
+    fn on_outbox_tick(
+        &mut self,
+        config: &ConnectConfig,
+        mut phase_projection_timer: std::pin::Pin<&mut tokio::time::Sleep>,
+    ) {
+        // The hook outbox is only one of five phase-ledger writers. The
+        // Codex bridge, both Console adapters, and OpenCode all run as
+        // separate processes and write the shared ledger directly, so
+        // the daemon never sees their phases through the outbox at all
+        // — those transitions fell through to the 60s reconciliation
+        // and produced the long tail that survived the debounce.
+        //
+        // Watching the ledger watermark covers every producer at once,
+        // including any added later, without each one having to signal
+        // the daemon. One MAX() over a table with one row per session.
+        if let Some(watermark) = latest_phase_watermark(&self.conn) {
+            if self.last_phase_watermark != Some(watermark) {
+                self.last_phase_watermark = Some(watermark);
+                if arm_phase_projection(&mut self.phase_projection_pending) {
+                    phase_projection_timer
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + PHASE_PROJECTION_DEBOUNCE);
+                }
+            }
+        }
+        // Files remain durable while a POST is in flight. Do not scan,
+        // parse, and persist them again every 100ms until that attempt
+        // has either removed them or made them eligible for retry.
+        if self.outbox_collect_tasks.is_empty() && self.outbox_post_tasks.is_empty() {
+            let outbox_dir = self.outbox_dir.clone();
+            let db_path = config.shipper_config.db_path.clone();
+            self.outbox_collect_tasks.spawn_blocking(move || {
+                let started = Instant::now();
+                let presence =
+                    outbox::collect_outbox_with_local_state_result(&outbox_dir, db_path.as_deref());
+                OutboxCollectResult {
+                    presence,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                }
+            });
+        }
+        if self.status_slot_tasks.is_empty() {
+            let agent_dir = self
+                .runtime_events_outbox_dir
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.runtime_events_outbox_dir.clone());
+            let db_path = config.shipper_config.db_path.clone();
+            let already_recorded = self.status_recorded.clone();
+            let owner_evidence = self.last_status_owners.clone();
+            let owner_evidence_fresh = status_owner_snapshot_is_fresh(self.last_status_owners_at);
+            let owner_refresh_cursor = self.status_owner_refresh_cursor;
+            let managed_refresh_cursor = self.managed_owner_refresh_cursor;
+            self.status_slot_tasks.spawn_blocking(move || {
+                let started = Instant::now();
+                let dir = crate::status_slot::status_slot_dir(&agent_dir);
+                let slots = crate::status_slot::read_all(&dir);
+                let claims = read_status_slot_claims_for_slots(&slots);
+                let (owners, owner_refresh_cursor, next_managed_refresh_cursor) =
+                    status_owner_evidence_for_slots(
+                        &slots,
+                        &claims,
+                        owner_evidence.as_ref(),
+                        owner_evidence_fresh,
+                        crate::heartbeat::machine_boot_id().as_deref(),
+                        owner_refresh_cursor,
+                        managed_refresh_cursor,
+                    );
+                let slots = reconcile_status_slots(&dir, slots, &owners);
+                // The phase ledger is local truth, and the daemon is
+                // its single writer. Recording here is what lets a
+                // provider callback stop writing a file per frame.
+                let recorded =
+                    record_status_slot_phases(db_path.as_deref(), &slots, &already_recorded);
+                StatusSlotResult {
+                    slots,
+                    recorded,
+                    owner_refresh_cursor,
+                    managed_owner_refresh_cursor: next_managed_refresh_cursor,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                }
+            });
+        }
+        if self.runtime_collect_tasks.is_empty()
+            && self.runtime_outbox_post_tasks.is_empty()
+            && self
+                .runtime_outbox_retry_after
+                .map(|retry_at| Instant::now() >= retry_at)
+                .unwrap_or(true)
+        {
+            let runtime_events_outbox_dir = self.runtime_events_outbox_dir.clone();
+            self.runtime_collect_tasks.spawn_blocking(move || {
+                let started = Instant::now();
+                let pass = outbox::collect_runtime_event_outbox_pass(&runtime_events_outbox_dir);
+                let measurement = heartbeat::RuntimeEventOutboxSnapshot {
+                    pending_count: pass.pending_count,
+                    pending_count_is_lower_bound: pass.pending_count_is_lower_bound,
+                    inspected_count: pass.inspected_count,
+                    saturated: pass.saturated,
+                    oldest_pending_at: pass.oldest_pending_at.map(|at| at.to_rfc3339()),
+                    observed_at: pass.observed_at.map(|at| at.to_rfc3339()),
+                };
+                RuntimeCollectResult {
+                    posts: pass.posts,
+                    measurement,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    saturated: pass.saturated,
+                }
+            });
+        }
+    }
+    fn on_flight_sample_tick(&mut self, config: &ConnectConfig) {
+        if let Some(recorder) = self.flight_recorder.as_ref() {
+            record_flight_sample(
+                recorder,
+                &self.outbox_dir,
+                &self.runtime_events_outbox_dir,
+                &self.control_channel_status,
+                &self.ship_stats,
+                &config.shipper_config.machine_name,
+                self.in_flight.len(),
+                self.scheduler.has_pending_work(),
+                self.deferred_retries.len(),
+                self.offline.is_offline,
+            );
+        }
+    }
+    async fn on_disk_guard_tick(&mut self, config: &ConnectConfig) {
+        if let Some(guard) = self.disk_guard.as_mut() {
+            let outcome = guard.tick(&disk_guard_sessions(&self.last_managed_observations));
+            if let Some((title, body)) = outcome.notify.as_ref() {
+                crate::disk_guard::notify_desktop(title, body);
+            }
+            for steer in outcome.steers {
+                let shipper_config = config.shipper_config.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = crate::control_channel::steer_local_session(
+                        &shipper_config,
+                        &steer.provider,
+                        &steer.session_id,
+                        &steer.text,
+                    )
+                    .await
+                    {
+                        tracing::info!(
+                            session_id = %steer.session_id,
+                            provider = %steer.provider,
+                            %error,
+                            "Disk guard could not steer session"
+                        );
+                    }
+                });
+            }
+        }
+    }
+    async fn on_update_check_tick(&mut self) {
+        // Spawned, not awaited. A download runs for as long as the
+        // transfer takes, and awaiting it here would stop shipping,
+        // heartbeat, and control work for that whole window.
+        //
+        // Runtime Host reachability is deliberately not consulted:
+        // `offline` describes the Longhouse transport, which says
+        // nothing about whether GitHub is reachable, and gating on it
+        // would hide a stale machine whose own Runtime Host is down.
+        let client = self.update_http_client.clone();
+        tokio::task::spawn(async move {
+            crate::update::run_check_tick(&client).await;
+        });
+    }
+    fn on_prune_tick(&mut self) {
+        let fs = FileState::new(&self.conn);
+        match fs.prune_stale(30) {
+            Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale file_state entries", n),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("Daily prune error: {}", e),
+        }
+        let sb = crate::state::session_binding::SessionBinding::new(&self.conn);
+        match sb.prune_stale(30) {
+            Ok(n) if n > 0 => {
+                tracing::info!("Daily prune: removed {} stale session_binding entries", n)
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("Session binding prune error: {}", e),
+        }
+        if self.daily_maintenance_tasks.is_empty() {
+            let db_path = self.projection_db_path.clone();
+            self.daily_maintenance_tasks.spawn_blocking(move || {
+                crate::state::recover::run_daily_storage_maintenance(&db_path);
+            });
+        }
+    }
+    async fn on_local_status_tick(&mut self) {
+        if let Some(gap) = self
+            .wake_gap_detector
+            .observe(SystemTime::now(), Instant::now())
+        {
+            self.shipping_progress.reset_after_sleep(Instant::now());
+            tracing::info!(
+                wake_gap_ms = gap.as_millis() as u64,
+                "Detected system wake gap"
+            );
+            if maybe_start_managed_observation_scan(
+                self.projection_db_path.clone(),
+                &mut self.managed_observation_scan_tasks,
+                "wake",
+                true,
+                &self.last_managed_observations,
+            ) {
+                self.managed_full_reconciliation_not_before =
+                    Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                self.managed_reconciliation
+                    .start("wake", chrono::Utc::now().to_rfc3339());
+            } else {
+                self.pending_wake_reconciliation = true;
+                self.managed_reconciliation
+                    .start("wake", chrono::Utc::now().to_rfc3339());
+            }
+        }
+        let host_link_status = self.host_link.snapshot();
+        if matches!(host_link_status.state.as_str(), "updating" | "slow_update")
+            && self.host_link_poll_tasks.len() < 3
+        {
+            let client = self.client.clone();
+            self.host_link_poll_tasks
+                .spawn_local(async move { client.poll_runtime_admission().await });
+        }
+        if let Some(projection) = self.last_status_projection.as_mut() {
+            projection.set_heartbeat_transport(self.heartbeat_transport.clone());
+            projection.set_host_link(host_link_status.clone());
+            heartbeat::write_status_file(
+                projection,
+                serde_json::to_value(self.control_channel_status.snapshot()).ok(),
+                &self.managed_reconciliation,
+                &mut self.shipping_progress,
+                self.offline.is_offline,
+                &self.status_path,
+            );
+        } else {
+            heartbeat::refresh_existing_status_pulse(
+                &self.managed_reconciliation,
+                &mut self.shipping_progress,
+                self.offline.is_offline,
+                &self.status_path,
+                &self.heartbeat_transport,
+                Some(&host_link_status),
+            );
+        }
+    }
+    fn on_managed_full_reconciliation_tick(&mut self) {
+        if managed_full_reconciliation_ready(
+            !self.pending_wake_reconciliation,
+            self.managed_observation_scan_tasks.is_empty(),
+            Instant::now(),
+            self.managed_full_reconciliation_not_before,
+        ) && maybe_start_managed_observation_scan(
+            self.projection_db_path.clone(),
+            &mut self.managed_observation_scan_tasks,
+            "full_reconciliation",
+            true,
+            &self.last_managed_observations,
+        ) {
+            self.managed_full_reconciliation_not_before =
+                Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+            self.managed_reconciliation
+                .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
+        } else {
+            self.pending_full_reconciliation = true;
+            self.managed_reconciliation
+                .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
+        }
+    }
+    fn on_managed_observation_tick(&mut self) {
+        // Coalesce a periodic tick and watcher burst while a full scan
+        // is running. A queued full request wins on the next tick, but
+        // the cooldown prevents a completion/event feedback loop.
+        if managed_full_reconciliation_ready(
+            self.pending_full_reconciliation,
+            self.managed_observation_scan_tasks.is_empty(),
+            Instant::now(),
+            self.managed_full_reconciliation_not_before,
+        ) && maybe_start_managed_observation_scan(
+            self.projection_db_path.clone(),
+            &mut self.managed_observation_scan_tasks,
+            "full_reconciliation",
+            true,
+            &self.last_managed_observations,
+        ) {
+            self.pending_full_reconciliation = false;
+            self.managed_full_reconciliation_not_before =
+                Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+            self.managed_reconciliation
+                .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
+        } else if !self.pending_full_reconciliation && !self.pending_wake_reconciliation {
+            maybe_start_managed_observation_scan(
+                self.projection_db_path.clone(),
+                &mut self.managed_observation_scan_tasks,
+                "periodic",
+                self.last_resume_contracts.is_none(),
+                &self.last_managed_observations,
+            );
+        }
+    }
+    fn on_machine_presence_tick(&mut self) {
+        if !self.offline.is_offline {
+            if self.machine_presence_post_tasks.is_empty() {
+                spawn_machine_presence_post(
+                    &mut self.machine_presence_post_tasks,
+                    self.client.clone(),
+                );
+            } else {
+                tracing::debug!(
+                    "Skipping machine presence POST while previous POST is still in flight"
+                );
+            }
+        }
+    }
+    fn on_truth_heartbeat_due(&mut self) {
+        if let Some(pending) = self.pending_truth_heartbeat.take() {
+            if !self.offline.is_offline
+                && runtime_truth_changed(
+                    self.last_runtime_truth_signature.as_deref(),
+                    &pending.signature,
+                )
+            {
+                let now = Instant::now();
+                self.heartbeat_transport
+                    .record_attempt(chrono::Utc::now().to_rfc3339());
+                publish_heartbeat_transport_status(
+                    &self.heartbeat_transport,
+                    &mut self.last_status_projection,
+                    serde_json::to_value(self.control_channel_status.snapshot()).ok(),
+                    &self.managed_reconciliation,
+                    &mut self.shipping_progress,
+                    self.offline.is_offline,
+                    &self.host_link,
+                    &self.status_path,
+                );
+                spawn_heartbeat_post(
+                    &mut self.heartbeat_post_tasks,
+                    self.client.clone(),
+                    pending.payload,
+                    pending.signature.clone(),
+                    "runtime_truth_change",
+                    &mut self.acknowledged_machine_evidence,
+                );
+                self.last_truth_heartbeat_at = Some(now);
+                self.last_runtime_truth_signature = Some(pending.signature);
+            }
+        }
+    }
+    fn on_heartbeat_tick(&mut self) {
+        if let Some(projection) = self.last_status_projection.as_mut() {
+            projection.set_heartbeat_transport(self.heartbeat_transport.clone());
+            projection.set_host_link(self.host_link.snapshot());
+            heartbeat::write_status_file(
+                projection,
+                serde_json::to_value(self.control_channel_status.snapshot()).ok(),
+                &self.managed_reconciliation,
+                &mut self.shipping_progress,
+                self.offline.is_offline,
+                &self.status_path,
+            );
+            if !self.offline.is_offline {
+                if self.heartbeat_post_tasks.is_empty() {
+                    self.heartbeat_transport
+                        .record_attempt(chrono::Utc::now().to_rfc3339());
+                    projection.set_heartbeat_transport(self.heartbeat_transport.clone());
+                    projection.set_host_link(self.host_link.snapshot());
+                    heartbeat::write_status_file(
+                        projection,
+                        serde_json::to_value(self.control_channel_status.snapshot()).ok(),
+                        &self.managed_reconciliation,
+                        &mut self.shipping_progress,
+                        self.offline.is_offline,
+                        &self.status_path,
+                    );
+                    let payload = projection.payload.clone();
+                    let signature = runtime_truth_signature(&payload);
+                    self.last_runtime_truth_signature = Some(signature.clone());
+                    self.pending_truth_heartbeat = None;
+                    spawn_heartbeat_post(
+                        &mut self.heartbeat_post_tasks,
+                        self.client.clone(),
+                        payload,
+                        signature,
+                        "periodic_heartbeat",
+                        &mut self.acknowledged_machine_evidence,
+                    );
+                } else {
+                    tracing::debug!(
+                        "Skipping periodic heartbeat while a heartbeat POST is still in flight"
+                    );
+                }
+            }
+        } else {
+            tracing::debug!(
+                "Skipping periodic heartbeat until the startup managed observation scan completes"
+            );
+        }
+    }
 }
 
 fn observe_active_opencode_titles(
