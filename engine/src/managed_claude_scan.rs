@@ -203,11 +203,10 @@ pub(crate) fn collect_observations_from_paths(
 }
 
 fn tombstone_expired(state: &ClaudeChannelStateFile, now: DateTime<Utc>) -> bool {
-    state
-        .exited_at
-        .as_deref()
-        .and_then(parse_rfc3339)
-        .is_some_and(|exited| now - exited >= EXITED_STATE_RETENTION)
+    // A tombstone whose exit time cannot be read is collected, not kept forever.
+    state.exited_at.as_deref().is_some_and(|raw| {
+        parse_rfc3339(raw).is_none_or(|exited| now - exited >= EXITED_STATE_RETENTION)
+    })
 }
 
 /// Delete a tombstone that has outlived its retention. The bridge rewrites the
@@ -630,6 +629,28 @@ mod tests {
 
         assert_eq!(observations.len(), 1);
         assert!(path.exists());
+    }
+
+    #[test]
+    fn tombstone_with_unreadable_exit_time_is_collected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tombstone(tmp.path(), "session.json", Utc::now());
+        let raw = fs::read_to_string(&path).unwrap();
+        let exited = raw
+            .lines()
+            .find(|line| line.contains("exited_at"))
+            .unwrap()
+            .to_string();
+        fs::write(
+            &path,
+            raw.replace(&exited, r#"  "exited_at": "not-a-time""#),
+        )
+        .unwrap();
+
+        let observations = collect_observations_from_processes(tmp.path(), &HashMap::new());
+
+        assert!(observations.is_empty());
+        assert!(!path.exists());
     }
 
     #[test]

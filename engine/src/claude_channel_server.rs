@@ -1195,6 +1195,9 @@ impl BridgeState {
         write_payload_at(
             &path,
             &BridgeStatePayload {
+                // Not ready: readers that only check `ready` (QA waiters, the
+                // conversation-reset probe) must not see a dead channel as attached.
+                ready: false,
                 exited_at: Some(Utc::now().to_rfc3339()),
                 ..payload
             },
@@ -1894,6 +1897,7 @@ mod tests {
         let payload: Value =
             serde_json::from_slice(&std::fs::read(state_path(temp.path())).unwrap()).unwrap();
         assert!(payload["exited_at"].as_str().is_some());
+        assert_eq!(payload["ready"], false);
         assert_eq!(payload["run_id"], "22222222-2222-4222-8222-222222222222");
         assert_eq!(payload["bridge_pid"], std::process::id());
         assert_eq!(payload["claude_pid"], std::process::id());
