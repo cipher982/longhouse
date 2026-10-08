@@ -17,6 +17,7 @@ from uuid import uuid5
 
 from sqlalchemy import select
 from sqlalchemy import update
+from sqlalchemy.orm import sessionmaker
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.models import FactHead
@@ -136,12 +137,8 @@ def _build_main_database(output_path: Path, *, owner_email: str) -> None:
     try:
         Base.metadata.create_all(bind=engine)
         _ensure_agents_fts(engine)
-        with engine.connect() as connection:
-            from sqlalchemy.orm import Session
-
-            with Session(bind=connection) as db:
-                _ensure_owner(db, owner_email)
-            connection.commit()
+        with sessionmaker(bind=engine, expire_on_commit=False)() as db:
+            _ensure_owner(db, owner_email)
     finally:
         engine.dispose()
 
@@ -220,7 +217,8 @@ def _demo_sessions(anchor: datetime) -> list[_DemoSession]:
         if not data.provider_session_id or data.provider_session_id not in DEMO_PRESENTATION:
             raise RuntimeError(f"demo session is missing from the presentation contract: {data.provider_session_id}")
         session_id = _demo_session_id(data.provider_session_id)
-        thread_id = stable_uuid("demo-thread", str(session_id))
+        # The same thread id _seed_live_catalog gives the managed sessions' live thread.
+        thread_id = uuid5(NAMESPACE_URL, f"demo-thread:{data.provider_session_id}")
         events: list[_DemoEvent] = []
         for item in data.events:
             events.append(
