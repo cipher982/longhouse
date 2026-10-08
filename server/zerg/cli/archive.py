@@ -142,11 +142,12 @@ def _render_status_summary(summary: dict[str, Any]) -> None:
         typer.echo(f"  pending bytes:    {_format_bytes(outbox['pending_bytes'])}")
         if outbox.get("oldest_pending_at"):
             typer.echo(f"  oldest pending:   {outbox['oldest_pending_at']}")
-        typer.echo(
-            f"  blocked sources:  {outbox['blocked_source_count']} "
-            f"({outbox['unresolved_blocked_source_count']} need you, "
-            f"{outbox['reconciling_blocked_source_count']} reconciling)"
+        unresolved = outbox.get("unresolved_blocked_source_count")
+        reconciling = outbox.get("reconciling_blocked_source_count")
+        split = (
+            f"{unresolved} need you, {reconciling} reconciling" if unresolved is not None and reconciling is not None else "split unknown"
         )
+        typer.echo(f"  blocked sources:  {outbox['blocked_source_count']} ({split})")
     else:
         typer.echo(f"  pending ranges:   {summary['pending_ranges']}")
         typer.echo(f"  pending paths:    {summary['pending_paths']}")
@@ -221,7 +222,7 @@ def _render_status_summary(summary: dict[str, Any]) -> None:
             )
     if archive_lane:
         typer.echo(
-            "  archive 1h: "
+            "  backlog 1h: "
             f"{archive_lane.get('successes_1h', 0)}/{archive_lane.get('attempts_1h', 0)} ok, "
             f"{archive_lane.get('backpressure_1h', 0)} backpressure, "
             f"{_format_bytes(archive_lane.get('bytes_1h'))}, "

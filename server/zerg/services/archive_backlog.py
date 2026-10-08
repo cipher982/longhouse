@@ -194,8 +194,9 @@ def _attach_storage_v2_outbox(result: dict[str, Any], engine_status_payload: Map
         "pending_bytes": _int(raw.get("pending_bytes")),
         "oldest_pending_at": _optional_str(raw.get("oldest_pending_at")),
         "blocked_source_count": _int(raw.get("blocked_source_count")),
-        "reconciling_blocked_source_count": _int(raw.get("reconciling_blocked_source_count")),
-        "unresolved_blocked_source_count": _int(raw.get("unresolved_blocked_source_count")),
+        # Older engines omit the split; absent stays None, never a false zero.
+        "reconciling_blocked_source_count": _optional_count(raw.get("reconciling_blocked_source_count")),
+        "unresolved_blocked_source_count": _optional_count(raw.get("unresolved_blocked_source_count")),
     }
 
 
@@ -215,11 +216,11 @@ def backlog_ship_lane(lanes: Any) -> dict[str, Any]:
     """
     if not isinstance(lanes, Mapping):
         return {}
-    archive = lanes.get("archive")
-    if isinstance(archive, Mapping) and _int(archive.get("attempts_1h")) > 0:
+    archive = lanes.get("archive") if isinstance(lanes.get("archive"), Mapping) else {}
+    repair = lanes.get("repair") if isinstance(lanes.get("repair"), Mapping) else {}
+    if not repair or _int(archive.get("attempts_1h")) > _int(repair.get("attempts_1h")):
         return dict(archive)
-    repair = lanes.get("repair")
-    return dict(repair) if isinstance(repair, Mapping) else {}
+    return dict(repair)
 
 
 def _attach_archive_progress(result: dict[str, Any], engine_status_payload: Mapping[str, Any] | None) -> None:
@@ -250,6 +251,10 @@ def _normalize_mode(mode: str) -> str:
     if normalized in {"drain", "drain-now"}:
         return "drain"
     raise ValueError("mode must be paused, trickle, or drain")
+
+
+def _optional_count(value: Any) -> int | None:
+    return None if value is None else _int(value)
 
 
 def _int(value: Any) -> int:

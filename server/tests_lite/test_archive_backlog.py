@@ -212,3 +212,31 @@ def test_archive_status_reports_the_storage_v2_outbox_backlog(tmp_path: Path):
     speed_archive = json.loads(speed.output)["archive"]
     assert speed_archive["pending_bytes"] == 8192
     assert speed_archive["bytes_per_sec_ewma_10s"] == 1024
+
+
+def test_archive_status_keeps_an_absent_blocked_split_unknown(tmp_path: Path):
+    status_path = get_agent_status_path(tmp_path)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "archive_backlog": {"state": "idle", "mode": "trickle"},
+                "storage_v2_outbox": {"pending_count": 1, "pending_bytes": 10, "blocked_source_count": 2},
+                "ship_lanes": {
+                    "archive": {"attempts_1h": 3, "bytes_per_sec_ewma_10s": 5},
+                    "repair": {"attempts_1h": 1, "bytes_per_sec_ewma_10s": 50},
+                },
+            }
+        )
+    )
+
+    summary = collect_archive_backlog(tmp_path)
+
+    assert summary["storage_v2_outbox"]["unresolved_blocked_source_count"] is None
+    assert summary["storage_v2_outbox"]["reconciling_blocked_source_count"] is None
+    # The busier lane drains the backlog: an older engine still on the archive lane.
+    assert summary["archive_bytes_per_sec"] == 5
+
+    result = CliRunner().invoke(app, ["archive", "status", "--state-root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "blocked sources:  2 (split unknown)" in result.output
