@@ -14,7 +14,7 @@ ARG BUN_SHA256_AARCH64=98d2e0b2c09421569172b4d46b6f81378c2dbdd77480ebb27f3989dd4
 # Every base is digest-pinned (literal FROM lines so Dependabot can bump them).
 # The production image is plain python:slim; uv is copied only into the stages
 # that build the virtual environment.
-FROM ghcr.io/astral-sh/uv:0.12.19@sha256:04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424 AS uv
+FROM ghcr.io/astral-sh/uv:0.12.24@sha256:3af4716e991d6956a41e573eab705d0ee08500cd829ed30293eb8472f372c65a AS uv
 
 FROM python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e AS python-base
 

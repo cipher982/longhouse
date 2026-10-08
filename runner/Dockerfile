@@ -1,6 +1,6 @@
 # Build from the repo root so the image installs from the workspace lockfile:
 #   docker build -f runner/Dockerfile -t longhouse/runner:latest .
-FROM oven/bun:1.2.20@sha256:78f46b81b82d767ee8d729411f6f95089a403c21f17c20a5789df00263d7c5b5
+FROM oven/bun:1.2.23@sha256:6ebf306367da43ad75c4d5119563e24de9b66372929ad4fa31546be053a16f74
 
 WORKDIR /app
 
