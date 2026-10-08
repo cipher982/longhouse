@@ -1051,9 +1051,7 @@ def test_project_opt_in_backfills_only_that_projects_old_sessions(server, tmp_pa
         session_id = str(uuid4())
         transcript = claude_root / "projects" / folder.name / f"{session_id}.jsonl"
         transcript.parent.mkdir(parents=True, exist_ok=True)
-        transcript.write_text(
-            fixture_text.replace(CLAUDE_SESSION_ID, session_id).replace("/tmp/longhouse-test", str(folder.resolve()))
-        )
+        transcript.write_text(fixture_text.replace(CLAUDE_SESSION_ID, session_id).replace("/tmp/longhouse-test", str(folder.resolve())))
         return session_id
 
     opted_in_id = write_old_session(project_dir)
@@ -1455,6 +1453,113 @@ def test_connect_daemon_ships_codex_transcript_from_filesystem_watch(server, tmp
         if proc.poll() is None:
             _terminate_process(proc)
         shutil.rmtree(longhouse_home, ignore_errors=True)
+
+
+def _live_rows(server: dict[str, str], query: str, params: tuple[object, ...] = ()) -> list[sqlite3.Row]:
+    """Rows from the split Live Store the file-backed test server writes beside its DB."""
+    db_path = Path(server["db_path"])
+    live_path = db_path.with_name(f"{db_path.stem}-live.db")
+    if not live_path.exists():
+        return []
+    with sqlite3.connect(f"file:{live_path}?mode=ro", uri=True, timeout=5) as conn:
+        conn.row_factory = sqlite3.Row
+        return conn.execute(query, params).fetchall()
+
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT], ids=["sigterm", "sigint"])
+def test_connect_daemon_exits_cleanly_on_shutdown_signal(server, tmp_path, sig):
+    """Pins the daemon loop's shutdown path: a signal ends the loop, the teardown
+    sequence runs to its final log line, and the process exits 0."""
+    daemon = _start_connect_daemon(server, tmp_path, project_name="shutdown-project", machine_name="shipper-e2e")
+    proc = daemon["proc"]
+    log_dir = daemon["log_dir"]
+    try:
+        _wait_for_log_contains(log_dir, "Daemon ready")
+        os.kill(proc.pid, sig)
+        try:
+            returncode = proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            raise AssertionError("daemon did not exit within 20 s of the shutdown signal") from None
+        assert returncode == 0
+        _wait_for_logs_contain(
+            log_dir,
+            "Shutdown signal received, exiting gracefully",
+            "Daemon shutdown complete",
+            timeout=5.0,
+        )
+    except Exception:
+        daemon_output = _terminate_process(proc) if proc.poll() is None else ""
+        raise AssertionError(
+            f"daemon shutdown integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}{_server_output_detail(server)}"
+        ) from None
+    finally:
+        if proc.poll() is None:
+            _terminate_process(proc)
+        shutil.rmtree(daemon["longhouse_home"], ignore_errors=True)
+
+
+def test_connect_daemon_timers_reach_runtime_host_and_status_file(server, tmp_path):
+    """Pins the daemon loop's timer arms end to end: the local status file is
+    written, a heartbeat reaches the Runtime Host, and the periodic machine
+    presence POST lands (first tick at MACHINE_PRESENCE_INTERVAL_SECS = 60 s)."""
+    # The test token is bound to this machine name; other tests heartbeat as it
+    # too, so only rows received after this daemon starts count.
+    machine_name = "shipper-e2e"
+
+    def _max_id(table: str) -> int:
+        rows = _live_rows(server, f"SELECT COALESCE(MAX(id), 0) AS m FROM {table}")
+        return int(rows[0]["m"]) if rows else 0
+
+    heartbeat_baseline = _max_id("live_heartbeat_stamps")
+    # machine_presence is one upserted row per device: wait for it to change.
+    prior_presence = _live_rows(server, "SELECT received_at FROM machine_presence WHERE device_id = ?", (machine_name,))
+    presence_baseline = prior_presence[0]["received_at"] if prior_presence else None
+    daemon = _start_connect_daemon(server, tmp_path, project_name="timers-project", machine_name=machine_name)
+    proc = daemon["proc"]
+    log_dir = daemon["log_dir"]
+    status_path = daemon["longhouse_home"] / "agent" / "engine-status.json"
+    try:
+        _wait_for_log_contains(log_dir, "Daemon ready")
+
+        deadline = time.monotonic() + 30
+        while not status_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.25)
+        assert status_path.exists(), f"engine status file never written at {status_path}"
+        json.loads(status_path.read_text())
+
+        heartbeat = []
+        deadline = time.monotonic() + 90
+        while not heartbeat and time.monotonic() < deadline:
+            heartbeat = _live_rows(
+                server,
+                "SELECT version FROM live_heartbeat_stamps WHERE device_id = ? AND id > ? LIMIT 1",
+                (machine_name, heartbeat_baseline),
+            )
+            if not heartbeat:
+                time.sleep(1)
+        assert heartbeat, f"no heartbeat from {machine_name} reached the Runtime Host within 90 s"
+        assert heartbeat[0]["version"]
+
+        presence = []
+        deadline = time.monotonic() + 100
+        while not presence and time.monotonic() < deadline:
+            presence = _live_rows(
+                server,
+                "SELECT state FROM machine_presence WHERE device_id = ? AND received_at IS NOT ? LIMIT 1",
+                (machine_name, presence_baseline),
+            )
+            if not presence:
+                time.sleep(1)
+        assert presence, f"no machine presence from {machine_name} reached the Runtime Host within 100 s"
+    except Exception:
+        daemon_output = _terminate_process(proc)
+        raise AssertionError(
+            f"daemon timer integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}{_server_output_detail(server)}"
+        ) from None
+    finally:
+        if proc.poll() is None:
+            _terminate_process(proc)
+        shutil.rmtree(daemon["longhouse_home"], ignore_errors=True)
 
 
 class TestClaudeShipping:
