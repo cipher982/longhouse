@@ -155,7 +155,7 @@ paths = [
   "engine/src/managed_*_scan.rs",
   "engine/src/turn_claims.rs",
   "engine/src/process_identity.rs",
-  "engine/src/control_channel.rs",
+  "engine/src/control_channel/**",
   "engine/src/*_control.rs",
   "engine/src/heartbeat.rs",
   "engine/src/machine_presence.rs",

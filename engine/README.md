@@ -8,6 +8,10 @@ and managed provider launches such as `longhouse codex`). Where it sits in the
 system: the Code map in [`ARCHITECTURE.md`](../ARCHITECTURE.md#code-map).
 
 - `src/pipeline/` parses and compresses transcripts; `src/shipping/` sends them.
+- `src/control_channel/` is the control WebSocket: `connection` (connect, reconnect,
+  heartbeat frames), `dispatch` (command frames and receipts around `execute_command`),
+  `turn_start` (Console turns), `receipts` (durable command receipts) and
+  `capabilities` (contract manifest and provider readiness).
 - `src/state/` is the local SQLite state: source epochs and pending envelopes, file offsets, session phase.
 - `src/import_scope.rs` is what local history the machine may ship (a start
   time plus optional project folders, `machine/import-scope.json`). The engine
