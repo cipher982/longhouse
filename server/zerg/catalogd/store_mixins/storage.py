@@ -228,8 +228,6 @@ class StorageMixin:
         sessions = StorageSession.__table__
         raw = LiveRawObject.__table__
         render_objects = RenderObject.__table__
-        generations = RenderGeneration.__table__
-        projector_state = ProjectorState.__table__
         tombstones = LiveSessionTombstone.__table__
         with _write_transaction(self.engine) as connection:
             session = connection.execute(select(sessions).where(sessions.c.session_id == session_key)).mappings().first()
@@ -321,72 +319,7 @@ class StorageMixin:
                     "commit_seq": str(session["commit_seq"]),
                 }
 
-            commit_seq = _advance_commit_seq(connection, observed_at)
-            retired_render = connection.execute(
-                update(render_objects)
-                .where(render_objects.c.session_id == session_key, render_objects.c.retired_at.is_(None))
-                .values(retired_at=observed_at, retirement_revision=commit_seq)
-            ).rowcount
-            retired_generations = connection.execute(
-                update(generations)
-                .where(generations.c.session_id == session_key, generations.c.state != "superseded")
-                .values(state="superseded", superseded_at=observed_at, commit_seq=commit_seq, updated_at=observed_at)
-            ).rowcount
-            connection.execute(
-                update(sessions)
-                .where(sessions.c.session_id == session_key)
-                .values(
-                    hidden_from_default_timeline=1,
-                    render_state="retired",
-                    commit_seq=commit_seq,
-                    updated_at=observed_at,
-                )
-            )
-            for projector_name in KNOWN_PROJECTORS:
-                state = (
-                    connection.execute(
-                        select(projector_state).where(
-                            projector_state.c.projector == projector_name,
-                            projector_state.c.session_id == session_key,
-                        )
-                    )
-                    .mappings()
-                    .first()
-                )
-                values = {
-                    "desired_revision": commit_seq,
-                    "desired_at": observed_at,
-                    "claimed_revision": None,
-                    "claim_token": None,
-                    "worker_id": None,
-                    "claim_expires_at": None,
-                    "status": "idle",
-                    "failure_count": 0,
-                    "last_error_code": None,
-                    "last_error_message": None,
-                    "retry_at": None,
-                    "commit_seq": commit_seq,
-                    "updated_at": observed_at,
-                }
-                if state is None:
-                    connection.execute(
-                        insert(projector_state).values(
-                            projector=projector_name,
-                            session_id=session_key,
-                            completed_revision=0,
-                            created_at=observed_at,
-                            **values,
-                        )
-                    )
-                else:
-                    connection.execute(
-                        update(projector_state)
-                        .where(
-                            projector_state.c.projector == projector_name,
-                            projector_state.c.session_id == session_key,
-                        )
-                        .values(**values)
-                    )
+            commit_seq, retired_render, retired_generations = _retire_session_render(connection, session_key, observed_at)
             return {
                 "changed": True,
                 "session_id": session_key,
@@ -394,6 +327,80 @@ class StorageMixin:
                 "retired_render_objects": int(retired_render or 0),
                 "retired_render_generations": int(retired_generations or 0),
                 "replacement_proofs": replacement_proofs,
+                "commit_seq": str(commit_seq),
+            }
+
+    def retire_legacy_twin_session(
+        self,
+        *,
+        session_id: UUID,
+        twin_session_id: UUID,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Retire a legacy-converted session whose conversation a native session already holds.
+
+        The caller supplies the content evidence (``storage-migrate reconcile-legacy-twins``);
+        this re-checks the structural half under the writer lock. Nothing is deleted:
+        raw objects stay active and the render is retired, so the copy leaves the
+        timeline and search but stays on disk.
+        """
+
+        session_key = str(session_id)
+        twin_key = str(twin_session_id)
+        sessions = StorageSession.__table__
+        raw = LiveRawObject.__table__
+        tombstones = LiveSessionTombstone.__table__
+        with _write_transaction(self.engine) as connection:
+
+            def conflict(code: str) -> dict[str, Any]:
+                return {"proof_conflict": code, "commit_seq": str(_current_commit_seq(connection))}
+
+            if session_key == twin_key:
+                return conflict("twin_is_session")
+            session = connection.execute(select(sessions).where(sessions.c.session_id == session_key)).mappings().first()
+            twin = connection.execute(select(sessions).where(sessions.c.session_id == twin_key)).mappings().first()
+            if session is None:
+                return {"session_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            if twin is None:
+                return conflict("twin_missing")
+            if connection.execute(select(tombstones.c.session_id).where(tombstones.c.session_id.in_([session_key, twin_key]))).first():
+                return conflict("session_tombstoned")
+            if twin["provider"] != session["provider"] or twin["machine_id"] != session["machine_id"]:
+                return conflict("twin_identity_mismatch")
+            if twin["render_state"] != "ready":
+                return conflict("twin_not_ready")
+
+            def provenance(key: str) -> list[str]:
+                return [
+                    str(row[0])
+                    for row in connection.execute(select(raw.c.provenance_kind).where(raw.c.session_id == key, raw.c.retired_at.is_(None)))
+                ]
+
+            owned = provenance(session_key)
+            if not owned:
+                return conflict("active_legacy_source_missing")
+            if any(not kind.startswith("legacy_") for kind in owned):
+                return conflict("active_nonlegacy_source_present")
+            twin_owned = provenance(twin_key)
+            if "native" not in twin_owned or any(kind.startswith("legacy_") for kind in twin_owned):
+                return conflict("twin_not_native")
+            if session["render_state"] == "retired":
+                return {
+                    "changed": False,
+                    "already_retired": True,
+                    "session_id": session_key,
+                    "twin_session_id": twin_key,
+                    "preserved_raw_objects": len(owned),
+                    "commit_seq": str(session["commit_seq"]),
+                }
+            commit_seq, retired_render, retired_generations = _retire_session_render(connection, session_key, observed_at)
+            return {
+                "changed": True,
+                "session_id": session_key,
+                "twin_session_id": twin_key,
+                "preserved_raw_objects": len(owned),
+                "retired_render_objects": retired_render,
+                "retired_render_generations": retired_generations,
                 "commit_seq": str(commit_seq),
             }
 
@@ -2498,3 +2505,84 @@ class StorageMixin:
                 ),
                 "commit_seq": str(commit_seq),
             }
+
+
+def _retire_session_render(connection, session_key: str, observed_at: datetime) -> tuple[int, int, int]:
+    """Hide one session's render without deleting anything.
+
+    Render objects are marked retired and generations superseded, the session is
+    hidden and ``retired``, and projectors are re-queued so search drops it. Raw
+    objects stay active.
+    """
+
+    sessions = StorageSession.__table__
+    render_objects = RenderObject.__table__
+    generations = RenderGeneration.__table__
+    projector_state = ProjectorState.__table__
+    commit_seq = _advance_commit_seq(connection, observed_at)
+    retired_render = connection.execute(
+        update(render_objects)
+        .where(render_objects.c.session_id == session_key, render_objects.c.retired_at.is_(None))
+        .values(retired_at=observed_at, retirement_revision=commit_seq)
+    ).rowcount
+    retired_generations = connection.execute(
+        update(generations)
+        .where(generations.c.session_id == session_key, generations.c.state != "superseded")
+        .values(state="superseded", superseded_at=observed_at, commit_seq=commit_seq, updated_at=observed_at)
+    ).rowcount
+    connection.execute(
+        update(sessions)
+        .where(sessions.c.session_id == session_key)
+        .values(
+            hidden_from_default_timeline=1,
+            render_state="retired",
+            commit_seq=commit_seq,
+            updated_at=observed_at,
+        )
+    )
+    for projector_name in KNOWN_PROJECTORS:
+        state = (
+            connection.execute(
+                select(projector_state).where(
+                    projector_state.c.projector == projector_name,
+                    projector_state.c.session_id == session_key,
+                )
+            )
+            .mappings()
+            .first()
+        )
+        values = {
+            "desired_revision": commit_seq,
+            "desired_at": observed_at,
+            "claimed_revision": None,
+            "claim_token": None,
+            "worker_id": None,
+            "claim_expires_at": None,
+            "status": "idle",
+            "failure_count": 0,
+            "last_error_code": None,
+            "last_error_message": None,
+            "retry_at": None,
+            "commit_seq": commit_seq,
+            "updated_at": observed_at,
+        }
+        if state is None:
+            connection.execute(
+                insert(projector_state).values(
+                    projector=projector_name,
+                    session_id=session_key,
+                    completed_revision=0,
+                    created_at=observed_at,
+                    **values,
+                )
+            )
+        else:
+            connection.execute(
+                update(projector_state)
+                .where(
+                    projector_state.c.projector == projector_name,
+                    projector_state.c.session_id == session_key,
+                )
+                .values(**values)
+            )
+    return commit_seq, int(retired_render or 0), int(retired_generations or 0)

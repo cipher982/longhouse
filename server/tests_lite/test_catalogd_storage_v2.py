@@ -3978,6 +3978,83 @@ async def test_source_epoch_replacement_advances_retired_projectors(daemon_paths
 
 
 @pytest.mark.asyncio
+async def test_legacy_twin_retirement_requires_a_native_twin_and_keeps_raw_objects(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    legacy_session, native_session, other_provider = uuid4(), uuid4(), uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+
+        async def commit(session_id, records, *, provenance, opaque, seed, provider="codex", offset=0):
+            epoch = uuid4()
+            params = _raw_params(
+                epoch=epoch,
+                session_id=session_id,
+                start=0,
+                end=sum(len(record) for record in records),
+                records=records,
+                sealed_at=now + timedelta(seconds=offset),
+                opaque_source_id=opaque,
+                provider=provider,
+            )
+            params.update(
+                provenance_kind=provenance,
+                render_state="ready",
+                render_manifest=_render_manifest(uuid4(), seed=seed, source_epoch=epoch, opaque_source_id=opaque, provider=provider),
+                projectors=["search-v2"],
+            )
+            await client.call("storage.raw_object.commit.v2", params)
+
+        await commit(legacy_session, (b"legacy\n",), provenance="legacy_normalized_event", opaque="legacy-events", seed=b"legacy-render")
+        await commit(native_session, (b"native\n",), provenance="native", opaque="history.jsonl", seed=b"native-render", offset=1)
+        await commit(
+            other_provider, (b"other\n",), provenance="native", opaque="other.jsonl", seed=b"other-render", provider="claude", offset=2
+        )
+
+        def retire(session_id, twin_id, offset):
+            return client.call(
+                "storage.session.legacy_twin.retire.v2",
+                {
+                    "session_id": str(session_id),
+                    "twin_session_id": str(twin_id),
+                    "observed_at": (now + timedelta(seconds=offset)).isoformat(),
+                },
+            )
+
+        # The native copy is never the one retired, and a twin must match provider and machine.
+        for session_id, twin_id, reason in (
+            (native_session, legacy_session, "active_nonlegacy_source_present"),
+            (legacy_session, other_provider, "twin_identity_mismatch"),
+            (legacy_session, legacy_session, "twin_is_session"),
+        ):
+            with pytest.raises(CatalogRemoteError) as conflict:
+                await retire(session_id, twin_id, 3)
+            assert conflict.value.details == {"reason": reason}
+
+        retired = await retire(legacy_session, native_session, 4)
+        assert retired["changed"] is True
+        assert retired["preserved_raw_objects"] == 1
+        assert retired["retired_render_objects"] == 1
+
+        legacy_row = (await client.call("storage.session.read.v2", {"session_id": str(legacy_session)}))["session"]
+        assert legacy_row["render_state"] == "retired"
+        assert legacy_row["raw_state"] == "durable"
+        assert legacy_row["hidden_from_default_timeline"] is True
+        native_row = (await client.call("storage.session.read.v2", {"session_id": str(native_session)}))["session"]
+        assert native_row["render_state"] == "ready"
+        assert native_row["hidden_from_default_timeline"] is False
+
+        replay = await retire(legacy_session, native_session, 5)
+        assert replay["changed"] is False
+        assert replay["already_retired"] is True
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_relinked_legacy_reconciliation_requires_duplicate_proof_and_retires_projection(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

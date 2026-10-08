@@ -973,6 +973,11 @@ class CatalogDaemon:
             frozenset({"observed_at", "session_id"}),
             "storage.session.relinked_legacy.reconcile.v2 has invalid parameters",
         ),
+        "storage.session.legacy_twin.retire.v2": _Route(
+            "_retire_legacy_twin_session",
+            frozenset({"observed_at", "session_id", "twin_session_id"}),
+            "storage.session.legacy_twin.retire.v2 has invalid parameters",
+        ),
         "storage.session.render_generation.restore.v2": _Route(
             "_restore_storage_render_generation",
             frozenset({"generation_id", "observed_at", "session_id"}),
@@ -3321,6 +3326,31 @@ class CatalogDaemon:
             reason=reason,
             deleted_at=deleted_at,
         )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _retire_legacy_twin_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+            twin_session_id = _canonical_uuid(request.params["twin_session_id"], "twin_session_id")
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.retire_legacy_twin_session,
+            session_id=session_id,
+            twin_session_id=twin_session_id,
+            observed_at=observed_at,
+        )
+        if result.get("session_missing"):
+            return self._error(request, "not_found", "storage session does not exist")
+        if result.get("proof_conflict"):
+            return self._error(
+                request,
+                "conflict",
+                "session does not satisfy the legacy twin proof",
+                details={"reason": result["proof_conflict"]},
+            )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _reconcile_relinked_legacy_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

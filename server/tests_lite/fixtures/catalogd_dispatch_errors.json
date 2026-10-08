@@ -2492,6 +2492,29 @@
    "retryable": false
   }
  },
+ "storage.session.legacy_twin.retire.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.legacy_twin.retire.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.legacy_twin.retire.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
  "storage.session.owned.list.v2": {
   "declared_nulls": {
    "code": "invalid_request",
