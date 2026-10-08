@@ -627,7 +627,7 @@ struct LoginView: View {
     private func friendlyHostedError(_ rawValue: String) -> String {
         switch rawValue {
         case "instance_not_found":
-            return "This Longhouse server does not belong to the authenticated control-plane account."
+            return "This Longhouse server does not belong to the Longhouse account you signed in with."
         default:
             return rawValue.replacingOccurrences(of: "_", with: " ")
         }
