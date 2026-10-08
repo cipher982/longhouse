@@ -37,7 +37,6 @@ from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBl
 from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBlobTampered
 from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBlobUnavailable
 from zerg.services.provider_capability_blob_resolver import resolver_from_settings
-from zerg.services.provider_capability_cell_verdicts import REVOKING_CONSECUTIVE_FAILURES
 from zerg.services.provider_capability_cell_verdicts import VERDICT_BUNDLE_KIND
 from zerg.services.provider_capability_cell_verdicts import VERDICT_SCHEMA_VERSION
 from zerg.services.provider_capability_cell_verdicts import CellVerdictStore
@@ -616,9 +615,10 @@ def get_provider_version_evidence(
     _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, Any]:
-    """Facts only: the proof records and failing cell verdicts one provider
-    version has, plus the assertions the chip certification requires. The
-    caller decides what they add up to; nothing here is a verdict."""
+    """Facts only: the proof records one provider version has (with store
+    integrity) and the assertions the chip certification requires. Whether a cell
+    is failing now is the certification's fold (/public/provider-certification),
+    not this route's: cell verdicts carry no version and a second fold would drift."""
 
     known = provider in managed_provider_names()
     store = _proof_store()
@@ -635,39 +635,6 @@ def get_provider_version_evidence(
         available = store.available_blob_digests(records=shown)
         report = store.integrity_report(provider, records=shown, available=available)
         integrity = {item.artifact_id: item for item in report.artifacts}
-    # Facts, not a fold: a failing verdict is returned with the newest pass of the
-    # same cell (any version) and the newest store-admissible one, so a caller can
-    # tell a verdict a later pass superseded from a live one. Whether a pass also
-    # qualifies for the chart (sha, epoch, age) is the projection's call, not this
-    # route's. Verdicts carry no provider version.
-    newest_pass: dict[tuple[str, str, str, str | None], ProviderCapabilityProofRecord] = {}
-    for record in provider_records:
-        if record.outcome.value != "pass":
-            continue
-        key = (record.provider, record.assertion_id, record.scenario_id, record.assertion_variant)
-        current = newest_pass.get(key)
-        if current is None or _evidence_moment(record.generated_at) > _evidence_moment(current.generated_at):
-            newest_pass[key] = record
-    verdicts = [
-        verdict
-        for verdict in (_cell_verdict_store().verdicts().values() if known else ())
-        if verdict.provider == provider and verdict.consecutive_failures >= REVOKING_CONSECUTIVE_FAILURES
-    ]
-    pass_records = tuple(newest_pass[v.key] for v in verdicts if v.key in newest_pass)
-    pass_admissible: dict[str, bool] = {}
-    if pass_records:
-        report = store.integrity_report(provider, records=pass_records, available=store.available_blob_digests(records=pass_records))
-        pass_admissible = {item.artifact_id: bool(item.admissible) for item in report.artifacts}
-    failing = []
-    for verdict in verdicts:
-        latest = newest_pass.get(verdict.key)
-        failing.append(
-            {
-                **verdict.serialize(),
-                "newest_pass_at": latest.generated_at if latest else None,
-                "newest_pass_admissible": pass_admissible.get(latest.artifact_id) if latest else None,
-            }
-        )
     return {
         "schema_version": 1,
         "artifact_kind": "provider_version_evidence",
@@ -691,8 +658,6 @@ def get_provider_version_evidence(
         ],
         "total_records": total,
         "truncated": total > len(shown),
-        "failing_verdicts": failing,
-        "failing_verdicts_version_attributed": False,
         "required_assertions": _required_assertion_ids(provider) if known else [],
     }
 

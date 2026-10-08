@@ -23,7 +23,6 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.routers import provider_capability_proofs as routes
 from zerg.services.provider_capability_cell_verdicts import CellVerdict
-from zerg.services.provider_capability_cell_verdicts import CellVerdictStore
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
 
 URL = "/api/agents/provider-version-evidence"
@@ -75,31 +74,6 @@ def test_version_evidence_returns_only_matching_records_newest_first(monkeypatch
     assert payload["required_assertions"]
 
 
-def test_failing_verdicts_need_two_consecutive_failures_for_this_provider(monkeypatch, tmp_path: Path) -> None:
-    client = _client(monkeypatch, tmp_path)
-    cells = CellVerdictStore(tmp_path / "cell-verdicts")
-    cells.publish(
-        [
-            _verdict("codex", "reconnect_survives", 2),
-            _verdict("codex", "single_flake", 1),
-            _verdict("claude", "other_provider", 5),
-        ]
-    )
-    try:
-        response = client.get(URL, params={"provider": "codex", "version": "0.145.0"})
-    finally:
-        api_app.dependency_overrides.clear()
-
-    payload = response.json()
-    assert response.status_code == 200
-    assert [verdict["assertion_id"] for verdict in payload["failing_verdicts"]] == ["reconnect_survives"]
-    verdict = payload["failing_verdicts"][0]
-    assert verdict["consecutive_failures"] == 2
-    assert verdict["outcome"] == "infrastructure_error"
-    assert verdict["provider"] == "codex"
-    assert "observed_at" in verdict
-
-
 def test_unknown_provider_or_version_returns_empty_facts(monkeypatch, tmp_path: Path) -> None:
     client = _client(monkeypatch, tmp_path)
     _seed(ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True))
@@ -112,7 +86,7 @@ def test_unknown_provider_or_version_returns_empty_facts(monkeypatch, tmp_path: 
     for response in (unknown_provider, unknown_version):
         assert response.status_code == 200
         assert response.json()["records"] == []
-        assert response.json()["failing_verdicts"] == []
+        assert "failing_verdicts" not in response.json()
     assert unknown_provider.json()["required_assertions"] == []
 
 
@@ -150,46 +124,3 @@ def test_version_evidence_requires_both_query_params(monkeypatch, tmp_path: Path
         api_app.dependency_overrides.clear()
 
     assert response.status_code == 422
-
-
-def test_failing_verdicts_carry_the_newest_pass_of_their_cell(monkeypatch, tmp_path: Path) -> None:
-    """Each failing verdict carries the newest pass of its cell and whether that
-    pass is store-admissible, so a caller can tell a superseded verdict from a live
-    one (reviews rv-20261008T220312Z F1, rv-20261008T221943Z F1/F2)."""
-    client = _client(monkeypatch, tmp_path)
-    store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
-    passed = _record(provider="codex", provider_version="0.145.0", invocation_id="p", generated_at="2026-10-05T00:00:00Z")
-    _write_trusted(store, passed)
-    cells = CellVerdictStore(tmp_path / "cell-verdicts")
-
-    def verdict(assertion_id: str, observed_at: datetime) -> CellVerdict:
-        return CellVerdict(
-            provider="codex",
-            assertion_id=assertion_id,
-            scenario_id=passed.scenario_id,
-            variant=passed.assertion_variant,
-            outcome="semantic_fail",
-            observed_at=observed_at,
-            consecutive_failures=2,
-        )
-
-    cells.publish(
-        [
-            verdict(passed.assertion_id, datetime(2026, 10, 4, tzinfo=UTC)),
-            verdict("reconnect_survives", datetime(2026, 10, 6, tzinfo=UTC)),
-        ]
-    )
-    try:
-        response = client.get(URL, params={"provider": "codex", "version": "0.145.0"})
-    finally:
-        api_app.dependency_overrides.clear()
-
-    payload = response.json()
-    assert response.status_code == 200
-    by_id = {item["assertion_id"]: item for item in payload["failing_verdicts"]}
-    assert set(by_id) == {passed.assertion_id, "reconnect_survives"}
-    # The older verdict carries the newer pass that supersedes it; the caller decides.
-    assert by_id[passed.assertion_id]["newest_pass_at"] == "2026-10-05T00:00:00Z"
-    assert isinstance(by_id[passed.assertion_id]["newest_pass_admissible"], bool)
-    assert by_id["reconnect_survives"]["newest_pass_at"] is None
-    assert payload["failing_verdicts_version_attributed"] is False
