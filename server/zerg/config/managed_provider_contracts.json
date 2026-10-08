@@ -863,8 +863,7 @@
           "trigger": "turn_end",
           "owner_action": "render reasoning as collapsed thinking records"
         }
-      },
-      "adapter_digest": "9f7462a7b4dd003cbd870519ff5ce8016a1b4b036e189a86e4b7572a69a2a5af"
+      }
     },
     {
       "provider": "claude",
@@ -1885,8 +1884,7 @@
           "trigger": "turn_end",
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
-      },
-      "adapter_digest": "c739d118a378ce52a92171b0410b1819588b9d861bf7e8123618eaa406629430"
+      }
     },
     {
       "provider": "opencode",
@@ -2631,8 +2629,7 @@
           "trigger": "turn_end",
           "owner_action": "render reasoning parts as collapsed thinking records"
         }
-      },
-      "adapter_digest": "cd26e6911777ace03163093c944ef65e9fa2c31ee9533b9f1fe0a15e2ea325bd"
+      }
     },
     {
       "provider": "antigravity",
@@ -3057,8 +3054,7 @@
           "trigger": "census",
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
-      },
-      "adapter_digest": "04fd801ee4440213e264ca11490af390f3f52917a13023cd4204174da781f165"
+      }
     },
     {
       "provider": "cursor",
@@ -3777,8 +3773,7 @@
           "trigger": "census",
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
-      },
-      "adapter_digest": "2f2dd9db40a0a2be74059c5d8ca9d39da23b534619cb3bce8b69ee0fc4f4bec4"
+      }
     },
     {
       "provider": "pi",
@@ -4402,8 +4397,7 @@
           "canary": "pi_transcript_signals",
           "trigger": "turn_end"
         }
-      },
-      "adapter_digest": "ce4bce3a393458ae334dbb624dbfb6a322827db5ffabff5814ebc5435a1b8527"
+      }
     },
     {
       "provider": "omp",
@@ -5076,8 +5070,7 @@
           "canary": "omp_transcript_signals",
           "trigger": "turn_end"
         }
-      },
-      "adapter_digest": "8b6522453ac8839631a0b8b38e0805ae9d9c1911b588e4df7b8a31cce23eb7ea"
+      }
     }
   ]
 }

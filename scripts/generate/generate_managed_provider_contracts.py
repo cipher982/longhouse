@@ -17,11 +17,12 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / "schemas" / "managed_providers.yml"
 OUTPUT_PATH = ROOT / "server" / "zerg" / "config" / "managed_provider_contracts.json"
-# The engine include_str!s this copy. It omits the source digests (adapter_digest,
-# oracle_digest): the engine reads neither, and they change whenever any adapter
-# or oracle file does, which rebuilt the engine on unrelated edits.
+# The engine include_str!s this copy. It omits oracle_digest: the engine never
+# reads it, and it changes whenever an oracle file does, which rebuilt the engine
+# on unrelated edits. (adapter_digest is not stored at all; it is computed from
+# adapter_sources when a proof is produced.)
 ENGINE_OUTPUT_PATH = ROOT / "engine" / "src" / "managed_provider_contracts.generated.json"
-ENGINE_OMITTED_KEYS = frozenset({"adapter_digest", "oracle_digest"})
+ENGINE_OMITTED_KEYS = frozenset({"oracle_digest"})
 
 sys.path.insert(0, str(ROOT / "server"))
 

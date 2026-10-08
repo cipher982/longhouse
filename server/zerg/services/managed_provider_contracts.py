@@ -14,6 +14,7 @@ from dataclasses import field
 from typing import Any
 
 from zerg.managed_provider_contract_manifest import MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX
+from zerg.managed_provider_contract_manifest import adapter_sources_digest
 from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.managed_provider_contract_manifest import managed_provider_contract_items
 from zerg.session_execution_home import ManagedSessionTransport
@@ -86,7 +87,6 @@ class ManagedProviderContract:
     control_plane: str | None
     release_channel: ProviderReleaseChannel
     control_plane_aliases: tuple[str, ...] = ()
-    adapter_digest: str = ""
     adapter_sources: tuple[str, ...] = ()
     wire_families: tuple[str, ...] = ()
     observation_sources: tuple[str, ...] = ()
@@ -187,6 +187,12 @@ class ManagedProviderContract:
         return self.operation_evidence.get(operation, {})
 
     @property
+    def adapter_digest(self) -> str:
+        """Digest of the adapter sources as they are now, never a stored copy."""
+
+        return adapter_sources_digest(self.provider, self.adapter_sources)
+
+    @property
     def contract_entry_digest(self) -> str:
         return managed_provider_contract_entry_digest(self.provider)
 
@@ -250,7 +256,6 @@ def managed_provider_contract_from_item(item: dict[str, object]) -> ManagedProvi
         managed_transport=(ManagedSessionTransport(str(item["managed_transport"])) if item.get("managed_transport") else None),
         control_plane=(str(item["control_plane"]) if item.get("control_plane") else None),
         control_plane_aliases=tuple(str(value) for value in item.get("control_plane_aliases") or ()),
-        adapter_digest=str(item.get("adapter_digest") or ""),
         adapter_sources=tuple(str(value) for value in item.get("adapter_sources") or ()),
         wire_families=tuple(str(value) for value in item.get("wire_families") or ()),
         observation_sources=tuple(str(value) for value in item.get("observation_sources") or ()),

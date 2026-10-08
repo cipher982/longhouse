@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from zerg.managed_provider_contract_manifest import _adapter_digest
 from zerg.managed_provider_contract_manifest import _validate_auth_probe
 from zerg.managed_provider_contract_manifest import _validate_machine_control_supports
 from zerg.managed_provider_contract_manifest import _validate_operation_evidence
@@ -155,13 +156,46 @@ def test_generated_runtime_manifest_does_not_require_repository_sources(monkeypa
     assert len(validated["providers"]) == 7
 
 
-def test_generated_runtime_manifest_rejects_invalid_embedded_digest():
+def test_generated_runtime_manifest_refuses_a_stored_adapter_digest():
     manifest_path = Path(__file__).resolve().parents[1] / "zerg" / "config" / "managed_provider_contracts.json"
     payload = json.loads(manifest_path.read_text())
-    payload["providers"][0]["adapter_digest"] = "z" * 64
+    payload["providers"][0]["adapter_digest"] = "a" * 64
 
-    with pytest.raises(ValueError, match="adapter_digest"):
+    with pytest.raises(ValueError, match="adapter_digest is computed from adapter_sources"):
         validate_generated_contract_manifest(payload)
+
+
+def test_contract_adapter_digest_is_computed_from_the_sources_on_disk():
+    repo = Path(__file__).resolve().parents[2]
+    manifest_path = repo / "server" / "zerg" / "config" / "managed_provider_contracts.json"
+    items = {item["provider"]: item for item in json.loads(manifest_path.read_text())["providers"]}
+    for contract in all_managed_provider_contracts():
+        expected = _adapter_digest(items[contract.provider], source_root=repo)
+        assert contract.adapter_digest == expected
+        assert len(contract.adapter_digest) == 64
+
+
+def test_contract_adapter_digest_reads_longhouse_source_root(monkeypatch, tmp_path):
+    repo = Path(__file__).resolve().parents[2]
+    contract = contract_for_provider("codex")
+    for relative in contract.adapter_sources:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((repo / relative).read_bytes())
+    monkeypatch.setenv("LONGHOUSE_SOURCE_ROOT", str(tmp_path))
+    assert contract.adapter_digest == _adapter_digest(
+        {"provider": "codex", "adapter_sources": list(contract.adapter_sources)}, source_root=repo
+    )
+
+    first = tmp_path / contract.adapter_sources[0]
+    first.write_bytes(first.read_bytes() + b"\n// edited")
+    assert contract.adapter_digest != _adapter_digest(
+        {"provider": "codex", "adapter_sources": list(contract.adapter_sources)}, source_root=repo
+    )
+
+    first.unlink()
+    with pytest.raises(ValueError, match="adapter source not found"):
+        contract.adapter_digest
 
 
 def test_provider_cli_catalog_matches_managed_provider_contracts():

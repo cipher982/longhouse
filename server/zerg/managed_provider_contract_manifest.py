@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
@@ -804,7 +805,10 @@ def normalize_contract_manifest(
     items: list[dict[str, Any]] = []
     for item in _validated_contract_items(payload):
         normalized_item = deepcopy(item)
-        normalized_item["adapter_digest"] = _adapter_digest(item, source_root=source_root)
+        # adapter_digest is computed from adapter_sources when a proof is
+        # produced, never stored: storing it churned this manifest on every
+        # adapter edit. Hashing here still fails on a missing source.
+        _adapter_digest(item, source_root=source_root)
         for entry in normalized_item.get("operation_evidence", {}).values():
             proof = entry.get("required_assertions")
             if proof is None:
@@ -838,9 +842,8 @@ def validate_generated_contract_manifest(payload: dict[str, Any]) -> dict[str, A
     items = _validated_contract_items(payload)
     for item in items:
         provider = str(item["provider"])
-        adapter_digest = item.get("adapter_digest")
-        if not _is_sha256_digest(adapter_digest):
-            raise ValueError(f"managed provider contract {provider}: adapter_digest must be a SHA-256 hex digest")
+        if "adapter_digest" in item:
+            raise ValueError(f"managed provider contract {provider}: adapter_digest is computed from adapter_sources, never stored")
         proven = [entry.get("required_assertions") or [] for entry in item.get("operation_evidence", {}).values()]
         declared = [declaration.get("required_assertions", []) for declaration in item.get("capabilities", {}).values()]
         for assertions in (*proven, *declared):
@@ -876,9 +879,26 @@ def managed_provider_contract_entry_digest(provider: str) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def contract_source_root() -> Path:
+    """Where adapter sources are read: ``LONGHOUSE_SOURCE_ROOT`` or this checkout.
+
+    The provider factory runs producers from a verifier bundle that holds only
+    pinned files, so it exports the head checkout under qualification here.
+    """
+
+    override = os.environ.get("LONGHOUSE_SOURCE_ROOT")
+    return Path(override) if override else Path(__file__).resolve().parents[2]
+
+
+def adapter_sources_digest(provider: str, adapter_sources: tuple[str, ...] | list[str]) -> str:
+    """SHA-256 over a provider's adapter sources, read from ``contract_source_root()``."""
+
+    return _adapter_digest({"provider": provider, "adapter_sources": list(adapter_sources)})
+
+
 def _adapter_digest(item: dict[str, Any], *, source_root: Path | None = None) -> str:
     provider = str(item.get("provider") or "<unknown>")
-    root = source_root or Path(__file__).resolve().parents[2]
+    root = source_root or contract_source_root()
     digest = hashlib.sha256()
     for raw_path in item.get("adapter_sources") or ():
         relative = Path(str(raw_path))
