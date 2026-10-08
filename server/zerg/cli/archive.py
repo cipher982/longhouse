@@ -13,6 +13,7 @@ from typing import Any
 import typer
 
 from zerg.config import get_settings
+from zerg.services.archive_backlog import backlog_ship_lane
 from zerg.services.archive_backlog import collect_archive_backlog
 from zerg.services.archive_backlog import pending_backlog_bytes
 from zerg.services.archive_backlog import write_archive_control
@@ -86,7 +87,7 @@ def _shipper_diagnostics(
     limiter = dict(shipper.get("adaptive_backlog_limiter") or {})
     lanes = dict(shipper.get("ship_lanes") or {})
     live_lane = dict(lanes.get("live") or {})
-    archive_lane = dict(lanes.get("archive") or {})
+    archive_lane = backlog_ship_lane(lanes)
     return shipper, scheduler, limiter, live_lane, archive_lane
 
 
@@ -133,24 +134,30 @@ def status_command(
 
 def _render_status_summary(summary: dict[str, Any]) -> None:
     typer.echo(f"Archive repair: {summary['state']} ({summary['mode']})")
-    typer.echo(f"  pending ranges:   {summary['pending_ranges']}")
-    typer.echo(f"  pending paths:    {summary['pending_paths']}")
-    typer.echo(f"  pending sessions: {summary['pending_sessions']}")
-    typer.echo(f"  pending bytes:    {_format_bytes(summary['pending_bytes'])}")
-    typer.echo(f"  huge ranges:      {summary['huge_pending_ranges']} ({_format_bytes(summary['huge_pending_bytes'])})")
-    typer.echo(f"  dead letters:     {summary['dead_ranges']} ({_format_bytes(summary['dead_bytes'])})")
-    if summary.get("oldest_pending_at"):
-        typer.echo(f"  oldest pending:   {summary['oldest_pending_at']}")
-    if summary.get("next_retry_at_min"):
-        typer.echo(f"  next retry:       {summary['next_retry_at_min']}")
     outbox = summary.get("storage_v2_outbox")
     if isinstance(outbox, dict):
-        typer.echo(
-            f"  storage-v2 outbox: {outbox['pending_count']} envelopes ({_format_bytes(outbox['pending_bytes'])}), "
-            f"{outbox['blocked_source_count']} blocked sources"
-        )
+        # The storage-v2 outbox is the backlog; the range counters below it
+        # described the retired v1 spool and are always zero.
+        typer.echo(f"  pending envelopes: {outbox['pending_count']}")
+        typer.echo(f"  pending bytes:    {_format_bytes(outbox['pending_bytes'])}")
         if outbox.get("oldest_pending_at"):
-            typer.echo(f"  oldest envelope:  {outbox['oldest_pending_at']}")
+            typer.echo(f"  oldest pending:   {outbox['oldest_pending_at']}")
+        typer.echo(
+            f"  blocked sources:  {outbox['blocked_source_count']} "
+            f"({outbox['unresolved_blocked_source_count']} need you, "
+            f"{outbox['reconciling_blocked_source_count']} reconciling)"
+        )
+    else:
+        typer.echo(f"  pending ranges:   {summary['pending_ranges']}")
+        typer.echo(f"  pending paths:    {summary['pending_paths']}")
+        typer.echo(f"  pending sessions: {summary['pending_sessions']}")
+        typer.echo(f"  pending bytes:    {_format_bytes(summary['pending_bytes'])}")
+        typer.echo(f"  huge ranges:      {summary['huge_pending_ranges']} ({_format_bytes(summary['huge_pending_bytes'])})")
+        typer.echo(f"  dead letters:     {summary['dead_ranges']} ({_format_bytes(summary['dead_bytes'])})")
+        if summary.get("oldest_pending_at"):
+            typer.echo(f"  oldest pending:   {summary['oldest_pending_at']}")
+        if summary.get("next_retry_at_min"):
+            typer.echo(f"  next retry:       {summary['next_retry_at_min']}")
 
     _, scheduler, limiter, live_lane, archive_lane = _shipper_diagnostics(summary)
 

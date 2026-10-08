@@ -178,8 +178,13 @@ def test_archive_status_reports_the_storage_v2_outbox_backlog(tmp_path: Path):
                     "pending_bytes": 8192,
                     "oldest_pending_at": "2026-10-08T00:00:00Z",
                     "blocked_source_count": 1,
+                    "reconciling_blocked_source_count": 1,
+                    "unresolved_blocked_source_count": 0,
                 },
-                "ship_lanes": {"archive": {"bytes_per_sec_ewma_10s": 1024}},
+                "ship_lanes": {
+                    "archive": {"attempts_1h": 0, "bytes_per_sec_ewma_10s": 0},
+                    "repair": {"attempts_1h": 4, "bytes_per_sec_ewma_10s": 1024},
+                },
             }
         )
     )
@@ -191,14 +196,19 @@ def test_archive_status_reports_the_storage_v2_outbox_backlog(tmp_path: Path):
         "pending_bytes": 8192,
         "oldest_pending_at": "2026-10-08T00:00:00Z",
         "blocked_source_count": 1,
+        "reconciling_blocked_source_count": 1,
+        "unresolved_blocked_source_count": 0,
     }
     assert summary["archive_eta_seconds"] == 8
 
     result = CliRunner().invoke(app, ["archive", "status", "--state-root", str(tmp_path)])
     assert result.exit_code == 0, result.output
-    assert "storage-v2 outbox: 7 envelopes" in result.output
-    assert "1 blocked sources" in result.output
+    assert "pending envelopes: 7" in result.output
+    assert "pending ranges" not in result.output
+    assert "1 (0 need you, 1 reconciling)" in result.output
 
     speed = CliRunner().invoke(app, ["archive", "speed", "--json", "--state-root", str(tmp_path)])
     assert speed.exit_code == 0, speed.output
-    assert json.loads(speed.output)["archive"]["pending_bytes"] == 8192
+    speed_archive = json.loads(speed.output)["archive"]
+    assert speed_archive["pending_bytes"] == 8192
+    assert speed_archive["bytes_per_sec_ewma_10s"] == 1024

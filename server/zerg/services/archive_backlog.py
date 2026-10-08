@@ -194,6 +194,8 @@ def _attach_storage_v2_outbox(result: dict[str, Any], engine_status_payload: Map
         "pending_bytes": _int(raw.get("pending_bytes")),
         "oldest_pending_at": _optional_str(raw.get("oldest_pending_at")),
         "blocked_source_count": _int(raw.get("blocked_source_count")),
+        "reconciling_blocked_source_count": _int(raw.get("reconciling_blocked_source_count")),
+        "unresolved_blocked_source_count": _int(raw.get("unresolved_blocked_source_count")),
     }
 
 
@@ -205,13 +207,27 @@ def pending_backlog_bytes(result: Mapping[str, Any]) -> int:
     return _int(result.get("pending_bytes"))
 
 
+def backlog_ship_lane(lanes: Any) -> dict[str, Any]:
+    """The ship lane that drains backlog.
+
+    The v1 spool shipped on the `archive` lane; storage-v2 backlog ships on
+    `repair`. An engine still reporting archive-lane activity is an older one.
+    """
+    if not isinstance(lanes, Mapping):
+        return {}
+    archive = lanes.get("archive")
+    if isinstance(archive, Mapping) and _int(archive.get("attempts_1h")) > 0:
+        return dict(archive)
+    repair = lanes.get("repair")
+    return dict(repair) if isinstance(repair, Mapping) else {}
+
+
 def _attach_archive_progress(result: dict[str, Any], engine_status_payload: Mapping[str, Any] | None) -> None:
-    """Add the only honest ETA: pending bytes divided by acknowledged archive rate."""
+    """Add the only honest ETA: pending bytes divided by the acknowledged backlog rate."""
     if not isinstance(engine_status_payload, Mapping):
         return
-    lanes = engine_status_payload.get("ship_lanes")
-    archive_lane = lanes.get("archive") if isinstance(lanes, Mapping) else None
-    if not isinstance(archive_lane, Mapping):
+    archive_lane = backlog_ship_lane(engine_status_payload.get("ship_lanes"))
+    if not archive_lane:
         return
     try:
         bytes_per_second = float(archive_lane.get("bytes_per_sec_ewma_10s") or 0)
