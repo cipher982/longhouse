@@ -75,6 +75,35 @@ import json, sys
 for f in json.load(sys.stdin).get("testFailures", []):
     print("  %s: %s" % (f.get("testName"), f.get("failureText")))
 ' || echo "  (could not read $RESULT_BUNDLE)"
+  # A crashed preview's report says where it trapped; keep it with the PNGs.
+  mkdir -p "$OUT_DIR/crashes"
+  xcrun xcresulttool export diagnostics --path "$RESULT_BUNDLE" \
+    --output-path "$OUT_DIR/crashes/xcresult-diagnostics" >/dev/null 2>&1 || true
+  find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -name 'Longhouse*' -mmin -60 \
+    -exec cp {} "$OUT_DIR/crashes/" \; 2>/dev/null || true
+  find "$OUT_DIR/crashes" -name '*.ips' -print0 2>/dev/null | xargs -0 python3 -c '
+import json, sys
+for path in sys.argv[1:]:
+    try:
+        text = open(path).read()
+        body = json.loads(text[text.index("\n") + 1:])
+    except Exception as error:
+        print("  %s: unreadable (%s)" % (path, error))
+        continue
+    print("  crash report %s" % path.rsplit("/", 1)[-1])
+    print("    exception: %s" % json.dumps(body.get("exception")))
+    if body.get("asi"):
+        print("    asi: %s" % json.dumps(body.get("asi")))
+    images = body.get("usedImages", [])
+    for thread in body.get("threads", []):
+        if not thread.get("triggered"):
+            continue
+        for frame in thread.get("frames", [])[:25]:
+            index = frame.get("imageIndex")
+            image = images[index].get("name", "?") if index is not None and index < len(images) else "?"
+            print("    %s %s +%s %s:%s" % (image, frame.get("symbol", "?"), frame.get("symbolLocation", 0),
+                                         frame.get("sourceFile", ""), frame.get("sourceLine", "")))
+' || true
 fi
 
 echo ">> Extracting attachments"
