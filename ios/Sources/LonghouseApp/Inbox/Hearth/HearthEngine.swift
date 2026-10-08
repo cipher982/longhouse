@@ -246,7 +246,10 @@ final class HearthEngine {
             for view in onScreen { draw(view, simulation: simulation, command: command, sparks: !still) }
         }
         inFlight += 1
-        command.addCompletedHandler { buffer in
+        // Metal calls this on its own queue. Without @Sendable the closure
+        // inherits tick()'s main-actor isolation under SDKs whose handler type
+        // is not Sendable (Xcode 16), and Swift 6 traps on the executor check.
+        command.addCompletedHandler { @Sendable buffer in
             let gpu = buffer.gpuEndTime - buffer.gpuStartTime
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { HearthEngine.shared.completed(slot: slot, gpu: gpu) }
