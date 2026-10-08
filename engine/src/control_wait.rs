@@ -22,8 +22,14 @@ pub(crate) fn control_wait(default: Duration) -> Duration {
 
 #[cfg(test)]
 pub(crate) fn with_test_control_wait<T>(wait: Duration, body: impl FnOnce() -> T) -> T {
-    let previous = TEST_OVERRIDE.with(|cell| cell.replace(Some(wait)));
-    let result = body();
-    TEST_OVERRIDE.with(|cell| cell.set(previous));
-    result
+    // Restored on drop, so a panicking body cannot leak the override into
+    // whatever runs next on this thread.
+    struct Restore(Option<Duration>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_OVERRIDE.with(|cell| cell.set(self.0));
+        }
+    }
+    let _restore = Restore(TEST_OVERRIDE.with(|cell| cell.replace(Some(wait))));
+    body()
 }
