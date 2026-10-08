@@ -626,6 +626,11 @@ struct SessionRuntimeDock: View {
         return RuntimeElapsed.ageLabel(from: observed, to: now)
     }
 
+    /// Whole-word match, so "Bash" does not count as named by "Bashful".
+    static func headlineNamesTool(_ headline: String, tool: String) -> Bool {
+        headline.range(of: "\\b\(NSRegularExpression.escapedPattern(for: tool))\\b", options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
     private func operationLine(for state: SessionLedgerEvidence) -> String? {
         if let tail = detail.runtimeTailLine,
            !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -637,6 +642,10 @@ struct SessionRuntimeDock: View {
               !tool.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
+        // "Using Bash" over "Tool: Bash" says the same thing twice. Keep the
+        // line when the headline does not name the tool (it is then the only
+        // place the tool shows).
+        if state != .uncertain, Self.headlineNamesTool(headline(for: state), tool: tool) { return nil }
         return state == .uncertain ? "Last observed tool: \(tool)" : "Tool: \(tool)"
     }
 

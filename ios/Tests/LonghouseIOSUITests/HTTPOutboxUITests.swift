@@ -97,6 +97,8 @@ final class HTTPOutboxUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: Self.timeout), "real composer did not load")
         XCTAssertTrue(actions.waitForExistence(timeout: Self.timeout), "real composer action menu did not load")
 
+        // The model lives in the + menu now, not a chip above the input.
+        actions.tap()
         let selectedModel = app.buttons.matching(
             NSPredicate(format: "identifier == %@ AND label == %@", "session-chat-model-picker", "Model gpt-5.6-luna")
         ).firstMatch
@@ -105,7 +107,6 @@ final class HTTPOutboxUITests: XCTestCase {
             "the session's selected model did not hydrate in the composer before sending"
         )
 
-        actions.tap()
         let attach = app.buttons["session-chat-attach"]
         XCTAssertTrue(attach.waitForExistence(timeout: 5), "real attachment action is not available")
         attach.tap()

@@ -699,14 +699,18 @@ struct SessionView: View {
             onStop: {
                 await viewModel.stopConsoleWork(sessionId: sessionId, appState: appState)
             },
-            actionMenu: { attachmentInputEnabled in
+            actionMenu: { menu in
                 SessionComposerActionMenu(
                     detail: detail,
                     attachmentSlotsLeft: attachmentStore.slotsLeft,
-                    attachmentInputEnabled: attachmentInputEnabled,
+                    attachmentInputEnabled: menu.attachmentInputEnabled,
                     isProcessing: attachmentStore.isProcessing || isLoadingPickerItems,
                     isSending: viewModel.isSending,
-                    onAttach: { isShowingPhotoPicker = true }
+                    onAttach: { isShowingPhotoPicker = true },
+                    model: menu.model,
+                    onModelTap: menu.onModelTap,
+                    stopLabel: menu.stopLabel,
+                    onArmStop: menu.armStop
                 )
             },
             attachmentTray: { attachmentTray }

@@ -319,14 +319,18 @@ private struct SessionScreenPreview: View {
                                 onDismissTurnEnded: {},
                                 onPauseRespond: { _, _, _, _ in false },
                                 onSend: { _ in },
-                                actionMenu: { attachmentInputEnabled in
+                                actionMenu: { menu in
                                     SessionComposerActionMenu(
                                         detail: detail,
                                         attachmentSlotsLeft: ComposerAttachmentLimits.maxAttachments,
-                                        attachmentInputEnabled: attachmentInputEnabled,
+                                        attachmentInputEnabled: menu.attachmentInputEnabled,
                                         isProcessing: false,
                                         isSending: isSending,
-                                        onAttach: {}
+                                        onAttach: {},
+                                        model: menu.model,
+                                        onModelTap: menu.onModelTap,
+                                        stopLabel: menu.stopLabel,
+                                        onArmStop: menu.armStop
                                     )
                                 },
                                 attachmentTray: { EmptyView() }

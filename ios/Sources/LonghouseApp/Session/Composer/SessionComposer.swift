@@ -4,6 +4,9 @@ import SwiftUI
 /// preview. Keeping these decisions next to the controls prevents previews
 /// from quietly growing a second send/queue policy.
 enum SessionComposerControlState {
+    /// How long a first Stop tap stays armed before it quietly disarms.
+    static let stopConfirmWindow: TimeInterval = 3
+
     static func isVisible(for detail: SessionDetail) -> Bool {
         detail.activePauseRequest != nil || detail.canSendLive || detail.canDraftBeforeSendReady
     }
@@ -61,6 +64,36 @@ enum SessionComposerControlState {
         return "Stop"
     }
 
+    /// The send slot becomes Stop while a stop is available and there is
+    /// nothing to send. An armed Stop keeps the slot even with a draft, so a
+    /// Stop armed from the + menu has a visible second tap.
+    static func sendSlotShowsStop(stopAvailable: Bool, hasContent: Bool, armed: Bool) -> Bool {
+        stopAvailable && (!hasContent || armed)
+    }
+
+    /// One status line above the input, most urgent first. A pending
+    /// turn-ended decision is its own row and is not part of this choice.
+    enum StatusNotice: Equatable {
+        case stopError
+        case failed(count: Int)
+        case queued(total: Int, elsewhere: Int)
+        case sent
+    }
+
+    static func statusNotice(
+        stopError: String?,
+        failedCount: Int,
+        queuedCount: Int,
+        queuedElsewhereCount: Int,
+        sent: Bool
+    ) -> StatusNotice? {
+        if stopError != nil { return .stopError }
+        if failedCount > 0 { return .failed(count: failedCount) }
+        if queuedCount > 0 { return .queued(total: queuedCount, elsewhere: queuedElsewhereCount) }
+        if sent { return .sent }
+        return nil
+    }
+
     /// The queue is shared by every sender into a session. The phone shows a
     /// bubble only for what it sent, so a message another sender parked is named
     /// rather than counted silently ("two queued" beside one bubble read as a bug).
@@ -82,6 +115,17 @@ enum SessionComposerControlState {
     }
 }
 
+/// What the composer hands its action menu. The menu owns the attachment,
+/// model and Stop entry points, but the composer owns the gates behind them.
+struct SessionComposerMenuContext {
+    let attachmentInputEnabled: Bool
+    let model: String?
+    let onModelTap: (() -> Void)?
+    let stopLabel: String?
+    /// Arms the two-step Stop in the send slot; it never stops on its own.
+    let armStop: () -> Void
+}
+
 /// The attachment/secondary-action control at the leading edge of the
 /// composer. The live view supplies the photo-picker action; previews supply
 /// an inert closure, but use this same control and capability gate.
@@ -92,6 +136,10 @@ struct SessionComposerActionMenu: View {
     let isProcessing: Bool
     let isSending: Bool
     let onAttach: () -> Void
+    var model: String? = nil
+    var onModelTap: (() -> Void)? = nil
+    var stopLabel: String? = nil
+    var onArmStop: (() -> Void)? = nil
 
     var body: some View {
         let canAttachImages = attachmentInputEnabled
@@ -118,6 +166,20 @@ struct SessionComposerActionMenu: View {
             }
             .disabled(!canAttachImages)
             .accessibilityIdentifier(canAttachImages ? "session-chat-attach" : "session-chat-attach-unavailable")
+
+            if let onModelTap {
+                Button(action: onModelTap) {
+                    Label("Model \(model ?? "Default")", systemImage: "cpu")
+                }
+                .accessibilityIdentifier("session-chat-model-picker")
+            }
+
+            if let stopLabel, let onArmStop {
+                Button(role: .destructive, action: onArmStop) {
+                    Label(stopLabel, systemImage: "stop.fill")
+                }
+                .accessibilityIdentifier("session-chat-stop-menu")
+            }
         } label: {
             Group {
                 if isProcessing {
@@ -137,29 +199,6 @@ struct SessionComposerActionMenu: View {
         .accessibilityIdentifier("session-chat-compose-actions")
     }
 }
-struct SessionModelChip: View {
-    let model: String?
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            Label(model ?? "Default", systemImage: "cpu")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Ember.textSecondary)
-                .lineLimit(1)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Ember.well, in: Capsule())
-                .overlay {
-                    Capsule().strokeBorder(Ember.hairline, lineWidth: 0.75)
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Model \(model ?? "Default")")
-        .accessibilityIdentifier("session-chat-model-picker")
-    }
-}
-
 
 /// Production composer controls with injectable actions for previews. The
 /// pause card, draft/queue affordance, attachment tray, and send row all share
@@ -172,7 +211,13 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     @FocusState.Binding var focused: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var evidenceNow = Date()
+    /// Set by the first Stop tap; nil whenever Stop is not armed.
+    @State private var stopArmedAt: Date?
+    @State private var stopRingProgress: Double = 1
+    @State private var stopArmTick = 0
+    @State private var stopConfirmTick = 0
     let failedInputCount: Int
     let queuedInputCount: Int
     let queuedElsewhereCount: Int
@@ -196,7 +241,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     ) async -> Bool
     let onSend: (_ intent: String?) async -> Void
     let onStop: () async -> Void
-    let actionMenu: (_ attachmentInputEnabled: Bool) -> ActionMenu
+    let actionMenu: (_ context: SessionComposerMenuContext) -> ActionMenu
     let attachmentTray: AttachmentTray
 
     init(
@@ -228,7 +273,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         ) async -> Bool,
         onSend: @escaping (_ intent: String?) async -> Void,
         onStop: @escaping () async -> Void = {},
-        @ViewBuilder actionMenu: @escaping (_ attachmentInputEnabled: Bool) -> ActionMenu,
+        @ViewBuilder actionMenu: @escaping (_ context: SessionComposerMenuContext) -> ActionMenu,
         @ViewBuilder attachmentTray: () -> AttachmentTray
     ) {
         self.detail = detail
@@ -260,78 +305,31 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
 
     var body: some View {
         let attachmentInputEnabled = SessionComposerControlState.attachmentInputEnabled(for: detail, asOf: evidenceNow)
+        let stopLabel = SessionComposerControlState.stopActionLabel(for: detail)
+        let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachmentIsEmpty
+        let inputRowVisible = detail.activePauseRequest == nil || focused || !text.isEmpty || !attachmentIsEmpty
+        let notice = SessionComposerControlState.statusNotice(
+            stopError: stopErrorMessage,
+            failedCount: failedInputCount,
+            queuedCount: queuedInputCount,
+            queuedElsewhereCount: queuedElsewhereCount,
+            sent: lastSendOutcome == .sent
+        )
         VStack(alignment: .leading, spacing: 6) {
-            if detail.stateFacts.mode == "console" {
-                SessionModelChip(model: model, onTap: onModelTap)
-            }
-            if let stopLabel = SessionComposerControlState.stopActionLabel(for: detail) {
-                HStack {
-                    Button {
-                        Task { await onStop() }
-                    } label: {
-                        Label(isStopping ? "Stopping" : stopLabel, systemImage: "stop.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(isStopping)
-                    .accessibilityLabel(isStopping ? "Stopping" : stopLabel)
-                    .accessibilityIdentifier("session-chat-stop")
+            // One status line, most urgent first. While a pause hides the input
+            // row, Stop rides here so it stays reachable.
+            if notice != nil || (!inputRowVisible && stopLabel != nil) {
+                HStack(spacing: 8) {
+                    noticeText(notice)
                     Spacer(minLength: 0)
+                    if !inputRowVisible, let stopLabel {
+                        stopControl(label: stopLabel)
+                    }
                 }
-            }
-            if let stopErrorMessage {
-                Text(stopErrorMessage)
-                    .font(.caption)
-                    .foregroundStyle(Ember.ember)
-            }
-
-            if failedInputCount > 0 {
-                Text(failedInputCount == 1
-                     ? "1 queued message failed to send."
-                     : "\(failedInputCount) queued messages failed to send.")
-                    .font(.caption)
-                    .foregroundStyle(Ember.ember)
-                    .accessibilityIdentifier("session-chat-queued-failed")
-            }
-
-            if queuedInputCount > 0 {
-                Text(SessionComposerControlState.queuedIndicatorText(
-                    total: queuedInputCount,
-                    elsewhere: queuedElsewhereCount
-                ))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("session-chat-queued-indicator")
-            } else if lastSendOutcome == .sent {
-                Text("Sent.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             if let turnEndedDraft {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Active turn ended")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Ember.flame)
-                    Text(turnEndedDraft)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                    HStack(spacing: 8) {
-                        Button("Queue instead") {
-                            Task { await onQueueInstead() }
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        Button("Dismiss", action: onDismissTurnEnded)
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                    }
-                }
-                .padding(8)
-                .background(Ember.flame.opacity(0.08))
-                .cornerRadius(8)
-                .accessibilityIdentifier("session-chat-turn-ended")
+                turnEndedRow(turnEndedDraft)
             }
 
             if let pauseRequest = detail.activePauseRequest {
@@ -349,8 +347,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                 attachmentTray
             }
 
-            if detail.activePauseRequest == nil || focused || !text.isEmpty || !attachmentIsEmpty {
-                let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachmentIsEmpty
+            if inputRowVisible {
                 let sendIsEnabled = detail.canSendLive
                     && detail.activePauseRequest == nil
                     && hasContent
@@ -358,20 +355,27 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                     && !attachmentIsProcessing
                     && !isLoadingPickerItems
                     && !(attachmentIsEmpty == false && !attachmentInputEnabled)
+                let menu = SessionComposerMenuContext(
+                    attachmentInputEnabled: attachmentInputEnabled,
+                    model: model,
+                    onModelTap: detail.stateFacts.mode == "console" ? onModelTap : nil,
+                    stopLabel: stopLabel,
+                    armStop: armStop
+                )
                 if typeSize.isAccessibilitySize {
                     VStack(alignment: .leading, spacing: 6) {
                         draftEditor
                         HStack {
-                            actionMenu(attachmentInputEnabled)
+                            actionMenu(menu)
                             Spacer()
-                            sendButton(enabled: sendIsEnabled)
+                            actionSlot(stopLabel: stopLabel, hasContent: hasContent, sendIsEnabled: sendIsEnabled)
                         }
                     }
                 } else {
                     HStack(alignment: .bottom, spacing: 8) {
-                        actionMenu(attachmentInputEnabled)
+                        actionMenu(menu)
                         draftEditor
-                        sendButton(enabled: sendIsEnabled)
+                        actionSlot(stopLabel: stopLabel, hasContent: hasContent, sendIsEnabled: sendIsEnabled)
                     }
                 }
             }
@@ -385,9 +389,90 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
             }
             if !Task.isCancelled { evidenceNow = Date() }
         }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { evidenceNow = Date() }
+        .task(id: stopArmedAt) {
+            // The ring drains over the whole window, then the arm lapses by itself.
+            guard let armedAt = stopArmedAt else { return }
+            let remaining = armedAt.addingTimeInterval(SessionComposerControlState.stopConfirmWindow)
+                .timeIntervalSinceNow
+            guard remaining > 0 else {
+                disarmStop()
+                return
+            }
+            stopRingProgress = 1
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(reduceMotion ? nil : .linear(duration: remaining)) { stopRingProgress = 0 }
+            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            if !Task.isCancelled { disarmStop() }
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { evidenceNow = Date() } else { disarmStop() }
+        }
+        // An armed Stop belongs to one turn and one draft. Any of these ends it;
+        // routine observation updates deliberately do not.
+        .onChange(of: text) { _, _ in disarmStop() }
+        .onChange(of: attachmentIsEmpty) { _, _ in disarmStop() }
+        .onChange(of: detail.id) { _, _ in disarmStop() }
+        .onChange(of: detail.activityStartedAt) { _, _ in disarmStop() }
+        .onChange(of: stopLabel == nil) { _, unavailable in
+            if unavailable { disarmStop() }
+        }
+        .onChange(of: isStopping) { _, stopping in
+            if stopping { disarmStop() }
+        }
+    }
+
+    @ViewBuilder
+    private func noticeText(_ notice: SessionComposerControlState.StatusNotice?) -> some View {
+        switch notice {
+        case .stopError:
+            Text(stopErrorMessage ?? "")
+                .font(.caption)
+                .foregroundStyle(Ember.ember)
+                .accessibilityIdentifier("session-chat-stop-error")
+        case .failed(let count):
+            Text(count == 1
+                 ? "1 queued message failed to send."
+                 : "\(count) queued messages failed to send.")
+                .font(.caption)
+                .foregroundStyle(Ember.ember)
+                .accessibilityIdentifier("session-chat-queued-failed")
+        case .queued(let total, let elsewhere):
+            Text(SessionComposerControlState.queuedIndicatorText(total: total, elsewhere: elsewhere))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("session-chat-queued-indicator")
+        case .sent:
+            Text("Sent.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private func turnEndedRow(_ draft: String) -> some View {
+        HStack(spacing: 8) {
+            Text("Active turn ended")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Ember.flame)
+            Text(draft)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Button("Queue instead") {
+                Task { await onQueueInstead() }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Button("Dismiss", action: onDismissTurnEnded)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+        .padding(8)
+        .background(Ember.flame.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityIdentifier("session-chat-turn-ended")
     }
 
     private var draftEditor: some View {
@@ -404,6 +489,110 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
             }
             .accessibilityIdentifier("session-chat-composer")
     }
+
+    @ViewBuilder
+    private func actionSlot(stopLabel: String?, hasContent: Bool, sendIsEnabled: Bool) -> some View {
+        if let stopLabel, SessionComposerControlState.sendSlotShowsStop(
+            stopAvailable: true,
+            hasContent: hasContent,
+            armed: stopArmedAt != nil
+        ) {
+            stopControl(label: stopLabel)
+        } else {
+            sendButton(enabled: sendIsEnabled)
+        }
+    }
+
+    // MARK: Two-step Stop
+
+    private func armStop() {
+        guard !isStopping, SessionComposerControlState.stopActionLabel(for: detail) != nil else { return }
+        stopArmTick += 1
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.28)) { stopArmedAt = Date() }
+    }
+
+    private func confirmStop() {
+        // Recheck the window and capability on the confirming tap: a stale arm
+        // must not interrupt a turn the user is no longer looking at.
+        guard let armedAt = stopArmedAt,
+              !isStopping,
+              SessionComposerControlState.stopActionLabel(for: detail) != nil,
+              Date().timeIntervalSince(armedAt) < SessionComposerControlState.stopConfirmWindow else {
+            disarmStop()
+            return
+        }
+        stopConfirmTick += 1
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.2)) { stopArmedAt = nil }
+        Task { await onStop() }
+    }
+
+    private func disarmStop() {
+        guard stopArmedAt != nil else { return }
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.2)) { stopArmedAt = nil }
+    }
+
+    private func stopControl(label: String) -> some View {
+        Button {
+            if stopArmedAt == nil { armStop() } else { confirmStop() }
+        } label: {
+            stopControlLabel(label: label)
+        }
+        .buttonStyle(.plain)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        .disabled(isStopping)
+        .sensoryFeedback(.warning, trigger: stopArmTick)
+        .sensoryFeedback(.impact(weight: .heavy), trigger: stopConfirmTick)
+        .accessibilityLabel(stopArmedAt == nil ? label : "Confirm \(label.lowercased())")
+        .accessibilityHint(stopArmedAt == nil ? "" : "Tap again to stop. Cancels in a few seconds.")
+        .accessibilityIdentifier("session-chat-stop")
+    }
+
+    @ViewBuilder
+    private func stopControlLabel(label: String) -> some View {
+        if isStopping {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Stopping")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Ember.textSecondary)
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .background(Ember.well, in: Capsule())
+            .overlay { Capsule().strokeBorder(Ember.hairline, lineWidth: 0.75) }
+        } else if stopArmedAt != nil {
+            HStack(spacing: 8) {
+                ZStack {
+                    Circle()
+                        .stroke(Ember.flame.opacity(0.22), lineWidth: 2)
+                    Circle()
+                        .trim(from: 0, to: stopRingProgress)
+                        .stroke(Ember.flame, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
+                .frame(width: 18, height: 18)
+                Text("Tap to stop")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Ember.flame)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 40)
+            .background(Ember.flame.opacity(0.14), in: Capsule())
+            .overlay { Capsule().strokeBorder(Ember.flame.opacity(0.55), lineWidth: 1) }
+            .transition(.scale(scale: 0.9).combined(with: .opacity))
+        } else {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Ember.flame)
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(Ember.flame.opacity(0.14)))
+                .overlay { Circle().strokeBorder(Ember.flame.opacity(0.5), lineWidth: 1) }
+                .transition(.scale(scale: 0.9).combined(with: .opacity))
+        }
+    }
+
+    // MARK: Send
 
     private func sendButton(enabled: Bool) -> some View {
         Button {
