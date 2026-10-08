@@ -10,7 +10,7 @@ use std::net::Shutdown;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::os::unix::process::CommandExt;
 use uuid::Uuid;
@@ -26,14 +26,14 @@ use uuid::Uuid;
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use crate::managed_launch_lifecycle::{
-    register_managed_launch_with_timeout, spawn_managed_registration_retry_with_hook,
-    spawn_managed_resume_registration_retry, DeferredNotices, ManagedLaunchResponse,
-    ManagedLaunchTransaction, FOREGROUND_REGISTRATION_TIMEOUT,
+    DeferredNotices, FOREGROUND_REGISTRATION_TIMEOUT, ManagedLaunchResponse,
+    ManagedLaunchTransaction, register_managed_launch_with_timeout,
+    spawn_managed_registration_retry_with_hook, spawn_managed_resume_registration_retry,
 };
 use crate::managed_launch_payload::{
     ManagedLaunchProvenance, ManagedLaunchRegistration, PermissionMode,
 };
-use crate::managed_terminal::{terminal_state_for_exit, ForegroundTerminal, ManagedTerminalEvent};
+use crate::managed_terminal::{ForegroundTerminal, ManagedTerminalEvent, terminal_state_for_exit};
 use crate::omp_helm_control::OMP_HELM_TRANSPORT;
 
 const STATE_DIR_NAME: &str = "managed-local/omp-helm";
@@ -2842,6 +2842,18 @@ fn build_omp_helm_args(
     args
 }
 
+/// Environment every Helm OMP launch carries. OMP's TTY onboarding wizard skips
+/// itself only when resuming, and a fresh launch passes no `--resume` (OMP 18.7
+/// refuses an empty reservation), so each time OMP adds an onboarding scene a
+/// fresh Helm session would open on that wizard and swallow the first steered
+/// input (provider factory, 2026-10-08). `OMP_SKIP_SETUP` is OMP's own gate.
+fn apply_omp_helm_env(command: &mut Command, profile: Option<&str>) {
+    if let Some(profile) = profile {
+        command.env("OMP_PROFILE", profile);
+    }
+    command.env("OMP_SKIP_SETUP", "1");
+}
+
 fn provisional_run_id(session_id: &str) -> String {
     Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
@@ -3062,7 +3074,9 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         .and_then(|value| value.coordination_token())
         .map(str::to_owned);
     if response.is_some() && coordination_token.is_none() {
-        eprintln!("Longhouse: OMP coordination authority unavailable; starting without coordination tools");
+        eprintln!(
+            "Longhouse: OMP coordination authority unavailable; starting without coordination tools"
+        );
     }
     let mut transaction = response.as_ref().map(|response| {
         ManagedLaunchTransaction::new(&runtime, &url, &token, &session_id, &response.run_id)
@@ -3201,9 +3215,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
             model.as_deref(),
         ))
         .current_dir(&cwd);
-    if let Some(profile) = profile.as_deref() {
-        command.env("OMP_PROFILE", profile);
-    }
+    apply_omp_helm_env(&mut command, profile.as_deref());
     let current_state = server.current_state();
     let channel_path = server.socket_path.to_string_lossy().into_owned();
     let initial_prompt = config.prompt.as_deref().unwrap_or("");
@@ -3691,8 +3703,8 @@ mod tests {
                     vec![1, 1, 0, 0],
                 );
                 assert_eq!(
-                    events.last().unwrap()["payload"]["delegation"]["recent_items"][0]
-                        ["native_progress"]["duration_ms"],
+                    events.last().unwrap()["payload"]["delegation"]["recent_items"][0]["native_progress"]
+                        ["duration_ms"],
                     2100,
                 );
             }));
@@ -5734,6 +5746,29 @@ mod tests {
         assert!(storage.fresh_directory.is_none());
         assert!(!temp.path().join("original-sessions").exists());
         assert!(!temp.path().join("new-sessions").exists());
+    }
+
+    #[test]
+    fn helm_launch_env_skips_omp_onboarding_and_keeps_profile() {
+        let mut command = Command::new("omp");
+        apply_omp_helm_env(&mut command, Some("work"));
+        let envs: std::collections::HashMap<_, _> = command
+            .get_envs()
+            .map(|(key, value)| (key.to_owned(), value.map(|v| v.to_owned())))
+            .collect();
+        assert_eq!(
+            envs.get(std::ffi::OsStr::new("OMP_SKIP_SETUP")),
+            Some(&Some("1".into()))
+        );
+        assert_eq!(
+            envs.get(std::ffi::OsStr::new("OMP_PROFILE")),
+            Some(&Some("work".into()))
+        );
+
+        let mut bare = Command::new("omp");
+        apply_omp_helm_env(&mut bare, None);
+        assert!(bare.get_envs().any(|(key, _)| key == "OMP_SKIP_SETUP"));
+        assert!(!bare.get_envs().any(|(key, _)| key == "OMP_PROFILE"));
     }
 
     #[test]
