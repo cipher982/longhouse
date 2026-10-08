@@ -46,10 +46,12 @@ echo ">> Running snapshot tests on $SIM_NAME ($SIM_ID)"
 # SnapshotPreviews discovers previews at runtime, so a "test" failure isn't
 # necessarily a UI bug: a preview can crash or hang during render. We still
 # want the attachments either way. The full log goes to the output directory;
-# the console keeps per-preview progress and failures. A hung preview fails at
-# the execution allowance instead of holding the VM until the job timeout.
+# the console streams build phases, per-preview progress and failures, so a
+# stall shows where it stopped. A hung preview fails at the execution
+# allowance; a run stalled outside any test is stopped after 20 minutes so the
+# evidence still uploads (a healthy run takes about 6).
 set +e
-xcodebuild test \
+perl -e 'alarm shift; exec @ARGV' 1200 xcodebuild test \
   -project XcodeHarness/LonghouseIOS.xcodeproj \
   -scheme LonghousePreviews \
   -destination "platform=iOS Simulator,id=$SIM_ID" \
@@ -60,10 +62,10 @@ xcodebuild test \
   -maximum-test-execution-time-allowance 60 \
   -resultBundlePath "$RESULT_BUNDLE" \
   -derivedDataPath "$DERIVED_DATA_PATH" \
-  >"$OUT_DIR/xcodebuild.log" 2>&1
-TEST_EXIT=$?
+  2>&1 | tee "$OUT_DIR/xcodebuild.log" \
+  | grep --line-buffered -E "^Test Case .*failed|^Test Suite|Testing started|error: |exceeded|crashed|Restarting after|\*\* (BUILD|TEST)|^(CompileSwiftSources|Ld|ProcessInfoPlistFile|PhaseScriptExecution) "
+TEST_EXIT=${PIPESTATUS[0]}
 set -e
-grep -E "^Test Case .*(passed|failed)|error: |exceeded|crashed|Restarting after|\*\* TEST" "$OUT_DIR/xcodebuild.log" || true
 
 # The xcresult does not leave the VM, so print each failing preview's message;
 # otherwise a failure names only the test.
