@@ -1568,7 +1568,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             _ = state.daily_maintenance_tasks.join_next(), if !state.daily_maintenance_tasks.is_empty() => {}
 
             unmanaged_binding_refresh_result = state.unmanaged_binding_refresh_tasks.join_next(), if !state.unmanaged_binding_refresh_tasks.is_empty() => {
-                state.on_unmanaged_binding_refresh_done(&config, unmanaged_binding_refresh_result)?;
+                state.on_unmanaged_binding_refresh_done(&config, unmanaged_binding_refresh_result);
             }
 
             managed_observation_scan_result = state.managed_observation_scan_tasks.join_next(), if !state.managed_observation_scan_tasks.is_empty() => {
@@ -2587,218 +2587,213 @@ impl DaemonState {
         unmanaged_binding_refresh_result: Option<
             Result<UnmanagedBindingRefreshResult, tokio::task::JoinError>,
         >,
-    ) -> Result<()> {
-        {
-            let refresh_generation = self.unmanaged_binding_refresh_generation.take();
-            match unmanaged_binding_refresh_result {
-                Some(Ok(result)) => {
-                    let stale = result.generation != self.projection_generation;
-                    let managed_observation_current = result.managed_observation_generation
-                        == self.managed_observation_generation;
-                    if stale {
-                        tracing::debug!(
-                            generation = result.generation,
-                            latest_generation = self.projection_generation,
-                            "Discarded stale unmanaged reconciliation result"
-                        );
-                    } else if !managed_observation_current {
-                        tracing::debug!(
-                                result_managed_observation_generation =
-                                    result.managed_observation_generation,
-                                latest_managed_observation_generation =
-                                    self.managed_observation_generation,
-                                "Applying unmanaged result without replacing newer managed observations"
-                            );
-                    }
-                    if !stale && self.managed_observation_valid {
-                        match result.result {
-                            Ok(bindings) => {
-                                if result.elapsed_ms > 1_000 {
-                                    tracing::warn!(
-                                        reason = result.reason,
-                                        binding_count = bindings.len(),
-                                        elapsed_ms = result.elapsed_ms,
-                                        "Unmanaged binding refresh was slow"
-                                    );
-                                } else {
-                                    tracing::debug!(
-                                        reason = result.reason,
-                                        binding_count = bindings.len(),
-                                        elapsed_ms = result.elapsed_ms,
-                                        "Unmanaged binding refresh completed"
-                                    );
-                                }
-                                if managed_observation_current {
-                                    self.last_projected_managed_observations = result.managed;
-                                    self.last_projected_managed_scan_partial =
-                                        result.managed_scan_partial;
-                                    self.last_projected_managed_snapshot_complete =
-                                        result.full_reconciliation_candidate;
-                                    self.last_projected_unmanaged_snapshot_complete =
-                                        result.full_reconciliation_candidate;
-                                    self.unmanaged_binding_refresh_failed = false;
-                                    if result.full_reconciliation_candidate {
-                                        self.last_full_reconciled_at =
-                                            Some(chrono::Utc::now().to_rfc3339());
-                                    }
-                                } else {
-                                    self.last_projected_unmanaged_snapshot_complete = false;
-                                }
-                                self.last_unmanaged_session_bindings = Some(bindings);
-                            }
-                            Err(err) if !managed_observation_current => {
-                                tracing::debug!(
-                                    reason = result.reason,
-                                    "Discarded stale unmanaged binding refresh failure: {}",
-                                    err
-                                );
-                            }
-                            Err(err) => {
-                                // Managed state files are authoritative for Helm ownership.
-                                // Optional Shadow process discovery must not suppress a newly
-                                // observed managed run. Publish that managed truth with the
-                                // last-known unmanaged bindings, but mark only the unmanaged
-                                // scope incomplete so the Runtime Host cannot close missing
-                                // Shadow sessions from this partial observation.
-                                if managed_observation_current {
-                                    self.last_projected_managed_observations = result.managed;
-                                    self.last_projected_managed_scan_partial =
-                                        result.managed_scan_partial;
-                                    self.last_projected_managed_snapshot_complete =
-                                        result.full_reconciliation_candidate;
-                                }
-                                self.last_projected_unmanaged_snapshot_complete = false;
-                                // Shadow discovery is optional. Do not turn a
-                                // per-pid lsof failure into an immediate full
-                                // managed scan, which would repeatedly advance
-                                // projection generations and starve managed
-                                // truth. The scheduled full observation is the
-                                // retry path; keep this projection incomplete
-                                // so missing Shadow sessions remain unknown.
-                                self.pending_full_reconciliation = false;
-                                self.unmanaged_binding_refresh_failed = true;
-                                // Shadow discovery is optional evidence. Keep the
-                                // retained managed projection usable and mark the
-                                // retry as in progress; a single lsof failure
-                                // must not turn local health into a failed
-                                // reconciliation or erase current sessions.
-                                self.managed_reconciliation
-                                    .start("unmanaged_binding", chrono::Utc::now().to_rfc3339());
+    ) {
+        let refresh_generation = self.unmanaged_binding_refresh_generation.take();
+        match unmanaged_binding_refresh_result {
+            Some(Ok(result)) => {
+                let stale = result.generation != self.projection_generation;
+                let managed_observation_current =
+                    result.managed_observation_generation == self.managed_observation_generation;
+                if stale {
+                    tracing::debug!(
+                        generation = result.generation,
+                        latest_generation = self.projection_generation,
+                        "Discarded stale unmanaged reconciliation result"
+                    );
+                } else if !managed_observation_current {
+                    tracing::debug!(
+                        result_managed_observation_generation =
+                            result.managed_observation_generation,
+                        latest_managed_observation_generation = self.managed_observation_generation,
+                        "Applying unmanaged result without replacing newer managed observations"
+                    );
+                }
+                if !stale && self.managed_observation_valid {
+                    match result.result {
+                        Ok(bindings) => {
+                            if result.elapsed_ms > 1_000 {
                                 tracing::warn!(
                                     reason = result.reason,
+                                    binding_count = bindings.len(),
                                     elapsed_ms = result.elapsed_ms,
-                                    "Unmanaged binding refresh failed: {}",
-                                    err
+                                    "Unmanaged binding refresh was slow"
+                                );
+                            } else {
+                                tracing::debug!(
+                                    reason = result.reason,
+                                    binding_count = bindings.len(),
+                                    elapsed_ms = result.elapsed_ms,
+                                    "Unmanaged binding refresh completed"
                                 );
                             }
+                            if managed_observation_current {
+                                self.last_projected_managed_observations = result.managed;
+                                self.last_projected_managed_scan_partial =
+                                    result.managed_scan_partial;
+                                self.last_projected_managed_snapshot_complete =
+                                    result.full_reconciliation_candidate;
+                                self.last_projected_unmanaged_snapshot_complete =
+                                    result.full_reconciliation_candidate;
+                                self.unmanaged_binding_refresh_failed = false;
+                                if result.full_reconciliation_candidate {
+                                    self.last_full_reconciled_at =
+                                        Some(chrono::Utc::now().to_rfc3339());
+                                }
+                            } else {
+                                self.last_projected_unmanaged_snapshot_complete = false;
+                            }
+                            self.last_unmanaged_session_bindings = Some(bindings);
                         }
-                        let input = ProjectionBuildInput {
-                            generation: self.projection_generation,
-                            managed_observation_generation: self.managed_observation_generation,
-                            managed_scan_partial: self.last_projected_managed_scan_partial,
-                            managed_snapshot_complete: self
-                                .last_projected_managed_snapshot_complete,
-                            managed_captured_at: self.last_managed_captured_at.clone(),
-                            unmanaged_snapshot_complete: self
-                                .last_projected_unmanaged_snapshot_complete,
-                            db_path: self.projection_db_path.clone(),
-                            parse_tracker: self.parse_tracker.clone(),
-                            ship_stats: self.ship_stats.clone(),
-                            is_offline: self.offline.is_offline,
-                            last_ship_at: self.last_ship_at.clone(),
-                            machine_id: config.shipper_config.machine_name.clone(),
-                            managed: self.last_projected_managed_observations.clone(),
-                            unmanaged: self
-                                .last_unmanaged_session_bindings
-                                .clone()
-                                .unwrap_or_default(),
-                            limiter: self.adaptive_limiter.snapshot(),
-                            scheduler: self.scheduler.snapshot(),
-                            archive_repair_mode: config.archive_repair_mode,
-                            last_full_reconciled_at: self.last_full_reconciled_at.clone(),
-                            continuation: self.last_resume_contracts.clone(),
-                            session_snapshot_state: self.session_snapshot_state.clone(),
-                        };
-                        if !maybe_start_projection_build(&mut self.projection_build_tasks, input) {
-                            self.projection_build_pending = true;
+                        Err(err) if !managed_observation_current => {
+                            tracing::debug!(
+                                reason = result.reason,
+                                "Discarded stale unmanaged binding refresh failure: {}",
+                                err
+                            );
+                        }
+                        Err(err) => {
+                            // Managed state files are authoritative for Helm ownership.
+                            // Optional Shadow process discovery must not suppress a newly
+                            // observed managed run. Publish that managed truth with the
+                            // last-known unmanaged bindings, but mark only the unmanaged
+                            // scope incomplete so the Runtime Host cannot close missing
+                            // Shadow sessions from this partial observation.
+                            if managed_observation_current {
+                                self.last_projected_managed_observations = result.managed;
+                                self.last_projected_managed_scan_partial =
+                                    result.managed_scan_partial;
+                                self.last_projected_managed_snapshot_complete =
+                                    result.full_reconciliation_candidate;
+                            }
+                            self.last_projected_unmanaged_snapshot_complete = false;
+                            // Shadow discovery is optional. Do not turn a
+                            // per-pid lsof failure into an immediate full
+                            // managed scan, which would repeatedly advance
+                            // projection generations and starve managed
+                            // truth. The scheduled full observation is the
+                            // retry path; keep this projection incomplete
+                            // so missing Shadow sessions remain unknown.
+                            self.pending_full_reconciliation = false;
+                            self.unmanaged_binding_refresh_failed = true;
+                            // Shadow discovery is optional evidence. Keep the
+                            // retained managed projection usable and mark the
+                            // retry as in progress; a single lsof failure
+                            // must not turn local health into a failed
+                            // reconciliation or erase current sessions.
+                            self.managed_reconciliation
+                                .start("unmanaged_binding", chrono::Utc::now().to_rfc3339());
+                            tracing::warn!(
+                                reason = result.reason,
+                                elapsed_ms = result.elapsed_ms,
+                                "Unmanaged binding refresh failed: {}",
+                                err
+                            );
                         }
                     }
-                }
-                Some(Err(err)) => {
-                    let refresh_is_current = refresh_generation
-                        == Some((
-                            self.projection_generation,
-                            self.managed_observation_generation,
-                        ));
-                    if refresh_is_current {
-                        self.unmanaged_binding_refresh_failed = true;
-                        // This task only refreshes optional Shadow bindings.
-                        // Preserve the last coherent managed projection and
-                        // expose the retry as reconciling rather than making
-                        // the whole local session inventory failed.
-                        self.managed_reconciliation
-                            .start("unmanaged_binding", chrono::Utc::now().to_rfc3339());
-                        heartbeat::refresh_existing_status_pulse(
-                            &self.managed_reconciliation,
-                            &mut self.shipping_progress,
-                            self.offline.is_offline,
-                            &self.status_path,
-                            &self.heartbeat_transport,
-                            Some(&self.host_link.snapshot()),
-                        );
-                        tracing::warn!("Unmanaged binding refresh task failed: {}", err);
-                    } else {
-                        tracing::debug!(
-                            refresh_generation = ?refresh_generation,
-                            latest_generation = self.projection_generation,
-                            latest_managed_observation_generation =
-                                self.managed_observation_generation,
-                            "Discarded stale unmanaged binding task failure: {}",
-                            err
-                        );
+                    let input = ProjectionBuildInput {
+                        generation: self.projection_generation,
+                        managed_observation_generation: self.managed_observation_generation,
+                        managed_scan_partial: self.last_projected_managed_scan_partial,
+                        managed_snapshot_complete: self.last_projected_managed_snapshot_complete,
+                        managed_captured_at: self.last_managed_captured_at.clone(),
+                        unmanaged_snapshot_complete: self
+                            .last_projected_unmanaged_snapshot_complete,
+                        db_path: self.projection_db_path.clone(),
+                        parse_tracker: self.parse_tracker.clone(),
+                        ship_stats: self.ship_stats.clone(),
+                        is_offline: self.offline.is_offline,
+                        last_ship_at: self.last_ship_at.clone(),
+                        machine_id: config.shipper_config.machine_name.clone(),
+                        managed: self.last_projected_managed_observations.clone(),
+                        unmanaged: self
+                            .last_unmanaged_session_bindings
+                            .clone()
+                            .unwrap_or_default(),
+                        limiter: self.adaptive_limiter.snapshot(),
+                        scheduler: self.scheduler.snapshot(),
+                        archive_repair_mode: config.archive_repair_mode,
+                        last_full_reconciled_at: self.last_full_reconciled_at.clone(),
+                        continuation: self.last_resume_contracts.clone(),
+                        session_snapshot_state: self.session_snapshot_state.clone(),
+                    };
+                    if !maybe_start_projection_build(&mut self.projection_build_tasks, input) {
+                        self.projection_build_pending = true;
                     }
                 }
-                None => {}
             }
-            if self.unmanaged_binding_refresh_tasks.is_empty()
-                && self.managed_observation_scan_tasks.is_empty()
-            {
-                if self.pending_wake_reconciliation
-                    && maybe_start_managed_observation_scan(
-                        self.projection_db_path.clone(),
-                        &mut self.managed_observation_scan_tasks,
-                        "wake",
-                        true,
-                        &self.last_managed_observations,
-                    )
-                {
-                    self.pending_wake_reconciliation = false;
-                    self.managed_full_reconciliation_not_before =
-                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+            Some(Err(err)) => {
+                let refresh_is_current = refresh_generation
+                    == Some((
+                        self.projection_generation,
+                        self.managed_observation_generation,
+                    ));
+                if refresh_is_current {
+                    self.unmanaged_binding_refresh_failed = true;
+                    // This task only refreshes optional Shadow bindings.
+                    // Preserve the last coherent managed projection and
+                    // expose the retry as reconciling rather than making
+                    // the whole local session inventory failed.
                     self.managed_reconciliation
-                        .start("wake", chrono::Utc::now().to_rfc3339());
-                } else if managed_full_reconciliation_ready(
-                    self.pending_full_reconciliation
-                        || certificate_needs_refresh(self.last_certified_at, Instant::now()),
-                    self.managed_observation_scan_tasks.is_empty(),
-                    Instant::now(),
-                    self.managed_full_reconciliation_not_before,
-                ) && maybe_start_managed_observation_scan(
+                        .start("unmanaged_binding", chrono::Utc::now().to_rfc3339());
+                    heartbeat::refresh_existing_status_pulse(
+                        &self.managed_reconciliation,
+                        &mut self.shipping_progress,
+                        self.offline.is_offline,
+                        &self.status_path,
+                        &self.heartbeat_transport,
+                        Some(&self.host_link.snapshot()),
+                    );
+                    tracing::warn!("Unmanaged binding refresh task failed: {}", err);
+                } else {
+                    tracing::debug!(
+                        refresh_generation = ?refresh_generation,
+                        latest_generation = self.projection_generation,
+                        latest_managed_observation_generation =
+                            self.managed_observation_generation,
+                        "Discarded stale unmanaged binding task failure: {}",
+                        err
+                    );
+                }
+            }
+            None => {}
+        }
+        if self.unmanaged_binding_refresh_tasks.is_empty()
+            && self.managed_observation_scan_tasks.is_empty()
+        {
+            if self.pending_wake_reconciliation
+                && maybe_start_managed_observation_scan(
                     self.projection_db_path.clone(),
                     &mut self.managed_observation_scan_tasks,
-                    "full_reconciliation",
+                    "wake",
                     true,
                     &self.last_managed_observations,
-                ) {
-                    self.pending_full_reconciliation = false;
-                    self.managed_full_reconciliation_not_before =
-                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                    self.managed_reconciliation
-                        .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
-                }
+                )
+            {
+                self.pending_wake_reconciliation = false;
+                self.managed_full_reconciliation_not_before =
+                    Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                self.managed_reconciliation
+                    .start("wake", chrono::Utc::now().to_rfc3339());
+            } else if managed_full_reconciliation_ready(
+                self.pending_full_reconciliation
+                    || certificate_needs_refresh(self.last_certified_at, Instant::now()),
+                self.managed_observation_scan_tasks.is_empty(),
+                Instant::now(),
+                self.managed_full_reconciliation_not_before,
+            ) && maybe_start_managed_observation_scan(
+                self.projection_db_path.clone(),
+                &mut self.managed_observation_scan_tasks,
+                "full_reconciliation",
+                true,
+                &self.last_managed_observations,
+            ) {
+                self.pending_full_reconciliation = false;
+                self.managed_full_reconciliation_not_before =
+                    Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                self.managed_reconciliation
+                    .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
             }
         }
-        Ok(())
     }
     fn on_managed_observation_scan_done(
         &mut self,
