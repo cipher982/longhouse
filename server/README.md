@@ -9,6 +9,8 @@ uv tool install longhouse
 longhouse-server serve
 ```
 
+`longhouse-server serve` runs the Runtime Host; the native `longhouse` binary has no `serve`.
+
 Full docs and the recommended hosted/self-host flows live in the main repository README: https://github.com/cipher982/longhouse
 
 ## Provider capability evidence
