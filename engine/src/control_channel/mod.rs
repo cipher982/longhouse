@@ -1888,6 +1888,50 @@ mod tests {
         }
     }
 
+    /// `ENGINE_DISPATCH_SUPPORTS` is a hand-kept mirror, so the tests above can
+    /// agree with it while `execute_command` disagrees. This one drives the
+    /// real dispatcher: for every manifest provider, `session.terminate` against
+    /// a session that does not exist either reaches that provider's terminate
+    /// path (any error but `unsupported_command`) or falls through to
+    /// `unsupported_command`. Which one must match `<provider>.terminate` in the
+    /// manifest, in both directions.
+    #[test]
+    fn terminate_dispatch_matches_manifest_terminate_support_for_every_provider() {
+        let supports = manifest_machine_control_supports();
+        let providers: std::collections::BTreeSet<String> = managed_provider_contract_items()
+            .iter()
+            .filter_map(|contract| contract.get("provider").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        assert!(!providers.is_empty());
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for provider in providers {
+            let frame = json!({
+                "command_type": COMMAND_TERMINATE,
+                "command_id": uuid::Uuid::new_v4().to_string(),
+                "session_id": uuid::Uuid::new_v4().to_string(),
+                "payload": {"provider": provider},
+            });
+            let outcome = temp_env::with_vars(
+                [
+                    ("LONGHOUSE_HOME", Some(temp.path().as_os_str())),
+                    ("HOME", Some(temp.path().as_os_str())),
+                ],
+                || runtime.block_on(execute_command(&frame, &ShipperConfig::default())),
+            );
+            let dispatched = !matches!(&outcome, Err(error) if error.code == "unsupported_command");
+            let declared = supports.contains(&format!("{provider}.terminate"));
+            assert_eq!(
+                dispatched, declared,
+                "{provider}: execute_command terminate dispatched={dispatched}, manifest declares {provider}.terminate={declared} ({outcome:?})"
+            );
+        }
+    }
+
     #[test]
     fn reducer_control_grants_follow_dispatch_manifest_and_connection_state() {
         assert_eq!(

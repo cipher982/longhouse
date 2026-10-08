@@ -68,22 +68,26 @@ def test_dispatchable_remote_control_is_advertised() -> None:
             )
 
 
-def test_terminate_is_honest_for_every_provider() -> None:
-    """Pin the specific regression, by name, so it cannot silently return.
+def test_terminate_flag_alone_never_advertises_terminate() -> None:
+    """Pin the 2026-07-31 regression by its mechanism: the operation flag alone.
 
-    A provider advertises remote terminate only when `control_channel/dispatch.rs`
-    COMMAND_TERMINATE implements it for that provider; the advertisement must
-    follow the implementation, whichever providers that is.
+    A contract may declare `terminate: true` without a `<provider>.terminate`
+    machine-control support (Codex does). can_terminate must then be off: the
+    flag says the provider CLI can stop a session, not that the control channel
+    carries the command. That the support entry matches what
+    `control_channel/dispatch.rs` actually implements is pinned on the engine
+    side, against the real dispatcher, by
+    `terminate_dispatch_matches_manifest_terminate_support_for_every_provider`.
     """
 
-    by_provider = {c.provider: c for c in all_managed_provider_contracts()}
-    for provider, contract in by_provider.items():
-        advertised = bool(contract.connection_capabilities["can_terminate"])
-        dispatchable = machine_control_capability_for_command(provider, "session.terminate") is not None
-        assert advertised == dispatchable, (
-            f"{provider}: can_terminate={advertised} but dispatchable={dispatchable}. "
-            "If remote terminate was implemented for this provider, add its support entry; "
-            "if it was removed, the advertisement must go with it."
+    for contract in all_managed_provider_contracts():
+        if not contract.supports_contract_operation("terminate"):
+            continue
+        if machine_control_capability_for_command(contract.provider, "session.terminate") is not None:
+            continue
+        assert contract.connection_capabilities["can_terminate"] == 0, (
+            f"{contract.provider} declares terminate but no {contract.provider}.terminate support, "
+            "and still advertises can_terminate: the advertisement came from the flag again."
         )
 
 
