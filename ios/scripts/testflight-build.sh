@@ -123,6 +123,11 @@ ios/scripts/check-archive.sh "$archive" >&2
 app="$archive/Products/Applications/Longhouse.app"
 bundles=("$app/PlugIns/LonghouseWidget.appex" "$app")
 entitlement_files=(ios/XcodeHarness/LonghouseWidget.entitlements ios/XcodeHarness/Longhouse.entitlements)
+# A new app extension or nested app carries its own entitlements and must be listed above;
+# frameworks need none, and the export signs them.
+while IFS= read -r nested; do
+  [ "$nested" = "${bundles[0]}" ] || fail "unlisted bundle ${nested#"$app/"}: add it and its entitlements to this script"
+done < <(find "$app" -mindepth 1 \( -name '*.appex' -o -name '*.app' \))
 for i in "${!bundles[@]}"; do
   # App Store builds always use production push; the files leave it to a build setting.
   sed 's/\$(APS_ENVIRONMENT)/production/' "${entitlement_files[$i]}" > "$work/entitlements.$i.plist"
