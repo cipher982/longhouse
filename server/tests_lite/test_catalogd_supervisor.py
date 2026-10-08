@@ -64,6 +64,17 @@ def _external_catalogd(database_path: Path, socket_path: Path, *, schema_generat
     )
 
 
+async def _terminate_and_wait(process: subprocess.Popen, timeout: float = 10.0) -> None:
+    """Stop an external catalogd without blocking this test's event loop.
+
+    catalogd's shutdown waits for every open connection to close (asyncio
+    Server.wait_closed). A supervisor ping in flight on this loop is one of
+    them, so a synchronous Popen.wait() here deadlocks the two until it times out.
+    """
+    process.terminate()
+    await asyncio.to_thread(process.wait, timeout)
+
+
 async def _eventually_new_ping(client: CatalogClient, old_pid: int, timeout: float = 10.0):
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
@@ -173,8 +184,7 @@ async def test_supervisor_adopts_compatible_existing_daemon_without_killing_it(s
     finally:
         await probe.close()
         if external.poll() is None:
-            external.terminate()
-            external.wait(timeout=10)
+            await _terminate_and_wait(external)
 
 
 @pytest.mark.asyncio
@@ -201,16 +211,14 @@ async def test_supervisor_waits_for_incompatible_owner_then_takes_over(superviso
         assert not start_task.done()
         assert external.poll() is None
 
-        external.terminate()
-        external.wait(timeout=10)
+        await _terminate_and_wait(external)
         replacement = await start_task
         assert replacement["pid"] != old_ping["pid"]
         assert supervisor.ownership == "owned"
     finally:
         await probe.close()
         if external.poll() is None:
-            external.terminate()
-            external.wait(timeout=10)
+            await _terminate_and_wait(external)
         if start_task is not None and not start_task.done():
             start_task.cancel()
         await supervisor.stop()
@@ -321,8 +329,7 @@ async def test_handoff_supervisor_never_adopts_the_predecessor_and_opens_only_af
         assert not start.done(), "the permit alone does not open a catalog the predecessor holds"
         assert (await client.call("ping.v2"))["pid"] == predecessor_pid
 
-        predecessor.terminate()
-        predecessor.wait(timeout=10)
+        await _terminate_and_wait(predecessor)
         ping = await asyncio.wait_for(start, timeout=20)
         assert ping["runtime_boot_id"] == RUNTIME_BOOT_ID
         assert supervisor.ownership == "owned"
@@ -330,6 +337,5 @@ async def test_handoff_supervisor_never_adopts_the_predecessor_and_opens_only_af
         await supervisor.stop()
         await client.close()
         if predecessor.poll() is None:
-            predecessor.terminate()
-            predecessor.wait(timeout=10)
+            await _terminate_and_wait(predecessor)
         handoff_module.reset_catalog_handoff_for_tests(None)
