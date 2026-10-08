@@ -8,9 +8,8 @@
 //! - Lightweight background work with bounded concurrency
 //!
 //! Primary transcript shipping is the Live lane: provider file changes or
-//! managed wake signals enqueue `WorkPriority::Live` immediately. The spool is
-//! a retry/archive store for failed or incomplete shipments, not the steady
-//! state live transcript path.
+//! managed wake signals enqueue `WorkPriority::Live` immediately. Retries come
+//! from storage-v2 pending envelopes; there is no separate retry store.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -43,7 +42,7 @@ use crate::managed_resume_scan;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
 use crate::scheduler::{
-    shipping_max_in_flight, AdaptiveLimiter, ObservationTrace, PathJob, PathScheduler, WorkPriority,
+    shipping_max_in_flight, ObservationTrace, PathJob, PathScheduler, WorkPriority,
 };
 use crate::shipping::client::ShipperClient;
 use crate::shipping::storage_v2::{require_storage_v2_cutover, StorageV2Capabilities};
@@ -51,7 +50,6 @@ use crate::shipping_stats::{RecentShipStatsTracker, ShipAttemptOutcome, ShipLane
 use crate::state::db::open_db;
 use crate::state::db_pool::ConnectionPool;
 use crate::state::file_state::FileState;
-use crate::state::spool::Spool;
 use crate::unmanaged_bindings;
 use crate::watcher::{SessionWatcher, WatcherEvent};
 
@@ -110,13 +108,6 @@ impl ArchiveRepairMode {
 /// and the reconciliation scanner.
 const WATCHER_FLUSH_INTERVAL: Duration = Duration::from_millis(15);
 
-const INITIAL_SPOOL_PATH_LIMIT: usize = 64;
-const PERIODIC_SPOOL_PATH_LIMIT: usize = 128;
-const ARCHIVE_TRICKLE_TICK_BYTES: u64 = 512 * 1024 * 1024;
-const ARCHIVE_DRAIN_TICK_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-const ARCHIVE_BACKPRESSURE_MAX_DEFER: Duration = Duration::from_secs(90);
-const ARCHIVE_STARTUP_REPLAY_WARMUP_MIN: Duration = Duration::from_secs(5);
-const ARCHIVE_STARTUP_REPLAY_WARMUP_MAX: Duration = Duration::from_secs(20);
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(30);
@@ -199,7 +190,6 @@ const OFFLINE_CONNECT_FAILURE_THRESHOLD: u32 = 3;
 // Stable telemetry strings for the retry/archive lane. Keep the wire names
 // for historical engine-status/log readers, but keep code names explicit.
 const FAILED_SHIPMENT_RETRY_CONTEXT: &str = "spool_replay";
-const FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE: &str = "spool_pending";
 const STORAGE_V2_PENDING_RETRY_OBSERVATION_SOURCE: &str = "storage_v2_pending";
 
 struct WakeGapDetector {
@@ -306,8 +296,6 @@ struct PathTaskResult {
     job: PathJob,
     events_shipped: usize,
     bytes_shipped: u64,
-    resolved_spool: usize,
-    failed_spool: usize,
     had_connect_error: bool,
     rerun_priority: Option<WorkPriority>,
     local_retry_after: Option<Duration>,
@@ -915,8 +903,6 @@ fn managed_provider_state_dirs() -> Vec<PathBuf> {
 struct ArchiveRepairControl {
     mode: Option<String>,
     expires_at: Option<String>,
-    max_tick_bytes: Option<u64>,
-    include_huge: Option<bool>,
     actor: Option<String>,
     reason: Option<String>,
     updated_at: Option<String>,
@@ -964,30 +950,6 @@ impl ArchiveRepairControl {
         self.normalized_mode(default_mode).is_paused()
     }
 
-    fn tick_bytes(&self, default_mode: ArchiveRepairMode) -> u64 {
-        if !self.active_override() {
-            return match default_mode {
-                ArchiveRepairMode::Drain => ARCHIVE_DRAIN_TICK_BYTES,
-                ArchiveRepairMode::Paused | ArchiveRepairMode::Trickle => {
-                    ARCHIVE_TRICKLE_TICK_BYTES
-                }
-            };
-        }
-        match self.normalized_mode(default_mode) {
-            ArchiveRepairMode::Drain => self.max_tick_bytes.unwrap_or(ARCHIVE_DRAIN_TICK_BYTES),
-            ArchiveRepairMode::Paused | ArchiveRepairMode::Trickle => {
-                self.max_tick_bytes.unwrap_or(ARCHIVE_TRICKLE_TICK_BYTES)
-            }
-        }
-    }
-
-    fn includes_huge(&self) -> bool {
-        if self.active_override() {
-            self.include_huge.unwrap_or(true)
-        } else {
-            true
-        }
-    }
 }
 
 fn read_archive_repair_control() -> ArchiveRepairControl {
@@ -1053,24 +1015,6 @@ fn apply_archive_repair_control(
 
 fn archive_repair_is_paused(default_mode: ArchiveRepairMode) -> bool {
     read_archive_repair_control().is_paused(default_mode)
-}
-
-fn archive_startup_replay_warmup_delay(
-    mode: ArchiveRepairMode,
-    jitter_seed: f64,
-) -> Option<Duration> {
-    if mode.is_paused() {
-        return None;
-    }
-    let jitter_seed = jitter_seed.clamp(0.0, 1.0);
-    let window_ms = ARCHIVE_STARTUP_REPLAY_WARMUP_MAX
-        .as_millis()
-        .saturating_sub(ARCHIVE_STARTUP_REPLAY_WARMUP_MIN.as_millis())
-        .min(u128::from(u64::MAX)) as u64;
-    Some(
-        ARCHIVE_STARTUP_REPLAY_WARMUP_MIN
-            + Duration::from_millis((window_ms as f64 * jitter_seed) as u64),
-    )
 }
 
 /// Write the reason a daemon start was refused, for `local-health` to read.
@@ -1361,8 +1305,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             "Unable to queue immutable storage-v2 exact retries at startup"
         ),
     }
-    let startup_archive_replay_delay =
-        archive_startup_replay_warmup_delay(startup_archive_mode, rand::random::<f64>());
     maybe_start_managed_observation_scan(
         projection_db_path.clone(),
         &mut managed_observation_scan_tasks,
@@ -1372,15 +1314,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     );
     let mut managed_full_reconciliation_not_before =
         Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-    if let Some(delay) = startup_archive_replay_delay {
-        tracing::info!(
-            mode = startup_archive_mode.as_str(),
-            warmup_ms = delay.as_millis() as u64,
-            "Deferred startup archive replay by jittered warmup; live lanes remain active"
-        );
-    } else {
-        tracing::info!("Startup archive replay paused by archive repair mode");
-    }
     tracing::info!(
         "Startup reconciliation deferred by {:?} (max {} concurrent)",
         STARTUP_RECONCILIATION_SCAN_DELAY,
@@ -1468,10 +1401,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         .unwrap_or_default();
     // Keep the first immediate tick: a daemon that has just started is exactly
     // when a stale machine most needs to learn it is behind.
-    let startup_archive_replay_timer =
-        tokio::time::sleep(startup_archive_replay_delay.unwrap_or(Duration::ZERO));
-    tokio::pin!(startup_archive_replay_timer);
-    let mut startup_archive_replay_pending = startup_archive_replay_delay.is_some();
     // Armed by a phase-ledger write, cleared when the projection is scheduled.
     // Coalesces a burst into one build; periodic reconciliation stays the
     // repair path for anything a notification misses.
@@ -1591,28 +1520,24 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
         .context("install SIGINT handler")?;
     loop {
-        if !startup_archive_replay_pending {
-            match queue_failed_shipment_retries_if_idle(
-                &mut scheduler,
-                &conn,
-                offline.is_offline,
-                PERIODIC_SPOOL_PATH_LIMIT,
-                Some(adaptive_limiter.as_ref()),
-                config.archive_repair_mode,
-                &mut deferred_retries,
-            ) {
-                Ok(queued) if queued > 0 => {
-                    tracing::info!(
-                        queued,
-                        "Queued failed-shipment retry paths after local scheduler drained"
-                    );
-                }
-                Ok(_) => {}
-                Err(e) => tracing::warn!(
-                    "Failed-shipment retry error while refilling idle scheduler: {}",
-                    e
-                ),
+        match queue_failed_shipment_retries_if_idle(
+            &mut scheduler,
+            &conn,
+            offline.is_offline,
+            config.archive_repair_mode,
+            &mut deferred_retries,
+        ) {
+            Ok(queued) if queued > 0 => {
+                tracing::info!(
+                    queued,
+                    "Queued failed-shipment retry paths after local scheduler drained"
+                );
             }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                "Failed-shipment retry error while refilling idle scheduler: {}",
+                e
+            ),
         }
         pump_ready_local_work(
             &mut scheduler,
@@ -1742,17 +1667,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 observation: result.job.observation.clone(),
                             });
                         }
-                        if result.resolved_spool > 0 || result.failed_spool > 0 {
-                            tracing::info!(
-                                "Path retry {}: {} resolved, {} failed",
-                                result.job.path.display(),
-                                result.resolved_spool,
-                                result.failed_spool
-                            );
-                        }
                         // Checking an unchanged source head advances reconciliation
                         // without creating a new upload receipt.
-                        if reconciled_to_head || result.events_shipped > 0 || result.bytes_shipped > 0 || result.resolved_spool > 0 {
+                        if reconciled_to_head || result.events_shipped > 0 || result.bytes_shipped > 0 {
                             shipping_progress.record_progress(Instant::now());
                         }
                         if result.had_connect_error {
@@ -3309,29 +3226,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            _ = &mut startup_archive_replay_timer, if startup_archive_replay_pending && !offline.is_offline => {
-                startup_archive_replay_pending = false;
-                match queue_failed_shipment_retry_paths(
-                    &mut scheduler,
-                    &conn,
-                    INITIAL_SPOOL_PATH_LIMIT,
-                    Some(adaptive_limiter.as_ref()),
-                    config.archive_repair_mode,
-                    &mut deferred_retries,
-                ) {
-                    Ok(queued) => {
-                        tracing::info!(
-                            queued,
-                            "Queued startup archive replay after jittered warmup"
-                        );
-                    }
-                    Err(e) => tracing::warn!(
-                        "Failed-shipment retry error after startup archive warmup: {}",
-                        e
-                    ),
-                }
-            }
-
             _ = &mut startup_reconciliation_timer, if startup_reconciliation_pending && !offline.is_offline => {
                 startup_reconciliation_pending = false;
                 maybe_start_reconciliation_scan(
@@ -3459,26 +3353,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 );
             }
 
-            // Retry/archive lane: replay failed or incomplete shipments from
-            // the spool. This timer is never the primary live transcript lane.
-            _ = failed_ship_retry_timer.tick(), if !offline.is_offline && !startup_archive_replay_pending => {
+            // Retry lane: storage-v2 pending envelopes. Never the primary live
+            // transcript lane.
+            _ = failed_ship_retry_timer.tick(), if !offline.is_offline => {
                 let mut queued_retries = 0usize;
-                match queue_failed_shipment_retry_paths(
-                    &mut scheduler,
-                    &conn,
-                    PERIODIC_SPOOL_PATH_LIMIT,
-                    Some(adaptive_limiter.as_ref()),
-                    config.archive_repair_mode,
-                    &mut deferred_retries,
-                ) {
-                    Ok(queued) => {
-                        queued_retries = queued_retries.saturating_add(queued);
-                        if queued > 0 {
-                            tracing::debug!("Queued {} failed-shipment retry paths from spool", queued);
-                        }
-                    }
-                    Err(e) => tracing::warn!("Failed-shipment retry error: {}", e),
-                }
                 match queue_storage_v2_pending_retry_paths(
                     &mut scheduler,
                     &conn,
@@ -3644,7 +3522,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 if let Some(recorder) = flight_recorder.as_ref() {
                     record_flight_sample(
                         recorder,
-                        &conn,
                         &outbox_dir,
                         &runtime_events_outbox_dir,
                         &control_channel_status,
@@ -3703,18 +3580,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 });
             }
             _ = prune_timer.tick() => {
-                // Give dead-lettered ranges another chance before pruning
-                // anything. Most dead-lettering is a transient the engine
-                // outlived — a host outage, a payload shape since fixed — and
-                // without this the range is retained, displayed, and never
-                // retried. Bounded so a large graveyard drains over days rather
-                // than flooding the shipper in one tick.
-                let spool = Spool::new(&conn);
-                match spool.revive_dead_with_readable_sources(200) {
-                    Ok(n) if n > 0 => tracing::info!("Daily revive: returned {} dead ranges to pending", n),
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("Dead-range revive error: {}", e),
-                }
                 let fs = FileState::new(&conn);
                 match fs.prune_stale(30) {
                     Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale file_state entries", n),
@@ -4699,10 +4564,8 @@ fn build_local_status_projection_with_omp(
     archive_repair_mode: ArchiveRepairMode,
     session_snapshot_state: &mut SessionSnapshotState,
 ) -> heartbeat::StatusFileProjection {
-    let spool = Spool::new(conn);
     let stats = heartbeat::HeartbeatStats {
         conn,
-        spool: &spool,
         parse_tracker,
         ship_stats,
         is_offline,
@@ -4852,7 +4715,7 @@ fn build_local_status_projection_with_omp(
     heartbeat::apply_machine_boot_identity(&mut payload.sessions);
     heartbeat::apply_local_titles(conn, &mut payload.sessions);
     session_snapshot_state.annotate(&mut payload);
-    heartbeat::build_status_file_projection(payload, &stats, phase_ledger, ledger_status)
+    heartbeat::build_status_file_projection(payload, phase_ledger, ledger_status)
 }
 
 fn history_runtime_work_active(
@@ -4930,7 +4793,6 @@ fn maybe_start_opencode_title_refresh(
 
 fn record_flight_sample(
     recorder: &FlightRecorder,
-    conn: &rusqlite::Connection,
     outbox_dir: &Path,
     runtime_events_outbox_dir: &Path,
     control_channel_status: &crate::control_channel::ControlChannelStatus,
@@ -4947,7 +4809,6 @@ fn record_flight_sample(
         "machine_name": machine_name,
         "outbox": crate::flight::outbox_snapshot(outbox_dir),
         "runtime_event_outbox": crate::flight::runtime_event_outbox_snapshot(runtime_events_outbox_dir),
-        "spool": crate::flight::spool_snapshot(conn),
         "process": crate::flight::process_snapshot(),
         "disk": crate::flight::disk_snapshot(outbox_dir),
         "control_channel": serde_json::to_value(control_channel_status.snapshot()).ok(),
@@ -6590,70 +6451,6 @@ fn spawn_machine_presence_post(
     });
 }
 
-fn queue_failed_shipment_retry_paths(
-    scheduler: &mut PathScheduler,
-    conn: &rusqlite::Connection,
-    limit: usize,
-    limiter: Option<&AdaptiveLimiter>,
-    archive_repair_mode: ArchiveRepairMode,
-    deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
-) -> Result<usize> {
-    let spool = Spool::new(conn);
-    let cleaned = spool.cleanup()?;
-    if cleaned > 0 {
-        tracing::info!("Cleaned {} old spool entries", cleaned);
-    }
-
-    let control = read_archive_repair_control();
-    if control.is_paused(archive_repair_mode) {
-        tracing::debug!("Archive replay paused by local control file");
-        return Ok(0);
-    }
-
-    let pressure_allows_huge = limiter.map_or(true, AdaptiveLimiter::huge_range_eligible);
-    let include_huge = control.includes_huge() && pressure_allows_huge;
-    if control.includes_huge() && !pressure_allows_huge {
-        tracing::debug!("Skipping huge archive replay paths while host pressure is above target");
-    }
-    let clipped = spool.clip_archive_backpressure_deferrals(ARCHIVE_BACKPRESSURE_MAX_DEFER)?;
-    if clipped > 0 {
-        tracing::info!(
-            clipped,
-            max_defer_ms = ARCHIVE_BACKPRESSURE_MAX_DEFER.as_millis() as u64,
-            "Clipped stale archive backpressure retry clocks"
-        );
-    }
-
-    let mut queued = 0usize;
-    for pending in spool.pending_paths_budgeted(
-        limit,
-        control.tick_bytes(archive_repair_mode),
-        include_huge,
-    )? {
-        let Some(provider) = discovery::canonical_provider_name(&pending.provider) else {
-            tracing::warn!(
-                "Skipping pending spool path with unknown provider {}: {}",
-                pending.provider,
-                pending.file_path
-            );
-            continue;
-        };
-        let path = PathBuf::from(pending.file_path);
-        if retry_admission_open(&path, deferred_retries) {
-            scheduler.enqueue_observed_with_estimated_bytes(
-                path,
-                provider,
-                WorkPriority::Retry,
-                FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE,
-                now_ms(),
-                Some(pending.pending_bytes),
-            );
-            queued += 1;
-        }
-    }
-    Ok(queued)
-}
-
 fn queue_storage_v2_pending_retry_paths(
     scheduler: &mut PathScheduler,
     conn: &rusqlite::Connection,
@@ -6694,31 +6491,13 @@ fn queue_failed_shipment_retries_if_idle(
     scheduler: &mut PathScheduler,
     conn: &rusqlite::Connection,
     offline: bool,
-    limit: usize,
-    limiter: Option<&AdaptiveLimiter>,
     archive_repair_mode: ArchiveRepairMode,
     deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
 ) -> Result<usize> {
     if offline || scheduler.has_pending_work() {
         return Ok(0);
     }
-    // Legacy v1 spool rows still name real source paths. Queueing them lets the
-    // storage-v2 lane re-ship those sources from disk and retire the leftover
-    // pointer rows; it is the only thing that still drains that table.
-    let queued = queue_failed_shipment_retry_paths(
-        scheduler,
-        conn,
-        limit,
-        limiter,
-        archive_repair_mode,
-        deferred_retries,
-    )?;
-    Ok(queued.saturating_add(queue_storage_v2_pending_retry_paths(
-        scheduler,
-        conn,
-        archive_repair_mode,
-        deferred_retries,
-    )?))
+    queue_storage_v2_pending_retry_paths(scheduler, conn, archive_repair_mode, deferred_retries)
 }
 
 fn work_context(priority: WorkPriority) -> &'static str {
@@ -7338,8 +7117,6 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         job,
         events_shipped: 0,
         bytes_shipped: 0,
-        resolved_spool: 0,
-        failed_spool: 0,
         had_connect_error: false,
         rerun_priority: None,
         local_retry_after: None,
@@ -7505,20 +7282,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             if outcome.has_more {
                 result.rerun_priority = Some(result.job.priority);
             } else {
-                match retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
-                    Ok(retired) => {
-                        result.resolved_spool += retired;
-                        result.reconciled_to_head = true;
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            path = %result.job.path.display(),
-                            error = %error,
-                            "Storage-v2 reached source head but legacy spool retirement failed"
-                        );
-                        result.local_retry_after = Some(local_retry_delay(result.job.priority));
-                    }
-                }
+                result.reconciled_to_head = true;
             }
             tracing::info!(
                 path = %result.job.path.display(),
@@ -7530,20 +7294,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             );
         }
         Ok(PathStorageV2ShipResult::Current) => {
-            match retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
-                Ok(retired) => {
-                    result.resolved_spool += retired;
-                    result.reconciled_to_head = true;
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        path = %result.job.path.display(),
-                        error = %error,
-                        "Storage-v2 source is current but legacy spool retirement failed"
-                    );
-                    result.local_retry_after = Some(local_retry_delay(result.job.priority));
-                }
-            }
+            result.reconciled_to_head = true;
         }
         Ok(PathStorageV2ShipResult::WaitingOnClaim) => {
             return finish_path_task(result, task_started);
@@ -7661,33 +7412,6 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         }
     }
     finish_path_task(result, task_started)
-}
-
-fn retire_legacy_spool_after_storage_v2(
-    conn: &rusqlite::Connection,
-    path: &Path,
-) -> anyhow::Result<usize> {
-    // Reaching the storage-v2 source head is also proof that any older v1
-    // pointer gap for this path is durably covered. Seal that legacy cursor
-    // before deleting its spool rows so a process crash cannot regenerate the
-    // same recovery work on every subsequent startup.
-    let path_text = path.to_string_lossy();
-    let file_state = FileState::new(conn);
-    let queued_offset = file_state.get_queued_offset(&path_text)?;
-    file_state.set_acked_offset(&path_text, queued_offset)?;
-
-    let spool = Spool::new(conn);
-    let mut retired = 0usize;
-    loop {
-        let pending = spool.pending_entries_for_path_now(&path_text, 1_000)?;
-        if pending.is_empty() {
-            return Ok(retired);
-        }
-        for entry in pending {
-            spool.mark_shipped(entry.id)?;
-            retired += 1;
-        }
-    }
 }
 
 fn finish_path_task(mut result: PathTaskResult, started: Instant) -> PathTaskResult {
@@ -9422,47 +9146,6 @@ mod tests {
     }
 
     #[test]
-    fn test_storage_v2_source_head_retires_only_matching_legacy_spool_rows() {
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let target = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(target.path(), vec![b'x'; 200]).unwrap();
-        let target_path = target.path().to_string_lossy().to_string();
-        let conn = open_db(Some(db.path())).unwrap();
-        let spool = Spool::new(&conn);
-        spool
-            .enqueue("codex", &target_path, 0, 100, Some("target"))
-            .unwrap();
-        spool
-            .enqueue("codex", &target_path, 100, 200, Some("target"))
-            .unwrap();
-        spool
-            .enqueue("codex", "/tmp/other.jsonl", 0, 100, Some("other"))
-            .unwrap();
-        let file_state = FileState::new(&conn);
-        file_state
-            .set_queued_offset(&target_path, 200, "codex", "target", "target")
-            .unwrap();
-        assert_eq!(file_state.get_offset(&target_path).unwrap(), 0);
-
-        assert_eq!(
-            retire_legacy_spool_after_storage_v2(&conn, target.path()).unwrap(),
-            2
-        );
-        assert_eq!(file_state.get_offset(&target_path).unwrap(), 200);
-        assert!(spool
-            .pending_entries_for_path_now(&target_path, 10)
-            .unwrap()
-            .is_empty());
-        assert_eq!(
-            spool
-                .pending_entries_for_path_now("/tmp/other.jsonl", 10)
-                .unwrap()
-                .len(),
-            1
-        );
-    }
-
-    #[test]
     fn test_opencode_database_job_uses_sqlite_shipper_path() {
         let job = PathJob {
             path: PathBuf::from("/tmp/opencode.db"),
@@ -9500,10 +9183,8 @@ mod tests {
             last_ship_http_status: None,
             last_ship_error_kind: None,
             last_ship_error_message: None,
-            spool_pending_count: 0,
             shipping_progress: heartbeat::ShippingProgress::default(),
-            spool_dead_count: 0,
-            archive_backlog: crate::state::spool::ArchiveBacklogSnapshot::default(),
+            archive_backlog: crate::state::archive_backlog::ArchiveBacklogSnapshot::default(),
             storage_v2_outbox:
                 crate::state::pending_source_envelope::StorageV2OutboxSnapshot::default(),
             runtime_event_outbox: heartbeat::RuntimeEventOutboxSnapshot::default(),
@@ -10682,40 +10363,6 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_failed_shipment_retries_if_idle_refills_drained_scheduler() {
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let transcript = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_db(Some(db.path())).unwrap();
-        let path = transcript.path().to_string_lossy().to_string();
-        Spool::new(&conn)
-            .enqueue("codex", &path, 0, 100, Some("session-id"))
-            .unwrap();
-
-        let mut scheduler = PathScheduler::new(4);
-        let queued = queue_failed_shipment_retries_if_idle(
-            &mut scheduler,
-            &conn,
-            false,
-            10,
-            None,
-            ArchiveRepairMode::Drain,
-            &mut HashMap::new(),
-        )
-        .unwrap();
-
-        assert_eq!(queued, 1);
-        let job = scheduler
-            .pop_launchable()
-            .expect("failed-shipment retry job queued");
-        assert_eq!(job.path, PathBuf::from(&path));
-        assert_eq!(job.priority, WorkPriority::Retry);
-        assert_eq!(
-            job.observation.source,
-            FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE
-        );
-    }
-
-    #[test]
     fn test_storage_v2_pending_retry_is_queued_immediately() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let transcript = tempfile::NamedTempFile::new().unwrap();
@@ -10864,210 +10511,6 @@ mod tests {
     }
 
     #[test]
-    fn test_failed_shipment_retry_accepts_sqlite_and_acp_discovery_providers() {
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let opencode = tempfile::NamedTempFile::new().unwrap();
-        let cursor_acp = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_db(Some(db.path())).unwrap();
-        for (provider, transcript) in [("opencode", &opencode), ("cursor_acp", &cursor_acp)] {
-            Spool::new(&conn)
-                .enqueue(
-                    provider,
-                    &transcript.path().to_string_lossy(),
-                    0,
-                    100,
-                    Some("session-id"),
-                )
-                .unwrap();
-        }
-
-        let mut scheduler = PathScheduler::new(4);
-        let queued = queue_failed_shipment_retry_paths(
-            &mut scheduler,
-            &conn,
-            10,
-            None,
-            ArchiveRepairMode::Drain,
-            &mut HashMap::new(),
-        )
-        .unwrap();
-        assert_eq!(queued, 2);
-
-        let mut launched = HashSet::new();
-        while let Some(job) = scheduler.pop_launchable() {
-            launched.insert(job.provider);
-            scheduler.complete(&job.path, None);
-        }
-        assert_eq!(launched, HashSet::from(["opencode", "cursor_acp"]));
-    }
-
-    #[test]
-    fn test_paused_mode_does_not_queue_failed_shipment_retry_paths() {
-        // Mutates process-global environment: hold the shared agent-state
-        // lock so a concurrent test does not spawn under this one's PATH.
-        let _guard = crate::console_adapter::agent_state_guard();
-        let temp = tempfile::tempdir().unwrap();
-        temp_env::with_vars(
-            [
-                (
-                    "LONGHOUSE_HOME",
-                    Some(temp.path().join("lh").display().to_string()),
-                ),
-                ("HOME", Some(temp.path().join("home").display().to_string())),
-            ],
-            || {
-                let db = tempfile::NamedTempFile::new().unwrap();
-                let transcript = tempfile::NamedTempFile::new().unwrap();
-                let conn = open_db(Some(db.path())).unwrap();
-                let path = transcript.path().to_string_lossy().to_string();
-                Spool::new(&conn)
-                    .enqueue("codex", &path, 0, 100, Some("session-id"))
-                    .unwrap();
-
-                let mut scheduler = PathScheduler::new(4);
-                let queued = queue_failed_shipment_retry_paths(
-                    &mut scheduler,
-                    &conn,
-                    10,
-                    None,
-                    ArchiveRepairMode::Paused,
-                    &mut HashMap::new(),
-                )
-                .unwrap();
-
-                assert_eq!(queued, 0);
-                assert!(scheduler.pop_launchable().is_none());
-            },
-        );
-    }
-
-    #[test]
-    fn test_archive_startup_replay_warmup_delays_non_paused_modes() {
-        assert_eq!(
-            archive_startup_replay_warmup_delay(ArchiveRepairMode::Paused, 1.0),
-            None
-        );
-        assert_eq!(
-            archive_startup_replay_warmup_delay(ArchiveRepairMode::Trickle, 0.0),
-            Some(ARCHIVE_STARTUP_REPLAY_WARMUP_MIN)
-        );
-        assert_eq!(
-            archive_startup_replay_warmup_delay(ArchiveRepairMode::Drain, 1.0),
-            Some(ARCHIVE_STARTUP_REPLAY_WARMUP_MAX)
-        );
-    }
-
-    #[test]
-    fn test_running_control_file_can_resume_paused_archive_replay_as_trickle() {
-        // Mutates process-global environment: hold the shared agent-state
-        // lock so a concurrent test does not spawn under this one's PATH.
-        let _guard = crate::console_adapter::agent_state_guard();
-        let temp = tempfile::tempdir().unwrap();
-        temp_env::with_vars(
-            [
-                (
-                    "LONGHOUSE_HOME",
-                    Some(temp.path().join("lh").display().to_string()),
-                ),
-                ("HOME", Some(temp.path().join("home").display().to_string())),
-            ],
-            || {
-                let db = tempfile::NamedTempFile::new().unwrap();
-                let transcript = tempfile::NamedTempFile::new().unwrap();
-                let conn = open_db(Some(db.path())).unwrap();
-                let path = transcript.path().to_string_lossy().to_string();
-                Spool::new(&conn)
-                    .enqueue("codex", &path, 0, 100, Some("session-id"))
-                    .unwrap();
-
-                let mut scheduler = PathScheduler::new(4);
-                let queued = queue_failed_shipment_retry_paths(
-                    &mut scheduler,
-                    &conn,
-                    10,
-                    None,
-                    ArchiveRepairMode::Paused,
-                    &mut HashMap::new(),
-                )
-                .unwrap();
-                assert_eq!(queued, 0);
-
-                let control_path = config::get_agent_archive_repair_control_path().unwrap();
-                std::fs::create_dir_all(control_path.parent().unwrap()).unwrap();
-                let expires_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
-                std::fs::write(
-                    &control_path,
-                    serde_json::to_vec(&json!({"mode": "trickle", "expires_at": expires_at}))
-                        .unwrap(),
-                )
-                .unwrap();
-
-                let queued = queue_failed_shipment_retry_paths(
-                    &mut scheduler,
-                    &conn,
-                    10,
-                    None,
-                    ArchiveRepairMode::Paused,
-                    &mut HashMap::new(),
-                )
-                .unwrap();
-                assert_eq!(queued, 1);
-                let job = scheduler.pop_launchable().expect("trickle queued replay");
-                assert_eq!(job.path, PathBuf::from(&path));
-                assert_eq!(job.priority, WorkPriority::Retry);
-            },
-        );
-    }
-
-    #[test]
-    fn test_queue_failed_shipment_retries_suppress_huge_under_host_pressure() {
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_db(Some(db.path())).unwrap();
-        Spool::new(&conn)
-            .enqueue(
-                "codex",
-                "/tmp/small-ready.jsonl",
-                0,
-                100,
-                Some("small-session"),
-            )
-            .unwrap();
-        Spool::new(&conn)
-            .enqueue(
-                "codex",
-                "/tmp/huge-ready.jsonl",
-                0,
-                200 * 1024 * 1024,
-                Some("huge-session"),
-            )
-            .unwrap();
-
-        let limiter = AdaptiveLimiter::new();
-        limiter.observe_backpressure(Some(Duration::from_secs(5)));
-        assert!(!limiter.huge_range_eligible());
-
-        let mut scheduler = PathScheduler::new(4);
-        let queued = queue_failed_shipment_retries_if_idle(
-            &mut scheduler,
-            &conn,
-            false,
-            10,
-            Some(limiter.as_ref()),
-            ArchiveRepairMode::Drain,
-            &mut HashMap::new(),
-        )
-        .unwrap();
-
-        assert_eq!(queued, 1);
-        let job = scheduler
-            .pop_launchable()
-            .expect("small failed-shipment retry job queued");
-        assert_eq!(job.path, PathBuf::from("/tmp/small-ready.jsonl"));
-        assert_eq!(job.priority, WorkPriority::Retry);
-        assert!(scheduler.pop_launchable().is_none());
-    }
-
-    #[test]
     fn test_reconciliation_discovery_queues_reconciliation_source() {
         let mut scheduler = PathScheduler::new(4);
         let path = PathBuf::from("/tmp/reconciliation-session.jsonl");
@@ -11120,8 +10563,6 @@ mod tests {
         let operator_control = ArchiveRepairControl {
             mode: Some("trickle".to_string()),
             expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()),
-            max_tick_bytes: None,
-            include_huge: None,
             ..Default::default()
         };
         assert_eq!(
@@ -11132,8 +10573,6 @@ mod tests {
         let invalid_control = ArchiveRepairControl {
             mode: Some("enabled".to_string()),
             expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()),
-            max_tick_bytes: None,
-            include_huge: None,
             ..Default::default()
         };
         assert_eq!(
@@ -11144,8 +10583,6 @@ mod tests {
         let expired_control = ArchiveRepairControl {
             mode: Some("drain".to_string()),
             expires_at: Some((chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339()),
-            max_tick_bytes: Some(4 * 1024 * 1024 * 1024),
-            include_huge: Some(true),
             ..Default::default()
         };
         assert_eq!(
@@ -11157,8 +10594,6 @@ mod tests {
         let legacy_drain = ArchiveRepairControl {
             mode: Some("drain".to_string()),
             expires_at: None,
-            max_tick_bytes: Some(4 * 1024 * 1024 * 1024),
-            include_huge: Some(true),
             ..Default::default()
         };
         assert_eq!(
@@ -11270,8 +10705,6 @@ mod tests {
         let control = ArchiveRepairControl {
             mode: Some("trickle".to_string()),
             expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()),
-            max_tick_bytes: None,
-            include_huge: None,
             ..Default::default()
         };
 
@@ -11880,4 +11313,41 @@ mod tests {
 
         assert_eq!(binding_state(&conn, &transcript), "active");
     }
+
+    #[test]
+    fn test_running_control_file_can_resume_paused_archive_replay_as_trickle() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_vars(
+            [
+                (
+                    "LONGHOUSE_HOME",
+                    Some(temp.path().join("lh").display().to_string()),
+                ),
+                ("HOME", Some(temp.path().join("home").display().to_string())),
+            ],
+            || {
+                assert!(archive_repair_is_paused(ArchiveRepairMode::Paused));
+
+                let control_path = config::get_agent_archive_repair_control_path().unwrap();
+                std::fs::create_dir_all(control_path.parent().unwrap()).unwrap();
+                let expires_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+                std::fs::write(
+                    &control_path,
+                    serde_json::to_vec(&json!({"mode": "trickle", "expires_at": expires_at}))
+                        .unwrap(),
+                )
+                .unwrap();
+
+                assert_eq!(
+                    read_archive_repair_control().normalized_mode(ArchiveRepairMode::Paused),
+                    ArchiveRepairMode::Trickle
+                );
+                assert!(!archive_repair_is_paused(ArchiveRepairMode::Paused));
+            },
+        );
+    }
+
 }

@@ -4,7 +4,6 @@
 //! refusal that names the problem and the fix; there is no second protocol to
 //! fall back to, and shipping nothing quietly would lose Source-tier history.
 
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::config::ShipperConfig;
@@ -14,7 +13,6 @@ use crate::pipeline::compressor::CompressionAlgo;
 use crate::shipping::client::ShipperClient;
 use crate::shipping::storage_v2::require_storage_v2_cutover;
 use crate::state::db::open_db;
-use crate::state::spool::Spool;
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -167,34 +165,7 @@ pub async fn cmd_ship(
     let capabilities = require_storage_v2_cutover(negotiated, &config.api_url)?;
 
     let providers = discovery::get_providers();
-    let mut all_files = discovery::discover_all_files(&providers);
-    // Legacy v1 spool rows are byte-range pointers into sources that still
-    // exist on disk. Including their paths lets the storage-v2 lane cover the
-    // same bytes from source and then retire the pointer row.
-    for pending in Spool::new(&conn).pending_paths_now(10_000)? {
-        if pending.provider == "cursor" {
-            Spool::new(&conn).dead_letter_pending_for_path(
-                &pending.file_path,
-                "Cursor legacy pointer spool retired: storage-v2 source receipt is required",
-            )?;
-            continue;
-        }
-        let path = PathBuf::from(&pending.file_path);
-        if path.exists() && !all_files.iter().any(|(known, _)| known == &path) {
-            let provider = providers
-                .iter()
-                .find(|item| item.name == pending.provider)
-                .map(|item| item.name)
-                .unwrap_or("claude");
-            // A pointer row is not permission: a source outside the machine's
-            // import scope stays out of a one-shot import too.
-            if !discovery::source_in_import_scope(&import_scope, provider, &path) {
-                continue;
-            }
-            all_files.push((path, provider));
-        }
-    }
-
+    let all_files = discovery::discover_all_files(&providers);
     let mut files_shipped = 0usize;
     let mut events_shipped = 0usize;
     for (path, provider) in &all_files {
@@ -212,11 +183,6 @@ pub async fn cmd_ship(
         if events > 0 {
             files_shipped += 1;
             events_shipped += events;
-        }
-        let pending_entries =
-            Spool::new(&conn).pending_entries_for_path_now(&path.to_string_lossy(), 10_000)?;
-        for entry in pending_entries {
-            Spool::new(&conn).mark_shipped(entry.id)?;
         }
     }
 
@@ -345,6 +311,7 @@ pub async fn cmd_ship_file(
 mod tests {
     use super::*;
     use crate::state::file_state::FileState;
+    use std::path::PathBuf;
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
@@ -389,11 +356,6 @@ mod tests {
         let file_str = source.to_string_lossy().to_string();
         let file_state = FileState::new(&conn);
         assert_eq!(file_state.get_offset(&file_str).unwrap(), 0);
-        assert_eq!(file_state.get_queued_offset(&file_str).unwrap(), 0);
-        assert!(Spool::new(&conn)
-            .pending_entries_for_path_now(&file_str, 10)
-            .unwrap()
-            .is_empty());
     }
 
     /// A Runtime Host with no storage-v2 route answers 404 on the capability

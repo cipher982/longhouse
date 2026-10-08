@@ -1254,18 +1254,6 @@ fn run_daily_prunes(conn: &Connection) {
     // is idempotent housekeeping that the next pass repeats, and none of them is
     // the reason the marker exists. The marker tracks the reclaim — a pass that
     // could not compact, or could not open the database at all, stays due.
-    // Give dead-lettered ranges another chance before pruning anything. Most
-    // dead-lettering is a transient the engine outlived — a host outage, a
-    // payload shape since fixed — and without this the range is retained,
-    // displayed, and never retried. Bounded so a large graveyard drains over
-    // days rather than flooding the shipper in one pass.
-    match crate::state::spool::Spool::new(conn).revive_dead_with_readable_sources(200) {
-        Ok(n) if n > 0 => {
-            tracing::info!("Daily revive: returned {} dead ranges to pending", n)
-        }
-        Ok(_) => {}
-        Err(err) => tracing::warn!("Dead-range revive error: {}", err),
-    }
     match crate::state::file_state::FileState::new(conn).prune_stale(30) {
         Ok(n) if n > 0 => {
             tracing::info!("Daily prune: removed {} stale file_state entries", n)

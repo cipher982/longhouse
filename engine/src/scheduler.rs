@@ -248,6 +248,7 @@ impl AdaptiveLimiter {
         (true, "normal", None)
     }
 
+    #[cfg(test)]
     pub fn huge_range_eligible(&self) -> bool {
         let state = self.state.lock();
         let (eligible, _, _) = Self::huge_range_policy(&state, Instant::now());

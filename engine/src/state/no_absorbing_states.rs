@@ -31,7 +31,6 @@
 mod tests {
     use crate::state::db::open_db;
     use crate::state::pending_source_envelope;
-    use crate::state::spool::Spool;
     use rusqlite::params;
     use uuid::Uuid;
 
@@ -39,46 +38,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         (dir, conn)
-    }
-
-    /// `spool_queue.status` — every value production code writes.
-    ///
-    /// Grep for `SET status =` in `state/spool.rs` before trusting this list.
-    const SPOOL_STATUSES: &[&str] = &["pending", "dead"];
-
-    #[test]
-    fn every_spool_status_can_be_worked_again() {
-        for status in SPOOL_STATUSES {
-            let (dir, conn) = temp_db();
-            let spool = Spool::new(&conn);
-            // A real file, because the recovery paths deliberately refuse rows
-            // whose source can no longer be read.
-            let source = dir.path().join("transcript.jsonl");
-            std::fs::write(&source, b"{}\n").unwrap();
-            spool
-                .enqueue("claude", source.to_str().unwrap(), 0, 1, None)
-                .unwrap();
-            conn.execute("UPDATE spool_queue SET status = ?1", params![status])
-                .unwrap();
-
-            let reachable = match *status {
-                // Selected directly by the shipper.
-                "pending" => spool.pending_count().unwrap() > 0,
-                // Not selected directly; must have a documented way back.
-                "dead" => {
-                    spool.revive_dead_with_readable_sources(10).unwrap() > 0
-                        && spool.pending_count().unwrap() > 0
-                }
-                other => panic!(
-                    "spool status {other:?} has no reachability case here. Add one, or explain \
-                     in this test why work in that state is genuinely finished."
-                ),
-            };
-            assert!(
-                reachable,
-                "spool_queue rows in status {status:?} can never be worked again"
-            );
-        }
     }
 
     #[test]
@@ -140,60 +99,6 @@ mod tests {
         );
     }
 
-    /// A recovery function nothing calls is the bug, not the fix.
-    ///
-    /// The other tests here prove the recovery *functions* behave. None of them
-    /// can observe whether the daemon still invokes them: delete the tick
-    /// wiring and they all stay green. That is precisely the producer/consumer
-    /// failure this module exists to catch — `--owner-pid` was defined, parsed
-    /// and forwarded while no caller passed it, and the orphan-bridge reaper
-    /// exists only in comments.
-    ///
-    /// Asserting on source text is crude, and it is the cheapest thing that
-    /// actually fails when the call site disappears. A stronger version would
-    /// drive the daemon loop directly; until that exists, this is the guard.
-    #[test]
-    fn every_recovery_producer_is_wired_into_the_daemon() {
-        // A recovery path that nothing schedules is indistinguishable from one
-        // that does not exist. The producer may live outside the daemon — the
-        // daily pass now runs the dead-range revive next to the compaction it
-        // prepares for — so the invariant is asserted in two parts: the
-        // producer exists where it is claimed to, and the daemon names the
-        // entry point that schedules it.
-        let daemon = include_str!("../daemon.rs");
-        let recover = include_str!("recover.rs");
-        for (producer, producer_source, scheduled_entry, why) in [
-            (
-                "revive_dead_with_readable_sources",
-                recover,
-                "run_daily_storage_maintenance",
-                "dead spool ranges would never return to pending",
-            ),
-            (
-                "run_check_tick",
-                daemon,
-                "run_check_tick",
-                "the machine would never learn it is running a stale binary",
-            ),
-            (
-                "wake_blocked_for_new_engine",
-                include_str!("pending_source_envelope.rs"),
-                "wake_blocked_for_new_engine",
-                "a fixed engine would wait out the old engine's backoff before re-judging blocked work",
-            ),
-        ] {
-            assert!(
-                producer_source.contains(producer),
-                "{producer} is not found in the source this test claims holds it"
-            );
-            assert!(
-                daemon.contains(scheduled_entry),
-                "daemon.rs does not schedule {scheduled_entry}, so {why}. A recovery path that \
-                 nothing schedules is indistinguishable from one that does not exist."
-            );
-        }
-    }
-
     #[test]
     fn no_launcher_opens_the_archive_database() {
         // A launcher that opens the shipper database puts a cold process with a
@@ -234,33 +139,49 @@ mod tests {
         }
     }
 
+
+    /// A recovery function nothing calls is the bug, not the fix.
+    ///
+    /// The other tests here prove the recovery *functions* behave. None of them
+    /// can observe whether the daemon still invokes them: delete the tick
+    /// wiring and they all stay green. That is precisely the producer/consumer
+    /// failure this module exists to catch — `--owner-pid` was defined, parsed
+    /// and forwarded while no caller passed it, and the orphan-bridge reaper
+    /// exists only in comments.
+    ///
+    /// Asserting on source text is crude, and it is the cheapest thing that
+    /// actually fails when the call site disappears. A stronger version would
+    /// drive the daemon loop directly; until that exists, this is the guard.
     #[test]
-    fn a_dead_range_whose_source_survives_is_never_deleted() {
-        // The bug: cleanup() hard-deleted dead rows after 30 days. A spool row
-        // is a pointer into the user's own transcript, not a copy, so deleting
-        // one destroyed no data — it destroyed the record that the bytes were
-        // never shipped, dropping dead_ranges to zero and turning the status
-        // surface green with the debt unpaid.
-        let (dir, conn) = temp_db();
-        let spool = Spool::new(&conn);
-        let source = dir.path().join("transcript.jsonl");
-        std::fs::write(&source, b"{}\n").unwrap();
-        spool
-            .enqueue("claude", source.to_str().unwrap(), 0, 1, None)
-            .unwrap();
-        conn.execute(
-            "UPDATE spool_queue SET status = 'dead', created_at = '2020-01-01T00:00:00Z'",
-            [],
-        )
-        .unwrap();
-
-        spool.cleanup().unwrap();
-
-        assert_eq!(
-            spool.dead_count().unwrap(),
-            1,
-            "an unshipped range whose source still exists must keep its pointer; forgetting it \
-             reports a debt as paid"
-        );
+    fn every_recovery_producer_is_wired_into_the_daemon() {
+        // A recovery path that nothing schedules is indistinguishable from one
+        // that does not exist. The producer may live outside the daemon, so the
+        // invariant is asserted in two parts: the producer exists where it is
+        // claimed to, and the daemon names the entry point that schedules it.
+        let daemon = include_str!("../daemon.rs");
+        for (producer, producer_source, scheduled_entry, why) in [
+            (
+                "run_check_tick",
+                daemon,
+                "run_check_tick",
+                "the machine would never learn it is running a stale binary",
+            ),
+            (
+                "wake_blocked_for_new_engine",
+                include_str!("pending_source_envelope.rs"),
+                "wake_blocked_for_new_engine",
+                "a fixed engine would wait out the old engine's backoff before re-judging blocked work",
+            ),
+        ] {
+            assert!(
+                producer_source.contains(producer),
+                "{producer} is not found in the source this test claims holds it"
+            );
+            assert!(
+                daemon.contains(scheduled_entry),
+                "daemon.rs does not schedule {scheduled_entry}, so {why}. A recovery path that \
+                 nothing schedules is indistinguishable from one that does not exist."
+            );
+        }
     }
 }

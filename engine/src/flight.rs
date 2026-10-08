@@ -14,11 +14,9 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
-use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use crate::shipping_stats::ShipStatsSummary;
-use crate::state::spool::Spool;
 
 const DEFAULT_BUFFER_CAPACITY: usize = 2048;
 const RETENTION_DAYS: i64 = 7;
@@ -160,14 +158,6 @@ fn snapshot_files(dir: &Path, include: impl Fn(&std::fs::DirEntry) -> bool) -> V
         "bytes": bytes,
         "oldest_age_ms": oldest_age_ms,
         "capped": capped,
-    })
-}
-
-pub fn spool_snapshot(conn: &Connection) -> Value {
-    let spool = Spool::new(conn);
-    json!({
-        "pending_count": spool.pending_count().ok(),
-        "dead_count": spool.dead_count().ok(),
     })
 }
 

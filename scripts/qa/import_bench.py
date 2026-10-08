@@ -197,11 +197,14 @@ def engine_backlog(db_path: Path) -> dict[str, int] | None:
     try:
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as connection:
             tables = {row[0] for row in connection.execute("select name from sqlite_master where type='table'")}
-            if not {"pending_source_envelope", "spool_queue"}.issubset(tables):
+            if "pending_source_envelope" not in tables:
                 return None
             pending_envelopes = int(connection.execute("select count(*) from pending_source_envelope").fetchone()[0])
-            spool_pending = int(connection.execute("select count(*) from spool_queue where status = 'pending'").fetchone()[0])
-            spool_dead = int(connection.execute("select count(*) from spool_queue where status = 'dead'").fetchone()[0])
+            # Released engines before the v1 spool removal still carry spool_queue.
+            spool_pending = spool_dead = 0
+            if "spool_queue" in tables:
+                spool_pending = int(connection.execute("select count(*) from spool_queue where status = 'pending'").fetchone()[0])
+                spool_dead = int(connection.execute("select count(*) from spool_queue where status = 'dead'").fetchone()[0])
             return {"pending_envelopes": pending_envelopes, "spool_pending": spool_pending, "spool_dead": spool_dead}
     except sqlite3.Error:
         return None

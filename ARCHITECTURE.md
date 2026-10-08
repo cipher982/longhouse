@@ -9,7 +9,7 @@ Longhouse is one product with two public components:
 
 - **Machine Agent** — a Rust engine (`longhouse-engine`) that runs on each
   machine where you do work. It drains the hook output that provider CLIs
-  write, ships session events to the Runtime Host with retry/spool, and emits
+  write, ships session events to the Runtime Host with durable retry, and emits
   heartbeats. This is the shipping path.
 - **Runtime Host** — the backend product: a FastAPI API, the bundled web UI,
   and SQLite-backed state. It is what `longhouse-server serve` runs. It lives where

@@ -9,8 +9,6 @@
     "payload": {
       "daemon_pid": 4242,
       "last_updated": "2026-08-03T16:00:00Z",
-      "spool_dead_count": 0,
-      "spool_pending_count": 0,
       "sessions": [
         {
           "bridge": {
@@ -35,6 +33,9 @@
           }
         }
       ],
+      "storage_v2_outbox": {
+        "pending_count": 0
+      },
       "version": "0.1.33"
     }
   },
@@ -86,10 +87,6 @@
   },
   "schema_version": 1,
   "severity": "green",
-  "spool": {
-    "dead_count": 0,
-    "pending_count": 0
-  },
   "suggested_action_ids": [
     "inspect_native_status"
   ],

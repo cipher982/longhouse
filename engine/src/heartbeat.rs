@@ -45,9 +45,7 @@ use crate::shipping_stats::RecentShipStatsTracker;
 use crate::shipping_stats::ShipLaneSummarySet;
 use crate::state::pending_source_envelope::{self, StorageV2OutboxSnapshot};
 use crate::state::session_phase::PhaseLedgerRow;
-use crate::state::spool::ArchiveBacklogSnapshot;
-use crate::state::spool::DeadLetterEntry;
-use crate::state::spool::Spool;
+use crate::state::archive_backlog::ArchiveBacklogSnapshot;
 
 const HEARTBEAT_POST_TIMEOUT: Duration = Duration::from_secs(6);
 const MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY: usize = 2_048;
@@ -93,9 +91,7 @@ pub struct HeartbeatPayload {
     pub last_ship_error_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_ship_error_message: Option<String>,
-    pub spool_pending_count: usize,
     pub shipping_progress: ShippingProgress,
-    pub spool_dead_count: usize,
     #[serde(default)]
     pub archive_backlog: ArchiveBacklogSnapshot,
     #[serde(default)]
@@ -490,10 +486,7 @@ pub fn payload_has_pending_work(payload: &HeartbeatPayload) -> bool {
     let archive_pending = !archive_paused
         && (payload.archive_backlog.pending_ranges > 0
             || payload.archive_backlog.pending_bytes > 0);
-    let spool_pending = !archive_paused && payload.spool_pending_count > 0;
-
-    spool_pending
-        || (!archive_paused && payload.storage_v2_outbox.pending_count > 0)
+    (!archive_paused && payload.storage_v2_outbox.pending_count > 0)
         || archive_pending
         || scheduler_pending
 }
@@ -1110,32 +1103,14 @@ pub struct ManagedSessionLease {
 /// Stats needed to build a heartbeat.
 pub struct HeartbeatStats<'a> {
     pub conn: &'a rusqlite::Connection,
-    pub spool: &'a Spool<'a>,
     pub parse_tracker: &'a RecentIssueTracker,
     pub ship_stats: &'a RecentShipStatsTracker,
     pub is_offline: bool,
     pub last_ship_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct StatusDeadLetter {
-    provider: String,
-    file_path: String,
-    start_offset: u64,
-    end_offset: u64,
-    range_bytes: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_error: Option<String>,
-    created_at: String,
-}
-
 impl HeartbeatPayload {
     pub fn build(stats: &HeartbeatStats<'_>) -> Self {
-        let spool_pending_count = stats.spool.pending_count().unwrap_or(0);
-        let spool_dead_count = stats.spool.dead_count().unwrap_or(0);
-        let archive_backlog = stats.spool.archive_backlog_snapshot().unwrap_or_default();
         let storage_v2_outbox =
             pending_source_envelope::snapshot(stats.conn).unwrap_or_else(|error| {
                 StorageV2OutboxSnapshot {
@@ -1162,10 +1137,8 @@ impl HeartbeatPayload {
             last_ship_http_status: ship_stats.last_ship_http_status,
             last_ship_error_kind: ship_stats.last_ship_error_kind,
             last_ship_error_message: ship_stats.last_ship_error_message,
-            spool_pending_count,
             shipping_progress: ShippingProgress::default(),
-            spool_dead_count,
-            archive_backlog,
+            archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox,
             runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
             parse_error_count_1h,
@@ -4368,8 +4341,6 @@ pub struct HeartbeatSendAttempt {
     fields(
         http.request.method = "POST",
         http.route = "/api/agents/heartbeat",
-        longhouse.spool_pending_count = payload.spool_pending_count as u64,
-        longhouse.spool_dead_count = payload.spool_dead_count as u64,
         longhouse.ship_attempts_1h = payload.ship_attempts_1h as u64,
     )
 )]
@@ -4502,7 +4473,6 @@ pub struct StatusFileProjection {
     /// including when an older projection build completes after the POST.
     pub heartbeat_transport: HeartbeatTransportStatus,
     pub host_link: Option<crate::host_link::HostLinkStatus>,
-    recent_dead_letters: Vec<StatusDeadLetter>,
     phase_ledger: Vec<PhaseLedgerRow>,
     phase_ledger_status: PhaseLedgerStatus,
     generated_at: String,
@@ -4511,23 +4481,14 @@ pub struct StatusFileProjection {
 
 pub fn build_status_file_projection(
     payload: HeartbeatPayload,
-    stats: &HeartbeatStats<'_>,
     phase_ledger: Vec<PhaseLedgerRow>,
     phase_ledger_status: PhaseLedgerStatus,
 ) -> StatusFileProjection {
-    let recent_dead_letters = stats
-        .spool
-        .recent_dead(5)
-        .unwrap_or_default()
-        .into_iter()
-        .map(status_dead_letter_from_entry)
-        .collect();
     let generated_at = chrono::Utc::now().to_rfc3339();
     StatusFileProjection {
         payload,
         heartbeat_transport: HeartbeatTransportStatus::default(),
         host_link: None,
-        recent_dead_letters,
         phase_ledger,
         phase_ledger_status,
         generated_at: generated_at.clone(),
@@ -4619,7 +4580,6 @@ pub fn write_status_file(
         /// Start time of the current daemon process, ISO 8601. Captured once
         /// at process startup.
         daemon_started_at: String,
-        recent_dead_letters: Vec<StatusDeadLetter>,
         /// Ledger rows whose phase is still within its freshness window.
         /// Same LWW rows that back `session_phase_state` so consumers can
         /// read this file instead of re-opening the SQLite ledger.
@@ -4670,7 +4630,6 @@ pub fn write_status_file(
         binary_path,
         binary_mtime,
         daemon_started_at,
-        recent_dead_letters: projection.recent_dead_letters.clone(),
         phase_ledger: projection.phase_ledger.clone(),
         phase_ledger_status: projection.phase_ledger_status.clone(),
         control_channel,
@@ -4773,19 +4732,6 @@ fn inspect_current_exe() -> (Option<String>, Option<String>) {
                 .into()
         });
     (Some(exe_path), mtime)
-}
-
-fn status_dead_letter_from_entry(entry: DeadLetterEntry) -> StatusDeadLetter {
-    StatusDeadLetter {
-        provider: entry.provider,
-        file_path: entry.file_path,
-        start_offset: entry.start_offset,
-        end_offset: entry.end_offset,
-        range_bytes: entry.end_offset.saturating_sub(entry.start_offset),
-        session_id: entry.session_id,
-        last_error: entry.last_error,
-        created_at: entry.created_at,
-    }
 }
 
 /// Get free bytes on the filesystem containing Longhouse agent state.
@@ -4966,9 +4912,7 @@ mod tests {
             last_ship_http_status: None,
             last_ship_error_kind: None,
             last_ship_error_message: None,
-            spool_pending_count: 5,
             shipping_progress: ShippingProgress::default(),
-            spool_dead_count: 1,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             runtime_event_outbox: RuntimeEventOutboxSnapshot {
@@ -5020,8 +4964,6 @@ mod tests {
 
         assert_eq!(parsed["version"], "0.1.0");
         assert_eq!(parsed["daemon_pid"], 12345);
-        assert_eq!(parsed["spool_pending_count"], 5);
-        assert_eq!(parsed["spool_dead_count"], 1);
         assert_eq!(parsed["ship_attempts_1h"], 7);
         assert_eq!(parsed["ship_successes_1h"], 5);
         assert_eq!(parsed["ship_attempts_10m"], 4);
@@ -5226,9 +5168,7 @@ mod tests {
             last_ship_http_status: None,
             last_ship_error_kind: None,
             last_ship_error_message: None,
-            spool_pending_count: 0,
             shipping_progress: ShippingProgress::default(),
-            spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
@@ -6489,9 +6429,7 @@ mod tests {
             last_ship_http_status: None,
             last_ship_error_kind: None,
             last_ship_error_message: None,
-            spool_pending_count: 0,
             shipping_progress: ShippingProgress::default(),
-            spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
@@ -6535,392 +6473,6 @@ mod tests {
 
         // last_ship_at should be omitted when None
         assert!(parsed.get("last_ship_at").is_none() || parsed["last_ship_at"].is_null());
-    }
-
-    #[test]
-    fn test_write_status_file_includes_dead_count() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_db(Some(db.path())).unwrap();
-        let spool = Spool::new(&conn);
-        let parse_tracker = RecentIssueTracker::new();
-        let ship_stats = RecentShipStatsTracker::new();
-        let payload = HeartbeatPayload {
-            version: "0.1.0".to_string(),
-            daemon_pid: 42,
-            last_ship_at: Some("2026-03-10T00:00:00Z".to_string()),
-            last_ship_attempt_at: None,
-            last_ship_result: None,
-            last_ship_latency_ms: None,
-            last_ship_http_status: None,
-            last_ship_error_kind: None,
-            last_ship_error_message: None,
-            spool_pending_count: 2,
-            shipping_progress: ShippingProgress::default(),
-            spool_dead_count: 3,
-            archive_backlog: ArchiveBacklogSnapshot::default(),
-            storage_v2_outbox: StorageV2OutboxSnapshot::default(),
-            runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
-            parse_error_count_1h: 0,
-            ship_attempts_1h: 0,
-            ship_successes_1h: 0,
-            ship_rate_limited_1h: 0,
-            ship_server_errors_1h: 0,
-            ship_payload_rejections_1h: 0,
-            ship_payload_too_large_1h: 0,
-            ship_retryable_client_errors_1h: 0,
-            ship_connect_errors_1h: 0,
-            ship_latency_p50_ms_1h: None,
-            ship_latency_p95_ms_1h: None,
-            ship_attempts_10m: 0,
-            ship_successes_10m: 0,
-            ship_rate_limited_10m: 0,
-            ship_server_errors_10m: 0,
-            ship_retryable_client_errors_10m: 0,
-            ship_connect_errors_10m: 0,
-            ship_lanes: ShipLaneSummarySet::default(),
-            events_per_sec_ewma_10s: None,
-            bytes_per_sec_ewma_10s: None,
-            local_database_bytes: None,
-            disk_free_bytes: 10,
-            is_offline: false,
-            managed_sessions: Vec::new(),
-            unmanaged_session_bindings: Vec::new(),
-            machine_evidence: None,
-            sessions: Vec::new(),
-            sessions_digest: None,
-            sessions_sequence: None,
-            adaptive_backlog_limiter: None,
-            ship_scheduler: None,
-            history_import: Default::default(),
-            update: None,
-        };
-
-        spool
-            .record_dead(
-                "codex",
-                "/tmp/dead-range.jsonl",
-                100,
-                220,
-                Some("dead-session"),
-                "oversize source range",
-            )
-            .unwrap();
-        let stats = HeartbeatStats {
-            conn: &conn,
-            spool: &spool,
-            parse_tracker: &parse_tracker,
-            ship_stats: &ship_stats,
-            is_offline: false,
-            last_ship_at: payload.last_ship_at.clone(),
-        };
-
-        let status_path = dir.path().join("agent").join("engine-status.json");
-        let mut projection =
-            build_status_file_projection(payload, &stats, Vec::new(), PhaseLedgerStatus::Ok);
-        projection.set_runtime_event_outbox(RuntimeEventOutboxSnapshot {
-            pending_count: 7,
-            pending_count_is_lower_bound: true,
-            inspected_count: 7,
-            saturated: true,
-            oldest_pending_at: Some("2026-10-05T12:00:00Z".to_string()),
-            observed_at: Some("2026-10-05T12:00:01Z".to_string()),
-        });
-        let mut progress_observation = ShippingProgressObservation::new(Instant::now());
-        write_status_file(
-            &mut projection,
-            Some(serde_json::json!({
-                "enabled": true,
-                "status": "connected",
-                "supports": ["codex.turn_start"],
-            })),
-            &ProjectionReconciliation::idle(),
-            &mut progress_observation,
-            false,
-            &status_path,
-        );
-
-        let json = std::fs::read_to_string(&status_path).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["spool_dead_count"], 3);
-        assert_eq!(parsed["runtime_event_outbox"]["pending_count"], 7);
-        assert_eq!(
-            parsed["runtime_event_outbox"]["pending_count_is_lower_bound"],
-            true
-        );
-        assert_eq!(
-            parsed["runtime_event_outbox"]["oldest_pending_at"],
-            "2026-10-05T12:00:00Z"
-        );
-        assert_eq!(parsed["heartbeat_transport"]["state"], "unknown");
-        assert_eq!(parsed["recent_dead_letters"][0]["provider"], "codex");
-        assert_eq!(
-            parsed["recent_dead_letters"][0]["file_path"],
-            "/tmp/dead-range.jsonl"
-        );
-        assert_eq!(parsed["recent_dead_letters"][0]["range_bytes"], 120);
-        // Callers that pass an empty ledger get an empty array, not a missing
-        // key — the shape stays stable for consumers.
-        assert_eq!(parsed["phase_ledger"], serde_json::json!([]));
-        assert_eq!(parsed["phase_ledger_status"], "ok");
-        // build block mirrors BuildIdentity::current() so menu bar / local-health
-        // can detect drift between the installed CLI and the engine.
-        let build = &parsed["build"];
-        assert!(build.is_object(), "expected build block");
-        assert!(build["version"].is_string());
-        assert!(build["commit"].is_string());
-        assert!(build["commit_short"].is_string());
-        assert!(build["built_at"].is_string());
-        assert!(build["channel"].is_string());
-        assert!(build["dirty"].is_boolean());
-        assert_eq!(parsed["control_channel"]["status"], "connected");
-        assert_eq!(parsed["control_channel"]["supports"][0], "codex.turn_start");
-        assert_eq!(
-            parsed["local_projection"]["reconciliation"]["state"],
-            "idle"
-        );
-        assert!(parsed["local_projection"]["engine_pulse_at"].is_string());
-        assert_eq!(parsed["local_projection"]["last_reconciled_at"], "");
-
-        let generated_at = parsed["local_projection"]["generated_at"].clone();
-        let stable_dead_letters = parsed["recent_dead_letters"].clone();
-        write_status_file(
-            &mut projection,
-            None,
-            &ProjectionReconciliation::running("local_status", "2026-07-16T12:00:00Z"),
-            &mut progress_observation,
-            false,
-            &status_path,
-        );
-        let refreshed: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&status_path).unwrap()).unwrap();
-        assert_eq!(refreshed["local_projection"]["generated_at"], generated_at);
-        assert_eq!(refreshed["recent_dead_letters"], stable_dead_letters);
-        assert_eq!(
-            refreshed["local_projection"]["reconciliation"]["state"],
-            "reconciling"
-        );
-        assert_eq!(
-            refreshed["local_projection"]["reconciliation"]["reason"],
-            "local_status"
-        );
-
-        refresh_existing_status_pulse(
-            &ProjectionReconciliation::running("wake", "2026-07-16T12:01:00Z"),
-            &mut progress_observation,
-            false,
-            &status_path,
-            &HeartbeatTransportStatus::default(),
-            None,
-        );
-        let pulsed: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&status_path).unwrap()).unwrap();
-        assert_eq!(pulsed["local_projection"]["generated_at"], generated_at);
-        assert_eq!(
-            pulsed["local_projection"]["reconciliation"]["reason"],
-            "wake"
-        );
-        assert_eq!(pulsed["daemon_pid"], std::process::id());
-    }
-
-    #[test]
-    fn test_write_status_file_embeds_fresh_phase_ledger() {
-        use crate::state::session_phase::{SessionPhaseSignal, SessionPhaseStore};
-        use chrono::Utc;
-
-        let dir = tempfile::tempdir().unwrap();
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_db(Some(db.path())).unwrap();
-        let spool = Spool::new(&conn);
-        let parse_tracker = RecentIssueTracker::new();
-        let ship_stats = RecentShipStatsTracker::new();
-
-        // Seed one fresh ledger row.
-        SessionPhaseStore::new(&conn)
-            .record(&SessionPhaseSignal {
-                session_id: "sess-live".to_string(),
-                provider: "claude".to_string(),
-                phase: "running".to_string(),
-                tool_name: Some("Bash".to_string()),
-                source: "claude_hook".to_string(),
-                observed_at: Utc::now(),
-                run_id: Some("run-live".to_string()),
-            })
-            .unwrap();
-
-        let payload = HeartbeatPayload {
-            version: "0.1.0".to_string(),
-            daemon_pid: 42,
-            last_ship_at: None,
-            last_ship_attempt_at: None,
-            last_ship_result: None,
-            last_ship_latency_ms: None,
-            last_ship_http_status: None,
-            last_ship_error_kind: None,
-            last_ship_error_message: None,
-            spool_pending_count: 0,
-            shipping_progress: ShippingProgress::default(),
-            spool_dead_count: 0,
-            archive_backlog: ArchiveBacklogSnapshot::default(),
-            storage_v2_outbox: StorageV2OutboxSnapshot::default(),
-            runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
-            parse_error_count_1h: 0,
-            ship_attempts_1h: 0,
-            ship_successes_1h: 0,
-            ship_rate_limited_1h: 0,
-            ship_server_errors_1h: 0,
-            ship_payload_rejections_1h: 0,
-            ship_payload_too_large_1h: 0,
-            ship_retryable_client_errors_1h: 0,
-            ship_connect_errors_1h: 0,
-            ship_latency_p50_ms_1h: None,
-            ship_latency_p95_ms_1h: None,
-            ship_attempts_10m: 0,
-            ship_successes_10m: 0,
-            ship_rate_limited_10m: 0,
-            ship_server_errors_10m: 0,
-            ship_retryable_client_errors_10m: 0,
-            ship_connect_errors_10m: 0,
-            ship_lanes: ShipLaneSummarySet::default(),
-            events_per_sec_ewma_10s: None,
-            bytes_per_sec_ewma_10s: None,
-            local_database_bytes: None,
-            disk_free_bytes: 0,
-            is_offline: false,
-            managed_sessions: Vec::new(),
-            unmanaged_session_bindings: Vec::new(),
-            machine_evidence: None,
-            sessions: Vec::new(),
-            sessions_digest: None,
-            sessions_sequence: None,
-            adaptive_backlog_limiter: None,
-            ship_scheduler: None,
-            history_import: Default::default(),
-            update: None,
-        };
-        let stats = HeartbeatStats {
-            conn: &conn,
-            spool: &spool,
-            parse_tracker: &parse_tracker,
-            ship_stats: &ship_stats,
-            is_offline: false,
-            last_ship_at: None,
-        };
-
-        let phase_ledger = SessionPhaseStore::new(&conn)
-            .fresh_rows(Utc::now())
-            .expect("fresh_rows should succeed on a live DB");
-
-        let status_path = dir.path().join("agent").join("engine-status.json");
-        let mut projection =
-            build_status_file_projection(payload, &stats, phase_ledger, PhaseLedgerStatus::Ok);
-        let mut progress_observation = ShippingProgressObservation::new(Instant::now());
-        write_status_file(
-            &mut projection,
-            None,
-            &ProjectionReconciliation::idle(),
-            &mut progress_observation,
-            false,
-            &status_path,
-        );
-
-        let json = std::fs::read_to_string(status_path).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["phase_ledger"][0]["session_id"], "sess-live");
-        assert_eq!(parsed["phase_ledger"][0]["phase"], "running");
-        assert_eq!(parsed["phase_ledger"][0]["tool_name"], "Bash");
-        assert_eq!(parsed["phase_ledger"][0]["source"], "claude_hook");
-        assert_eq!(parsed["phase_ledger_status"], "ok");
-    }
-
-    #[test]
-    fn test_write_status_file_records_ledger_read_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_db(Some(db.path())).unwrap();
-        let spool = Spool::new(&conn);
-        let parse_tracker = RecentIssueTracker::new();
-        let ship_stats = RecentShipStatsTracker::new();
-        let payload = HeartbeatPayload {
-            version: "0.1.0".to_string(),
-            daemon_pid: 42,
-            last_ship_at: None,
-            last_ship_attempt_at: None,
-            last_ship_result: None,
-            last_ship_latency_ms: None,
-            last_ship_http_status: None,
-            last_ship_error_kind: None,
-            last_ship_error_message: None,
-            spool_pending_count: 0,
-            shipping_progress: ShippingProgress::default(),
-            spool_dead_count: 0,
-            archive_backlog: ArchiveBacklogSnapshot::default(),
-            storage_v2_outbox: StorageV2OutboxSnapshot::default(),
-            runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
-            parse_error_count_1h: 0,
-            ship_attempts_1h: 0,
-            ship_successes_1h: 0,
-            ship_rate_limited_1h: 0,
-            ship_server_errors_1h: 0,
-            ship_payload_rejections_1h: 0,
-            ship_payload_too_large_1h: 0,
-            ship_retryable_client_errors_1h: 0,
-            ship_connect_errors_1h: 0,
-            ship_latency_p50_ms_1h: None,
-            ship_latency_p95_ms_1h: None,
-            ship_attempts_10m: 0,
-            ship_successes_10m: 0,
-            ship_rate_limited_10m: 0,
-            ship_server_errors_10m: 0,
-            ship_retryable_client_errors_10m: 0,
-            ship_connect_errors_10m: 0,
-            ship_lanes: ShipLaneSummarySet::default(),
-            events_per_sec_ewma_10s: None,
-            bytes_per_sec_ewma_10s: None,
-            local_database_bytes: None,
-            disk_free_bytes: 0,
-            is_offline: false,
-            managed_sessions: Vec::new(),
-            unmanaged_session_bindings: Vec::new(),
-            machine_evidence: None,
-            sessions: Vec::new(),
-            sessions_digest: None,
-            sessions_sequence: None,
-            adaptive_backlog_limiter: None,
-            ship_scheduler: None,
-            history_import: Default::default(),
-            update: None,
-        };
-        let stats = HeartbeatStats {
-            conn: &conn,
-            spool: &spool,
-            parse_tracker: &parse_tracker,
-            ship_stats: &ship_stats,
-            is_offline: false,
-            last_ship_at: None,
-        };
-
-        let status_path = dir.path().join("agent").join("engine-status.json");
-        let mut projection = build_status_file_projection(
-            payload,
-            &stats,
-            Vec::new(),
-            PhaseLedgerStatus::ReadFailed("db locked".to_string()),
-        );
-        let mut progress_observation = ShippingProgressObservation::new(Instant::now());
-        write_status_file(
-            &mut projection,
-            None,
-            &ProjectionReconciliation::idle(),
-            &mut progress_observation,
-            false,
-            &status_path,
-        );
-
-        let json = std::fs::read_to_string(status_path).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["phase_ledger"], serde_json::json!([]));
-        assert_eq!(parsed["phase_ledger_status"], "read_failed: db locked");
     }
 
     #[test]
@@ -8476,9 +8028,7 @@ mod tests {
             last_ship_http_status: None,
             last_ship_error_kind: None,
             last_ship_error_message: None,
-            spool_pending_count: 0,
             shipping_progress: ShippingProgress::default(),
-            spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
@@ -8654,5 +8204,177 @@ mod tests {
             let value = serde_json::json!({"observed_at": timestamp});
             assert_eq!(canonical_evidence_value(value.clone()).unwrap(), value);
         }
+    }
+
+    #[test]
+    fn test_write_status_file_embeds_fresh_phase_ledger() {
+        use crate::state::session_phase::{SessionPhaseSignal, SessionPhaseStore};
+        use chrono::Utc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+
+        // Seed one fresh ledger row.
+        SessionPhaseStore::new(&conn)
+            .record(&SessionPhaseSignal {
+                session_id: "sess-live".to_string(),
+                provider: "claude".to_string(),
+                phase: "running".to_string(),
+                tool_name: Some("Bash".to_string()),
+                source: "claude_hook".to_string(),
+                observed_at: Utc::now(),
+                run_id: Some("run-live".to_string()),
+            })
+            .unwrap();
+
+        let payload = HeartbeatPayload {
+            version: "0.1.0".to_string(),
+            daemon_pid: 42,
+            last_ship_at: None,
+            last_ship_attempt_at: None,
+            last_ship_result: None,
+            last_ship_latency_ms: None,
+            last_ship_http_status: None,
+            last_ship_error_kind: None,
+            last_ship_error_message: None,
+            shipping_progress: ShippingProgress::default(),
+            archive_backlog: ArchiveBacklogSnapshot::default(),
+            storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
+            parse_error_count_1h: 0,
+            ship_attempts_1h: 0,
+            ship_successes_1h: 0,
+            ship_rate_limited_1h: 0,
+            ship_server_errors_1h: 0,
+            ship_payload_rejections_1h: 0,
+            ship_payload_too_large_1h: 0,
+            ship_retryable_client_errors_1h: 0,
+            ship_connect_errors_1h: 0,
+            ship_latency_p50_ms_1h: None,
+            ship_latency_p95_ms_1h: None,
+            ship_attempts_10m: 0,
+            ship_successes_10m: 0,
+            ship_rate_limited_10m: 0,
+            ship_server_errors_10m: 0,
+            ship_retryable_client_errors_10m: 0,
+            ship_connect_errors_10m: 0,
+            ship_lanes: ShipLaneSummarySet::default(),
+            events_per_sec_ewma_10s: None,
+            bytes_per_sec_ewma_10s: None,
+            local_database_bytes: None,
+            disk_free_bytes: 0,
+            is_offline: false,
+            managed_sessions: Vec::new(),
+            unmanaged_session_bindings: Vec::new(),
+            machine_evidence: None,
+            sessions: Vec::new(),
+            sessions_digest: None,
+            sessions_sequence: None,
+            adaptive_backlog_limiter: None,
+            ship_scheduler: None,
+            history_import: Default::default(),
+            update: None,
+        };
+
+        let phase_ledger = SessionPhaseStore::new(&conn)
+            .fresh_rows(Utc::now())
+            .expect("fresh_rows should succeed on a live DB");
+
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let mut projection =
+            build_status_file_projection(payload,  phase_ledger, PhaseLedgerStatus::Ok);
+        let mut progress_observation = ShippingProgressObservation::new(Instant::now());
+        write_status_file(
+            &mut projection,
+            None,
+            &ProjectionReconciliation::idle(),
+            &mut progress_observation,
+            false,
+            &status_path,
+        );
+
+        let json = std::fs::read_to_string(status_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["phase_ledger"][0]["session_id"], "sess-live");
+        assert_eq!(parsed["phase_ledger"][0]["phase"], "running");
+        assert_eq!(parsed["phase_ledger"][0]["tool_name"], "Bash");
+        assert_eq!(parsed["phase_ledger"][0]["source"], "claude_hook");
+        assert_eq!(parsed["phase_ledger_status"], "ok");
+    }
+
+    #[test]
+    fn test_write_status_file_records_ledger_read_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let payload = HeartbeatPayload {
+            version: "0.1.0".to_string(),
+            daemon_pid: 42,
+            last_ship_at: None,
+            last_ship_attempt_at: None,
+            last_ship_result: None,
+            last_ship_latency_ms: None,
+            last_ship_http_status: None,
+            last_ship_error_kind: None,
+            last_ship_error_message: None,
+            shipping_progress: ShippingProgress::default(),
+            archive_backlog: ArchiveBacklogSnapshot::default(),
+            storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
+            parse_error_count_1h: 0,
+            ship_attempts_1h: 0,
+            ship_successes_1h: 0,
+            ship_rate_limited_1h: 0,
+            ship_server_errors_1h: 0,
+            ship_payload_rejections_1h: 0,
+            ship_payload_too_large_1h: 0,
+            ship_retryable_client_errors_1h: 0,
+            ship_connect_errors_1h: 0,
+            ship_latency_p50_ms_1h: None,
+            ship_latency_p95_ms_1h: None,
+            ship_attempts_10m: 0,
+            ship_successes_10m: 0,
+            ship_rate_limited_10m: 0,
+            ship_server_errors_10m: 0,
+            ship_retryable_client_errors_10m: 0,
+            ship_connect_errors_10m: 0,
+            ship_lanes: ShipLaneSummarySet::default(),
+            events_per_sec_ewma_10s: None,
+            bytes_per_sec_ewma_10s: None,
+            local_database_bytes: None,
+            disk_free_bytes: 0,
+            is_offline: false,
+            managed_sessions: Vec::new(),
+            unmanaged_session_bindings: Vec::new(),
+            machine_evidence: None,
+            sessions: Vec::new(),
+            sessions_digest: None,
+            sessions_sequence: None,
+            adaptive_backlog_limiter: None,
+            ship_scheduler: None,
+            history_import: Default::default(),
+            update: None,
+        };
+
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let mut projection = build_status_file_projection(
+            payload,
+
+            Vec::new(),
+            PhaseLedgerStatus::ReadFailed("db locked".to_string()),
+        );
+        let mut progress_observation = ShippingProgressObservation::new(Instant::now());
+        write_status_file(
+            &mut projection,
+            None,
+            &ProjectionReconciliation::idle(),
+            &mut progress_observation,
+            false,
+            &status_path,
+        );
+
+        let json = std::fs::read_to_string(status_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["phase_ledger"], serde_json::json!([]));
+        assert_eq!(parsed["phase_ledger_status"], "read_failed: db locked");
     }
 }

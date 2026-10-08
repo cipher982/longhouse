@@ -2,7 +2,7 @@
 //!
 //! Per-job `open_db()` was a measurable hot-path cost (P95 ~190ms outliers
 //! under contention) because cold open re-runs schema bootstrap, several
-//! `PRAGMA table_info` introspections, a `DELETE … GROUP BY` on `spool_queue`,
+//! `PRAGMA table_info` introspections, dedupe `DELETE`s,
 //! and a handful of `CREATE INDEX IF NOT EXISTS` statements. Schema work only
 //! needs to happen once per process; PRAGMAs are the only per-connection
 //! setup.

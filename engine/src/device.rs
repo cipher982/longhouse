@@ -115,7 +115,6 @@ struct NativeLocalHealth {
     heartbeat_transport: NativeHeartbeatTransportStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     host_link: Option<Value>,
-    spool: NativeSpoolStatus,
     managed_sessions: NativeManagedSessionsStatus,
     managed_launch_recovery: NativeManagedLaunchRecoveryStatus,
     runtime_event_outbox: NativeRuntimeEventOutboxStatus,
@@ -188,12 +187,6 @@ struct NativeHeartbeatTransportStatus {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct NativeSpoolStatus {
-    pending_count: Option<u64>,
-    dead_count: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 struct NativeRuntimeEventOutboxStatus {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -249,7 +242,6 @@ struct NativeDesktopHealth {
     heartbeat_transport: NativeHeartbeatTransportStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     host_link: Option<Value>,
-    spool: NativeSpoolStatus,
     runtime_event_outbox: NativeRuntimeEventOutboxStatus,
     /// Absent when session evidence could not be read at all. An empty array
     /// here is a positive claim that the engine reported no sessions.
@@ -1120,14 +1112,13 @@ const BROKEN_REASONS: &[&str] = &[
 /// retry an exhausted recovery.
 ///
 /// Transport-window reasons (`payload_rejected`, `payload_too_large`,
-/// `parse_errors`, `spool_dead`, `ship_stalled`, ...) are absent on purpose:
+/// `parse_errors`, `ship_stalled`, ...) are absent on purpose:
 /// setup-required needs an engine that is not fresh, and a non-fresh engine's
 /// transport is already reported as `transport_unavailable` because last-hour
 /// counters from a stopped engine are not current health. The durable facts
-/// behind them are here instead (`spool_dead` is `spool_dead_letters`).
+/// behind them are here instead.
 const RETAINED_DATA_FAULT_REASONS: &[&str] = &[
     "engine_status_unreadable",
-    "spool_dead_letters",
     "archive_dead_lettered",
     "runtime_events_backlogged",
     "archive_repair_paused",
@@ -1892,12 +1883,6 @@ fn native_health_from_parts(
     let is_offline = object
         .and_then(|value| value.get("is_offline"))
         .and_then(Value::as_bool);
-    let pending_count = object
-        .and_then(|value| value.get("spool_pending_count"))
-        .and_then(Value::as_u64);
-    let dead_count = object
-        .and_then(|value| value.get("spool_dead_count"))
-        .and_then(Value::as_u64);
     let storage_outbox_value = object.and_then(|value| value.get("storage_v2_outbox"));
     let storage_outbox = storage_outbox_value.and_then(Value::as_object);
     let runtime_event_outbox_value = object.and_then(|value| value.get("runtime_event_outbox"));
@@ -2126,9 +2111,6 @@ fn native_health_from_parts(
     if is_offline == Some(true) {
         reasons.push("engine_offline".to_string());
     }
-    if dead_count.is_some_and(|count| count > 0) {
-        reasons.push("spool_dead_letters".to_string());
-    }
     if archive_dead_lettered {
         reasons.push("archive_dead_lettered".to_string());
     }
@@ -2292,10 +2274,6 @@ fn native_health_from_parts(
         transport,
         heartbeat_transport,
         host_link,
-        spool: NativeSpoolStatus {
-            pending_count,
-            dead_count,
-        },
         managed_sessions: NativeManagedSessionsStatus {
             count: managed_session_count,
         },
@@ -2394,7 +2372,6 @@ fn native_desktop_health_from_parts(
             payload: native_desktop_engine_payload(engine_payload.as_ref()),
         },
         transport: health.transport,
-        spool: health.spool,
         runtime_event_outbox: health.runtime_event_outbox,
         managed_summary: NativeDesktopManagedSummary {
             attached_count,
@@ -2423,8 +2400,6 @@ fn native_desktop_engine_payload(payload: Option<&Value>) -> Option<Value> {
         "daemon_pid",
         "last_ship_at",
         "last_updated",
-        "spool_pending_count",
-        "spool_dead_count",
         "storage_v2_outbox",
         "runtime_event_outbox",
         "archive_backlog",
@@ -2437,7 +2412,6 @@ fn native_desktop_engine_payload(payload: Option<&Value>) -> Option<Value> {
         "startup_refused",
         "startup_refusal_kind",
         "startup_refusal",
-        "recent_dead_letters",
         "sessions",
         "build",
     ] {
@@ -5320,9 +5294,6 @@ fn native_transport_status(
         .get("is_offline")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let spool_pending = get_required_u64(object, "spool_pending_count");
-    let spool_dead = get_required_u64(object, "spool_dead_count");
-    let spool_counters_unknown = spool_pending.is_none() || spool_dead.is_none();
     let parse_errors = get_u64(object, "parse_error_count_1h");
     let payload_rejections = get_u64(object, "ship_payload_rejections_1h");
     let payload_too_large = get_u64(object, "ship_payload_too_large_1h");
@@ -5389,15 +5360,6 @@ fn native_transport_status(
         )
     } else if is_offline {
         transport_status("offline", "reported_offline", "Engine reported offline.")
-    } else if spool_dead.is_some_and(|count| count > 0) {
-        transport_status(
-            "degraded",
-            "spool_dead",
-            &format!(
-                "{} dead-letter archive range(s) need attention.",
-                spool_dead.unwrap_or(0)
-            ),
-        )
     } else if parse_errors > 0 {
         transport_status(
             "degraded",
@@ -5457,12 +5419,6 @@ fn native_transport_status(
             "retryable_client_errors",
             &format!("{retryable_client_errors} retryable client error(s) in the active window."),
         )
-    } else if spool_counters_unknown {
-        transport_status(
-            "unknown",
-            "transport_unavailable",
-            "Required spool counters are unavailable; current shipping health cannot be proven.",
-        )
     } else {
         transport_status("healthy", "healthy", "Shipping healthy.")
     }
@@ -5481,11 +5437,6 @@ fn native_payload_has_pending_work(object: &serde_json::Map<String, Value>) -> O
         });
     let mut observed_lane = false;
     let mut pending = false;
-
-    if let Some(value) = object.get("spool_pending_count") {
-        observed_lane = true;
-        pending |= value.as_u64()? > 0 && !archive_paused;
-    }
 
     if let Some(value) = object.get("storage_v2_outbox") {
         let outbox = value.as_object()?;
@@ -5663,10 +5614,6 @@ fn get_u64(object: &serde_json::Map<String, Value>, key: &str) -> u64 {
     object.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
-fn get_required_u64(object: &serde_json::Map<String, Value>, key: &str) -> Option<u64> {
-    object.get(key).and_then(Value::as_u64)
-}
-
 fn age_seconds_since(modified: SystemTime) -> u64 {
     SystemTime::now()
         .duration_since(modified)
@@ -5700,23 +5647,6 @@ fn print_native_local_health(health: &NativeLocalHealth) {
     if let Some(bytes) = health.engine_status.local_database_bytes {
         println!("  database bytes: {bytes}");
     }
-    println!("Spool");
-    println!(
-        "  pending: {}",
-        health
-            .spool
-            .pending_count
-            .map(|count| count.to_string())
-            .unwrap_or_else(|| "unknown".to_string())
-    );
-    println!(
-        "  dead: {}",
-        health
-            .spool
-            .dead_count
-            .map(|count| count.to_string())
-            .unwrap_or_else(|| "unknown".to_string())
-    );
     println!("Runtime Event Outbox");
     println!("  state: {}", health.runtime_event_outbox.status);
     println!(
@@ -5990,8 +5920,7 @@ mod tests {
     fn native_health_waits_for_the_host_freshness_horizon_after_a_failed_post() {
         let now = chrono::Utc::now().to_rfc3339();
         let mut payload = json!({
-            "spool_pending_count": 0,
-            "spool_dead_count": 0,
+            "storage_v2_outbox": {"pending_count": 0},
             "ship_attempts_10m": 1,
             "daemon_started_at": now.clone(),
             "shipping_progress": {
@@ -6140,8 +6069,7 @@ mod tests {
         let now = chrono::Utc::now().to_rfc3339();
         let mut payload = json!({
             "is_offline": false,
-            "spool_pending_count": 0,
-            "spool_dead_count": 0,
+            "storage_v2_outbox": {"pending_count": 0},
             "ship_attempts_10m": 1,
             "shipping_progress": {
                 "pending_work": false,
@@ -6626,8 +6554,7 @@ mod tests {
             "version": "0.1.33",
             "daemon_pid": 4242,
             "last_updated": "2026-08-03T16:00:00Z",
-            "spool_pending_count": 0,
-            "spool_dead_count": 0,
+            "storage_v2_outbox": {"pending_count": 0},
             "ship_attempts_10m": 0,
             "sessions": [{
                 "session_id": "00000000-0000-4000-8000-000000000001",
@@ -6849,8 +6776,7 @@ mod tests {
     ) -> NativeLocalHealth {
         let now = chrono::Utc::now().to_rfc3339();
         let mut payload = json!({
-            "spool_pending_count": 0,
-            "spool_dead_count": 0,
+            "storage_v2_outbox": {"pending_count": 0},
             "ship_attempts_10m": 0,
             "is_offline": false,
             "local_projection": {
@@ -6986,8 +6912,7 @@ mod tests {
             Some(json!({
                 "last_updated": "2026-06-29T00:00:00Z",
                 "daemon_pid": 1234,
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "ship_attempts_10m": 0,
                 "is_offline": false,
                 "managed_sessions": [{"session_id": "s1"}],
@@ -7009,7 +6934,6 @@ mod tests {
         assert_eq!(health.transport.status, "healthy");
         assert!(health.engine_status.fresh);
         assert_eq!(health.managed_sessions.count, 1);
-        assert_eq!(health.spool.pending_count, Some(0));
         assert_eq!(
             health
                 .control_channel
@@ -7379,7 +7303,7 @@ mod tests {
     #[test]
     fn cleared_credentials_do_not_hide_retained_data_faults_behind_sign_in() {
         // `longhouse auth --clear` nulls runtime_url and removes the token. The
-        // engine that ran before left stale evidence and dead-lettered data.
+        // engine that ran before left stale evidence and blocked sources.
         let dir = tempfile::tempdir().unwrap();
         write_machine_setup(
             dir.path(),
@@ -7391,25 +7315,27 @@ mod tests {
             &path,
             true,
             Some(ENGINE_STALE_SECONDS + 1),
-            Some(json!({"spool_dead_count": 2})),
+            Some(json!({"storage_v2_outbox": {"blocked_source_count": 2, "unresolved_blocked_source_count": 0}})),
             None,
         );
         apply_native_machine_setup(&mut health, setup_for(dir.path()));
 
-        // The dead letters keep the machine's own classification; signing in
-        // is offered alongside them, not instead of them.
+        // The blocked sources keep the machine's own classification; signing
+        // in is offered alongside them, not instead of them.
         assert_eq!(health.health_state, "degraded");
         assert_ne!(
             health.headline,
             "Sign in to connect this machine to Longhouse"
         );
         assert_eq!(health.reasons[0], "machine_setup_required");
-        assert!(health.reasons.contains(&"spool_dead_letters".to_string()));
+        assert!(health
+            .reasons
+            .contains(&"storage_v2_sources_blocked".to_string()));
         assert!(!health.reasons.contains(&"engine_status_stale".to_string()));
         let actions = native_desktop_suggested_action_ids(&health.reasons);
         assert!(actions.contains(&"sign_in".to_string()), "{actions:?}");
         assert!(
-            actions.contains(&"inspect_shipping".to_string()),
+            actions.contains(&"inspect_storage_source".to_string()),
             "{actions:?}"
         );
 
@@ -7419,7 +7345,7 @@ mod tests {
             &path,
             true,
             Some(ENGINE_STALE_SECONDS + 1),
-            Some(json!({"spool_dead_count": 0})),
+            Some(json!({})),
             None,
         );
         apply_native_machine_setup(&mut clean, setup_for(dir.path()));
@@ -7570,8 +7496,7 @@ mod tests {
         let mut payload = json!({
             "ship_attempts_10m": 0,
             "is_offline": false,
-            "spool_dead_count": 0,
-            "spool_pending_count": 1,
+            "storage_v2_outbox": {"pending_count": 1},
             "shipping_progress": {
                 "pending_work": true,
                 "stalled": false,
@@ -7583,7 +7508,7 @@ mod tests {
             native_transport_status(payload.as_object()).status_reason,
             "ship_stalled"
         );
-        payload["spool_pending_count"] = json!(0);
+        payload["storage_v2_outbox"]["pending_count"] = json!(0);
         payload["shipping_progress"]["pending_work"] = json!(false);
         assert_eq!(
             native_transport_status(payload.as_object()).status,
@@ -7595,8 +7520,6 @@ mod tests {
     fn native_transport_prioritizes_current_stall_over_cached_counts_and_retry_bursts() {
         let mut payload = json!({
             "ship_attempts_10m": 0,
-            "spool_pending_count": 0,
-            "spool_dead_count": 0,
             "storage_v2_outbox": {"pending_count": 0},
             "shipping_progress": {
                 "pending_work": true,
@@ -7627,43 +7550,9 @@ mod tests {
     }
 
     #[test]
-    fn native_transport_keeps_missing_or_malformed_spool_counters_unknown() {
-        let observed_at = chrono::Utc::now().to_rfc3339();
-        let mut payload = json!({
-            "ship_attempts_10m": 0,
-            "shipping_progress": {
-                "pending_work": false,
-                "stalled": false,
-                "seconds_without_progress": 0,
-                "observed_at": observed_at
-            },
-            "spool_pending_count": 0
-        });
-
-        assert_eq!(
-            native_transport_status(payload.as_object()).status_reason,
-            "transport_unavailable"
-        );
-
-        payload["spool_dead_count"] = json!(0);
-        assert_eq!(
-            native_transport_status(payload.as_object()).status_reason,
-            "healthy"
-        );
-
-        payload["spool_dead_count"] = json!("not-a-counter");
-        assert_eq!(
-            native_transport_status(payload.as_object()).status_reason,
-            "transport_unavailable"
-        );
-    }
-
-    #[test]
     fn native_transport_missing_progress_checks_every_pending_lane() {
         let payload = json!({
             "ship_attempts_10m": 0,
-            "spool_pending_count": 0,
-            "spool_dead_count": 0,
             "storage_v2_outbox": {"pending_count": 1},
             "archive_backlog": {"pending_ranges": 0, "pending_bytes": 0},
             "ship_scheduler": {
@@ -7689,8 +7578,6 @@ mod tests {
 
         let archive_payload = json!({
             "ship_attempts_10m": 0,
-            "spool_pending_count": 0,
-            "spool_dead_count": 0,
             "storage_v2_outbox": {"pending_count": 0},
             "archive_backlog": {"pending_ranges": 2, "pending_bytes": 128}
         });
@@ -7713,8 +7600,6 @@ mod tests {
                 "last_updated": "before",
                 "daemon_pid": 1,
                 "ship_attempts_10m": 0,
-                "spool_pending_count": 1,
-                "spool_dead_count": 0,
                 "shipping_progress": {
                     "pending_work": true,
                     "stalled": true,
@@ -7732,8 +7617,7 @@ mod tests {
                 "last_updated": "after",
                 "daemon_pid": 2,
                 "ship_attempts_10m": 0,
-                "spool_pending_count": 1,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 1},
                 "shipping_progress": {
                     "pending_work": true,
                     "stalled": true,
@@ -7873,8 +7757,7 @@ mod tests {
             true,
             Some(1),
             Some(json!({
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "ship_attempts_10m": 0,
                 "is_offline": false,
                 "local_projection": {
@@ -7908,8 +7791,7 @@ mod tests {
             true,
             Some(1),
             Some(json!({
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "ship_attempts_10m": 0,
                 "is_offline": false,
                 "local_projection": {
@@ -7935,8 +7817,7 @@ mod tests {
             true,
             Some(1),
             Some(json!({
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "ship_attempts_10m": 0,
                 "is_offline": false,
                 "local_projection": {
@@ -7978,8 +7859,7 @@ mod tests {
             true,
             Some(1),
             Some(json!({
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "ship_attempts_10m": 0,
                 "is_offline": false,
                 "local_projection": {
@@ -8009,8 +7889,7 @@ mod tests {
             true,
             Some(1),
             Some(json!({
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "ship_attempts_10m": 0,
                 "is_offline": false,
                 "local_projection": {
@@ -8031,8 +7910,7 @@ mod tests {
             true,
             Some(1),
             Some(json!({
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "ship_attempts_10m": 0,
                 "is_offline": false,
                 "local_projection": {
@@ -8055,8 +7933,7 @@ mod tests {
             true,
             Some(1),
             Some(json!({
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "ship_attempts_10m": 4,
                 "ship_server_errors_10m": 3,
                 "last_ship_result": "server_error",
@@ -8134,8 +8011,7 @@ mod tests {
             Some(1),
             Some(json!({
                 "ship_payload_rejections_1h": 1,
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "is_offline": false,
                 "local_projection": {
                     "generated_at": now.clone(),
@@ -8166,8 +8042,7 @@ mod tests {
                 "ship_attempts_10m": 4,
                 "ship_server_errors_10m": 3,
                 "last_ship_result": "server_error",
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "is_offline": false,
                 "local_projection": {
                     "generated_at": now.clone(),
@@ -8197,8 +8072,7 @@ mod tests {
                 "ship_attempts_10m": 674,
                 "ship_server_errors_10m": 201,
                 "last_ship_result": "ok",
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "is_offline": false,
                 "local_projection": {
                     "generated_at": now.clone(),
@@ -8230,8 +8104,7 @@ mod tests {
             true,
             None,
             Some(json!({
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "is_offline": false
             })),
             None,
@@ -8280,7 +8153,7 @@ mod tests {
             &path,
             serde_json::to_string(&json!({
                 "last_updated": "2026-06-29T00:00:00Z",
-                "spool_pending_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "is_offline": false,
                 "local_projection": {
                     "generated_at": now.clone(),
@@ -8314,7 +8187,7 @@ mod tests {
             serde_json::to_string(&json!({
                 "last_updated": now.clone(),
                 "ship_payload_rejections_1h": 2,
-                "spool_pending_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "is_offline": false,
                 "local_projection": {
                     "generated_at": now.clone(),
@@ -8392,8 +8265,7 @@ mod tests {
                 true,
                 Some(2),
                 Some(json!({
-                    "spool_pending_count": 0,
-                    "spool_dead_count": 0,
+                    "storage_v2_outbox": {"pending_count": 0},
                     "is_offline": false,
                     "ship_attempts_10m": 0,
                     "local_projection": {
@@ -8460,8 +8332,7 @@ mod tests {
                 true,
                 Some(ENGINE_STALE_SECONDS + 1),
                 Some(json!({
-                    "spool_pending_count": 0,
-                    "spool_dead_count": 0,
+                    "storage_v2_outbox": {"pending_count": 0},
                     "is_offline": false
                 })),
                 None,
@@ -8493,8 +8364,7 @@ mod tests {
                 true,
                 Some(2),
                 Some(json!({
-                    "spool_pending_count": 0,
-                    "spool_dead_count": 0,
+                    "storage_v2_outbox": {"pending_count": 0},
                     "is_offline": false
                 })),
                 None,
@@ -8537,8 +8407,7 @@ mod tests {
                 true,
                 Some(2),
                 Some(json!({
-                    "spool_pending_count": 0,
-                    "spool_dead_count": 0,
+                    "storage_v2_outbox": {"pending_count": 0},
                     "is_offline": false
                 })),
                 None,
@@ -8581,8 +8450,7 @@ mod tests {
                 true,
                 Some(2),
                 Some(json!({
-                    "spool_pending_count": 0,
-                    "spool_dead_count": 0,
+                    "storage_v2_outbox": {"pending_count": 0},
                     "is_offline": false
                 })),
                 None,
@@ -8628,7 +8496,7 @@ mod tests {
                     "ship_attempts_10m": 4,
                     "ship_server_errors_10m": 3,
                     "last_ship_result": "server_error",
-                    "spool_pending_count": 0,
+                    "storage_v2_outbox": {"pending_count": 0},
                     "is_offline": false,
                     "local_projection": {
                         "generated_at": now.clone(),
@@ -8670,8 +8538,7 @@ mod tests {
         std::fs::write(
             &status_path,
             serde_json::to_string(&json!({
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "is_offline": false,
                 "ship_attempts_10m": 0,
                 "local_projection": {
@@ -8717,8 +8584,7 @@ mod tests {
                 "ship_attempts_10m": 4,
                 "ship_server_errors_10m": 3,
                 "last_ship_result": "server_error",
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "is_offline": false
             }))
             .unwrap(),
@@ -8768,8 +8634,7 @@ mod tests {
         std::fs::write(
             &status_path,
             serde_json::to_string(&json!({
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "is_offline": false
             }))
             .unwrap(),
@@ -8828,8 +8693,7 @@ mod tests {
             &status_path,
             serde_json::to_string(&json!({
                 "last_updated": "2026-06-29T00:00:00Z",
-                "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "storage_v2_outbox": {"pending_count": 0},
                 "is_offline": false
             }))
             .unwrap(),

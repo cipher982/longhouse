@@ -7,13 +7,13 @@ pub mod file_state;
 pub mod no_absorbing_states;
 pub mod payload_store;
 pub mod pending_source_envelope;
+pub mod archive_backlog;
 pub mod recover;
 pub mod session_binding;
 pub mod session_phase;
 pub mod session_title;
 pub mod source_epoch;
 pub mod source_inventory;
-pub mod spool;
 pub mod unmanaged_process_binding;
 #[cfg(test)]
 pub mod wal_window;

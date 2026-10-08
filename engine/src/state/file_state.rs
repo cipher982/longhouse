@@ -8,11 +8,15 @@
 
 use anyhow::Result;
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
+#[cfg(test)]
+use rusqlite::OptionalExtension;
 
 #[cfg(test)]
 use super::file_identity::current_file_identity;
-use super::file_identity::{cursor_fingerprint, strongest_matching_file_identity};
+#[cfg(test)]
+use super::file_identity::cursor_fingerprint;
+use super::file_identity::strongest_matching_file_identity;
 
 /// A tracked session file.
 #[derive(Debug, Clone)]
@@ -50,6 +54,7 @@ impl<'a> FileState<'a> {
     }
 
     /// Get the queued offset for a file. Returns 0 if not tracked.
+    #[cfg(test)]
     pub fn get_queued_offset(&self, file_path: &str) -> Result<u64> {
         let result = self.conn.query_row(
             "SELECT queued_offset FROM file_state WHERE path = ?",
@@ -221,6 +226,7 @@ impl<'a> FileState<'a> {
     }
 
     /// Advance acked offset only (server confirmed receipt). Monotonic.
+    #[cfg(test)]
     pub fn set_acked_offset(&self, file_path: &str, offset: u64) -> Result<()> {
         // Sealing an untracked path, a position already behind the acked one, or
         // the exact position and boundary proof already on file changes nothing,
