@@ -8,8 +8,8 @@
 //! - `pending_source_envelope.blocked_at` was set on conflict and
 //!   `retry_paths` filtered `blocked_at IS NULL`, so quarantine was terminal by
 //!   scheduling as well as by policy;
-//! - `spool_queue.status = 'dead'` had no transition back to `pending`, and
-//!   every query that selects work asks for `pending`;
+//! - the since-removed v1 spool's `dead` rows had no transition back to
+//!   `pending`, and every query that selected work asked for `pending`;
 //! - a Codex bridge with no recorded owner was owned forever by rule.
 //!
 //! Each was found by reading code and asking "what selects this again?". That

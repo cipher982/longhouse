@@ -1,10 +1,9 @@
-//! Per-file shipping progress tracker.
+//! Per-file legacy cursor and identity store.
 //!
-//! Tracks dual offsets per file:
-//! - `queued_offset`: bytes enqueued for shipping (may be in spool)
-//! - `acked_offset`: bytes confirmed received by server
-//!
-//! Gap between them means data needs recovery (re-read from spool pointers).
+//! The v1 shipper recorded a queued and an acked offset per file. Storage-v2
+//! tracks position in source epochs instead; this table survives so a source
+//! with no epoch yet can adopt its acked v1 offset (with identity proof) rather
+//! than replaying from zero, and so file identity can be recorded.
 
 use anyhow::Result;
 use chrono::Utc;
@@ -191,7 +190,7 @@ impl<'a> FileState<'a> {
         Ok(())
     }
 
-    /// Advance queued offset only (data enqueued to spool but not yet acked).
+    /// Advance queued offset only (enqueued but not yet acked).
     #[cfg(test)]
     pub fn set_queued_offset(
         &self,

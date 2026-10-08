@@ -48,8 +48,6 @@ STATUS_FIELDS = (
     "version",
     "last_ship_result",
     "last_ship_latency_ms",
-    "spool_pending_count",
-    "spool_dead_count",
     "local_database_bytes",
     "ship_attempts_1h",
     "ship_successes_1h",
