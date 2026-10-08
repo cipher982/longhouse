@@ -2,8 +2,8 @@
 """Ring promoter: move dogfood and production forward on their own, never backwards.
 
 Run by the Promote Rings workflow (.github/workflows/promote-rings.yml) after every image
-publication, canary, Hosted Live QA and CI completion, every review attestation, and every
-30 minutes. Each run is stateless: it reads what each ring serves and what main holds, decides,
+publication, archive, canary, Hosted Live QA and CI completion, every review attestation, and
+Sauron's `longhouse-ring-wake` tick while a ring trails. Each run is stateless: it reads what each ring serves and what main holds, decides,
 and calls the promote scripts, which keep every gate they had.
 
   dogfood     target = the newest main commit whose runtime image is published.

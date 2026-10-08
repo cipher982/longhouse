@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -127,6 +128,38 @@ class PromoterTests(unittest.TestCase):
         self.world.answers["scripts/ops/promote-dogfood.sh --fast-lane"] = (1, "", "deployment failed")
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(promoter.main([]), 1)
+
+
+class WakeWiringTests(unittest.TestCase):
+    """Every gate run wakes the promoter. A trigger GitHub never fires reads as wired and is not.
+
+    On 2026-10-08 Hosted Live QA passed on 605347929 at 15:39Z and production sat "waiting on hosted_qa"
+    until a hand dispatch at 17:30Z: QA is dispatched with GITHUB_TOKEN, so its completion never fires
+    `workflow_run` (0 of 23), and the `schedule` catch-all ran 2 times in 22 h.
+    """
+
+    WORKFLOWS = ROOT / ".github" / "workflows"
+
+    def test_workflow_run_lists_only_runs_whose_completion_fires_it(self) -> None:
+        text = (self.WORKFLOWS / "promote-rings.yml").read_text(encoding="utf-8")
+        listed = re.search(r"^    workflows: \[(.*)\]$", text, re.MULTILINE)
+        self.assertIsNotNone(listed)
+        names = {n.strip().strip('"') for n in listed.group(1).split(",")}
+        self.assertEqual(names, {"Publish Runtime Image", "Archive Runtime Image", "Deploy and Verify", "CI"})
+        self.assertNotRegex(text, r"(?m)^  schedule:", "the catch-all is Sauron longhouse-ring-wake")
+
+    def test_hosted_live_qa_wakes_the_promoter_and_the_promoter_waits_for_it(self) -> None:
+        qa = (self.WORKFLOWS / "hosted-live-qa.yml").read_text(encoding="utf-8")
+        steps = re.findall(r"^      - name: (.+)$", qa, re.MULTILINE)
+        self.assertEqual(steps[-1], "Wake Promote Rings", "the wake must come after the verdict upload")
+        wake = qa[qa.index("      - name: Wake Promote Rings"):]
+        self.assertIn("promote-rings.yml/dispatches", wake)
+        self.assertIn("after_run:$run", wake)
+        self.assertIn("continue-on-error: true", wake, "a failed wake must not fail QA's own qualification")
+        self.assertRegex(qa, r"(?m)^  actions: write$")
+        rings = (self.WORKFLOWS / "promote-rings.yml").read_text(encoding="utf-8")
+        self.assertRegex(rings, r"(?m)^      after_run:$")
+        self.assertRegex(rings, r"(?m)^    needs: wake$")
 
 
 if __name__ == "__main__":

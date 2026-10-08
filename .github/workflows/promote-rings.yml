@@ -10,17 +10,33 @@ name: Promote Rings
 on:
   workflow_run:
     # Image published (dogfood fast lane), canary qualified (blocking-list
-    # ranges), QA verdict, CI receipts and the OCI archive (production gates).
-    workflows: ["Publish Runtime Image", "Archive Runtime Image", "Deploy and Verify", "Hosted Live QA", "CI"]
+    # ranges), CI receipts and the OCI archive (production gates). These runs
+    # start from a push (the pusher is the actor), so their completion fires
+    # this trigger: 101 of 101 completions on main, 2026-10-07..08.
+    workflows: ["Publish Runtime Image", "Archive Runtime Image", "Deploy and Verify", "CI"]
     types: [completed]
     branches: [main]
+  # Hosted Live QA is not in that list because its completion never fires it
+  # (0 of 23 on 2026-10-07..08): Deploy and Verify dispatches it with
+  # GITHUB_TOKEN, and GitHub creates no run from an event caused by that token
+  # except workflow_dispatch and repository_dispatch. So QA dispatches this
+  # workflow itself as its last step, passing its run id as `after_run`; the
+  # `wake` job below waits for that run to complete, because the QA gate
+  # accepts only a completed run.
   # The review attester (review_gate.py attest, on the machine that holds the
   # receipts) posts `longhouse/review-gate` statuses; the job ignores others.
   status: {}
-  # Catch-all: a soak that elapsed, a missed event, a promoter run that failed.
-  schedule:
-    - cron: "7,37 * * * *"
-  workflow_dispatch: {}
+  # Catch-all (a soak that elapsed, a lost event, a promoter run that failed):
+  # Sauron `longhouse-ring-wake` dispatches this every 10 min while a ring
+  # trails and nothing has woken the promoter since a gate run completed. Not a
+  # GitHub `schedule`: on 2026-10-08 a "7,37 * * * *" cron ran 2 times in 22 h.
+  # `make promote-rings` dispatches it by hand.
+  workflow_dispatch:
+    inputs:
+      after_run:
+        description: "Run id of the gate run that dispatched this; the promoter decides once it has completed"
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -29,9 +45,49 @@ permissions:
   statuses: write
 
 jobs:
+  # A gate run dispatches this from its own last step, so it is still running
+  # then; every gate the promoter reads accepts only a completed run. Waiting
+  # here, outside the promote job's concurrency group, means a run enters that
+  # queue (where a newer pending run replaces an older one) only once the run
+  # that woke it has completed, so the survivor sees it.
+  wake:
+    name: "Wait for the run that woke this one"
+    if: github.repository == 'cipher982/longhouse' && github.event_name == 'workflow_dispatch' && inputs.after_run != ''
+    runs-on: cube-gate
+    timeout-minutes: 10
+    outputs:
+      woken_by: ${{ steps.wait.outputs.woken_by }}
+    steps:
+      - name: Wait for the run to complete
+        id: wait
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AFTER_RUN: ${{ inputs.after_run }}
+        run: |
+          set -euo pipefail
+          [[ "$AFTER_RUN" =~ ^[1-9][0-9]*$ ]] || { echo "after_run must be a run id, got '$AFTER_RUN'" >&2; exit 1; }
+          url="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/$AFTER_RUN"
+          name="run"
+          # A gate run completes seconds after its last step; 5 min bounds a stuck one.
+          for _ in $(seq 60); do
+            run="$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$url")" || { sleep 5; continue; }
+            name="$(jq -r .name <<<"$run")"
+            if [[ "$(jq -r .status <<<"$run")" == completed ]]; then
+              echo "woken_by=$name" >> "$GITHUB_OUTPUT"
+              echo "$name run $AFTER_RUN completed ($(jq -r .conclusion <<<"$run"))"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "woken_by=$name" >> "$GITHUB_OUTPUT"
+          echo "::warning::$name run $AFTER_RUN has not completed after 5 min; deciding anyway"
+
   promote:
     name: "Promote dogfood and production"
+    needs: wake
+    # !cancelled(): run when `wake` is skipped (every trigger but a dispatch with after_run).
     if: >-
+      !cancelled() && needs.wake.result != 'failure' &&
       github.repository == 'cipher982/longhouse' &&
       (github.event_name != 'status' || github.event.context == 'longhouse/review-gate') &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
@@ -93,7 +149,7 @@ jobs:
           REGISTRY_PASSWORD: ${{ github.token }}
           SUBDOMAIN: ${{ vars.LONGHOUSE_DEFAULT_SUBDOMAIN }}
           DEMO_SSH_HOST: deploy-host
-          PROMOTER_TRIGGER: ${{ github.event_name }}${{ github.event.workflow_run.name && format(':{0}', github.event.workflow_run.name) || '' }}
+          PROMOTER_TRIGGER: ${{ github.event_name }}${{ (github.event.workflow_run.name || needs.wake.outputs.woken_by) && format(':{0}', github.event.workflow_run.name || needs.wake.outputs.woken_by) || '' }}
         run: python3 scripts/ops/ring_promoter.py --json "$RUNNER_TEMP/ring-decision.json"
 
       - name: Upload decision
