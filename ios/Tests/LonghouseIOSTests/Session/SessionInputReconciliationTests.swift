@@ -98,14 +98,16 @@ struct SessionInputReconciliationTests {
     }
 
     @Test
-    func linkedReceiptWithUnreadableTimeIsTakenAsBehindTheWindow() {
-        let undated = served("undated", text: "no time", at: "not-a-date", eventId: "echo-undated")
+    func linkedReceiptWithUnreadableTimeKeepsItsRow() {
+        // Placement needs a readable time, so a row whose receipt cannot be
+        // placed must not be dropped either.
+        let unreadable = served("unreadable", text: "no time", at: "not-a-date", eventId: "echo-unreadable")
         let resolved = SessionViewModel.resolvedSubmittedInputIds(
-            submittedInputs: [input("undated")],
+            submittedInputs: [input("unreadable")],
             events: [userEvent("older", text: "earlier", at: "2026-10-08T04:00:00Z")],
-            receipts: [undated]
+            receipts: [unreadable]
         )
-        #expect(resolved == ["undated"])
+        #expect(resolved.isEmpty)
     }
 
     @Test

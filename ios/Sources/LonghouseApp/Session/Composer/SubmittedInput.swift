@@ -188,7 +188,9 @@ enum UnrecordedInputs {
             guard let eventId = receipt.eventId, let id = receipt.clientRequestId else { return nil }
             if loadedEventIds.contains(eventId) { return id }
             guard let start else { return nil }
-            guard let createdAt = receipt.createdAt.flatMap(LonghouseDateParser.parse) else { return id }
+            guard let raw = receipt.createdAt else { return id }
+            // Unreadable time: placement needs a readable one, so keep the row.
+            guard let createdAt = LonghouseDateParser.parse(raw) else { return nil }
             return createdAt < start ? id : nil
         })
         let candidates: [(id: String, text: String, at: Date)] = receipts
