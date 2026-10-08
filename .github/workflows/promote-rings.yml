@@ -70,7 +70,7 @@ jobs:
           name="run"
           # A gate run completes seconds after its last step; 5 min bounds a stuck one.
           for _ in $(seq 60); do
-            run="$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$url")" || { sleep 5; continue; }
+            run="$(curl -fsS --max-time 15 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$url")" || { sleep 5; continue; }
             name="$(jq -r .name <<<"$run")"
             if [[ "$(jq -r .status <<<"$run")" == completed ]]; then
               echo "woken_by=$name" >> "$GITHUB_OUTPUT"
