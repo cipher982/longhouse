@@ -621,20 +621,38 @@ def get_provider_version_evidence(
     caller decides what they add up to; nothing here is a verdict."""
 
     known = provider in managed_provider_names()
-    records: list[ProviderCapabilityProofRecord] = []
-    if known:
-        records = [record for record in _proof_store().records(provider) if record.provider_version == version]
-    records.sort(key=lambda record: (record.generated_at, record.artifact_id), reverse=True)
-    truncated = len(records) > _MAX_VERSION_EVIDENCE_RECORDS
-    failing = (
-        [
-            verdict.serialize()
-            for verdict in _cell_verdict_store().verdicts().values()
-            if verdict.provider == provider and verdict.consecutive_failures >= REVOKING_CONSECUTIVE_FAILURES
-        ]
-        if known
-        else []
+    store = _proof_store()
+    provider_records = store.records(provider) if known else ()
+    records = sorted(
+        (record for record in provider_records if record.provider_version == version),
+        key=lambda record: (_evidence_moment(record.generated_at), record.artifact_id),
+        reverse=True,
     )
+    total = len(records)
+    shown = tuple(records[:_MAX_VERSION_EVIDENCE_RECORDS])
+    integrity = {}
+    if shown:
+        available = store.available_blob_digests(records=shown)
+        report = store.integrity_report(provider, records=shown, available=available)
+        integrity = {item.artifact_id: item for item in report.artifacts}
+    # A verdict is the newest failure of a cell; a later pass of the same cell
+    # (any version) supersedes it, exactly as the chart's fold does. Verdicts
+    # carry no provider version, so they are provider-scoped facts.
+    newest_pass: dict[tuple[str, str, str, str | None], datetime] = {}
+    for record in provider_records:
+        if record.outcome.value != "pass":
+            continue
+        key = (record.provider, record.assertion_id, record.scenario_id, record.assertion_variant)
+        moment = _evidence_moment(record.generated_at)
+        if moment > newest_pass.get(key, datetime.min.replace(tzinfo=UTC)):
+            newest_pass[key] = moment
+    failing = [
+        verdict.serialize()
+        for verdict in (_cell_verdict_store().verdicts().values() if known else ())
+        if verdict.provider == provider
+        and verdict.consecutive_failures >= REVOKING_CONSECUTIVE_FAILURES
+        and verdict.observed_at > newest_pass.get(verdict.key, datetime.min.replace(tzinfo=UTC))
+    ]
     return {
         "schema_version": 1,
         "artifact_kind": "provider_version_evidence",
@@ -649,13 +667,31 @@ def get_provider_version_evidence(
                 "evidence_class": record.evidence_class.value,
                 "longhouse_git_sha": record.longhouse_git_sha,
                 "generated_at": record.generated_at,
+                "store_integrity": {
+                    "admissible": bool(integrity.get(record.artifact_id) and integrity[record.artifact_id].admissible),
+                    "reason_codes": list(integrity[record.artifact_id].reason_codes)
+                    if record.artifact_id in integrity
+                    else ["integrity_unknown"],
+                },
             }
-            for record in records[:_MAX_VERSION_EVIDENCE_RECORDS]
+            for record in shown
         ],
-        "truncated": truncated,
+        "total_records": total,
+        "truncated": total > len(shown),
         "failing_verdicts": failing,
+        "failing_verdicts_version_attributed": False,
         "required_assertions": _required_assertion_ids(provider) if known else [],
     }
+
+
+def _evidence_moment(value: str | datetime) -> datetime:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    try:
+        moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.min.replace(tzinfo=UTC)
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
 def _require_owner_capable_evidence_caller(caller: Caller = Depends(verify_agents_caller)) -> Caller:

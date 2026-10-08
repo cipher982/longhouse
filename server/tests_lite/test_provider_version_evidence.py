@@ -62,9 +62,12 @@ def test_version_evidence_returns_only_matching_records_newest_first(monkeypatch
     assert payload["version"] == "0.145.0"
     assert [record["generated_at"] for record in payload["records"]] == ["2026-10-02T10:00:00Z", "2026-10-01T10:00:00Z"]
     assert all(
-        set(record) == {"assertion_id", "scenario_id", "variant", "outcome", "evidence_class", "longhouse_git_sha", "generated_at"}
+        set(record)
+        == {"assertion_id", "scenario_id", "variant", "outcome", "evidence_class", "longhouse_git_sha", "generated_at", "store_integrity"}
         for record in payload["records"]
     )
+    assert all(isinstance(record["store_integrity"]["admissible"], bool) for record in payload["records"])
+    assert payload["total_records"] == 2
     assert all(record["outcome"] == "pass" for record in payload["records"])
     assert payload["truncated"] is False
     assert isinstance(payload["required_assertions"], list)
@@ -147,3 +150,40 @@ def test_version_evidence_requires_both_query_params(monkeypatch, tmp_path: Path
         api_app.dependency_overrides.clear()
 
     assert response.status_code == 422
+
+
+def test_a_newer_pass_supersedes_a_failing_verdict(monkeypatch, tmp_path: Path) -> None:
+    """A verdict is the newest failure of a cell; a later pass of that cell
+    supersedes it, as the chart's fold does (review rv-20261008T220312Z F1)."""
+    client = _client(monkeypatch, tmp_path)
+    store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
+    passed = _record(provider="codex", provider_version="0.145.0", invocation_id="p", generated_at="2026-10-05T00:00:00Z")
+    _write_trusted(store, passed)
+    cells = CellVerdictStore(tmp_path / "cell-verdicts")
+
+    def verdict(assertion_id: str, observed_at: datetime) -> CellVerdict:
+        return CellVerdict(
+            provider="codex",
+            assertion_id=assertion_id,
+            scenario_id=passed.scenario_id,
+            variant=passed.assertion_variant,
+            outcome="semantic_fail",
+            observed_at=observed_at,
+            consecutive_failures=2,
+        )
+
+    cells.publish(
+        [
+            verdict(passed.assertion_id, datetime(2026, 10, 4, tzinfo=UTC)),
+            verdict("reconnect_survives", datetime(2026, 10, 6, tzinfo=UTC)),
+        ]
+    )
+    try:
+        response = client.get(URL, params={"provider": "codex", "version": "0.145.0"})
+    finally:
+        api_app.dependency_overrides.clear()
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert [item["assertion_id"] for item in payload["failing_verdicts"]] == ["reconnect_survives"]
+    assert payload["failing_verdicts_version_attributed"] is False
