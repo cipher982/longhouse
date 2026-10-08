@@ -126,9 +126,10 @@ entitlement_files=(ios/XcodeHarness/LonghouseWidget.entitlements ios/XcodeHarnes
 # A new app extension or nested app carries its own entitlements and must be listed above;
 # frameworks need none, and the export signs them.
 while IFS= read -r nested; do
-  [ "$nested" = "${bundles[0]}" ] || fail "unlisted bundle ${nested#"$app/"}: add it and its entitlements to this script"
+  case " ${bundles[*]} " in *" $nested "*) ;; *) fail "unlisted bundle ${nested#"$app/"}: add it and its entitlements to this script";; esac
 done < <(find "$app" -mindepth 1 \( -name '*.appex' -o -name '*.app' \))
 for i in "${!bundles[@]}"; do
+  [ -d "${bundles[$i]}" ] || fail "listed bundle ${bundles[$i]#"$app/"} is not in the archive"
   # App Store builds always use production push; the files leave it to a build setting.
   sed 's/\$(APS_ENVIRONMENT)/production/' "${entitlement_files[$i]}" > "$work/entitlements.$i.plist"
   ! grep -q '\$(' "$work/entitlements.$i.plist" || fail "${entitlement_files[$i]} has a build setting this script does not expand"
