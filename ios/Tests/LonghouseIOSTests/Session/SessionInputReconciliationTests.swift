@@ -48,12 +48,37 @@ struct SessionInputReconciliationTests {
 
     @Test
     func linkedReceiptResolvesSendEvenWhenEchoIsOffThePage() {
+        let older = userEvent("older", text: "earlier", at: "2026-10-08T04:00:00Z")
         let resolved = SessionViewModel.resolvedSubmittedInputIds(
             submittedInputs: [input("req-1"), input("req-2")],
-            events: [],
+            events: [older],
             receipts: [receipt("req-1", eventId: "echo-1"), receipt("req-2", eventId: nil)]
         )
         #expect(resolved == ["req-1"])
+    }
+
+    @Test
+    func linkedSteerKeepsItsRowWhenNoUserRowIsLoadedYet() {
+        // A long tool-call tail can load with no user row at all. Nothing is
+        // known about the window then, so the steer's echo may still be coming.
+        let steer = served("steer", text: "voice never worked", at: "2026-10-08T04:28:41Z", intent: "steer", eventId: "steer-echo")
+        let resolved = SessionViewModel.resolvedSubmittedInputIds(
+            submittedInputs: [input("steer")],
+            events: [],
+            receipts: [steer]
+        )
+        #expect(resolved.isEmpty)
+    }
+
+    @Test
+    func linkedReceiptWithUnreadableTimeResolvesOnItsEchoAlone() {
+        let undated = served("undated", text: "no time", at: "not-a-date", eventId: "echo-undated")
+        let resolved = SessionViewModel.resolvedSubmittedInputIds(
+            submittedInputs: [input("undated")],
+            events: [userEvent("older", text: "earlier", at: "2026-10-08T04:00:00Z")],
+            receipts: [undated]
+        )
+        #expect(resolved == ["undated"])
     }
 
     @Test
@@ -74,8 +99,9 @@ struct SessionInputReconciliationTests {
 
     @Test
     func linkedSteerResolvesExactlyOnceWhenItsEchoLoads() {
+        // Settled delivery, so a missing shown-check would place a second row.
         let steerEcho = userEvent("steer-echo", text: "voice never worked", at: "2026-10-08T04:28:42Z")
-        let steer = served("steer", text: "voice never worked", at: "2026-10-08T04:28:41Z", intent: "steer", eventId: "steer-echo", turnState: "active")
+        let steer = served("steer", text: "voice never worked", at: "2026-10-08T04:28:41Z", intent: "steer", eventId: "steer-echo")
         let resolved = SessionViewModel.resolvedSubmittedInputIds(
             submittedInputs: [input("steer")],
             events: [steerEcho],
@@ -102,7 +128,7 @@ struct SessionInputReconciliationTests {
     func activeConsoleReceiptResolvesOnceItsEchoIsLinked() {
         let resolved = SessionViewModel.resolvedSubmittedInputIds(
             submittedInputs: [input("req-1", phase: .working, turnId: "turn-1")],
-            events: [],
+            events: [userEvent("echo-1", text: "ship it", at: "2026-10-08T04:00:00Z")],
             receipts: [receipt("req-1", eventId: "echo-1")]
         )
         #expect(resolved == ["req-1"])

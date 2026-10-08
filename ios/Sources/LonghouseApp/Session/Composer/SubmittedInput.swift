@@ -113,8 +113,9 @@ struct TurnEndedInput: Equatable, Sendable {
 
 /// A delivered user send or steer is shown exactly once: by its transcript row
 /// when the provider recorded it, otherwise by its served receipt at the time it
-/// was sent, on every client and not only the one that sent it. Mirrors
-/// web/src/features/session/chat/unrecordedInputs.ts.
+/// was sent, on every client and not only the one that sent it. The web client
+/// (web/src/features/session/chat/unrecordedInputs.ts) still treats any linked
+/// receipt as shown; the loaded-timeline rule below is iOS-only until it lands.
 enum UnrecordedInputs {
     nonisolated static let lostDetail = "the run ended before the agent read it"
     nonisolated private static let terminalTurnStates: Set<String> = ["completed", "failed", "cancelled"]
@@ -167,22 +168,28 @@ enum UnrecordedInputs {
     /// text sent no later than 5 s after it.
     nonisolated static func shownByTranscript(
         receipts: [SessionInputReceipt],
-        userEvents: [SessionEvent]
+        userEvents: [SessionEvent],
+        windowEvents: [SessionEvent]? = nil
     ) -> Set<String> {
-        // A linked receipt counts as shown only once its echo is in the loaded
+        // A linked receipt counts as shown once its echo is in the loaded
         // timeline. An echo older than the loaded window is off the page, so it
-        // is settled. A newer echo that has not loaded yet is still on its way,
-        // and its optimistic row must stay until it does.
-        let loadedEventIds = Set(userEvents.filter(\.isHeadBranch).map(\.id))
-        let oldestLoaded = userEvents
+        // is settled, and an undated one is taken to be behind the window. A
+        // newer echo that has not loaded yet is still on its way, and its
+        // optimistic row must stay until it does. The window starts at the
+        // oldest loaded event of any kind, because a long tool-call tail can
+        // load with no user row in it.
+        let headEvents = userEvents.filter(\.isHeadBranch)
+        let loadedEventIds = Set(headEvents.map(\.id))
+        let windowStart = (windowEvents ?? userEvents)
+            .filter(\.isHeadBranch)
             .compactMap { LonghouseDateParser.parse($0.timestamp) }
             .min()
         var shown = Set(receipts.compactMap { receipt -> String? in
             guard let eventId = receipt.eventId, let id = receipt.clientRequestId else { return nil }
             if loadedEventIds.contains(eventId) { return id }
-            guard let oldest = oldestLoaded else { return id }
-            guard let createdAt = receipt.createdAt.flatMap(LonghouseDateParser.parse) else { return nil }
-            return createdAt < oldest ? id : nil
+            guard let start = windowStart else { return nil }
+            guard let createdAt = receipt.createdAt.flatMap(LonghouseDateParser.parse) else { return id }
+            return createdAt < start ? id : nil
         })
         let candidates: [(id: String, text: String, at: Date)] = receipts
             .compactMap { receipt in
