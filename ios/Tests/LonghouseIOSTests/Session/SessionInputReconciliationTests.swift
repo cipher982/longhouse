@@ -49,12 +49,39 @@ struct SessionInputReconciliationTests {
     @Test
     func linkedReceiptResolvesSendEvenWhenEchoIsOffThePage() {
         let older = userEvent("older", text: "earlier", at: "2026-10-08T04:00:00Z")
+        let offPage = served("req-1", text: "from yesterday", at: "2026-10-07T23:00:00Z", eventId: "echo-1")
         let resolved = SessionViewModel.resolvedSubmittedInputIds(
             submittedInputs: [input("req-1"), input("req-2")],
             events: [older],
-            receipts: [receipt("req-1", eventId: "echo-1"), receipt("req-2", eventId: nil)]
+            receipts: [offPage, receipt("req-2", eventId: nil)]
         )
         #expect(resolved == ["req-1"])
+    }
+
+    @Test
+    func linkedSteerInsideAToolCallTailWithNoUserRowKeepsItsRow() {
+        // The window holds only tool events, so its start has to come from
+        // them. The steer is newer than that start and its echo is not loaded.
+        let tool = assistantEvent("tool-1", at: "2026-10-08T04:10:00Z")
+        let steer = served("steer", text: "voice never worked", at: "2026-10-08T04:28:41Z", intent: "steer", eventId: "steer-echo")
+        let resolved = SessionViewModel.resolvedSubmittedInputIds(
+            submittedInputs: [input("steer")],
+            events: [tool],
+            receipts: [steer]
+        )
+        #expect(resolved.isEmpty)
+    }
+
+    @Test
+    func linkedEchoOlderThanAToolOnlyWindowResolves() {
+        let tool = assistantEvent("tool-1", at: "2026-10-08T04:10:00Z")
+        let oldEcho = served("old", text: "earlier", at: "2026-10-08T04:00:00Z", eventId: "old-echo")
+        let resolved = SessionViewModel.resolvedSubmittedInputIds(
+            submittedInputs: [input("old")],
+            events: [tool],
+            receipts: [oldEcho]
+        )
+        #expect(resolved == ["old"])
     }
 
     @Test
@@ -71,7 +98,7 @@ struct SessionInputReconciliationTests {
     }
 
     @Test
-    func linkedReceiptWithUnreadableTimeResolvesOnItsEchoAlone() {
+    func linkedReceiptWithUnreadableTimeIsTakenAsBehindTheWindow() {
         let undated = served("undated", text: "no time", at: "not-a-date", eventId: "echo-undated")
         let resolved = SessionViewModel.resolvedSubmittedInputIds(
             submittedInputs: [input("undated")],
@@ -183,6 +210,24 @@ struct SessionInputReconciliationTests {
             text: text,
             origin: origin,
             turnState: turnState
+        )
+    }
+
+    private func assistantEvent(_ id: String, at timestamp: String) -> SessionEvent {
+        SessionEvent(
+            id: id,
+            role: "assistant",
+            contentText: nil,
+            toolName: "bash",
+            toolInputJSON: nil,
+            toolOutputText: "ok",
+            toolCallId: "call-\(id)",
+            toolCallState: nil,
+            timestamp: timestamp,
+            inActiveContext: true,
+            isHeadBranch: true,
+            inputOrigin: nil,
+            cursor: id
         )
     }
 

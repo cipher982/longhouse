@@ -536,7 +536,8 @@ struct SessionView: View {
             receipts: viewModel.detail?.inputReceipts ?? [],
             userEvents: userEvents,
             excluding: Set(localInputs.map(\.clientRequestId)),
-            loadedFrom: firstLoadedDate
+            loadedFrom: firstLoadedDate,
+            windowStart: viewModel.items.first.flatMap { LonghouseDateParser.parse($0.sortTimestamp) }
         )
         return localInputs + systemReceiptInputs + placedReceiptInputs
     }

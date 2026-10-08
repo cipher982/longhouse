@@ -169,7 +169,7 @@ enum UnrecordedInputs {
     nonisolated static func shownByTranscript(
         receipts: [SessionInputReceipt],
         userEvents: [SessionEvent],
-        windowEvents: [SessionEvent]? = nil
+        windowStart: Date? = nil
     ) -> Set<String> {
         // A linked receipt counts as shown once its echo is in the loaded
         // timeline. An echo older than the loaded window is off the page, so it
@@ -180,14 +180,14 @@ enum UnrecordedInputs {
         // load with no user row in it.
         let headEvents = userEvents.filter(\.isHeadBranch)
         let loadedEventIds = Set(headEvents.map(\.id))
-        let windowStart = (windowEvents ?? userEvents)
+        let start = windowStart ?? userEvents
             .filter(\.isHeadBranch)
             .compactMap { LonghouseDateParser.parse($0.timestamp) }
             .min()
         var shown = Set(receipts.compactMap { receipt -> String? in
             guard let eventId = receipt.eventId, let id = receipt.clientRequestId else { return nil }
             if loadedEventIds.contains(eventId) { return id }
-            guard let start = windowStart else { return nil }
+            guard let start else { return nil }
             guard let createdAt = receipt.createdAt.flatMap(LonghouseDateParser.parse) else { return id }
             return createdAt < start ? id : nil
         })
@@ -229,9 +229,10 @@ enum UnrecordedInputs {
         receipts: [SessionInputReceipt],
         userEvents: [SessionEvent],
         excluding ownClientRequestIds: Set<String>,
-        loadedFrom: Date? = nil
+        loadedFrom: Date? = nil,
+        windowStart: Date? = nil
     ) -> [SubmittedInput] {
-        let shown = shownByTranscript(receipts: receipts, userEvents: userEvents)
+        let shown = shownByTranscript(receipts: receipts, userEvents: userEvents, windowStart: windowStart)
         return receipts.compactMap { receipt in
             guard (receipt.origin ?? "user") == "user",
                   isSettledDelivery(receipt),

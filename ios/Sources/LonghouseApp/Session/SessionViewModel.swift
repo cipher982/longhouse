@@ -3684,7 +3684,10 @@ final class SessionViewModel: ObservableObject {
         let linkedRequestIds = UnrecordedInputs.shownByTranscript(
             receipts: receipts,
             userEvents: events.filter { $0.role == "user" },
-            windowEvents: events
+            windowStart: events
+                .filter(\.isHeadBranch)
+                .compactMap { LonghouseDateParser.parse($0.timestamp) }
+                .min()
         )
         // Delivered and settled, with no transcript row: the served receipt now
         // stands at its send time for every client, so this phone's own row
