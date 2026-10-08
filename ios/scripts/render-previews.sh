@@ -36,6 +36,12 @@ if [ -z "$SIM_ID" ]; then
   exit 1
 fi
 xcrun simctl boot "$SIM_ID" 2>/dev/null || true
+# Wait for the boot to finish before xcodebuild installs onto it; a stuck
+# boot fails here, named, instead of stalling the test launch.
+if ! perl -e 'alarm shift; exec @ARGV' 300 xcrun simctl bootstatus "$SIM_ID" -b >/dev/null; then
+  echo "Simulator $SIM_ID did not finish booting within 300 s" >&2
+  exit 1
+fi
 
 # Wipe prior artifacts. Keep previews isolated from Xcode's shared DerivedData
 # so regenerated harness projects do not reuse stale source membership.
@@ -76,7 +82,7 @@ if [ "$TEST_EXIT" -ne 0 ]; then
 import json, sys
 for f in json.load(sys.stdin).get("testFailures", []):
     print("  %s: %s" % (f.get("testName"), f.get("failureText")))
-' || echo "  (could not read $RESULT_BUNDLE)"
+' 2>/dev/null || echo "  (could not read $RESULT_BUNDLE)"
   # A crashed preview's report says where it trapped; keep it with the PNGs.
   mkdir -p "$OUT_DIR/crashes"
   xcrun xcresulttool export diagnostics --path "$RESULT_BUNDLE" \
