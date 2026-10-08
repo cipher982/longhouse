@@ -71,10 +71,9 @@ def test_dispatchable_remote_control_is_advertised() -> None:
 def test_terminate_is_honest_for_every_provider() -> None:
     """Pin the specific regression, by name, so it cannot silently return.
 
-    Cursor and OpenCode carry a real remote terminate. Claude and Codex do not:
-    `machine_control_supports` omits it and `control_channel/dispatch.rs`
-    COMMAND_TERMINATE implements only opencode and cursor. Whichever way that
-    product decision goes, the advertisement must follow the implementation.
+    A provider advertises remote terminate only when `control_channel/dispatch.rs`
+    COMMAND_TERMINATE implements it for that provider; the advertisement must
+    follow the implementation, whichever providers that is.
     """
 
     by_provider = {c.provider: c for c in all_managed_provider_contracts()}
