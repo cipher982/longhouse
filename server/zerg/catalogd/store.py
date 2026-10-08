@@ -5804,6 +5804,14 @@ class CatalogStore(
     ProjectorsMixin,
     LegacyMigrationMixin,
 ):
+    """Small product operations over the bounded catalog.
+
+    Methods are deliberately synchronous: the daemon invokes mutations on one
+    executor and explicitly read-only operations on a separate bounded pool,
+    keeping SQLite work off the asyncio socket loop while WAL readers remain
+    available during background writes.
+    """
+
     def reset_e2e_user_data(self) -> dict[str, object]:
         """Clear browser-test product state while retaining its authority.
 
@@ -5869,14 +5877,6 @@ class CatalogStore(
                 "pruned": int(pruned),
                 "commit_seq": str(commit_seq),
             }
-
-    """Small product operations over the bounded catalog.
-
-    Methods are deliberately synchronous: the daemon invokes mutations on one
-    executor and explicitly read-only operations on a separate bounded pool,
-    keeping SQLite work off the asyncio socket loop while WAL readers remain
-    available during background writes.
-    """
 
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
