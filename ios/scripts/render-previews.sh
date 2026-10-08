@@ -43,9 +43,11 @@ rm -rf "$RESULT_BUNDLE" "$OUT_DIR" "$DERIVED_DATA_PATH"
 mkdir -p "$OUT_DIR"
 
 echo ">> Running snapshot tests on $SIM_NAME ($SIM_ID)"
-# Use -quiet to keep output tractable. SnapshotPreviews discovers previews at
-# runtime, so a "test" failure isn't necessarily a UI bug — could be a preview
-# that crashes during render. We still want the attachments either way.
+# SnapshotPreviews discovers previews at runtime, so a "test" failure isn't
+# necessarily a UI bug: a preview can crash or hang during render. We still
+# want the attachments either way. The full log goes to the output directory;
+# the console keeps per-preview progress and failures. A hung preview fails at
+# the execution allowance instead of holding the VM until the job timeout.
 set +e
 xcodebuild test \
   -project XcodeHarness/LonghouseIOS.xcodeproj \
@@ -53,14 +55,18 @@ xcodebuild test \
   -destination "platform=iOS Simulator,id=$SIM_ID" \
   -configuration Debug \
   -only-testing:LonghousePreviewTests/PreviewSnapshots \
+  -test-timeouts-enabled YES \
+  -default-test-execution-time-allowance 60 \
+  -maximum-test-execution-time-allowance 60 \
   -resultBundlePath "$RESULT_BUNDLE" \
   -derivedDataPath "$DERIVED_DATA_PATH" \
-  -quiet
+  >"$OUT_DIR/xcodebuild.log" 2>&1
 TEST_EXIT=$?
 set -e
+grep -E "^Test Case .*(passed|failed)|error: |exceeded|crashed|Restarting after|\*\* TEST" "$OUT_DIR/xcodebuild.log" || true
 
-# -quiet hides assertion text and the xcresult is not retained, so print each
-# failing preview's message here; otherwise a failure names only the test.
+# The xcresult does not leave the VM, so print each failing preview's message;
+# otherwise a failure names only the test.
 if [ "$TEST_EXIT" -ne 0 ]; then
   echo ">> Failure messages"
   xcrun xcresulttool get test-results summary --path "$RESULT_BUNDLE" 2>/dev/null \
