@@ -14,6 +14,7 @@ import typer
 
 from zerg.config import get_settings
 from zerg.services.archive_backlog import collect_archive_backlog
+from zerg.services.archive_backlog import pending_backlog_bytes
 from zerg.services.archive_backlog import write_archive_control
 from zerg.services.archive_store import FilesystemArchiveStore
 
@@ -142,6 +143,14 @@ def _render_status_summary(summary: dict[str, Any]) -> None:
         typer.echo(f"  oldest pending:   {summary['oldest_pending_at']}")
     if summary.get("next_retry_at_min"):
         typer.echo(f"  next retry:       {summary['next_retry_at_min']}")
+    outbox = summary.get("storage_v2_outbox")
+    if isinstance(outbox, dict):
+        typer.echo(
+            f"  storage-v2 outbox: {outbox['pending_count']} envelopes ({_format_bytes(outbox['pending_bytes'])}), "
+            f"{outbox['blocked_source_count']} blocked sources"
+        )
+        if outbox.get("oldest_pending_at"):
+            typer.echo(f"  oldest envelope:  {outbox['oldest_pending_at']}")
 
     _, scheduler, limiter, live_lane, archive_lane = _shipper_diagnostics(summary)
 
@@ -234,7 +243,7 @@ def speed_command(
     )
     speed = {
         "archive": {
-            "pending_bytes": summary.get("pending_bytes", 0),
+            "pending_bytes": pending_backlog_bytes(summary),
             "bytes_per_sec_ewma_10s": archive_lane.get("bytes_per_sec_ewma_10s"),
             "events_per_sec_ewma_10s": archive_lane.get("events_per_sec_ewma_10s"),
             "attempts_1h": archive_lane.get("attempts_1h", 0),

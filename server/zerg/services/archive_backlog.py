@@ -91,6 +91,7 @@ def normalize_archive_backlog(
         }
     )
     _attach_shipper_diagnostics(result, engine_status_payload)
+    _attach_storage_v2_outbox(result, engine_status_payload)
     _attach_archive_progress(result, engine_status_payload)
     return result
 
@@ -115,6 +116,7 @@ def collect_archive_backlog(
     # no separate local store to read (the v1 spool is gone).
     result = default_archive_backlog(source="missing")
     _attach_shipper_diagnostics(result, engine_status_payload)
+    _attach_storage_v2_outbox(result, engine_status_payload)
     return result
 
 
@@ -178,6 +180,31 @@ def _attach_shipper_diagnostics(result: dict[str, Any], engine_status_payload: M
         result["shipper"] = shipper
 
 
+def _attach_storage_v2_outbox(result: dict[str, Any], engine_status_payload: Mapping[str, Any] | None) -> None:
+    """Add the engine's storage-v2 outbox, the backlog that actually ships now.
+
+    The `archive_backlog` range counters described the retired v1 spool and are
+    always zero; the pending storage-v2 envelopes are the work left to send.
+    """
+    raw = engine_status_payload.get("storage_v2_outbox") if isinstance(engine_status_payload, Mapping) else None
+    if not isinstance(raw, Mapping):
+        return
+    result["storage_v2_outbox"] = {
+        "pending_count": _int(raw.get("pending_count")),
+        "pending_bytes": _int(raw.get("pending_bytes")),
+        "oldest_pending_at": _optional_str(raw.get("oldest_pending_at")),
+        "blocked_source_count": _int(raw.get("blocked_source_count")),
+    }
+
+
+def pending_backlog_bytes(result: Mapping[str, Any]) -> int:
+    """Bytes still to ship: the storage-v2 outbox when reported, else the range counters."""
+    outbox = result.get("storage_v2_outbox")
+    if isinstance(outbox, Mapping):
+        return _int(outbox.get("pending_bytes"))
+    return _int(result.get("pending_bytes"))
+
+
 def _attach_archive_progress(result: dict[str, Any], engine_status_payload: Mapping[str, Any] | None) -> None:
     """Add the only honest ETA: pending bytes divided by acknowledged archive rate."""
     if not isinstance(engine_status_payload, Mapping):
@@ -193,7 +220,7 @@ def _attach_archive_progress(result: dict[str, Any], engine_status_payload: Mapp
     if bytes_per_second <= 0:
         return
     result["archive_bytes_per_sec"] = bytes_per_second
-    pending_bytes = _int(result.get("pending_bytes"))
+    pending_bytes = pending_backlog_bytes(result)
     if pending_bytes > 0:
         result["archive_eta_seconds"] = int(pending_bytes / bytes_per_second)
 

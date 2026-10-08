@@ -164,3 +164,41 @@ def test_archive_status_without_engine_status_reports_an_empty_backlog(tmp_path:
     payload = json.loads(result.stdout)
     assert payload["pending_ranges"] == 0
     assert payload["pending_bytes"] == 0
+
+
+def test_archive_status_reports_the_storage_v2_outbox_backlog(tmp_path: Path):
+    status_path = get_agent_status_path(tmp_path)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "archive_backlog": {"state": "idle", "mode": "trickle", "pending_bytes": 0},
+                "storage_v2_outbox": {
+                    "pending_count": 7,
+                    "pending_bytes": 8192,
+                    "oldest_pending_at": "2026-10-08T00:00:00Z",
+                    "blocked_source_count": 1,
+                },
+                "ship_lanes": {"archive": {"bytes_per_sec_ewma_10s": 1024}},
+            }
+        )
+    )
+
+    summary = collect_archive_backlog(tmp_path)
+
+    assert summary["storage_v2_outbox"] == {
+        "pending_count": 7,
+        "pending_bytes": 8192,
+        "oldest_pending_at": "2026-10-08T00:00:00Z",
+        "blocked_source_count": 1,
+    }
+    assert summary["archive_eta_seconds"] == 8
+
+    result = CliRunner().invoke(app, ["archive", "status", "--state-root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "storage-v2 outbox: 7 envelopes" in result.output
+    assert "1 blocked sources" in result.output
+
+    speed = CliRunner().invoke(app, ["archive", "speed", "--json", "--state-root", str(tmp_path)])
+    assert speed.exit_code == 0, speed.output
+    assert json.loads(speed.output)["archive"]["pending_bytes"] == 8192
