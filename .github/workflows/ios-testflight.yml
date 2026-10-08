@@ -17,6 +17,11 @@ on:
         required: false
         default: ""
         type: string
+      internal_only:
+        description: Internal group only (no public link, no Beta App Review)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -75,10 +80,13 @@ jobs:
           TESTFLIGHT_REVIEW_CONTACT_EMAIL: ${{ secrets.TESTFLIGHT_REVIEW_CONTACT_EMAIL }}
           BUILD: ${{ steps.build.outputs.build }}
           WHATS_NEW: ${{ inputs.whats_new }}
+          INTERNAL_ONLY: ${{ inputs.internal_only }}
         run: |
           set -euo pipefail
+          ONLY_FLAG=""
+          if [ "$INTERNAL_ONLY" = "true" ]; then ONLY_FLAG="--internal-only"; fi
           scripts/ops/testflight.py wait-build --build "$BUILD"
-          scripts/ops/testflight.py publish --build "$BUILD" ${WHATS_NEW:+--whats-new "$WHATS_NEW"} | tee "$RUNNER_TEMP/publish.json"
+          scripts/ops/testflight.py publish --build "$BUILD" $ONLY_FLAG ${WHATS_NEW:+--whats-new "$WHATS_NEW"} | tee "$RUNNER_TEMP/publish.json"
           {
             echo "### TestFlight"
             echo '```json'

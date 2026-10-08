@@ -508,6 +508,26 @@ def _default_whats_new() -> str:
     return f"Version {marketing_version()}. {subject}".strip()[:4000]
 
 
+def _publish_internal_only(app_id: str, config: dict, build: str, version: str) -> None:
+    """Make the build reach the internal group only: no public link, no Beta App Review."""
+    internal = _ensure_internal_group(app_id, config)
+    testers = _ensure_internal_testers(internal["id"])
+    for attempt in range(POLL_ATTEMPTS):
+        if _in_group(app_id, internal["id"], build):
+            break
+        if attempt == POLL_ATTEMPTS - 1:
+            die(f"build {build} is not available to internal group {config['internal_group_name']!r} after {POLL_ATTEMPTS * POLL_DELAY}s")
+        time.sleep(POLL_DELAY)
+    print(json.dumps({
+        "build": build,
+        "version": version,
+        "internal_only": True,
+        "submitted_this_run": False,
+        "internal_group_testers": testers,
+        "internal_build_available": True,
+    }, indent=2))
+
+
 def cmd_publish(args: argparse.Namespace) -> None:
     config = load_config()
     feedback = require_env("TESTFLIGHT_FEEDBACK_EMAIL")["TESTFLIGHT_FEEDBACK_EMAIL"]
@@ -527,6 +547,9 @@ def cmd_publish(args: argparse.Namespace) -> None:
     if build["attributes"]["processingState"] != "VALID":
         die(f"build {args.build} is {build['attributes']['processingState']}; run wait-build first")
     build_id = build["id"]
+    if args.internal_only:
+        _publish_internal_only(app_id, config, args.build, version)
+        return
 
     _upsert_beta_localization(app_id, config, feedback)
     _update_review_detail(app_id, config, contact)
@@ -615,6 +638,7 @@ def main() -> None:
     publish.add_argument("--build", required=True)
     publish.add_argument("--version", help="marketing version (default: Version.xcconfig)")
     publish.add_argument("--whats-new", help="tester-facing change note (default: latest commit subject)")
+    publish.add_argument("--internal-only", action="store_true", help="internal group only: no public link, no Beta App Review")
     publish.set_defaults(func=cmd_publish)
 
     sub.add_parser("dev-certs").set_defaults(func=cmd_dev_certs)

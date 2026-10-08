@@ -5,6 +5,7 @@
 #
 #   scripts/ops/testflight-ship.sh [sha]        # default: HEAD (must be on origin/main)
 #   WHATS_NEW="note for testers" scripts/ops/testflight-ship.sh
+#   INTERNAL_ONLY=1 scripts/ops/testflight-ship.sh   # internal group only: no public link, no Beta App Review
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -21,7 +22,7 @@ git merge-base --is-ancestor "$SHA" origin/main \
   || die "$SHA is not on origin/main; push it first (only main ships to TestFlight)"
 
 before="$(gh run list -R "$REPO" -w "$WORKFLOW" --limit 1 --json databaseId -q '.[0].databaseId // 0')"
-gh workflow run "$WORKFLOW" -R "$REPO" --ref main -f source_sha="$SHA" ${WHATS_NEW:+-f whats_new="$WHATS_NEW"}
+gh workflow run "$WORKFLOW" -R "$REPO" --ref main -f source_sha="$SHA" ${WHATS_NEW:+-f whats_new="$WHATS_NEW"} ${INTERNAL_ONLY:+-f internal_only=true}
 
 run_id=""
 for _ in $(seq 1 24); do
