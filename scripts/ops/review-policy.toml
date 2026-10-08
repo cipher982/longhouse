@@ -62,7 +62,6 @@ paths = [
   "server/zerg/catalogd/models.py",
   "server/zerg/storage_v2/**",
   "server/zerg/cli/storage_migrate.py",
-  "server/zerg/services/legacy_corpus_migration.py",
   "scripts/ops/runtime-schema.py",
   "schemas/storage-v2-contract-vectors.json",
   "schemas/machine-evidence-hash-v1.json",

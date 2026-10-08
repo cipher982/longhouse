@@ -56,7 +56,6 @@ from zerg.catalogd.fact_reducer import reduce_fact_batch_setwise
 from zerg.catalogd.fact_reducer import reducer_facts_from_machine_evidence
 from zerg.catalogd.models import FactHead
 from zerg.catalogd.models import FactParityDelta
-from zerg.catalogd.models import LegacyMigrationRun
 from zerg.catalogd.models import LegacyMigrationSession
 from zerg.catalogd.models import MediaObject
 from zerg.catalogd.models import ProjectorState
@@ -2594,33 +2593,6 @@ def _legacy_migration_run_dto(row) -> dict[str, Any]:
     }
 
 
-def _legacy_migration_session_dto(row) -> dict[str, Any]:
-    return {
-        "run_id": str(row["run_id"]),
-        "session_id": str(row["session_id"]),
-        "state": str(row["state"]),
-        "source_expected": int(row["source_expected"]),
-        "source_covered": int(row["source_covered"]),
-        "source_missing": int(row["source_missing"]),
-        "media_expected": int(row["media_expected"]),
-        "media_covered": int(row["media_covered"]),
-        "media_missing": int(row["media_missing"]),
-        "output_proof_hash": row["output_proof_hash"],
-        "parity_proof_hash": row["parity_proof_hash"],
-        "error_code": row["error_code"],
-        "error_message": row["error_message"],
-        "attempts": int(row["attempts"]),
-        "claim_token": row["claim_token"],
-        "worker_id": row["worker_id"],
-        "lease_expires_at": _encode_datetime(row["lease_expires_at"]),
-        "retry_at": _encode_datetime(row["retry_at"]),
-        "commit_seq": str(row["commit_seq"]),
-        "created_at": _encode_datetime(row["created_at"]),
-        "updated_at": _encode_datetime(row["updated_at"]),
-        "verified_at": _encode_datetime(row["verified_at"]),
-    }
-
-
 def _legacy_migration_summary(connection, run_id: str) -> dict[str, Any]:
     rows = LegacyMigrationSession.__table__
     state_counts = {
@@ -2650,32 +2622,6 @@ def _legacy_migration_summary(connection, run_id: str) -> dict[str, Any]:
         "media_covered": int(totals[5]),
         "media_missing": int(totals[6]),
     }
-
-
-def _refresh_legacy_migration_run(connection, run_id: str, commit_seq: int, observed_at: datetime) -> None:
-    runs = LegacyMigrationRun.__table__
-    rows = LegacyMigrationSession.__table__
-    run = connection.execute(select(runs).where(runs.c.run_id == run_id)).mappings().one()
-    expected = int(run["expected_session_count"])
-    if run["state"] == "inventory":
-        registered = int(connection.execute(select(func.count()).select_from(rows).where(rows.c.run_id == run_id)).scalar_one())
-        if registered < expected:
-            state, completed_at = "inventory", None
-        else:
-            state, completed_at = "migrating", None
-    elif connection.execute(
-        select(rows.c.session_id).where(rows.c.run_id == run_id, rows.c.state.in_(("pending", "migrating"))).limit(1)
-    ).first():
-        state, completed_at = "migrating", None
-    elif connection.execute(select(rows.c.session_id).where(rows.c.run_id == run_id, rows.c.state == "degraded").limit(1)).first():
-        state, completed_at = "degraded", observed_at
-    else:
-        state, completed_at = "complete", observed_at
-    connection.execute(
-        update(runs)
-        .where(runs.c.run_id == run_id)
-        .values(state=state, commit_seq=commit_seq, updated_at=observed_at, completed_at=completed_at)
-    )
 
 
 def _storage_card_compat_row(row) -> dict[str, Any]:

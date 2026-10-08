@@ -19,19 +19,20 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 import sqlite3
+from datetime import datetime
+from datetime import timezone
 
-from zerg.database import Base
+from tests_lite._archive_chunk_manifests import insert_archive_chunk_manifests
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSourceLine
 from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
-from zerg.services.archive_primary import insert_archive_chunk_manifests
-from zerg.services.raw_json_compression import compress_raw_json, CODEC_ZSTD
-from datetime import datetime, timezone
+from zerg.services.raw_json_compression import CODEC_ZSTD
+from zerg.services.raw_json_compression import compress_raw_json
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "ops" / "phase-e-build-slim.py"
 

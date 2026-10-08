@@ -11,6 +11,7 @@ from uuid import uuid4
 from sqlalchemy import text
 from typer.testing import CliRunner
 
+from tests_lite._archive_chunk_manifests import insert_archive_chunk_manifests
 from zerg.cli.main import app
 from zerg.database import Base
 from zerg.database import make_engine
@@ -19,7 +20,6 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
-from zerg.services.archive_primary import insert_archive_chunk_manifests
 from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.raw_json_compression import CODEC_PLAIN

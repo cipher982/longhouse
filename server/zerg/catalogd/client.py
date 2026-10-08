@@ -132,16 +132,7 @@ _SAFE_RETRY_METHODS = {
     "projector.coverage.read.v2",
     "projector.state.requeue.v2",
     "projector.store.bind.v2",
-    "migration.run.create.v2",
-    "migration.run.read.v2",
-    "migration.session.register.batch.v2",
-    "migration.session.claim.v2",
-    "migration.session.complete.v2",
-    "migration.session.fail.v2",
-    "migration.render.repair.v2",
-    "migration.run.reconcile.v2",
     "migration.run.summary.v2",
-    "migration.gaps.list.v2",
     # search.db is disposable and every mutation is exact/idempotent on its
     # object, generation, or session identity. Reads and ping are replay-safe.
     "search.ping.v2",

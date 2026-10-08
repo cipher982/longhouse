@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 309,
+  "file_count": 308,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1211,13 +1211,6 @@
         "claude",
         "codex",
         "cursor"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_legacy_corpus_migration.py",
-      "providers": [
-        "claude",
-        "codex"
       ]
     },
     {
