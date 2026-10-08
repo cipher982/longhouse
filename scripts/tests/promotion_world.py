@@ -2,7 +2,7 @@
 
 `green_world()` is everything the gates read when a promotion is allowed: dogfood
 serving the commit, a passed Hosted Live QA receipt, a passed engine-compat
-receipt, and a control plane with no real tenants. Each test breaks one thing.
+receipt, a sealed OCI archive receipt, and a control plane with no real tenants. Each test breaks one thing.
 The same dict is served two ways: in-process (`InProcessSources`, for the gate
 tests) and over HTTP plus stubbed `gh`/`ssh` (`Wire`, for the script tests).
 """
@@ -36,6 +36,7 @@ DOGFOOD = "fixture-dogfood"
 REPO = "cipher982/longhouse"
 QA_RUN = 36000000001
 COMPAT_RUN = 36000000002
+ARCHIVE_RUN = 36000000003
 
 
 def qa_receipt(*, verdict: str = "passed", sha: str = SHA, run: int = QA_RUN, digest: str | None = DIGEST, failed_steps=None) -> dict:
@@ -88,6 +89,38 @@ def compat_receipt(*, result: str = "passed", sha: str = SHA) -> dict:
     else:
         receipt["reason"] = "no published release precedes the candidate"
     return receipt
+
+
+def archive_receipt(*, sha: str = SHA, digest: str = DIGEST, sealed: bool = True) -> dict:
+    return {
+        "schema": gates.ARCHIVE_SCHEMA,
+        "component": "longhouse-runtime",
+        "image_digest": digest.rsplit("@", 1)[-1],
+        "source_sha": sha,
+        "build_run_id": "555",
+        "build_attempt": 1,
+        "sealed": sealed,
+        "manifest_key": "images/sha256/" + digest.rsplit(":", 1)[-1] + ".json",
+        "blob_count": 9,
+    }
+
+
+def archive_run(**changes: Any) -> dict:
+    """The run of main's Archive Runtime Image workflow that uploaded the archive receipt."""
+    return {
+        "id": ARCHIVE_RUN,
+        "name": gates.ARCHIVE_WORKFLOW,
+        "path": gates.ARCHIVE_WORKFLOW_PATH,
+        "event": "workflow_run",
+        "head_branch": "main",
+        "head_sha": SHA,
+        "head_repository": {"full_name": REPO},
+        "repository": {"full_name": REPO},
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.test/archive",
+        **changes,
+    }
 
 
 def artifact(artifact_id: int, name: str, receipt: dict, *, run: int, created: str, head_sha: str = SHA, expired: bool = False) -> dict:
@@ -147,9 +180,11 @@ def green_world() -> dict[str, Any]:
         "artifacts": [
             artifact(101, f"hosted-live-qa-verdict-{SHA}", qa_receipt(), run=QA_RUN, created="2026-09-29T23:00:00Z"),
             artifact(102, f"engine-compat-{SHA}", compat_receipt(), run=COMPAT_RUN, created="2026-09-29T22:50:00Z"),
+            artifact(104, f"runtime-oci-archive-{SHA}", archive_receipt(), run=ARCHIVE_RUN, created="2026-09-29T21:55:00Z"),
         ],
         "runs": {
             str(QA_RUN): qa_run(),
+            str(ARCHIVE_RUN): archive_run(),
         },
         "publish_runs": [
             {"databaseId": 555, "number": 44, "attempt": 1, "headSha": SHA, "workflowName": "Publish Runtime Image", "conclusion": "success"}
@@ -179,7 +214,11 @@ def zip_bytes(member: str, receipt: dict) -> bytes:
 
 
 def _member(name: str) -> str:
-    return gates.QA_MEMBER if name.startswith("hosted-live-qa-verdict-") else gates.COMPAT_MEMBER
+    if name.startswith("hosted-live-qa-verdict-"):
+        return gates.QA_MEMBER
+    if name.startswith("runtime-oci-archive-"):
+        return gates.ARCHIVE_MEMBER
+    return gates.COMPAT_MEMBER
 
 
 class InProcessSources(gates.Sources):

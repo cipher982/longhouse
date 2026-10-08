@@ -37,11 +37,12 @@ class GreenTests(unittest.TestCase):
         self.assertTrue(receipt["promotable"], refused(receipt))
         self.assertEqual(receipt["sha"], w.SHA)
         self.assertEqual(receipt["image_digest"], w.DIGEST)
-        self.assertEqual(set(receipt["gates"]), {"dogfood", "hosted_qa", "engine_compat", "soak"})
+        self.assertEqual(set(receipt["gates"]), {"dogfood", "hosted_qa", "engine_compat", "soak", "archive"})
         self.assertEqual(receipt["gates"]["dogfood"]["evidence"]["deployment_id"], "d-dogfood")
         self.assertEqual(receipt["gates"]["hosted_qa"]["evidence"]["run_id"], w.QA_RUN)
         self.assertEqual(receipt["gates"]["engine_compat"]["evidence"]["previous_release_tag"], "v0.1.59")
         self.assertEqual(receipt["gates"]["soak"]["evidence"]["required_hours"], 0)
+        self.assertEqual(receipt["gates"]["archive"]["evidence"]["run_id"], w.ARCHIVE_RUN)
         # A promotable receipt is machine-readable JSON as it stands.
         self.assertEqual(json.loads(json.dumps(receipt)), receipt)
 
@@ -323,6 +324,49 @@ class SoakGateTests(unittest.TestCase):
         self.assertNotIn("SOAK_HOURS", Path(gates.__file__).read_text())
 
 
+class ArchiveGateTests(unittest.TestCase):
+    name = f"runtime-oci-archive-{w.SHA}"
+
+    def test_no_receipt_is_refused_and_says_how_to_archive(self) -> None:
+        world = w.green_world()
+        world["artifacts"] = [a for a in world["artifacts"] if a["name"] != self.name]
+        message = refused(evaluate(world))["archive"]
+        self.assertIn("no sealed OCI archive receipt", message)
+        self.assertIn("gh workflow run runtime-image-archive.yml --ref main", message)
+
+    def test_a_receipt_for_another_digest_commit_or_an_unsealed_one_is_not_evidence(self) -> None:
+        for receipt in (w.archive_receipt(digest=w.OTHER_DIGEST), w.archive_receipt(sha=w.OTHER_SHA), w.archive_receipt(sealed=False), {"schema": "other"}):
+            world = w.green_world()
+            world["artifacts"][2]["receipt"] = receipt
+            self.assertIn("no sealed OCI archive receipt", refused(evaluate(world))["archive"], receipt)
+
+    def test_only_a_completed_run_of_mains_archive_workflow_counts(self) -> None:
+        for change in (
+            {"head_branch": "some-branch"},
+            {"path": ".github/workflows/copy.yml"},
+            {"name": "CI"},
+            {"head_repository": {"full_name": "someone/longhouse"}},
+            {"status": "in_progress", "conclusion": None},
+            {"conclusion": "failure"},
+        ):
+            world = w.green_world()
+            world["runs"][str(w.ARCHIVE_RUN)] = w.archive_run(**change)
+            self.assertIn("no usable OCI archive receipt", refused(evaluate(world))["archive"], change)
+
+    def test_an_older_good_receipt_still_counts_after_a_bad_newer_one(self) -> None:
+        world = w.green_world()
+        world["artifacts"].append(w.artifact(105, self.name, w.archive_receipt(), run=36000000011, created="2026-09-29T23:59:00Z"))
+        world["runs"]["36000000011"] = w.archive_run(id=36000000011, conclusion="failure")
+        receipt = evaluate(world)
+        self.assertTrue(receipt["promotable"], refused(receipt))
+        self.assertEqual(receipt["gates"]["archive"]["evidence"]["run_id"], w.ARCHIVE_RUN)
+
+    def test_it_waits_for_the_dogfood_digest(self) -> None:
+        world = w.green_world()
+        world["dogfood_health"]["build"]["commit"] = w.OTHER_SHA
+        self.assertIn("not evaluated", refused(evaluate(world))["archive"])
+
+
 class WholeReceiptTests(unittest.TestCase):
     def test_every_gate_runs_so_one_check_lists_everything_missing(self) -> None:
         world = w.green_world()
@@ -330,8 +374,8 @@ class WholeReceiptTests(unittest.TestCase):
         world["soak"] = None
         world["dogfood_health"]["build"]["commit"] = w.OTHER_SHA
         receipt = evaluate(world)
-        self.assertEqual(set(refused(receipt)), {"dogfood", "hosted_qa", "engine_compat", "soak"})
-        self.assertEqual(len(gates.refusals(receipt)), 4)
+        self.assertEqual(set(refused(receipt)), {"dogfood", "hosted_qa", "engine_compat", "soak", "archive"})
+        self.assertEqual(len(gates.refusals(receipt)), 5)
         self.assertFalse(receipt["promotable"])
 
     def test_an_unreadable_instance_list_blocks_the_plan(self) -> None:

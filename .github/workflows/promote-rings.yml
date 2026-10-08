@@ -10,8 +10,8 @@ name: Promote Rings
 on:
   workflow_run:
     # Image published (dogfood fast lane), canary qualified (blocking-list
-    # ranges), QA verdict and CI receipts (production gates).
-    workflows: ["Publish Runtime Image", "Deploy and Verify", "Hosted Live QA", "CI"]
+    # ranges), QA verdict, CI receipts and the OCI archive (production gates).
+    workflows: ["Publish Runtime Image", "Archive Runtime Image", "Deploy and Verify", "Hosted Live QA", "CI"]
     types: [completed]
     branches: [main]
   # The review attester (review_gate.py attest, on the machine that holds the

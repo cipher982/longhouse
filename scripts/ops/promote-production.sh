@@ -16,6 +16,8 @@
 #   engine_compat  the previous released engine shipped to SHA's server
 #   soak           the control plane says the 24 h soak (on once any real tenant
 #                  exists) has elapsed; an unreadable answer is a refusal
+#   archive        Archive Runtime Image sealed the digest's OCI closure in the
+#                  object store (runtime-oci-archive-<sha> receipt)
 # The digest is the one dogfood's deployment recorded; nothing here accepts a
 # caller-supplied image or soak. Rollout is one control-plane deployment, one
 # tenant at a time, halting on the first failure; only then the demo is pinned.
@@ -131,7 +133,7 @@ DOGFOOD_DEPLOYMENT="$(jq -r '.gates.dogfood.evidence.deployment_id' "$receipt")"
 echo "Gates passed for $SHA ($PROD_IMAGE)." >&2
 
 # --- Review: every code commit between what production serves and SHA needs a completed
-# review receipt (scripts/ops/review_gate.py). It sits outside the receipt's four gates
+# review receipt (scripts/ops/review_gate.py). It sits outside the receipt's five gates
 # because it reads this machine's review store, not the control plane or GitHub.
 . "$ROOT/scripts/lib/review-gate.sh"
 if ! lh_review_gate_promotion "$SHA" "$DEMO_HEALTH_URL" >&2; then

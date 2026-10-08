@@ -21,6 +21,11 @@ looks green:
   soak           the control plane, not this script, decides whether the 24 h
                  soak applies (any real tenant) and whether the image has run on
                  dogfood that long. A status that cannot be read is a refusal.
+  archive        the exact digest's complete OCI closure is sealed in the
+                 object store: a `runtime-oci-archive-<sha>` receipt from a
+                 completed run of main's Archive Runtime Image workflow. The
+                 archive runs after publication, off the path dogfood and the
+                 canary wait on, so production is where it is required.
 
 Unknown is never a pass: a read that fails, a receipt that is missing or
 malformed, or a field that is absent refuses the gate that needed it. Every gate
@@ -57,9 +62,13 @@ QA_WORKFLOW_PATH = ".github/workflows/hosted-live-qa.yml"
 DEFAULT_BRANCH = "main"
 COMPAT_SCHEMA = "longhouse.engine-compat.v1"
 COMPAT_MEMBER = "receipt.json"
+ARCHIVE_SCHEMA = "longhouse.runtime-oci-archive.v1"
+ARCHIVE_MEMBER = "runtime-oci-archive.json"
+ARCHIVE_WORKFLOW = "Archive Runtime Image"
+ARCHIVE_WORKFLOW_PATH = ".github/workflows/runtime-image-archive.yml"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
-GATES = ("dogfood", "hosted_qa", "engine_compat", "soak")
+GATES = ("dogfood", "hosted_qa", "engine_compat", "soak", "archive")
 
 
 class SourceError(Exception):
@@ -344,6 +353,58 @@ def gate_soak(sources: Sources, digest: str | None) -> dict[str, Any]:
     }
 
 
+# --- gate 5: the OCI archive ----------------------------------------------------------------------------------------
+
+
+def gate_archive(cfg: Config, sources: Sources, sha: str, digest: str | None) -> dict[str, Any]:
+    """The promoted digest's OCI closure is sealed in the object store, per a receipt from main's archive workflow."""
+    if not digest:
+        raise Refusal("not evaluated: there is no digest to look for until the dogfood gate passes")
+    image_digest = digest.rsplit("@", 1)[-1]
+    name = f"runtime-oci-archive-{sha}"
+    redo = f"gh workflow run runtime-image-archive.yml --ref {DEFAULT_BRANCH} -f publish_run_id=<the Publish Runtime Image run of {_short(sha)}>"
+    found, unreadable = _receipts(cfg, sources, name, ARCHIVE_MEMBER)
+    sealed = [
+        (artifact, receipt)
+        for artifact, receipt in found
+        if receipt.get("schema") == ARCHIVE_SCHEMA
+        and receipt.get("sealed") is True
+        and receipt.get("source_sha") == sha
+        and receipt.get("image_digest") == image_digest
+    ]
+    if not sealed:
+        raise Refusal(
+            f"no sealed OCI archive receipt for {image_digest} (artifact {name}: {len(found)} found"
+            f"{f', {unreadable} unreadable' if unreadable else ''}); Archive Runtime Image runs after every publication. "
+            f"If it failed or never ran: {redo}"
+        )
+    reasons = []
+    for artifact, receipt in sealed:
+        run_id = (artifact.get("workflow_run") or {}).get("id")
+        try:
+            run = sources.github(f"repos/{cfg.repo}/actions/runs/{run_id}")
+        except SourceError as exc:
+            reasons.append(f"cannot read archive run {run_id}: {exc}")
+            continue
+        origin = (run.get("name"), run.get("path"), run.get("head_branch"), (run.get("head_repository") or {}).get("full_name"), (run.get("repository") or {}).get("full_name"))
+        if origin != (ARCHIVE_WORKFLOW, ARCHIVE_WORKFLOW_PATH, DEFAULT_BRANCH, cfg.repo, cfg.repo):
+            reasons.append(f"archive run {run_id} is not a run of {ARCHIVE_WORKFLOW_PATH} on {DEFAULT_BRANCH} in {cfg.repo}")
+            continue
+        if run.get("status") != "completed" or run.get("conclusion") != "success":
+            reasons.append(f"archive run {run_id} is not a completed successful run (status={run.get('status')!r} conclusion={run.get('conclusion')!r})")
+            continue
+        return {
+            "run_id": run_id,
+            "run_url": run.get("html_url"),
+            "image_digest": image_digest,
+            "manifest_key": receipt.get("manifest_key"),
+            "blob_count": receipt.get("blob_count"),
+            "build_run_id": receipt.get("build_run_id"),
+            "build_attempt": receipt.get("build_attempt"),
+        }
+    raise Refusal(f"no usable OCI archive receipt for {image_digest}: {'; '.join(reasons)}. {redo}")
+
+
 # --- the plan: which tenants the wave touches ---------------------------------------------------------------------------
 
 
@@ -400,6 +461,7 @@ def evaluate(cfg: Config, sources: Sources, sha: str | None = None, *, now: date
     _run(gates, "hosted_qa", lambda: gate_hosted_qa(cfg, sources, sha, digest))
     _run(gates, "engine_compat", lambda: gate_engine_compat(cfg, sources, sha))
     _run(gates, "soak", lambda: gate_soak(sources, digest))
+    _run(gates, "archive", lambda: gate_archive(cfg, sources, sha, digest))
     plan: dict[str, Any] | None
     try:
         plan = plan_targets(cfg, sources)

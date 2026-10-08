@@ -112,8 +112,17 @@ RUN echo "${SETUPTOOLS_REQUIREMENT}" > /tmp/build-requirements.txt \
     && mkdir -p /dist && cp dist/*.whl /dist/
 
 # =============================================================================
-# Stage 2: Build Backend Dependencies
+# Stage 2: Build the virtual environment (dependencies + the project install)
 # =============================================================================
+# Layer order is the publish-speed contract (control-plane
+# docs/specs/runtime-image-build.md): the production stage stacks the model,
+# then this venv, then the code, so a code-only commit republishes only the
+# code and web layers (~10 MB), not the ~580 MB model and venv. So this stage
+# reads nothing a code-only commit changes: the lockfile, the project metadata
+# hatchling turns into the editable install (pyproject.toml, hatch_build.py,
+# README.md) and an empty `zerg` package standing in for the source. The
+# editable install is a .pth naming /app plus the longhouse-server console
+# script; neither depends on the code. Only .venv leaves this stage.
 FROM python-uv AS dependencies
 
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
@@ -124,13 +133,18 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 # entry points that exit 127.
 WORKDIR /app
 
-# Copy pyproject files for dependency caching
 COPY server/uv.lock server/pyproject.toml ./
-
 RUN uv sync --frozen --no-install-project --no-dev
 
+# The project install and the pysqlite3 wheel (statically links modern SQLite).
+COPY server/hatch_build.py server/README.md ./
+COPY --from=pysqlite-builder /dist/ /tmp/pysqlite3-dist/
+RUN mkdir zerg && touch zerg/__init__.py \
+    && uv sync --frozen --no-dev \
+    && uv pip install /tmp/pysqlite3-dist/*.whl
+
 # =============================================================================
-# Stage 2.5: Fetch the checksum-pinned embedding model
+# Stage 3: Fetch the checksum-pinned embedding model
 # =============================================================================
 FROM python-base AS embedding-model
 
@@ -147,63 +161,20 @@ COPY server/zerg/embedding_space.py ./zerg/embedding_space.py
 COPY server/zerg/services/embedding_artifact.py ./zerg/services/embedding_artifact.py
 COPY config/models.json /config/models.json
 
+# The production stage copies /out/ to / as a layer of its own. Every entry in
+# it, the opt/ and opt/longhouse/ directories included, gets a fixed owner and
+# mtime, so rebuilding this stage (after a cache eviction) yields the same
+# layer digest, which the registry already holds. /opt/longhouse stays owned
+# by longhouse (uid/gid 1000): runtime startup re-verifies the model under a
+# lock file it creates there (zerg/services/embedding_artifact.py).
 RUN MODELS_CONFIG_PATH=/config/models.json \
     LONGHOUSE_EMBED_MODEL_DIR=/opt/longhouse/embedding-model \
     PYTHONPATH=/provision \
-    python -c "from zerg.services.embedding_artifact import provision_embedding_artifact; provision_embedding_artifact()"
-
-# =============================================================================
-# Stage 3: Build Backend Application
-# =============================================================================
-FROM python-uv AS backend-builder
-
-ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
-
-WORKDIR /app
-
-# Copy virtual environment from dependencies stage (same path, see above)
-COPY --from=dependencies /app/.venv ./.venv
-
-# Copy backend source
-COPY server/ ./
-
-# Copy shared config
-COPY config/models.json /config/models.json
-COPY config/tool-tiers.json /config/tool-tiers.json
-
-# schemas/managed_providers.yml: read live by
-# zerg/services/provider_capability_schema.py, which serves
-# GET /api/agents/provider-capabilities (zerg/qa/ re-exports it but is not in
-# this image -- see .dockerignore). Found missing here the
-# hard way -- the endpoint's first real deploy 500'd on FileNotFoundError
-# because this file was never part of the runtime image at all.
-COPY schemas/managed_providers.yml /schemas/managed_providers.yml
-
-# Install the project + pysqlite3 wheel (statically links modern SQLite)
-COPY --from=pysqlite-builder /dist/ /tmp/pysqlite3-dist/
-# The version floor comes from zerg.searchd.store.MIN_SQLITE_VERSION (not a
-# number copied in here) so this smoke test can never drift stale against the
-# schema that actually needs it -- which is exactly how the 2026-09-24
-# contentless_delete change silently outran this assert's old (3, 35, 0)
-# floor until a candidate host crash-looped on it two days later. The probe
-# table below exercises contentless_delete itself, not a plain fts5 table.
-# Importing zerg.searchd.store loads the embedding contract, so the probe needs
-# MODELS_CONFIG_PATH like the production stage: there is no /repo/config here.
-RUN uv sync --frozen --no-dev \
-    && uv pip install /tmp/pysqlite3-dist/*.whl \
-    && MODELS_CONFIG_PATH=/config/models.json PYTHONPATH=/app ./.venv/bin/python -c "\
-import pysqlite3, sys; sys.modules['sqlite3'] = pysqlite3; \
-from zerg.searchd.store import MIN_SQLITE_VERSION; \
-v = pysqlite3.sqlite_version; \
-parts = tuple(int(x) for x in v.split('.')); \
-required = '.'.join(str(p) for p in MIN_SQLITE_VERSION); \
-assert parts >= MIN_SQLITE_VERSION, f'SQLite {v} < {required}'; \
-conn = pysqlite3.connect(':memory:'); \
-conn.execute(\"create virtual table t using fts5(x, content='', contentless_delete=1)\"); \
-conn.execute('select count(*) from dbstat').fetchone(); \
-assert hasattr(conn, 'set_progress_handler'), 'set_progress_handler unavailable'; \
-assert hasattr(conn, 'interrupt'), 'interrupt unavailable'; \
-conn.close(); print(f'pysqlite3 OK: SQLite {v} >= {required}, FTS5 contentless_delete + dbstat + progress handler available')"
+    python -c "from zerg.services.embedding_artifact import provision_embedding_artifact; provision_embedding_artifact()" \
+    && mkdir -p /out/opt/longhouse \
+    && mv /opt/longhouse/embedding-model /out/opt/longhouse/embedding-model \
+    && chown -R 1000:1000 /out/opt/longhouse \
+    && find /out -exec touch -h -d @0 {} +
 
 # =============================================================================
 # Stage 4: Production Runtime
@@ -223,30 +194,37 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # web app; the Machine Agent launches and observes provider CLIs on the user's
 # own machine, so this image needs no Node.js and no provider binaries.
 
-# Create non-root user
-RUN useradd --create-home --shell /bin/bash --uid 1000 longhouse
+# Create non-root user. The --link copies below chown by number, so its uid
+# and gid must both be 1000.
+RUN useradd --create-home --shell /bin/bash --uid 1000 longhouse \
+    && test "$(id -u longhouse):$(id -g longhouse)" = "1000:1000"
 
 WORKDIR /app
 
-# Copy backend with virtual environment (includes pysqlite3 from builder).
-# build-identity.json is already staged into server/zerg/ by
-# scripts/build/generate_build_identity.py before the Docker build
-# context is sent, so importlib.resources.files("zerg") / "build_identity.json"
-# resolves inside the container with no extra COPY.
-COPY --from=backend-builder --chown=longhouse:longhouse /app /app
-
-# Copy frontend dist to where backend expects it
-COPY --from=frontend-builder --chown=longhouse:longhouse /app/web/dist /app/web/dist
-
-# Copy config
-COPY --from=backend-builder --chown=longhouse:longhouse /config /config
-
-# Copy schemas (see the matching COPY in the backend-builder stage above)
-COPY --from=backend-builder --chown=longhouse:longhouse /schemas /schemas
-
-# The build stage downloads and checksum-verifies the exact immutable model;
-# runtime startup verifies the copied bytes again before loading ONNX.
-COPY --from=embedding-model --chown=longhouse:longhouse /opt/longhouse/embedding-model /opt/longhouse/embedding-model
+# Least to most often changed. Each --link COPY is a layer of its own, reused
+# from cache (and already in the registry) whenever its source is unchanged,
+# whatever changed in the layers before it.
+# 1. The model (~480 MB). The build stage downloads and checksum-verifies the
+#    exact immutable model; runtime startup verifies the copied bytes again
+#    before loading ONNX.
+COPY --link --from=embedding-model /out/ /
+# 2. The venv (~100 MB): dependencies, pysqlite3 and the editable project install.
+COPY --link --chown=1000:1000 --from=dependencies /app/.venv /app/.venv
+# 3. Shared config, and schemas/managed_providers.yml: read live by
+#    zerg/services/provider_capability_schema.py, which serves
+#    GET /api/agents/provider-capabilities (zerg/qa/ re-exports it but is not in
+#    this image -- see .dockerignore). Found missing here the hard way -- the
+#    endpoint's first real deploy 500'd on FileNotFoundError because this file
+#    was never part of the runtime image at all.
+COPY --link --chown=1000:1000 config/models.json config/tool-tiers.json /config/
+COPY --link --chown=1000:1000 schemas/managed_providers.yml /schemas/managed_providers.yml
+# 4. The code. build-identity.json is already staged into server/zerg/ by
+#    scripts/build/generate_build_identity.py before the Docker build context
+#    is sent, so importlib.resources.files("zerg") / "build_identity.json"
+#    resolves inside the container with no extra COPY.
+COPY --link --chown=1000:1000 server/ /app/
+# 5. The frontend dist, where the backend expects it.
+COPY --link --chown=1000:1000 --from=frontend-builder /app/web/dist /app/web/dist
 
 # Create the durable Runtime Host data root. User uploads live below this
 # volume; application source remains immutable and replaceable.
@@ -277,7 +255,27 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 # The console-script entry point must run in the shipped image (its shebang
 # names the venv interpreter by absolute path; see the dependencies stage).
-RUN longhouse-server --help > /dev/null
+# Then the SQLite probe. Its version floor comes from
+# zerg.searchd.store.MIN_SQLITE_VERSION (not a number copied in here) so this
+# smoke test can never drift stale against the schema that actually needs it --
+# which is exactly how the 2026-09-24 contentless_delete change silently outran
+# this assert's old (3, 35, 0) floor until a candidate host crash-looped on it
+# two days later. The probe table exercises contentless_delete itself, not a
+# plain fts5 table.
+RUN longhouse-server --help > /dev/null \
+    && python -c "\
+import pysqlite3, sys; sys.modules['sqlite3'] = pysqlite3; \
+from zerg.searchd.store import MIN_SQLITE_VERSION; \
+v = pysqlite3.sqlite_version; \
+parts = tuple(int(x) for x in v.split('.')); \
+required = '.'.join(str(p) for p in MIN_SQLITE_VERSION); \
+assert parts >= MIN_SQLITE_VERSION, f'SQLite {v} < {required}'; \
+conn = pysqlite3.connect(':memory:'); \
+conn.execute(\"create virtual table t using fts5(x, content='', contentless_delete=1)\"); \
+conn.execute('select count(*) from dbstat').fetchone(); \
+assert hasattr(conn, 'set_progress_handler'), 'set_progress_handler unavailable'; \
+assert hasattr(conn, 'interrupt'), 'interrupt unavailable'; \
+conn.close(); print(f'pysqlite3 OK: SQLite {v} >= {required}, FTS5 contentless_delete + dbstat + progress handler available')"
 
 # Health check — /api/readyz returns 503 on unhealthy (unlike /api/health which always 200s)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

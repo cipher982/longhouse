@@ -1,10 +1,20 @@
 name: Publish Runtime Image
 
+# "Published" means: the image is in GHCR by digest and this run uploaded its
+# publication receipt. Deploy and Verify, Promote Rings (dogfood fast lane) and
+# the promote scripts read exactly that. The OCI archive in the object store
+# follows in Archive Runtime Image (runtime-image-archive.yml), off this path;
+# production promotion requires it (scripts/ops/promotion_gates.py, gate
+# `archive`). Timing and layer layout: control-plane
+# docs/specs/runtime-image-build.md.
+
 on:
   push:
     branches: [main]
     tags:
       - "runtime-v*"
+    # This list is the whole scope check: a push that touches none of these
+    # never starts a run (there is no separate scope-detection job).
     paths:
       - '.dockerignore'
       - 'bun.lock'
@@ -29,13 +39,15 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  # Image preparation is immutable per source SHA. Pushes to main share one
-  # group so a queued build for a commit main has already moved past is
-  # dropped (only the newest verified main commit deploys, and it contains the
-  # older ones); a running build always finishes. Tags and manual runs keep
-  # their own per-SHA group. Deploy and Verify treats a dropped prerequisite
-  # as superseded, not failed (wait-for-ci superseded_branch).
-  group: runtime-image-${{ github.repository }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'main' || github.sha }}
+  # One group per source SHA: a newer push never waits behind an older build.
+  # Builds may therefore finish out of order, and nothing depends on finish
+  # order. Every receipt carries source_order = this run's number, which GitHub
+  # assigns in push order; Promote Rings takes the highest-numbered successful
+  # run and never moves dogfood to a commit that does not contain what it
+  # serves; the control plane orders deployments by source_order; and `latest`
+  # moves only for main's head (Resolve image tags). A rerun of the same SHA
+  # waits for the first.
+  group: runtime-image-${{ github.repository }}-${{ github.sha }}
   cancel-in-progress: false
 
 permissions:
@@ -43,54 +55,15 @@ permissions:
   packages: write
 
 jobs:
-  changes:
-    timeout-minutes: 10
-    name: "Detect runtime image scope"
-    runs-on: ubuntu-24.04-arm
-    outputs:
-      runtime_image: ${{ steps.decide.outputs.runtime_image }}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        if: ${{ github.event_name == 'push' }}
-        with:
-          fetch-depth: 1
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        if: ${{ github.event_name == 'push' }}
-        id: filter
-        with:
-          filters: .github/path-filters.yml
-          predicate-quantifier: some-with-excludes
-      - name: Resolve runtime image scope
-        id: decide
-        run: |
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "runtime_image=${{ steps.filter.outputs.runtime_image }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "runtime_image=true" >> "$GITHUB_OUTPUT"
-          fi
-
   build-and-push:
     timeout-minutes: 45
     runs-on: cube-maint
-    needs: changes
-    env:
-      # Only the publishing job receives the scoped archive authority, as
-      # ordinary environment values. Public code never names a secret manager.
-      RUNTIME_ARTIFACT_S3_ENDPOINT: ${{ secrets.RUNTIME_ARTIFACT_S3_ENDPOINT }}
-      RUNTIME_ARTIFACT_S3_BUCKET: ${{ secrets.RUNTIME_ARTIFACT_S3_BUCKET }}
-      RUNTIME_ARTIFACT_S3_PREFIX: ${{ secrets.RUNTIME_ARTIFACT_S3_PREFIX }}
-      RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID: ${{ secrets.RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID }}
-      RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY: ${{ secrets.RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY }}
-    if: ${{ needs.changes.outputs.runtime_image == 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
-      - name: Setup uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
 
       - name: Stage build identity for runtime image
         run: python3 scripts/build/generate_build_identity.py
@@ -99,6 +72,37 @@ jobs:
         id: schema
         run: python3 scripts/ops/runtime-schema.py --source-root . --github-output "$GITHUB_OUTPUT"
 
+      # The layer cache is a type=local directory on cube's disk that several
+      # builds now read at once. Reads are safe; BuildKit's index update takes a
+      # non-blocking lock and fails the build if another export holds it, so
+      # only the build holding this flock exports (the rest still import).
+      # The holder is a background process the release step below (or the
+      # runner's end-of-job cleanup) kills.
+      - name: Claim the layer cache's single writer slot
+        id: cache
+        env:
+          CACHE_DIR: /ci-cache/buildkit/longhouse-runtime
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$CACHE_DIR")"
+          state="$RUNNER_TEMP/cache-writer"
+          (
+            exec 9>"$CACHE_DIR.writer.lock"
+            if flock -n 9; then
+              echo "$BASHPID" > "$state.pid"
+              echo held > "$state"
+              exec sleep 2700
+            fi
+            echo busy > "$state"
+          ) >/dev/null 2>&1 &
+          for _ in $(seq 100); do [[ -s "$state" ]] && break; sleep 0.05; done
+          if [[ "$(cat "$state" 2>/dev/null)" == "held" ]]; then
+            echo "cache_to=type=local,dest=$CACHE_DIR,mode=max,ignore-error=true" >> "$GITHUB_OUTPUT"
+            echo "This build exports the layer cache."
+          else
+            echo "cache_to=" >> "$GITHUB_OUTPUT"
+            echo "Another build holds the cache writer slot; importing only."
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -110,21 +114,36 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # `latest` is a convenience tag; nothing deploys from it (every ring is
+      # promoted by digest). It moves only when this commit is main's head as
+      # the build starts, so an older build finishing late cannot move it back
+      # past a newer one; at worst it trails by one commit until the next push.
       - name: Resolve image tags
         id: image
         env:
           IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/longhouse-runtime
           HEAD_SHA: ${{ github.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          tags="${IMAGE_NAME}:${HEAD_SHA}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tags="${tags}"$'\n'"${IMAGE_NAME}:${GITHUB_REF_NAME}"
+          elif [[ "${GITHUB_REF_TYPE}" == "branch" && "${GITHUB_REF_NAME}" == "$DEFAULT_BRANCH" ]]; then
+            branch_head="$(curl --fail --silent --show-error --max-time 10 \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github.sha" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}" || true)"
+            if [[ "$branch_head" == "$HEAD_SHA" ]]; then
+              tags="${tags}"$'\n'"${IMAGE_NAME}:latest"
+            else
+              echo "${DEFAULT_BRANCH} is at ${branch_head:-<unread>}, not ${HEAD_SHA}; leaving latest alone."
+            fi
+          fi
           {
             echo "tags<<EOF"
-            echo "${IMAGE_NAME}:${HEAD_SHA}"
-            if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-              echo "${IMAGE_NAME}:${GITHUB_REF_NAME}"
-            elif [[ "${GITHUB_REF_TYPE}" == "branch" && "${GITHUB_REF_NAME}" == "$DEFAULT_BRANCH" ]]; then
-              echo "${IMAGE_NAME}:latest"
-            fi
+            echo "$tags"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -149,56 +168,17 @@ jobs:
           # re-downloaded on most builds) and the export itself took 55-216 s.
           # ci-cache-gc.timer on cube bounds the directory.
           cache-from: type=local,src=/ci-cache/buildkit/longhouse-runtime
-          cache-to: type=local,dest=/ci-cache/buildkit/longhouse-runtime,mode=max,ignore-error=true
+          cache-to: ${{ steps.cache.outputs.cache_to }}
 
-      - name: Write immutable qualification metadata
-        env:
-          SOURCE_SHA: ${{ github.sha }}
-          SOURCE_WORKFLOW: ${{ github.workflow }}
-          SOURCE_ORDER: ${{ github.run_number }}
-          QUALIFICATION_ID: runtime-image-${{ github.run_id }}-${{ github.run_attempt }}
-          SCHEMA_VERSION: ${{ steps.schema.outputs.schema_version }}
-          SCHEMA_MIN_READER: ${{ steps.schema.outputs.schema_min_reader }}
-          SCHEMA_MAX_READER: ${{ steps.schema.outputs.schema_max_reader }}
+      - name: Release the layer cache's writer slot
+        if: always()
         run: |
-          python3 - "$RUNNER_TEMP/qualification.json" <<'PY'
-          import json
-          import os
-          import sys
-          with open(sys.argv[1], "w", encoding="utf-8") as handle:
-              json.dump(
-                  {
-                      "source_workflow": os.environ["SOURCE_WORKFLOW"],
-                      "source_order": int(os.environ["SOURCE_ORDER"]),
-                      "source_sha": os.environ["SOURCE_SHA"],
-                      "qualification_id": os.environ["QUALIFICATION_ID"],
-                      "schema_version": int(os.environ["SCHEMA_VERSION"]),
-                      "schema_min_reader": int(os.environ["SCHEMA_MIN_READER"]),
-                      "schema_max_reader": int(os.environ["SCHEMA_MAX_READER"]),
-                      "gates": {"image_build": "success"},
-                  },
-                  handle,
-                  sort_keys=True,
-              )
-          PY
+          pid_file="$RUNNER_TEMP/cache-writer.pid"
+          if [[ -s "$pid_file" ]]; then kill "$(cat "$pid_file")" 2>/dev/null || true; fi
 
-      - name: Publish immutable OCI archive
-        env:
-          IMAGE_REF: ghcr.io/${{ github.repository_owner }}/longhouse-runtime@${{ steps.build.outputs.digest }}
-          SOURCE_SHA: ${{ github.sha }}
-          BUILD_RUN_ID: ${{ github.run_id }}
-          BUILD_ATTEMPT: ${{ github.run_attempt }}
-          REGISTRY_USERNAME: ${{ github.actor }}
-          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          uv run --project server python scripts/ops/release-artifacts.py publish \
-            --image "$IMAGE_REF" \
-            --source-sha "$SOURCE_SHA" \
-            --build-run-id "$BUILD_RUN_ID" \
-            --build-attempt "$BUILD_ATTEMPT" \
-            --build-identity .build/build-identity.json \
-            --qualification-json "$RUNNER_TEMP/qualification.json" \
-            --qualification-id "runtime-image-${{ github.run_id }}-${{ github.run_attempt }}"
+      # The receipt directory is uploaded as one artifact. runtime-publication.json
+      # is what every consumer reads; build-identity.json and qualification.json
+      # are the inputs Archive Runtime Image needs to seal the OCI archive.
       - name: Write immutable publication receipt
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
@@ -208,13 +188,20 @@ jobs:
           BUILD_RUN_ID: ${{ github.run_id }}
           BUILD_ATTEMPT: ${{ github.run_attempt }}
           QUALIFICATION_ID: runtime-image-${{ github.run_id }}-${{ github.run_attempt }}
+          SCHEMA_VERSION: ${{ steps.schema.outputs.schema_version }}
+          SCHEMA_MIN_READER: ${{ steps.schema.outputs.schema_min_reader }}
+          SCHEMA_MAX_READER: ${{ steps.schema.outputs.schema_max_reader }}
         run: |
-          python3 - "$RUNNER_TEMP/runtime-publication.json" <<'PY'
+          mkdir -p "$RUNNER_TEMP/runtime-publication"
+          cp .build/build-identity.json "$RUNNER_TEMP/runtime-publication/build-identity.json"
+          python3 - "$RUNNER_TEMP/runtime-publication" <<'PY'
           import json
           import os
           import re
           import sys
+          from pathlib import Path
 
+          out = Path(sys.argv[1])
           digest = os.environ["IMAGE_DIGEST"]
           source_sha = os.environ["SOURCE_SHA"]
           source_order = os.environ["SOURCE_ORDER"]
@@ -228,7 +215,22 @@ jobs:
               raise SystemExit("Publication source order is not a positive workflow run number")
           if not build_run_id.isdigit() or not build_attempt.isdigit():
               raise SystemExit("Publication run identity is malformed")
-          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+          with open(out / "qualification.json", "w", encoding="utf-8") as handle:
+              json.dump(
+                  {
+                      "source_workflow": os.environ["SOURCE_WORKFLOW"],
+                      "source_order": int(source_order),
+                      "source_sha": source_sha,
+                      "qualification_id": os.environ["QUALIFICATION_ID"],
+                      "schema_version": int(os.environ["SCHEMA_VERSION"]),
+                      "schema_min_reader": int(os.environ["SCHEMA_MIN_READER"]),
+                      "schema_max_reader": int(os.environ["SCHEMA_MAX_READER"]),
+                      "gates": {"image_build": "success"},
+                  },
+                  handle,
+                  sort_keys=True,
+              )
+          with open(out / "runtime-publication.json", "w", encoding="utf-8") as handle:
               json.dump(
                   {
                       "schema": "longhouse.runtime-publication.v1",
@@ -249,6 +251,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runtime-publication-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/runtime-publication.json
+          path: ${{ runner.temp }}/runtime-publication/
           if-no-files-found: error
           retention-days: 90
