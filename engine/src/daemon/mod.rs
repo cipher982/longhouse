@@ -708,7 +708,11 @@ fn managed_provider_state_dirs() -> Vec<PathBuf> {
 /// Run the connect daemon. This function blocks until shutdown signal.
 /// The daemon loop's state: every local `run` sets up that the loop or its
 /// teardown reads. Fields are declared in reverse of the order `run` created
-/// them, so they drop in the same order the locals did.
+/// them, so they drop among themselves in the order the locals did. `state` is
+/// declared last, so it drops before the locals that stay in `run`
+/// (`_path_shutdown_guard`, `db_pool`, `_caffeinate`, the pinned timers); none of
+/// those depends on a field's drop (the guard re-sends a shutdown the teardown
+/// already sent). Keep new fields in reverse creation order.
 struct DaemonState {
     sigint: tokio::signal::unix::Signal,
     sigterm: tokio::signal::unix::Signal,
