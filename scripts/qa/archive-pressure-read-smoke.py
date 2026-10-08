@@ -60,8 +60,6 @@ def set_repair(base_url: str, token: str, device: str, mode: str, lease_seconds:
         method="POST",
         payload={
             "mode": mode,
-            "include_huge": False,
-            "max_tick_bytes": 512 * 1024 * 1024,
             "lease_seconds": lease_seconds,
         },
     )
