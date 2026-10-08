@@ -10,7 +10,7 @@ use std::net::Shutdown;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::os::unix::process::CommandExt;
 use uuid::Uuid;
@@ -26,14 +26,14 @@ use uuid::Uuid;
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use crate::managed_launch_lifecycle::{
-    DeferredNotices, FOREGROUND_REGISTRATION_TIMEOUT, ManagedLaunchResponse,
-    ManagedLaunchTransaction, register_managed_launch_with_timeout,
-    spawn_managed_registration_retry_with_hook, spawn_managed_resume_registration_retry,
+    register_managed_launch_with_timeout, spawn_managed_registration_retry_with_hook,
+    spawn_managed_resume_registration_retry, DeferredNotices, ManagedLaunchResponse,
+    ManagedLaunchTransaction, FOREGROUND_REGISTRATION_TIMEOUT,
 };
 use crate::managed_launch_payload::{
     ManagedLaunchProvenance, ManagedLaunchRegistration, PermissionMode,
 };
-use crate::managed_terminal::{ForegroundTerminal, ManagedTerminalEvent, terminal_state_for_exit};
+use crate::managed_terminal::{terminal_state_for_exit, ForegroundTerminal, ManagedTerminalEvent};
 use crate::omp_helm_control::OMP_HELM_TRANSPORT;
 
 const STATE_DIR_NAME: &str = "managed-local/omp-helm";
@@ -3703,8 +3703,8 @@ mod tests {
                     vec![1, 1, 0, 0],
                 );
                 assert_eq!(
-                    events.last().unwrap()["payload"]["delegation"]["recent_items"][0]["native_progress"]
-                        ["duration_ms"],
+                    events.last().unwrap()["payload"]["delegation"]["recent_items"][0]
+                        ["native_progress"]["duration_ms"],
                     2100,
                 );
             }));
