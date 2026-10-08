@@ -150,13 +150,14 @@ class WakeWiringTests(unittest.TestCase):
 
     def test_hosted_live_qa_wakes_the_promoter_and_the_promoter_waits_for_it(self) -> None:
         qa = (self.WORKFLOWS / "hosted-live-qa.yml").read_text(encoding="utf-8")
-        steps = re.findall(r"^      - name: (.+)$", qa, re.MULTILINE)
-        self.assertEqual(steps[-1], "Wake Promote Rings", "the wake must come after the verdict upload")
-        wake = qa[qa.index("      - name: Wake Promote Rings"):]
+        self.assertIn("\n  wake-promoter:\n", qa)
+        wake = qa[qa.index("\n  wake-promoter:\n"):]
+        self.assertIn("needs: hosted-live-qa", wake, "the wake must follow the verdict upload")
         self.assertIn("promote-rings.yml/dispatches", wake)
         self.assertIn("after_run:$run", wake)
         self.assertIn("continue-on-error: true", wake, "a failed wake must not fail QA's own qualification")
-        self.assertRegex(qa, r"(?m)^  actions: write$")
+        self.assertIn("actions: write", wake)
+        self.assertNotRegex(qa[:qa.index("\njobs:")], r"actions: write", "only the wake job may dispatch workflows")
         rings = (self.WORKFLOWS / "promote-rings.yml").read_text(encoding="utf-8")
         self.assertRegex(rings, r"(?m)^      after_run:$")
         self.assertRegex(rings, r"(?m)^    needs: wake$")

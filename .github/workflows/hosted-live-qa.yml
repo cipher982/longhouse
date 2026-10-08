@@ -32,8 +32,6 @@ on:
         required: false
         type: string
 permissions:
-  # actions: write only to dispatch Promote Rings (the last step).
-  actions: write
   contents: read
   packages: read
 concurrency:
@@ -56,6 +54,9 @@ jobs:
     runs-on: cube-browser
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 25
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
+      deployed: ${{ steps.deploy_qa.outcome }}
     env:
       CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
@@ -466,17 +467,27 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      # A passed verdict can unblock production, so wake the promoter. Its
-      # workflow_run trigger never fires for this workflow: Deploy and Verify
-      # dispatches QA with GITHUB_TOKEN, and GitHub creates no run from an event
-      # that token caused, except workflow_dispatch (which is what this is).
-      # Promote Rings waits for this run to complete (`after_run`) before it
-      # reads the verdict, because the gate accepts only a completed run.
-      # continue-on-error: a failed wake must not fail the run, because the QA
-      # gate accepts only a successful one; Sauron's tick covers a lost wake.
-      - name: Wake Promote Rings
-        if: success() && steps.verdict.outputs.verdict == 'passed' && github.ref == 'refs/heads/main'
-        continue-on-error: true
+  # A passed verdict on the commit QA deployed can unblock production, so wake
+  # the promoter. Its workflow_run trigger never fires for this workflow: Deploy
+  # and Verify dispatches QA with GITHUB_TOKEN, and GitHub creates no run from an
+  # event that token caused, except workflow_dispatch (which is what this is).
+  # Promote Rings waits for this run to complete (`after_run`) before it reads
+  # the verdict, because the gate accepts only a completed run. A job of its own
+  # so only it holds `actions: write`; continue-on-error so a failed wake cannot
+  # fail the run the QA gate reads (Sauron longhouse-ring-wake covers a lost one).
+  wake-promoter:
+    name: "Wake Promote Rings"
+    needs: hosted-live-qa
+    if: >-
+      github.ref == 'refs/heads/main' && needs.hosted-live-qa.result == 'success' &&
+      needs.hosted-live-qa.outputs.verdict == 'passed' && needs.hosted-live-qa.outputs.deployed == 'success'
+    runs-on: cube-gate
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch Promote Rings
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -485,6 +496,7 @@ jobs:
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "Accept: application/vnd.github+json" \
             --header "X-GitHub-Api-Version: 2022-11-28" \
+            --header "Content-Type: application/json" \
             --data "$(jq -cn --arg run "$GITHUB_RUN_ID" '{ref:"main",inputs:{after_run:$run}}')" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/promote-rings.yml/dispatches"
           echo "Dispatched Promote Rings (after_run=$GITHUB_RUN_ID)"
