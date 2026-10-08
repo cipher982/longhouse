@@ -22,7 +22,9 @@ git merge-base --is-ancestor "$SHA" origin/main \
   || die "$SHA is not on origin/main; push it first (only main ships to TestFlight)"
 
 before="$(gh run list -R "$REPO" -w "$WORKFLOW" --limit 1 --json databaseId -q '.[0].databaseId // 0')"
-gh workflow run "$WORKFLOW" -R "$REPO" --ref main -f source_sha="$SHA" ${WHATS_NEW:+-f whats_new="$WHATS_NEW"} ${INTERNAL_ONLY:+-f internal_only=true}
+INTERNAL_ONLY_INPUT=false
+if [ "${INTERNAL_ONLY:-}" = "1" ]; then INTERNAL_ONLY_INPUT=true; fi
+gh workflow run "$WORKFLOW" -R "$REPO" --ref main -f source_sha="$SHA" ${WHATS_NEW:+-f whats_new="$WHATS_NEW"} -f internal_only="$INTERNAL_ONLY_INPUT"
 
 run_id=""
 for _ in $(seq 1 24); do

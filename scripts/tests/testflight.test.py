@@ -275,7 +275,7 @@ def main() -> None:
     fake_landing.write('export const IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/ABC123";\n')
     fake_landing.close()
     testflight.LANDING_LINK_FILE = Path(fake_landing.name)
-    args = argparse.Namespace(build="42", version="0.1.56", whats_new="note for testers")
+    args = argparse.Namespace(build="42", version="0.1.56", whats_new="note for testers", internal_only=False)
 
     try:
         # the token is a real ES256 JWT with the right claims
@@ -362,6 +362,15 @@ def main() -> None:
         assert "internal group" in err.getvalue() and "example.test" not in err.getvalue() + out.getvalue(), err.getvalue()
         run_publish(args)
         assert sorted(FAKE.internal_members) == ["T1", "T2"]
+
+        # 3d''. internal-only: the build reaches the internal group with its note and notification,
+        # and no request attaches it to a public group or submits it for Beta App Review
+        mark = len(FAKE.calls)
+        internal_only = run_publish(argparse.Namespace(build="42", version="0.1.56", whats_new="note for testers", internal_only=True))
+        assert internal_only["internal_only"] is True and internal_only["submitted_this_run"] is False, internal_only
+        new_calls = FAKE.calls[mark:]
+        assert not any("betaAppReviewSubmissions" in call or call.endswith("/relationships/builds") for call in new_calls), new_calls
+        assert any("betaBuildLocalizations" in call for call in new_calls) and any("buildBetaDetail" in call for call in new_calls), new_calls
 
         # 3e. a build the group lists late is waited for; one it never lists fails the publish
         FAKE.internal_hidden_reads = 2

@@ -508,8 +508,23 @@ def _default_whats_new() -> str:
     return f"Version {marketing_version()}. {subject}".strip()[:4000]
 
 
-def _publish_internal_only(app_id: str, config: dict, build: str, version: str) -> None:
-    """Make the build reach the internal group only: no public link, no Beta App Review."""
+def _enable_auto_notify(build_id: str) -> None:
+    beta_detail = call("GET", f"/v1/builds/{build_id}/buildBetaDetail")["data"]
+    if not beta_detail["attributes"].get("autoNotifyEnabled"):
+        call(
+            "PATCH",
+            f"/v1/buildBetaDetails/{beta_detail['id']}",
+            {"data": {"type": "buildBetaDetails", "id": beta_detail["id"], "attributes": {"autoNotifyEnabled": True}}},
+        )
+
+
+def _publish_internal_only(app_id: str, config: dict, build_id: str, build: str, version: str, whats_new: str) -> None:
+    """Make the build reach the internal group only: no public link, no Beta App Review.
+
+    Internal testers still get the what-to-test note and the new-build notification.
+    """
+    _upsert_whats_new(build_id, config, whats_new)
+    _enable_auto_notify(build_id)
     internal = _ensure_internal_group(app_id, config)
     testers = _ensure_internal_testers(internal["id"])
     for attempt in range(POLL_ATTEMPTS):
@@ -530,13 +545,6 @@ def _publish_internal_only(app_id: str, config: dict, build: str, version: str) 
 
 def cmd_publish(args: argparse.Namespace) -> None:
     config = load_config()
-    feedback = require_env("TESTFLIGHT_FEEDBACK_EMAIL")["TESTFLIGHT_FEEDBACK_EMAIL"]
-    contact = require_env(
-        "TESTFLIGHT_REVIEW_CONTACT_FIRST",
-        "TESTFLIGHT_REVIEW_CONTACT_LAST",
-        "TESTFLIGHT_REVIEW_CONTACT_PHONE",
-        "TESTFLIGHT_REVIEW_CONTACT_EMAIL",
-    )
     app = find_app(config)
     app_id = app["id"]
     version = args.version or marketing_version()
@@ -547,21 +555,22 @@ def cmd_publish(args: argparse.Namespace) -> None:
     if build["attributes"]["processingState"] != "VALID":
         die(f"build {args.build} is {build['attributes']['processingState']}; run wait-build first")
     build_id = build["id"]
+    whats_new = args.whats_new or _default_whats_new()
     if args.internal_only:
-        _publish_internal_only(app_id, config, args.build, version)
+        _publish_internal_only(app_id, config, build_id, args.build, version, whats_new)
         return
 
+    feedback = require_env("TESTFLIGHT_FEEDBACK_EMAIL")["TESTFLIGHT_FEEDBACK_EMAIL"]
+    contact = require_env(
+        "TESTFLIGHT_REVIEW_CONTACT_FIRST",
+        "TESTFLIGHT_REVIEW_CONTACT_LAST",
+        "TESTFLIGHT_REVIEW_CONTACT_PHONE",
+        "TESTFLIGHT_REVIEW_CONTACT_EMAIL",
+    )
     _upsert_beta_localization(app_id, config, feedback)
     _update_review_detail(app_id, config, contact)
-    _upsert_whats_new(build_id, config, args.whats_new or _default_whats_new())
-
-    beta_detail = call("GET", f"/v1/builds/{build_id}/buildBetaDetail")["data"]
-    if not beta_detail["attributes"].get("autoNotifyEnabled"):
-        call(
-            "PATCH",
-            f"/v1/buildBetaDetails/{beta_detail['id']}",
-            {"data": {"type": "buildBetaDetails", "id": beta_detail["id"], "attributes": {"autoNotifyEnabled": True}}},
-        )
+    _upsert_whats_new(build_id, config, whats_new)
+    _enable_auto_notify(build_id)
 
     group = _ensure_public_group(app_id, config)
     call(
