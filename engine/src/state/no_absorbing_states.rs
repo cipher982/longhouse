@@ -157,47 +157,25 @@ mod tests {
         // that does not exist. The producer may live outside the daemon, so the
         // invariant is asserted in two parts: the producer exists where it is
         // claimed to, and the daemon names the entry point that schedules it.
-        // The concat below must cover every file of the daemon module, or a
-        // scheduler moved into a new submodule would escape this check.
+        // Read every file of the daemon module, so a scheduler moved into a new
+        // submodule is still seen.
         let daemon_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/daemon");
-        let mut on_disk: Vec<String> = std::fs::read_dir(&daemon_dir)
+        let mut daemon_files: Vec<std::path::PathBuf> = std::fs::read_dir(&daemon_dir)
             .expect("read src/daemon")
-            .map(|entry| {
-                entry
-                    .expect("daemon dir entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .filter(|name| name.ends_with(".rs"))
+            .map(|entry| entry.expect("daemon dir entry").path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
             .collect();
-        on_disk.sort();
-        assert_eq!(
-            on_disk,
-            [
-                "archive_repair.rs",
-                "discovery_scans.rs",
-                "managed_observation.rs",
-                "mod.rs",
-                "path_jobs.rs",
-                "projection.rs",
-                "startup.rs",
-                "status_slots.rs",
-                "transcript_wake.rs",
-            ],
-            "add the new daemon file to this list and to the concat! below"
+        daemon_files.sort();
+        assert!(
+            !daemon_files.is_empty(),
+            "no daemon sources found in {}",
+            daemon_dir.display()
         );
-        let daemon = concat!(
-            include_str!("../daemon/mod.rs"),
-            include_str!("../daemon/archive_repair.rs"),
-            include_str!("../daemon/discovery_scans.rs"),
-            include_str!("../daemon/managed_observation.rs"),
-            include_str!("../daemon/path_jobs.rs"),
-            include_str!("../daemon/projection.rs"),
-            include_str!("../daemon/startup.rs"),
-            include_str!("../daemon/status_slots.rs"),
-            include_str!("../daemon/transcript_wake.rs"),
-        );
+        let daemon_source: String = daemon_files
+            .iter()
+            .map(|path| std::fs::read_to_string(path).expect("read daemon source"))
+            .collect();
+        let daemon = daemon_source.as_str();
         for (producer, producer_source, scheduled_entry, why) in [
             (
                 "run_check_tick",
