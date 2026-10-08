@@ -139,7 +139,6 @@ mod tests {
         }
     }
 
-
     /// A recovery function nothing calls is the bug, not the fix.
     ///
     /// The other tests here prove the recovery *functions* behave. None of them
@@ -158,7 +157,17 @@ mod tests {
         // that does not exist. The producer may live outside the daemon, so the
         // invariant is asserted in two parts: the producer exists where it is
         // claimed to, and the daemon names the entry point that schedules it.
-        let daemon = include_str!("../daemon.rs");
+        let daemon = concat!(
+            include_str!("../daemon/mod.rs"),
+            include_str!("../daemon/archive_repair.rs"),
+            include_str!("../daemon/discovery_scans.rs"),
+            include_str!("../daemon/managed_observation.rs"),
+            include_str!("../daemon/path_jobs.rs"),
+            include_str!("../daemon/projection.rs"),
+            include_str!("../daemon/startup.rs"),
+            include_str!("../daemon/status_slots.rs"),
+            include_str!("../daemon/transcript_wake.rs"),
+        );
         for (producer, producer_source, scheduled_entry, why) in [
             (
                 "run_check_tick",
@@ -179,7 +188,7 @@ mod tests {
             );
             assert!(
                 daemon.contains(scheduled_entry),
-                "daemon.rs does not schedule {scheduled_entry}, so {why}. A recovery path that \
+                "the daemon does not schedule {scheduled_entry}, so {why}. A recovery path that \
                  nothing schedules is indistinguishable from one that does not exist."
             );
         }

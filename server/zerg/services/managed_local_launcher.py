@@ -40,7 +40,7 @@ _MANAGED_LOCAL_NAME_MAX = 64
 # Providers whose Machine Agent emits managed-control lease snapshots in the
 # heartbeat, so the server reconciler observes channel readiness and promotes
 # the launcher's birth connection detached -> attached once the bridge is up.
-# Engine truth (engine/src/daemon.rs, payload.managed_sessions):
+# Engine truth (engine/src/daemon/, payload.managed_sessions):
 # leases_from_observations (codex) + leases_from_claude_channel_observations
 # (claude) + leases_from_opencode_server_observations (opencode) +
 # leases_from_cursor_helm_observations (cursor) + Pi channel observations.

@@ -8,6 +8,9 @@ and managed provider launches such as `longhouse codex`). Where it sits in the
 system: the Code map in [`ARCHITECTURE.md`](../ARCHITECTURE.md#code-map).
 
 - `src/pipeline/` parses and compresses transcripts; `src/shipping/` sends them.
+- `src/daemon/` is the engine loop: `mod.rs` holds `run`; helpers sit in
+  `discovery_scans`, `path_jobs`, `transcript_wake`, `managed_observation`,
+  `status_slots`, `projection`, `archive_repair` and `startup`.
 - `src/storage_v2_shipper/` turns sources into storage-v2 envelopes: `prepare`,
   `ship`, `reconcile` (host conflicts), `pending` (durable envelopes), `render`, and
   one module per non-file source (`opencode_source`, `cursor_store_source`,
