@@ -3029,12 +3029,6 @@ async fn run_archive_backlog_control_command(
             + chrono::Duration::seconds(lease_seconds as i64))
         .to_rfc3339());
     }
-    if let Some(max_tick_bytes) = payload.get("max_tick_bytes").and_then(Value::as_u64) {
-        control["max_tick_bytes"] = json!(max_tick_bytes);
-    }
-    if let Some(include_huge) = payload.get("include_huge").and_then(Value::as_bool) {
-        control["include_huge"] = json!(include_huge);
-    }
 
     let path =
         crate::config::get_agent_archive_repair_control_path().map_err(|err| CommandError {

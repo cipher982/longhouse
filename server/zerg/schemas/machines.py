@@ -246,15 +246,6 @@ class ArchiveBacklogControlRequest(UTCBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: ArchiveBacklogControlMode = Field(..., description="Archive repair mode to apply on the Machine Agent.")
-    max_tick_bytes: int | None = Field(
-        default=None,
-        ge=1,
-        description="Optional per-tick byte budget consumed by the Machine Agent archive scheduler.",
-    )
-    include_huge: bool = Field(
-        default=False,
-        description="Allow replaying archive ranges >=100MB in explicit drain mode.",
-    )
     lease_seconds: int = Field(
         default=3600,
         ge=60,

@@ -1,118 +1,14 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from zerg.cli.main import app
 from zerg.services.archive_backlog import collect_archive_backlog
-from zerg.services.archive_backlog import inspect_archive_backlog
-from zerg.services.archive_backlog import ready_archive_backlog
-from zerg.services.archive_backlog import retry_dead_archive_path
 from zerg.services.archive_backlog import write_archive_control
-from zerg.services.longhouse_paths import get_agent_db_path
-from zerg.services.longhouse_paths import get_agent_state_dir
 from zerg.services.longhouse_paths import get_agent_status_path
-
-
-def _create_spool_db(state_root: Path) -> None:
-    db_path = get_agent_db_path(state_root)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            """
-            CREATE TABLE spool_queue (
-                id INTEGER PRIMARY KEY,
-                provider TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                start_offset INTEGER NOT NULL,
-                end_offset INTEGER NOT NULL,
-                session_id TEXT,
-                created_at TEXT NOT NULL,
-                next_retry_at TEXT NOT NULL,
-                retry_count INTEGER NOT NULL DEFAULT 0,
-                last_error TEXT,
-                status TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO spool_queue
-              (provider, file_path, start_offset, end_offset, session_id, created_at, next_retry_at, status)
-            VALUES
-              ('codex', '/tmp/a.jsonl', 0, 1048576, 's1', '2026-06-01T00:00:00Z', '2026-06-02T00:00:00Z', 'pending'),
-              ('codex', '/tmp/a.jsonl', 1048576, 2097152, 's1',
-               '2026-06-01T00:01:00Z', '2026-06-02T00:01:00Z', 'pending'),
-              ('claude', '/tmp/dead.jsonl', 0, 10, 's2', '2026-06-01T00:02:00Z', '2026-06-02T00:02:00Z', 'dead')
-            """
-        )
-        conn.commit()
-
-
-def test_collect_archive_backlog_summarizes_sqlite_spool(tmp_path: Path):
-    _create_spool_db(tmp_path)
-
-    summary = collect_archive_backlog(tmp_path)
-
-    assert summary["state"] == "blocked"
-    assert summary["pending_ranges"] == 2
-    assert summary["pending_paths"] == 1
-    assert summary["pending_sessions"] == 1
-    assert summary["pending_bytes"] == 2 * 1024 * 1024
-    assert summary["dead_ranges"] == 1
-    assert summary["mode"] == "drain"
-    assert summary["providers"][0]["provider"] == "codex"
-
-
-def test_archive_inspect_and_control(tmp_path: Path):
-    _create_spool_db(tmp_path)
-
-    rows = inspect_archive_backlog(tmp_path, limit=1)
-    assert rows == [
-        {
-            "provider": "codex",
-            "file_path": "/tmp/a.jsonl",
-            "pending_ranges": 2,
-            "pending_sessions": 1,
-            "pending_bytes": 2 * 1024 * 1024,
-            "oldest_pending_at": "2026-06-01T00:00:00Z",
-            "newest_pending_at": "2026-06-01T00:01:00Z",
-            "next_retry_at_min": "2026-06-02T00:00:00Z",
-            "last_error": None,
-        }
-    ]
-
-    result = write_archive_control(
-        tmp_path,
-        mode="drain",
-        max_tick_bytes=123,
-        include_huge=True,
-        actor="menu_bar",
-        reason="catch up after first install",
-    )
-    payload = json.loads(Path(result["path"]).read_text())
-    assert payload["mode"] == "drain"
-    assert payload["max_tick_bytes"] == 123
-    assert payload["include_huge"] is True
-    assert payload["actor"] == "menu_bar"
-    assert payload["reason"] == "catch up after first install"
-    assert payload["expires_at"] > payload["updated_at"]
-
-
-def test_archive_status_cli_reads_state_root(tmp_path: Path):
-    _create_spool_db(tmp_path)
-    runner = CliRunner()
-
-    result = runner.invoke(app, ["archive", "status", "--state-root", str(tmp_path), "--json"])
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["mode"] == "drain"
-    assert payload["pending_ranges"] == 2
-    assert payload["pending_bytes"] == 2 * 1024 * 1024
 
 
 def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(tmp_path: Path):
@@ -236,113 +132,6 @@ def test_archive_status_watch_rejects_json(tmp_path: Path):
     assert result.exit_code != 0
 
 
-def test_archive_pause_class_huge_keeps_non_huge_drain_enabled(tmp_path: Path):
-    runner = CliRunner()
-    result = runner.invoke(app, ["archive", "pause", "--class", "huge", "--state-root", str(tmp_path)])
-
-    assert result.exit_code == 0
-    assert "huge-range replay paused" in result.stdout
-    payload = json.loads((get_agent_state_dir(tmp_path) / "archive-repair-control.json").read_text())
-    assert payload["mode"] == "drain"
-    assert payload["include_huge"] is False
-
-
-def test_ready_archive_backlog_makes_pending_ranges_eligible(tmp_path: Path):
-    _create_spool_db(tmp_path)
-
-    changed = ready_archive_backlog(tmp_path)
-
-    assert changed == 2
-    db_path = get_agent_db_path(tmp_path)
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT status, next_retry_at FROM spool_queue ORDER BY id",
-        ).fetchall()
-
-    assert rows[0][0] == "pending"
-    assert rows[1][0] == "pending"
-    assert rows[0][1] == rows[1][1]
-    assert rows[2][0] == "dead"
-
-
-def test_retry_dead_archive_path_revives_recoverable_dead_range(tmp_path: Path):
-    _create_spool_db(tmp_path)
-    db_path = get_agent_db_path(tmp_path)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("UPDATE spool_queue SET last_error = '525:<!DOCTYPE html>' WHERE status = 'dead'")
-        conn.commit()
-
-    changed = retry_dead_archive_path(tmp_path, file_path="/tmp/dead.jsonl")
-
-    assert changed == 1
-    with sqlite3.connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT status, retry_count, last_error FROM spool_queue WHERE file_path = '/tmp/dead.jsonl'",
-        ).fetchone()
-
-    assert row == (
-        "pending",
-        0,
-        "operator retried dead archive range; previous_error=525:<!DOCTYPE html>",
-    )
-
-
-def test_retry_dead_archive_path_leaves_nonrecoverable_dead_range_by_default(tmp_path: Path):
-    _create_spool_db(tmp_path)
-    db_path = get_agent_db_path(tmp_path)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("UPDATE spool_queue SET last_error = 'parse error' WHERE status = 'dead'")
-        conn.commit()
-
-    changed = retry_dead_archive_path(tmp_path, file_path="/tmp/dead.jsonl")
-
-    assert changed == 0
-    with sqlite3.connect(db_path) as conn:
-        status = conn.execute("SELECT status FROM spool_queue WHERE file_path = '/tmp/dead.jsonl'").fetchone()[0]
-    assert status == "dead"
-
-
-def test_archive_retry_dead_cli_revives_recoverable_range(tmp_path: Path):
-    _create_spool_db(tmp_path)
-    db_path = get_agent_db_path(tmp_path)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("UPDATE spool_queue SET last_error = '503:busy' WHERE status = 'dead'")
-        conn.commit()
-    runner = CliRunner()
-
-    result = runner.invoke(app, ["archive", "retry-dead", "--path", "/tmp/dead.jsonl", "--state-root", str(tmp_path)])
-
-    assert result.exit_code == 0
-    assert "Queued 1 dead-lettered archive range(s) for retry." in result.stdout
-    with sqlite3.connect(db_path) as conn:
-        status = conn.execute("SELECT status FROM spool_queue WHERE file_path = '/tmp/dead.jsonl'").fetchone()[0]
-    assert status == "pending"
-
-
-def test_archive_drain_retry_now_cli_resets_pending_clocks(tmp_path: Path):
-    _create_spool_db(tmp_path)
-    runner = CliRunner()
-
-    result = runner.invoke(app, ["archive", "drain", "--state-root", str(tmp_path), "--retry-now"])
-
-    assert result.exit_code == 0
-    assert "Archive retry clocks reset for 2 pending range(s)." in result.stdout
-
-
-def test_archive_drain_max_safe_excludes_huge_ranges(tmp_path: Path):
-    runner = CliRunner()
-
-    result = runner.invoke(app, ["archive", "drain", "--target", "max-safe", "--state-root", str(tmp_path)])
-
-    assert result.exit_code == 0
-    assert "Archive repair max-safe drain enabled" in result.stdout
-    payload = json.loads((get_agent_state_dir(tmp_path) / "archive-repair-control.json").read_text())
-    assert payload["mode"] == "drain"
-    assert payload["max_tick_bytes"] == 4 * 1024 * 1024 * 1024
-    assert payload["include_huge"] is False
-    assert payload["expires_at"] > payload["updated_at"]
-
-
 def test_archive_pause_is_persistent_but_drain_is_leased(tmp_path: Path):
     paused = write_archive_control(tmp_path, mode="paused")
     assert "expires_at" not in paused
@@ -351,11 +140,27 @@ def test_archive_pause_is_persistent_but_drain_is_leased(tmp_path: Path):
     assert drain["expires_at"] > drain["updated_at"]
 
 
-def test_archive_inspect_largest_cli_is_explicit(tmp_path: Path):
-    _create_spool_db(tmp_path)
+def test_archive_control_records_actor_and_reason(tmp_path: Path):
+    result = write_archive_control(
+        tmp_path,
+        mode="drain",
+        actor="menu_bar",
+        reason="catch up after first install",
+    )
+    payload = json.loads(Path(result["path"]).read_text())
+    assert payload["mode"] == "drain"
+    assert payload["actor"] == "menu_bar"
+    assert payload["reason"] == "catch up after first install"
+    assert payload["expires_at"] > payload["updated_at"]
+    assert "max_tick_bytes" not in payload
+
+
+def test_archive_status_without_engine_status_reports_an_empty_backlog(tmp_path: Path):
     runner = CliRunner()
 
-    result = runner.invoke(app, ["archive", "inspect", "--largest", "--limit", "1", "--state-root", str(tmp_path)])
+    result = runner.invoke(app, ["archive", "status", "--state-root", str(tmp_path), "--json"])
 
     assert result.exit_code == 0
-    assert "codex 2.0 MB 2 range(s) /tmp/a.jsonl" in result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["pending_ranges"] == 0
+    assert payload["pending_bytes"] == 0

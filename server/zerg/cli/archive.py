@@ -14,11 +14,6 @@ import typer
 
 from zerg.config import get_settings
 from zerg.services.archive_backlog import collect_archive_backlog
-from zerg.services.archive_backlog import dead_letter_archive_path
-from zerg.services.archive_backlog import inspect_archive_backlog
-from zerg.services.archive_backlog import parse_byte_budget
-from zerg.services.archive_backlog import ready_archive_backlog
-from zerg.services.archive_backlog import retry_dead_archive_path
 from zerg.services.archive_backlog import write_archive_control
 from zerg.services.archive_store import FilesystemArchiveStore
 
@@ -320,42 +315,11 @@ def speed_command(
     )
 
 
-@app.command("inspect")
-def inspect_command(
-    limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum pending paths to show."),
-    largest: bool = typer.Option(False, "--largest", help="Sort by pending bytes descending."),
-    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
-    state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
-) -> None:
-    """List the largest pending archive paths."""
-
-    _ = largest
-    rows = inspect_archive_backlog(state_root, limit=limit)
-    if json_output:
-        typer.echo(json.dumps(rows, indent=2))
-        return
-    for row in rows:
-        provider = row["provider"]
-        pending_bytes = _format_bytes(row["pending_bytes"])
-        pending_ranges = row["pending_ranges"]
-        file_path = row["file_path"]
-        typer.echo(f"{provider} {pending_bytes} {pending_ranges} range(s) {file_path}")
-
-
 @app.command("pause")
 def pause_command(
-    archive_class: str | None = typer.Option(None, "--class", help="Archive class to pause. Supported: huge."),
     state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
 ) -> None:
     """Pause local archive repair replay."""
-
-    if archive_class:
-        normalized_class = archive_class.strip().lower()
-        if normalized_class != "huge":
-            raise typer.BadParameter("--class currently supports only 'huge'")
-        result = write_archive_control(state_root, mode="drain", include_huge=False)
-        typer.echo(f"Archive repair huge-range replay paused; non-huge drain remains enabled: {result['path']}")
-        return
 
     result = write_archive_control(state_root, mode="paused")
     typer.echo(f"Archive repair paused: {result['path']}")
@@ -364,9 +328,6 @@ def pause_command(
 @app.command("resume")
 def resume_command(
     mode: str = typer.Option("drain", "--mode", help="Resume mode: trickle or drain."),
-    budget: str | None = typer.Option(None, "--budget", help="Per-tick byte budget, e.g. 512MB or 4GB."),
-    include_huge: bool = typer.Option(True, "--include-huge/--exclude-huge", help="Allow ranges >=100MB."),
-    retry_now: bool = typer.Option(False, "--retry-now", help="Make pending archive ranges eligible immediately."),
     max_minutes: int = typer.Option(60, "--max-minutes", min=1, help="Expire resumed repair automatically."),
     state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
 ) -> None:
@@ -375,22 +336,13 @@ def resume_command(
     result = write_archive_control(
         state_root,
         mode=mode,
-        max_tick_bytes=parse_byte_budget(budget),
-        include_huge=include_huge,
         lease_minutes=max_minutes,
     )
     typer.echo(f"Archive repair resumed in {result['mode']} mode: {result['path']}")
-    if retry_now:
-        changed = ready_archive_backlog(state_root)
-        typer.echo(f"Archive retry clocks reset for {changed} pending range(s).")
 
 
 @app.command("drain")
 def drain_command(
-    budget: str = typer.Option("4GB", "--budget", help="Per-tick byte budget, e.g. 4GB."),
-    target: str | None = typer.Option(None, "--target", help="Drain target. Supported: max-safe."),
-    include_huge: bool = typer.Option(True, "--include-huge/--exclude-huge", help="Allow ranges >=100MB."),
-    retry_now: bool = typer.Option(False, "--retry-now", help="Make pending archive ranges eligible immediately."),
     max_minutes: int = typer.Option(
         60,
         "--max-minutes",
@@ -401,56 +353,8 @@ def drain_command(
 ) -> None:
     """Switch archive repair to explicit drain mode."""
 
-    normalized_target = str(target or "").strip().lower()
-    if normalized_target and normalized_target != "max-safe":
-        raise typer.BadParameter("--target currently supports only 'max-safe'")
-    effective_include_huge = False if normalized_target == "max-safe" else include_huge
-    result = write_archive_control(
-        state_root,
-        mode="drain",
-        max_tick_bytes=parse_byte_budget(budget),
-        include_huge=effective_include_huge,
-        lease_minutes=max_minutes,
-    )
-    if normalized_target == "max-safe":
-        typer.echo(f"Archive repair max-safe drain enabled: {result['path']}")
-    else:
-        typer.echo(f"Archive repair drain enabled: {result['path']}")
-    if retry_now:
-        changed = ready_archive_backlog(state_root)
-        typer.echo(f"Archive retry clocks reset for {changed} pending range(s).")
-
-
-@app.command("dead-letter")
-def dead_letter_command(
-    file_path: str = typer.Option(..., "--path", help="Exact source path to dead-letter."),
-    reason: str = typer.Option(..., "--reason", help="Operator reason recorded on pending ranges."),
-    state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
-) -> None:
-    """Move pending ranges for one source path to dead-letter state."""
-
-    changed = dead_letter_archive_path(state_root, file_path=file_path, reason=reason)
-    typer.echo(f"Dead-lettered {changed} pending archive range(s).")
-
-
-@app.command("retry-dead")
-def retry_dead_command(
-    file_path: str = typer.Option(..., "--path", help="Exact source path to retry."),
-    recoverable_only: bool = typer.Option(
-        True,
-        "--recoverable-only/--all",
-        help="Only retry dead ranges with recoverable host/network errors.",
-    ),
-    state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
-) -> None:
-    """Move dead-lettered archive ranges for one source path back to pending retry."""
-
-    changed = retry_dead_archive_path(
-        state_root,
-        file_path=file_path,
-        recoverable_only=recoverable_only,
-    )
-    typer.echo(f"Queued {changed} dead-lettered archive range(s) for retry.")
+    result = write_archive_control(state_root, mode="drain", lease_minutes=max_minutes)
+    typer.echo(f"Archive repair drain enabled: {result['path']}")
 
 
 @app.command("backfill-previews")

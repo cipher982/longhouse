@@ -3952,17 +3952,6 @@ export interface components {
              */
             mode: "paused" | "trickle" | "drain";
             /**
-             * Max Tick Bytes
-             * @description Optional per-tick byte budget consumed by the Machine Agent archive scheduler.
-             */
-            max_tick_bytes?: number | null;
-            /**
-             * Include Huge
-             * @description Allow replaying archive ranges >=100MB in explicit drain mode.
-             * @default false
-             */
-            include_huge: boolean;
-            /**
              * Lease Seconds
              * @description Expiry for trickle/drain control; ignored for paused mode.
              * @default 3600

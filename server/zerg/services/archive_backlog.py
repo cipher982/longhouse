@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from collections.abc import Mapping
 from datetime import datetime
 from datetime import timedelta
@@ -11,29 +10,8 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
-from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_state_dir
 from zerg.services.longhouse_paths import get_agent_status_path
-
-HUGE_RANGE_BYTES = 100 * 1024 * 1024
-DEFAULT_TRICKLE_TICK_BYTES = 512 * 1024 * 1024
-DEFAULT_DRAIN_TICK_BYTES = 4 * 1024 * 1024 * 1024
-RECOVERABLE_DEAD_ERROR_PATTERNS = (
-    "%Archive ingest backlog is throttled%",
-    "500:%",
-    "502:%",
-    "503:%",
-    "504:%",
-    "520:%",
-    "521:%",
-    "522:%",
-    "523:%",
-    "524:%",
-    "525:%",
-    "526:%",
-    "527:%",
-    "error sending request for url (%",
-)
 
 
 def _utc_now_iso() -> str:
@@ -133,61 +111,17 @@ def collect_archive_backlog(
             engine_status_payload=engine_status_payload,
         )
 
-    db_path = get_agent_db_path(base_dir)
-    if not db_path.exists():
-        result = default_archive_backlog(source="sqlite")
-        _attach_shipper_diagnostics(result, engine_status_payload)
-        return result
-
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        if not _has_spool_queue(conn):
-            result = default_archive_backlog(source="sqlite")
-        else:
-            result = _collect_archive_backlog_from_conn(conn, source="sqlite")
-        _attach_shipper_diagnostics(result, engine_status_payload)
-        return result
-
-
-def inspect_archive_backlog(base_dir: Path | None = None, *, limit: int = 20) -> list[dict[str, Any]]:
-    db_path = get_agent_db_path(base_dir)
-    if not db_path.exists():
-        return []
-    normalized_limit = max(1, min(int(limit), 200))
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        if not _has_spool_queue(conn):
-            return []
-        rows = conn.execute(
-            """
-            SELECT provider,
-                   file_path,
-                   COUNT(*) AS pending_ranges,
-                   COUNT(DISTINCT session_id) AS pending_sessions,
-                   COALESCE(SUM(
-                       CASE WHEN end_offset > start_offset THEN end_offset - start_offset ELSE 0 END
-                   ), 0) AS pending_bytes,
-                   MIN(created_at) AS oldest_pending_at,
-                   MAX(created_at) AS newest_pending_at,
-                   MIN(next_retry_at) AS next_retry_at_min,
-                   MAX(last_error) AS last_error
-            FROM spool_queue
-            WHERE status = 'pending'
-            GROUP BY provider, file_path
-            ORDER BY pending_bytes DESC, newest_pending_at DESC
-            LIMIT ?
-            """,
-            (normalized_limit,),
-        ).fetchall()
-    return [dict(row) for row in rows]
+    # The engine reports this block in its status file; with no status there is
+    # no separate local store to read (the v1 spool is gone).
+    result = default_archive_backlog(source="missing")
+    _attach_shipper_diagnostics(result, engine_status_payload)
+    return result
 
 
 def write_archive_control(
     base_dir: Path | None = None,
     *,
     mode: str,
-    max_tick_bytes: int | None = None,
-    include_huge: bool | None = None,
     lease_minutes: int = 60,
     actor: str = "cli",
     reason: str | None = None,
@@ -201,10 +135,6 @@ def write_archive_control(
     }
     if normalized_mode != "paused":
         payload["expires_at"] = (now + timedelta(minutes=max(1, lease_minutes))).isoformat().replace("+00:00", "Z")
-    if max_tick_bytes is not None:
-        payload["max_tick_bytes"] = max(1, int(max_tick_bytes))
-    if include_huge is not None:
-        payload["include_huge"] = bool(include_huge)
     if reason and reason.strip():
         payload["reason"] = reason.strip()
 
@@ -212,103 +142,6 @@ def write_archive_control(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n")
     return {"path": str(path), **payload}
-
-
-def dead_letter_archive_path(base_dir: Path | None = None, *, file_path: str, reason: str) -> int:
-    normalized_path = str(file_path or "").strip()
-    if not normalized_path:
-        raise ValueError("file_path is required")
-    normalized_reason = str(reason or "").strip() or "operator dead-lettered archive backlog path"
-    db_path = get_agent_db_path(base_dir)
-    if not db_path.exists():
-        return 0
-    now = _utc_now_iso()
-    with sqlite3.connect(db_path) as conn:
-        if not _has_spool_queue(conn):
-            return 0
-        changed = conn.execute(
-            """
-            UPDATE spool_queue
-            SET status = 'dead',
-                retry_count = retry_count + 1,
-                last_error = ?,
-                next_retry_at = ?
-            WHERE status = 'pending' AND file_path = ?
-            """,
-            (normalized_reason, now, normalized_path),
-        ).rowcount
-        conn.commit()
-    return int(changed)
-
-
-def ready_archive_backlog(base_dir: Path | None = None) -> int:
-    """Make pending archive ranges eligible for immediate retry."""
-    db_path = get_agent_db_path(base_dir)
-    if not db_path.exists():
-        return 0
-    now = _utc_now_iso()
-    with sqlite3.connect(db_path) as conn:
-        if not _has_spool_queue(conn):
-            return 0
-        changed = conn.execute(
-            """
-            UPDATE spool_queue
-            SET next_retry_at = ?
-            WHERE status = 'pending'
-            """,
-            (now,),
-        ).rowcount
-        conn.commit()
-    return int(changed)
-
-
-def retry_dead_archive_path(
-    base_dir: Path | None = None,
-    *,
-    file_path: str,
-    recoverable_only: bool = True,
-) -> int:
-    """Move dead-lettered archive ranges for one path back to pending retry."""
-    normalized_path = str(file_path or "").strip()
-    if not normalized_path:
-        raise ValueError("file_path is required")
-    db_path = get_agent_db_path(base_dir)
-    if not db_path.exists():
-        return 0
-    now = _utc_now_iso()
-    with sqlite3.connect(db_path) as conn:
-        if not _has_spool_queue(conn):
-            return 0
-        where = "status = 'dead' AND file_path = ?"
-        params: list[Any] = [normalized_path]
-        if recoverable_only:
-            pattern_terms = []
-            for pattern in RECOVERABLE_DEAD_ERROR_PATTERNS:
-                pattern_terms.append("last_error LIKE ?")
-                params.append(pattern)
-            where += f" AND ({' OR '.join(pattern_terms)})"
-        changed = conn.execute(
-            f"""
-            UPDATE spool_queue
-            SET status = 'pending',
-                retry_count = 0,
-                next_retry_at = ?,
-                last_error = CASE
-                    WHEN last_error IS NULL OR TRIM(last_error) = ''
-                    THEN 'operator retried dead archive range'
-                    ELSE 'operator retried dead archive range; previous_error=' || last_error
-                END
-            WHERE {where}
-            """,
-            [now, *params],
-        ).rowcount
-        conn.commit()
-    return int(changed)
-
-
-def _has_spool_queue(conn: sqlite3.Connection) -> bool:
-    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'spool_queue' LIMIT 1").fetchone()
-    return row is not None
 
 
 def _read_engine_status_payload(base_dir: Path | None = None) -> dict[str, Any] | None:
@@ -363,174 +196,6 @@ def _attach_archive_progress(result: dict[str, Any], engine_status_payload: Mapp
     pending_bytes = _int(result.get("pending_bytes"))
     if pending_bytes > 0:
         result["archive_eta_seconds"] = int(pending_bytes / bytes_per_second)
-
-
-def parse_byte_budget(value: str | None) -> int | None:
-    raw = str(value or "").strip().lower()
-    if not raw:
-        return None
-    multipliers = {
-        "b": 1,
-        "kb": 1024,
-        "k": 1024,
-        "mb": 1024 * 1024,
-        "m": 1024 * 1024,
-        "gb": 1024 * 1024 * 1024,
-        "g": 1024 * 1024 * 1024,
-    }
-    for suffix, multiplier in sorted(multipliers.items(), key=lambda item: -len(item[0])):
-        if raw.endswith(suffix):
-            return int(float(raw[: -len(suffix)].strip()) * multiplier)
-    return int(float(raw))
-
-
-def _collect_archive_backlog_from_conn(conn: sqlite3.Connection, *, source: str) -> dict[str, Any]:
-    now = datetime.now(timezone.utc).isoformat()
-    aggregate = conn.execute(
-        """
-        SELECT
-            COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_ranges,
-            COALESCE(SUM(
-                CASE
-                    WHEN status = 'pending'
-                     AND (
-                         next_retry_at <= ?
-                         OR (retry_count = 0 AND (last_error IS NULL OR TRIM(last_error) = ''))
-                     )
-                    THEN 1
-                    ELSE 0
-                END
-            ), 0) AS ready_ranges,
-            COALESCE(SUM(
-                CASE
-                    WHEN status = 'pending'
-                     AND NOT (
-                         next_retry_at <= ?
-                         OR (retry_count = 0 AND (last_error IS NULL OR TRIM(last_error) = ''))
-                     )
-                    THEN 1
-                    ELSE 0
-                END
-            ), 0) AS deferred_ranges,
-            COUNT(DISTINCT CASE WHEN status = 'pending' THEN provider || char(31) || file_path END) AS pending_paths,
-            COUNT(DISTINCT CASE WHEN status = 'pending' THEN session_id END) AS pending_sessions,
-            COALESCE(SUM(
-                CASE
-                    WHEN status = 'pending' AND end_offset > start_offset THEN end_offset - start_offset
-                    ELSE 0
-                END
-            ), 0) AS pending_bytes,
-            COALESCE(SUM(CASE WHEN status = 'dead' THEN 1 ELSE 0 END), 0) AS dead_ranges,
-            COALESCE(SUM(
-                CASE WHEN status = 'dead' AND end_offset > start_offset THEN end_offset - start_offset ELSE 0 END
-            ), 0) AS dead_bytes,
-            COALESCE(SUM(
-                CASE WHEN status = 'pending' AND end_offset - start_offset >= ? THEN 1 ELSE 0 END
-            ), 0) AS huge_pending_ranges,
-            COALESCE(SUM(
-                CASE
-                    WHEN status = 'pending' AND end_offset - start_offset >= ? THEN end_offset - start_offset
-                    ELSE 0
-                END
-            ), 0) AS huge_pending_bytes,
-            MIN(CASE WHEN status = 'pending' THEN created_at END) AS oldest_pending_at,
-            MAX(CASE WHEN status = 'pending' THEN created_at END) AS newest_pending_at,
-            MIN(CASE WHEN status = 'pending' THEN next_retry_at END) AS next_retry_at_min,
-            MAX(CASE WHEN status = 'pending' THEN next_retry_at END) AS next_retry_at_max,
-            MIN(
-                CASE
-                    WHEN status = 'pending'
-                     AND NOT (
-                         next_retry_at <= ?
-                         OR (retry_count = 0 AND (last_error IS NULL OR TRIM(last_error) = ''))
-                     )
-                    THEN next_retry_at
-                END
-            ) AS next_deferred_retry_at
-        FROM spool_queue
-        """,
-        (now, now, HUGE_RANGE_BYTES, HUGE_RANGE_BYTES, now),
-    ).fetchone()
-    pending_ranges = _int(aggregate["pending_ranges"])
-    dead_ranges = _int(aggregate["dead_ranges"])
-    state = "blocked" if dead_ranges else "scanning" if pending_ranges else "complete"
-    return {
-        "source": source,
-        "state": state,
-        "mode": "drain" if pending_ranges else "idle",
-        "pending_ranges": pending_ranges,
-        "ready_ranges": _int(aggregate["ready_ranges"]),
-        "deferred_ranges": _int(aggregate["deferred_ranges"]),
-        "pending_paths": _int(aggregate["pending_paths"]),
-        "pending_sessions": _int(aggregate["pending_sessions"]),
-        "pending_bytes": _int(aggregate["pending_bytes"]),
-        "dead_ranges": dead_ranges,
-        "dead_bytes": _int(aggregate["dead_bytes"]),
-        "huge_pending_ranges": _int(aggregate["huge_pending_ranges"]),
-        "huge_pending_bytes": _int(aggregate["huge_pending_bytes"]),
-        "oldest_pending_at": aggregate["oldest_pending_at"],
-        "newest_pending_at": aggregate["newest_pending_at"],
-        "next_retry_at_min": aggregate["next_retry_at_min"],
-        "next_retry_at_max": aggregate["next_retry_at_max"],
-        "next_deferred_retry_at": aggregate["next_deferred_retry_at"],
-        "providers": _provider_rows(conn),
-        "size_buckets": _size_buckets(conn),
-        "db_exists": True,
-    }
-
-
-def _provider_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
-        SELECT provider,
-               COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_ranges,
-               COUNT(DISTINCT CASE WHEN status = 'pending' THEN file_path END) AS pending_paths,
-               COUNT(DISTINCT CASE WHEN status = 'pending' THEN session_id END) AS pending_sessions,
-               COALESCE(SUM(
-                   CASE
-                       WHEN status = 'pending' AND end_offset > start_offset THEN end_offset - start_offset
-                       ELSE 0
-                   END
-               ), 0) AS pending_bytes,
-               COALESCE(SUM(CASE WHEN status = 'dead' THEN 1 ELSE 0 END), 0) AS dead_ranges,
-               COALESCE(SUM(
-                   CASE WHEN status = 'dead' AND end_offset > start_offset THEN end_offset - start_offset ELSE 0 END
-               ), 0) AS dead_bytes
-        FROM spool_queue
-        GROUP BY provider
-        ORDER BY pending_bytes DESC, provider ASC
-        """
-    ).fetchall()
-    return [dict(row) for row in rows if _int(row["pending_ranges"]) or _int(row["dead_ranges"])]
-
-
-def _size_buckets(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
-    rows = conn.execute(
-        """
-        SELECT
-            CASE
-                WHEN end_offset - start_offset < 1024 THEN 'tiny_lt_1kb'
-                WHEN end_offset - start_offset < 1048576 THEN 'small_lt_1mb'
-                WHEN end_offset - start_offset < 10485760 THEN 'medium_lt_10mb'
-                WHEN end_offset - start_offset < 104857600 THEN 'large_lt_100mb'
-                ELSE 'huge_gte_100mb'
-            END AS bucket,
-            COUNT(*) AS pending_ranges,
-            COALESCE(SUM(
-                CASE WHEN end_offset > start_offset THEN end_offset - start_offset ELSE 0 END
-            ), 0) AS pending_bytes
-        FROM spool_queue
-        WHERE status = 'pending'
-        GROUP BY bucket
-        """
-    ).fetchall()
-    return {
-        str(row["bucket"]): {
-            "pending_ranges": _int(row["pending_ranges"]),
-            "pending_bytes": _int(row["pending_bytes"]),
-        }
-        for row in rows
-    }
 
 
 def _normalize_mode(mode: str) -> str:
