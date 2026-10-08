@@ -67,7 +67,7 @@ if [ "$TEST_EXIT" -ne 0 ]; then
     | python3 -c '
 import json, sys
 for f in json.load(sys.stdin).get("testFailures", []):
-    print(f"  {f.get(\"testName\")}: {f.get(\"failureText\")}")
+    print("  %s: %s" % (f.get("testName"), f.get("failureText")))
 ' || echo "  (could not read $RESULT_BUNDLE)"
 fi
 
