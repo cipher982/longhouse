@@ -104,7 +104,7 @@ def _reset_envelope(
     """A rotation-shaped envelope: reset boundary first, then the new records.
 
     Mirrors what the engine ships after detecting a native-id rotation
-    (storage_v2_shipper.rs insert_conversation_reset_boundary): a system record
+    (storage_v2_shipper/render.rs insert_conversation_reset_boundary): a system record
     with branch_kind conversation_reset ordered before the resumed source
     records at the same source_position.
     """

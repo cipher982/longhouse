@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 309,
+  "file_count": 311,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -413,7 +413,7 @@
       ]
     },
     {
-      "path": "engine/src/storage_v2_shipper.rs",
+      "path": "engine/src/storage_v2_shipper/mod.rs",
       "providers": [
         "antigravity",
         "claude",
@@ -422,6 +422,23 @@
         "omp",
         "opencode",
         "pi"
+      ]
+    },
+    {
+      "path": "engine/src/storage_v2_shipper/prepare.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "cursor",
+        "omp",
+        "pi"
+      ]
+    },
+    {
+      "path": "engine/src/storage_v2_shipper/render.rs",
+      "providers": [
+        "codex",
+        "omp"
       ]
     },
     {

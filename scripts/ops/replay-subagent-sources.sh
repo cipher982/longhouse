@@ -5,7 +5,7 @@
 #
 # A parser revision bump does NOT re-ship an exhausted file source: `observe_file`
 # returns at EOF, and automatic revision replay exists only for Cursor and
-# Antigravity (engine/src/storage_v2_shipper.rs). `--replay` mints a replacement
+# Antigravity (engine/src/storage_v2_shipper/). `--replay` mints a replacement
 # source epoch, which is the only mechanism that makes the host treat the same
 # bytes as new material. Events deduplicate by hash, so history is refreshed
 # rather than duplicated.

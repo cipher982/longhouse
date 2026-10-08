@@ -8,6 +8,10 @@ and managed provider launches such as `longhouse codex`). Where it sits in the
 system: the Code map in [`ARCHITECTURE.md`](../ARCHITECTURE.md#code-map).
 
 - `src/pipeline/` parses and compresses transcripts; `src/shipping/` sends them.
+- `src/storage_v2_shipper/` turns sources into storage-v2 envelopes: `prepare`,
+  `ship`, `reconcile` (host conflicts), `pending` (durable envelopes), `render`, and
+  one module per non-file source (`opencode_source`, `cursor_store_source`,
+  `cursor_acp_source`).
 - `src/control_channel/` is the control WebSocket: `connection` (connect, reconnect,
   heartbeat frames), `dispatch` (command frames and receipts around `execute_command`),
   `turn_start` (Console turns), `receipts` (durable command receipts) and

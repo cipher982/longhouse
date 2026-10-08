@@ -126,7 +126,7 @@ paths = [
 [[repos.longhouse.blocking]]
 area = "engine storage/shipper/state"
 paths = [
-  "engine/src/storage_v2_shipper.rs",
+  "engine/src/storage_v2_shipper/**",
   "engine/src/shipping/**",
   "engine/src/state/**",
   "engine/src/pipeline/**",
