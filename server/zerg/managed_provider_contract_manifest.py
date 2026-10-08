@@ -805,6 +805,8 @@ def normalize_contract_manifest(
     items: list[dict[str, Any]] = []
     for item in _validated_contract_items(payload):
         normalized_item = deepcopy(item)
+        # A manifest seeded from an older JSON may still carry the stored key.
+        normalized_item.pop("adapter_digest", None)
         # adapter_digest is computed from adapter_sources when a proof is
         # produced, never stored: storing it churned this manifest on every
         # adapter edit. Hashing here still fails on a missing source.
@@ -918,7 +920,7 @@ def _source_digest(*, provider: str, raw_path: str, label: str, source_root: Pat
     relative = Path(raw_path)
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError(f"managed provider contract {provider}: unsafe {label} {raw_path!r}")
-    path = (source_root or Path(__file__).resolve().parents[2]) / relative
+    path = (source_root or contract_source_root()) / relative
     if not path.is_file():
         raise ValueError(f"managed provider contract {provider}: {label} not found: {raw_path}")
     return hashlib.sha256(path.read_bytes()).hexdigest()

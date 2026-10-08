@@ -165,6 +165,16 @@ def test_generated_runtime_manifest_refuses_a_stored_adapter_digest():
         validate_generated_contract_manifest(payload)
 
 
+def test_normalizing_drops_a_stored_adapter_digest():
+    schema = yaml.safe_load((Path(__file__).resolve().parents[2] / "schemas" / "managed_providers.yml").read_text())
+    schema["providers"][0]["adapter_digest"] = "a" * 64
+
+    normalized = normalize_contract_manifest(schema)
+
+    assert "adapter_digest" not in normalized["providers"][0]
+    validate_generated_contract_manifest(normalized)
+
+
 def test_contract_adapter_digest_is_computed_from_the_sources_on_disk():
     repo = Path(__file__).resolve().parents[2]
     manifest_path = repo / "server" / "zerg" / "config" / "managed_provider_contracts.json"
