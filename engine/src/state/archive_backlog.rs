@@ -4,8 +4,9 @@
 //! ships every source from its own epoch cursor, so there is no separate
 //! backlog of byte ranges left to count. The block stays on the wire because
 //! the archive repair control (`paused`/`trickle`/`drain`) still reports its
-//! mode and pause provenance here, and the Runtime Host, Desktop and machine
-//! routes read it.
+//! mode here, and the Runtime Host, Desktop and machine routes read it. Pause
+//! provenance is attached only while ranges are pending, so with no range
+//! backlog the block reads `complete`.
 
 use serde::Serialize;
 use std::collections::BTreeMap;

@@ -84,18 +84,18 @@ def test_transport_health_marks_missing_engine_transport_evidence_unknown():
     assert assessment.reasons == ("transport_unavailable",)
 
 
-def test_transport_health_does_not_treat_missing_or_malformed_spool_counts_as_zero():
+def test_transport_health_reads_retired_spool_counts_as_absent_but_malformed_as_unknown():
+    # Engines without the v1 spool send neither counter; that is not missing evidence.
     payload = {
         "ship_attempts_10m": 0,
-        "spool_pending_count": 0,
         "shipping_progress": _healthy_shipping_progress(),
     }
 
-    missing = assess_transport_health(transport_health_sample_from_engine_status_payload(payload))
-    assert missing.status == "unknown"
-    assert missing.status_reason == "transport_unavailable"
-    assert missing.reasons == ("transport_unavailable",)
+    absent = assess_transport_health(transport_health_sample_from_engine_status_payload(payload))
+    assert absent.status == "healthy"
+    assert absent.reasons == ()
 
+    payload["spool_pending_count"] = 0
     payload["spool_dead_count"] = 0
     explicit_zero = assess_transport_health(transport_health_sample_from_engine_status_payload(payload))
     assert explicit_zero.status == "healthy"

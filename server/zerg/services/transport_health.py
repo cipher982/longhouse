@@ -44,6 +44,18 @@ def _normalize_required_int(value: Any) -> tuple[int, bool]:
     return (value, True) if value >= 0 else (0, False)
 
 
+def _normalize_retired_count(payload: Mapping[str, Any], key: str) -> tuple[int, bool]:
+    """A counter newer engines no longer send: absent is zero, malformed is unknown.
+
+    Engines stopped reporting the v1 spool once it was removed; storage-v2 has no
+    separate range backlog. Older engines still send the field, and a value that
+    is present but not a counter still makes the evidence unreadable.
+    """
+    if key not in payload:
+        return 0, True
+    return _normalize_required_int(payload.get(key))
+
+
 def _normalize_optional_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value
@@ -172,8 +184,8 @@ def transport_health_sample_from_heartbeat(row: AgentHeartbeat) -> TransportHeal
 def transport_health_sample_from_engine_status_payload(payload: Mapping[str, Any] | None) -> TransportHealthSample:
     raw_payload = payload if isinstance(payload, Mapping) else {}
     progress = _shipping_progress_from_payload(raw_payload)
-    spool_pending, pending_valid = _normalize_required_int(raw_payload.get("spool_pending_count"))
-    spool_dead, dead_valid = _normalize_required_int(raw_payload.get("spool_dead_count"))
+    spool_pending, pending_valid = _normalize_retired_count(raw_payload, "spool_pending_count")
+    spool_dead, dead_valid = _normalize_retired_count(raw_payload, "spool_dead_count")
     evidence_available = any(
         key in raw_payload for key in ("ship_attempts_1h", "ship_attempts_10m", "last_ship_result", "shipping_progress")
     )
