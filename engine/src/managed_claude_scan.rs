@@ -117,9 +117,10 @@ pub(crate) fn collect_observations_from_paths(
         let now = Utc::now();
         if tombstone_expired(&state, now) {
             // Re-checked under the bridge's lock: a relaunch may have replaced
-            // the tombstone, and that live state is read on the next pass.
+            // the tombstone, and that live state is read on the next pass. The
+            // expired tombstone is still observed once below, so an engine that
+            // was down past the retention still ends the run as process_gone.
             remove_expired_tombstone(path, now);
-            continue;
         }
         let session_id = state
             .session_id
@@ -612,7 +613,9 @@ mod tests {
 
         let observations = collect_observations_from_processes(tmp.path(), &HashMap::new());
 
-        assert!(observations.is_empty());
+        // Observed one last time (the run can still end), then collected.
+        assert_eq!(observations.len(), 1);
+        assert!(!observations[0].claude_alive);
         assert!(!path.exists());
     }
 
@@ -649,7 +652,7 @@ mod tests {
 
         let observations = collect_observations_from_processes(tmp.path(), &HashMap::new());
 
-        assert!(observations.is_empty());
+        assert_eq!(observations.len(), 1);
         assert!(!path.exists());
     }
 
