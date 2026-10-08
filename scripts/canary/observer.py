@@ -131,6 +131,28 @@ def _canary_marker(payload: str) -> tuple[int, int, int, int, int]:
     return canary_seq, emitted_at_ms, server_fanout_at_ms, server_now_ms, pubsub_seq
 
 
+def _hop_line(
+    canary_seq: int,
+    emitted_at_ms: int,
+    fanout_ms: int,
+    server_now_ms: int,
+    received_at_ms: int,
+) -> str:
+    """One journal line per delivery, so a slow sample names its slow hop.
+
+    ``to_fanout`` (producer emit to server publish: connect, uplink, ingest,
+    catalog apply) and ``to_observer`` (server SSE write to observer receipt)
+    each compare two hosts' NTP clocks, so they carry that offset in opposite
+    directions; their sum, ``total``, uses one clock and is what the SLA reads.
+    """
+    return (
+        f"canary seq={canary_seq} total_ms={received_at_ms - emitted_at_ms} "
+        f"to_fanout_ms={fanout_ms - emitted_at_ms} "
+        f"fanout_to_sse_ms={server_now_ms - fanout_ms} "
+        f"to_observer_ms={received_at_ms - server_now_ms}"
+    )
+
+
 def main() -> int:
     try:
         base_url = _require_env("LONGHOUSE_CANARY_URL").rstrip("/")
@@ -234,15 +256,16 @@ def main() -> int:
                         (
                             canary_seq,
                             emitted_at_ms,
-                            _fanout_ms,
-                            _server_now_ms,
+                            fanout_ms,
+                            server_now_ms,
                             _pubsub_seq,
                         ) = _canary_marker(payload)
                         if canary_seq <= last_canary_seq:
                             raise _FatalCanaryError(
                                 f"canary sequence did not advance: {canary_seq}"
                             )
-                        latency_ms = int(time.time() * 1000) - emitted_at_ms
+                        received_at_ms = int(time.time() * 1000)
+                        latency_ms = received_at_ms - emitted_at_ms
                         if latency_ms < 0 or latency_ms > 600_000:
                             raise _FatalCanaryError(
                                 f"invalid SSE latency for canary sequence {canary_seq}: {latency_ms}ms"
@@ -260,6 +283,7 @@ def main() -> int:
                                 f"could not record SSE observation: {exc}"
                             ) from exc
                         last_canary_seq = canary_seq
+                        print(_hop_line(canary_seq, emitted_at_ms, fanout_ms, server_now_ms, received_at_ms))
                 if stopping:
                     break
                 raise RuntimeError("canary SSE stream closed")

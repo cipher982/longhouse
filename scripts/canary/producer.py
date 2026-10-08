@@ -44,6 +44,13 @@ from pathlib import Path
 import httpx
 
 INTERVAL_S = float(os.environ.get("LONGHOUSE_CANARY_INTERVAL_S", "30"))
+# Hold one connection across samples, as the Machine Agent's shipper does
+# (pool_idle_timeout 120 s, engine/src/shipping/client.rs). httpx's default
+# keepalive_expiry is 5 s, shorter than INTERVAL_S, so every sample used to open
+# a new connection: DNS + TCP + TLS to the edge, 45-60 ms on cube (2026-10-08:
+# a fresh-connection request took a median 193 ms against 144 ms on a held one).
+# No engine request pays that, and it was the widest part of the sample spread.
+KEEPALIVE_EXPIRY_S = max(120.0, 4 * INTERVAL_S)
 SESSION_ID_FILE = Path(
     os.environ.get(
         "LONGHOUSE_CANARY_SESSION_FILE",
@@ -83,6 +90,10 @@ def _load_storage_v2_wire():
 
 
 _storage_v2_wire = _load_storage_v2_wire()
+
+
+def client_limits() -> httpx.Limits:
+    return httpx.Limits(keepalive_expiry=KEEPALIVE_EXPIRY_S)
 
 
 def _require_env(key: str) -> str:
@@ -354,7 +365,7 @@ def main() -> int:
     if stopping:
         return 0
 
-    with httpx.Client(http2=False) as client:
+    with httpx.Client(http2=False, limits=client_limits()) as client:
         _bootstrap_storage_v2(
             client,
             base_url=base_url,

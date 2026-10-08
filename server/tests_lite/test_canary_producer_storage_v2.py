@@ -255,3 +255,12 @@ def test_canary_producer_bootstrap_rejects_unexpected_advertised_route(field, va
             session_id="a776f692-7fb8-44a7-9574-e347fa29b88e",
         )
     assert int(stopped.value.code) == 3
+
+
+def test_canary_producer_holds_its_connection_across_samples():
+    # A connection that expires between samples makes every sample pay DNS,
+    # TCP and TLS setup that no Machine Agent request pays.
+    producer = _load_producer()
+    assert producer.client_limits().keepalive_expiry > producer.INTERVAL_S
+    source = (Path(__file__).resolve().parents[2] / "scripts" / "canary" / "producer.py").read_text()
+    assert "httpx.Client(http2=False, limits=client_limits())" in source

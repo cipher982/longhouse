@@ -215,3 +215,9 @@ def test_observer_waits_for_initial_server_bootstrap(monkeypatch, tmp_path):
 
     assert _run_observer(monkeypatch, tmp_path, handler) == 3
     assert deliveries == [41]
+
+
+def test_hop_line_names_each_hop_and_sums_to_the_sla_latency():
+    observer = _load_observer()
+    line = observer._hop_line(41, 1_000, 1_150, 1_151, 1_230)
+    assert line == "canary seq=41 total_ms=230 to_fanout_ms=150 fanout_to_sse_ms=1 to_observer_ms=79"

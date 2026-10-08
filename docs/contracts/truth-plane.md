@@ -174,7 +174,11 @@ Initial invalidations and unrelated workspace changes are not delivery observati
 The observer correlates producer sequences, not the independent pubsub cursor.
 Ingest latency is the producer's monotonic committed-acknowledgement round trip;
 it does not compare clocks on different hosts. Producer and observer share a host
-clock for end-to-end SSE timing in the supervised bundle.
+clock for end-to-end SSE timing in the supervised bundle. The producer holds one
+connection across samples, as Machine Agents do, so a sample measures delivery rather
+than connection setup. The observer journals one line per delivery splitting the
+total into producer-to-fanout, fanout-to-SSE-write and SSE-to-observer hops; the two
+cross-host hops carry the hosts' NTP offset in opposite directions.
 
 The authenticated `/api/telemetry/selfcheck` requires fresh ingest and SSE observations,
 an absolute sequence gap below ten, and actual SSE latency samples with p95 at most 300 ms.
