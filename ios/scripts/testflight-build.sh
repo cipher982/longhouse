@@ -4,10 +4,19 @@
 #   ios/scripts/testflight-build.sh                # archive + export the .ipa only
 #   ios/scripts/testflight-build.sh --upload       # ... and upload it to TestFlight
 #
-# Signing is Apple cloud-managed: with an App Store Connect API key (CI) Xcode
-# creates the distribution certificate and profiles itself; without one it uses
-# the Apple ID signed in to Xcode on this Mac (local dry runs). Nothing here
-# installs a certificate or a profile by hand.
+# The archive is built unsigned, then ad-hoc signed with each bundle's entitlements, and
+# only the export signs for distribution, with Apple cloud-managed signing: with an App
+# Store Connect API key (CI) Xcode uses the cloud distribution certificate and creates the
+# profiles itself; without one it uses the Apple ID signed in to Xcode on this Mac (local
+# dry runs). Nothing here installs a certificate or a profile by hand.
+#
+# Why the archive is not signed by Xcode: automatic signing signs an archive for
+# development, so on a machine whose keychain holds no development identity (every hosted
+# runner) it creates a new "Apple Development: Created via API" certificate per run, which
+# dies with the VM and counts toward Apple's cap; revoking it emails the account holder.
+# Why the ad-hoc signature: export takes each bundle's entitlement request from the
+# archived signature, so an unsigned archive exports without aps-environment and the app
+# group (push and the widget's shared data break silently). Both were observed 2026-10-07.
 #
 # Environment:
 #   ASC_API_KEY_ID, ASC_API_ISSUER_ID   API key identity (both or neither)
@@ -42,11 +51,11 @@ case "$BUILD_NUMBER" in ''|*[!0-9]*) fail "BUILD_NUMBER must be an integer (got 
 work="$(mktemp -d "${TMPDIR:-/tmp}/lh-testflight.XXXXXX")"
 out="${OUT_DIR:-$work/out}"
 mkdir -p "$out"
-# With an API key, archiving creates an "Apple Development: Created via API" certificate
-# whose private key lives only on this machine; on a hosted runner it dies with the VM.
-# Revoke what this run created: new since the snapshot taken before archiving, and held by
-# this keychain, so a concurrent build on another machine keeps its certificate. Leaked
-# certificates accumulate up to Apple's cap, which fails every later archive.
+# Safety net: this build should create no development certificate (see the header). If an
+# Xcode change ever makes it create one, revoke what this run created, new since the
+# snapshot and held by this keychain, so a concurrent build elsewhere keeps its own and
+# leaked certificates never accumulate to Apple's cap. A non-zero `revoked_dev_certs` in
+# the log means the unsigned archive path regressed.
 certs_before=""
 revoke_own_dev_certs() {
   security find-identity -p codesigning | awk '$1 ~ /^[0-9]+\)$/ { print $2 }' > "$work/held-identities" \
@@ -93,19 +102,34 @@ if [ ${#auth_args[@]} -gt 0 ]; then
 fi
 
 archive="$out/Longhouse.xcarchive"
+# No -allowProvisioningUpdates and no API key here: nothing in the archive step may talk to
+# Apple's signing service.
 xcodebuild archive \
   -project ios/XcodeHarness/LonghouseIOS.xcodeproj \
   -scheme Longhouse \
   -configuration Release \
   -destination "generic/platform=iOS" \
   -archivePath "$archive" \
-  -allowProvisioningUpdates \
-  ${auth_args[@]+"${auth_args[@]}"} \
+  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY= \
   DEVELOPMENT_TEAM="$TEAM_ID" \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" >"$out/archive.log" 2>&1 \
   || { tail -40 "$out/archive.log" >&2; fail "archive failed (full log: $out/archive.log)"; }
 
 ios/scripts/check-archive.sh "$archive" >&2
+
+# Each signed bundle and its entitlements file, innermost first (codesign seals nested code).
+app="$archive/Products/Applications/Longhouse.app"
+bundles=("$app/PlugIns/LonghouseWidget.appex" "$app")
+entitlement_files=(ios/XcodeHarness/LonghouseWidget.entitlements ios/XcodeHarness/Longhouse.entitlements)
+for i in "${!bundles[@]}"; do
+  # App Store builds always use production push; the files leave it to a build setting.
+  sed 's/\$(APS_ENVIRONMENT)/production/' "${entitlement_files[$i]}" > "$work/entitlements.$i.plist"
+  ! grep -q '\$(' "$work/entitlements.$i.plist" || fail "${entitlement_files[$i]} has a build setting this script does not expand"
+  codesign --force --sign - --entitlements "$work/entitlements.$i.plist" "${bundles[$i]}" \
+    || fail "could not ad-hoc sign ${bundles[$i]}"
+done
 
 cat > "$work/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -122,7 +146,9 @@ cat > "$work/ExportOptions.plist" <<PLIST
 </plist>
 PLIST
 
-xcodebuild -exportArchive \
+# Xcode's packaging step calls `rsync` from PATH and fails ("Copy failed") with Homebrew's
+# rsync 3.x, which the bench and dev Macs put first; the system one works.
+PATH="/usr/bin:$PATH" xcodebuild -exportArchive \
   -archivePath "$archive" \
   -exportPath "$out/export" \
   -exportOptionsPlist "$work/ExportOptions.plist" \
@@ -132,6 +158,23 @@ xcodebuild -exportArchive \
 
 ipa="$(find "$out/export" -maxdepth 1 -name '*.ipa' | head -1)"
 [ -n "$ipa" ] || fail "export produced no .ipa"
+
+# The exported signatures must carry every entitlement the project requests: a dropped
+# one (the unsigned-archive failure) uploads fine and breaks push or the widget on device.
+mkdir "$work/ipa"
+ditto -x -k "$ipa" "$work/ipa"
+for i in "${!bundles[@]}"; do
+  exported="$work/ipa/Payload/${bundles[$i]#"$archive/Products/Applications/"}"
+  codesign -d --entitlements - --xml "$exported" > "$work/exported.$i.plist" 2>/dev/null \
+    || fail "could not read the exported signature of $exported"
+  python3 -I -c '
+import plistlib, sys
+want = plistlib.load(open(sys.argv[1], "rb"))
+got = plistlib.load(open(sys.argv[2], "rb"))
+bad = sorted(k for k, v in want.items() if got.get(k) != v)
+sys.exit(f"exported {sys.argv[3]} lacks or changed entitlements: {bad}" if bad else 0)
+' "$work/entitlements.$i.plist" "$work/exported.$i.plist" "$(basename "$exported")" || fail "export dropped entitlements"
+done
 
 if [ "$upload" = 1 ]; then
   xcrun altool --upload-app --type ios --file "$ipa" \

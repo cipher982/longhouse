@@ -66,13 +66,12 @@ PAST_SUBMISSION = {
     "IN_BETA_TESTING",
 }
 
-# `xcodebuild -allowProvisioningUpdates` with an API key signs the archive for development
-# first, so every machine without a usable identity gets a fresh certificate with this name.
-# A hosted runner's private key dies with the VM: each run leaks one unusable certificate
-# until Apple's cap fails every later archive ("Your account has reached the maximum number
-# of certificates"). The build snapshots these before archiving and revokes only its own:
-# new since the snapshot and held by this machine's keychain, so a concurrent build
-# elsewhere keeps its certificate.
+# `xcodebuild archive -allowProvisioningUpdates` with an API key signs for development, so a
+# machine without a usable identity gets a fresh certificate with this name; a hosted
+# runner's private key dies with the VM, and leaked ones fail every archive once Apple's cap
+# is reached. testflight-build.sh therefore archives unsigned and creates none (since
+# 2026-10-07); it still snapshots these and revokes any new one it holds, as a safety net
+# that should report zero. Only its own: a concurrent build elsewhere keeps its certificate.
 API_DEV_CERT_NAME = "Apple Development: Created via API"
 
 
