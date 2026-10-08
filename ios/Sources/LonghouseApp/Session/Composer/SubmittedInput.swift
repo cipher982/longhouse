@@ -169,7 +169,21 @@ enum UnrecordedInputs {
         receipts: [SessionInputReceipt],
         userEvents: [SessionEvent]
     ) -> Set<String> {
-        var shown = Set(receipts.compactMap { $0.eventId == nil ? nil : $0.clientRequestId })
+        // A linked receipt counts as shown only once its echo is in the loaded
+        // timeline. An echo older than the loaded window is off the page, so it
+        // is settled. A newer echo that has not loaded yet is still on its way,
+        // and its optimistic row must stay until it does.
+        let loadedEventIds = Set(userEvents.filter(\.isHeadBranch).map(\.id))
+        let oldestLoaded = userEvents
+            .compactMap { LonghouseDateParser.parse($0.timestamp) }
+            .min()
+        var shown = Set(receipts.compactMap { receipt -> String? in
+            guard let eventId = receipt.eventId, let id = receipt.clientRequestId else { return nil }
+            if loadedEventIds.contains(eventId) { return id }
+            guard let oldest = oldestLoaded else { return id }
+            guard let createdAt = receipt.createdAt.flatMap(LonghouseDateParser.parse) else { return nil }
+            return createdAt < oldest ? id : nil
+        })
         let candidates: [(id: String, text: String, at: Date)] = receipts
             .compactMap { receipt in
                 guard receipt.eventId == nil,

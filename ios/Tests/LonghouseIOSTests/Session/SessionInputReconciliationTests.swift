@@ -57,6 +57,48 @@ struct SessionInputReconciliationTests {
     }
 
     @Test
+    func linkedSteerWhoseEchoIsNotYetLoadedKeepsItsRow() {
+        // Mid-turn steer: the server linked its echo, but the echo is newer
+        // than the loaded window and not in it yet. Dropping the row here is
+        // the bug that made a follow-up vanish during tool calls.
+        let older = userEvent("older", text: "earlier", at: "2026-10-08T04:00:00Z")
+        let steer = served("steer", text: "voice never worked", at: "2026-10-08T04:28:41Z", intent: "steer", eventId: "steer-echo", turnState: "active")
+        let resolved = SessionViewModel.resolvedSubmittedInputIds(
+            submittedInputs: [input("steer")],
+            events: [older],
+            receipts: [steer]
+        )
+        #expect(resolved.isEmpty)
+        #expect(UnrecordedInputs.shownByTranscript(receipts: [steer], userEvents: [older]).isEmpty)
+    }
+
+    @Test
+    func linkedSteerResolvesExactlyOnceWhenItsEchoLoads() {
+        let steerEcho = userEvent("steer-echo", text: "voice never worked", at: "2026-10-08T04:28:42Z")
+        let steer = served("steer", text: "voice never worked", at: "2026-10-08T04:28:41Z", intent: "steer", eventId: "steer-echo", turnState: "active")
+        let resolved = SessionViewModel.resolvedSubmittedInputIds(
+            submittedInputs: [input("steer")],
+            events: [steerEcho],
+            receipts: [steer]
+        )
+        #expect(resolved == ["steer"])
+        let placed = UnrecordedInputs.placedInputs(receipts: [steer], userEvents: [steerEcho], excluding: [])
+        #expect(placed.isEmpty)
+    }
+
+    @Test
+    func linkedEchoOlderThanTheLoadedWindowStaysSettled() {
+        let older = userEvent("older", text: "earlier", at: "2026-10-08T04:00:00Z")
+        let oldEcho = served("old", text: "from yesterday", at: "2026-10-07T23:00:00Z", eventId: "old-echo")
+        let resolved = SessionViewModel.resolvedSubmittedInputIds(
+            submittedInputs: [input("old")],
+            events: [older],
+            receipts: [oldEcho]
+        )
+        #expect(resolved == ["old"])
+    }
+
+    @Test
     func activeConsoleReceiptResolvesOnceItsEchoIsLinked() {
         let resolved = SessionViewModel.resolvedSubmittedInputIds(
             submittedInputs: [input("req-1", phase: .working, turnId: "turn-1")],
