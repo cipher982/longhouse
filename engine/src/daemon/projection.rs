@@ -2,6 +2,16 @@
 
 use super::*;
 
+/// Open a debounce window for a phase-ledger write.
+///
+/// Returns true when the caller should arm the timer, false when a window is
+/// already open and this write coalesces into it.
+///
+/// The window is fixed from the first write, not sliding. A sliding window
+/// would be pushed out by every subsequent phase, and providers are chatty
+/// enough — the Codex bridge posts a phase per item start, completion, and
+/// thread-status change — that a busy turn could starve the rebuild
+/// indefinitely, which is the failure this whole change exists to remove.
 pub(super) fn arm_phase_projection(pending: &mut bool) -> bool {
     if *pending {
         return false;
