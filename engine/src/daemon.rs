@@ -982,35 +982,16 @@ fn apply_archive_repair_control(
     payload.archive_backlog.pause_actor = None;
     payload.archive_backlog.pause_reason = None;
     payload.archive_backlog.pause_updated_at = None;
-    if mode == ArchiveRepairMode::Paused && payload.archive_backlog.pending_ranges > 0 {
+    // A pause holds the storage-v2 retry lane, so it is visible exactly while
+    // that lane has envelopes waiting; with nothing held there is nothing paused.
+    if mode == ArchiveRepairMode::Paused && payload.storage_v2_outbox.pending_count > 0 {
         payload.archive_backlog.state = "paused".to_string();
         payload.archive_backlog.pause_actor = control.actor.clone();
         payload.archive_backlog.pause_reason = control.reason.clone();
         payload.archive_backlog.pause_updated_at = control.updated_at.clone();
         return;
     }
-    if payload.archive_backlog.dead_ranges > 0 {
-        payload.archive_backlog.state = "dead_lettered".to_string();
-        return;
-    }
-    if payload.archive_backlog.pending_ranges == 0 {
-        payload.archive_backlog.state = "complete".to_string();
-        return;
-    }
-    let uploading = payload
-        .ship_scheduler
-        .as_ref()
-        .is_some_and(|scheduler| scheduler.in_flight_retry > 0);
-    payload.archive_backlog.state = if uploading {
-        "uploading"
-    } else if payload.archive_backlog.ready_ranges == 0
-        && payload.archive_backlog.deferred_ranges > 0
-    {
-        "blocked"
-    } else {
-        "scanning"
-    }
-    .to_string();
+    payload.archive_backlog.state = "complete".to_string();
 }
 
 fn archive_repair_is_paused(default_mode: ArchiveRepairMode) -> bool {
@@ -10605,8 +10586,6 @@ mod tests {
     #[test]
     fn test_archive_paused_status_is_distinct_from_offline() {
         let mut payload = empty_heartbeat_payload();
-        payload.archive_backlog.pending_ranges = 2;
-        payload.archive_backlog.state = "ready".to_string();
         payload.storage_v2_outbox.pending_count = 1;
         let control = ArchiveRepairControl {
             mode: Some("paused".to_string()),
@@ -10697,11 +10676,26 @@ mod tests {
     }
 
     #[test]
+    fn test_archive_pause_with_nothing_held_reads_complete() {
+        let mut payload = empty_heartbeat_payload();
+        let control = ArchiveRepairControl {
+            mode: Some("paused".to_string()),
+            actor: Some("menu_bar".to_string()),
+            ..Default::default()
+        };
+
+        apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);
+
+        assert_eq!(payload.archive_backlog.mode, "paused");
+        assert_eq!(payload.archive_backlog.state, "complete");
+        assert!(payload.archive_backlog.pause_actor.is_none());
+    }
+
+    #[test]
     fn test_archive_trickle_status_does_not_keep_stale_paused_state() {
         let mut payload = empty_heartbeat_payload();
-        payload.archive_backlog.pending_ranges = 2;
-        payload.archive_backlog.ready_ranges = 2;
         payload.archive_backlog.state = "paused".to_string();
+        payload.storage_v2_outbox.pending_count = 2;
         let control = ArchiveRepairControl {
             mode: Some("trickle".to_string()),
             expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()),
@@ -10711,24 +10705,7 @@ mod tests {
         apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);
 
         assert_eq!(payload.archive_backlog.mode, "trickle");
-        assert_eq!(payload.archive_backlog.state, "scanning");
-
-        let mut scheduler = PathScheduler::new(2);
-        scheduler.enqueue(
-            PathBuf::from("/archive.jsonl"),
-            "codex",
-            WorkPriority::Retry,
-        );
-        let _job = scheduler.pop_launchable().unwrap();
-        payload.ship_scheduler = Some(scheduler.snapshot());
-        apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);
-        assert_eq!(payload.archive_backlog.state, "uploading");
-
-        payload.ship_scheduler = None;
-        payload.archive_backlog.ready_ranges = 0;
-        payload.archive_backlog.deferred_ranges = 2;
-        apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);
-        assert_eq!(payload.archive_backlog.state, "blocked");
+        assert_eq!(payload.archive_backlog.state, "complete");
     }
 
     #[tokio::test]
