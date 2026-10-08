@@ -706,11 +706,134 @@ fn managed_provider_state_dirs() -> Vec<PathBuf> {
 }
 
 /// Run the connect daemon. This function blocks until shutdown signal.
+/// The daemon loop's state: every local `run` sets up that the loop or its
+/// teardown reads. Fields are declared in reverse of the order `run` created
+/// them, so they drop in the same order the locals did.
+struct DaemonState {
+    sigint: tokio::signal::unix::Signal,
+    sigterm: tokio::signal::unix::Signal,
+    transcript_wake_task: Option<tokio::task::JoinHandle<()>>,
+    transcript_wake_rx: mpsc::UnboundedReceiver<TranscriptWakeSignal>,
+    control_channel_task: Option<tokio::task::JoinHandle<()>>,
+    control_channel_status: crate::control_channel::ControlChannelStatus,
+    status_path: PathBuf,
+    runtime_events_outbox_dir: PathBuf,
+    outbox_dir: PathBuf,
+    daily_maintenance_tasks: JoinSet<()>,
+    storage_maintenance_tasks: JoinSet<()>,
+    unmanaged_binding_refresh_generation: Option<(u64, u64)>,
+    unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult>,
+    machine_presence_post_tasks: JoinSet<MachinePresencePostResult>,
+    host_link_poll_tasks: JoinSet<Result<()>>,
+    last_serving_generation: u64,
+    host_link_changed: watch::Receiver<crate::host_link::HostLinkStatus>,
+    heartbeat_post_tasks: JoinSet<HeartbeatPostResult>,
+    acknowledged_machine_evidence: heartbeat::AcknowledgedEvidenceHashes,
+    runtime_outbox_retry_after: Option<Instant>,
+    runtime_outbox_consecutive_failures: u32,
+    runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)>,
+    outbox_post_tasks: JoinSet<(usize, usize, u64, u64)>,
+    status_recorded: HashMap<String, (String, u64)>,
+    status_ledger: StatusLedger,
+    status_post_tasks: JoinSet<StatusPostResult>,
+    status_slot_tasks: JoinSet<StatusSlotResult>,
+    runtime_sweep_quiet_until: Option<Instant>,
+    runtime_sweep_tasks: JoinSet<outbox::RuntimeOutboxSweep>,
+    runtime_collect_tasks: JoinSet<RuntimeCollectResult>,
+    outbox_collect_tasks: JoinSet<OutboxCollectResult>,
+    latest_runtime_event_outbox: heartbeat::RuntimeEventOutboxSnapshot,
+    latest_transcript_wake_observed: HashMap<PathBuf, i64>,
+    last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>>,
+    unmanaged_binding_refresh_failed: bool,
+    last_projected_unmanaged_snapshot_complete: bool,
+    certificate_keepalive_warned: bool,
+    last_certified_at: Option<Instant>,
+    last_managed_captured_at: String,
+    last_projected_managed_snapshot_complete: bool,
+    last_projected_managed_scan_partial: bool,
+    managed_owner_refresh_cursor: usize,
+    status_owner_refresh_cursor: usize,
+    last_status_owners_at: Option<Instant>,
+    last_status_owners: Arc<StatusOwnerEvidence>,
+    last_projected_managed_observations: ManagedObservationSnapshot,
+    last_resume_contracts: Option<Arc<[managed_resume_scan::ResumeContractObservation]>>,
+    last_full_reconciled_at: Option<String>,
+    projection_budget_reported_at: Option<Instant>,
+    projection_worst_elapsed_ms: u64,
+    projection_over_budget_ticks: u64,
+    managed_observation_valid: bool,
+    managed_observation_generation: u64,
+    projection_generation: u64,
+    projection_build_pending: bool,
+    pending_full_reconciliation: bool,
+    pending_wake_reconciliation: bool,
+    wake_gap_detector: WakeGapDetector,
+    managed_reconciliation: heartbeat::ProjectionReconciliation,
+    heartbeat_transport: heartbeat::HeartbeatTransportStatus,
+    last_status_projection: Option<heartbeat::StatusFileProjection>,
+    pending_truth_heartbeat: Option<PendingTruthHeartbeat>,
+    last_truth_heartbeat_at: Option<Instant>,
+    session_snapshot_state: SessionSnapshotState,
+    last_runtime_truth_signature: Option<String>,
+    last_ship_at: Option<String>,
+    offline: OfflineState,
+    startup_reconciliation_pending: bool,
+    last_phase_watermark: Option<i64>,
+    phase_projection_pending: bool,
+    update_http_client: reqwest::Client,
+    update_check_timer: tokio::time::Interval,
+    local_retry_timer: tokio::time::Interval,
+    outbox_timer: tokio::time::Interval,
+    disk_guard: Option<crate::disk_guard::DiskGuard>,
+    disk_guard_timer: tokio::time::Interval,
+    flight_sample_timer: tokio::time::Interval,
+    machine_presence_timer: tokio::time::Interval,
+    managed_full_reconciliation_timer: tokio::time::Interval,
+    managed_observation_timer: tokio::time::Interval,
+    local_status_timer: tokio::time::Interval,
+    heartbeat_timer: tokio::time::Interval,
+    prune_timer: tokio::time::Interval,
+    health_timer: tokio::time::Interval,
+    failed_ship_retry_timer: tokio::time::Interval,
+    scope_timer: tokio::time::Interval,
+    provider_roots_timer: tokio::time::Interval,
+    fallback_timer: tokio::time::Interval,
+    managed_full_reconciliation_not_before: Instant,
+    shipping_progress: heartbeat::ShippingProgressObservation,
+    deferred_retries: HashMap<PathBuf, DeferredRetry>,
+    projection_build_tasks: JoinSet<ProjectionBuildResult>,
+    opencode_title_refresh_tasks: JoinSet<Result<()>>,
+    last_managed_observations: ManagedObservationSnapshot,
+    last_reconcile_started_at: Instant,
+    reconcile_tasks: JoinSet<ReconcileScanResult>,
+    managed_observation_scan_tasks: JoinSet<ManagedObservationScanResult>,
+    open_history_reconciliation: Option<OpenHistoryReconciliation>,
+    discovery_tasks: JoinSet<DiscoveryTaskResult>,
+    in_flight: JoinSet<Option<PathTaskResult>>,
+    scheduler: PathScheduler,
+    watcher: SessionWatcher,
+    managed_state_dirs: Vec<PathBuf>,
+    task_context: PathTaskContext,
+    path_shutdown: watch::Sender<bool>,
+    adaptive_limiter: Arc<crate::scheduler::AdaptiveLimiter>,
+    flight_recorder: Option<FlightRecorder>,
+    ship_stats: RecentShipStatsTracker,
+    parse_tracker: RecentIssueTracker,
+    pending_provider_roots: Vec<ProviderConfig>,
+    providers: Vec<ProviderConfig>,
+    host_link: crate::host_link::HostLink,
+    client: ShipperClient,
+    last_scope_fingerprint: Option<(SystemTime, u64)>,
+    scope_dir: PathBuf,
+    conn: rusqlite::Connection,
+    projection_db_path: PathBuf,
+}
+
 pub async fn run(config: ConnectConfig) -> Result<()> {
     // 1. Open state DB
     let projection_db_path =
         crate::state::db::resolve_db_path(config.shipper_config.db_path.as_deref())?;
-    let mut conn = open_db(Some(&projection_db_path)).inspect_err(|error| {
+    let conn = open_db(Some(&projection_db_path)).inspect_err(|error| {
         record_startup_refusal(startup_storage_reason(error), &format!("{error:#}"));
     })?;
     crate::state::source_inventory::abandon_open_reconciliation(&conn).inspect_err(|error| {
@@ -729,7 +852,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         import_scope.describe()
     );
     let scope_dir = crate::config::get_machine_dir()?;
-    let mut last_scope_fingerprint = crate::import_scope::fingerprint(&scope_dir);
+    let last_scope_fingerprint = crate::import_scope::fingerprint(&scope_dir);
 
     // 2. Prune stale file_state entries (files deleted from disk, >30 days old)
     {
@@ -825,8 +948,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // 4. Discover providers. ACP creates run files after the daemon starts;
     // establish its engine-owned root first so the watcher includes it.
     std::fs::create_dir_all(crate::config::get_agent_dir()?.join("cursor-acp-source"))?;
-    let mut providers = discovery::get_providers();
-    let mut pending_provider_roots = discovery::configured_provider_roots();
+    let providers = discovery::get_providers();
+    let pending_provider_roots = discovery::configured_provider_roots();
     if providers.is_empty() {
         tracing::warn!("No provider directories found — nothing to watch");
         return Ok(());
@@ -881,7 +1004,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     for state_dir in &managed_state_dirs {
         std::fs::create_dir_all(state_dir)?;
     }
-    let mut watcher = SessionWatcher::new(&providers, &managed_state_dirs)?;
+    let watcher = SessionWatcher::new(&providers, &managed_state_dirs)?;
     tracing::info!(
         "Daemon ready — watching for file changes (flush interval: {:?})",
         WATCHER_FLUSH_INTERVAL
@@ -913,18 +1036,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let max_in_flight = shipping_max_in_flight(config.shipper_config.workers);
     let mut scheduler =
         PathScheduler::with_limiter(max_in_flight, std::sync::Arc::clone(&adaptive_limiter));
-    let mut in_flight = JoinSet::new();
+    let in_flight = JoinSet::new();
     let mut discovery_tasks: JoinSet<DiscoveryTaskResult> = JoinSet::new();
     start_inventory_task(&mut discovery_tasks, &providers);
-    let mut open_history_reconciliation: Option<OpenHistoryReconciliation> = None;
+    let open_history_reconciliation: Option<OpenHistoryReconciliation> = None;
     let mut managed_observation_scan_tasks: JoinSet<ManagedObservationScanResult> = JoinSet::new();
-    let mut reconcile_tasks: JoinSet<ReconcileScanResult> = JoinSet::new();
-    let mut last_reconcile_started_at = Instant::now();
-    let mut last_managed_observations = ManagedObservationSnapshot::default();
-    let mut opencode_title_refresh_tasks: JoinSet<Result<()>> = JoinSet::new();
-    let mut projection_build_tasks: JoinSet<ProjectionBuildResult> = JoinSet::new();
+    let reconcile_tasks: JoinSet<ReconcileScanResult> = JoinSet::new();
+    let last_reconcile_started_at = Instant::now();
+    let last_managed_observations = ManagedObservationSnapshot::default();
+    let opencode_title_refresh_tasks: JoinSet<Result<()>> = JoinSet::new();
+    let projection_build_tasks: JoinSet<ProjectionBuildResult> = JoinSet::new();
     let mut deferred_retries = HashMap::new();
-    let mut shipping_progress = heartbeat::ShippingProgressObservation::new(Instant::now());
+    let shipping_progress = heartbeat::ShippingProgressObservation::new(Instant::now());
     let startup_archive_mode =
         read_archive_repair_control().normalized_mode(config.archive_repair_mode);
     match queue_storage_v2_pending_retry_paths(
@@ -950,7 +1073,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         true,
         &last_managed_observations,
     );
-    let mut managed_full_reconciliation_not_before =
+    let managed_full_reconciliation_not_before =
         Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
     tracing::info!(
         "Startup reconciliation deferred by {:?} (max {} concurrent)",
@@ -989,7 +1112,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // timer that begins counting at startup is reset by every restart, and this
     // daemon restarts several times a day. See
     // `state::recover::daily_maintenance_delay`.
-    let mut prune_timer = tokio::time::interval_at(
+    let prune_timer = tokio::time::interval_at(
         tokio::time::Instant::now()
             + crate::state::recover::daily_maintenance_delay(
                 &projection_db_path,
@@ -1019,7 +1142,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     flight_sample_timer.tick().await; // consume first immediate tick
     let mut disk_guard_timer = tokio::time::interval(crate::disk_guard::TICK);
     disk_guard_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut disk_guard = config::get_longhouse_home()
+    let disk_guard = config::get_longhouse_home()
         .ok()
         .map(|home| crate::disk_guard::DiskGuard::new(home, crate::disk_guard::state_path()));
 
@@ -1044,87 +1167,85 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // repair path for anything a notification misses.
     let phase_projection_timer = tokio::time::sleep(PHASE_PROJECTION_DEBOUNCE);
     tokio::pin!(phase_projection_timer);
-    let mut phase_projection_pending = false;
+    let phase_projection_pending = false;
     // Highest accepted phase-ledger revision, to detect out-of-process writes.
-    let mut last_phase_watermark: Option<i64> = None;
+    let last_phase_watermark: Option<i64> = None;
     let startup_reconciliation_timer = tokio::time::sleep(STARTUP_RECONCILIATION_SCAN_DELAY);
     tokio::pin!(startup_reconciliation_timer);
-    let mut startup_reconciliation_pending = !startup_archive_mode.is_paused();
+    let startup_reconciliation_pending = !startup_archive_mode.is_paused();
 
-    let mut offline = OfflineState::new();
-    let mut last_ship_at: Option<String> = None;
-    let mut last_runtime_truth_signature: Option<String> = None;
-    let mut session_snapshot_state = SessionSnapshotState::default();
-    let mut last_truth_heartbeat_at: Option<Instant> = None;
-    let mut pending_truth_heartbeat: Option<PendingTruthHeartbeat> = None;
-    let mut last_status_projection: Option<heartbeat::StatusFileProjection> = None;
-    let mut heartbeat_transport = heartbeat::HeartbeatTransportStatus::default();
-    let mut managed_reconciliation =
+    let offline = OfflineState::new();
+    let last_ship_at: Option<String> = None;
+    let last_runtime_truth_signature: Option<String> = None;
+    let session_snapshot_state = SessionSnapshotState::default();
+    let last_truth_heartbeat_at: Option<Instant> = None;
+    let pending_truth_heartbeat: Option<PendingTruthHeartbeat> = None;
+    let last_status_projection: Option<heartbeat::StatusFileProjection> = None;
+    let heartbeat_transport = heartbeat::HeartbeatTransportStatus::default();
+    let managed_reconciliation =
         heartbeat::ProjectionReconciliation::running("startup", chrono::Utc::now().to_rfc3339());
-    let mut wake_gap_detector = WakeGapDetector::new();
-    let mut pending_wake_reconciliation = false;
-    let mut pending_full_reconciliation = false;
-    let mut projection_build_pending = false;
-    let mut projection_generation = 0_u64;
-    let mut managed_observation_generation = 0_u64;
+    let wake_gap_detector = WakeGapDetector::new();
+    let pending_wake_reconciliation = false;
+    let pending_full_reconciliation = false;
+    let projection_build_pending = false;
+    let projection_generation = 0_u64;
+    let managed_observation_generation = 0_u64;
     // Cached rebuilds cannot turn a failed observation into fresh evidence.
     // Only a subsequent valid managed scan makes these inputs publishable.
-    let mut managed_observation_valid = false;
+    let managed_observation_valid = false;
     // Budget-overrun reporting state: how many ticks were over since the last
     // report, the worst one seen, and when we last said anything.
-    let mut projection_over_budget_ticks = 0_u64;
-    let mut projection_worst_elapsed_ms = 0_u64;
-    let mut projection_budget_reported_at: Option<Instant> = None;
-    let mut last_full_reconciled_at: Option<String> = None;
-    let mut last_resume_contracts: Option<Arc<[managed_resume_scan::ResumeContractObservation]>> =
-        None;
-    let mut last_projected_managed_observations = ManagedObservationSnapshot::default();
-    let mut last_status_owners = Arc::new(StatusOwnerEvidence::default());
-    let mut last_status_owners_at: Option<Instant> = None;
-    let mut status_owner_refresh_cursor = 0_usize;
-    let mut managed_owner_refresh_cursor = 0_usize;
-    let mut last_projected_managed_scan_partial = false;
-    let mut last_projected_managed_snapshot_complete = false;
-    let mut last_managed_captured_at = String::new();
-    let mut last_certified_at: Option<Instant> = None;
-    let mut certificate_keepalive_warned = false;
-    let mut last_projected_unmanaged_snapshot_complete = false;
-    let mut unmanaged_binding_refresh_failed = false;
-    let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
-    let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
-    let mut latest_runtime_event_outbox = heartbeat::RuntimeEventOutboxSnapshot::default();
-    let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
-    let mut runtime_collect_tasks: JoinSet<RuntimeCollectResult> = JoinSet::new();
-    let mut runtime_sweep_tasks: JoinSet<outbox::RuntimeOutboxSweep> = JoinSet::new();
+    let projection_over_budget_ticks = 0_u64;
+    let projection_worst_elapsed_ms = 0_u64;
+    let projection_budget_reported_at: Option<Instant> = None;
+    let last_full_reconciled_at: Option<String> = None;
+    let last_resume_contracts: Option<Arc<[managed_resume_scan::ResumeContractObservation]>> = None;
+    let last_projected_managed_observations = ManagedObservationSnapshot::default();
+    let last_status_owners = Arc::new(StatusOwnerEvidence::default());
+    let last_status_owners_at: Option<Instant> = None;
+    let status_owner_refresh_cursor = 0_usize;
+    let managed_owner_refresh_cursor = 0_usize;
+    let last_projected_managed_scan_partial = false;
+    let last_projected_managed_snapshot_complete = false;
+    let last_managed_captured_at = String::new();
+    let last_certified_at: Option<Instant> = None;
+    let certificate_keepalive_warned = false;
+    let last_projected_unmanaged_snapshot_complete = false;
+    let unmanaged_binding_refresh_failed = false;
+    let last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
+    let latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
+    let latest_runtime_event_outbox = heartbeat::RuntimeEventOutboxSnapshot::default();
+    let outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
+    let runtime_collect_tasks: JoinSet<RuntimeCollectResult> = JoinSet::new();
+    let runtime_sweep_tasks: JoinSet<outbox::RuntimeOutboxSweep> = JoinSet::new();
     // A sweep that removed nothing found a flood of distinct events, which it
     // cannot reduce; re-reading the whole directory again in seconds only
     // competes with delivery for the disk. See RUNTIME_SWEEP_QUIET_AFTER_NOTHING.
-    let mut runtime_sweep_quiet_until: Option<Instant> = None;
-    let mut status_slot_tasks: JoinSet<StatusSlotResult> = JoinSet::new();
-    let mut status_post_tasks: JoinSet<StatusPostResult> = JoinSet::new();
-    let mut status_ledger = StatusLedger::default();
+    let runtime_sweep_quiet_until: Option<Instant> = None;
+    let status_slot_tasks: JoinSet<StatusSlotResult> = JoinSet::new();
+    let status_post_tasks: JoinSet<StatusPostResult> = JoinSet::new();
+    let status_ledger = StatusLedger::default();
     // What the local phase ledger already holds. Recording an unchanged phase
     // every 100ms bumps its revision, and the projection debounce watches that
     // watermark: the daemon would schedule a rebuild forever.
-    let mut status_recorded: HashMap<String, (String, u64)> = HashMap::new();
-    let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
-    let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
-    let mut runtime_outbox_consecutive_failures: u32 = 0;
-    let mut runtime_outbox_retry_after: Option<Instant> = None;
-    let mut acknowledged_machine_evidence = heartbeat::AcknowledgedEvidenceHashes::default();
-    let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
-    let mut host_link_changed = host_link.subscribe();
-    let mut last_serving_generation = 0_u64;
-    let mut host_link_poll_tasks: JoinSet<Result<()>> = JoinSet::new();
-    let mut machine_presence_post_tasks: JoinSet<MachinePresencePostResult> = JoinSet::new();
-    let mut unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> =
-        JoinSet::new();
-    let mut unmanaged_binding_refresh_generation: Option<(u64, u64)> = None;
-    let mut storage_maintenance_tasks: JoinSet<()> = JoinSet::new();
+    let status_recorded: HashMap<String, (String, u64)> = HashMap::new();
+    let outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
+    let runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
+    let runtime_outbox_consecutive_failures: u32 = 0;
+    let runtime_outbox_retry_after: Option<Instant> = None;
+    let acknowledged_machine_evidence = heartbeat::AcknowledgedEvidenceHashes::default();
+    let heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
+    let host_link_changed = host_link.subscribe();
+    let last_serving_generation = 0_u64;
+    let host_link_poll_tasks: JoinSet<Result<()>> = JoinSet::new();
+    let machine_presence_post_tasks: JoinSet<MachinePresencePostResult> = JoinSet::new();
+    let unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> = JoinSet::new();
+    let unmanaged_binding_refresh_generation: Option<(u64, u64)> = None;
+    let storage_maintenance_tasks: JoinSet<()> = JoinSet::new();
     // The daily pass gets its own set: sharing one with the cursor-drain work
     // meant a due pass could be skipped outright when a drain was in flight,
     // and the timer would not come back for another day.
-    let mut daily_maintenance_tasks: JoinSet<()> = JoinSet::new();
+    let daily_maintenance_tasks: JoinSet<()> = JoinSet::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let runtime_events_outbox_dir = config::get_agent_runtime_events_outbox_dir()?;
@@ -1142,7 +1263,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // app-server regardless of how many durable sessions exist. Failure is a
     // measured cold-path miss and never disables the control channel.
     tokio::spawn(crate::codex_exec::prewarm_codex_console_workers());
-    let (transcript_wake_tx, mut transcript_wake_rx) = mpsc::unbounded_channel();
+    let (transcript_wake_tx, transcript_wake_rx) = mpsc::unbounded_channel();
     let transcript_wake_task = spawn_transcript_wake_listener(transcript_wake_tx)?;
     // These must outlive the loop. tokio delivers a signal only to receivers
     // that already exist, so building them inside the select rebuilt them on
@@ -1153,17 +1274,136 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // first SIGTERM and exited only on a second, because the second arrived
     // while a stream was being polled. A long-lived stream latches the signal
     // instead, so the next poll sees it no matter when it arrived.
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    let sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .context("install SIGTERM handler")?;
-    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+    let sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
         .context("install SIGINT handler")?;
+    let mut state = DaemonState {
+        sigint,
+        sigterm,
+        transcript_wake_task,
+        transcript_wake_rx,
+        control_channel_task,
+        control_channel_status,
+        status_path,
+        runtime_events_outbox_dir,
+        outbox_dir,
+        daily_maintenance_tasks,
+        storage_maintenance_tasks,
+        unmanaged_binding_refresh_generation,
+        unmanaged_binding_refresh_tasks,
+        machine_presence_post_tasks,
+        host_link_poll_tasks,
+        last_serving_generation,
+        host_link_changed,
+        heartbeat_post_tasks,
+        acknowledged_machine_evidence,
+        runtime_outbox_retry_after,
+        runtime_outbox_consecutive_failures,
+        runtime_outbox_post_tasks,
+        outbox_post_tasks,
+        status_recorded,
+        status_ledger,
+        status_post_tasks,
+        status_slot_tasks,
+        runtime_sweep_quiet_until,
+        runtime_sweep_tasks,
+        runtime_collect_tasks,
+        outbox_collect_tasks,
+        latest_runtime_event_outbox,
+        latest_transcript_wake_observed,
+        last_unmanaged_session_bindings,
+        unmanaged_binding_refresh_failed,
+        last_projected_unmanaged_snapshot_complete,
+        certificate_keepalive_warned,
+        last_certified_at,
+        last_managed_captured_at,
+        last_projected_managed_snapshot_complete,
+        last_projected_managed_scan_partial,
+        managed_owner_refresh_cursor,
+        status_owner_refresh_cursor,
+        last_status_owners_at,
+        last_status_owners,
+        last_projected_managed_observations,
+        last_resume_contracts,
+        last_full_reconciled_at,
+        projection_budget_reported_at,
+        projection_worst_elapsed_ms,
+        projection_over_budget_ticks,
+        managed_observation_valid,
+        managed_observation_generation,
+        projection_generation,
+        projection_build_pending,
+        pending_full_reconciliation,
+        pending_wake_reconciliation,
+        wake_gap_detector,
+        managed_reconciliation,
+        heartbeat_transport,
+        last_status_projection,
+        pending_truth_heartbeat,
+        last_truth_heartbeat_at,
+        session_snapshot_state,
+        last_runtime_truth_signature,
+        last_ship_at,
+        offline,
+        startup_reconciliation_pending,
+        last_phase_watermark,
+        phase_projection_pending,
+        update_http_client,
+        update_check_timer,
+        local_retry_timer,
+        outbox_timer,
+        disk_guard,
+        disk_guard_timer,
+        flight_sample_timer,
+        machine_presence_timer,
+        managed_full_reconciliation_timer,
+        managed_observation_timer,
+        local_status_timer,
+        heartbeat_timer,
+        prune_timer,
+        health_timer,
+        failed_ship_retry_timer,
+        scope_timer,
+        provider_roots_timer,
+        fallback_timer,
+        managed_full_reconciliation_not_before,
+        shipping_progress,
+        deferred_retries,
+        projection_build_tasks,
+        opencode_title_refresh_tasks,
+        last_managed_observations,
+        last_reconcile_started_at,
+        reconcile_tasks,
+        managed_observation_scan_tasks,
+        open_history_reconciliation,
+        discovery_tasks,
+        in_flight,
+        scheduler,
+        watcher,
+        managed_state_dirs,
+        task_context,
+        path_shutdown,
+        adaptive_limiter,
+        flight_recorder,
+        ship_stats,
+        parse_tracker,
+        pending_provider_roots,
+        providers,
+        host_link,
+        client,
+        last_scope_fingerprint,
+        scope_dir,
+        conn,
+        projection_db_path,
+    };
     loop {
         match queue_failed_shipment_retries_if_idle(
-            &mut scheduler,
-            &conn,
-            offline.is_offline,
+            &mut state.scheduler,
+            &state.conn,
+            state.offline.is_offline,
             config.archive_repair_mode,
-            &mut deferred_retries,
+            &mut state.deferred_retries,
         ) {
             Ok(queued) if queued > 0 => {
                 tracing::info!(
@@ -1178,12 +1418,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             ),
         }
         pump_ready_local_work(
-            &mut scheduler,
-            &mut in_flight,
-            &task_context,
-            &mut deferred_retries,
-            &mut shipping_progress,
-            offline.is_offline,
+            &mut state.scheduler,
+            &mut state.in_flight,
+            &state.task_context,
+            &mut state.deferred_retries,
+            &mut state.shipping_progress,
+            state.offline.is_offline,
             archive_repair_is_paused(config.archive_repair_mode),
         );
 
@@ -1191,7 +1431,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         // a sustained event stream cannot starve it. The expensive half — walking
         // the bound working set, statting each source, reading cursors — runs in a
         // blocking task; only the enqueue happens on the loop.
-        while let Some(joined) = reconcile_tasks.try_join_next() {
+        while let Some(joined) = state.reconcile_tasks.try_join_next() {
             match joined {
                 Ok(result) => {
                     if let Some(error) = result.error.as_deref() {
@@ -1210,7 +1450,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         else {
                             continue;
                         };
-                        if !retry_admission_open(&target.path, &mut deferred_retries) {
+                        if !retry_admission_open(&target.path, &mut state.deferred_retries) {
                             continue;
                         }
                         let observed_at_ms = now_ms();
@@ -1226,7 +1466,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             never_shipped = target.never_shipped,
                             "Bound source is behind; scheduling a shipment"
                         );
-                        scheduler.enqueue_observed_window(
+                        state.scheduler.enqueue_observed_window(
                             target.path,
                             provider,
                             WorkPriority::Live,
@@ -1241,20 +1481,25 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
         }
-        if reconcile_tasks.is_empty() && last_reconcile_started_at.elapsed() >= RECONCILE_INTERVAL {
-            last_reconcile_started_at = Instant::now();
-            maybe_start_reconcile_scan(&mut reconcile_tasks, config.shipper_config.db_path.clone());
+        if state.reconcile_tasks.is_empty()
+            && state.last_reconcile_started_at.elapsed() >= RECONCILE_INTERVAL
+        {
+            state.last_reconcile_started_at = Instant::now();
+            maybe_start_reconcile_scan(
+                &mut state.reconcile_tasks,
+                config.shipper_config.db_path.clone(),
+            );
         }
 
         tokio::select! {
             biased;
 
             // Shutdown signals
-            _ = sigterm.recv() => {
+            _ = state.sigterm.recv() => {
                 tracing::info!("Shutdown signal received, exiting gracefully...");
                 break;
             }
-            _ = sigint.recv() => {
+            _ = state.sigint.recv() => {
                 tracing::info!("Shutdown signal received, exiting gracefully...");
                 break;
             }
@@ -1263,27 +1508,27 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Periodic local status/outbox work can do synchronous filesystem
             // and SQLite reads, so do not let a ready timer win the select race
             // while a turn-completion wake is already waiting.
-            Some(signal) = transcript_wake_rx.recv() => {
+            Some(signal) = state.transcript_wake_rx.recv() => {
                 if enqueue_transcript_wake_signal(
-                    &conn,
-                    &mut scheduler,
-                    &mut latest_transcript_wake_observed,
-                    &mut deferred_retries,
+                    &state.conn,
+                    &mut state.scheduler,
+                    &mut state.latest_transcript_wake_observed,
+                    &mut state.deferred_retries,
                     signal,
                 ).is_some() {
                     pump_ready_local_work(
-                        &mut scheduler,
-                        &mut in_flight,
-                        &task_context,
-                        &mut deferred_retries,
-                        &mut shipping_progress,
-                        offline.is_offline,
+                        &mut state.scheduler,
+                        &mut state.in_flight,
+                        &state.task_context,
+                        &mut state.deferred_retries,
+                        &mut state.shipping_progress,
+                        state.offline.is_offline,
                         archive_repair_is_paused(config.archive_repair_mode),
                     );
                 }
             }
 
-            task_result = in_flight.join_next(), if scheduler.has_in_flight() => {
+            task_result = state.in_flight.join_next(), if state.scheduler.has_in_flight() => {
                 match task_result {
                     Some(Ok(Some(result))) => {
                         let retry_path = result.job.path.clone();
@@ -1292,13 +1537,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             && result.rerun_priority.is_none()
                             && result.local_retry_after.is_none();
                         if result.local_retry_after.is_some() {
-                            scheduler.complete_without_rerun(&retry_path);
+                            state.scheduler.complete_without_rerun(&retry_path);
                         } else {
-                            scheduler.complete(&retry_path, result.rerun_priority);
+                            state.scheduler.complete(&retry_path, result.rerun_priority);
                         }
                         if let Some(delay) = result.local_retry_after {
                             let priority = result.local_retry_priority.unwrap_or(result.job.priority);
-                            deferred_retries.insert(retry_path.clone(), DeferredRetry {
+                            state.deferred_retries.insert(retry_path.clone(), DeferredRetry {
                                 due_at: Instant::now() + delay,
                                 provider: retry_provider,
                                 priority,
@@ -1308,11 +1553,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // Checking an unchanged source head advances reconciliation
                         // without creating a new upload receipt.
                         if reconciled_to_head || result.events_shipped > 0 || result.bytes_shipped > 0 {
-                            shipping_progress.record_progress(Instant::now());
+                            state.shipping_progress.record_progress(Instant::now());
                         }
                         if result.had_connect_error {
-                            if offline.record_connect_error() {
-                                shipping_progress.reset_after_sleep(Instant::now());
+                            if state.offline.record_connect_error() {
+                                state.shipping_progress.reset_after_sleep(Instant::now());
                                 tracing::warn!(
                                     threshold = OFFLINE_CONNECT_FAILURE_THRESHOLD,
                                     "Connection error threshold reached while processing {} — entering offline mode",
@@ -1320,16 +1565,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 );
                             } else {
                                 tracing::warn!(
-                                    consecutive_connect_errors = offline.consecutive_connect_failures,
+                                    consecutive_connect_errors = state.offline.consecutive_connect_failures,
                                     threshold = OFFLINE_CONNECT_FAILURE_THRESHOLD,
                                     "Connection error while processing {}; keeping local shipping active",
                                     result.job.path.display()
                                 );
                             }
                         } else if result.events_shipped > 0 || result.bytes_shipped > 0 {
-                            last_ship_at = Some(chrono::Utc::now().to_rfc3339());
-                            if let Some(duration) = offline.mark_online() {
-                                last_runtime_truth_signature = None;
+                            state.last_ship_at = Some(chrono::Utc::now().to_rfc3339());
+                            if let Some(duration) = state.offline.mark_online() {
+                                state.last_runtime_truth_signature = None;
                                 tracing::info!(
                                     "Back online after {:.0}s — resuming shipping",
                                     duration.as_secs_f64()
@@ -1337,19 +1582,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             }
                         }
                         if reconciled_to_head
-                            && !scheduler.has_path(&retry_path)
-                            && !deferred_retries.contains_key(&retry_path)
+                            && !state.scheduler.has_path(&retry_path)
+                            && !state.deferred_retries.contains_key(&retry_path)
                         {
-                            if let Some(open) = open_history_reconciliation.as_mut() {
+                            if let Some(open) = state.open_history_reconciliation.as_mut() {
                                 open.remaining_paths.remove(&retry_path);
                             }
                         }
                         maybe_seal_history_reconciliation(
-                            &mut conn,
-                            &mut open_history_reconciliation,
-                            &scheduler,
-                            &deferred_retries,
-                            discovery_tasks.is_empty(),
+                            &mut state.conn,
+                            &mut state.open_history_reconciliation,
+                            &state.scheduler,
+                            &state.deferred_retries,
+                            state.discovery_tasks.is_empty(),
                         );
                     }
                     Some(Err(e)) => {
@@ -1360,27 +1605,27 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            discovery_result = discovery_tasks.join_next(), if !discovery_tasks.is_empty() => {
+            discovery_result = state.discovery_tasks.join_next(), if !state.discovery_tasks.is_empty() => {
                 match discovery_result {
                     Some(Ok(result)) => {
                         let reconciliation_paths = result
                             .enqueue_files
                             .then(|| result.files.iter().map(|file| file.path.clone()).collect());
                         let previous_inventory_generation =
-                            crate::state::source_inventory::load_inventory(&conn)
+                            crate::state::source_inventory::load_inventory(&state.conn)
                                 .ok()
                                 .flatten()
                                 .map(|inventory| inventory.generation);
                         let inventory = crate::state::source_inventory::persist_inventory(
-                            &conn,
+                            &state.conn,
                             result.inventory,
                         );
                         if result.enqueue_files {
                             let queued = enqueue_discovered_files(
-                                &mut scheduler,
+                                &mut state.scheduler,
                                 result.files,
                                 result.priority,
-                                &mut deferred_retries,
+                                &mut state.deferred_retries,
                             );
                             tracing::debug!("Queued {} paths for {}", queued, result.reason);
                         }
@@ -1395,19 +1640,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 );
                                 if let Some(remaining_paths) = reconciliation_paths {
                                     match crate::state::source_inventory::begin_reconciliation(
-                                        &mut conn,
+                                        &mut state.conn,
                                         &snapshot,
                                     ) {
                                         Ok(Some(attempt)) => {
-                                            open_history_reconciliation =
+                                            state.open_history_reconciliation =
                                                 Some(OpenHistoryReconciliation {
                                                     attempt_id: attempt.attempt_id,
                                                     remaining_paths,
                                                 });
                                         }
-                                        Ok(None) => open_history_reconciliation = None,
+                                        Ok(None) => state.open_history_reconciliation = None,
                                         Err(error) => {
-                                            open_history_reconciliation = None;
+                                            state.open_history_reconciliation = None;
                                             tracing::warn!(
                                                 error = %error,
                                                 "Failed to begin transcript reconciliation seal"
@@ -1415,45 +1660,45 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                         }
                                     }
                                     maybe_seal_history_reconciliation(
-                                        &mut conn,
-                                        &mut open_history_reconciliation,
-                                        &scheduler,
-                                        &deferred_retries,
-                                        discovery_tasks.is_empty(),
+                                        &mut state.conn,
+                                        &mut state.open_history_reconciliation,
+                                        &state.scheduler,
+                                        &state.deferred_retries,
+                                        state.discovery_tasks.is_empty(),
                                     );
                                 }
                                 if inventory_change_requires_projection(
                                     previous_inventory_generation,
                                     snapshot.generation,
-                                    last_unmanaged_session_bindings.is_some(),
-                                ) && managed_observation_valid {
-                                    projection_generation = projection_generation.saturating_add(1);
+                                    state.last_unmanaged_session_bindings.is_some(),
+                                ) && state.managed_observation_valid {
+                                    state.projection_generation = state.projection_generation.saturating_add(1);
                                     let input = ProjectionBuildInput {
-                                        generation: projection_generation,
-                                        managed_observation_generation,
-                                        managed_scan_partial: last_projected_managed_scan_partial,
+                                        generation: state.projection_generation,
+                                        managed_observation_generation: state.managed_observation_generation,
+                                        managed_scan_partial: state.last_projected_managed_scan_partial,
                                         managed_snapshot_complete:
-                                            last_projected_managed_snapshot_complete,
-                                        managed_captured_at: last_managed_captured_at.clone(),
+                                            state.last_projected_managed_snapshot_complete,
+                                        managed_captured_at: state.last_managed_captured_at.clone(),
                                         unmanaged_snapshot_complete:
-                                            last_projected_unmanaged_snapshot_complete,
-                                        db_path: projection_db_path.clone(),
-                                        parse_tracker: parse_tracker.clone(),
-                                        ship_stats: ship_stats.clone(),
-                                        is_offline: offline.is_offline,
-                                        last_ship_at: last_ship_at.clone(),
+                                            state.last_projected_unmanaged_snapshot_complete,
+                                        db_path: state.projection_db_path.clone(),
+                                        parse_tracker: state.parse_tracker.clone(),
+                                        ship_stats: state.ship_stats.clone(),
+                                        is_offline: state.offline.is_offline,
+                                        last_ship_at: state.last_ship_at.clone(),
                                         machine_id: config.shipper_config.machine_name.clone(),
-                                        managed: last_projected_managed_observations.clone(),
-                                        unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
-                                        limiter: adaptive_limiter.snapshot(),
-                                        scheduler: scheduler.snapshot(),
+                                        managed: state.last_projected_managed_observations.clone(),
+                                        unmanaged: state.last_unmanaged_session_bindings.clone().unwrap_or_default(),
+                                        limiter: state.adaptive_limiter.snapshot(),
+                                        scheduler: state.scheduler.snapshot(),
                                         archive_repair_mode: config.archive_repair_mode,
-                                        last_full_reconciled_at: last_full_reconciled_at.clone(),
-                                        continuation: last_resume_contracts.clone(),
-                                        session_snapshot_state: session_snapshot_state.clone(),
+                                        last_full_reconciled_at: state.last_full_reconciled_at.clone(),
+                                        continuation: state.last_resume_contracts.clone(),
+                                        session_snapshot_state: state.session_snapshot_state.clone(),
                                     };
-                                    if !maybe_start_projection_build(&mut projection_build_tasks, input) {
-                                        projection_build_pending = true;
+                                    if !maybe_start_projection_build(&mut state.projection_build_tasks, input) {
+                                        state.projection_build_pending = true;
                                     }
                                 }
                             }
@@ -1470,7 +1715,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            outbox_collect_result = outbox_collect_tasks.join_next(), if !outbox_collect_tasks.is_empty() => {
+            outbox_collect_result = state.outbox_collect_tasks.join_next(), if !state.outbox_collect_tasks.is_empty() => {
                 match outbox_collect_result {
                     Some(Ok(result)) => {
                         if result.elapsed_ms > 100 {
@@ -1488,15 +1733,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             // The phase ledger just moved, which is the only
                             // evidence a turn boundary produces. Arm the
                             // debounce rather than projecting per signal.
-                            if arm_phase_projection(&mut phase_projection_pending) {
+                            if arm_phase_projection(&mut state.phase_projection_pending) {
                                 phase_projection_timer
                                     .as_mut()
                                     .reset(tokio::time::Instant::now() + PHASE_PROJECTION_DEBOUNCE);
                             }
                         }
                         if !result.presence.posts.is_empty() {
-                            if outbox_post_tasks.is_empty() {
-                                let client = client.clone();
+                            if state.outbox_post_tasks.is_empty() {
+                                let client = state.client.clone();
                                 let posts = result.presence.posts;
                                 let post_count = posts.len();
                                 // spawn, not spawn_local: the wrapper only awaits
@@ -1504,7 +1749,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 // the LocalSet's driving thread. Multi-second work
                                 // there (a full reconciliation pass is 10-20s) then
                                 // holds this gate closed while the network is idle.
-                                outbox_post_tasks.spawn(async move {
+                                state.outbox_post_tasks.spawn(async move {
                                     let join_started = Instant::now();
                                     let post_task = tokio::spawn(async move {
                                         let task_started = Instant::now();
@@ -1549,11 +1794,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            status_slot_result = status_slot_tasks.join_next(), if !status_slot_tasks.is_empty() => {
+            status_slot_result = state.status_slot_tasks.join_next(), if !state.status_slot_tasks.is_empty() => {
                 match status_slot_result {
                     Some(Ok(result)) => {
-                        status_owner_refresh_cursor = result.owner_refresh_cursor;
-                        managed_owner_refresh_cursor = result.managed_owner_refresh_cursor;
+                        state.status_owner_refresh_cursor = result.owner_refresh_cursor;
+                        state.managed_owner_refresh_cursor = result.managed_owner_refresh_cursor;
                         if result.elapsed_ms > 100 {
                             tracing::warn!(
                                 elapsed_ms = result.elapsed_ms,
@@ -1568,16 +1813,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             .map(|slot| slot.session_id.clone())
                             .collect();
                         for (session_id, version) in result.recorded {
-                            status_recorded.insert(session_id, version);
+                            state.status_recorded.insert(session_id, version);
                         }
                         // A session with no slot has no current status, so
                         // neither map needs to remember it.
-                        status_recorded.retain(|session_id, _| live.contains(session_id));
-                        status_ledger.retain_live(&result.slots);
-                        let pending = status_ledger.pending(result.slots, Instant::now());
-                        if !pending.is_empty() && status_post_tasks.is_empty() {
-                            let client = client.clone();
-                            status_post_tasks.spawn(async move {
+                        state.status_recorded.retain(|session_id, _| live.contains(session_id));
+                        state.status_ledger.retain_live(&result.slots);
+                        let pending = state.status_ledger.pending(result.slots, Instant::now());
+                        if !pending.is_empty() && state.status_post_tasks.is_empty() {
+                            let client = state.client.clone();
+                            state.status_post_tasks.spawn(async move {
                                 post_status_slots(&client, pending).await
                             });
                         }
@@ -1588,9 +1833,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     None => {}
                 }
             }
-            status_post_result = status_post_tasks.join_next(), if !status_post_tasks.is_empty() => {
+            status_post_result = state.status_post_tasks.join_next(), if !state.status_post_tasks.is_empty() => {
                 match status_post_result {
-                    Some(Ok(result)) => status_ledger.settle(result, Instant::now()),
+                    Some(Ok(result)) => state.status_ledger.settle(result, Instant::now()),
                     Some(Err(err)) => {
                         tracing::warn!("Status slot POST task failed: {}", err);
                     }
@@ -1598,13 +1843,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            runtime_collect_result = runtime_collect_tasks.join_next(), if !runtime_collect_tasks.is_empty() => {
+            runtime_collect_result = state.runtime_collect_tasks.join_next(), if !state.runtime_collect_tasks.is_empty() => {
                 match runtime_collect_result {
                     Some(Ok(result)) => {
-                        latest_runtime_event_outbox = result.measurement;
-                        if let Some(projection) = last_status_projection.as_mut() {
+                        state.latest_runtime_event_outbox = result.measurement;
+                        if let Some(projection) = state.last_status_projection.as_mut() {
                             projection
-                                .set_runtime_event_outbox(latest_runtime_event_outbox.clone());
+                                .set_runtime_event_outbox(state.latest_runtime_event_outbox.clone());
                         }
                         // A saturated pass means the directory holds more than
                         // one pass can inspect, so the newest observation is
@@ -1612,11 +1857,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // task of its own: the live lane must keep collecting
                         // and posting while that runs.
                         if result.saturated
-                            && runtime_sweep_tasks.is_empty()
-                            && runtime_sweep_quiet_until.is_none_or(|until| Instant::now() >= until)
+                            && state.runtime_sweep_tasks.is_empty()
+                            && state.runtime_sweep_quiet_until.is_none_or(|until| Instant::now() >= until)
                         {
-                            let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
-                            runtime_sweep_tasks.spawn_blocking(move || {
+                            let runtime_events_outbox_dir = state.runtime_events_outbox_dir.clone();
+                            state.runtime_sweep_tasks.spawn_blocking(move || {
                                 outbox::sweep_runtime_event_outbox(
                                     &runtime_events_outbox_dir,
                                     outbox::RUNTIME_EVENT_SWEEP_LIMIT,
@@ -1631,18 +1876,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                         }
                         if !result.posts.is_empty() {
-                            let retry_due = runtime_outbox_retry_after
+                            let retry_due = state.runtime_outbox_retry_after
                                 .map(|retry_at| Instant::now() >= retry_at)
                                 .unwrap_or(true);
-                            if runtime_outbox_post_tasks.is_empty() && retry_due {
-                                let client = client.clone();
+                            if state.runtime_outbox_post_tasks.is_empty() && retry_due {
+                                let client = state.client.clone();
                                 let runtime_posts = result.posts;
                                 let post_count = runtime_posts.len();
                                 // spawn, not spawn_local: see the presence path
                                 // above. This is the live-transcript lane, so a
                                 // starved wrapper here shows up as minutes-stale
                                 // events on every client.
-                                runtime_outbox_post_tasks.spawn(async move {
+                                state.runtime_outbox_post_tasks.spawn(async move {
                                     let join_started = Instant::now();
                                     let post_task = tokio::spawn(async move {
                                         let task_started = Instant::now();
@@ -1688,7 +1933,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            runtime_sweep_result = runtime_sweep_tasks.join_next(), if !runtime_sweep_tasks.is_empty() => {
+            runtime_sweep_result = state.runtime_sweep_tasks.join_next(), if !state.runtime_sweep_tasks.is_empty() => {
                 match runtime_sweep_result {
                     Some(Ok(sweep)) => {
                         tracing::warn!(
@@ -1701,7 +1946,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // next saturated collection arms the next sweep on the
                         // ordinary tick; chaining blocking passes back to back
                         // would starve every other lane on this loop.
-                        runtime_sweep_quiet_until = (sweep.discarded == 0)
+                        state.runtime_sweep_quiet_until = (sweep.discarded == 0)
                             .then(|| Instant::now() + RUNTIME_SWEEP_QUIET_AFTER_NOTHING);
                     }
                     Some(Err(err)) => {
@@ -1711,12 +1956,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            outbox_post_result = outbox_post_tasks.join_next(), if !outbox_post_tasks.is_empty() => {
+            outbox_post_result = state.outbox_post_tasks.join_next(), if !state.outbox_post_tasks.is_empty() => {
                 match outbox_post_result {
                     Some(Ok((sent, kept, join_elapsed_ms, task_elapsed_ms))) => {
                         let local_join_delay_ms = join_elapsed_ms.saturating_sub(task_elapsed_ms);
                         if kept > 0 {
-                            if host_link.is_updating() {
+                            if state.host_link.is_updating() {
                                 tracing::debug!(
                                     sent,
                                     kept,
@@ -1736,7 +1981,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 );
                             }
                         } else if join_elapsed_ms > 1_000 {
-                            if host_link.is_updating() {
+                            if state.host_link.is_updating() {
                                 tracing::debug!(
                                     sent,
                                     task_elapsed_ms,
@@ -1763,7 +2008,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     }
                     Some(Err(err)) => {
-                        if host_link.explains_failure(&err.to_string()) {
+                        if state.host_link.explains_failure(&err.to_string()) {
                             tracing::debug!("Outbox presence POST task deferred during Runtime Host update: {}", err);
                         } else {
                             tracing::warn!("Outbox presence POST task failed: {}", err);
@@ -1773,7 +2018,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            runtime_outbox_post_result = runtime_outbox_post_tasks.join_next(), if !runtime_outbox_post_tasks.is_empty() => {
+            runtime_outbox_post_result = state.runtime_outbox_post_tasks.join_next(), if !state.runtime_outbox_post_tasks.is_empty() => {
                 match runtime_outbox_post_result {
                     Some(Ok((sent, kept, join_elapsed_ms, task_elapsed_ms))) => {
                         let local_join_delay_ms = join_elapsed_ms.saturating_sub(task_elapsed_ms);
@@ -1782,15 +2027,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // every other session; back off only when this pass made
                         // no progress at all.
                         if kept > 0 && sent == 0 {
-                            runtime_outbox_consecutive_failures =
-                                runtime_outbox_consecutive_failures.saturating_add(1);
+                            state.runtime_outbox_consecutive_failures =
+                                state.runtime_outbox_consecutive_failures.saturating_add(1);
                             let backoff_multiplier = 1u64
-                                << runtime_outbox_consecutive_failures.min(4);
+                                << state.runtime_outbox_consecutive_failures.min(4);
                             let delay = LIVE_LOCAL_RETRY_DELAY
                                 .saturating_mul(backoff_multiplier as u32)
                                 .min(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
-                            runtime_outbox_retry_after = Some(Instant::now() + delay);
-                            if host_link.is_updating() {
+                            state.runtime_outbox_retry_after = Some(Instant::now() + delay);
+                            if state.host_link.is_updating() {
                                 tracing::debug!(
                                     sent,
                                     kept,
@@ -1812,14 +2057,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 );
                             }
                         } else {
-                            runtime_outbox_consecutive_failures = 0;
-                            runtime_outbox_retry_after = None;
+                            state.runtime_outbox_consecutive_failures = 0;
+                            state.runtime_outbox_retry_after = None;
                             // Delivery made progress, so more may be waiting:
                             // collect again now rather than on the next tick.
                             // An empty outbox ends this, because a pass that
                             // finds nothing starts no POST.
                             if sent > 0 {
-                                outbox_timer.reset_immediately();
+                                state.outbox_timer.reset_immediately();
                             }
                             if kept > 0 {
                                 tracing::warn!(
@@ -1831,7 +2076,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     "Outbox runtime-event POST kept some files while other files progressed"
                                 );
                             } else if join_elapsed_ms > 1_000 {
-                                if host_link.is_updating() {
+                                if state.host_link.is_updating() {
                                     tracing::debug!(
                                         sent,
                                         task_elapsed_ms,
@@ -1859,11 +2104,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     }
                     Some(Err(err)) => {
-                        runtime_outbox_consecutive_failures =
-                            runtime_outbox_consecutive_failures.saturating_add(1);
-                        runtime_outbox_retry_after =
+                        state.runtime_outbox_consecutive_failures =
+                            state.runtime_outbox_consecutive_failures.saturating_add(1);
+                        state.runtime_outbox_retry_after =
                             Some(Instant::now() + LIVE_LOCAL_RETRY_DELAY);
-                        if host_link.explains_failure(&err.to_string()) {
+                        if state.host_link.explains_failure(&err.to_string()) {
                             tracing::debug!("Runtime-event outbox task deferred during Runtime Host update: {}", err);
                         } else {
                             tracing::warn!("Outbox runtime-event POST task failed: {}", err);
@@ -1873,10 +2118,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            heartbeat_post_result = heartbeat_post_tasks.join_next(), if !heartbeat_post_tasks.is_empty() => {
+            heartbeat_post_result = state.heartbeat_post_tasks.join_next(), if !state.heartbeat_post_tasks.is_empty() => {
                 match heartbeat_post_result {
                     Some(Ok(result)) => {
-                        heartbeat_transport.record_send_metrics(
+                        state.heartbeat_transport.record_send_metrics(
                             result.reason,
                             result.metrics.raw_bytes,
                             result.metrics.wire_bytes,
@@ -1885,7 +2130,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         let local_join_delay_ms =
                             result.join_elapsed_ms.saturating_sub(result.task_elapsed_ms);
                         if result.task_elapsed_ms > 1_000 || local_join_delay_ms > 1_000 {
-                            if host_link.is_updating() {
+                            if state.host_link.is_updating() {
                                 tracing::debug!(
                                     reason = result.reason,
                                     task_elapsed_ms = result.task_elapsed_ms,
@@ -1903,73 +2148,73 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 );
                             }
                         }
-                        acknowledged_machine_evidence.record_send_result(
+                        state.acknowledged_machine_evidence.record_send_result(
                             &result.result,
                             &result.sent_evidence_identities,
                         );
-                        if let Some(evidence) = last_status_projection
+                        if let Some(evidence) = state.last_status_projection
                             .as_ref()
                             .and_then(|projection| projection.payload.machine_evidence.as_ref())
                         {
-                            acknowledged_machine_evidence
+                            state.acknowledged_machine_evidence
                                 .prune_to_current(&evidence.candidate_identities);
                         } else {
-                            acknowledged_machine_evidence.prune_to_current(&[]);
+                            state.acknowledged_machine_evidence.prune_to_current(&[]);
                         }
                         match result.result {
                             Ok(ack) => {
-                                let evidence_was_refused = heartbeat_transport.evidence_refused();
-                                let evidence_changed = heartbeat_transport
+                                let evidence_was_refused = state.heartbeat_transport.evidence_refused();
+                                let evidence_changed = state.heartbeat_transport
                                     .record_evidence_ack(ack.evidence_ack.as_deref());
-                                let evidence_refused = heartbeat_transport.evidence_refused();
-                                let recovered = heartbeat_transport
+                                let evidence_refused = state.heartbeat_transport.evidence_refused();
+                                let recovered = state.heartbeat_transport
                                     .record_success(chrono::Utc::now().to_rfc3339());
                                 tracing::debug!(
                                     reason = result.reason,
                                     task_elapsed_ms = result.task_elapsed_ms,
                                     join_elapsed_ms = result.join_elapsed_ms,
-                                    evidence_state = %heartbeat_transport.evidence_state,
+                                    evidence_state = %state.heartbeat_transport.evidence_state,
                                     "Runtime truth snapshot sent after local process/control change"
                                 );
                                 if evidence_changed && evidence_refused {
                                     tracing::warn!(
                                         reason = result.reason,
-                                        evidence_state = %heartbeat_transport.evidence_state,
+                                        evidence_state = %state.heartbeat_transport.evidence_state,
                                         "Heartbeat machine evidence was refused"
                                     );
-                                } else if evidence_was_refused && heartbeat_transport.evidence_state == "applied" {
+                                } else if evidence_was_refused && state.heartbeat_transport.evidence_state == "applied" {
                                     tracing::info!("Heartbeat machine evidence recovered");
                                 }
                                 if recovered {
                                     tracing::info!("Heartbeat POST recovered");
                                 }
-                                last_runtime_truth_signature = Some(result.signature.clone());
-                                if pending_truth_heartbeat
+                                state.last_runtime_truth_signature = Some(result.signature.clone());
+                                if state.pending_truth_heartbeat
                                     .as_ref()
                                     .is_some_and(|pending| pending.signature == result.signature)
                                 {
-                                    pending_truth_heartbeat = None;
+                                    state.pending_truth_heartbeat = None;
                                 }
                             }
                             Err(err) => {
                                 let error = heartbeat::bounded_heartbeat_error(&err);
-                                let transitioned = heartbeat_transport.record_failure(
+                                let transitioned = state.heartbeat_transport.record_failure(
                                     chrono::Utc::now().to_rfc3339(),
                                     &error,
                                 );
-                                if pending_truth_heartbeat
+                                if state.pending_truth_heartbeat
                                     .as_ref()
                                     .is_some_and(|pending| pending.signature == result.signature)
                                 {
-                                    pending_truth_heartbeat = None;
+                                    state.pending_truth_heartbeat = None;
                                 }
                                 // The failed send did not deliver this truth: forget it, so the
                                 // next projection retries it (after the 1 s window) instead of
                                 // waiting for the 60 s periodic heartbeat.
-                                if last_runtime_truth_signature.as_deref() == Some(result.signature.as_str()) {
-                                    last_runtime_truth_signature = None;
+                                if state.last_runtime_truth_signature.as_deref() == Some(result.signature.as_str()) {
+                                    state.last_runtime_truth_signature = None;
                                 }
-                                if host_link.explains_failure(&error) {
+                                if state.host_link.explains_failure(&error) {
                                     tracing::debug!(
                                         reason = result.reason,
                                         error = %error,
@@ -1993,23 +2238,23 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             }
                         }
                         publish_heartbeat_transport_status(
-                            &heartbeat_transport,
-                            &mut last_status_projection,
-                            serde_json::to_value(control_channel_status.snapshot()).ok(),
-                            &managed_reconciliation,
-                            &mut shipping_progress,
-                            offline.is_offline,
-                            &host_link,
-                            &status_path,
+                            &state.heartbeat_transport,
+                            &mut state.last_status_projection,
+                            serde_json::to_value(state.control_channel_status.snapshot()).ok(),
+                            &state.managed_reconciliation,
+                            &mut state.shipping_progress,
+                            state.offline.is_offline,
+                            &state.host_link,
+                            &state.status_path,
                         );
                     }
                     Some(Err(err)) => {
                         let error = heartbeat::bounded_heartbeat_error(&err.to_string());
-                        let transitioned = heartbeat_transport.record_failure(
+                        let transitioned = state.heartbeat_transport.record_failure(
                             chrono::Utc::now().to_rfc3339(),
                             &error,
                         );
-                        if host_link.explains_failure(&error) {
+                        if state.host_link.explains_failure(&error) {
                             tracing::debug!(error = %error, "Heartbeat POST task deferred during Runtime Host update");
                         } else if transitioned {
                             tracing::warn!(error = %error, "Heartbeat POST task failed");
@@ -2017,21 +2262,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             tracing::debug!(error = %error, "Heartbeat POST task remains degraded");
                         }
                         publish_heartbeat_transport_status(
-                            &heartbeat_transport,
-                            &mut last_status_projection,
-                            serde_json::to_value(control_channel_status.snapshot()).ok(),
-                            &managed_reconciliation,
-                            &mut shipping_progress,
-                            offline.is_offline,
-                            &host_link,
-                            &status_path,
+                            &state.heartbeat_transport,
+                            &mut state.last_status_projection,
+                            serde_json::to_value(state.control_channel_status.snapshot()).ok(),
+                            &state.managed_reconciliation,
+                            &mut state.shipping_progress,
+                            state.offline.is_offline,
+                            &state.host_link,
+                            &state.status_path,
                         );
                     }
                     None => {}
                 }
             }
 
-            machine_presence_post_result = machine_presence_post_tasks.join_next(), if !machine_presence_post_tasks.is_empty() => {
+            machine_presence_post_result = state.machine_presence_post_tasks.join_next(), if !state.machine_presence_post_tasks.is_empty() => {
                 match machine_presence_post_result {
                     Some(Ok(result)) => {
                         match result.result {
@@ -2052,7 +2297,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     None => {}
                 }
             }
-            host_link_poll_result = host_link_poll_tasks.join_next(), if !host_link_poll_tasks.is_empty() => {
+            host_link_poll_result = state.host_link_poll_tasks.join_next(), if !state.host_link_poll_tasks.is_empty() => {
                 match host_link_poll_result {
                     Some(Ok(Ok(()))) | None => {}
                     Some(Ok(Err(error))) => {
@@ -2063,39 +2308,39 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                 }
             }
-            host_link_event = host_link_changed.changed() => {
+            host_link_event = state.host_link_changed.changed() => {
                 if host_link_event.is_ok() {
-                    let serving_generation = host_link.serving_generation();
-                    if serving_generation > last_serving_generation {
-                        last_serving_generation = serving_generation;
+                    let serving_generation = state.host_link.serving_generation();
+                    if serving_generation > state.last_serving_generation {
+                        state.last_serving_generation = serving_generation;
                         let now = Instant::now();
-                        for retry in deferred_retries.values_mut() {
+                        for retry in state.deferred_retries.values_mut() {
                             retry.due_at = now;
                         }
-                        runtime_outbox_consecutive_failures = 0;
-                        runtime_outbox_retry_after = None;
-                        adaptive_limiter.reset_backpressure_cooldown();
-                        outbox_timer.reset_immediately();
-                        failed_ship_retry_timer.reset_immediately();
-                        heartbeat_timer.reset_immediately();
-                        pending_truth_heartbeat = None;
+                        state.runtime_outbox_consecutive_failures = 0;
+                        state.runtime_outbox_retry_after = None;
+                        state.adaptive_limiter.reset_backpressure_cooldown();
+                        state.outbox_timer.reset_immediately();
+                        state.failed_ship_retry_timer.reset_immediately();
+                        state.heartbeat_timer.reset_immediately();
+                        state.pending_truth_heartbeat = None;
                     }
                 }
             }
-            _ = storage_maintenance_tasks.join_next(), if !storage_maintenance_tasks.is_empty() => {}
-            _ = daily_maintenance_tasks.join_next(), if !daily_maintenance_tasks.is_empty() => {}
+            _ = state.storage_maintenance_tasks.join_next(), if !state.storage_maintenance_tasks.is_empty() => {}
+            _ = state.daily_maintenance_tasks.join_next(), if !state.daily_maintenance_tasks.is_empty() => {}
 
-            unmanaged_binding_refresh_result = unmanaged_binding_refresh_tasks.join_next(), if !unmanaged_binding_refresh_tasks.is_empty() => {
-                let refresh_generation = unmanaged_binding_refresh_generation.take();
+            unmanaged_binding_refresh_result = state.unmanaged_binding_refresh_tasks.join_next(), if !state.unmanaged_binding_refresh_tasks.is_empty() => {
+                let refresh_generation = state.unmanaged_binding_refresh_generation.take();
                 match unmanaged_binding_refresh_result {
                     Some(Ok(result)) => {
-                        let stale = result.generation != projection_generation;
+                        let stale = result.generation != state.projection_generation;
                         let managed_observation_current =
-                            result.managed_observation_generation == managed_observation_generation;
+                            result.managed_observation_generation == state.managed_observation_generation;
                         if stale {
                             tracing::debug!(
                                 generation = result.generation,
-                                latest_generation = projection_generation,
+                                latest_generation = state.projection_generation,
                                 "Discarded stale unmanaged reconciliation result"
                             );
                         } else if !managed_observation_current {
@@ -2103,11 +2348,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 result_managed_observation_generation =
                                     result.managed_observation_generation,
                                 latest_managed_observation_generation =
-                                    managed_observation_generation,
+                                    state.managed_observation_generation,
                                 "Applying unmanaged result without replacing newer managed observations"
                             );
                         }
-                        if !stale && managed_observation_valid {
+                        if !stale && state.managed_observation_valid {
                             match result.result {
                             Ok(bindings) => {
                                 if result.elapsed_ms > 1_000 {
@@ -2126,22 +2371,22 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     );
                                 }
                                 if managed_observation_current {
-                                    last_projected_managed_observations = result.managed;
-                                    last_projected_managed_scan_partial =
+                                    state.last_projected_managed_observations = result.managed;
+                                    state.last_projected_managed_scan_partial =
                                         result.managed_scan_partial;
-                                    last_projected_managed_snapshot_complete =
+                                    state.last_projected_managed_snapshot_complete =
                                         result.full_reconciliation_candidate;
-                                    last_projected_unmanaged_snapshot_complete =
+                                    state.last_projected_unmanaged_snapshot_complete =
                                         result.full_reconciliation_candidate;
-                                    unmanaged_binding_refresh_failed = false;
+                                    state.unmanaged_binding_refresh_failed = false;
                                     if result.full_reconciliation_candidate {
-                                        last_full_reconciled_at =
+                                        state.last_full_reconciled_at =
                                             Some(chrono::Utc::now().to_rfc3339());
                                     }
                                 } else {
-                                    last_projected_unmanaged_snapshot_complete = false;
+                                    state.last_projected_unmanaged_snapshot_complete = false;
                                 }
-                                last_unmanaged_session_bindings = Some(bindings);
+                                state.last_unmanaged_session_bindings = Some(bindings);
                             }
                             Err(err) if !managed_observation_current => {
                                 tracing::debug!(
@@ -2158,13 +2403,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 // scope incomplete so the Runtime Host cannot close missing
                                 // Shadow sessions from this partial observation.
                                 if managed_observation_current {
-                                    last_projected_managed_observations = result.managed;
-                                    last_projected_managed_scan_partial =
+                                    state.last_projected_managed_observations = result.managed;
+                                    state.last_projected_managed_scan_partial =
                                         result.managed_scan_partial;
-                                    last_projected_managed_snapshot_complete =
+                                    state.last_projected_managed_snapshot_complete =
                                         result.full_reconciliation_candidate;
                                 }
-                                last_projected_unmanaged_snapshot_complete = false;
+                                state.last_projected_unmanaged_snapshot_complete = false;
                                 // Shadow discovery is optional. Do not turn a
                                 // per-pid lsof failure into an immediate full
                                 // managed scan, which would repeatedly advance
@@ -2172,14 +2417,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 // truth. The scheduled full observation is the
                                 // retry path; keep this projection incomplete
                                 // so missing Shadow sessions remain unknown.
-                                pending_full_reconciliation = false;
-                                unmanaged_binding_refresh_failed = true;
+                                state.pending_full_reconciliation = false;
+                                state.unmanaged_binding_refresh_failed = true;
                                 // Shadow discovery is optional evidence. Keep the
                                 // retained managed projection usable and mark the
                                 // retry as in progress; a single lsof failure
                                 // must not turn local health into a failed
                                 // reconciliation or erase current sessions.
-                                managed_reconciliation.start(
+                                state.managed_reconciliation.start(
                                     "unmanaged_binding",
                                     chrono::Utc::now().to_rfc3339(),
                                 );
@@ -2192,64 +2437,64 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             }
                             }
                             let input = ProjectionBuildInput {
-                                generation: projection_generation,
-                                managed_observation_generation,
-                                managed_scan_partial: last_projected_managed_scan_partial,
+                                generation: state.projection_generation,
+                                managed_observation_generation: state.managed_observation_generation,
+                                managed_scan_partial: state.last_projected_managed_scan_partial,
                                 managed_snapshot_complete:
-                                    last_projected_managed_snapshot_complete,
-                                managed_captured_at: last_managed_captured_at.clone(),
+                                    state.last_projected_managed_snapshot_complete,
+                                managed_captured_at: state.last_managed_captured_at.clone(),
                                 unmanaged_snapshot_complete:
-                                    last_projected_unmanaged_snapshot_complete,
-                                db_path: projection_db_path.clone(),
-                                parse_tracker: parse_tracker.clone(),
-                                ship_stats: ship_stats.clone(),
-                                is_offline: offline.is_offline,
-                                last_ship_at: last_ship_at.clone(),
+                                    state.last_projected_unmanaged_snapshot_complete,
+                                db_path: state.projection_db_path.clone(),
+                                parse_tracker: state.parse_tracker.clone(),
+                                ship_stats: state.ship_stats.clone(),
+                                is_offline: state.offline.is_offline,
+                                last_ship_at: state.last_ship_at.clone(),
                                 machine_id: config.shipper_config.machine_name.clone(),
-                                managed: last_projected_managed_observations.clone(),
-                                unmanaged: last_unmanaged_session_bindings
+                                managed: state.last_projected_managed_observations.clone(),
+                                unmanaged: state.last_unmanaged_session_bindings
                                     .clone()
                                     .unwrap_or_default(),
-                                limiter: adaptive_limiter.snapshot(),
-                                scheduler: scheduler.snapshot(),
+                                limiter: state.adaptive_limiter.snapshot(),
+                                scheduler: state.scheduler.snapshot(),
                                 archive_repair_mode: config.archive_repair_mode,
-                                last_full_reconciled_at: last_full_reconciled_at.clone(),
-                                continuation: last_resume_contracts.clone(),
-                                session_snapshot_state: session_snapshot_state.clone(),
+                                last_full_reconciled_at: state.last_full_reconciled_at.clone(),
+                                continuation: state.last_resume_contracts.clone(),
+                                session_snapshot_state: state.session_snapshot_state.clone(),
                             };
-                            if !maybe_start_projection_build(&mut projection_build_tasks, input) {
-                                projection_build_pending = true;
+                            if !maybe_start_projection_build(&mut state.projection_build_tasks, input) {
+                                state.projection_build_pending = true;
                             }
                         }
                     }
                     Some(Err(err)) => {
                         let refresh_is_current = refresh_generation
-                            == Some((projection_generation, managed_observation_generation));
+                            == Some((state.projection_generation, state.managed_observation_generation));
                         if refresh_is_current {
-                            unmanaged_binding_refresh_failed = true;
+                            state.unmanaged_binding_refresh_failed = true;
                             // This task only refreshes optional Shadow bindings.
                             // Preserve the last coherent managed projection and
                             // expose the retry as reconciling rather than making
                             // the whole local session inventory failed.
-                            managed_reconciliation.start(
+                            state.managed_reconciliation.start(
                                 "unmanaged_binding",
                                 chrono::Utc::now().to_rfc3339(),
                             );
                             heartbeat::refresh_existing_status_pulse(
-                                &managed_reconciliation,
-                                &mut shipping_progress,
-                                offline.is_offline,
-                                &status_path,
-                                &heartbeat_transport,
-                                Some(&host_link.snapshot()),
+                                &state.managed_reconciliation,
+                                &mut state.shipping_progress,
+                                state.offline.is_offline,
+                                &state.status_path,
+                                &state.heartbeat_transport,
+                                Some(&state.host_link.snapshot()),
                             );
                             tracing::warn!("Unmanaged binding refresh task failed: {}", err);
                         } else {
                             tracing::debug!(
                                 refresh_generation = ?refresh_generation,
-                                latest_generation = projection_generation,
+                                latest_generation = state.projection_generation,
                                 latest_managed_observation_generation =
-                                    managed_observation_generation,
+                                    state.managed_observation_generation,
                                 "Discarded stale unmanaged binding task failure: {}",
                                 err
                             );
@@ -2257,43 +2502,43 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     None => {}
                 }
-                if unmanaged_binding_refresh_tasks.is_empty()
-                    && managed_observation_scan_tasks.is_empty()
+                if state.unmanaged_binding_refresh_tasks.is_empty()
+                    && state.managed_observation_scan_tasks.is_empty()
                 {
-                    if pending_wake_reconciliation
+                    if state.pending_wake_reconciliation
                         && maybe_start_managed_observation_scan(
-                            projection_db_path.clone(),
-                            &mut managed_observation_scan_tasks,
+                            state.projection_db_path.clone(),
+                            &mut state.managed_observation_scan_tasks,
                             "wake",
                             true,
-                            &last_managed_observations,
+                            &state.last_managed_observations,
                         )
                     {
-                        pending_wake_reconciliation = false;
-                        managed_full_reconciliation_not_before =
+                        state.pending_wake_reconciliation = false;
+                        state.managed_full_reconciliation_not_before =
                             Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                        managed_reconciliation.start(
+                        state.managed_reconciliation.start(
                             "wake",
                             chrono::Utc::now().to_rfc3339(),
                         );
                     } else if managed_full_reconciliation_ready(
-                        pending_full_reconciliation || certificate_needs_refresh(last_certified_at, Instant::now()),
-                        managed_observation_scan_tasks.is_empty(),
+                        state.pending_full_reconciliation || certificate_needs_refresh(state.last_certified_at, Instant::now()),
+                        state.managed_observation_scan_tasks.is_empty(),
                         Instant::now(),
-                        managed_full_reconciliation_not_before,
+                        state.managed_full_reconciliation_not_before,
                     )
                         && maybe_start_managed_observation_scan(
-                            projection_db_path.clone(),
-                            &mut managed_observation_scan_tasks,
+                            state.projection_db_path.clone(),
+                            &mut state.managed_observation_scan_tasks,
                             "full_reconciliation",
                             true,
-                            &last_managed_observations,
+                            &state.last_managed_observations,
                         )
                     {
-                        pending_full_reconciliation = false;
-                        managed_full_reconciliation_not_before =
+                        state.pending_full_reconciliation = false;
+                        state.managed_full_reconciliation_not_before =
                             Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                        managed_reconciliation.start(
+                        state.managed_reconciliation.start(
                             "full_reconciliation",
                             chrono::Utc::now().to_rfc3339(),
                         );
@@ -2301,11 +2546,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            managed_observation_scan_result = managed_observation_scan_tasks.join_next(), if !managed_observation_scan_tasks.is_empty() => {
+            managed_observation_scan_result = state.managed_observation_scan_tasks.join_next(), if !state.managed_observation_scan_tasks.is_empty() => {
                 match managed_observation_scan_result {
                     Some(Ok(mut result)) => {
-                        last_status_owners_at = result.status_owner_snapshot_at;
-                        last_status_owners = Arc::new(std::mem::take(&mut result.status_owners));
+                        state.last_status_owners_at = result.status_owner_snapshot_at;
+                        state.last_status_owners = Arc::new(std::mem::take(&mut result.status_owners));
                         if result.elapsed_ms > 250 {
                             tracing::warn!(
                                 reason = result.reason,
@@ -2368,87 +2613,87 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                         }
                         if !result.process_inventory_valid {
-                            managed_observation_valid = false;
-                            projection_generation = projection_generation.saturating_add(1);
+                            state.managed_observation_valid = false;
+                            state.projection_generation = state.projection_generation.saturating_add(1);
                             tracing::warn!(
                                 reason = result.reason,
                                 "Managed observation scan retained prior truth because process inventory failed"
                             );
-                            managed_reconciliation =
+                            state.managed_reconciliation =
                                 heartbeat::ProjectionReconciliation::failed("process_inventory");
-                            managed_reconciliation.start(
+                            state.managed_reconciliation.start(
                                 "process_inventory",
                                 chrono::Utc::now().to_rfc3339(),
                             );
                             heartbeat::refresh_existing_status_pulse(
-                                &managed_reconciliation,
-                                &mut shipping_progress,
-                                offline.is_offline,
-                                &status_path,
-                                &heartbeat_transport,
-                                Some(&host_link.snapshot()),
+                                &state.managed_reconciliation,
+                                &mut state.shipping_progress,
+                                state.offline.is_offline,
+                                &state.status_path,
+                                &state.heartbeat_transport,
+                                Some(&state.host_link.snapshot()),
                             );
-                            if pending_wake_reconciliation {
+                            if state.pending_wake_reconciliation {
                                 if maybe_start_managed_observation_scan(
-                                    projection_db_path.clone(),
-                                    &mut managed_observation_scan_tasks,
+                                    state.projection_db_path.clone(),
+                                    &mut state.managed_observation_scan_tasks,
                                     "wake",
                                     true,
-                                    &last_managed_observations,
+                                    &state.last_managed_observations,
                                 ) {
-                                    pending_wake_reconciliation = false;
+                                    state.pending_wake_reconciliation = false;
                                 }
                             } else if managed_full_reconciliation_ready(
-                                pending_full_reconciliation
-                                    || certificate_needs_refresh(last_certified_at, Instant::now()),
-                                managed_observation_scan_tasks.is_empty(),
+                                state.pending_full_reconciliation
+                                    || certificate_needs_refresh(state.last_certified_at, Instant::now()),
+                                state.managed_observation_scan_tasks.is_empty(),
                                 Instant::now(),
-                                managed_full_reconciliation_not_before,
+                                state.managed_full_reconciliation_not_before,
                             )
                                 && maybe_start_managed_observation_scan(
-                                    projection_db_path.clone(),
-                                    &mut managed_observation_scan_tasks,
+                                    state.projection_db_path.clone(),
+                                    &mut state.managed_observation_scan_tasks,
                                     "full_reconciliation",
                                     true,
-                                    &last_managed_observations,
+                                    &state.last_managed_observations,
                                 )
                             {
-                                pending_full_reconciliation = false;
-                                managed_full_reconciliation_not_before =
+                                state.pending_full_reconciliation = false;
+                                state.managed_full_reconciliation_not_before =
                                     Instant::now()
                                         + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
                             }
                             continue;
                         }
-                        managed_observation_valid = true;
+                        state.managed_observation_valid = true;
                         if result.full_reconciliation {
                             // Start-time gating does not prevent a long scan
                             // from immediately retriggering on events observed
                             // during its own walk. Hold the next full pass for
                             // one observation interval after completion.
-                            managed_full_reconciliation_not_before =
+                            state.managed_full_reconciliation_not_before =
                                 Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
                         }
                         if let Some(continuation) = &result.continuation {
-                            last_resume_contracts = Some(continuation.clone());
+                            state.last_resume_contracts = Some(continuation.clone());
                         }
                         let next_managed_observations =
                             ManagedObservationSnapshot::from_result(&result).current_only();
                         let managed_observations_changed = !next_managed_observations
-                            .projection_equivalent(&last_managed_observations);
+                            .projection_equivalent(&state.last_managed_observations);
                         let (managed_scan_partial, managed_snapshot_complete) =
                             managed_scan_certificate(&result);
                         if managed_snapshot_complete {
-                            last_certified_at = Some(Instant::now());
-                            certificate_keepalive_warned = false;
-                        } else if let Some(refreshed_at) = last_certified_at {
+                            state.last_certified_at = Some(Instant::now());
+                            state.certificate_keepalive_warned = false;
+                        } else if let Some(refreshed_at) = state.last_certified_at {
                             // Keep the last claim only while it is still inside
                             // the keepalive; past that the beat ships without
                             // absence authority, which fails closed.
                             if refreshed_at.elapsed() > Duration::from_secs(MANAGED_CERTIFICATE_KEEPALIVE_SECS)
-                                && !certificate_keepalive_warned
+                                && !state.certificate_keepalive_warned
                             {
-                                certificate_keepalive_warned = true;
+                                state.certificate_keepalive_warned = true;
                                 tracing::warn!(
                                     reason = result.reason,
                                     retained_stale_rows = result.retained_stale_rows,
@@ -2458,20 +2703,20 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                         let managed_evidence_changed = managed_observations_changed
                             || result.full_reconciliation
-                            || managed_scan_partial != last_projected_managed_scan_partial;
+                            || managed_scan_partial != state.last_projected_managed_scan_partial;
                         if managed_evidence_changed {
-                            managed_observation_generation =
-                                managed_observation_generation.saturating_add(1);
+                            state.managed_observation_generation =
+                                state.managed_observation_generation.saturating_add(1);
                         }
-                        last_managed_observations = next_managed_observations;
-                        project_binding_liveness(&conn, &last_managed_observations);
+                        state.last_managed_observations = next_managed_observations;
+                        project_binding_liveness(&state.conn, &state.last_managed_observations);
                         pump_ready_local_work(
-                            &mut scheduler,
-                            &mut in_flight,
-                            &task_context,
-                            &mut deferred_retries,
-                            &mut shipping_progress,
-                            offline.is_offline,
+                            &mut state.scheduler,
+                            &mut state.in_flight,
+                            &state.task_context,
+                            &mut state.deferred_retries,
+                            &mut state.shipping_progress,
+                            state.offline.is_offline,
                             archive_repair_is_paused(config.archive_repair_mode),
                         );
                         let managed_process_pids = managed_process_pids_from_observations(
@@ -2484,35 +2729,35 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         );
                         let should_refresh_unmanaged =
                             result.full_reconciliation || managed_observations_changed;
-                        let paired_generation = projection_generation.saturating_add(1);
+                        let paired_generation = state.projection_generation.saturating_add(1);
                         let paired_refresh_started = should_refresh_unmanaged
                             && maybe_start_unmanaged_binding_refresh(
-                                &mut unmanaged_binding_refresh_tasks,
+                                &mut state.unmanaged_binding_refresh_tasks,
                                 config.shipper_config.db_path.clone(),
                                 config.shipper_config.machine_name.clone(),
                                 managed_process_pids.clone(),
                                 result.process_inventory.clone(),
                                 result.reason,
                                 paired_generation,
-                                managed_observation_generation,
-                                last_managed_observations.clone(),
+                                state.managed_observation_generation,
+                                state.last_managed_observations.clone(),
                                 managed_scan_partial,
                                 managed_scan_certificate(&result).1,
                             );
                         if paired_refresh_started {
-                            projection_generation = paired_generation;
-                            unmanaged_binding_refresh_generation =
-                                Some((projection_generation, managed_observation_generation));
+                            state.projection_generation = paired_generation;
+                            state.unmanaged_binding_refresh_generation =
+                                Some((state.projection_generation, state.managed_observation_generation));
                         } else if result.full_reconciliation {
                             if result.reason == "wake" {
-                                pending_wake_reconciliation = true;
+                                state.pending_wake_reconciliation = true;
                             } else {
-                                pending_full_reconciliation = true;
+                                state.pending_full_reconciliation = true;
                             }
                         } else if managed_observations_changed {
                             defer_managed_pair_retry(
-                                &mut projection_generation,
-                                &mut pending_full_reconciliation,
+                                &mut state.projection_generation,
+                                &mut state.pending_full_reconciliation,
                             );
                         }
 
@@ -2521,110 +2766,110 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // Publish it with the cached Shadow rows only as
                         // incomplete evidence; the refresh result can replace
                         // this projection later without blocking managed truth.
-                        last_projected_managed_observations = last_managed_observations.clone();
-                        last_managed_captured_at = result.captured_at.clone();
-                        last_projected_managed_scan_partial = managed_scan_partial;
-                        last_projected_managed_snapshot_complete = managed_snapshot_complete;
-                        last_projected_unmanaged_snapshot_complete = false;
+                        state.last_projected_managed_observations = state.last_managed_observations.clone();
+                        state.last_managed_captured_at = result.captured_at.clone();
+                        state.last_projected_managed_scan_partial = managed_scan_partial;
+                        state.last_projected_managed_snapshot_complete = managed_snapshot_complete;
+                        state.last_projected_unmanaged_snapshot_complete = false;
                         let input = ProjectionBuildInput {
-                            generation: projection_generation,
-                            managed_observation_generation,
-                            managed_scan_partial: last_projected_managed_scan_partial,
+                            generation: state.projection_generation,
+                            managed_observation_generation: state.managed_observation_generation,
+                            managed_scan_partial: state.last_projected_managed_scan_partial,
                             managed_snapshot_complete:
-                                last_projected_managed_snapshot_complete,
-                            managed_captured_at: last_managed_captured_at.clone(),
+                                state.last_projected_managed_snapshot_complete,
+                            managed_captured_at: state.last_managed_captured_at.clone(),
                             unmanaged_snapshot_complete:
-                                last_projected_unmanaged_snapshot_complete,
-                            db_path: projection_db_path.clone(),
-                            parse_tracker: parse_tracker.clone(),
-                            ship_stats: ship_stats.clone(),
-                            is_offline: offline.is_offline,
-                            last_ship_at: last_ship_at.clone(),
+                                state.last_projected_unmanaged_snapshot_complete,
+                            db_path: state.projection_db_path.clone(),
+                            parse_tracker: state.parse_tracker.clone(),
+                            ship_stats: state.ship_stats.clone(),
+                            is_offline: state.offline.is_offline,
+                            last_ship_at: state.last_ship_at.clone(),
                             machine_id: config.shipper_config.machine_name.clone(),
-                            managed: last_projected_managed_observations.clone(),
-                            unmanaged: last_unmanaged_session_bindings
+                            managed: state.last_projected_managed_observations.clone(),
+                            unmanaged: state.last_unmanaged_session_bindings
                                 .clone()
                                 .unwrap_or_default(),
-                            limiter: adaptive_limiter.snapshot(),
-                            scheduler: scheduler.snapshot(),
+                            limiter: state.adaptive_limiter.snapshot(),
+                            scheduler: state.scheduler.snapshot(),
                             archive_repair_mode: config.archive_repair_mode,
-                            last_full_reconciled_at: last_full_reconciled_at.clone(),
-                            continuation: last_resume_contracts.clone(),
-                            session_snapshot_state: session_snapshot_state.clone(),
+                            last_full_reconciled_at: state.last_full_reconciled_at.clone(),
+                            continuation: state.last_resume_contracts.clone(),
+                            session_snapshot_state: state.session_snapshot_state.clone(),
                         };
-                        if !maybe_start_projection_build(&mut projection_build_tasks, input) {
-                            projection_build_pending = true;
+                        if !maybe_start_projection_build(&mut state.projection_build_tasks, input) {
+                            state.projection_build_pending = true;
                         }
                         maybe_start_opencode_title_refresh(
-                            &mut opencode_title_refresh_tasks,
+                            &mut state.opencode_title_refresh_tasks,
                             config.shipper_config.db_path.clone(),
                             result.opencode_observations.clone(),
                         );
-                        if pending_wake_reconciliation
-                            && unmanaged_binding_refresh_tasks.is_empty()
+                        if state.pending_wake_reconciliation
+                            && state.unmanaged_binding_refresh_tasks.is_empty()
                             && maybe_start_managed_observation_scan(
-                                projection_db_path.clone(),
-                                &mut managed_observation_scan_tasks,
+                                state.projection_db_path.clone(),
+                                &mut state.managed_observation_scan_tasks,
                                 "wake",
                                 true,
-                                &last_managed_observations,
+                                &state.last_managed_observations,
                             )
                         {
-                            pending_wake_reconciliation = false;
-                            managed_full_reconciliation_not_before =
+                            state.pending_wake_reconciliation = false;
+                            state.managed_full_reconciliation_not_before =
                                 Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                            managed_reconciliation.start(
+                            state.managed_reconciliation.start(
                                 "wake",
                                 chrono::Utc::now().to_rfc3339(),
                             );
                         } else if managed_full_reconciliation_ready(
-                            pending_full_reconciliation,
-                            unmanaged_binding_refresh_tasks.is_empty()
-                                && managed_observation_scan_tasks.is_empty(),
+                            state.pending_full_reconciliation,
+                            state.unmanaged_binding_refresh_tasks.is_empty()
+                                && state.managed_observation_scan_tasks.is_empty(),
                             Instant::now(),
-                            managed_full_reconciliation_not_before,
+                            state.managed_full_reconciliation_not_before,
                         )
                             && maybe_start_managed_observation_scan(
-                                projection_db_path.clone(),
-                                &mut managed_observation_scan_tasks,
+                                state.projection_db_path.clone(),
+                                &mut state.managed_observation_scan_tasks,
                                 "full_reconciliation",
                                 true,
-                                &last_managed_observations,
+                                &state.last_managed_observations,
                             )
                         {
-                            pending_full_reconciliation = false;
-                            managed_full_reconciliation_not_before =
+                            state.pending_full_reconciliation = false;
+                            state.managed_full_reconciliation_not_before =
                                 Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                            managed_reconciliation.start(
+                            state.managed_reconciliation.start(
                                 "full_reconciliation",
                                 chrono::Utc::now().to_rfc3339(),
                             );
                         }
                     }
                     Some(Err(err)) => {
-                        managed_observation_valid = false;
-                        projection_generation = projection_generation.saturating_add(1);
+                        state.managed_observation_valid = false;
+                        state.projection_generation = state.projection_generation.saturating_add(1);
                         tracing::warn!("Managed observation scan task failed: {}", err);
-                        managed_reconciliation = heartbeat::ProjectionReconciliation::failed(
-                            managed_reconciliation
+                        state.managed_reconciliation = heartbeat::ProjectionReconciliation::failed(
+                            state.managed_reconciliation
                                 .reason
                                 .clone()
                                 .unwrap_or_else(|| "managed_observation".to_string()),
                         );
                         heartbeat::refresh_existing_status_pulse(
-                            &managed_reconciliation,
-                            &mut shipping_progress,
-                            offline.is_offline,
-                            &status_path,
-                            &heartbeat_transport,
-                            Some(&host_link.snapshot()),
+                            &state.managed_reconciliation,
+                            &mut state.shipping_progress,
+                            state.offline.is_offline,
+                            &state.status_path,
+                            &state.heartbeat_transport,
+                            Some(&state.host_link.snapshot()),
                         );
                     }
                     None => {}
                 }
             }
 
-            opencode_title_refresh_result = opencode_title_refresh_tasks.join_next(), if !opencode_title_refresh_tasks.is_empty() => {
+            opencode_title_refresh_result = state.opencode_title_refresh_tasks.join_next(), if !state.opencode_title_refresh_tasks.is_empty() => {
                 match opencode_title_refresh_result {
                     Some(Ok(Ok(()))) | None => {}
                     Some(Ok(Err(err))) => tracing::warn!(error = %err, "OpenCode title refresh failed"),
@@ -2632,142 +2877,142 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            projection_build_result = projection_build_tasks.join_next(), if !projection_build_tasks.is_empty() => {
+            projection_build_result = state.projection_build_tasks.join_next(), if !state.projection_build_tasks.is_empty() => {
                 match projection_build_result {
                     Some(Ok(result)) => {
-                        let is_current = managed_observation_valid
-                            && result.generation == projection_generation
+                        let is_current = state.managed_observation_valid
+                            && result.generation == state.projection_generation
                             && result.managed_observation_generation
-                                == managed_observation_generation
+                                == state.managed_observation_generation
                             && result.managed_scan_partial
-                                == last_projected_managed_scan_partial
+                                == state.last_projected_managed_scan_partial
                             && result.managed_snapshot_complete
-                                == last_projected_managed_snapshot_complete
+                                == state.last_projected_managed_snapshot_complete
                             && result.unmanaged_snapshot_complete
-                                == last_projected_unmanaged_snapshot_complete;
+                                == state.last_projected_unmanaged_snapshot_complete;
                         match result.result {
                         Ok((mut projection, next_snapshot_state)) => {
                             if result.elapsed_ms > LOCAL_STATUS_BUDGET_MS {
-                                projection_over_budget_ticks =
-                                    projection_over_budget_ticks.saturating_add(1);
-                                projection_worst_elapsed_ms =
-                                    projection_worst_elapsed_ms.max(result.elapsed_ms);
-                                let due = projection_budget_reported_at.is_none_or(|at| {
+                                state.projection_over_budget_ticks =
+                                    state.projection_over_budget_ticks.saturating_add(1);
+                                state.projection_worst_elapsed_ms =
+                                    state.projection_worst_elapsed_ms.max(result.elapsed_ms);
+                                let due = state.projection_budget_reported_at.is_none_or(|at| {
                                     at.elapsed() >= LOCAL_STATUS_BUDGET_REPORT_INTERVAL
                                 });
                                 if due {
                                     tracing::warn!(
-                                        over_budget_ticks = projection_over_budget_ticks,
-                                        worst_elapsed_ms = projection_worst_elapsed_ms,
+                                        over_budget_ticks = state.projection_over_budget_ticks,
+                                        worst_elapsed_ms = state.projection_worst_elapsed_ms,
                                         budget_ms = LOCAL_STATUS_BUDGET_MS,
                                         "Local status projection exceeded background budget"
                                     );
-                                    projection_over_budget_ticks = 0;
-                                    projection_worst_elapsed_ms = 0;
-                                    projection_budget_reported_at = Some(Instant::now());
+                                    state.projection_over_budget_ticks = 0;
+                                    state.projection_worst_elapsed_ms = 0;
+                                    state.projection_budget_reported_at = Some(Instant::now());
                                 }
                             }
                             if !is_current {
                                 tracing::debug!(
                                     generation = result.generation,
-                                    latest_generation = projection_generation,
+                                    latest_generation = state.projection_generation,
                                     managed_scan_partial = result.managed_scan_partial,
                                     latest_managed_scan_partial =
-                                        last_projected_managed_scan_partial,
+                                        state.last_projected_managed_scan_partial,
                                     unmanaged_snapshot_complete =
                                         result.unmanaged_snapshot_complete,
                                     latest_unmanaged_snapshot_complete =
-                                        last_projected_unmanaged_snapshot_complete,
+                                        state.last_projected_unmanaged_snapshot_complete,
                                     "Discarded stale local status projection"
                                 );
                             } else {
-                            session_snapshot_state = next_snapshot_state;
+                            state.session_snapshot_state = next_snapshot_state;
                             if result.managed_scan_partial {
-                                managed_reconciliation =
+                                state.managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::failed("provider_state_partial");
                             } else if result.managed_snapshot_complete
                                 && result.unmanaged_snapshot_complete
-                                && managed_observation_scan_tasks.is_empty()
-                                && unmanaged_binding_refresh_tasks.is_empty()
-                                && !unmanaged_binding_refresh_failed
+                                && state.managed_observation_scan_tasks.is_empty()
+                                && state.unmanaged_binding_refresh_tasks.is_empty()
+                                && !state.unmanaged_binding_refresh_failed
                             {
                                 // Only a complete paired observation clears a failure.
                                 // A cached/managed-only projection is not recovery.
-                                managed_reconciliation =
+                                state.managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::idle();
                             }
-                            shipping_progress.observe_pending_work(
+                            state.shipping_progress.observe_pending_work(
                                 heartbeat::payload_has_pending_work(&projection.payload)
                                     || known_pending_local_work(
-                                        &scheduler,
-                                        &deferred_retries,
+                                        &state.scheduler,
+                                        &state.deferred_retries,
                                         archive_repair_is_paused(config.archive_repair_mode),
                                     ),
                                 Instant::now(),
                             );
-                            projection.set_heartbeat_transport(heartbeat_transport.clone());
-                            projection.set_host_link(host_link.snapshot());
+                            projection.set_heartbeat_transport(state.heartbeat_transport.clone());
+                            projection.set_host_link(state.host_link.snapshot());
                             projection
-                                .set_runtime_event_outbox(latest_runtime_event_outbox.clone());
+                                .set_runtime_event_outbox(state.latest_runtime_event_outbox.clone());
                             if let Some(evidence) =
                                 projection.payload.machine_evidence.as_ref()
                             {
-                                acknowledged_machine_evidence
+                                state.acknowledged_machine_evidence
                                     .prune_to_current(&evidence.candidate_identities);
                             } else {
-                                acknowledged_machine_evidence.prune_to_current(&[]);
+                                state.acknowledged_machine_evidence.prune_to_current(&[]);
                             }
                             heartbeat::write_status_file(
                                 &mut projection,
-                                serde_json::to_value(control_channel_status.snapshot()).ok(),
-                                &managed_reconciliation,
-                                &mut shipping_progress,
-                                offline.is_offline,
-                                &status_path,
+                                serde_json::to_value(state.control_channel_status.snapshot()).ok(),
+                                &state.managed_reconciliation,
+                                &mut state.shipping_progress,
+                                state.offline.is_offline,
+                                &state.status_path,
                             );
                             let payload = projection.payload.clone();
-                            last_status_projection = Some(projection);
+                            state.last_status_projection = Some(projection);
                             let signature = runtime_truth_signature(&payload);
-                            if !offline.is_offline {
+                            if !state.offline.is_offline {
                                 if runtime_truth_changed(
-                                    last_runtime_truth_signature.as_deref(),
+                                    state.last_runtime_truth_signature.as_deref(),
                                     &signature,
                                 ) {
                                     let now = Instant::now();
-                                    let due = truth_heartbeat_due_at(last_truth_heartbeat_at, now);
-                                    if heartbeat_post_tasks.is_empty() && due <= now {
-                                        heartbeat_transport.record_attempt(
+                                    let due = truth_heartbeat_due_at(state.last_truth_heartbeat_at, now);
+                                    if state.heartbeat_post_tasks.is_empty() && due <= now {
+                                        state.heartbeat_transport.record_attempt(
                                             chrono::Utc::now().to_rfc3339(),
                                         );
                                         publish_heartbeat_transport_status(
-                                            &heartbeat_transport,
-                                            &mut last_status_projection,
-                                            serde_json::to_value(control_channel_status.snapshot()).ok(),
-                                            &managed_reconciliation,
-                                            &mut shipping_progress,
-                                            offline.is_offline,
-                                            &host_link,
-                                            &status_path,
+                                            &state.heartbeat_transport,
+                                            &mut state.last_status_projection,
+                                            serde_json::to_value(state.control_channel_status.snapshot()).ok(),
+                                            &state.managed_reconciliation,
+                                            &mut state.shipping_progress,
+                                            state.offline.is_offline,
+                                            &state.host_link,
+                                            &state.status_path,
                                         );
                                         spawn_heartbeat_post(
-                                            &mut heartbeat_post_tasks,
-                                            client.clone(),
+                                            &mut state.heartbeat_post_tasks,
+                                            state.client.clone(),
                                             payload,
                                             signature.clone(),
                                             "runtime_truth_change",
-                                            &mut acknowledged_machine_evidence,
+                                            &mut state.acknowledged_machine_evidence,
                                         );
-                                        last_truth_heartbeat_at = Some(now);
-                                        last_runtime_truth_signature = Some(signature);
-                                        pending_truth_heartbeat = None;
+                                        state.last_truth_heartbeat_at = Some(now);
+                                        state.last_runtime_truth_signature = Some(signature);
+                                        state.pending_truth_heartbeat = None;
                                     } else {
-                                        pending_truth_heartbeat = Some(PendingTruthHeartbeat {
+                                        state.pending_truth_heartbeat = Some(PendingTruthHeartbeat {
                                             payload,
                                             signature,
                                         });
                                     }
                                 } else {
-                                    pending_truth_heartbeat = None;
+                                    state.pending_truth_heartbeat = None;
                                 }
                             }
                         }
@@ -2775,7 +3020,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         Err(error) => {
                             tracing::warn!(error = %error, "Local status projection build failed");
                             if is_current {
-                                managed_reconciliation =
+                                state.managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::failed("projection_build");
                             }
                         }
@@ -2783,41 +3028,41 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     },
                     Some(Err(error)) => {
                         tracing::warn!(error = %error, "Local status projection task failed");
-                        if !projection_build_pending {
-                            managed_reconciliation =
+                        if !state.projection_build_pending {
+                            state.managed_reconciliation =
                                 heartbeat::ProjectionReconciliation::failed("projection_build");
                         }
                     }
                     None => {}
                 }
 
-                if projection_build_pending && managed_observation_valid {
-                    projection_build_pending = false;
+                if state.projection_build_pending && state.managed_observation_valid {
+                    state.projection_build_pending = false;
                     let input = ProjectionBuildInput {
-                        generation: projection_generation,
-                        managed_observation_generation,
-                        managed_scan_partial: last_projected_managed_scan_partial,
+                        generation: state.projection_generation,
+                        managed_observation_generation: state.managed_observation_generation,
+                        managed_scan_partial: state.last_projected_managed_scan_partial,
                         managed_snapshot_complete:
-                            last_projected_managed_snapshot_complete,
-                        managed_captured_at: last_managed_captured_at.clone(),
+                            state.last_projected_managed_snapshot_complete,
+                        managed_captured_at: state.last_managed_captured_at.clone(),
                         unmanaged_snapshot_complete:
-                            last_projected_unmanaged_snapshot_complete,
-                        db_path: projection_db_path.clone(),
-                        parse_tracker: parse_tracker.clone(),
-                        ship_stats: ship_stats.clone(),
-                        is_offline: offline.is_offline,
-                        last_ship_at: last_ship_at.clone(),
+                            state.last_projected_unmanaged_snapshot_complete,
+                        db_path: state.projection_db_path.clone(),
+                        parse_tracker: state.parse_tracker.clone(),
+                        ship_stats: state.ship_stats.clone(),
+                        is_offline: state.offline.is_offline,
+                        last_ship_at: state.last_ship_at.clone(),
                         machine_id: config.shipper_config.machine_name.clone(),
-                        managed: last_projected_managed_observations.clone(),
-                        unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
-                        limiter: adaptive_limiter.snapshot(),
-                        scheduler: scheduler.snapshot(),
+                        managed: state.last_projected_managed_observations.clone(),
+                        unmanaged: state.last_unmanaged_session_bindings.clone().unwrap_or_default(),
+                        limiter: state.adaptive_limiter.snapshot(),
+                        scheduler: state.scheduler.snapshot(),
                         archive_repair_mode: config.archive_repair_mode,
-                        last_full_reconciled_at: last_full_reconciled_at.clone(),
-                        continuation: last_resume_contracts.clone(),
-                        session_snapshot_state: session_snapshot_state.clone(),
+                        last_full_reconciled_at: state.last_full_reconciled_at.clone(),
+                        continuation: state.last_resume_contracts.clone(),
+                        session_snapshot_state: state.session_snapshot_state.clone(),
                     };
-                    let _ = maybe_start_projection_build(&mut projection_build_tasks, input);
+                    let _ = maybe_start_projection_build(&mut state.projection_build_tasks, input);
                 }
             }
 
@@ -2825,62 +3070,62 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // is already running, `projection_build_pending` makes it run
             // exactly once more afterwards, so a phase observed mid-build is
             // never stranded until the next reconciliation.
-            _ = &mut phase_projection_timer, if phase_projection_pending => {
-                phase_projection_pending = false;
+            _ = &mut phase_projection_timer, if state.phase_projection_pending => {
+                state.phase_projection_pending = false;
                 // Only after the first full projection: before that the
                 // managed snapshot is empty, and projecting would ship a
                 // sessionless digest that the first real scan immediately
                 // replaces.
-                if last_status_projection.is_some() && managed_observation_valid {
+                if state.last_status_projection.is_some() && state.managed_observation_valid {
                     let input = ProjectionBuildInput {
-                        generation: projection_generation,
-                        managed_observation_generation,
-                        managed_scan_partial: last_projected_managed_scan_partial,
+                        generation: state.projection_generation,
+                        managed_observation_generation: state.managed_observation_generation,
+                        managed_scan_partial: state.last_projected_managed_scan_partial,
                         managed_snapshot_complete:
-                            last_projected_managed_snapshot_complete,
-                        managed_captured_at: last_managed_captured_at.clone(),
+                            state.last_projected_managed_snapshot_complete,
+                        managed_captured_at: state.last_managed_captured_at.clone(),
                         unmanaged_snapshot_complete:
-                            last_projected_unmanaged_snapshot_complete,
-                        db_path: projection_db_path.clone(),
-                        parse_tracker: parse_tracker.clone(),
-                        ship_stats: ship_stats.clone(),
-                        is_offline: offline.is_offline,
-                        last_ship_at: last_ship_at.clone(),
+                            state.last_projected_unmanaged_snapshot_complete,
+                        db_path: state.projection_db_path.clone(),
+                        parse_tracker: state.parse_tracker.clone(),
+                        ship_stats: state.ship_stats.clone(),
+                        is_offline: state.offline.is_offline,
+                        last_ship_at: state.last_ship_at.clone(),
                         machine_id: config.shipper_config.machine_name.clone(),
-                        managed: last_projected_managed_observations.clone(),
-                        unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
-                        limiter: adaptive_limiter.snapshot(),
-                        scheduler: scheduler.snapshot(),
+                        managed: state.last_projected_managed_observations.clone(),
+                        unmanaged: state.last_unmanaged_session_bindings.clone().unwrap_or_default(),
+                        limiter: state.adaptive_limiter.snapshot(),
+                        scheduler: state.scheduler.snapshot(),
                         archive_repair_mode: config.archive_repair_mode,
-                        last_full_reconciled_at: last_full_reconciled_at.clone(),
-                        continuation: last_resume_contracts.clone(),
-                        session_snapshot_state: session_snapshot_state.clone(),
+                        last_full_reconciled_at: state.last_full_reconciled_at.clone(),
+                        continuation: state.last_resume_contracts.clone(),
+                        session_snapshot_state: state.session_snapshot_state.clone(),
                     };
-                    if !maybe_start_projection_build(&mut projection_build_tasks, input) {
-                        projection_build_pending = true;
+                    if !maybe_start_projection_build(&mut state.projection_build_tasks, input) {
+                        state.projection_build_pending = true;
                     }
                 }
             }
 
-            _ = &mut startup_reconciliation_timer, if startup_reconciliation_pending && !offline.is_offline => {
-                startup_reconciliation_pending = false;
+            _ = &mut startup_reconciliation_timer, if state.startup_reconciliation_pending && !state.offline.is_offline => {
+                state.startup_reconciliation_pending = false;
                 maybe_start_reconciliation_scan(
-                    &mut discovery_tasks,
-                    &providers,
-                    &scheduler,
-                    &deferred_retries,
+                    &mut state.discovery_tasks,
+                    &state.providers,
+                    &state.scheduler,
+                    &state.deferred_retries,
                     config.archive_repair_mode,
                     "startup reconciliation",
                 );
             }
 
             // Health check when offline (every 60s)
-            _ = health_timer.tick(), if offline.is_offline => {
-                match client.health_check().await {
+            _ = state.health_timer.tick(), if state.offline.is_offline => {
+                match state.client.health_check().await {
                     Ok(true) => {
-                        if let Some(duration) = offline.mark_online() {
-                            shipping_progress.reset_after_sleep(Instant::now());
-                            last_runtime_truth_signature = None;
+                        if let Some(duration) = state.offline.mark_online() {
+                            state.shipping_progress.reset_after_sleep(Instant::now());
+                            state.last_runtime_truth_signature = None;
                             tracing::info!(
                                 "Back online after {:.0}s — resuming shipping",
                                 duration.as_secs_f64()
@@ -2896,26 +3141,26 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Live transcript lane (primary path): provider file appends enqueue
             // WorkPriority::Live. Managed wake signals can pre-empt the small
             // filesystem coalescing window.
-            Some(first_event) = watcher.next_event() => {
+            Some(first_event) = state.watcher.next_event() => {
                 let managed_state_changes = handle_live_transcript_file_events(
-                    &mut watcher,
+                    &mut state.watcher,
                     first_event,
-                    &providers,
-                    &managed_state_dirs,
-                    &conn,
-                    &mut transcript_wake_rx,
-                    &mut scheduler,
-                    &mut latest_transcript_wake_observed,
-                    &mut deferred_retries,
-                    &mut in_flight,
-                    &task_context,
-                    &mut shipping_progress,
-                    offline.is_offline,
+                    &state.providers,
+                    &state.managed_state_dirs,
+                    &state.conn,
+                    &mut state.transcript_wake_rx,
+                    &mut state.scheduler,
+                    &mut state.latest_transcript_wake_observed,
+                    &mut state.deferred_retries,
+                    &mut state.in_flight,
+                    &state.task_context,
+                    &mut state.shipping_progress,
+                    state.offline.is_offline,
                     archive_repair_is_paused(config.archive_repair_mode),
                 ).await;
                 if !managed_state_changes.is_empty() {
                     let requires_discovery = managed_state_changes_require_full_reconciliation(
-                        &last_managed_observations,
+                        &state.last_managed_observations,
                         &managed_state_changes,
                     );
                     if requires_discovery {
@@ -2923,8 +3168,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // a provider is writing one session. Queue one bounded
                         // full walk; the 5s observation tick starts it after the
                         // burst instead of starting one walk per event batch.
-                        projection_generation = projection_generation.saturating_add(1);
-                        pending_full_reconciliation = true;
+                        state.projection_generation = state.projection_generation.saturating_add(1);
+                        state.pending_full_reconciliation = true;
                         tracing::debug!(
                             event_count = managed_state_changes.len(),
                             "Queued managed state discovery for coalesced observation"
@@ -2938,26 +3183,26 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            _ = scope_timer.tick() => {
-                let current = crate::import_scope::fingerprint(&scope_dir);
-                if current != last_scope_fingerprint {
-                    last_scope_fingerprint = current;
+            _ = state.scope_timer.tick() => {
+                let current = crate::import_scope::fingerprint(&state.scope_dir);
+                if current != state.last_scope_fingerprint {
+                    state.last_scope_fingerprint = current;
                     if current.is_none() {
                         // The file was deleted under a running daemon. What it
                         // enforces did not change (it keeps the scope it last
                         // knew), so put the file back rather than rescan.
-                        if crate::config::restore_lost_scope_file(&scope_dir) {
+                        if crate::config::restore_lost_scope_file(&state.scope_dir) {
                             tracing::warn!(
                                 "The import scope file was deleted; restored it from the running scope"
                             );
                         }
                     } else {
                         let scope = crate::config::import_scope();
-                        crate::config::record_import_scope(&conn, &scope);
+                        crate::config::record_import_scope(&state.conn, &scope);
                         tracing::info!("Import scope: {}", scope.describe());
                         start_discovery_task(
-                            &mut discovery_tasks,
-                            &providers,
+                            &mut state.discovery_tasks,
+                            &state.providers,
                             WorkPriority::Scan,
                             "import scope changed",
                         );
@@ -2965,11 +3210,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            _ = provider_roots_timer.tick(), if !pending_provider_roots.is_empty() => {
-                if watcher.refresh_provider_roots(&mut providers, &mut pending_provider_roots) {
+            _ = state.provider_roots_timer.tick(), if !state.pending_provider_roots.is_empty() => {
+                if state.watcher.refresh_provider_roots(&mut state.providers, &mut state.pending_provider_roots) {
                     start_discovery_task(
-                        &mut discovery_tasks,
-                        &providers,
+                        &mut state.discovery_tasks,
+                        &state.providers,
                         WorkPriority::Scan,
                         "new provider transcript root",
                     );
@@ -2978,12 +3223,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Periodic reconciliation scan — repair missed file-watch work after
             // restarts, sleeps, or dropped OS notifications.
-            _ = fallback_timer.tick(), if !offline.is_offline => {
+            _ = state.fallback_timer.tick(), if !state.offline.is_offline => {
                 maybe_start_reconciliation_scan(
-                    &mut discovery_tasks,
-                    &providers,
-                    &scheduler,
-                    &deferred_retries,
+                    &mut state.discovery_tasks,
+                    &state.providers,
+                    &state.scheduler,
+                    &state.deferred_retries,
                     config.archive_repair_mode,
                     "reconciliation scan",
                 );
@@ -2991,13 +3236,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Retry lane: storage-v2 pending envelopes. Never the primary live
             // transcript lane.
-            _ = failed_ship_retry_timer.tick(), if !offline.is_offline => {
+            _ = state.failed_ship_retry_timer.tick(), if !state.offline.is_offline => {
                 let mut queued_retries = 0usize;
                 match queue_storage_v2_pending_retry_paths(
-                    &mut scheduler,
-                    &conn,
+                    &mut state.scheduler,
+                    &state.conn,
                     config.archive_repair_mode,
-                    &mut deferred_retries,
+                    &mut state.deferred_retries,
                 ) {
                     Ok(queued) => queued_retries = queued_retries.saturating_add(queued),
                     Err(error) => tracing::warn!(
@@ -3012,9 +3257,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 // makes owed envelopes visible to the safety predicate. Never
                 // put this writer on the event-loop connection: even a bounded
                 // batch must not pause live transcript scheduling.
-                if storage_maintenance_tasks.is_empty() {
-                    let db_path = projection_db_path.clone();
-                    storage_maintenance_tasks.spawn_blocking(move || {
+                if state.storage_maintenance_tasks.is_empty() {
+                    let db_path = state.projection_db_path.clone();
+                    state.storage_maintenance_tasks.spawn_blocking(move || {
                         let result = crate::state::db::open_connection(&db_path).and_then(|conn| {
                             crate::state::cursor_store_records::drain_receipted_cursor_records(&conn)
                         });
@@ -3042,7 +3287,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Outbox drain: presence events written by hooks. These are runtime
             // overlay signals only; transcript shipping is owned by filesystem
             // events plus reconciliation scans.
-            _ = outbox_timer.tick() => {
+            _ = state.outbox_timer.tick() => {
                 // The hook outbox is only one of five phase-ledger writers. The
                 // Codex bridge, both Console adapters, and OpenCode all run as
                 // separate processes and write the shared ledger directly, so
@@ -3053,10 +3298,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 // Watching the ledger watermark covers every producer at once,
                 // including any added later, without each one having to signal
                 // the daemon. One MAX() over a table with one row per session.
-                if let Some(watermark) = latest_phase_watermark(&conn) {
-                    if last_phase_watermark != Some(watermark) {
-                        last_phase_watermark = Some(watermark);
-                        if arm_phase_projection(&mut phase_projection_pending) {
+                if let Some(watermark) = latest_phase_watermark(&state.conn) {
+                    if state.last_phase_watermark != Some(watermark) {
+                        state.last_phase_watermark = Some(watermark);
+                        if arm_phase_projection(&mut state.phase_projection_pending) {
                             phase_projection_timer
                                 .as_mut()
                                 .reset(tokio::time::Instant::now() + PHASE_PROJECTION_DEBOUNCE);
@@ -3066,10 +3311,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 // Files remain durable while a POST is in flight. Do not scan,
                 // parse, and persist them again every 100ms until that attempt
                 // has either removed them or made them eligible for retry.
-                if outbox_collect_tasks.is_empty() && outbox_post_tasks.is_empty() {
-                    let outbox_dir = outbox_dir.clone();
+                if state.outbox_collect_tasks.is_empty() && state.outbox_post_tasks.is_empty() {
+                    let outbox_dir = state.outbox_dir.clone();
                     let db_path = config.shipper_config.db_path.clone();
-                    outbox_collect_tasks.spawn_blocking(move || {
+                    state.outbox_collect_tasks.spawn_blocking(move || {
                         let started = Instant::now();
                         let presence = outbox::collect_outbox_with_local_state_result(
                             &outbox_dir,
@@ -3081,18 +3326,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     });
                 }
-                if status_slot_tasks.is_empty() {
-                    let agent_dir = runtime_events_outbox_dir
+                if state.status_slot_tasks.is_empty() {
+                    let agent_dir = state.runtime_events_outbox_dir
                         .parent()
                         .map(Path::to_path_buf)
-                        .unwrap_or_else(|| runtime_events_outbox_dir.clone());
+                        .unwrap_or_else(|| state.runtime_events_outbox_dir.clone());
                     let db_path = config.shipper_config.db_path.clone();
-                    let already_recorded = status_recorded.clone();
-                    let owner_evidence = last_status_owners.clone();
-                    let owner_evidence_fresh = status_owner_snapshot_is_fresh(last_status_owners_at);
-                    let owner_refresh_cursor = status_owner_refresh_cursor;
-                    let managed_refresh_cursor = managed_owner_refresh_cursor;
-                    status_slot_tasks.spawn_blocking(move || {
+                    let already_recorded = state.status_recorded.clone();
+                    let owner_evidence = state.last_status_owners.clone();
+                    let owner_evidence_fresh = status_owner_snapshot_is_fresh(state.last_status_owners_at);
+                    let owner_refresh_cursor = state.status_owner_refresh_cursor;
+                    let managed_refresh_cursor = state.managed_owner_refresh_cursor;
+                    state.status_slot_tasks.spawn_blocking(move || {
                         let started = Instant::now();
                         let dir = crate::status_slot::status_slot_dir(&agent_dir);
                         let slots = crate::status_slot::read_all(&dir);
@@ -3122,14 +3367,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     });
                 }
-                if runtime_collect_tasks.is_empty()
-                    && runtime_outbox_post_tasks.is_empty()
-                    && runtime_outbox_retry_after
+                if state.runtime_collect_tasks.is_empty()
+                    && state.runtime_outbox_post_tasks.is_empty()
+                    && state.runtime_outbox_retry_after
                         .map(|retry_at| Instant::now() >= retry_at)
                         .unwrap_or(true)
                 {
-                    let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
-                    runtime_collect_tasks.spawn_blocking(move || {
+                    let runtime_events_outbox_dir = state.runtime_events_outbox_dir.clone();
+                    state.runtime_collect_tasks.spawn_blocking(move || {
                         let started = Instant::now();
                         let pass =
                             outbox::collect_runtime_event_outbox_pass(&runtime_events_outbox_dir);
@@ -3152,28 +3397,28 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             // Wake the loop when delayed local retry work may now be ready.
-            _ = local_retry_timer.tick(), if !deferred_retries.is_empty() => {}
+            _ = state.local_retry_timer.tick(), if !state.deferred_retries.is_empty() => {}
 
-            _ = flight_sample_timer.tick(), if flight_recorder.is_some() => {
-                if let Some(recorder) = flight_recorder.as_ref() {
+            _ = state.flight_sample_timer.tick(), if state.flight_recorder.is_some() => {
+                if let Some(recorder) = state.flight_recorder.as_ref() {
                     record_flight_sample(
                         recorder,
-                        &outbox_dir,
-                        &runtime_events_outbox_dir,
-                        &control_channel_status,
-                        &ship_stats,
+                        &state.outbox_dir,
+                        &state.runtime_events_outbox_dir,
+                        &state.control_channel_status,
+                        &state.ship_stats,
                         &config.shipper_config.machine_name,
-                        in_flight.len(),
-                        scheduler.has_pending_work(),
-                        deferred_retries.len(),
-                        offline.is_offline,
+                        state.in_flight.len(),
+                        state.scheduler.has_pending_work(),
+                        state.deferred_retries.len(),
+                        state.offline.is_offline,
                     );
                 }
             }
 
-            _ = disk_guard_timer.tick(), if disk_guard.is_some() => {
-                if let Some(guard) = disk_guard.as_mut() {
-                    let outcome = guard.tick(&disk_guard_sessions(&last_managed_observations));
+            _ = state.disk_guard_timer.tick(), if state.disk_guard.is_some() => {
+                if let Some(guard) = state.disk_guard.as_mut() {
+                    let outcome = guard.tick(&disk_guard_sessions(&state.last_managed_observations));
                     if let Some((title, body)) = outcome.notify.as_ref() {
                         crate::disk_guard::notify_desktop(title, body);
                     }
@@ -3201,7 +3446,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             // Daily: prune stale file_state and session_binding entries
-            _ = update_check_timer.tick() => {
+            _ = state.update_check_timer.tick() => {
                 // Spawned, not awaited. A download runs for as long as the
                 // transfer takes, and awaiting it here would stop shipping,
                 // heartbeat, and control work for that whole window.
@@ -3210,161 +3455,161 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 // `offline` describes the Longhouse transport, which says
                 // nothing about whether GitHub is reachable, and gating on it
                 // would hide a stale machine whose own Runtime Host is down.
-                let client = update_http_client.clone();
+                let client = state.update_http_client.clone();
                 tokio::task::spawn(async move {
                     crate::update::run_check_tick(&client).await;
                 });
             }
-            _ = prune_timer.tick() => {
-                let fs = FileState::new(&conn);
+            _ = state.prune_timer.tick() => {
+                let fs = FileState::new(&state.conn);
                 match fs.prune_stale(30) {
                     Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale file_state entries", n),
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Daily prune error: {}", e),
                 }
-                let sb = crate::state::session_binding::SessionBinding::new(&conn);
+                let sb = crate::state::session_binding::SessionBinding::new(&state.conn);
                 match sb.prune_stale(30) {
                     Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale session_binding entries", n),
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Session binding prune error: {}", e),
                 }
-                if daily_maintenance_tasks.is_empty() {
-                    let db_path = projection_db_path.clone();
-                    daily_maintenance_tasks.spawn_blocking(move || {
+                if state.daily_maintenance_tasks.is_empty() {
+                    let db_path = state.projection_db_path.clone();
+                    state.daily_maintenance_tasks.spawn_blocking(move || {
                         crate::state::recover::run_daily_storage_maintenance(&db_path);
                     });
                 }
             }
 
             // Frequent local status file refresh for ambient UX and debugging
-            _ = local_status_timer.tick() => {
-                if let Some(gap) = wake_gap_detector.observe(SystemTime::now(), Instant::now()) {
-                    shipping_progress.reset_after_sleep(Instant::now());
+            _ = state.local_status_timer.tick() => {
+                if let Some(gap) = state.wake_gap_detector.observe(SystemTime::now(), Instant::now()) {
+                    state.shipping_progress.reset_after_sleep(Instant::now());
                     tracing::info!(wake_gap_ms = gap.as_millis() as u64, "Detected system wake gap");
                     if maybe_start_managed_observation_scan(
-                        projection_db_path.clone(),
-                        &mut managed_observation_scan_tasks,
+                        state.projection_db_path.clone(),
+                        &mut state.managed_observation_scan_tasks,
                         "wake",
                         true,
-                        &last_managed_observations,
+                        &state.last_managed_observations,
                     ) {
-                        managed_full_reconciliation_not_before =
+                        state.managed_full_reconciliation_not_before =
                             Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                        managed_reconciliation.start(
+                        state.managed_reconciliation.start(
                             "wake",
                             chrono::Utc::now().to_rfc3339(),
                         );
                     } else {
-                        pending_wake_reconciliation = true;
-                        managed_reconciliation.start(
+                        state.pending_wake_reconciliation = true;
+                        state.managed_reconciliation.start(
                             "wake",
                             chrono::Utc::now().to_rfc3339(),
                         );
                     }
                 }
-                let host_link_status = host_link.snapshot();
+                let host_link_status = state.host_link.snapshot();
                 if matches!(host_link_status.state.as_str(), "updating" | "slow_update")
-                    && host_link_poll_tasks.len() < 3
+                    && state.host_link_poll_tasks.len() < 3
                 {
-                    let client = client.clone();
-                    host_link_poll_tasks.spawn_local(async move {
+                    let client = state.client.clone();
+                    state.host_link_poll_tasks.spawn_local(async move {
                         client.poll_runtime_admission().await
                     });
                 }
-                if let Some(projection) = last_status_projection.as_mut() {
-                    projection.set_heartbeat_transport(heartbeat_transport.clone());
+                if let Some(projection) = state.last_status_projection.as_mut() {
+                    projection.set_heartbeat_transport(state.heartbeat_transport.clone());
                     projection.set_host_link(host_link_status.clone());
                     heartbeat::write_status_file(
                         projection,
-                        serde_json::to_value(control_channel_status.snapshot()).ok(),
-                        &managed_reconciliation,
-                        &mut shipping_progress,
-                        offline.is_offline,
-                        &status_path,
+                        serde_json::to_value(state.control_channel_status.snapshot()).ok(),
+                        &state.managed_reconciliation,
+                        &mut state.shipping_progress,
+                        state.offline.is_offline,
+                        &state.status_path,
                     );
                 } else {
                     heartbeat::refresh_existing_status_pulse(
-                        &managed_reconciliation,
-                        &mut shipping_progress,
-                        offline.is_offline,
-                        &status_path,
-                        &heartbeat_transport,
+                        &state.managed_reconciliation,
+                        &mut state.shipping_progress,
+                        state.offline.is_offline,
+                        &state.status_path,
+                        &state.heartbeat_transport,
                         Some(&host_link_status),
                     );
             }
             }
 
-            _ = managed_full_reconciliation_timer.tick() => {
+            _ = state.managed_full_reconciliation_timer.tick() => {
                 if managed_full_reconciliation_ready(
-                    !pending_wake_reconciliation,
-                    managed_observation_scan_tasks.is_empty(),
+                    !state.pending_wake_reconciliation,
+                    state.managed_observation_scan_tasks.is_empty(),
                     Instant::now(),
-                    managed_full_reconciliation_not_before,
+                    state.managed_full_reconciliation_not_before,
                 )
                     && maybe_start_managed_observation_scan(
-                    projection_db_path.clone(),
-                    &mut managed_observation_scan_tasks,
+                    state.projection_db_path.clone(),
+                    &mut state.managed_observation_scan_tasks,
                     "full_reconciliation",
                     true,
-                    &last_managed_observations,
+                    &state.last_managed_observations,
                 ) {
-                    managed_full_reconciliation_not_before =
+                    state.managed_full_reconciliation_not_before =
                         Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                    managed_reconciliation.start(
+                    state.managed_reconciliation.start(
                         "full_reconciliation",
                         chrono::Utc::now().to_rfc3339(),
                     );
                 } else {
-                    pending_full_reconciliation = true;
-                    managed_reconciliation.start(
+                    state.pending_full_reconciliation = true;
+                    state.managed_reconciliation.start(
                         "full_reconciliation",
                         chrono::Utc::now().to_rfc3339(),
                     );
                 }
             }
 
-            _ = managed_observation_timer.tick() => {
+            _ = state.managed_observation_timer.tick() => {
                 // Coalesce a periodic tick and watcher burst while a full scan
                 // is running. A queued full request wins on the next tick, but
                 // the cooldown prevents a completion/event feedback loop.
                 if managed_full_reconciliation_ready(
-                    pending_full_reconciliation,
-                    managed_observation_scan_tasks.is_empty(),
+                    state.pending_full_reconciliation,
+                    state.managed_observation_scan_tasks.is_empty(),
                     Instant::now(),
-                    managed_full_reconciliation_not_before,
+                    state.managed_full_reconciliation_not_before,
                 )
                     && maybe_start_managed_observation_scan(
-                        projection_db_path.clone(),
-                        &mut managed_observation_scan_tasks,
+                        state.projection_db_path.clone(),
+                        &mut state.managed_observation_scan_tasks,
                         "full_reconciliation",
                         true,
-                        &last_managed_observations,
+                        &state.last_managed_observations,
                     )
                 {
-                    pending_full_reconciliation = false;
-                    managed_full_reconciliation_not_before =
+                    state.pending_full_reconciliation = false;
+                    state.managed_full_reconciliation_not_before =
                         Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
-                    managed_reconciliation.start(
+                    state.managed_reconciliation.start(
                         "full_reconciliation",
                         chrono::Utc::now().to_rfc3339(),
                     );
-                } else if !pending_full_reconciliation && !pending_wake_reconciliation {
+                } else if !state.pending_full_reconciliation && !state.pending_wake_reconciliation {
                     maybe_start_managed_observation_scan(
-                        projection_db_path.clone(),
-                        &mut managed_observation_scan_tasks,
+                        state.projection_db_path.clone(),
+                        &mut state.managed_observation_scan_tasks,
                         "periodic",
-                        last_resume_contracts.is_none(),
-                        &last_managed_observations,
+                        state.last_resume_contracts.is_none(),
+                        &state.last_managed_observations,
                     );
                 }
             }
 
-            _ = machine_presence_timer.tick() => {
-                if !offline.is_offline {
-                    if machine_presence_post_tasks.is_empty() {
+            _ = state.machine_presence_timer.tick() => {
+                if !state.offline.is_offline {
+                    if state.machine_presence_post_tasks.is_empty() {
                         spawn_machine_presence_post(
-                            &mut machine_presence_post_tasks,
-                            client.clone(),
+                            &mut state.machine_presence_post_tasks,
+                            state.client.clone(),
                         );
                     } else {
                         tracing::debug!("Skipping machine presence POST while previous POST is still in flight");
@@ -3373,79 +3618,79 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
-                truth_heartbeat_due_at(last_truth_heartbeat_at, Instant::now()),
-            )), if pending_truth_heartbeat.is_some() && heartbeat_post_tasks.is_empty() => {
-                if let Some(pending) = pending_truth_heartbeat.take() {
-                    if !offline.is_offline
+                truth_heartbeat_due_at(state.last_truth_heartbeat_at, Instant::now()),
+            )), if state.pending_truth_heartbeat.is_some() && state.heartbeat_post_tasks.is_empty() => {
+                if let Some(pending) = state.pending_truth_heartbeat.take() {
+                    if !state.offline.is_offline
                         && runtime_truth_changed(
-                            last_runtime_truth_signature.as_deref(),
+                            state.last_runtime_truth_signature.as_deref(),
                             &pending.signature,
                         )
                     {
                         let now = Instant::now();
-                        heartbeat_transport.record_attempt(chrono::Utc::now().to_rfc3339());
+                        state.heartbeat_transport.record_attempt(chrono::Utc::now().to_rfc3339());
                         publish_heartbeat_transport_status(
-                            &heartbeat_transport,
-                            &mut last_status_projection,
-                            serde_json::to_value(control_channel_status.snapshot()).ok(),
-                            &managed_reconciliation,
-                            &mut shipping_progress,
-                            offline.is_offline,
-                            &host_link,
-                            &status_path,
+                            &state.heartbeat_transport,
+                            &mut state.last_status_projection,
+                            serde_json::to_value(state.control_channel_status.snapshot()).ok(),
+                            &state.managed_reconciliation,
+                            &mut state.shipping_progress,
+                            state.offline.is_offline,
+                            &state.host_link,
+                            &state.status_path,
                         );
                         spawn_heartbeat_post(
-                            &mut heartbeat_post_tasks,
-                            client.clone(),
+                            &mut state.heartbeat_post_tasks,
+                            state.client.clone(),
                             pending.payload,
                             pending.signature.clone(),
                             "runtime_truth_change",
-                            &mut acknowledged_machine_evidence,
+                            &mut state.acknowledged_machine_evidence,
                         );
-                        last_truth_heartbeat_at = Some(now);
-                        last_runtime_truth_signature = Some(pending.signature);
+                        state.last_truth_heartbeat_at = Some(now);
+                        state.last_runtime_truth_signature = Some(pending.signature);
                     }
                 }
             }
             // Periodic server heartbeat
-            _ = heartbeat_timer.tick() => {
-                if let Some(projection) = last_status_projection.as_mut() {
-                    projection.set_heartbeat_transport(heartbeat_transport.clone());
-                    projection.set_host_link(host_link.snapshot());
+            _ = state.heartbeat_timer.tick() => {
+                if let Some(projection) = state.last_status_projection.as_mut() {
+                    projection.set_heartbeat_transport(state.heartbeat_transport.clone());
+                    projection.set_host_link(state.host_link.snapshot());
                     heartbeat::write_status_file(
                         projection,
-                        serde_json::to_value(control_channel_status.snapshot()).ok(),
-                        &managed_reconciliation,
-                        &mut shipping_progress,
-                        offline.is_offline,
-                        &status_path,
+                        serde_json::to_value(state.control_channel_status.snapshot()).ok(),
+                        &state.managed_reconciliation,
+                        &mut state.shipping_progress,
+                        state.offline.is_offline,
+                        &state.status_path,
                     );
-                    if !offline.is_offline {
-                        if heartbeat_post_tasks.is_empty() {
-                            heartbeat_transport.record_attempt(
+                    if !state.offline.is_offline {
+                        if state.heartbeat_post_tasks.is_empty() {
+                            state.heartbeat_transport.record_attempt(
                                 chrono::Utc::now().to_rfc3339(),
                             );
-                            projection.set_heartbeat_transport(heartbeat_transport.clone());
-                            projection.set_host_link(host_link.snapshot());
+                            projection.set_heartbeat_transport(state.heartbeat_transport.clone());
+                            projection.set_host_link(state.host_link.snapshot());
                             heartbeat::write_status_file(
                                 projection,
-                                serde_json::to_value(control_channel_status.snapshot()).ok(),
-                                &managed_reconciliation,
-                                &mut shipping_progress,
-                                offline.is_offline,
-                                &status_path,
+                                serde_json::to_value(state.control_channel_status.snapshot()).ok(),
+                                &state.managed_reconciliation,
+                                &mut state.shipping_progress,
+                                state.offline.is_offline,
+                                &state.status_path,
                             );
                             let payload = projection.payload.clone();
                             let signature = runtime_truth_signature(&payload);
-                            last_runtime_truth_signature = Some(signature.clone());
-                            pending_truth_heartbeat = None;
+                            state.last_runtime_truth_signature = Some(signature.clone());
+                            state.pending_truth_heartbeat = None;
                             spawn_heartbeat_post(
-                                &mut heartbeat_post_tasks,
-                                client.clone(),
+                                &mut state.heartbeat_post_tasks,
+                                state.client.clone(),
                                 payload,
                                 signature,
                                 "periodic_heartbeat",
-                                &mut acknowledged_machine_evidence,
+                                &mut state.acknowledged_machine_evidence,
                             );
                         } else {
                             tracing::debug!("Skipping periodic heartbeat while a heartbeat POST is still in flight");
@@ -3458,13 +3703,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         }
     }
 
-    path_shutdown.send_replace(true);
-    in_flight.abort_all();
-    while in_flight.join_next().await.is_some() {}
-    if let Some(task) = control_channel_task {
+    state.path_shutdown.send_replace(true);
+    state.in_flight.abort_all();
+    while state.in_flight.join_next().await.is_some() {}
+    if let Some(task) = state.control_channel_task {
         task.abort();
     }
-    if let Some(task) = transcript_wake_task {
+    if let Some(task) = state.transcript_wake_task {
         task.abort();
     }
     crate::codex_exec::shutdown_codex_console_worker_pool().await;
