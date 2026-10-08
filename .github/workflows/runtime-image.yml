@@ -45,8 +45,8 @@ concurrency:
   # assigns in push order; Promote Rings takes the highest-numbered successful
   # run and never moves dogfood to a commit that does not contain what it
   # serves; the control plane orders deployments by source_order; and `latest`
-  # moves only for main's head (Resolve image tags). A rerun of the same SHA
-  # waits for the first.
+  # moves only for main's head, in Archive Runtime Image. A rerun of the same
+  # SHA waits for the first.
   group: runtime-image-${{ github.repository }}-${{ github.sha }}
   cancel-in-progress: false
 
@@ -114,36 +114,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # `latest` is a convenience tag; nothing deploys from it (every ring is
-      # promoted by digest). It moves only when this commit is main's head as
-      # the build starts, so an older build finishing late cannot move it back
-      # past a newer one; at worst it trails by one commit until the next push.
       - name: Resolve image tags
         id: image
         env:
           IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/longhouse-runtime
           HEAD_SHA: ${{ github.sha }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          tags="${IMAGE_NAME}:${HEAD_SHA}"
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            tags="${tags}"$'\n'"${IMAGE_NAME}:${GITHUB_REF_NAME}"
-          elif [[ "${GITHUB_REF_TYPE}" == "branch" && "${GITHUB_REF_NAME}" == "$DEFAULT_BRANCH" ]]; then
-            branch_head="$(curl --fail --silent --show-error --max-time 10 \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header "Accept: application/vnd.github.sha" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}" || true)"
-            if [[ "$branch_head" == "$HEAD_SHA" ]]; then
-              tags="${tags}"$'\n'"${IMAGE_NAME}:latest"
-            else
-              echo "${DEFAULT_BRANCH} is at ${branch_head:-<unread>}, not ${HEAD_SHA}; leaving latest alone."
-            fi
-          fi
+          # `latest` is not set here: builds finish out of order, so Archive
+          # Runtime Image moves it afterwards, only for main's head.
           {
             echo "tags<<EOF"
-            echo "$tags"
+            echo "${IMAGE_NAME}:${HEAD_SHA}"
+            if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+              echo "${IMAGE_NAME}:${GITHUB_REF_NAME}"
+            fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 

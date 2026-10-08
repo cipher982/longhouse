@@ -28,7 +28,7 @@ on:
 permissions:
   actions: read
   contents: read
-  packages: read
+  packages: write  # moving `latest`
 
 concurrency:
   group: runtime-image-archive-${{ github.event.workflow_run.id || inputs.publish_run_id }}
@@ -150,3 +150,38 @@ jobs:
           path: ${{ runner.temp }}/runtime-oci-archive/runtime-oci-archive.json
           if-no-files-found: error
           retention-days: 90
+          # A re-run attempt of this run re-uploads the same name.
+          overwrite: true
+
+      # `latest` is a convenience tag (every ring deploys by digest). Builds
+      # finish out of order, so it moves only to main's head, checked a moment
+      # before the retag: a newer push cannot also be published within that
+      # moment, since its own build takes over a minute.
+      - name: Log in to GHCR
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == github.event.repository.default_branch && github.event.workflow_run.event == 'push'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Move latest to main's head
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == github.event.repository.default_branch && github.event.workflow_run.event == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/longhouse-runtime
+          DIGEST: ${{ steps.pub.outputs.digest }}
+          SOURCE_SHA: ${{ steps.pub.outputs.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          head="$(curl --fail --silent --show-error --max-time 10 \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github.sha" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}")"
+          if [[ "$head" != "$SOURCE_SHA" ]]; then
+            echo "${DEFAULT_BRANCH} is at $head, not $SOURCE_SHA; leaving latest to a newer publication."
+            exit 0
+          fi
+          docker buildx imagetools create --tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}@${DIGEST}"
+          docker buildx imagetools inspect "${IMAGE_NAME}:latest" | head -3
