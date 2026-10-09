@@ -130,8 +130,8 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
     _home, longhouse_home = isolation_paths(isolation_root)
     workspace = isolation_root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
-    marker_pre = f"LONGHOUSE_COORD_PRECOMPACT_{uuid.uuid4().hex}"
-    marker_post = f"LONGHOUSE_COORD_POSTCOMPACT_{uuid.uuid4().hex}"
+    marker_pre = f"LONGHOUSE_COORD_PRECOMPACT_{uuid.uuid4().hex[:12]}"
+    marker_post = f"LONGHOUSE_COORD_POSTCOMPACT_{uuid.uuid4().hex[:12]}"
     probe_repo = f"longhouse-coordination-awareness-probe-{uuid.uuid4().hex[:12]}"
 
     def peers_prompt(marker: str) -> str:

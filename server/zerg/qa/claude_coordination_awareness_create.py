@@ -101,7 +101,7 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
     isolation_root = Path(tempfile.mkdtemp(prefix="lhx-claude-coord-create-", dir="/tmp"))
     workspace = isolation_root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
-    marker = f"LONGHOUSE_COORD_CREATE_{uuid.uuid4().hex}"
+    marker = f"LONGHOUSE_COORD_CREATE_{uuid.uuid4().hex[:12]}"
     probe_repo = f"longhouse-coordination-awareness-probe-{uuid.uuid4().hex[:12]}"
     prompt = (
         f'Call your peers tool now with repo="{probe_repo}" and active_only=false. '

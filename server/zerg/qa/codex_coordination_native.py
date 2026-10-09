@@ -505,7 +505,7 @@ def _run_awareness_create(args: argparse.Namespace, root: Path) -> tuple[dict[st
         state_file = Path(str(summary.get("state_file") or ""))
         if not session_id or not state_file.is_file():
             raise RuntimeError("awareness-create bridge did not start a resumable provider thread")
-        marker = f"LONGHOUSE_COORD_CREATE_{uuid.uuid4().hex}"
+        marker = f"LONGHOUSE_COORD_CREATE_{uuid.uuid4().hex[:12]}"
         probe_repo = f"longhouse-coordination-awareness-probe-{uuid.uuid4().hex[:12]}"
         prompt = (
             f'Call the Longhouse peers MCP tool with repo="{probe_repo}" and active_only=false. '
