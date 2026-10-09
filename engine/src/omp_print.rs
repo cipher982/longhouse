@@ -3449,7 +3449,8 @@ fn recorded_process_matches(
         return Ok(Some(false));
     };
     match crate::process_identity::inspect_process_fact(identity.pid) {
-        // An unreaped zombie has exited; only its parent's wait is pending.
+        // An unreaped zombie has exited; only its parent's wait is pending. A
+        // stopped (`T`) process has not, so this is not `is_stopped_or_zombie`.
         crate::process_identity::ProcessFactLookup::Present(fact) => Ok(Some(
             fact.lstart == expected_start && !fact.stat.starts_with('Z'),
         )),

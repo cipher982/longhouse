@@ -136,12 +136,7 @@ pub fn group_has_running_member(pgid: i32) -> bool {
     if !group_is_alive(pgid) {
         return false;
     }
-    match crate::process_identity::try_collect_process_lineage() {
-        Some(entries) => entries
-            .iter()
-            .any(|entry| entry.pgid == pgid && !entry.stat.starts_with('Z')),
-        None => true,
-    }
+    crate::process_identity::try_group_has_non_zombie(pgid).unwrap_or(true)
 }
 
 #[cfg(unix)]

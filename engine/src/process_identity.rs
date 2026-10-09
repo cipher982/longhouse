@@ -127,6 +127,30 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     }
     Some(facts)
 }
+/// Whether process group `pgid` has a member that is not a zombie, from one
+/// bounded `ps` pass. `None` when `ps` fails, times out or prints a line it
+/// cannot parse; callers then fall back to the zombie-inclusive probe.
+pub fn try_group_has_non_zombie(pgid: i32) -> Option<bool> {
+    let mut command = Command::new("ps");
+    command.args(["-axo", "pgid=,stat="]);
+    let output = output_with_timeout(command, PROCESS_INVENTORY_TIMEOUT)?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut running = false;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let mut fields = line.split_whitespace();
+        let group = fields.next()?.parse::<i32>().ok()?;
+        let stat = fields.next()?;
+        // `T` (stopped) is still a member that holds resources; only `Z` has exited.
+        if group == pgid && !stat.starts_with('Z') {
+            running = true;
+        }
+    }
+    Some(running)
+}
+
 /// Read one bounded batch of exact process identities without enumerating the
 /// rest of the machine. A successful result is a complete observation for the
 /// requested PIDs: omitted PIDs were absent, while a failed/partial `ps` pass
