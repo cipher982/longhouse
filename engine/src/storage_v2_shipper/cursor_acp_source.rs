@@ -93,6 +93,7 @@ pub(crate) fn prepare_next_cursor_acp_envelope(
                 cwd: None,
                 git_repo: None,
                 git_branch: None,
+                provider_version: None,
                 started_at: observed_at.to_rfc3339(),
                 last_activity_at: observed_at.to_rfc3339(),
                 ended_at: None,

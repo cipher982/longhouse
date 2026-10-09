@@ -151,6 +151,10 @@ pub struct StorageV2SessionFacts {
     pub cwd: Option<String>,
     pub git_repo: Option<String>,
     pub git_branch: Option<String>,
+    /// The provider CLI's own release. Only Claude and Codex transcripts carry
+    /// one; absent everywhere else, and absent on the wire when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_version: Option<String>,
     pub started_at: String,
     pub last_activity_at: String,
     pub ended_at: Option<String>,

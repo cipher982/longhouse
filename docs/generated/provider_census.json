@@ -465,6 +465,7 @@
     {
       "path": "engine/src/storage_v2_shipper/render.rs",
       "providers": [
+        "claude",
         "codex",
         "omp"
       ]

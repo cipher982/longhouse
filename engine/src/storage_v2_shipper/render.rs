@@ -247,6 +247,17 @@ pub(super) fn insert_conversation_reset_boundary(
     Ok(())
 }
 
+/// Only Claude and Codex write their CLI release into the transcript. Other
+/// providers' version fields describe a file format (OMP/Pi writes a numeric
+/// schema version), so they ship no CLI version.
+fn shipped_provider_version(provider: &str, metadata: &SessionMetadata) -> Option<String> {
+    if provider.eq_ignore_ascii_case("claude") || provider.eq_ignore_ascii_case("codex") {
+        metadata.version.clone()
+    } else {
+        None
+    }
+}
+
 pub(super) fn session_facts(
     provider: &str,
     metadata: &SessionMetadata,
@@ -305,6 +316,7 @@ pub(super) fn session_facts(
         cwd: metadata.cwd.clone(),
         git_repo: metadata.git_repo.clone(),
         git_branch: metadata.git_branch.clone(),
+        provider_version: shipped_provider_version(provider, metadata),
         started_at: started_at.to_rfc3339(),
         last_activity_at: last_activity_at.max(started_at).to_rfc3339(),
         ended_at: metadata.ended_at.map(|value| value.to_rfc3339()),

@@ -1399,6 +1399,7 @@ pub(super) fn prepare_next_cursor_envelope_outcome_with_limit(
                     .as_ref()
                     .and_then(|(_, _, git_repo)| git_repo.clone()),
                 git_branch: None,
+                provider_version: None,
                 started_at: started_at.to_rfc3339(),
                 last_activity_at: last_activity_at.to_rfc3339(),
                 ended_at: None,

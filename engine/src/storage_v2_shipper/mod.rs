@@ -3256,6 +3256,69 @@ mod tests {
         assert_eq!(pending_source_envelope::count(&conn).unwrap(), 1);
     }
 
+    /// Prepare the first envelope for one transcript and return its session facts.
+    fn shipped_session_facts(
+        provider: &str,
+        file_name: &str,
+        lines: &str,
+    ) -> StorageV2SessionFacts {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(file_name);
+        fs::write(&path, lines).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        prepare_next_envelope(&mut conn, &capabilities(), &path, provider, None)
+            .unwrap()
+            .unwrap()
+            .envelope
+            .session
+    }
+
+    #[test]
+    fn claude_session_ships_the_cli_version_from_its_transcript() {
+        let session = shipped_session_facts(
+            "claude",
+            "claude-version.jsonl",
+            "{\"type\":\"user\",\"uuid\":\"019c638d-0000-0000-0000-0000000000bb\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{\"content\":\"hi\"},\"cwd\":\"/tmp/proj\",\"version\":\"2.1.142\"}\n",
+        );
+
+        assert_eq!(session.provider_version.as_deref(), Some("2.1.142"));
+    }
+
+    #[test]
+    fn codex_session_ships_the_cli_version_from_session_meta() {
+        let session = shipped_session_facts(
+            "codex",
+            "rollout-2026-02-15T10-00-00-eeee5555.jsonl",
+            concat!(
+                r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"eeeeeeee-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.145.0"}}"#,
+                "\n",
+                r#"{"type":"response_item","timestamp":"2026-02-15T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}"#,
+                "\n",
+            ),
+        );
+
+        assert_eq!(session.provider_version.as_deref(), Some("0.145.0"));
+    }
+
+    #[test]
+    fn omp_session_ships_no_cli_version_even_though_its_header_carries_one() {
+        // The header version is OMP's file-format number, not a CLI release.
+        let session = shipped_session_facts(
+            "omp",
+            "omp-version.jsonl",
+            concat!(
+                r#"{"type":"session","version":3,"id":"omp-version-1","timestamp":"2026-09-09T00:00:00.000Z","cwd":"/tmp/omp"}"#,
+                "\n",
+                r#"{"type":"message","id":"omp-user-01","parentId":null,"timestamp":"2026-09-09T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}"#,
+                "\n",
+            ),
+        );
+
+        assert_eq!(session.provider_version, None);
+        let wire = serde_json::to_value(&session).unwrap();
+        assert!(wire.get("provider_version").is_none());
+    }
+
     fn codex_forked_child_lines() -> String {
         concat!(
             r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"dddddddd-1111-2222-3333-444455556666","forked_from_id":"cccccccc-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.1.0"}}"#,
