@@ -59,6 +59,14 @@ class DogfoodRefreshExactTests(unittest.TestCase):
             shutil.copyfile(ROOT / "scripts" / "lib" / name, lib / name)
         self.home = self.root / "home"
         (self.home / ".local" / "bin").mkdir(parents=True)
+        # The inner run installs longhouse-server from the exact checkout; the
+        # stub stands in for that install and reports the requested commit.
+        self.write_server_cli(self.first)
+
+    def write_server_cli(self, sha: str) -> None:
+        cli = self.home / ".local" / "bin" / "longhouse-server"
+        cli.write_text(f"#!/usr/bin/env bash\necho longhouse 0.1.0-dev+{sha[:8]}\n")
+        cli.chmod(0o755)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -115,6 +123,14 @@ class DogfoodRefreshExactTests(unittest.TestCase):
         self.assertFalse((self.root / "inner").exists())
         self.assertFalse(self.lanes.exists())
         self.assertIn("No canonical machine state", result.stderr + result.stdout)
+
+    def test_longhouse_server_must_report_the_requested_commit(self):
+        self.write_server_cli("deadbeefcafe")
+        result = self.refresh("--sha", self.first, "--skip-engine", "--no-menubar")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("longhouse-server reports", result.stderr)
+        self.assertIn("not " + self.first[:8], result.stderr)
+        self.assert_cleaned_up()
 
 
 if __name__ == "__main__":
