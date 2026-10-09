@@ -52,7 +52,7 @@ def _peer_line(item: dict, now: datetime) -> str:
             )
         except ValueError:
             pass
-    title = " ".join(str(item.get("summary_title") or "").split())[:80]
+    title = " ".join("".join(ch for ch in str(item.get("summary_title") or "") if ch.isprintable() or ch.isspace()).split())[:80]
     line = f"{item.get('session_id')} {item.get('provider') or '?'} {item.get('presence_state') or '?'} {age}"
     return f"{line} · {title}" if title else line
 
@@ -563,11 +563,13 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         repo: str | None = None,
         active_only: bool = True,
     ) -> str:
-        """List current same-repo collaborators from the live Longhouse wall.
+        """List the other agent sessions in this repo, one line each.
 
-        When repo is omitted, the tool tries to infer it from the current
-        managed session context when available. Use this for live coordination;
-        use search_sessions for historical work discovery.
+        Each line is `<session_id> <provider> <state> <age> · <title>`. Several
+        agents often work at once: use peers, inbox and tail whenever knowing what
+        others are doing would help, for example before starting work in a shared
+        repo. When repo is omitted it is inferred from the current managed session.
+        Live sessions only unless active_only=false; use search_sessions for history.
         """
         current_session_id = get_managed_session_id()
         resolved_repo = repo

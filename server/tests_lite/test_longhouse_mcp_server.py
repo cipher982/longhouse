@@ -620,7 +620,7 @@ def test_peer_line_is_one_token_cheap_line():
         "provider": "omp",
         "presence_state": "running",
         "last_event_at": "2026-10-09T17:55:30Z",
-        "summary_title": "Moving  tools\nout of service pkg",
+        "summary_title": "Moving  tools\nout of\x1b[31m service pkg",
     }
-    assert _peer_line(item, now) == "22222222-2222-2222-2222-222222222222 omp running 4m · Moving tools out of service pkg"
+    assert _peer_line(item, now) == "22222222-2222-2222-2222-222222222222 omp running 4m · Moving tools out of[31m service pkg"
     assert _peer_line({**item, "last_event_at": "2026-10-07T18:00:00Z", "summary_title": ""}, now).endswith("omp running 2d")

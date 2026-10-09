@@ -710,10 +710,10 @@ describe("peerLine", () => {
       provider: "omp",
       presence_state: "running",
       last_event_at: "2026-10-09T17:55:30Z",
-      summary_title: "Moving  tools\nout of service pkg",
+      summary_title: "Moving  tools\nout of\u001b[31m service pkg",
     };
     expect(peerLine(item, now)).toBe(
-      "22222222-2222-2222-2222-222222222222 omp running 4m · Moving tools out of service pkg",
+      "22222222-2222-2222-2222-222222222222 omp running 4m · Moving tools out of[31m service pkg",
     );
     expect(peerLine({ ...item, last_event_at: undefined, summary_title: "" }, now)).toBe(
       "22222222-2222-2222-2222-222222222222 omp running ?",

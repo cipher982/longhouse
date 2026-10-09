@@ -853,7 +853,8 @@ fn parse_json_or_text(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))
 }
 
-/// Shape the wall into the peers answer every Longhouse surface gives: the
+/// Shape the wall into the peers answer the agent tool surfaces give (engine
+/// MCP, Python MCP, OMP extension; the human CLI keeps its own table): the
 /// caller is not its own peer, `active_only` (the default) keeps only sessions
 /// with live presence, and each peer is one line,
 /// `<session_id> <provider> <state> <age> · <title>`. The model decides what
@@ -904,7 +905,11 @@ fn peer_line(item: &Value, now: chrono::DateTime<chrono::Utc>) -> String {
             }
         })
         .unwrap_or_else(|_| "?".to_string());
-    let title: String = field("summary_title")
+    let printable: String = field("summary_title")
+        .chars()
+        .filter(|ch| !ch.is_control() || ch.is_whitespace())
+        .collect();
+    let title: String = printable
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -1933,7 +1938,7 @@ mod tests {
             {"session_id": "self", "has_live_presence": true, "provider": "claude"},
             {"session_id": "live", "has_live_presence": true, "provider": "codex",
              "presence_state": "running", "last_event_at": "2026-10-09T17:55:30Z",
-             "summary_title": "Composer\n stop  slot", "internal": 1},
+             "summary_title": "Composer\n stop \u{1b} slot", "internal": 1},
             {"session_id": "ended", "has_live_presence": false, "provider": "omp"},
         ]})
         .to_string();

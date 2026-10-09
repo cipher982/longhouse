@@ -436,7 +436,13 @@ export function peerLine(item: Record<string, unknown>, nowMs: number): string {
             ? `${Math.floor(minutes / 60)}h`
             : `${Math.floor(minutes / 1440)}d`;
   }
-  const title = text(item.summary_title).split(/\s+/).filter(Boolean).join(" ").slice(0, 80);
+  const title = text(item.summary_title)
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 80);
   const line = `${text(item.session_id)} ${text(item.provider) || "?"} ${text(item.presence_state) || "?"} ${age}`;
   return title ? `${line} · ${title}` : line;
 }
