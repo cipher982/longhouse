@@ -222,42 +222,97 @@ enum UnrecordedInputs {
         return shown
     }
 
-    /// Served user receipts the transcript does not show, as rows placed at
-    /// their send time. `excluding` is this client's own optimistic rows,
+    /// Claude records a completion in its transcript and Longhouse separately
+    /// records the wake that delivered it. Their DTOs have no shared task id.
+    /// Only an unambiguous exact body within the delivery window is redundant.
+    private nonisolated static func shownByNotifications(
+        receipts: [SessionInputReceipt],
+        events: [SessionEvent]
+    ) -> Set<String> {
+        let prefix = "Background task finished: "
+        let wakes = receipts.compactMap { receipt -> (id: String, text: String, at: Date)? in
+            guard receipt.origin == "wake",
+                  let id = receipt.clientRequestId,
+                  let text = receipt.text, text.hasPrefix(prefix),
+                  let at = receipt.createdAt.flatMap(LonghouseDateParser.parse)
+            else { return nil }
+            return (id, String(text.dropFirst(prefix.count)), at)
+        }
+        let notices = events.compactMap { event -> (text: String, at: Date)? in
+            guard event.isHeadBranch, event.interactionKind == "provider_notification",
+                  let text = event.contentText,
+                  let at = LonghouseDateParser.parse(event.timestamp)
+            else { return nil }
+            return (text, at)
+        }
+        // Observed receipt lag: 0.189–4.107 s; 5 s adds 0.893 s of margin.
+        // Do not infer identity for repeated or differently worded completions.
+        func matches(_ wake: (id: String, text: String, at: Date), _ notice: (text: String, at: Date)) -> Bool {
+            let lag = wake.at.timeIntervalSince(notice.at)
+            return wake.text == notice.text && lag >= 0 && lag <= 5
+        }
+        var shown = Set<String>()
+        for wake in wakes {
+            var match: Int?
+            var ambiguous = false
+            for index in notices.indices where matches(wake, notices[index]) {
+                if match != nil { ambiguous = true; break }
+                match = index
+            }
+            guard !ambiguous, let match,
+                  !wakes.contains(where: { $0.id != wake.id && matches($0, notices[match]) })
+            else { continue }
+            shown.insert(wake.id)
+        }
+        return shown
+    }
+
+    /// Served receipts the transcript does not show, including background
+    /// completions and Longhouse notices, placed at their recorded time.
+    /// `excluding` is this client's own optimistic rows,
     /// which still render themselves. `loadedFrom` is the first loaded row's
     /// time while older rows remain unloaded: a receipt older than it waits
     /// for that page instead of claiming the top.
     nonisolated static func placedInputs(
         receipts: [SessionInputReceipt],
         userEvents: [SessionEvent],
+        notificationEvents: [SessionEvent] = [],
         excluding ownClientRequestIds: Set<String>,
         loadedFrom: Date? = nil,
         windowStart: Date? = nil
     ) -> [SubmittedInput] {
         let shown = shownByTranscript(receipts: receipts, userEvents: userEvents, windowStart: windowStart)
+            .union(shownByNotifications(receipts: receipts, events: notificationEvents))
         return receipts.compactMap { receipt in
-            guard (receipt.origin ?? "user") == "user",
-                  isSettledDelivery(receipt),
+            let origin = receipt.origin ?? "user"
+            let isNotice = origin == "wake" || origin == "longhouse"
+            guard origin == "user" || isNotice,
+                  isNotice || isSettledDelivery(receipt),
                   let id = receipt.clientRequestId,
                   !shown.contains(id),
                   !ownClientRequestIds.contains(id),
-                  let text = receipt.text, !text.isEmpty,
-                  let createdAt = receipt.createdAt.flatMap(LonghouseDateParser.parse),
-                  loadedFrom.map({ createdAt >= $0 }) ?? true
+                  let text = receipt.text, !text.isEmpty
             else { return nil }
-            let lost = failedBeforeRecorded(receipt)
+            let createdAt = receipt.createdAt.flatMap(LonghouseDateParser.parse)
+            // An undated notice remains visible without inventing its order.
+            // User receipts still require a readable time for placement.
+            guard isNotice || createdAt != nil
+            else { return nil }
+            if let createdAt, let loadedFrom, createdAt < loadedFrom { return nil }
+            let lost = !isNotice && failedBeforeRecorded(receipt)
             var input = SubmittedInput(
                 id: "receipt:\(id)",
                 clientRequestId: id,
                 text: text,
+                origin: origin,
                 intent: receipt.intent,
                 phase: lost ? .failed : .sent,
                 serverInputId: nil,
                 deliveryStatus: receipt.status,
                 lastError: lost ? lostDetail : nil,
-                createdAt: createdAt
+                createdAt: createdAt ?? .distantPast
             )
-            input.placedAtSendTime = true
+            input.placedAtSendTime = createdAt != nil
             return input
         }
     }

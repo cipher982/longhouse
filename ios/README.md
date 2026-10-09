@@ -17,6 +17,11 @@ history. Expired active evidence becomes unknown without erasing a provider's
 recorded completion, failure, cancellation, or abort. Native progress counters
 remain separate from counters derived from the archived child transcript.
 
+Completion notices sit at their recorded time among transcript messages, not in
+a persistent tail below newer replies. An unambiguous native completion replaces
+its duplicate wake receipt; unmatched notices and unreadable-time evidence remain
+visible, and notices before an unloaded page wait for that history.
+
 Settings → Machines shows enrolled machines, activity and independent sync facts.
 If activity/sync is unavailable, the directory and supported machine actions remain
 usable; failed refreshes label retained facts as last known. Open sessions keeps the

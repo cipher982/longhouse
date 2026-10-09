@@ -289,7 +289,6 @@ struct SessionInputReconciliationTests {
                 served("ios-lost", text: "keep pushing", at: "2026-10-07T13:17:33Z", turnState: "failed"),
                 served("web-linked", text: "linked", at: "2026-10-07T03:37:05Z", eventId: "evt-1"),
                 served("ios-echoed", text: "echoed", at: "2026-10-07T05:18:54Z"),
-                served("wake:1", text: "Background task finished", at: "2026-10-07T05:30:00Z", origin: "wake"),
                 served("ios-mine", text: "mine", at: "2026-10-07T06:00:00Z"),
                 served("ios-running", text: "running", at: "2026-10-07T07:00:00Z", turnState: "active"),
             ],
@@ -331,6 +330,127 @@ struct SessionInputReconciliationTests {
         // With every row loaded, a send older than the first row leads.
         #expect(rows.map(\.body) == ["before the page", "first", "TLDR please", "second"])
         #expect(rows[2].status == "sent placed")
+    }
+
+    @Test
+    func backgroundCompletionReceiptsStayAtTheirTimeAsNewMessagesArrive() {
+        let receipts = [
+            served("wake:second", text: "Second task finished", at: "2026-10-08T04:30:00Z", origin: "wake"),
+            served("wake:first", text: "First task finished", at: "2026-10-08T04:10:00Z", origin: "wake"),
+            served("close:1", text: "Session closed", at: "2026-10-08T04:40:00Z", origin: "longhouse"),
+        ]
+        let placed = UnrecordedInputs.placedInputs(receipts: receipts, userEvents: [], excluding: [])
+        let events = [
+            userEvent("before", text: "Before tasks", at: "2026-10-08T04:00:00Z"),
+            userEvent("between", text: "Between tasks", at: "2026-10-08T04:20:00Z"),
+            userEvent("after", text: "After tasks", at: "2026-10-08T04:50:00Z"),
+        ]
+        let rows = WebTranscriptView.payloadItems(
+            timelineItems: TimelineBuilder.build(events: events),
+            submittedInputs: placed
+        )
+        #expect(rows.map(\.body) == [
+            "Before tasks", "First task finished", "Between tasks",
+            "Second task finished", "Session closed", "After tasks",
+        ])
+        let updated = WebTranscriptView.payloadItems(
+            timelineItems: TimelineBuilder.build(events: events + [
+                userEvent("newest", text: "New message", at: "2026-10-08T05:00:00Z")
+            ]),
+            submittedInputs: placed
+        )
+        #expect(updated.map(\.body) == rows.map(\.body) + ["New message"])
+        #expect(rows.filter { $0.kind == "providerNotification" }.map(\.origin) == [nil, nil, "longhouse"])
+    }
+
+    @Test
+    func backgroundReceiptOutsideLoadedPageWaitsForOlderHistory() {
+        let receipts = [
+            served("wake:old", text: "Old task finished", at: "2026-10-08T03:00:00Z", origin: "wake"),
+            served("wake:loaded", text: "Recent task finished", at: "2026-10-08T04:10:00Z", origin: "wake"),
+        ]
+        let placed = UnrecordedInputs.placedInputs(
+            receipts: receipts, userEvents: [], excluding: [],
+            loadedFrom: LonghouseDateParser.parse("2026-10-08T04:00:00Z")
+        )
+        #expect(placed.map(\.clientRequestId) == ["wake:loaded"])
+        let all = UnrecordedInputs.placedInputs(receipts: receipts, userEvents: [], excluding: [])
+        #expect(Set(all.map(\.clientRequestId)) == ["wake:old", "wake:loaded"])
+    }
+
+    @Test
+    func echoedBackgroundReceiptIsNotDuplicatedAndUndatedNoticeIsRetained() {
+        let echo = userEvent(
+            id: "echo",
+            origin: SessionInputOrigin(authoredVia: .longhouse, origin: "wake", sessionInputId: nil, clientRequestId: "wake:echo"),
+            text: "Task finished"
+        )
+        let placed = UnrecordedInputs.placedInputs(
+            receipts: [
+                served("wake:echo", text: "Task finished", at: echo.timestamp, eventId: "echo", origin: "wake"),
+                served("wake:undated", text: "Undated completion", at: "not-a-date", origin: "wake"),
+            ],
+            userEvents: [echo], excluding: []
+        )
+        let rows = WebTranscriptView.payloadItems(
+            timelineItems: TimelineBuilder.build(events: [echo]), submittedInputs: placed
+        )
+        #expect(rows.map(\.body) == ["Task finished", "Undated completion"])
+        #expect(placed.map(\.clientRequestId) == ["wake:undated"])
+        #expect(placed.first?.placedAtSendTime == false)
+    }
+
+    private func notification(_ id: String, text: String, at timestamp: String) -> SessionEvent {
+        SessionEvent(
+            id: id, role: "system", contentText: text, interactionKind: "provider_notification",
+            toolName: nil, toolInputJSON: nil, toolOutputText: nil,
+            toolCallId: nil, toolCallState: nil, timestamp: timestamp,
+            inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        )
+    }
+
+    @Test
+    func nativeCompletionReplacesOnlyItsUnambiguousWakeReceipt() {
+        let body = "Background command \"Run checks\" completed (exit code 0)"
+        let events = [notification("native", text: body, at: "2026-10-08T04:10:00Z")]
+        let placed = UnrecordedInputs.placedInputs(
+            receipts: [
+                served("wake:echo", text: "Background task finished: \(body)", at: "2026-10-08T04:10:04.107Z", origin: "wake"),
+                served("wake:later", text: "Background task finished: \(body)", at: "2026-10-08T04:11:00Z", origin: "wake"),
+                served("wake:different", text: "Background task finished: Another command", at: "2026-10-08T04:10:01Z", origin: "wake"),
+            ],
+            userEvents: [], notificationEvents: events, excluding: []
+        )
+        #expect(placed.map(\.clientRequestId) == ["wake:later", "wake:different"])
+        let rows = WebTranscriptView.payloadItems(
+            timelineItems: TimelineBuilder.build(events: events), submittedInputs: placed
+        )
+        #expect(rows.map(\.body) == [body, "Background task finished: Another command", "Background task finished: \(body)"])
+    }
+
+    @Test
+    func ambiguousOrOutOfWindowCompletionsNeverEraseWakeEvidence() {
+        let body = "Repeated command completed"
+        let receipts = [
+            served("wake:one", text: "Background task finished: \(body)", at: "2026-10-08T04:10:01Z", origin: "wake"),
+            served("wake:two", text: "Background task finished: \(body)", at: "2026-10-08T04:10:02Z", origin: "wake"),
+        ]
+        let oneNotice = [notification("native", text: body, at: "2026-10-08T04:10:00Z")]
+        let ambiguousReceipts = UnrecordedInputs.placedInputs(
+            receipts: receipts, userEvents: [], notificationEvents: oneNotice, excluding: []
+        )
+        #expect(ambiguousReceipts.map(\.clientRequestId) == ["wake:one", "wake:two"])
+        let ambiguousEvents = UnrecordedInputs.placedInputs(
+            receipts: [receipts[1]], userEvents: [],
+            notificationEvents: oneNotice + [notification("native-again", text: body, at: "2026-10-08T04:10:01Z")],
+            excluding: []
+        )
+        #expect(ambiguousEvents.map(\.clientRequestId) == ["wake:two"])
+        let outsideWindow = UnrecordedInputs.placedInputs(
+            receipts: [served("wake:late", text: "Background task finished: \(body)", at: "2026-10-08T04:10:05.001Z", origin: "wake")],
+            userEvents: [], notificationEvents: oneNotice, excluding: []
+        )
+        #expect(outsideWindow.map(\.clientRequestId) == ["wake:late"])
     }
 
     @Test

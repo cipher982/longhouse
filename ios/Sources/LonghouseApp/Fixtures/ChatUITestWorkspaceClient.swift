@@ -62,6 +62,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             seedEvents = Self.marketingFixtureEvents()
         } else if fixture.name == "lite-bodies" {
             seedEvents = Self.liteBodiesFixtureEvents()
+        } else if fixture.name == "background-completion-receipts" {
+            seedEvents = Self.backgroundCompletionReceiptFixtureEvents()
         } else {
             // Every assistant reply ends a turn, and the provider stamps each
             // one; the fixture carries that so the footer is part of what the
@@ -543,6 +545,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     /// realistic session title, not the test-harness label.
     static func titleForFixture(_ fixtureName: String) -> String {
         switch fixtureName {
+        case "background-completion-receipts":
+            return "Background Completion Receipts"
         case "marketing":
             return "Wire up OAuth refresh flow"
         case "ended-codex-helm":
@@ -595,6 +599,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         let isHelmChannelReconcile = title == titleForFixture("helm-channel-reconcile")
         let isTimelineDelegation = title.contains("Background Tasks (timeline)")
         let isAttentionDelegation = title == titleForFixture("background-tasks-attention")
+        let isBackgroundCompletionReceipts = title == titleForFixture("background-completion-receipts")
         let composerPlaceholder = isMarketing
             ? "Message"
             : "Steer this turn"
@@ -697,6 +702,9 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             ),
             deviceId: isEndedCodexHelm ? "cinder" : nil
         )
+        if isBackgroundCompletionReceipts {
+            detail.inputReceipts = Self.backgroundCompletionReceipts()
+        }
         if title.hasPrefix("Background Tasks") {
             let positiveExpired = title.contains("(stale)") || title.contains("(expired positive)")
             let serverEmptyExpired = title.contains("(expired empty)")
@@ -787,6 +795,58 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             inputOrigin: inputOrigin,
             turnEnd: turnEnd
         )
+    }
+
+    /// Assistant prose deliberately brackets served receipts in time so the UI
+    /// fixture exercises the chronological merge rather than provider rows.
+    private static func backgroundCompletionReceiptFixtureEvents() -> [SessionEvent] {
+        [
+            makeEvent(
+                id: 1,
+                role: "assistant",
+                content: "Assistant reply before background work.",
+                timestamp: fixedTimestamp(offset: 0)
+            ),
+            makeEvent(
+                id: 2,
+                role: "assistant",
+                content: "Assistant reply between completion notices.",
+                timestamp: fixedTimestamp(offset: 2)
+            ),
+            makeEvent(
+                id: 3,
+                role: "assistant",
+                content: "Assistant reply after completion notices.",
+                timestamp: fixedTimestamp(offset: 4)
+            ),
+        ]
+    }
+
+    /// These are served receipts, not synthetic provider-notification timeline
+    /// events. Their creation times interleave with the fixture's replies.
+    private static func backgroundCompletionReceipts() -> [SessionInputReceipt] {
+        [
+            SessionInputReceipt(
+                clientRequestId: "close:background-completion-fixture",
+                intent: "auto",
+                status: "delivered",
+                createdAt: fixedTimestamp(offset: 3),
+                eventId: nil,
+                text: "Stopped 1 background task: package the report. Longhouse couldn't confirm all its processes exited, and left any that remain alone.",
+                origin: "longhouse",
+                turnState: "completed"
+            ),
+            SessionInputReceipt(
+                clientRequestId: "wake:background-completion-fixture:1",
+                intent: "auto",
+                status: "delivered",
+                createdAt: fixedTimestamp(offset: 1),
+                eventId: nil,
+                text: "Background task finished: Background command \"Run the checks\" completed (exit code 0)",
+                origin: "wake",
+                turnState: "completed"
+            ),
+        ]
     }
 
     /// A realistic mixed transcript that exercises the redesign's demoted

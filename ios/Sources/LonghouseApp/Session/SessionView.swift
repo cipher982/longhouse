@@ -503,27 +503,8 @@ struct SessionView: View {
         } else {
             localInputs = hostUpdateInputs
         }
-        let systemReceiptInputs = (viewModel.detail?.inputReceipts ?? []).compactMap { receipt -> SubmittedInput? in
-            guard let origin = receipt.origin,
-                  origin == "wake" || origin == "longhouse",
-                  let clientRequestId = receipt.clientRequestId,
-                  let text = receipt.text,
-                  !text.isEmpty else { return nil }
-            return SubmittedInput(
-                id: clientRequestId,
-                clientRequestId: clientRequestId,
-                text: text,
-                origin: origin,
-                intent: receipt.intent,
-                phase: .sent,
-                serverInputId: nil,
-                deliveryStatus: receipt.status,
-                lastError: nil,
-                createdAt: receipt.createdAt.flatMap(LonghouseDateParser.parse) ?? .distantPast
-            )
-        }
-        // Sends from any client (and steers the provider never wrote down)
-        // that the transcript does not show, at the time they were sent.
+        // All served receipts, including completion notices, stand at their
+        // recorded time instead of collecting beneath newer messages.
         let userEvents = viewModel.items.compactMap { item -> SessionEvent? in
             if case .user(let event) = item { return event }
             return nil
@@ -535,11 +516,15 @@ struct SessionView: View {
         let placedReceiptInputs = UnrecordedInputs.placedInputs(
             receipts: viewModel.detail?.inputReceipts ?? [],
             userEvents: userEvents,
+            notificationEvents: viewModel.items.compactMap { item in
+                if case .providerNotification(let event) = item { return event }
+                return nil
+            },
             excluding: Set(localInputs.map(\.clientRequestId)),
             loadedFrom: firstLoadedDate,
             windowStart: viewModel.items.first.flatMap { LonghouseDateParser.parse($0.sortTimestamp) }
         )
-        return localInputs + systemReceiptInputs + placedReceiptInputs
+        return localInputs + placedReceiptInputs
     }
 
     private var transcript: some View {

@@ -323,6 +323,50 @@ final class SessionChatUITests: XCTestCase {
         add(shot)
     }
 
+    func testBackgroundCompletionReceiptsStayBeforeLaterReplies() {
+        let app = launchChatFixture(
+            name: "background-completion-receipts",
+            eventCount: 0,
+            appearance: .dark
+        )
+        let firstReply = app.staticTexts["Assistant reply before background work."]
+        let wakeNotice = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "Run the checks"))
+            .firstMatch
+        let middleReply = app.staticTexts["Assistant reply between completion notices."]
+        let longhouseNotice = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "Longhouse couldn't confirm"))
+            .firstMatch
+        let lastReply = app.staticTexts["Assistant reply after completion notices."]
+        let initialOrder = [firstReply, wakeNotice, middleReply, longhouseNotice, lastReply]
+
+        for element in initialOrder {
+            XCTAssertTrue(
+                element.waitForExistence(timeout: Self.webTranscriptTimeout),
+                "Expected transcript row to render: \(element)"
+            )
+        }
+        assertTranscriptElementsVisibleInOrder(initialOrder, in: app)
+        let newestReply = app.staticTexts["Assistant fixture live update at bottom."]
+        XCTAssertFalse(newestReply.exists, "The first frame must precede the fixture assistant update")
+
+        let darkScreenshot = app.screenshot()
+        let screenshot = XCTAttachment(screenshot: darkScreenshot)
+        screenshot.name = "background-completion-receipts-dark"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        // Drive the update only after observing the initial rendered order.
+        app.buttons["background-completion-append"].tap()
+        XCTAssertTrue(newestReply.waitForExistence(timeout: Self.webTranscriptTimeout))
+        assertTranscriptElementsVisibleInOrder(initialOrder + [newestReply], in: app)
+        XCTAssertGreaterThan(
+            newestReply.frame.minY,
+            longhouseNotice.frame.maxY,
+            "The new assistant reply must stay below the earlier Longhouse completion notice"
+        )
+    }
+
 
     func testBackgroundTaskSheetOpensExactChildTranscript() {
         let app = launchChatFixture(name: "background-tasks", eventCount: 3)
@@ -720,6 +764,33 @@ final class SessionChatUITests: XCTestCase {
         }
         let reason = sawValidFrame ? "is still on screen" : "never reported a valid frame"
         XCTAssertFalse(visible, "\(element) \(reason)", file: file, line: line)
+    }
+
+    private func assertTranscriptElementsVisibleInOrder(
+        _ elements: [XCUIElement],
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let screen = app.frame
+        XCTAssertTrue(screen.isFiniteAndNonNull, "The app reported no usable screen frame", file: file, line: line)
+        var previousFrame: CGRect?
+        for element in elements {
+            let frame = element.frame
+            XCTAssertTrue(element.exists, "Transcript row does not exist: \(element)", file: file, line: line)
+            XCTAssertTrue(frame.isFiniteAndNonNull, "Transcript row has no rendered frame: \(element)", file: file, line: line)
+            XCTAssertTrue(frame.intersects(screen), "Transcript row is not visible on screen: \(element)", file: file, line: line)
+            if let previousFrame {
+                XCTAssertGreaterThan(
+                    frame.minY,
+                    previousFrame.maxY,
+                    "Transcript rows are not top-to-bottom in the expected chronology: \(element)",
+                    file: file,
+                    line: line
+                )
+            }
+            previousFrame = frame
+        }
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {

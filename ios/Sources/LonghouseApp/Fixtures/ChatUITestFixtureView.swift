@@ -158,6 +158,19 @@ struct ChatUITestFixtureView: View {
                     }
                     .accessibilityIdentifier("background-tasks-clear")
                 }
+                if fixtureName == "background-completion-receipts" {
+                    Button {
+                        Task {
+                            let rowID = await client.appendAssistantMessage("Assistant fixture live update at bottom.")
+                            await reloadUntilPublished(rowID: rowID)
+                        }
+                    } label: {
+                        Color.clear.frame(width: 44, height: 44).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Append assistant reply")
+                    .accessibilityIdentifier("background-completion-append")
+                }
             }
         }
         .task(id: fixtureName) {
