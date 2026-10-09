@@ -447,6 +447,37 @@ struct SessionInputReconciliationTests {
     }
 
     @Test
+    func wrappedAndEngineCappedSummariesKeepOneNativeResult() {
+        // The server folds whitespace in the native row; the receipt keeps the raw newline.
+        let wrapped = "Background command \"Run checks\"\n  completed (exit code 0)"
+        let wrappedEvent = notification("native-wrapped", text: "Background command \"Run checks\" completed (exit code 0)", at: "2026-10-08T04:10:00Z")
+        let wrappedInputs = UnrecordedInputs.placedInputs(
+            receipts: [served("wake:wrapped", text: "Background task finished: \(wrapped)", at: "2026-10-08T04:10:01Z", origin: "wake")],
+            userEvents: [], notificationEvents: [wrappedEvent], excluding: []
+        )
+        #expect(wrappedInputs.isEmpty)
+        // The engine keeps 180 scalars of a Claude task summary.
+        let full = String(repeating: "y", count: 200) + " done"
+        let capped = String(full.unicodeScalars.prefix(180))
+        let cappedEvent = notification("native-capped", text: full, at: "2026-10-08T04:10:00Z")
+        let cappedInputs = UnrecordedInputs.placedInputs(
+            receipts: [served("wake:capped", text: "Background agent finished: " + capped, at: "2026-10-08T04:10:01Z", origin: "wake")],
+            userEvents: [], notificationEvents: [cappedEvent], excluding: []
+        )
+        #expect(cappedInputs.isEmpty)
+    }
+
+    @Test
+    func anUncappedSummaryNeverMatchesALongerNativeResultByPrefix() {
+        let event = notification("native", text: "Run checks and deploy", at: "2026-10-08T04:10:00Z")
+        let inputs = UnrecordedInputs.placedInputs(
+            receipts: [served("wake:short", text: "Background task finished: Run checks", at: "2026-10-08T04:10:01Z", origin: "wake")],
+            userEvents: [], notificationEvents: [event], excluding: []
+        )
+        #expect(inputs.map(\.clientRequestId) == ["wake:short"])
+    }
+
+    @Test
     func identicalTruncatedSummariesDoNotCollapseDifferentNativeResults() {
         let shared = String(repeating: "x", count: 512)
         let events = [

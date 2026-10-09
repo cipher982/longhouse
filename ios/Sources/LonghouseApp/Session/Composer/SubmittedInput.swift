@@ -223,6 +223,16 @@ enum UnrecordedInputs {
     }
 
     private nonisolated static let completionPrefixes = ["Background task finished: ", "Background agent finished: "]
+    /// A wake summary this long was cut by a producer: the engine keeps 180
+    /// scalars of a Claude task summary (claude_print.rs), catalogd 512
+    /// (`_wake_trigger_summary`). Only then may it match a longer native result.
+    private nonisolated static let cappedSummaryScalars = 180
+
+    /// The server folds notification whitespace (`" ".join(value.split())`);
+    /// the wake receipt is only stripped. Fold both so wrapped summaries compare.
+    private nonisolated static func foldedWhitespace(_ value: String) -> String {
+        value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
 
     /// Claude records a completion in its transcript and Longhouse separately
     /// records the wake that delivered it. Their DTOs have no shared task id.
@@ -231,31 +241,33 @@ enum UnrecordedInputs {
         receipts: [SessionInputReceipt],
         events: [SessionEvent]
     ) -> Set<String> {
-        let wakes = receipts.compactMap { receipt -> (id: String, text: String, at: Date)? in
+        let wakes = receipts.compactMap { receipt -> (id: String, text: String, capped: Bool, at: Date)? in
             guard receipt.origin == "wake",
                   let id = receipt.clientRequestId,
                   let text = receipt.text,
                   let prefix = completionPrefixes.first(where: { text.hasPrefix($0) }),
                   let at = receipt.createdAt.flatMap(LonghouseDateParser.parse)
             else { return nil }
-            return (id, String(text.dropFirst(prefix.count)), at)
+            let summary = String(text.dropFirst(prefix.count))
+            return (id, foldedWhitespace(summary), summary.unicodeScalars.count >= cappedSummaryScalars, at)
         }
         let notices = events.compactMap { event -> (text: String, at: Date)? in
             guard event.isHeadBranch, event.interactionKind == "provider_notification",
                   let text = event.contentText,
                   let at = LonghouseDateParser.parse(event.timestamp)
             else { return nil }
-            // catalogd.store._wake_trigger_summary keeps 512 Unicode scalars,
-            // not Swift graphemes. Compare that receipt summary while retaining
-            // the native row's complete result for expansion.
-            let summary = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (String(summary.unicodeScalars.prefix(512)), at)
+            // Producers cut the receipt summary in Unicode scalars, not Swift
+            // graphemes, so a capped summary is compared as a scalar prefix while
+            // the native row keeps its complete result for expansion.
+            return (foldedWhitespace(text), at)
         }
         // Observed receipt lag: 0.189–4.107 s; 5 s adds 0.893 s of margin.
         // Do not infer identity for repeated or differently worded completions.
-        func matches(_ wake: (id: String, text: String, at: Date), _ notice: (text: String, at: Date)) -> Bool {
+        func matches(_ wake: (id: String, text: String, capped: Bool, at: Date), _ notice: (text: String, at: Date)) -> Bool {
             let lag = wake.at.timeIntervalSince(notice.at)
-            return wake.text == notice.text && lag >= 0 && lag <= 5
+            guard lag >= 0, lag <= 5, !wake.text.isEmpty else { return false }
+            return wake.text == notice.text
+                || (wake.capped && notice.text.unicodeScalars.starts(with: wake.text.unicodeScalars))
         }
         var shown = Set<String>()
         for wake in wakes {
