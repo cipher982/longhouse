@@ -137,10 +137,11 @@ extension WebTranscriptView {
         return collapsingProviderNotifications(rows)
     }
 
-    /// Consecutive background completions read as one row with a count, placed
-    /// at the latest one. Each completion used to add its own row, so a burst of
-    /// them buried the reply under a pile. A message or input between two of them
-    /// keeps them apart.
+    /// Consecutive background completions (wake notices only) read as one row
+    /// with a count, placed at the latest one. Each completion used to add its
+    /// own row, so a burst of them buried the reply under a pile. Longhouse's own
+    /// close and cleanup notices are never merged: they render whole, and a
+    /// message or input between two completions keeps them apart.
     nonisolated static func collapsingProviderNotifications(_ rows: [WebTranscriptPayloadItem]) -> [WebTranscriptPayloadItem] {
         var collapsed: [WebTranscriptPayloadItem] = []
         var run: [WebTranscriptPayloadItem] = []
@@ -150,12 +151,12 @@ extension WebTranscriptView {
                 collapsed.append(latest)
             } else {
                 let text = latest.body ?? "Background task finished"
-                collapsed.append(providerNotificationPayload(id: latest.id, text: "\(text) (\(run.count) updates)"))
+                collapsed.append(providerNotificationPayload(id: latest.id, text: "\(text) (\(run.count) updates)", origin: "wake"))
             }
             run.removeAll()
         }
         for row in rows {
-            if row.kind == "providerNotification" {
+            if row.kind == "providerNotification", row.origin == "wake" {
                 run.append(row)
             } else {
                 flush()
