@@ -23,12 +23,15 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from tests_lite.test_catalogd_storage_v2 import _raw_params
 from tests_lite.test_provider_capability_proof_routes import _client
+from zerg.auth.caller import Caller
+from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.store import CatalogStore
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.routers import provider_capability_proofs as routes
@@ -307,6 +310,20 @@ def test_field_versions_route_requires_agents_auth(monkeypatch, tmp_path: Path) 
         api_app.dependency_overrides.clear()
 
     assert response.status_code == 401
+
+
+def test_field_versions_route_refuses_a_managed_session_token(monkeypatch, tmp_path: Path) -> None:
+    """Owner-wide field versions follow the evidence guard: a scoped session token cannot read them."""
+    client = _client(monkeypatch, tmp_path)
+    api_app.dependency_overrides[verify_agents_caller] = lambda: Caller(
+        owner_id=1, principal=ManagedSessionToken(owner_id=1, session_id="session", scope="hook")
+    )
+    try:
+        response = client.get(URL)
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 403
 
 
 def test_field_versions_route_is_refused_on_public_demo(monkeypatch, tmp_path: Path) -> None:

@@ -1541,8 +1541,9 @@ class StorageMixin:
 
         Counts storage sessions started inside the window that carry a version.
         ``first_seen`` is the earliest ``started_at`` and ``last_seen`` the latest
-        ``last_activity_at`` among those sessions. Test and e2e environments are
-        excluded, as on the timeline. No verdict is made here.
+        ``last_activity_at`` among those sessions. Only test and e2e environments are
+        excluded; hidden and tombstoned sessions still count, because they ran the
+        version. No verdict is made here.
         """
         table = StorageSession.__table__
         observed_at = datetime.now(UTC)

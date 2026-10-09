@@ -664,10 +664,21 @@ def get_provider_version_evidence(
     }
 
 
+def _require_owner_capable_evidence_caller(caller: Caller = Depends(verify_agents_caller)) -> Caller:
+    if isinstance(caller.principal, ManagedSessionToken):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Managed-session tokens cannot read owner-wide provider evidence",
+        )
+    if caller.owner_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Provider evidence requires an owner-bound caller")
+    return caller
+
+
 @router.get("/agents/provider-field-versions", dependencies=[Depends(_refuse_evidence_on_public_demo)])
 def get_provider_field_versions(
     days: int = Query(14, ge=1, le=90, description="Window in days, by session start"),
-    caller: Caller = Depends(verify_agents_caller),
+    caller: Caller = Depends(_require_owner_capable_evidence_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, Any]:
     """Facts only: which provider CLI releases this owner's sessions ran in the window.
@@ -704,17 +715,6 @@ def _evidence_moment(value: str | datetime) -> datetime:
     except ValueError:
         return datetime.min.replace(tzinfo=UTC)
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
-
-
-def _require_owner_capable_evidence_caller(caller: Caller = Depends(verify_agents_caller)) -> Caller:
-    if isinstance(caller.principal, ManagedSessionToken):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Managed-session tokens cannot read owner-wide provider evidence",
-        )
-    if caller.owner_id is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Provider evidence requires an owner-bound caller")
-    return caller
 
 
 @router.get(
