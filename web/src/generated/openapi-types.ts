@@ -1122,6 +1122,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/provider-field-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Provider Field Versions
+         * @description Facts only: which provider CLI releases this owner's sessions ran in the window.
+         *
+         *     Counts and first/last seen per (provider, provider_version). Whether a version
+         *     has been proven is the provider factory's comparison, not this route's.
+         */
+        get: operations["get_provider_field_versions_agents_provider_field_versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/provider-capability-proofs/blobs/{sha256}": {
         parameters: {
             query?: never;
@@ -12043,6 +12066,40 @@ export interface operations {
             query: {
                 provider: string;
                 version: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_provider_field_versions_agents_provider_field_versions_get: {
+        parameters: {
+            query?: {
+                /** @description Window in days, by session start */
+                days?: number;
             };
             header?: never;
             path?: never;

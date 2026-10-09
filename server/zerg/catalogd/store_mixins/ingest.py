@@ -905,6 +905,7 @@ class IngestMixin:
                 "cwd": session_facts["cwd"],
                 "git_repo": session_facts["git_repo"],
                 "git_branch": session_facts["git_branch"],
+                "provider_version": session_facts.get("provider_version"),
                 "ended_at": session_facts["ended_at"],
                 "origin_kind": session_facts["origin_kind"],
                 "hidden_from_default_timeline": int(session_facts["hidden_from_default_timeline"]),
@@ -1246,6 +1247,8 @@ class IngestMixin:
                     "cwd",
                     "git_repo",
                     "git_branch",
+                    # A null incoming version never clears what an earlier ingest recorded.
+                    "provider_version",
                     "ended_at",
                     "origin_kind",
                     "launch_actor",

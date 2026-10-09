@@ -1536,6 +1536,55 @@ class StorageMixin:
                 "commit_seq": str(commit_seq),
             }
 
+    def summarize_provider_versions(self, *, owner_id: int, days_back: int) -> dict[str, Any]:
+        """Which provider CLI releases the owner ran, grouped by provider and version.
+
+        Counts storage sessions started inside the window that carry a version.
+        ``first_seen`` is the earliest ``started_at`` and ``last_seen`` the latest
+        ``last_activity_at`` among those sessions. Test and e2e environments are
+        excluded, as on the timeline. No verdict is made here.
+        """
+        table = StorageSession.__table__
+        observed_at = datetime.now(UTC)
+        window_start = observed_at - timedelta(days=days_back)
+        statement = (
+            select(
+                table.c.provider,
+                table.c.provider_version,
+                func.count().label("sessions"),
+                func.count(func.distinct(table.c.machine_id)).label("devices"),
+                func.min(table.c.started_at).label("first_seen"),
+                func.max(table.c.last_activity_at).label("last_seen"),
+            )
+            .where(
+                table.c.owner_id == str(owner_id),
+                table.c.provider_version.is_not(None),
+                table.c.started_at >= window_start,
+                table.c.environment.notin_(("test", "e2e")),
+            )
+            .group_by(table.c.provider, table.c.provider_version)
+            .order_by(table.c.provider.asc(), func.max(table.c.last_activity_at).desc(), table.c.provider_version.asc())
+        )
+        with _read_snapshot(self.engine) as connection:
+            rows = connection.execute(statement).fetchall()
+            commit_seq = _current_commit_seq(connection)
+        return {
+            "observed_at": observed_at.isoformat(),
+            "window_days": days_back,
+            "versions": [
+                {
+                    "provider": str(row.provider),
+                    "provider_version": str(row.provider_version),
+                    "sessions": int(row.sessions),
+                    "devices": int(row.devices),
+                    "first_seen": _as_aware_utc(row.first_seen).isoformat(),
+                    "last_seen": _as_aware_utc(row.last_seen).isoformat(),
+                }
+                for row in rows
+            ],
+            "commit_seq": str(commit_seq),
+        }
+
     def list_storage_sessions(
         self,
         *,

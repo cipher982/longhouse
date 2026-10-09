@@ -27,6 +27,8 @@ from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.catalog_read_gateway import provider_version_summary
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.product_assurance_proof_archive import ProductAssuranceProofArchive
 from zerg.services.provider_assurance_plan_projection import validate_plan_projection
@@ -659,6 +661,38 @@ def get_provider_version_evidence(
         "total_records": total,
         "truncated": total > len(shown),
         "required_assertions": _required_assertion_ids(provider) if known else [],
+    }
+
+
+@router.get("/agents/provider-field-versions", dependencies=[Depends(_refuse_evidence_on_public_demo)])
+def get_provider_field_versions(
+    days: int = Query(14, ge=1, le=90, description="Window in days, by session start"),
+    caller: Caller = Depends(verify_agents_caller),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, Any]:
+    """Facts only: which provider CLI releases this owner's sessions ran in the window.
+
+    Counts and first/last seen per (provider, provider_version). Whether a version
+    has been proven is the provider factory's comparison, not this route's.
+    """
+    try:
+        summary = provider_version_summary(owner_id=caller.owner_id, days_back=days)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+    return {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "window_days": days,
+        "versions": [
+            {
+                "provider": item["provider"],
+                "provider_version": item["provider_version"],
+                "sessions": item["sessions"],
+                "devices": item["devices"],
+                "first_seen": item["first_seen"],
+                "last_seen": item["last_seen"],
+            }
+            for item in summary.get("versions", [])
+        ],
     }
 
 

@@ -82,6 +82,8 @@ _SAFE_RETRY_METHODS = {
     "session.timeline.list.v2",
     # Read-only aggregate over the same snapshot as the timeline.
     "machine.activity.summary.v2",
+    # Read-only aggregate of provider CLI releases seen per owner.
+    "session.provider_versions.summary.v2",
     "session.titles.search.v2",
     "directed_input.create.v2",
     "directed_input.link_receipt.v2",

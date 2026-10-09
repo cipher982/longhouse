@@ -1911,6 +1911,29 @@
    "retryable": false
   }
  },
+ "session.provider_versions.summary.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.provider_versions.summary.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.provider_versions.summary.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
  "session.read.batch.v2": {
   "empty": {
    "code": "invalid_request",

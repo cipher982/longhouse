@@ -150,6 +150,9 @@ _EXPECTED_SESSION_FIELDS = {
 }
 _OPTIONAL_SESSION_FIELDS = {
     "provider_session_id",
+    # The provider CLI's own release (claude/codex). Optional so an engine that
+    # predates it still ships; a value that is not a usable version is dropped.
+    "provider_version",
     # Subagent lineage. Optional so an engine that predates it still ships;
     # absent means "not a subagent", which is what an older engine meant too.
     "is_subagent",
@@ -288,6 +291,20 @@ def _lower_hash(value: object, field: str) -> str:
     return value
 
 
+def _provider_version_or_none(value: object) -> str | None:
+    """Keep a provider CLI version only when it is a short, non-empty string.
+
+    The version is advisory evidence for the provider factory, never a reason
+    to refuse an envelope, so anything unusable is dropped rather than raised.
+    """
+    if not isinstance(value, str):
+        return None
+    version = value.strip()
+    if not version or len(version) > 64:
+        return None
+    return version
+
+
 def _parse_session_facts(value: object) -> dict[str, object]:
     if (
         not isinstance(value, dict)
@@ -297,6 +314,7 @@ def _parse_session_facts(value: object) -> dict[str, object]:
         raise ValueError("session fields do not match protocol v2")
     result = dict(value)
     result.setdefault("provider_session_id", None)
+    result["provider_version"] = _provider_version_or_none(result.get("provider_version"))
     result["environment"] = _canonical_text(result["environment"], "session.environment", 32)
     for field, maximum in (
         ("project", 255),

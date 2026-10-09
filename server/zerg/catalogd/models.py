@@ -171,6 +171,9 @@ class StorageSession(CatalogBase):
     cwd = Column(Text, nullable=True)
     git_repo = Column(String(500), nullable=True)
     git_branch = Column(String(255), nullable=True)
+    # The provider CLI's own release that wrote this session (claude/codex).
+    # Null on rows that predate it or came from providers without a CLI release.
+    provider_version = Column(String(64), nullable=True)
     started_at = Column(DateTime(timezone=True), nullable=False, index=True)
     last_activity_at = Column(DateTime(timezone=True), nullable=False, index=True)
     ended_at = Column(DateTime(timezone=True), nullable=True)

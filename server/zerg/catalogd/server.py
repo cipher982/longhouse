@@ -858,6 +858,11 @@ class CatalogDaemon:
             frozenset({"days_back", "owner_id", "utc_offset_minutes"}),
             "machine.activity.summary.v2 has invalid parameters",
         ),
+        "session.provider_versions.summary.v2": _Route(
+            "_summarize_provider_versions",
+            frozenset({"days_back", "owner_id"}),
+            "session.provider_versions.summary.v2 has invalid parameters",
+        ),
         "machine.enrollment.rename.v2": _Route(
             "_rename_machine_enrollment",
             frozenset({"device_id", "machine_name", "owner_id"}),
@@ -2904,6 +2909,21 @@ class CatalogDaemon:
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _summarize_provider_versions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        owner_id = request.params["owner_id"]
+        days_back = request.params["days_back"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if type(days_back) is not int or not 1 <= days_back <= 90:
+            return self._error(request, "invalid_request", "days_back must be an integer from 1 through 90")
+        assert self._store is not None
+        result = await self._run_read_store(
+            self._store.summarize_provider_versions,
+            owner_id=owner_id,
+            days_back=days_back,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _rename_machine_enrollment(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         owner_id = request.params["owner_id"]
         device_id = request.params["device_id"]
@@ -4710,6 +4730,7 @@ def _validate_storage_session_facts(value: object) -> dict:
     }
     optional = {
         "provider_session_id",
+        "provider_version",
         "is_subagent",
         "parent_provider_session_id",
         "parent_tool_call_id",
@@ -4719,6 +4740,10 @@ def _validate_storage_session_facts(value: object) -> dict:
         raise ValueError("session_facts has invalid fields")
     result = dict(value)
     result.setdefault("provider_session_id", None)
+    # The router already reduced this to a short string or None; a value that
+    # reaches the RPC unusable is dropped, never a reason to refuse the envelope.
+    version = result.get("provider_version")
+    result["provider_version"] = version.strip() if isinstance(version, str) and 0 < len(version.strip()) <= 64 else None
     result.setdefault("is_subagent", False)
     for lineage_field in ("parent_provider_session_id", "parent_tool_call_id", "workflow_run_id"):
         result.setdefault(lineage_field, None)
