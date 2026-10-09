@@ -1711,7 +1711,13 @@ mod tests {
         }
         std::env::set_var("LONGHOUSE_HOME", home);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
-        std::env::remove_var("LONGHOUSE_HOME");
+        // Clear whatever the body set too, so nothing leaks to the next test.
+        for (key, _) in std::env::vars_os()
+            .filter(|(key, _)| key.to_string_lossy().starts_with("LONGHOUSE_"))
+            .collect::<Vec<_>>()
+        {
+            std::env::remove_var(key);
+        }
         for (key, value) in &ambient {
             std::env::set_var(key, value);
         }

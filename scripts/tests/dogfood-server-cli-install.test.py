@@ -78,6 +78,15 @@ class ServerCliInstallTests(unittest.TestCase):
         calls = self.install()
         self.assertFalse(any(call.startswith("bun") for call in calls), calls)
 
+    def test_a_stale_dist_is_rebuilt(self):
+        dist = self.repo / "web" / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text("old")
+        os.utime(dist / "index.html", (1, 1))
+        (self.repo / "web" / "src" / "app.tsx").write_text("changed")
+        calls = self.install()
+        self.assertTrue(any(call.startswith("bun run build") for call in calls), calls)
+
 
 if __name__ == "__main__":
     unittest.main()
