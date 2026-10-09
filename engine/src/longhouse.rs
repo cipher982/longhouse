@@ -1833,11 +1833,79 @@ fn write_claude_mcp_config(
     Ok(PrivateTempFile { path })
 }
 
-/// Where a launch still registering receives its coordination authority.
-fn claude_coordination_token_path() -> anyhow::Result<PathBuf> {
-    Ok(longhouse_home()?
-        .join("run/claude-mcp")
-        .join(format!("{}.coordination-token", Uuid::new_v4())))
+/// The file through which a launch that missed its registration budget
+/// receives coordination authority once the background retry recovers.
+///
+/// The launcher owns it: the retry that writes it lives in this process, so
+/// the file exists exactly as long as recovery can happen. Writer and cleanup
+/// share one lock, so a recovery landing during teardown cannot recreate a
+/// credential file after it was removed.
+struct LateCoordinationToken {
+    inner: Arc<LateCoordinationTokenFile>,
+}
+
+struct LateCoordinationTokenFile {
+    path: PathBuf,
+    open: std::sync::Mutex<bool>,
+}
+
+impl LateCoordinationToken {
+    fn new() -> anyhow::Result<Self> {
+        let path = longhouse_home()?
+            .join("run/coordination")
+            .join(format!("{}.coordination-token", Uuid::new_v4()));
+        Ok(Self {
+            inner: Arc::new(LateCoordinationTokenFile {
+                path,
+                open: std::sync::Mutex::new(true),
+            }),
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.inner.path
+    }
+
+    /// The registration-recovery hook: write the token the Runtime Host
+    /// issued, or leave a notice explaining why coordination stays pending.
+    fn recovery_hook(
+        &self,
+        provider: &'static str,
+        notices: DeferredNotices,
+    ) -> Arc<dyn Fn(&ManagedLaunchResponse) + Send + Sync> {
+        let file = Arc::clone(&self.inner);
+        Arc::new(move |response: &ManagedLaunchResponse| {
+            let Some(token) = response.coordination_token() else {
+                notices.push(format!(
+                    "Longhouse: {provider} registration recovered without coordination authority; \
+                     send/inbox/reply stay pending until the session is relaunched."
+                ));
+                return;
+            };
+            let open = file.open.lock().unwrap_or_else(|poison| poison.into_inner());
+            if !*open {
+                return;
+            }
+            if let Err(error) = write_private_text(&file.path, token) {
+                notices.push(format!(
+                    "Longhouse: could not hand {provider} its coordination authority ({error:#}); \
+                     send/inbox/reply stay pending until the session is relaunched."
+                ));
+            }
+        })
+    }
+}
+
+impl Drop for LateCoordinationToken {
+    fn drop(&mut self) {
+        let mut open = self
+            .inner
+            .open
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *open = false;
+        let _ = std::fs::remove_file(&self.inner.path);
+    }
 }
 
 fn claude_registration_issue(
@@ -2033,10 +2101,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             "Longhouse warning: starting Claude without Longhouse control because registration was unusable ({issue})"
         );
     }
-    // Removed when this launch ends, whether or not authority ever arrived.
-    let coordination_token_file = PrivateTempFile {
-        path: claude_coordination_token_path()?,
-    };
+    let late_coordination_token = LateCoordinationToken::new()?;
     if response.is_none() && resume_target.is_none() {
         // The provider remains usable while registration retries. Logging and
         // control recovery must never delay or prevent the provider TUI.
@@ -2044,7 +2109,6 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             .get("session_id")
             .and_then(serde_json::Value::as_str)
             .context("Claude degraded launch lost its client-minted session identity")?;
-        let token_path = coordination_token_file.path.clone();
         degraded_registration = Some(
             managed_launch_lifecycle::spawn_managed_registration_retry_with_hook(
                 &url,
@@ -2056,13 +2120,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
                 longhouse_home()
                     .map(|home| home.join("agent"))
                     .unwrap_or_else(|_| PathBuf::from(".")),
-                Some(Arc::new(move |response: &ManagedLaunchResponse| {
-                    // The coordination server reads this file on every call, so
-                    // the tools it advertised at launch start working now.
-                    if let Some(token) = response.coordination_token() {
-                        let _ = write_private_text(&token_path, token);
-                    }
-                })),
+                Some(late_coordination_token.recovery_hook("Claude", deferred_notices.clone())),
             ),
         );
     }
@@ -2120,7 +2178,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let mcp_config = write_claude_mcp_config(
         &session_id,
         coordination_token.as_deref(),
-        &coordination_token_file.path,
+        late_coordination_token.path(),
     )?;
     let mut command = Command::new(&binary);
     if permission_mode == "bypass" {
@@ -2438,9 +2496,16 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
                 "detached"
             },
         ]);
+    // A launch without authority yet still gets the coordination tools; they
+    // read the token from this file once registration recovers.
+    let late_coordination_token = LateCoordinationToken::new()?;
     match coordination_token.as_deref() {
-        Some(value) => start.env("LONGHOUSE_COORDINATION_TOKEN", value),
-        None => start.env_remove("LONGHOUSE_COORDINATION_TOKEN"),
+        Some(value) => start
+            .env("LONGHOUSE_COORDINATION_TOKEN", value)
+            .env_remove("LONGHOUSE_COORDINATION_TOKEN_FILE"),
+        None => start
+            .env_remove("LONGHOUSE_COORDINATION_TOKEN")
+            .env("LONGHOUSE_COORDINATION_TOKEN_FILE", late_coordination_token.path()),
     };
     if let Some(name) = &args.name {
         start.args(["--display-name", name]);
@@ -2492,17 +2557,20 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     }
     let degraded_registration = match response {
         Some(_) => None,
-        None => Some(managed_launch_lifecycle::spawn_managed_registration_retry(
-            &url,
-            &token,
-            "OpenCode",
-            payload.clone(),
-            &session_id,
-            deferred_notices.clone(),
-            longhouse_home()
-                .map(|home| home.join("agent"))
-                .unwrap_or_else(|_| PathBuf::from(".")),
-        )),
+        None => Some(
+            managed_launch_lifecycle::spawn_managed_registration_retry_with_hook(
+                &url,
+                &token,
+                "OpenCode",
+                payload.clone(),
+                &session_id,
+                deferred_notices.clone(),
+                longhouse_home()
+                    .map(|home| home.join("agent"))
+                    .unwrap_or_else(|_| PathBuf::from(".")),
+                Some(late_coordination_token.recovery_hook("OpenCode", deferred_notices.clone())),
+            ),
+        ),
     };
     if let Some(transaction) = launch_transaction.as_mut() {
         // The bridge already owns a live provider. Stopping it because the
@@ -3140,9 +3208,9 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             .to_string()
         });
     // Coordination authority is minted by the Runtime Host at registration. A
-    // degraded launch has none; the bridge omits the MCP token when the
-    // variable is absent, so coordination tools fail closed for this session
-    // until it is relaunched.
+    // degraded launch has none yet: its coordination tools answer
+    // registration_pending until the retry below recovers and writes the token
+    // to the late-token file the bridge hands Codex's MCP server.
     let coordination_token = response
         .as_ref()
         .map(|response| response.require_authority("Codex", "codex_app_server"))
@@ -3151,19 +3219,23 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     if response.is_some() && run_id.trim().is_empty() {
         anyhow::bail!("Longhouse server did not return the managed run identity");
     }
+    let late_coordination_token = LateCoordinationToken::new()?;
     let degraded_registration = match response {
         Some(_) => None,
-        None => Some(managed_launch_lifecycle::spawn_managed_registration_retry(
-            &url,
-            &token,
-            "Codex",
-            payload.clone(),
-            &session_id,
-            deferred_notices.clone(),
-            longhouse_home()
-                .map(|home| home.join("agent"))
-                .unwrap_or_else(|_| PathBuf::from(".")),
-        )),
+        None => Some(
+            managed_launch_lifecycle::spawn_managed_registration_retry_with_hook(
+                &url,
+                &token,
+                "Codex",
+                payload.clone(),
+                &session_id,
+                deferred_notices.clone(),
+                longhouse_home()
+                    .map(|home| home.join("agent"))
+                    .unwrap_or_else(|_| PathBuf::from(".")),
+                Some(late_coordination_token.recovery_hook("Codex", deferred_notices.clone())),
+            ),
+        ),
     };
     let mut launch_transaction = degraded_registration
         .is_none()
@@ -3205,8 +3277,12 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     // Never let an inherited token stand in for authority this launch does not
     // hold: the bridge treats an absent variable as "no coordination".
     match coordination_token.as_deref() {
-        Some(value) => bridge.env("LONGHOUSE_COORDINATION_TOKEN", value),
-        None => bridge.env_remove("LONGHOUSE_COORDINATION_TOKEN"),
+        Some(value) => bridge
+            .env("LONGHOUSE_COORDINATION_TOKEN", value)
+            .env_remove("LONGHOUSE_COORDINATION_TOKEN_FILE"),
+        None => bridge
+            .env_remove("LONGHOUSE_COORDINATION_TOKEN")
+            .env("LONGHOUSE_COORDINATION_TOKEN_FILE", late_coordination_token.path()),
     };
     if !attach {
         bridge.arg("--create-initial-thread");
@@ -6407,7 +6483,8 @@ mod tests {
                 ("LONGHOUSE_ENGINE_BIN", Some(engine.display().to_string())),
             ],
             || {
-                let token_path = claude_coordination_token_path().unwrap();
+                let late = LateCoordinationToken::new().unwrap();
+                let token_path = late.path().to_path_buf();
                 let config = write_claude_mcp_config(
                     "11111111-1111-4111-8111-111111111111",
                     Some("session-secret"),
@@ -6445,6 +6522,50 @@ mod tests {
         );
     }
 
+    /// Recovery hands over the token; teardown removes it and a recovery that
+    /// lands afterwards cannot recreate it; a write failure or a recovery
+    /// without authority leaves a notice instead of silent pending tools.
+    #[test]
+    fn late_coordination_token_is_written_once_and_never_after_teardown() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            let response = |token: Option<&str>| ManagedLaunchResponse {
+                session_id: "11111111-1111-4111-8111-111111111111".to_string(),
+                run_id: "22222222-2222-4222-8222-222222222222".to_string(),
+                provider_session_id: None,
+                permission_mode: None,
+                hook_token: None,
+                managed_transport: None,
+                coordination_token: token.map(str::to_owned),
+            };
+            let notices = DeferredNotices::default();
+            let late = LateCoordinationToken::new().unwrap();
+            let path = late.path().to_path_buf();
+            let hook = late.recovery_hook("Claude", notices.clone());
+
+            hook(&response(None));
+            assert!(!path.exists());
+            assert!(notices.drain()[0].contains("without coordination authority"));
+
+            hook(&response(Some("late-secret")));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "late-secret");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+
+            drop(late);
+            assert!(!path.exists());
+            hook(&response(Some("late-secret")));
+            assert!(!path.exists());
+            assert!(notices.drain().is_empty());
+        });
+    }
+
     /// A launch that lost its registration race gets the same tools; only the
     /// credential arrives later, through the file.
     #[test]
@@ -6458,7 +6579,8 @@ mod tests {
                 ("LONGHOUSE_ENGINE_BIN", Some(engine.display().to_string())),
             ],
             || {
-                let token_path = claude_coordination_token_path().unwrap();
+                let late = LateCoordinationToken::new().unwrap();
+                let token_path = late.path().to_path_buf();
                 let registered = write_claude_mcp_config(
                     "11111111-1111-4111-8111-111111111111",
                     Some("session-secret"),

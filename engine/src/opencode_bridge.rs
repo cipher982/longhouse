@@ -39,6 +39,9 @@ pub struct StartConfig {
     pub launch_mode: String,
     pub resume_provider_session_id: Option<String>,
     pub coordination_token: String,
+    /// Where a launch that started without authority receives it once
+    /// registration recovers; the launcher owns and writes the file.
+    pub coordination_token_file: Option<PathBuf>,
     pub model: Option<String>,
 }
 
@@ -124,8 +127,13 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     // This process is the paired engine binary, so the registered command is
     // absolute and remains valid even when the facade is not on PATH.
     let model = configured_model(config.model.as_deref());
-    let mcp_config =
-        opencode_mcp_config(&engine, &session_id, coordination_token, model.as_deref());
+    let mcp_config = opencode_mcp_config(
+        &engine,
+        &session_id,
+        coordination_token,
+        config.coordination_token_file.as_deref(),
+        model.as_deref(),
+    );
     // OpenCode 1.18.x treats `--port 0` as the default server port (4096)
     // instead of asking the OS for an ephemeral port. A Resume can therefore
     // reconnect to a dead/stale server or collide with another factory case.
@@ -217,6 +225,7 @@ fn opencode_mcp_config(
     engine: &Path,
     session_id: &str,
     coordination_token: Option<&str>,
+    coordination_token_file: Option<&Path>,
     model: Option<&str>,
 ) -> serde_json::Value {
     // Omit the variable entirely when this launch holds no authority. An empty
@@ -228,6 +237,8 @@ fn opencode_mcp_config(
     });
     if let Some(token) = coordination_token {
         environment["LONGHOUSE_COORDINATION_TOKEN"] = json!(token);
+    } else if let Some(path) = coordination_token_file {
+        environment["LONGHOUSE_COORDINATION_TOKEN_FILE"] = json!(path.display().to_string());
     }
     let mut config = json!({
         "mcp": {
@@ -1221,6 +1232,24 @@ mod tests {
     }
 
     #[test]
+    fn mcp_config_without_authority_names_the_late_token_file() {
+        let config = opencode_mcp_config(
+            Path::new("/opt/longhouse-engine"),
+            "11111111-1111-4111-8111-111111111111",
+            None,
+            Some(Path::new("/run/late.coordination-token")),
+            None,
+        );
+        let environment = &config["mcp"]["longhouse"]["environment"];
+        assert_eq!(environment["LONGHOUSE_MCP_ROLE"], "coordination");
+        assert!(environment["LONGHOUSE_COORDINATION_TOKEN"].is_null());
+        assert_eq!(
+            environment["LONGHOUSE_COORDINATION_TOKEN_FILE"],
+            "/run/late.coordination-token"
+        );
+    }
+
+    #[test]
     fn mcp_config_scopes_coordination_authority_to_the_server() {
         // Spawns a subprocess or reads the process table: hold the shared
         // agent-state lock, so a concurrent test cannot empty PATH or move a
@@ -1230,6 +1259,7 @@ mod tests {
             Path::new("/opt/longhouse-engine"),
             "11111111-1111-4111-8111-111111111111",
             Some("session-secret"),
+            None,
             None,
         );
         let server = &config["mcp"]["longhouse"];
@@ -1250,6 +1280,7 @@ mod tests {
             Path::new("/opt/longhouse-engine"),
             "11111111-1111-4111-8111-111111111111",
             Some("session-secret"),
+            None,
             Some("openrouter/deepseek/deepseek-v4-flash"),
         );
         assert_eq!(configured["model"], "openrouter/deepseek/deepseek-v4-flash");

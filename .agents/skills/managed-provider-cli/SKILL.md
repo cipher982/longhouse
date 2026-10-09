@@ -51,9 +51,14 @@ target's phase never decides whether a message survives, only when it lands.
   evidence the model has seen it; read the target transcript
   (`longhouse-server tail <id>`) to confirm.
 - Agent-to-agent messages go through the coordination tools (`send`, `inbox`,
-  `reply`), which carry the sending session's identity. Every managed session
-  has them from launch; while registration is still recovering they answer
-  `registration_pending`, so retry rather than reaching for another path.
+  `reply`), which carry the sending session's identity. Claude, Codex and
+  OpenCode Helm sessions list them from launch even when registration missed
+  its foreground budget: until the launcher's background retry recovers they
+  answer `registration_pending`, then work without a restart (the launcher
+  writes a late-token file; the tool list never changes). If the launcher
+  exits first (a detached launch), they stay pending until relaunch. OMP
+  receives the credential the same way through its extension; Cursor gets
+  its tools only when authority exists at launch.
 - `longhouse-server continue <session_id> <text>` (durable SEND) and
   `continue --steer` (enters a running turn) send with the owner's device
   credential, and the target reads the text as the owner typing. They are the

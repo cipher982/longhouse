@@ -3699,12 +3699,18 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     let ws_auth_token = crate::codex_ws_relay::generate_auth_token();
     let ws_token_file =
         PrivateTokenFile::write(config.state_file.with_extension("ws-token"), &ws_auth_token)?;
+    // A launch that started without authority names the file its launcher
+    // writes once registration recovers; the coordination server reads it on
+    // every call, so the tools Codex listed at startup begin to work.
+    let late_token_file =
+        std::env::var_os("LONGHOUSE_COORDINATION_TOKEN_FILE").map(PathBuf::from);
     command.args(codex_app_server_args(
         config,
         &coordination_command,
         coordination_token_file
             .as_ref()
-            .map(|file| file.path.as_path()),
+            .map(|file| file.path.as_path())
+            .or(late_token_file.as_deref()),
         &ws_token_file.path,
     ));
     apply_app_server_env(&mut command, config);
