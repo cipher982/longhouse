@@ -784,7 +784,7 @@ export default function (pi: any) {
 
   coordination(
     "send",
-    "Send durable attributed input to another managed Longhouse session. Keep client_request_id stable across retries.",
+    "Send durable attributed input to another managed Longhouse session; it sees the message as coming from this session. Other sessions are coworkers: ask them directly and settle things together, escalating to the owner only what the owner keeps (money, credentials, irreversible actions, product decisions). Delivery is not immediate: a target that is mid-turn receives it at its next turn boundary, and a receipt means the provider accepted it, not that the model has read it (tail confirms). Keep client_request_id stable across retries.",
     {
       session_id: { type: "string" },
       text: {

@@ -471,7 +471,7 @@ fn coordination_tools() -> Vec<Value> {
                 "max_content_chars":{"type":"integer","default":4000,"minimum":200,"maximum":100000,"description":"Per-event content budget. Truncated events are annotated rather than silently cut."},
             }),
         ),
-        tool(
+        tool_requiring(
             "send",
             "Send durable attributed input to another managed session. Delivery is \
              durable and ordered, not immediate: the target takes the message at its \
@@ -482,23 +482,33 @@ fn coordination_tools() -> Vec<Value> {
              provider accepted the input, not that the model has seen it. The target \
              sees the message as coming from this session; never relay it through a \
              CLI that sends with the owner's credential.",
-            json!({"session_id":{"type":"string"},"text":{"type":"string"},"client_request_id":{"type":"string"}}),
+            json!({"session_id":{"type":"string"},"text":{"type":"string"},"client_request_id":{"type":"string","description":"Your idempotency key; reuse it if you retry the same message."}}),
+            &["session_id", "text", "client_request_id"],
         ),
         tool(
             "inbox",
             "Recover durable input for the current managed session.",
             json!({"direction":{"type":"string","enum":["inbound","outbound","all"],"default":"inbound"},"after_cursor":{"type":"integer","default":0},"limit":{"type":"integer","default":20}}),
         ),
-        tool(
+        tool_requiring(
             "reply",
             "Reply to inbound input without copying its source session id.",
-            json!({"input_id":{"type":"integer"},"text":{"type":"string"},"client_request_id":{"type":"string"}}),
+            json!({"input_id":{"type":"integer"},"text":{"type":"string"},"client_request_id":{"type":"string","description":"Your idempotency key; reuse it if you retry the same reply."}}),
+            &["input_id", "text", "client_request_id"],
         ),
     ]
 }
 
 fn tool(name: &str, description: &str, properties: Value) -> Value {
     json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties}})
+}
+
+/// A tool whose API refuses the call without these arguments; the schema says
+/// so up front instead of the model learning it from a 422.
+fn tool_requiring(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+    let mut value = tool(name, description, properties);
+    value["inputSchema"]["required"] = json!(required);
+    value
 }
 
 /// Content query for search_sessions, or None for a query-less listing call.
