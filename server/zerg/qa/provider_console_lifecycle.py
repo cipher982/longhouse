@@ -2518,7 +2518,10 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             write_json(root / "steer-contract-receipt.json", steer_receipt)
 
         interrupt_marker = f"LH_{provider.upper()}_INTERRUPT_{uuid4().hex}"
-        interrupt_message = f"Use the shell tool to run `sleep 8`, then reply with exactly {interrupt_marker} and nothing else."
+        interrupt_message = (
+            "Use the shell tool to run `sleep 8` in the foreground (not as a named or background job), "
+            f"then reply with exactly {interrupt_marker} and nothing else."
+        )
         interrupt_request_id = f"console-interrupt-{uuid4()}"
         interrupt_turn = _start_turn(
             api_url=api_url,

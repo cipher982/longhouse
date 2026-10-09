@@ -769,7 +769,7 @@ def test_omp_helm_marker_prompts_preserve_setup_instructions() -> None:
 
     setup = omp_helm_lifecycle._setup_marker_prompt(
         marker,
-        setup="Use the bash tool to run `sleep 8`, then",
+        setup="Use the bash tool to run `sleep 8` in the foreground (not as a named or background job), then",
     )
     assert "`sleep 8`" in setup
     assert setup.endswith("and no other text.")
