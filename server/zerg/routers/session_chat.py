@@ -49,6 +49,7 @@ from zerg.services.console_turns import create_branch_with_first_turn
 from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import interrupt_console_turn
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
+from zerg.services.live_control_catalog import RETRYABLE_SEND_PRECONDITIONS
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.live_session_inputs import LiveInputReceiptUnavailable
 from zerg.services.live_session_inputs import cancel_live_queued_receipt_catalog
@@ -2036,23 +2037,6 @@ async def _finish_catalog_input_receipt(
         raise HTTPException(status_code=503, detail="Live input catalog could not finish the receipt") from exc
 
 
-# Refusals that mean the SEND never reached the model, so its durable
-# receipt goes back to the queue for the turn-boundary drain: the control path
-# has not converged yet, or the adapter's turn started after the observed
-# boundary (turn_active). Shared by every provider whose native send owns the
-# turn it starts (OMP, Pi).
-_NATIVE_SEND_REQUEUE_PRECONDITIONS = frozenset(
-    {
-        "control_unavailable",
-        "connection_unavailable",
-        "control_head_missing",
-        "lease_expired",
-        "identity_unbound",
-        "turn_active",
-    }
-)
-
-
 async def _dispatch_provider_native_send(
     *,
     db: Session,
@@ -2701,7 +2685,7 @@ async def _create_catalog_session_input_response(
             delivery_request_id=delivery_request_id,
             lock_scope_id=lock_scope_id,
             failure_code="pi_native_send_failed",
-            requeue_preconditions=_NATIVE_SEND_REQUEUE_PRECONDITIONS,
+            requeue_preconditions=RETRYABLE_SEND_PRECONDITIONS,
         )
 
     if (
@@ -2723,7 +2707,7 @@ async def _create_catalog_session_input_response(
             delivery_request_id=delivery_request_id,
             lock_scope_id=lock_scope_id,
             failure_code="omp_native_send_failed",
-            requeue_preconditions=_NATIVE_SEND_REQUEUE_PRECONDITIONS,
+            requeue_preconditions=RETRYABLE_SEND_PRECONDITIONS,
         )
 
     current = queued_state[1]

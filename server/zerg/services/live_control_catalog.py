@@ -518,17 +518,21 @@ def _is_transient_delivery_failure(result: "ManagedControlDispatchResult") -> bo
 
     if getattr(result, "failure_kind", None) != DISPATCH_FAILURE_PRECONDITION:
         return False
-    return str(getattr(result, "failure_reason", "") or "") in _RETRYABLE_PRECONDITIONS
+    return str(getattr(result, "failure_reason", "") or "") in RETRYABLE_SEND_PRECONDITIONS
 
 
-# catalogd prepare reasons a later attempt can plausibly satisfy.
+# Refusals a later attempt can plausibly satisfy, so a SEND's durable receipt
+# goes back to the queue: catalogd prepare reasons for a control path that has
+# not converged yet, and the adapter's turn_active (its turn started after the
+# observed boundary). The boundary drain and the OMP/Pi native-send path share
+# this one set.
 #
 # All describe a control path that has not converged yet and does converge on
 # reconnect. Deliberately excluded: idempotency_conflict and operation_finished
 # (a retry can never satisfy them), and unsupported, session_closed, run_ended,
 # identity_diverged, control_head_rejected, not_granted, grant_revoked — all
 # decisions about this session that waiting will not change.
-_RETRYABLE_PRECONDITIONS = frozenset(
+RETRYABLE_SEND_PRECONDITIONS = frozenset(
     {
         "control_unavailable",
         "connection_unavailable",

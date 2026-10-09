@@ -1263,6 +1263,9 @@ export default function (pi: any) {
     return connectionPromise;
   };
 
+  const hasAttachments = (command: Frame) =>
+    Array.isArray(command.attachments) && command.attachments.length > 0;
+
   const handleCommand = async (
     command: Frame,
     ctx: any,
@@ -1302,13 +1305,19 @@ export default function (pi: any) {
       if (kind === "send") {
         // A busy turn's follow-up queue lives in this process and dies with
         // it, so accepting into it is not delivery. Refuse; the Runtime Host
-        // keeps the durable receipt queued for the turn-boundary drain.
-        if (!providerIsIdle(ctx))
+        // keeps the durable receipt queued for the turn-boundary drain. The
+        // drain cannot carry image attachments yet, so a mid-turn send with
+        // attachments still uses the follow-up queue rather than failing.
+        if (providerIsIdle(ctx)) await Promise.resolve(pi.sendUserMessage(content));
+        else if (hasAttachments(command))
+          await Promise.resolve(
+            pi.sendUserMessage(content, { deliverAs: "followUp" }),
+          );
+        else
           throw Object.assign(
             new Error("OMP provider is mid-turn; send waits for the turn boundary"),
             { code: "turn_active" },
           );
-        await Promise.resolve(pi.sendUserMessage(content));
       } else if (kind === "steer") {
         if (providerIsIdle(ctx))
           throw new Error("OMP provider has no active turn to steer");

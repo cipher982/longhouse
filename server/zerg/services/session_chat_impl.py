@@ -952,6 +952,20 @@ async def _dispatch_catalog_managed_text(
     if not result.ok or exit_code != 0:
         await session_lock_manager.release(lock_scope_id, request_id)
         detail = str(result.error or data.get("stderr") or data.get("stdout") or "Managed control dispatch failed")
+        if result.failure_reason == "turn_active":
+            # The adapter's turn is running and this path has no durable queue
+            # to hand the text back to: say so plainly instead of reporting a
+            # send failure. Nothing reached the model.
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={
+                    "accepted": False,
+                    "error": "The session is mid-turn, so nothing was sent; send again when the turn ends or queue it.",
+                    "error_code": "turn_active",
+                    "session_id": str(source_session.id),
+                    "request_id": request_id,
+                },
+            )
         error_code = "delivery_unknown" if result.failure_reason == "indeterminate" else SESSION_TURN_ERROR_SEND_FAILED
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,

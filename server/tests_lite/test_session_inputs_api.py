@@ -1167,6 +1167,38 @@ def test_omp_busy_send_refusal_keeps_the_receipt_queued(live_catalog, live_catal
         asyncio.run(_clear_machine_control_registry())
 
 
+def test_legacy_send_live_to_a_busy_omp_session_says_turn_active(live_catalog, live_catalog_client):  # noqa: F811
+    """A path with no durable queue reports the adapter's busy refusal plainly
+    (409 turn_active, nothing sent) instead of a generic send failure."""
+
+    email = "live-omp-busy-send-live@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    device_id = "omp-busy-send-live-machine"
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="omp", device_id=device_id)
+    asyncio.run(
+        get_machine_control_channel_registry().register(
+            owner_id=owner_id,
+            device_id=device_id,
+            machine_name=device_id,
+            engine_build="test-engine",
+            supports=["omp.send"],
+            websocket=_TurnActiveMachineWebSocket(),
+        )
+    )
+    try:
+        response = live_catalog_client.post(
+            f"/sessions/{session_id}/send-live",
+            json={"message": "while busy"},
+            cookies=cookies,
+        )
+        assert response.status_code == 409, response.text
+        assert response.json()["error_code"] == "turn_active"
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
+
+
 def test_omp_disconnected_input_stays_queued_for_recovery(live_catalog, live_catalog_client):  # noqa: F811
     owner_id = live_catalog.create_user("live-omp-disconnected@test.local")
     cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email="live-omp-disconnected@test.local")}

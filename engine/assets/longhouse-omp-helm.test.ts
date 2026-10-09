@@ -803,6 +803,31 @@ describe("busy send", () => {
       expect((busy.error as Record<string, unknown>).code).toBe("turn_active");
       expect(sent.length).toBe(0);
 
+      // The durable drain cannot carry images yet, so a busy send with
+      // attachments still rides the provider's follow-up queue.
+      const authority = [...frames]
+        .reverse()
+        .find((frame) => typeof frame.auth_token === "string" && frame.connection_id === "c1")!;
+      sockets[0].write(
+        `${JSON.stringify({
+          kind: "send",
+          request_id: "busy-image",
+          text: "look at this",
+          attachments: [{ mime_type: "image/png", data: "iVBORw0KGgo=" }],
+          auth_token: authority.auth_token,
+          session_id: authority.session_id,
+          native_session_id: authority.native_session_id,
+          session_file: authority.session_file,
+          connection_id: authority.connection_id,
+          lease_generation: authority.lease_generation,
+        })}\n`,
+      );
+      for (let attempt = 0; attempt < 50 && !frames.some((f) => f.request_id === "busy-image"); attempt += 1)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(sent.length).toBe(1);
+      expect(sent[0][1]).toEqual({ deliverAs: "followUp" });
+      sent.length = 0;
+
       idle = true;
       const delivered = await command("idle-send");
       expect(delivered.ok).toBe(true);
