@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import TYPE_CHECKING
+from typing import Any
 from typing import Literal
+from typing import Mapping
 from uuid import UUID
 from uuid import uuid4
 
@@ -509,7 +512,10 @@ def _is_transient_delivery_failure(result: "ManagedControlDispatchResult") -> bo
       durable engine dedupe (today an in-memory cache) and a grant that survived
       the reconnect (today a new lease generation revokes it). Neither holds, so
       a retry would risk injecting the prompt twice.
-    - A provider that saw the input and refused it should not be retried at all.
+    - A provider that saw the input and refused it should not be retried at all,
+      except for an adapter's turn_active: it refused only because its turn was
+      still running, the model never saw the text, and the boundary drain is
+      the delivery it is waiting for.
 
     Dropping a message is bad; delivering it twice is worse.
     """
@@ -544,6 +550,22 @@ RETRYABLE_SEND_PRECONDITIONS = frozenset(
         "turn_active",
     }
 )
+
+
+def _drain_attempt_request_id(receipt: Mapping[str, Any]) -> str:
+    """The receipt id on its first drain attempt, then one id per requeue."""
+
+    receipt_id = str(receipt["id"])
+    error = receipt.get("error_json")
+    if isinstance(error, str) and error:
+        try:
+            error = json.loads(error)
+        except ValueError:
+            error = None
+    attempts = error.get("attempts") if isinstance(error, dict) and error.get("reason") == "transient" else None
+    if isinstance(attempts, int) and attempts > 0:
+        return f"{receipt_id}:retry-{attempts}"
+    return receipt_id
 
 
 async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
@@ -609,10 +631,14 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
             command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
             payload={"text": str(receipt.get("text") or "")},
             # Seed the engine command id from the durable receipt, not this
-            # attempt's claim token. Retrying a transient failure must reuse the
-            # same command id, or an ambiguous acceptance followed by a retry
-            # injects the same prompt twice.
-            request_id=str(receipt["id"]),
+            # attempt's claim token, so the id is deterministic per attempt.
+            # Only definite non-deliveries are ever requeued (an ambiguous
+            # outcome keeps the receipt delivering and is never replayed), so a
+            # retry cannot inject twice. A retry still needs its own id: when
+            # the earlier attempt reached the engine and was refused
+            # (turn_active, a detached extension), the engine and catalogd both
+            # remember that command id as finished and would refuse a replay.
+            request_id=_drain_attempt_request_id(receipt),
             run_id=None,
         )
         data = dict(result.data or {})

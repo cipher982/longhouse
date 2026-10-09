@@ -364,10 +364,12 @@ async def test_transient_dispatch_failure_requeues_then_delivers(monkeypatch):
     class _Catalogd:
         async def call(self, method, params, timeout_seconds=None):
             if method == "session.input.claim.v2":
+                # A requeue records the attempt count, as requeue_live_receipt does.
+                error_json = '{"attempts": 1, "message": "x", "reason": "transient"}' if finish_statuses else None
                 return {
                     "claimed": True,
                     "session": {"id": session_id, "provider": "claude", "device_id": "cinder"},
-                    "receipt": {"id": receipt_id, "owner_id": 1, "text": "hello"},
+                    "receipt": {"id": receipt_id, "owner_id": 1, "text": "hello", "error_json": error_json},
                 }
             if method == "session.input.finish.v2":
                 finish_statuses.append(str(params["status"]))
@@ -392,8 +394,22 @@ async def test_transient_dispatch_failure_requeues_then_delivers(monkeypatch):
     assert second is True, "the retry must actually deliver"
     # The whole point: the first failure returned the input to the queue.
     assert finish_statuses == ["queued", "delivered"]
-    # And both attempts seeded the engine command id from the durable receipt.
-    assert seen_request_ids == [receipt_id, receipt_id]
+    # Both attempts are seeded from the durable receipt, deterministically; the
+    # retry gets its own id so a refusal the engine already recorded as a
+    # finished command (turn_active, a detached extension) cannot block it.
+    assert seen_request_ids == [receipt_id, f"{receipt_id}:retry-1"]
+
+
+def test_drain_attempt_request_id_is_the_receipt_until_a_requeue():
+    from zerg.services.live_control_catalog import _drain_attempt_request_id
+
+    assert _drain_attempt_request_id({"id": "r1"}) == "r1"
+    assert _drain_attempt_request_id({"id": "r1", "error_json": None}) == "r1"
+    requeued = {"id": "r1", "error_json": '{"attempts": 2, "message": "busy", "reason": "transient"}'}
+    assert _drain_attempt_request_id(requeued) == "r1:retry-2"
+    assert _drain_attempt_request_id({**requeued, "error_json": {"attempts": 3, "reason": "transient"}}) == "r1:retry-3"
+    # A terminal error never comes back to the drain, but must not change the id.
+    assert _drain_attempt_request_id({"id": "r1", "error_json": '{"reason": "delivery_expired"}'}) == "r1"
 
 
 def test_claiming_skips_an_input_that_aged_out_while_unclaimable(orm: Session):
