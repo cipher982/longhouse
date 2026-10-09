@@ -848,6 +848,7 @@ validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 	@bash scripts/tests/dogfood-runtime.test.sh
 	@python3 scripts/tests/ring-lock.test.py
 	@python3 scripts/tests/dogfood-refresh-exact.test.py
+	@python3 scripts/tests/dogfood-server-cli-install.test.py
 	@python3 scripts/tests/promote-dogfood.test.py
 	@python3 scripts/tests/promotion-gates.test.py
 	@python3 scripts/tests/promote-production.test.py

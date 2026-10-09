@@ -199,6 +199,10 @@ install_server_cli_from_source() {
   # work is still fine; the next refresh puts this back.
   log "==> Installing longhouse-server from this checkout"
   python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
+  # The wheel force-includes web/dist (server/pyproject.toml), which is
+  # gitignored and absent from a fresh exact checkout; build it first so the
+  # installed `longhouse-server serve` carries the UI.
+  ensure_frontend_dist
   uv tool install --force --reinstall --quiet "$SERVER_PROJECT"
   log "longhouse-server ready: $("$HOME/.local/bin/longhouse-server" --version 2>/dev/null || echo unknown)"
 }
