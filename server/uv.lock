@@ -554,7 +554,7 @@ wheels = [
 
 [[package]]
 name = "longhouse"
-version = "0.1.76"
+version = "0.1.77"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
