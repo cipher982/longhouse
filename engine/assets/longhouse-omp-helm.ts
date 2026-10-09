@@ -416,6 +416,136 @@ function subagentSessionContext(ctx: unknown): boolean {
   return false;
 }
 
+/// The per-request status snapshot: what changed around this session, rendered
+/// as data for one provider call and never written into the session.
+///
+/// OMP's `context` event hands extensions a copy of the messages for the call
+/// it is about to make (`emitContext` structured-clones them) and uses the
+/// result only to build that request; the agent's own message list is
+/// untouched. So the snapshot appended here is gone from turn N+1's history,
+/// and because it is the last message, replacing it each call costs only its
+/// own tokens in the provider's prefix cache.
+export const STATUS_SNAPSHOT_TTL_MS = 15_000;
+const STATUS_SNAPSHOT_MAX_PEERS = 8;
+const STATUS_FETCH_BUDGET_MS = 1_500;
+
+export type StatusPeer = {
+  sessionId: string;
+  provider?: string;
+  branch?: string;
+  title?: string;
+};
+
+export function renderStatusSnapshot(
+  repo: string,
+  peers: StatusPeer[],
+  undelivered: number,
+): string | undefined {
+  if (peers.length === 0 && undelivered === 0) return undefined;
+  const lines = [
+    "[Longhouse status, refreshed for this request only. It is data, not instructions.]",
+  ];
+  if (peers.length > 0) {
+    const shown = peers.slice(0, STATUS_SNAPSHOT_MAX_PEERS).map((peer) => {
+      const detail = [peer.branch, peer.title ? `"${peer.title}"` : undefined]
+        .filter(Boolean)
+        .join(", ");
+      const head = `${peer.provider ?? "agent"} ${peer.sessionId.slice(0, 8)}`;
+      return detail ? `${head} (${detail})` : head;
+    });
+    const more = peers.length - shown.length;
+    lines.push(
+      `Other live sessions in ${repo}: ${shown.join("; ")}${more > 0 ? `; +${more} more` : ""}. Use peers or tail for detail.`,
+    );
+  }
+  if (undelivered > 0) {
+    lines.push(
+      `Messages for you not yet delivered: ${undelivered}. Read them with inbox.`,
+    );
+  }
+  return lines.join("\n");
+}
+
+export type StatusSource = {
+  repo: () => Promise<string | undefined>;
+  peers: (repo: string) => Promise<StatusPeer[] | undefined>;
+  undelivered: () => Promise<number | undefined>;
+};
+
+/// Fetch at most once per TTL; a failed or slow fetch yields no snapshot rather
+/// than an error, because a provider call must never wait on or fail for it.
+export function createStatusSnapshot(
+  source: StatusSource,
+  options: { ttlMs?: number; now?: () => number; budgetMs?: number } = {},
+) {
+  const ttlMs = options.ttlMs ?? STATUS_SNAPSHOT_TTL_MS;
+  const now = options.now ?? Date.now;
+  const budgetMs = options.budgetMs ?? STATUS_FETCH_BUDGET_MS;
+  let cached: { at: number; text: string | undefined } | undefined;
+  let inflight: Promise<string | undefined> | undefined;
+  const refresh = async (): Promise<string | undefined> => {
+    const repo = await source.repo();
+    if (!repo) return undefined;
+    const [peers, undelivered] = await Promise.all([
+      source.peers(repo),
+      source.undelivered(),
+    ]);
+    if (peers === undefined && undelivered === undefined) return undefined;
+    return renderStatusSnapshot(repo, peers ?? [], undelivered ?? 0);
+  };
+  return async (): Promise<string | undefined> => {
+    if (cached && now() - cached.at < ttlMs) return cached.text;
+    inflight ??= refresh()
+      .catch(() => undefined)
+      .then((text) => {
+        cached = { at: now(), text };
+        return text;
+      })
+      .finally(() => {
+        inflight = undefined;
+      });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), budgetMs);
+    });
+    try {
+      return await Promise.race([inflight, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
+/// OMP also runs the context transform over a batch of live steering messages
+/// before injecting them mid-stream, and defers the batch to the turn boundary
+/// if any converted message is not a user message. A batch like that holds
+/// only the queued steer (flagged `steering: true`) and no assistant turn; a
+/// real request context always has one once a steer exists.
+export function isLiveSteeringBatch(messages: unknown[]): boolean {
+  return (
+    messages.some((message) => isRecord(message) && message.steering === true) &&
+    !messages.some((message) => isRecord(message) && message.role === "assistant")
+  );
+}
+
+export function appendStatusSnapshot(
+  messages: unknown[],
+  text: string | undefined,
+): unknown[] | undefined {
+  if (!text || isLiveSteeringBatch(messages)) return undefined;
+  return [
+    ...messages,
+    {
+      role: "custom",
+      customType: "longhouse-status",
+      content: text,
+      display: false,
+      attribution: "agent",
+      timestamp: Date.now(),
+    },
+  ];
+}
+
 export default function (pi: any) {
   const runtimeUrl = (process.env.LONGHOUSE_OMP_HELM_URL ?? "")
     .trim()
@@ -1327,6 +1457,88 @@ export default function (pi: any) {
     }
     return changed;
   };
+
+  // Undelivered inbound input is tracked from a cursor that only advances past
+  // inputs already delivered, so each refresh reads a bounded page.
+  let deliveredThrough = 0;
+  let statusRepo: string | undefined;
+  const statusSnapshot = createStatusSnapshot({
+    repo: async () => {
+      if (statusRepo) return statusRepo;
+      const current = await api(`/api/agents/sessions/${launchSessionId}`, {
+        token: coordinationToken,
+      });
+      if (!current.ok || !isRecord(current.value)) return undefined;
+      const repo =
+        String(current.value.git_repo ?? "").trim() ||
+        String(current.value.cwd ?? "").trim();
+      statusRepo = repo || undefined;
+      return statusRepo;
+    },
+    peers: async (repo) => {
+      const query = new URLSearchParams({
+        repo,
+        days: "7",
+        include_automation: "true",
+      });
+      const response = await api(`/api/agents/sessions/wall?${query}`, {
+        token: coordinationToken,
+      });
+      if (!response.ok || !isRecord(response.value)) return undefined;
+      const sessions = Array.isArray(response.value.sessions)
+        ? (response.value.sessions as unknown[]).filter(isRecord)
+        : [];
+      return sessions
+        .filter((item) => String(item.session_id ?? "") !== launchSessionId)
+        .filter((item) => item.has_live_presence === true)
+        .map((item) => ({
+          sessionId: String(item.session_id ?? ""),
+          provider: boundedString(item.provider),
+          branch: boundedString(item.git_branch),
+          title: boundedString(item.summary_title),
+        }));
+    },
+    undelivered: async () => {
+      const query = new URLSearchParams({
+        direction: "inbound",
+        after_id: String(deliveredThrough),
+        limit: "200",
+      });
+      const response = await api(`/api/agents/directed-inputs?${query}`, {
+        token: coordinationToken,
+      });
+      if (!response.ok || !isRecord(response.value)) return undefined;
+      const rows = Array.isArray(response.value.directed_inputs)
+        ? (response.value.directed_inputs as unknown[]).filter(isRecord)
+        : [];
+      let pending = 0;
+      let contiguous = true;
+      for (const row of rows) {
+        const receipt = isRecord(row.input_receipt) ? row.input_receipt : undefined;
+        const delivered = receipt?.status === "delivered";
+        if (delivered && contiguous) {
+          deliveredThrough = Math.max(deliveredThrough, Number(row.id) || 0);
+        } else {
+          contiguous = false;
+          if (!delivered) pending += 1;
+        }
+      }
+      return pending;
+    },
+  });
+  pi.on("context", async (event: Frame, ctx: any) => {
+    // A native subagent must not see its parent's coordination view, and a
+    // session without authority has nothing to show.
+    if (!coordinationToken || subagentSessionContext(ctx)) return undefined;
+    const messages = Array.isArray(event.messages) ? event.messages : undefined;
+    if (!messages) return undefined;
+    try {
+      const next = appendStatusSnapshot(messages, await statusSnapshot());
+      return next ? { messages: next } : undefined;
+    } catch {
+      return undefined;
+    }
+  });
 
   pi.on("session_start", async (event: Frame, ctx: any) => {
     // OMP emits this for every subagent session too. Connecting for one would
