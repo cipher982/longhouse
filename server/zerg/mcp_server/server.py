@@ -631,7 +631,10 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
 
         The sender session id is inferred from the current managed session.
         ``client_request_id`` is caller-owned and must remain stable across
-        ambiguous transport retries.
+        ambiguous transport retries. The result's ``delivery`` field says in
+        plain words what happened: queued for the target's next turn boundary
+        (with its expiry), delivered, stored for the target's inbox only, or
+        expired.
         """
         if not _UUID_RE.match(session_id):
             return json.dumps({"error": "Invalid session_id format — expected UUID"})

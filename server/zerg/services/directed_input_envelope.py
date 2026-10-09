@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
+from datetime import timedelta
 from typing import Any
 
 DIRECTED_INPUT_PROVIDERS = frozenset({"claude", "codex", "omp", "opencode", "cursor"})
@@ -54,3 +56,65 @@ def render_directed_input_envelope(*, source_session: Any, input_id: int, text: 
             ),
         ]
     )
+
+
+def describe_directed_input_delivery(directed_input: dict[str, Any], *, max_delivery_age: timedelta) -> dict[str, Any]:
+    """Say plainly what happened to a directed input, from the facts it carries.
+
+    The record itself is always stored, and the target can always read it with
+    inbox. What varies is automatic delivery into the target's conversation:
+    whether it is waiting, done, impossible, or expired. Senders read this
+    instead of decoding receipt statuses, and "durable" is never mistaken for
+    "will certainly be injected".
+    """
+
+    receipt = directed_input.get("input_receipt")
+    if not isinstance(receipt, dict):
+        return {
+            "state": "stored",
+            "meaning": (
+                "Stored for the target, but it cannot receive pushed input right now, so it will not be "
+                "injected automatically. The target sees it only if it calls inbox."
+            ),
+            "expires_at": None,
+        }
+    status = str(receipt.get("status") or "")
+    expires_at = None
+    created_at = str(receipt.get("created_at") or "")
+    if created_at:
+        try:
+            expires_at = (datetime.fromisoformat(created_at.replace("Z", "+00:00")) + max_delivery_age).isoformat().replace("+00:00", "Z")
+        except ValueError:
+            expires_at = None
+    reason = ""
+    error = receipt.get("error_json")
+    if isinstance(error, str) and error:
+        try:
+            error = json.loads(error)
+        except ValueError:
+            error = None
+    if isinstance(error, dict):
+        reason = str(error.get("reason") or error.get("message") or "")
+    if status == "queued":
+        meaning = (
+            "Waiting for the target's next turn boundary; it is injected then if that comes before "
+            "expires_at, otherwise it stays readable in the target's inbox."
+        )
+    elif status == "delivering":
+        meaning = "Being handed to the target's provider now."
+    elif status == "delivered":
+        meaning = "The target's provider accepted it. That is not proof the model read it; tail the target to confirm."
+        expires_at = None
+    elif status == "failed" and reason == "delivery_expired":
+        status = "expired"
+        meaning = "Not injected before expiry. It stays readable in the target's inbox."
+        expires_at = None
+    elif status == "failed":
+        meaning = f"Automatic delivery failed ({reason or 'no reason recorded'}). It stays readable in the target's inbox."
+        expires_at = None
+    elif status == "cancelled":
+        meaning = "Automatic delivery was cancelled. It stays readable in the target's inbox."
+        expires_at = None
+    else:
+        meaning = f"Delivery status {status or 'unknown'}. It stays readable in the target's inbox."
+    return {"state": status or "unknown", "meaning": meaning, "expires_at": expires_at}

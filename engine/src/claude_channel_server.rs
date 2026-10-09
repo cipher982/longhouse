@@ -271,21 +271,63 @@ pub const MCP_ROLE_ENV: &str = "LONGHOUSE_MCP_ROLE";
 pub const MCP_ROLE_COORDINATION: &str = "coordination";
 pub const MCP_ROLE_CHANNEL: &str = "channel";
 
-/// What a coordination tool returns while the session's authority is pending.
+/// What a coordination tool returns while the session holds no authority.
 ///
-/// The tool list never changes; the call reports why it cannot act yet. The
-/// launcher writes the token file as soon as registration recovers, and the
-/// next call reads it.
-fn registration_pending_result(id: Value) -> Value {
-    tool_result(
-        id,
-        json!({
-            "error": "registration_pending",
-            "message": "Longhouse has not finished registering this session, so it holds no \
-                        coordination authority yet. Registration retries in the background; \
-                        call this tool again shortly.",
-        }),
-    )
+/// The tool list never changes; the call reports why it cannot act, from the
+/// registration retry receipt the launcher keeps for this session
+/// (`agent/managed-local/registration-retries/<session>.json`). "Call again
+/// shortly" is only said while a retry is actually running: a detached launch
+/// abandons recovery, and an exhausted or stopped one never recovers, so those
+/// say to relaunch instead.
+fn registration_pending_result(id: Value, session_id: Option<&str>) -> Value {
+    let receipt = session_id.and_then(|session_id| {
+        let path = crate::config::get_agent_dir()
+            .ok()?
+            .join("managed-local/registration-retries")
+            .join(format!("{session_id}.json"));
+        serde_json::from_slice::<Value>(&std::fs::read(path).ok()?).ok()
+    });
+    tool_result(id, registration_pending_payload(receipt.as_ref()))
+}
+
+fn registration_pending_payload(receipt: Option<&Value>) -> Value {
+    let field = |name: &str| {
+        receipt
+            .and_then(|receipt| receipt.get(name))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    let state = field("registration_state");
+    let (registration, message) = match state.as_str() {
+        Some("recovering") => (
+            "retrying",
+            "Longhouse has not finished registering this session, so it holds no coordination \
+             authority yet. Registration is still being retried in the background; call this tool \
+             again shortly.",
+        ),
+        Some("recovered") => (
+            "recovered",
+            "Registration just recovered and this session's coordination authority is being handed \
+             over; call this tool again.",
+        ),
+        Some("exhausted" | "stopped" | "abandoned") => (
+            "stopped",
+            "Registration recovery for this session has stopped, so these tools will not work in it. \
+             Relaunch the session to get coordination authority.",
+        ),
+        _ => (
+            "unknown",
+            "This session holds no coordination authority. If calling again shortly does not help, \
+             relaunch the session.",
+        ),
+    };
+    json!({
+        "error": "registration_pending",
+        "registration": registration,
+        "message": message,
+        "attempts": field("attempt_count"),
+        "last_error": field("last_error"),
+    })
 }
 
 /// The coordination authority this managed session was launched with. Codex is
@@ -479,7 +521,9 @@ fn coordination_tools() -> Vec<Value> {
              current turn ends. The tool never interrupts a running turn. Confirm the \
              model actually received it by reading the target with \
              tail(session_id, roles=\"user,assistant\"); a delivered receipt means the \
-             provider accepted the input, not that the model has seen it. The target \
+             provider accepted the input, not that the model has seen it. The result's \
+             delivery field says in plain words what happened (queued with its expiry, \
+             delivered, stored for the target's inbox only, or expired). The target \
              sees the message as coming from this session; never relay it through a \
              CLI that sends with the owner's credential.",
             json!({"session_id":{"type":"string"},"text":{"type":"string"},"client_request_id":{"type":"string","description":"Your idempotency key; reuse it if you retry the same message."}}),
@@ -552,7 +596,7 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
     // it would still read any session's history on this session's behalf. A
     // session without authority yet gets a typed refusal instead.
     let Some(request_token) = coordination_token() else {
-        return registration_pending_result(id);
+        return registration_pending_result(id, session_id.as_deref());
     };
     let mut peers_repo: Option<String> = None;
     let config = match crate::config::ShipperConfig::from_env() {
@@ -1962,6 +2006,25 @@ mod tests {
         assert_eq!(all["peers"][1], "ended omp ? ?");
         assert_eq!(all["active_only"], false);
         assert_eq!(all["repo"], "repo");
+    }
+
+    /// The pending answer says to retry only while a retry is running.
+    #[test]
+    fn registration_pending_reports_the_retry_workers_real_state() {
+        let retrying = registration_pending_payload(Some(
+            &json!({"registration_state": "recovering", "attempt_count": 3, "last_error": "timeout"}),
+        ));
+        assert_eq!(retrying["registration"], "retrying");
+        assert!(retrying["message"].as_str().unwrap().contains("again shortly"));
+        assert_eq!(retrying["attempts"], 3);
+        for state in ["exhausted", "stopped", "abandoned"] {
+            let stopped = registration_pending_payload(Some(&json!({"registration_state": state})));
+            assert_eq!(stopped["registration"], "stopped");
+            assert!(stopped["message"].as_str().unwrap().contains("Relaunch"));
+            assert!(!stopped["message"].as_str().unwrap().contains("shortly"));
+        }
+        assert_eq!(registration_pending_payload(None)["registration"], "unknown");
+        assert_eq!(registration_pending_payload(None)["error"], "registration_pending");
     }
 
     /// The launcher's explicit role wins over token presence in both directions.

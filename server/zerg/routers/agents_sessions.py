@@ -2027,14 +2027,24 @@ async def _create_directed_input_for_actor(
     directed_input = created.get("directed_input")
     if not isinstance(directed_input, dict):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invalid directed input response")
-    if directed_input.get("input_receipt") is not None:
-        return directed_input
-    return await _attempt_directed_input_delivery(
-        owner_id=owner_id,
-        sender_session=source_session,
-        target_session=target_session,
-        directed_input=directed_input,
-    )
+    if directed_input.get("input_receipt") is None:
+        directed_input = await _attempt_directed_input_delivery(
+            owner_id=owner_id,
+            sender_session=source_session,
+            target_session=target_session,
+            directed_input=directed_input,
+        )
+    return _with_delivery_facts(directed_input)
+
+
+def _with_delivery_facts(directed_input: dict[str, Any]) -> dict[str, Any]:
+    from zerg.services.directed_input_envelope import describe_directed_input_delivery
+    from zerg.services.live_session_inputs import MAX_DELIVERY_AGE
+
+    return {
+        **directed_input,
+        "delivery": describe_directed_input_delivery(directed_input, max_delivery_age=MAX_DELIVERY_AGE),
+    }
 
 
 @router.post("/directed-inputs", status_code=status.HTTP_201_CREATED)
@@ -2091,7 +2101,7 @@ async def list_directed_inputs(
     if not isinstance(directed_inputs, list):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invalid directed input response")
     return {
-        "directed_inputs": directed_inputs,
+        "directed_inputs": [_with_delivery_facts(item) if isinstance(item, dict) else item for item in directed_inputs],
         "next_cursor": int(result.get("next_cursor") or after_id),
     }
 
