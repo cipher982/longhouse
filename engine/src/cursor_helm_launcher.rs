@@ -944,6 +944,10 @@ pub fn serve_coordination_mcp() -> anyhow::Result<()> {
         .filter(|token| !token.is_empty())
         .context("Cursor Helm coordination authority is unavailable")?;
     std::env::set_var("LONGHOUSE_COORDINATION_TOKEN", token);
+    std::env::set_var(
+        crate::claude_channel_server::MCP_ROLE_ENV,
+        crate::claude_channel_server::MCP_ROLE_COORDINATION,
+    );
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(crate::claude_channel_server::run(
         crate::claude_channel_server::ClaudeChannelServeConfig {

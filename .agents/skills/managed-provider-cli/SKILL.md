@@ -50,11 +50,16 @@ target's phase never decides whether a message survives, only when it lands.
 - `delivered` on a receipt means the provider accepted the input. It is not
   evidence the model has seen it; read the target transcript
   (`longhouse-server tail <id>`) to confirm.
-- Peer verbs: `longhouse-server continue <session_id> <text>` is a durable SEND,
-  `continue --steer` enters a running turn, and `longhouse-server send` leaves a
-  durable attributed message. Steer is best effort and can change what the
-  target's turn does — use it when the turn must change course, not to be
-  polite.
+- Agent-to-agent messages go through the coordination tools (`send`, `inbox`,
+  `reply`), which carry the sending session's identity. Every managed session
+  has them from launch; while registration is still recovering they answer
+  `registration_pending`, so retry rather than reaching for another path.
+- `longhouse-server continue <session_id> <text>` (durable SEND) and
+  `continue --steer` (enters a running turn) send with the owner's device
+  credential, and the target reads the text as the owner typing. They are the
+  owner's verbs: inside a managed session `continue` refuses another target
+  unless `--as-owner` says the words are the owner's. Steer is best effort and
+  can change what the target's turn does.
 
 ## Provider Paths
 

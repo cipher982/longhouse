@@ -223,6 +223,7 @@ fn opencode_mcp_config(
     // string would look like a credential to the channel server; an absent one
     // makes it fail closed.
     let mut environment = json!({
+        crate::claude_channel_server::MCP_ROLE_ENV: crate::claude_channel_server::MCP_ROLE_COORDINATION,
         "LONGHOUSE_MANAGED_SESSION_ID": session_id,
     });
     if let Some(token) = coordination_token {
@@ -1239,6 +1240,7 @@ mod tests {
             server["environment"]["LONGHOUSE_COORDINATION_TOKEN"],
             "session-secret"
         );
+        assert_eq!(server["environment"]["LONGHOUSE_MCP_ROLE"], "coordination");
         assert_eq!(
             server["environment"]["LONGHOUSE_MANAGED_SESSION_ID"],
             "11111111-1111-4111-8111-111111111111"

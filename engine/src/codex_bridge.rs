@@ -3825,6 +3825,13 @@ fn codex_app_server_args(
         "mcp_servers.longhouse.env.LONGHOUSE_MANAGED_SESSION_ID",
         &config.session_id,
     )));
+    // The role is explicit so the tools exist even when this launch holds no
+    // coordination authority yet; calls then report registration_pending.
+    args.push(OsString::from("-c"));
+    args.push(OsString::from(crate::codex_config::string_override(
+        "mcp_servers.longhouse.env.LONGHOUSE_MCP_ROLE",
+        crate::claude_channel_server::MCP_ROLE_COORDINATION,
+    )));
     if let Some(token_file) = coordination_token_file {
         args.push(OsString::from("-c"));
         args.push(OsString::from(crate::codex_config::string_override(
@@ -7641,6 +7648,8 @@ mod tests {
         expected.extend([
             "-c".to_string(),
             "mcp_servers.longhouse.env.LONGHOUSE_MANAGED_SESSION_ID=\"session-123\"".to_string(),
+            "-c".to_string(),
+            "mcp_servers.longhouse.env.LONGHOUSE_MCP_ROLE=\"coordination\"".to_string(),
         ]);
         // The coordination secret itself never reaches argv; Codex is given
         // the path to the 0600 file holding it.

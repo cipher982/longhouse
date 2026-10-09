@@ -566,6 +566,15 @@ def continue_session(
         "--claude-dir",
         help="Claude config directory (default: ~/.claude).",
     ),
+    as_owner: bool = typer.Option(
+        False,
+        "--as-owner",
+        help=(
+            "Send from inside a managed session anyway. The message travels with the owner's "
+            "device credential, so the target reads it as the owner typing; use only to relay "
+            "words the owner wrote."
+        ),
+    ),
 ) -> None:
     """Send a peer a message with an explicit delivery semantic.
 
@@ -585,9 +594,25 @@ def continue_session(
     transcript to confirm the model received it.
     """
 
+    resolved_session_id = parse_uuid_or_exit(session_id, label="session_id")
+    # This command authenticates with the owner's device token, and the target
+    # renders its text as the owner's own input. From inside a managed session
+    # that would let one agent's words pass as the owner's, so agents message
+    # peers with their coordination `send` tool, which carries their identity.
+    managed_session_id = (get_managed_session_id() or "").strip()
+    if managed_session_id and managed_session_id != resolved_session_id and as_owner is not True:
+        typer.secho(
+            f"Refusing: this shell belongs to managed session {managed_session_id}. "
+            "`continue` sends with the owner's credential, so the target would read your text as "
+            "the owner typing it. Message a peer with your coordination `send` tool instead; the "
+            "target then sees which session wrote it. Pass --as-owner only to relay words the owner wrote.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
-    resolved_session_id = parse_uuid_or_exit(session_id, label="session_id")
     intent = "steer" if steer else "queue"
     resolved_client_request_id = (client_request_id or "").strip() or uuid.uuid4().hex
 

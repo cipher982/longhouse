@@ -24,6 +24,13 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
 
 
+@pytest.fixture(autouse=True)
+def _outside_managed_session(monkeypatch):
+    """These tests send as the owner; an agent shell running them must not count."""
+
+    monkeypatch.delenv("LONGHOUSE_MANAGED_SESSION_ID", raising=False)
+
+
 def _req(method: str, path: str, token: str = "zdt_test_token") -> Request:
     return Request(
         {
@@ -382,3 +389,39 @@ def test_interrupt_retries_on_429(monkeypatch):
         claude_dir=None,
     )
     assert attempts == 2
+
+
+def test_continue_session_refuses_to_speak_for_the_owner_from_an_agent_shell(monkeypatch, capsys):
+    """An agent's shell carries its managed session id; `continue` would send as the owner."""
+
+    current = str(uuid4())
+    target = str(uuid4())
+    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", current)
+    monkeypatch.setattr(
+        "zerg.cli.sessions._load_api_credentials",
+        lambda **kwargs: pytest.fail("credentials must not be loaded for a refused send"),
+    )
+    kwargs = dict(
+        session_id=target,
+        message="hello peer",
+        steer=False,
+        output_json=False,
+        client_request_id=None,
+        current_session_id=None,
+        url=None,
+        token=None,
+        claude_dir=None,
+    )
+
+    with pytest.raises(typer.Exit) as refused:
+        continue_session(**kwargs, as_owner=False)
+    assert refused.value.exit_code == 2
+    err = capsys.readouterr().err
+    assert current in err and "`send` tool" in err
+
+    monkeypatch.setattr(
+        "zerg.cli.sessions._load_api_credentials",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("reached the send")),
+    )
+    with pytest.raises(RuntimeError, match="reached the send"):
+        continue_session(**kwargs, as_owner=True)

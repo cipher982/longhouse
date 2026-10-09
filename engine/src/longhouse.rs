@@ -1781,16 +1781,35 @@ impl Drop for PrivateTempFile {
     }
 }
 
+/// Write the launch-scoped MCP config Claude reads once at startup.
+///
+/// Both servers are always present, with explicit roles, so the model's tool
+/// list is identical whether registration finished inside the foreground
+/// budget or recovers later. A launch that already holds coordination
+/// authority passes it in the environment; one that is still registering
+/// gets it through `token_path`, which the registration retry writes when it
+/// recovers. Changing the tool list after launch is not an option: Claude
+/// reads it once, and tool definitions head the prompt cache. The role names
+/// are `claude_channel_server::MCP_ROLE_*`; this binary does not link it.
 fn write_claude_mcp_config(
     session_id: &str,
-    coordination_token: &str,
+    coordination_token: Option<&str>,
+    token_path: &Path,
 ) -> anyhow::Result<PrivateTempFile> {
-    if coordination_token.trim().is_empty() {
-        anyhow::bail!("Longhouse did not issue coordination authority for this session");
-    }
     let path = longhouse_home()?
         .join("run/claude-mcp")
         .join(format!("{session_id}-{}.json", Uuid::new_v4()));
+    let mut coordination_env = json!({
+        "LONGHOUSE_MCP_ROLE": "coordination",
+        "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+        "LONGHOUSE_COORDINATION_TOKEN_FILE": token_path.display().to_string(),
+    });
+    if let Some(token) = coordination_token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        coordination_env["LONGHOUSE_COORDINATION_TOKEN"] = json!(token);
+    }
     let config = json!({
         "mcpServers": {
             "longhouse-channel": {
@@ -1798,6 +1817,7 @@ fn write_claude_mcp_config(
                 "command": paired_engine_path()?,
                 "args": ["claude-channel", "serve"],
                 "env": {
+                    "LONGHOUSE_MCP_ROLE": "channel",
                     "LONGHOUSE_MANAGED_SESSION_ID": session_id,
                 },
             },
@@ -1805,10 +1825,7 @@ fn write_claude_mcp_config(
                 "type": "stdio",
                 "command": paired_engine_path()?,
                 "args": ["claude-channel", "serve"],
-                "env": {
-                    "LONGHOUSE_COORDINATION_TOKEN": coordination_token,
-                    "LONGHOUSE_MANAGED_SESSION_ID": session_id,
-                },
+                "env": coordination_env,
             }
         }
     });
@@ -1816,24 +1833,11 @@ fn write_claude_mcp_config(
     Ok(PrivateTempFile { path })
 }
 
-fn write_claude_degraded_mcp_config(session_id: &str) -> anyhow::Result<PrivateTempFile> {
-    let path = longhouse_home()?
+/// Where a launch still registering receives its coordination authority.
+fn claude_coordination_token_path() -> anyhow::Result<PathBuf> {
+    Ok(longhouse_home()?
         .join("run/claude-mcp")
-        .join(format!("{session_id}-{}.json", Uuid::new_v4()));
-    let config = json!({
-        "mcpServers": {
-            "longhouse-channel": {
-                "type": "stdio",
-                "command": paired_engine_path()?,
-                "args": ["claude-channel", "serve"],
-                "env": {
-                    "LONGHOUSE_MANAGED_SESSION_ID": session_id,
-                },
-            }
-        }
-    });
-    write_private_text(&path, &serde_json::to_string(&config)?)?;
-    Ok(PrivateTempFile { path })
+        .join(format!("{}.coordination-token", Uuid::new_v4())))
 }
 
 fn claude_registration_issue(
@@ -2029,6 +2033,10 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             "Longhouse warning: starting Claude without Longhouse control because registration was unusable ({issue})"
         );
     }
+    // Removed when this launch ends, whether or not authority ever arrived.
+    let coordination_token_file = PrivateTempFile {
+        path: claude_coordination_token_path()?,
+    };
     if response.is_none() && resume_target.is_none() {
         // The provider remains usable while registration retries. Logging and
         // control recovery must never delay or prevent the provider TUI.
@@ -2036,17 +2044,27 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             .get("session_id")
             .and_then(serde_json::Value::as_str)
             .context("Claude degraded launch lost its client-minted session identity")?;
-        degraded_registration = Some(managed_launch_lifecycle::spawn_managed_registration_retry(
-            &url,
-            &token,
-            "Claude",
-            payload.clone(),
-            session_id,
-            deferred_notices.clone(),
-            longhouse_home()
-                .map(|home| home.join("agent"))
-                .unwrap_or_else(|_| PathBuf::from(".")),
-        ));
+        let token_path = coordination_token_file.path.clone();
+        degraded_registration = Some(
+            managed_launch_lifecycle::spawn_managed_registration_retry_with_hook(
+                &url,
+                &token,
+                "Claude",
+                payload.clone(),
+                session_id,
+                deferred_notices.clone(),
+                longhouse_home()
+                    .map(|home| home.join("agent"))
+                    .unwrap_or_else(|_| PathBuf::from(".")),
+                Some(Arc::new(move |response: &ManagedLaunchResponse| {
+                    // The coordination server reads this file on every call, so
+                    // the tools it advertised at launch start working now.
+                    if let Some(token) = response.coordination_token() {
+                        let _ = write_private_text(&token_path, token);
+                    }
+                })),
+            ),
+        );
     }
     let session_id = response
         .as_ref()
@@ -2099,11 +2117,11 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .as_ref()
         .and_then(|response| response.coordination_token())
         .map(str::to_owned);
-    let mcp_config = if let Some(coordination_token) = coordination_token.as_deref() {
-        write_claude_mcp_config(&session_id, coordination_token)?
-    } else {
-        write_claude_degraded_mcp_config(&session_id)?
-    };
+    let mcp_config = write_claude_mcp_config(
+        &session_id,
+        coordination_token.as_deref(),
+        &coordination_token_file.path,
+    )?;
     let mut command = Command::new(&binary);
     if permission_mode == "bypass" {
         command.arg("--dangerously-skip-permissions");
@@ -6389,9 +6407,11 @@ mod tests {
                 ("LONGHOUSE_ENGINE_BIN", Some(engine.display().to_string())),
             ],
             || {
+                let token_path = claude_coordination_token_path().unwrap();
                 let config = write_claude_mcp_config(
                     "11111111-1111-4111-8111-111111111111",
-                    "session-secret",
+                    Some("session-secret"),
+                    &token_path,
                 )
                 .unwrap();
                 let path = config.path.clone();
@@ -6399,15 +6419,17 @@ mod tests {
                     serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
                 assert_eq!(
                     payload["mcpServers"]["longhouse-channel"]["env"],
-                    json!({"LONGHOUSE_MANAGED_SESSION_ID":"11111111-1111-4111-8111-111111111111"})
+                    json!({
+                        "LONGHOUSE_MCP_ROLE": "channel",
+                        "LONGHOUSE_MANAGED_SESSION_ID": "11111111-1111-4111-8111-111111111111",
+                    })
                 );
-                assert!(payload["mcpServers"]["longhouse-channel"]["env"]
-                    ["LONGHOUSE_COORDINATION_TOKEN"]
-                    .is_null());
+                let coordination = &payload["mcpServers"]["longhouse-coordination"]["env"];
+                assert_eq!(coordination["LONGHOUSE_MCP_ROLE"], "coordination");
+                assert_eq!(coordination["LONGHOUSE_COORDINATION_TOKEN"], "session-secret");
                 assert_eq!(
-                    payload["mcpServers"]["longhouse-coordination"]["env"]
-                        ["LONGHOUSE_COORDINATION_TOKEN"],
-                    "session-secret"
+                    coordination["LONGHOUSE_COORDINATION_TOKEN_FILE"],
+                    token_path.display().to_string()
                 );
                 #[cfg(unix)]
                 {
@@ -6419,6 +6441,56 @@ mod tests {
                 }
                 drop(config);
                 assert!(!path.exists());
+            },
+        );
+    }
+
+    /// A launch that lost its registration race gets the same tools; only the
+    /// credential arrives later, through the file.
+    #[test]
+    fn claude_mcp_config_without_authority_keeps_the_coordination_tools() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = temp.path().join("longhouse-engine");
+        std::fs::write(&engine, "").unwrap();
+        temp_env::with_vars(
+            [
+                ("LONGHOUSE_HOME", Some(temp.path().display().to_string())),
+                ("LONGHOUSE_ENGINE_BIN", Some(engine.display().to_string())),
+            ],
+            || {
+                let token_path = claude_coordination_token_path().unwrap();
+                let registered = write_claude_mcp_config(
+                    "11111111-1111-4111-8111-111111111111",
+                    Some("session-secret"),
+                    &token_path,
+                )
+                .unwrap();
+                let pending = write_claude_mcp_config(
+                    "11111111-1111-4111-8111-111111111111",
+                    None,
+                    &token_path,
+                )
+                .unwrap();
+                let read = |path: &Path| -> serde_json::Value {
+                    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+                };
+                let (registered, pending) = (read(&registered.path), read(&pending.path));
+                let servers = |payload: &serde_json::Value| -> Vec<String> {
+                    payload["mcpServers"]
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .cloned()
+                        .collect()
+                };
+                assert_eq!(servers(&registered), servers(&pending));
+                let env = &pending["mcpServers"]["longhouse-coordination"]["env"];
+                assert_eq!(env["LONGHOUSE_MCP_ROLE"], "coordination");
+                assert!(env["LONGHOUSE_COORDINATION_TOKEN"].is_null());
+                assert_eq!(
+                    env["LONGHOUSE_COORDINATION_TOKEN_FILE"],
+                    token_path.display().to_string()
+                );
             },
         );
     }
