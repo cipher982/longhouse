@@ -57,8 +57,9 @@ from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_h
 logger = logging.getLogger(__name__)
 
 COORDINATION_BOOTSTRAP = (
-    "You are running through a Longhouse-managed session. Other Longhouse sessions "
-    "may be discoverable with the Longhouse `peers` tool. "
+    "You are running through a Longhouse-managed session. Several agents often work at "
+    "once: use `peers`, `inbox` and `tail` whenever knowing what others are doing would "
+    "help, for example before starting work in a shared repo. "
     "When the user refers to another agent or asks you to coordinate, look for peers "
     "before concluding that you cannot reach it. Use `tail` to inspect work, `send` "
     "for durable directed input, `inbox` for recovery, and `reply` to respond. Longhouse channel "

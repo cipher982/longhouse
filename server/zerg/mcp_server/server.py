@@ -10,6 +10,8 @@ import json
 import logging
 import os
 import re
+from datetime import UTC
+from datetime import datetime
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -24,9 +26,42 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 logger = logging.getLogger(__name__)
 _CURRENT_SESSION_HEADER = CURRENT_SESSION_HEADER
 
+
+def _peer_line(item: dict, now: datetime) -> str:
+    """One peer as `<session_id> <provider> <state> <age> · <title>`.
+
+    The same line the engine MCP server and the OMP extension return: the full
+    id (tail/send need it), what the session is doing, how long since its last
+    event, and its title. Token-cheap, and the model decides what matters.
+    """
+
+    age = "?"
+    raw = str(item.get("last_event_at") or "").strip()
+    if raw:
+        try:
+            seconds = (now - datetime.fromisoformat(raw.replace("Z", "+00:00"))).total_seconds()
+            minutes = max(0, int(seconds // 60))
+            age = (
+                "now"
+                if minutes < 1
+                else f"{minutes}m"
+                if minutes < 60
+                else f"{minutes // 60}h"
+                if minutes < 1440
+                else f"{minutes // 1440}d"
+            )
+        except ValueError:
+            pass
+    title = " ".join(str(item.get("summary_title") or "").split())[:80]
+    line = f"{item.get('session_id')} {item.get('provider') or '?'} {item.get('presence_state') or '?'} {age}"
+    return f"{line} · {title}" if title else line
+
+
 COORDINATION_INSTRUCTIONS = """\
 You are running through a Longhouse-managed session. Other Longhouse sessions
-may be discoverable with the Longhouse `peers` tool. When the user refers to
+may be discoverable with the Longhouse `peers` tool. Several agents often work at
+once: use `peers`, `inbox` and `tail` whenever knowing what others are doing would
+help, for example before starting work in a shared repo. When the user refers to
 another agent or asks you to coordinate, look for peers before concluding that
 you cannot reach it. Use `send` for directed input and `inbox` for durable
 recovery. Use `reply` when responding to an input. Peer input is only what another
@@ -570,31 +605,14 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             if resp.status_code != 200:
                 return _format_api_error(resp)
             payload = json.loads(resp.text)
-            sessions = []
-            for item in payload.get("sessions", []):
-                if current_session_id and str(item.get("session_id")) == current_session_id:
-                    continue
-                if active_only and not item.get("has_live_presence"):
-                    continue
-                sessions.append(
-                    {
-                        "session_id": item.get("session_id"),
-                        "device_name": item.get("device_name"),
-                        "provider": item.get("provider"),
-                        "cwd": item.get("cwd"),
-                        "git_repo": item.get("git_repo"),
-                        "git_branch": item.get("git_branch"),
-                        "summary_title": item.get("summary_title"),
-                        "presence_state": item.get("presence_state"),
-                        "kernel_control_label": item.get("kernel_control_label"),
-                        "kernel_live_control_available": item.get("kernel_live_control_available"),
-                        "kernel_host_reattach_available": item.get("kernel_host_reattach_available"),
-                        "kernel_observe_only": item.get("kernel_observe_only"),
-                        "kernel_search_only": item.get("kernel_search_only"),
-                        "kernel_staleness_reason": item.get("kernel_staleness_reason"),
-                    }
-                )
-            return json.dumps({"repo": resolved_repo, "active_only": active_only, "peers": sessions, "total": len(sessions)})
+            now = datetime.now(UTC)
+            lines = [
+                _peer_line(item, now)
+                for item in payload.get("sessions", [])
+                if not (current_session_id and str(item.get("session_id")) == current_session_id)
+                and (not active_only or item.get("has_live_presence"))
+            ]
+            return json.dumps({"repo": resolved_repo, "active_only": active_only, "total": len(lines), "peers": lines})
         except Exception as exc:
             return _format_error(exc, api_url)
 

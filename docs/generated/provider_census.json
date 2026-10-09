@@ -1336,7 +1336,8 @@
       "path": "server/tests_lite/test_longhouse_mcp_server.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "omp"
       ]
     },
     {

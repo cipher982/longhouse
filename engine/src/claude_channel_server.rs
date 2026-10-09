@@ -68,7 +68,9 @@ const CHANNEL_INSTRUCTIONS: &str =
 /// untrusted"), so a steer typed on the phone could be declined the same way.
 /// Only the directed-input envelope and what these tools return are peer data.
 const COORDINATION_INSTRUCTIONS: &str =
-    "Provider-neutral tools for reading and directing Longhouse sessions. When the user says \
+    "Provider-neutral tools for reading and directing Longhouse sessions. Several agents often \
+     work at once: use peers, inbox and tail whenever knowing what others are doing would help, \
+     for example before starting work in a shared repo. When the user says \
      they have already done something, search history before asking them to redo it: \
      search_sessions(query, project) to find the session, then tail(session_id, \
      roles=\"user,assistant\") to read it. Call search_sessions with no query to list recent \
@@ -448,9 +450,11 @@ fn coordination_tools() -> Vec<Value> {
         ),
         tool(
             "peers",
-            "List same-repo collaborators from the Longhouse wall. Live sessions only \
-             unless active_only=false. This is a liveness tool, not a history tool — use \
-             search_sessions to find ended sessions.",
+            "List the other agent sessions in this repo, one line each: \
+             `<session_id> <provider> <state> <age> · <title>`. Live sessions only \
+             unless active_only=false. Use it whenever knowing what others are doing would \
+             help. This is a liveness tool, not a history tool — use search_sessions to \
+             find ended sessions.",
             json!({"repo":{"type":"string"},"active_only":{"type":"boolean","default":true}}),
         ),
         tool(
@@ -803,6 +807,7 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                                 .get("active_only")
                                 .and_then(Value::as_bool)
                                 .unwrap_or(true),
+                            chrono::Utc::now(),
                         ),
                     ),
                     None => tool_text_result(id, render_coordination_response(name, &text)),
@@ -848,30 +853,22 @@ fn parse_json_or_text(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))
 }
 
-/// Shape the wall into the peers answer the Python MCP and OMP give: the
-/// caller is not its own peer, and `active_only` (the default) keeps only
-/// sessions with live presence.
-fn render_peers(text: &str, repo: &str, current_session_id: Option<&str>, active_only: bool) -> String {
+/// Shape the wall into the peers answer every Longhouse surface gives: the
+/// caller is not its own peer, `active_only` (the default) keeps only sessions
+/// with live presence, and each peer is one line,
+/// `<session_id> <provider> <state> <age> · <title>`. The model decides what
+/// matters; the line only has to be cheap and carry the id tail/send need.
+fn render_peers(
+    text: &str,
+    repo: &str,
+    current_session_id: Option<&str>,
+    active_only: bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
     let Ok(payload) = serde_json::from_str::<Value>(text) else {
         return text.to_string();
     };
-    const FIELDS: [&str; 14] = [
-        "session_id",
-        "device_name",
-        "provider",
-        "cwd",
-        "git_repo",
-        "git_branch",
-        "summary_title",
-        "presence_state",
-        "kernel_control_label",
-        "kernel_live_control_available",
-        "kernel_host_reattach_available",
-        "kernel_observe_only",
-        "kernel_search_only",
-        "kernel_staleness_reason",
-    ];
-    let peers: Vec<Value> = payload
+    let peers: Vec<String> = payload
         .get("sessions")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
@@ -888,17 +885,44 @@ fn render_peers(text: &str, repo: &str, current_session_id: Option<&str>, active
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
         })
-        .map(|item| {
-            Value::Object(
-                FIELDS
-                    .iter()
-                    .map(|field| (field.to_string(), item.get(*field).cloned().unwrap_or(Value::Null)))
-                    .collect(),
-            )
-        })
+        .map(|item| peer_line(item, now))
         .collect();
     json!({"repo": repo, "active_only": active_only, "total": peers.len(), "peers": peers})
         .to_string()
+}
+
+fn peer_line(item: &Value, now: chrono::DateTime<chrono::Utc>) -> String {
+    let field = |name: &str| item.get(name).and_then(Value::as_str).unwrap_or("");
+    let age = chrono::DateTime::parse_from_rfc3339(field("last_event_at"))
+        .map(|at| {
+            let minutes = (now - at.with_timezone(&chrono::Utc)).num_minutes().max(0);
+            match minutes {
+                0 => "now".to_string(),
+                1..=59 => format!("{minutes}m"),
+                60..=1439 => format!("{}h", minutes / 60),
+                _ => format!("{}d", minutes / 1440),
+            }
+        })
+        .unwrap_or_else(|_| "?".to_string());
+    let title: String = field("summary_title")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(80)
+        .collect();
+    let or_unknown = |value: &str| if value.is_empty() { "?".to_string() } else { value.to_string() };
+    let line = format!(
+        "{} {} {} {age}",
+        field("session_id"),
+        or_unknown(field("provider")),
+        or_unknown(field("presence_state")),
+    );
+    if title.is_empty() {
+        line
+    } else {
+        format!("{line} · {title}")
+    }
 }
 
 fn render_coordination_response(name: &str, text: &str) -> String {
@@ -1902,21 +1926,25 @@ mod tests {
     /// peers leaves out the caller and, by default, sessions without live presence.
     #[test]
     fn peers_excludes_the_caller_and_honours_active_only() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-09T18:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
         let wall = json!({"sessions": [
             {"session_id": "self", "has_live_presence": true, "provider": "claude"},
-            {"session_id": "live", "has_live_presence": true, "provider": "codex", "internal": 1},
+            {"session_id": "live", "has_live_presence": true, "provider": "codex",
+             "presence_state": "running", "last_event_at": "2026-10-09T17:55:30Z",
+             "summary_title": "Composer\n stop  slot", "internal": 1},
             {"session_id": "ended", "has_live_presence": false, "provider": "omp"},
         ]})
         .to_string();
         let live: Value =
-            serde_json::from_str(&render_peers(&wall, "repo", Some("self"), true)).unwrap();
+            serde_json::from_str(&render_peers(&wall, "repo", Some("self"), true, now)).unwrap();
         assert_eq!(live["total"], 1);
-        assert_eq!(live["peers"][0]["session_id"], "live");
-        assert_eq!(live["peers"][0]["provider"], "codex");
-        assert!(live["peers"][0].get("internal").is_none());
+        assert_eq!(live["peers"][0], "live codex running 4m · Composer stop slot");
         let all: Value =
-            serde_json::from_str(&render_peers(&wall, "repo", Some("self"), false)).unwrap();
+            serde_json::from_str(&render_peers(&wall, "repo", Some("self"), false, now)).unwrap();
         assert_eq!(all["total"], 2);
+        assert_eq!(all["peers"][1], "ended omp ? ?");
         assert_eq!(all["active_only"], false);
         assert_eq!(all["repo"], "repo");
     }

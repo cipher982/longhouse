@@ -29,6 +29,7 @@ const {
   agentEndIsTerminal,
   compactAsyncJobEvidence,
   ompProviderIsIdle,
+  peerLine,
 } = await import("./longhouse-omp-helm");
 
 describe("ompProviderIsIdle", () => {
@@ -698,5 +699,24 @@ describe("channel reconnect", () => {
       await new Promise((resolve) => server.close(resolve));
       rmSync(channelDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("peerLine", () => {
+  it("renders one token-cheap line per peer", () => {
+    const now = Date.parse("2026-10-09T18:00:00Z");
+    const item = {
+      session_id: "22222222-2222-2222-2222-222222222222",
+      provider: "omp",
+      presence_state: "running",
+      last_event_at: "2026-10-09T17:55:30Z",
+      summary_title: "Moving  tools\nout of service pkg",
+    };
+    expect(peerLine(item, now)).toBe(
+      "22222222-2222-2222-2222-222222222222 omp running 4m · Moving tools out of service pkg",
+    );
+    expect(peerLine({ ...item, last_event_at: undefined, summary_title: "" }, now)).toBe(
+      "22222222-2222-2222-2222-222222222222 omp running ?",
+    );
   });
 });

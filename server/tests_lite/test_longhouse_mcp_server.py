@@ -380,22 +380,7 @@ async def test_peers_infers_repo_from_current_session(monkeypatch):
     assert payload["total"] == 1
     assert payload["repo"] == "git@github.com:cipher982/longhouse.git"
     assert payload["active_only"] is True
-    assert payload["peers"][0] == {
-        "session_id": "22222222-2222-2222-2222-222222222222",
-        "device_name": "demo-machine",
-        "provider": "codex",
-        "cwd": "/Users/dev/git/longhouse",
-        "git_repo": "git@github.com:cipher982/longhouse.git",
-        "git_branch": "main",
-        "summary_title": "Peer",
-        "presence_state": "thinking",
-        "kernel_control_label": None,
-        "kernel_live_control_available": None,
-        "kernel_host_reattach_available": None,
-        "kernel_observe_only": None,
-        "kernel_search_only": None,
-        "kernel_staleness_reason": None,
-    }
+    assert payload["peers"] == ["22222222-2222-2222-2222-222222222222 codex thinking ? · Peer"]
     assert mock_get.await_args_list[0].args == ("/api/agents/sessions/11111111-1111-1111-1111-111111111111",)
     assert mock_get.await_args_list[1].args == ("/api/agents/sessions/wall",)
     assert mock_get.await_args_list[1].kwargs["params"] == {
@@ -621,3 +606,21 @@ async def test_search_sessions_description_names_canonical_longhouse_database():
     tool = server._tool_manager._tools["search_sessions"]
 
     assert "canonical Longhouse agent-session database" in tool.fn.__doc__
+
+
+def test_peer_line_is_one_token_cheap_line():
+    from datetime import UTC
+    from datetime import datetime
+
+    from zerg.mcp_server.server import _peer_line
+
+    now = datetime(2026, 10, 9, 18, 0, tzinfo=UTC)
+    item = {
+        "session_id": "22222222-2222-2222-2222-222222222222",
+        "provider": "omp",
+        "presence_state": "running",
+        "last_event_at": "2026-10-09T17:55:30Z",
+        "summary_title": "Moving  tools\nout of service pkg",
+    }
+    assert _peer_line(item, now) == "22222222-2222-2222-2222-222222222222 omp running 4m · Moving tools out of service pkg"
+    assert _peer_line({**item, "last_event_at": "2026-10-07T18:00:00Z", "summary_title": ""}, now).endswith("omp running 2d")

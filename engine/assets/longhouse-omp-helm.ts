@@ -416,6 +416,31 @@ function subagentSessionContext(ctx: unknown): boolean {
   return false;
 }
 
+/**
+ * One peer as `<session_id> <provider> <state> <age> · <title>`, the same line
+ * the engine and Python MCP servers return: the full id tail/send need, what
+ * the session is doing, time since its last event, and its title.
+ */
+export function peerLine(item: Record<string, unknown>, nowMs: number): string {
+  const text = (value: unknown) => (typeof value === "string" ? value : "");
+  const at = Date.parse(text(item.last_event_at));
+  let age = "?";
+  if (Number.isFinite(at)) {
+    const minutes = Math.max(0, Math.floor((nowMs - at) / 60_000));
+    age =
+      minutes < 1
+        ? "now"
+        : minutes < 60
+          ? `${minutes}m`
+          : minutes < 1440
+            ? `${Math.floor(minutes / 60)}h`
+            : `${Math.floor(minutes / 1440)}d`;
+  }
+  const title = text(item.summary_title).split(/\s+/).filter(Boolean).join(" ").slice(0, 80);
+  const line = `${text(item.session_id)} ${text(item.provider) || "?"} ${text(item.presence_state) || "?"} ${age}`;
+  return title ? `${line} · ${title}` : line;
+}
+
 export default function (pi: any) {
   const runtimeUrl = (process.env.LONGHOUSE_OMP_HELM_URL ?? "")
     .trim()
@@ -613,7 +638,7 @@ export default function (pi: any) {
 
   coordination(
     "peers",
-    "List same-repository Longhouse collaborators. This is a liveness view, not transcript history.",
+    "List the other agent sessions in this repository, one line each: `<session_id> <provider> <state> <age> · <title>`. Several agents often work at once: use peers, inbox and tail whenever knowing what others are doing would help, for example before starting work in a shared repo. This is a liveness view, not transcript history.",
     {
       repo: {
         type: "string",
@@ -667,11 +692,12 @@ export default function (pi: any) {
             .filter((item) => String(item.session_id ?? "") !== launchSessionId)
             .filter((item) => !activeOnly || item.has_live_presence)
         : [];
+      const peers = sessions.map((item) => peerLine(item, Date.now()));
       return {
         repo,
         active_only: activeOnly,
-        peers: sessions,
-        total: sessions.length,
+        total: peers.length,
+        peers,
       };
     },
   );
