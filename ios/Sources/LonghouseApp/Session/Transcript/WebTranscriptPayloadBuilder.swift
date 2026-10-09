@@ -151,12 +151,14 @@ extension WebTranscriptView {
                 collapsed.append(latest)
             } else {
                 let text = latest.body ?? "Background task finished"
-                collapsed.append(providerNotificationPayload(id: latest.id, text: "\(text) (\(run.count) updates)", origin: "wake"))
+                var merged = providerNotificationPayload(id: latest.id, text: "\(text) (\(run.count) updates)", wake: true)
+                merged.turnEnd = latest.turnEnd
+                collapsed.append(merged)
             }
             run.removeAll()
         }
         for row in rows {
-            if row.kind == "providerNotification", row.origin == "wake" {
+            if row.wake == true {
                 run.append(row)
             } else {
                 flush()
@@ -266,7 +268,8 @@ extension WebTranscriptView {
                 return providerNotificationPayload(
                     id: item.id,
                     text: event.contentText ?? "Background task finished",
-                    origin: event.inputOrigin?.origin
+                    origin: event.inputOrigin?.origin,
+                    wake: event.inputOrigin?.origin == "wake"
                 )
             }
             return messagePayload(
@@ -362,9 +365,10 @@ extension WebTranscriptView {
     private nonisolated static func providerNotificationPayload(
         id: String,
         text: String,
-        origin: String? = nil
+        origin: String? = nil,
+        wake: Bool = false
     ) -> WebTranscriptPayloadItem {
-        WebTranscriptPayloadItem(
+        var item = WebTranscriptPayloadItem(
             id: id,
             kind: "providerNotification",
             role: nil,
@@ -381,6 +385,8 @@ extension WebTranscriptView {
             origin: origin == "longhouse" ? origin : nil,
             media: nil
         )
+        item.wake = wake ? true : nil
+        return item
     }
 
     private nonisolated static func actionLabel(_ kind: String) -> String {
@@ -390,7 +396,7 @@ extension WebTranscriptView {
 
     private nonisolated static func payloadSubmittedInput(_ input: SubmittedInput) -> WebTranscriptPayloadItem {
         if input.origin == "wake" || input.origin == "longhouse" {
-            return providerNotificationPayload(id: input.id, text: input.text, origin: input.origin)
+            return providerNotificationPayload(id: input.id, text: input.text, origin: input.origin, wake: input.origin == "wake")
         }
         return WebTranscriptPayloadItem(
             id: input.id,
@@ -853,6 +859,8 @@ struct WebTranscriptPayloadItem: Encodable {
     var subagentSummary: String? = nil
     /// "Worked for 2m 9s · Turn finished 9:15 AM" under the item a turn ended on.
     var turnEnd: WebTranscriptTurnEnd? = nil
+    /// A background completion (wake notice). Consecutive ones collapse to one row.
+    var wake: Bool? = nil
     /// Cursors of this row's events that a lite page sent as previews.
     /// Expanding the row asks native to load them (`loadToolBodies`).
     var bodyCursors: [String]? = nil
