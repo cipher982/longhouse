@@ -300,7 +300,7 @@ def _provider_version_or_none(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     version = value.strip()
-    if not version or len(version) > 64:
+    if not version or len(version.encode("utf-8")) > 64:
         return None
     return version
 

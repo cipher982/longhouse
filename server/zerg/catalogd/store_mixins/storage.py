@@ -1541,7 +1541,9 @@ class StorageMixin:
 
         Counts storage sessions started inside the window that carry a version.
         ``first_seen`` is the earliest ``started_at`` and ``last_seen`` the latest
-        ``last_activity_at`` among those sessions. Only test and e2e environments are
+        ``last_activity_at`` among those sessions. A resumed session's version is
+        replaced in place, so ``first_seen`` can predate the version; read
+        ``last_seen`` as when it last ran, not ``first_seen`` as when it first did. Only test and e2e environments are
         excluded; hidden and tombstoned sessions still count, because they ran the
         version. No verdict is made here.
         """
