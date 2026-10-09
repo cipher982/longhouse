@@ -885,8 +885,10 @@ describe("status snapshot", () => {
             directed_inputs: [
               { id: 1, input_receipt: { status: "delivered" } },
               { id: 2, input_receipt: { status: "failed" } },
-              { id: 3, input_receipt: { status: "queued" } },
-              { id: 4, input_receipt: { status: "delivered" } },
+              { id: 3, input_receipt: null },
+              { id: 4, input_receipt: { status: "queued" } },
+              { id: 5, input_receipt: { status: "delivering" } },
+              { id: 6, input_receipt: { status: "delivered" } },
             ],
           });
         return new Response("not found", { status: 404 });
@@ -915,7 +917,7 @@ describe("status snapshot", () => {
       expect(String(last.content)).toContain(
           'agent-b 5c666b5a (main, "Console image picker")',
       );
-      expect(String(last.content)).toContain("Messages queued for you: 1.");
+      expect(String(last.content)).toContain("Messages queued for you: 2.");
     } finally {
       process.env.LONGHOUSE_OMP_HELM_URL = previousUrl;
       await server.stop(true);

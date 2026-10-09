@@ -1475,8 +1475,8 @@ export default function (pi: any) {
   };
 
   // Queued inbound input is read from a cursor that advances past every input
-  // whose delivery has settled (delivered, failed, cancelled), so each refresh
-  // reads a bounded page and a settled input never counts again.
+  // whose delivery has settled (delivered, failed, cancelled, or never pushed),
+  // so each refresh reads a bounded page and a settled input never counts again.
   let settledThrough = 0;
   const statusSnapshot = createStatusSnapshot({
     // Resolved on every refresh (at most once per TTL): the session's repo can
@@ -1531,8 +1531,13 @@ export default function (pi: any) {
       let contiguous = true;
       for (const row of rows) {
         const receipt = isRecord(row.input_receipt) ? row.input_receipt : undefined;
-        // No receipt yet means the input has not been dispatched: it is waiting.
-        const waiting = receipt === undefined || receipt.status === "queued";
+        // Only a receipt still on its way to the provider is waiting. An input
+        // with no receipt was stored for inbox recovery and is never pushed, so
+        // counting it would show "queued" forever; "delivering" can still fall
+        // back to "queued" after a delivery timeout, so it is not settled yet.
+        const waiting =
+          receipt !== undefined &&
+          (receipt.status === "queued" || receipt.status === "delivering");
         if (!waiting && contiguous) {
           settledThrough = Math.max(settledThrough, Number(row.id) || 0);
         } else if (waiting) {
