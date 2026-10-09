@@ -108,11 +108,18 @@ def _single_user(entries: list[Mapping[str, Any]], marker: str) -> tuple[Mapping
 
 
 def step_task_prompt(task_marker: str, done_marker: str) -> str:
-    """A turn that stays busy across several tool boundaries."""
+    """A turn that stays busy across several tool boundaries.
+
+    The commands must run in the foreground: OMP runs a named bash command as a
+    background service that outlives an abort, and after a tool-description change
+    on 2026-10-09 the test model began naming them, so abort and steer checks saw
+    work continue that the turn no longer owned.
+    """
 
     steps = " ".join(f"`sleep 4 && echo {task_marker}-step{index}`" for index in range(1, 7))
     return (
         f"Task {task_marker}: run each of these bash commands as its own separate tool call, one at a time, "
+        "in the foreground (do not name it or run it as a background job or service), "
         f"waiting for each to finish: {steps}. After all six, reply with {done_marker}."
     )
 

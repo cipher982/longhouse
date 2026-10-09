@@ -2119,7 +2119,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             env,
             text=_setup_marker_prompt(
                 active_marker,
-                setup="Use the bash tool to run `sleep 8`, then",
+                setup="Use the bash tool to run `sleep 8` in the foreground (not as a named or background job), then",
             ),
         )
         active_state = _wait_state(
