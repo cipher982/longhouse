@@ -189,6 +189,20 @@ install_engine_from_source() {
   log "Native pair ready: $($HOME/.local/bin/longhouse build-identity)"
 }
 
+install_server_cli_from_source() {
+  # `longhouse-server` (the uv tool named "longhouse") used to be an editable
+  # install pointing at the primary checkout. Nothing advances that checkout
+  # since release and refresh moved to disposable worktrees, so the CLI drifted
+  # 80 commits behind the engine on 2026-10-09 and lacked a guard that had
+  # already landed. Install it from this exact checkout, non-editable, so the
+  # whole Mac runs one commit. A later `uv tool install -e .` for local CLI
+  # work is still fine; the next refresh puts this back.
+  log "==> Installing longhouse-server from this checkout"
+  python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
+  uv tool install --force --reinstall --quiet "$SERVER_PROJECT"
+  log "longhouse-server ready: $("$HOME/.local/bin/longhouse-server" --version 2>/dev/null || echo unknown)"
+}
+
 ensure_frontend_dist() {
   local dist_index="$ROOT_DIR/web/dist/index.html"
   local needs_build=0
@@ -342,6 +356,9 @@ run_refresh_exact() {
     [[ "$identity" == *"+${LH_EXACT_SHA:0:8}"* ]] || fail "Installed longhouse reports '$identity', not ${LH_EXACT_SHA:0:8}."
     log "Installed exactly ${LH_EXACT_SHA:0:8}: $identity"
   fi
+  identity="$("$HOME/.local/bin/longhouse-server" --version 2>/dev/null || true)"
+  [[ "$identity" == *"+${LH_EXACT_SHA:0:8}"* ]] || fail "Installed longhouse-server reports '$identity', not ${LH_EXACT_SHA:0:8}."
+  log "longhouse-server exactly ${LH_EXACT_SHA:0:8}: $identity"
 }
 
 run_refresh() {
@@ -359,6 +376,7 @@ run_refresh() {
   else
     log "==> Skipping engine rebuild"
   fi
+  install_server_cli_from_source
 
   if [[ "$(uname -s)" == "Darwin" ]] && (( MENUBAR == 1 )); then
     SWIFT_BUILD_DIR="$(mktemp -d -t longhouse-dogfood-swift.XXXXXX)"
