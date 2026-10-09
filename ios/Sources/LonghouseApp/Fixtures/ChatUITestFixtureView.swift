@@ -6,7 +6,7 @@ import UIKit
 struct ChatUITestFixtureView: View {
     @EnvironmentObject private var appState: AppState
     private let fixtureName: String
-    private let client: ChatUITestWorkspaceClient
+    @State private var client: ChatUITestWorkspaceClient
     @StateObject private var viewModel: SessionViewModel
     @State private var probe: ChatUITestProbe
     @State private var navigationPath: [String] = []
@@ -30,7 +30,9 @@ struct ChatUITestFixtureView: View {
         let client = ChatUITestWorkspaceClient(fixture: fixture, sessionID: sessionID)
         self.fixtureName = fixtureName
         _showBackgroundSheet = State(initialValue: fixtureName.hasPrefix("background-tasks-") && fixtureName.hasSuffix("-sheet"))
-        self.client = client
+        // Keep button updates on the same actor retained by the StateObject's
+        // API factory when SwiftUI reconstructs this fixture view.
+        _client = State(initialValue: client)
         _probe = State(initialValue: ChatUITestProbe(path: UITestHooks.chatFixtureProbePath))
         // Every non-benchmark fixture shares one session ID, and the transcript
         // cache is durable. Left on the production store, whichever fixture ran

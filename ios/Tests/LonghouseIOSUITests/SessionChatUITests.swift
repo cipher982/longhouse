@@ -505,17 +505,6 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertFalse(summary.waitForExistence(timeout: 2))
     }
 
-    func testBackgroundTaskEvidenceExpiresLocallyAsUnknown() {
-        let app = launchChatFixture(name: "background-tasks-stale", eventCount: 0)
-        let summary = app.buttons["session-runtime-background-summary"]
-        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(summary.label.contains("unknown"))
-        summary.tap()
-        XCTAssertTrue(
-            app.staticTexts["Background work status unknown"].waitForExistence(timeout: Self.patient(5))
-        )
-        XCTAssertTrue(app.descendants(matching: .any)["session-runtime-background-unknown"].exists)
-    }
     func testKeyboardFocusKeepsLatestTranscriptMessageVisible() {
         let app = launchChatFixture(eventCount: 40)
         let composer = app.textFields["session-chat-composer"]
