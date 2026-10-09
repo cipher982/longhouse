@@ -423,3 +423,28 @@ def test_package_must_be_complete_before_canary_start(tmp_path: Path, monkeypatc
 
     with pytest.raises(codex_release_identity.RequestError, match="package members mismatch"):
         provider_qualification.run(_request(tmp_path, binary, identity), tmp_path / "output")
+
+
+def test_package_without_optional_zsh_is_accepted(tmp_path: Path) -> None:
+    package_root, binary, _identity = _package(tmp_path)
+    assert not (package_root / "codex-resources/zsh/bin/zsh").exists()
+
+    root, _digest, identities = profile._package_identity(str(package_root), binary)  # noqa: SLF001
+
+    assert root == package_root.resolve()
+    assert set(identities) == set(profile.PACKAGE_MEMBERS)
+
+
+def test_package_with_optional_zsh_is_accepted_and_hashed_into_identity(tmp_path: Path) -> None:
+    package_root, binary, _identity = _package(tmp_path)
+    _root, digest_without, _ = profile._package_identity(str(package_root), binary)  # noqa: SLF001
+    zsh = package_root / "codex-resources/zsh/bin/zsh"
+    zsh.parent.mkdir(parents=True, exist_ok=True)
+    zsh.write_text("codex-resources/zsh/bin/zsh", encoding="utf-8")
+    zsh.chmod(0o700)
+
+    _root, digest_with, identities = profile._package_identity(str(package_root), binary)  # noqa: SLF001
+
+    assert set(identities) == set(profile.PACKAGE_MEMBERS | profile.OPTIONAL_PACKAGE_MEMBERS)
+    assert "codex-resources/zsh/bin/zsh" in profile._EXECUTABLE_PACKAGE_MEMBERS  # noqa: SLF001
+    assert digest_with != digest_without

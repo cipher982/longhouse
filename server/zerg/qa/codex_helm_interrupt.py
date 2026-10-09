@@ -48,10 +48,14 @@ PACKAGE_MEMBERS = frozenset(
         "codex-package.json",
         "codex-path/rg",
         "codex-resources/bwrap",
-        "codex-resources/zsh/bin/zsh",
     }
 )
-_EXECUTABLE_PACKAGE_MEMBERS = PACKAGE_MEMBERS - {"codex-package.json"}
+# Present through rust-v0.162.x and dropped from the official package in the
+# rust-v0.163.0 alphas (2026-10-08). Admitted and hashed into the package
+# identity when present, never required. Exact paths only, matching
+# provider_factory/core.py OPTIONAL_PACKAGE_MEMBERS.
+OPTIONAL_PACKAGE_MEMBERS = frozenset({"codex-resources/zsh/bin/zsh"})
+_EXECUTABLE_PACKAGE_MEMBERS = (PACKAGE_MEMBERS | OPTIONAL_PACKAGE_MEMBERS) - {"codex-package.json"}
 # The official package carries the optional voice runtime as a resource closure
 # (first seen in openai/codex releases on 2026-09-15). Admit only this subtree,
 # matching provider_factory/core.py PACKAGE_MEMBER_PREFIXES, and hash it into
@@ -99,7 +103,7 @@ def _package_identity(raw_root: str, provider_bin: Path) -> tuple[Path, str, dic
         raise identity_bridge.RequestError(f"{PACKAGE_ROOT_ENV} must be an absolute non-symlink directory")
     root = root.resolve(strict=True)
     observed = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file() or path.is_symlink()}
-    optional = {name for name in observed if name.startswith(PACKAGE_MEMBER_PREFIXES)}
+    optional = {name for name in observed if name.startswith(PACKAGE_MEMBER_PREFIXES) or name in OPTIONAL_PACKAGE_MEMBERS}
     if observed - optional != PACKAGE_MEMBERS:
         missing = sorted(PACKAGE_MEMBERS - observed)
         unexpected = sorted(observed - optional - PACKAGE_MEMBERS)
