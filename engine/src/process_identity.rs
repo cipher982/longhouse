@@ -137,7 +137,12 @@ pub fn try_group_has_non_zombie(pgid: i32) -> Option<bool> {
     if !output.status.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+    group_has_non_zombie_in(&String::from_utf8_lossy(&output.stdout), pgid)
+}
+
+/// The parse behind [`try_group_has_non_zombie`]: `pgid stat` lines. Any line
+/// that does not parse makes the whole pass unusable.
+fn group_has_non_zombie_in(text: &str, pgid: i32) -> Option<bool> {
     let mut running = false;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
         let mut fields = line.split_whitespace();
@@ -584,6 +589,22 @@ pub fn owned_processes<'a>(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn group_membership_parse_counts_only_non_zombie_members() {
+        let text = "  41 Ss\n  41 Z\n  77 R+\n";
+        assert_eq!(group_has_non_zombie_in(text, 41), Some(true));
+        assert_eq!(group_has_non_zombie_in("  41 Z\n  77 S\n", 41), Some(false));
+        assert_eq!(
+            group_has_non_zombie_in("  41 T\n", 41),
+            Some(true),
+            "stopped is still a member"
+        );
+        assert_eq!(group_has_non_zombie_in("  77 S\n", 41), Some(false));
+        assert_eq!(group_has_non_zombie_in("garbage\n", 41), None);
+        assert_eq!(group_has_non_zombie_in("  41\n", 41), None);
+    }
+
     use super::*;
 
     #[test]

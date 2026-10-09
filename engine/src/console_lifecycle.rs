@@ -1082,7 +1082,9 @@ async fn stop_invocation_group(
     claim: &crate::turn_claims::TurnClaim,
     process_group_id: i32,
 ) -> (InvocationCleanup, Option<String>) {
-    if !crate::process_group::group_is_alive(process_group_id) {
+    // A group whose only members are unreaped zombies has stopped; the monitor
+    // reaps the leader on its next poll.
+    if !crate::process_group::group_has_running_member(process_group_id) {
         return (InvocationCleanup::Complete, None);
     }
     let verified = claim.process_group_id == Some(process_group_id)
@@ -1090,7 +1092,9 @@ async fn stop_invocation_group(
         && crate::process_identity::try_collect_process_facts_by_pid()
             .is_some_and(|inventory| claim.has_live_group_identity(&inventory));
     if !verified {
-        if crate::process_group::wait_for_group_exit(process_group_id, OWNER_REAP_SETTLE).await {
+        if crate::process_group::wait_for_group_exit(process_group_id, OWNER_REAP_SETTLE).await
+            || !crate::process_group::group_has_running_member(process_group_id)
+        {
             return (InvocationCleanup::Complete, None);
         }
         return (
@@ -1104,6 +1108,7 @@ async fn stop_invocation_group(
     let shutdown = crate::process_group::shutdown_group(process_group_id, Duration::ZERO).await;
     if shutdown.is_gone()
         || crate::process_group::wait_for_group_exit(process_group_id, OWNER_REAP_SETTLE).await
+        || !crate::process_group::group_has_running_member(process_group_id)
     {
         return (InvocationCleanup::Complete, None);
     }

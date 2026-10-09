@@ -355,6 +355,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_group_of_unreaped_zombies_has_no_running_member() {
+        // `ps` is resolved through PATH, which other tests may point elsewhere.
+        let _guard = crate::console_adapter::agent_state_guard();
         let mut child = spawn_group_leader();
         let pid = child.id().expect("test child pid");
         let pgid = leader_group_for(pid).expect("test child leads its group");
