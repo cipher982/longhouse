@@ -55,11 +55,12 @@ impl InvocationCleanup {
 }
 
 /// The cleanup a restart-recovery close can prove when it publishes: complete
-/// only when a recorded process group is gone. With no recorded group, or one
-/// still alive, nothing proves the processes are gone.
+/// only when a recorded process group has no running member (unreaped zombies
+/// have stopped). With no recorded group, or one still running, nothing proves
+/// the processes are gone.
 pub fn recovered_invocation_cleanup(claim: &crate::turn_claims::TurnClaim) -> InvocationCleanup {
     match claim.process_group_id {
-        Some(pgid) if pgid > 0 && !crate::process_group::group_is_alive(pgid) => {
+        Some(pgid) if pgid > 0 && !crate::process_group::group_has_running_member(pgid) => {
             InvocationCleanup::Complete
         }
         _ => InvocationCleanup::Unverified,
