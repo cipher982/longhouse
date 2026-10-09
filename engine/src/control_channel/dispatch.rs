@@ -1319,6 +1319,7 @@ pub(super) fn claude_channel_error_to_command_error(
         ClaudeChannelControlError::CommandFailed(message) => {
             CommandError::command_failed(anyhow!(message))
         }
+        ClaudeChannelControlError::TurnEnded(message) => CommandError::turn_ended(message),
     }
 }
 

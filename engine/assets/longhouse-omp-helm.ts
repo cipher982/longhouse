@@ -1300,12 +1300,15 @@ export default function (pi: any) {
       )
         throw new Error("OMP Helm input text must not be empty");
       if (kind === "send") {
-        if (providerIsIdle(ctx))
-          await Promise.resolve(pi.sendUserMessage(content));
-        else
-          await Promise.resolve(
-            pi.sendUserMessage(content, { deliverAs: "followUp" }),
+        // A busy turn's follow-up queue lives in this process and dies with
+        // it, so accepting into it is not delivery. Refuse; the Runtime Host
+        // keeps the durable receipt queued for the turn-boundary drain.
+        if (!providerIsIdle(ctx))
+          throw Object.assign(
+            new Error("OMP provider is mid-turn; send waits for the turn boundary"),
+            { code: "turn_active" },
           );
+        await Promise.resolve(pi.sendUserMessage(content));
       } else if (kind === "steer") {
         if (providerIsIdle(ctx))
           throw new Error("OMP provider has no active turn to steer");
@@ -1328,9 +1331,13 @@ export default function (pi: any) {
       reply.error = {
         code: !authorityMatches
           ? "stale_channel"
-          : kind === "steer" && providerIsIdle(ctx)
-            ? "turn_ended"
-            : "command_failed",
+          : typeof error === "object" &&
+              error !== null &&
+              (error as { code?: unknown }).code === "turn_active"
+            ? "turn_active"
+            : kind === "steer" && providerIsIdle(ctx)
+              ? "turn_ended"
+              : "command_failed",
         message: error instanceof Error ? error.message : String(error),
       };
     }

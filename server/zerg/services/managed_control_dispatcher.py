@@ -542,6 +542,17 @@ async def _dispatch_engine_channel(
             failure_kind=DISPATCH_FAILURE_PRECONDITION,
             failure_reason="control_unavailable",
         )
+    if code == "turn_active":
+        # The provider adapter refused a SEND because its turn started after
+        # the Runtime Host observed the boundary. Nothing reached the model;
+        # the durable receipt goes back to the queue for the boundary drain.
+        return ManagedControlDispatchResult(
+            ok=False,
+            transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+            error=error,
+            failure_kind=DISPATCH_FAILURE_PRECONDITION,
+            failure_reason="turn_active",
+        )
     if code == "turn_ended":
         return ManagedControlDispatchResult(
             ok=True,

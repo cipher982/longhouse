@@ -630,8 +630,18 @@ def test_pi_helm_follow_up_oracle_requires_active_native_input_delivery() -> Non
     }
 
     assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is False
-    observation["control_receipts"]["follow_up"]["command"]["path"] = "/api/agents/sessions/session/send-live"
+    observation["control_receipts"]["follow_up"]["command"]["path"] = "/api/agents/sessions/session/input"
+    observation["control_receipts"]["follow_up"]["result"] = {"queued_not_sent": True}
     assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is True
+
+    # Revision 7: the mid-turn send must be a durable queued receipt; the old
+    # send-live path, or a send the adapter accepted mid-turn, does not count.
+    observation["control_receipts"]["follow_up"]["result"] = {"queued_not_sent": False}
+    assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is False
+    observation["control_receipts"]["follow_up"]["result"] = {"queued_not_sent": True}
+    observation["control_receipts"]["follow_up"]["command"]["path"] = "/api/agents/sessions/session/send-live"
+    assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is False
+    observation["control_receipts"]["follow_up"]["command"]["path"] = "/api/agents/sessions/session/input"
 
     observation["control_receipts"]["follow_up"]["native"]["user_marker_rows"] = 0
     assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is False

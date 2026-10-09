@@ -2672,9 +2672,9 @@ async def _create_catalog_session_input_response(
     ):
         # Pi's native send owns the turn it starts, so it is reached only at an
         # observed turn boundary, with the SEND lock held and nothing older
-        # waiting. A mid-turn send would come back from Pi's volatile busy-turn
-        # queue, and a direct send ahead of a parked receipt would deliver this
-        # message out of order.
+        # waiting. A turn that started after that observation makes Pi refuse
+        # with turn_active, which requeues the receipt; a direct send ahead of
+        # a parked receipt would deliver this message out of order.
         return await _dispatch_provider_native_send(
             db=db,
             source_session=source_session,
@@ -2684,7 +2684,7 @@ async def _create_catalog_session_input_response(
             delivery_request_id=delivery_request_id,
             lock_scope_id=lock_scope_id,
             failure_code="pi_native_send_failed",
-            requeue_preconditions=frozenset(),
+            requeue_preconditions=frozenset({"turn_active"}),
         )
 
     if (
@@ -2693,9 +2693,10 @@ async def _create_catalog_session_input_response(
         and send_can_dispatch
     ):
         # Reached only at an observed turn boundary, with the SEND lock held and
-        # nothing older waiting. The OMP extension answers a mid-turn send from
-        # its volatile follow-up queue, which is not a delivery, so everything
-        # else takes the durable receipt path below.
+        # nothing older waiting. A turn that started after that observation
+        # makes the extension refuse with turn_active, which requeues the
+        # receipt for the boundary drain; everything else takes the durable
+        # receipt path below.
         return await _dispatch_provider_native_send(
             db=db,
             source_session=source_session,
@@ -2712,6 +2713,7 @@ async def _create_catalog_session_input_response(
                     "control_head_missing",
                     "lease_expired",
                     "identity_unbound",
+                    "turn_active",
                 }
             ),
         )

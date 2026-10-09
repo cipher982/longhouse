@@ -1062,6 +1062,45 @@ def test_engine_session_not_attached_is_retryable_control_unavailable(live_catal
     asyncio.run(_run())
 
 
+def test_adapter_busy_send_refusal_is_a_requeueable_precondition(live_catalog):  # noqa: F811
+    """An OMP/Pi adapter whose turn started after the boundary was observed
+    refuses the SEND with turn_active; nothing reached the model, so the
+    durable receipt must go back to the queue, not fail."""
+
+    session_id, _lease = _seed_lease_for_new_session()
+
+    async def _run():
+        websocket = await _connect_fake_engine(owner_id=42, supports=["codex.send"])
+        completer = asyncio.create_task(
+            _complete_first_machine_command(
+                websocket,
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "turn_active",
+                        "message": "OMP provider is mid-turn; send waits for the turn boundary",
+                    },
+                },
+            )
+        )
+        result = await dispatch_managed_control_command(
+            db=object(),
+            owner_id=42,
+            session=_session(id=session_id, source_runner_id=None),
+            timeout_secs=1,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            payload={"text": "continue"},
+            request_id="req-omp-busy",
+        )
+        await completer
+
+        assert result.ok is False
+        assert result.failure_kind == dispatcher_module.DISPATCH_FAILURE_PRECONDITION
+        assert result.failure_reason == "turn_active"
+
+    asyncio.run(_run())
+
+
 def test_dispatch_managed_control_command_rejects_malformed_engine_success(live_catalog):  # noqa: F811
     session_id, _lease = _seed_lease_for_new_session()
     database_path, _socket_path = catalogd_supervisor.catalogd_paths()

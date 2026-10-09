@@ -73,7 +73,7 @@ def _receipt(orm: Session, *, status: str = "delivering", attempts: int | None =
 
 @pytest.mark.parametrize(
     "reason",
-    ["control_unavailable", "connection_unavailable", "control_head_missing", "lease_expired"],
+    ["control_unavailable", "connection_unavailable", "control_head_missing", "lease_expired", "turn_active"],
 )
 def test_unconverged_control_preconditions_are_transient(reason: str):
     # These describe a control path that has not come back yet, and they do

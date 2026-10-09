@@ -2615,11 +2615,11 @@ mod tests {
             &test_config(),
         )
         .await;
-        assert_eq!(result["ok"], true);
-        let request = rx.recv().await.unwrap();
-        let body: Value = serde_json::from_str(&request.body).unwrap();
-        assert_eq!(body["content"], "course correct");
-        assert_eq!(body["meta"]["intent"], "steer");
+        // No turn is running, so the steer is refused with turn_ended (the
+        // Runtime Host offers "queue instead"), never injected as a message.
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "turn_ended");
+        assert!(rx.try_recv().is_err(), "a refused steer must not reach the channel");
 
         let result = handle_command_frame(
             json!({

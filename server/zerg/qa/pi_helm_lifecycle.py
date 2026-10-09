@@ -84,7 +84,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=6,
+    scenario_revision=7,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -714,6 +714,39 @@ def _stale_frame(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _send_input(url: str, token: str, session_id: str, text: str, *, timeout: float = 30) -> dict[str, Any]:
+    """Submit a SEND through the durable input route, as every client does.
+
+    Revision 7: a mid-turn SEND is a durable receipt the turn-boundary drain
+    delivers; the adapter refuses it while busy rather than holding it in its
+    volatile follow-up queue. The Runtime Host answers "queued".
+    """
+
+    request = Request(
+        f"{url.rstrip('/')}/api/agents/sessions/{session_id}/input",
+        data=json.dumps({"text": text, "intent": "auto", "client_request_id": f"pi-helm-follow-up-{os.urandom(8).hex()}"}).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-Agents-Token": token,
+            "User-Agent": _RUNTIME_HOST_USER_AGENT,
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read(4096).decode("utf-8", "replace")[:1000]
+        except OSError:
+            detail = ""
+        raise _RuntimeHostHTTPError(exc.code, detail) from exc
+    outcome = payload.get("outcome") if isinstance(payload, dict) else None
+    if outcome not in {"queued", "sent"}:
+        raise RuntimeError(f"Runtime Host did not accept Pi follow-up: {payload}")
+    return {"accepted": True, "outcome": outcome, "queued_not_sent": outcome == "queued", "response": payload}
+
+
 def _send_live(url: str, token: str, session_id: str, text: str, *, timeout: float = 30) -> dict[str, Any]:
     request = Request(
         f"{url.rstrip('/')}/api/agents/sessions/{session_id}/send-live",
@@ -1050,7 +1083,8 @@ def pi_helm_lifecycle_assertions(observation: dict[str, Any]) -> dict[str, bool]
             and follow_command.get("method") == "POST"
             and isinstance(follow_command.get("path"), str)
             and follow_command["path"].startswith("/api/agents/sessions/")
-            and follow_command["path"].endswith("/send-live")
+            and follow_command["path"].endswith("/input")
+            and (follow_receipt.get("result") or {}).get("queued_not_sent") is True
             and isinstance(follow_marker, str)
             and follow_command.get("text") == f"After this turn, reply with {follow_marker}."
             and follow_native.get("user_marker_rows") == 1
@@ -1372,7 +1406,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         follow_marker = f"PI_HELM_FOLLOW_{os.urandom(8).hex()}"
         follow_offset = session_file.stat().st_size
         follow_submitted_while_active = active["accepted"] and bool(active_state) and active_state.get("phase") in {"running", "thinking"}
-        follow = _send_live(
+        follow = _send_input(
             str(args.api_url),
             str(args.agents_token),
             session_id,
@@ -1502,7 +1536,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                 current_state,
                 command={
                     "method": "POST",
-                    "path": f"/api/agents/sessions/{session_id}/send-live",
+                    "path": f"/api/agents/sessions/{session_id}/input",
                     "text": f"After this turn, reply with {follow_marker}.",
                 },
                 accepted=follow.get("accepted") is True,

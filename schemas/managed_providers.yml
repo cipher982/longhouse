@@ -2509,6 +2509,7 @@ providers:
         id: pi_helm_steer_active
       - <<: *pi_helm_lifecycle_assertion
         id: pi_helm_follow_up_native
+        minimum_scenario_revision: 7
       - <<: *pi_helm_lifecycle_assertion
         id: pi_helm_abort_native
       - <<: *pi_helm_lifecycle_assertion
@@ -2986,6 +2987,7 @@ providers:
         id: omp_helm_send_idle
       - <<: *omp_helm_lifecycle_assertion
         id: omp_helm_follow_up_native
+        minimum_scenario_revision: 12
       - <<: *omp_helm_lifecycle_assertion
         id: omp_helm_steer_active
       - <<: *omp_helm_lifecycle_assertion

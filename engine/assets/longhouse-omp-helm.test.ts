@@ -720,3 +720,99 @@ describe("peerLine", () => {
     );
   });
 });
+
+describe("busy send", () => {
+  it("refuses a send while a turn runs instead of queueing it in memory", async () => {
+    mkdirSync(channelDir, { recursive: true });
+    const frames: Record<string, unknown>[] = [];
+    const sockets: Socket[] = [];
+    const server = createServer((socket) => {
+      sockets.push(socket);
+      let buffer = "";
+      socket.on("data", (chunk) => {
+        buffer += chunk.toString("utf8");
+        let newline = buffer.indexOf("\n");
+        while (newline >= 0) {
+          const frame = JSON.parse(buffer.slice(0, newline));
+          buffer = buffer.slice(newline + 1);
+          newline = buffer.indexOf("\n");
+          frames.push(frame);
+          if (frame.kind === "extension_hello") {
+            socket.write(
+              `${JSON.stringify({ kind: "extension_ready", ok: true, connection_id: "c1", lease_generation: "g1" })}\n`,
+            );
+          }
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(channelPath, resolve));
+    const handlers: Record<
+      string,
+      (event: Record<string, unknown>, ctx: unknown) => Promise<unknown>
+    > = {};
+    const sent: Array<[unknown, unknown]> = [];
+    registerExtension({
+      on: (name: string, handler: (typeof handlers)[string]) => {
+        handlers[name] = handler;
+      },
+      sendUserMessage: (content: unknown, options: unknown) => {
+        sent.push([content, options]);
+      },
+    });
+    let idle = false;
+    const ctx = {
+      isIdle: () => idle,
+      sessionManager: {
+        getSessionId: () => "native-1",
+        getSessionFile: () => join(channelDir, "session.jsonl"),
+      },
+    };
+    const command = async (requestId: string) => {
+      const authority = [...frames]
+        .reverse()
+        .find((frame) => typeof frame.auth_token === "string" && frame.connection_id === "c1")!;
+      sockets[0].write(
+        `${JSON.stringify({
+          kind: "send",
+          request_id: requestId,
+          text: "hello",
+          auth_token: authority.auth_token,
+          session_id: authority.session_id,
+          native_session_id: authority.native_session_id,
+          session_file: authority.session_file,
+          connection_id: authority.connection_id,
+          lease_generation: authority.lease_generation,
+        })}\n`,
+      );
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const reply = frames.find(
+          (frame) => frame.kind === "command_result" && frame.request_id === requestId,
+        );
+        if (reply) return reply;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error(`no command_result for ${requestId}`);
+    };
+    try {
+      await handlers.session_start({ type: "session_resume" }, ctx);
+      for (let attempt = 0; attempt < 50 && !frames.some((f) => f.connection_id === "c1"); attempt += 1)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const busy = await command("busy-send");
+      expect(busy.ok).toBe(false);
+      expect((busy.error as Record<string, unknown>).code).toBe("turn_active");
+      expect(sent.length).toBe(0);
+
+      idle = true;
+      const delivered = await command("idle-send");
+      expect(delivered.ok).toBe(true);
+      expect(sent.length).toBe(1);
+      expect(sent[0][1]).toBeUndefined();
+    } finally {
+      await handlers.session_shutdown({ type: "session_shutdown" }, ctx);
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(resolve));
+      rmSync(channelDir, { recursive: true, force: true });
+    }
+  });
+});

@@ -93,7 +93,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
     producer_revision=10,
     scenario_id=SCENARIO_ID,
-    scenario_revision=11,
+    scenario_revision=12,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -229,6 +229,7 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             and follow_up.get("native_source_bound") is True
             and follow_up.get("marker_count") == 1
             and follow_up.get("channel_ack_bound") is True
+            and follow_up.get("queued_not_sent") is True
         ),
         "omp_helm_steer_active": (
             observation.get("steer_active") is True
@@ -2151,6 +2152,12 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             active_state.get("phase") in {"running", "thinking"} and active_command_evidence["channel_ack_bound"]
         )
         follow_up_evidence["follow_up_delivery"] = follow_up_command_evidence["channel_ack_bound"]
+        # Revision 12: a mid-turn SEND is a durable receipt delivered by the
+        # turn-boundary drain, never an acknowledged entry in the extension's
+        # volatile follow-up queue. The Runtime Host answers "queued"; "sent"
+        # would mean the provider accepted it mid-turn.
+        follow_up_payload = follow_up.get("payload")
+        follow_up_evidence["queued_not_sent"] = isinstance(follow_up_payload, Mapping) and follow_up_payload.get("outcome") == "queued"
         follow_up_evidence.update(_channel_command_evidence(follow_up, current_state))
         follow_up_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
         controls["follow_up"] = {
@@ -2166,6 +2173,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         }
         observation["follow_up_native"] = (
             follow_up_evidence["active_command_bound"]
+            and follow_up_evidence["queued_not_sent"]
             and follow_up_evidence["follow_up_delivery"]
             and follow_up_evidence["channel_ack_bound"]
             and follow_up_evidence["native_source_bound"]

@@ -237,6 +237,11 @@ export default function (pi: ExtensionAPI) {
     write(sessionFrame({ kind: "activity", phase, tool_name: toolName }, ctx));
   };
 
+  const turnActive = (provider: string) =>
+    Object.assign(new Error(`${provider} provider is mid-turn; send waits for the turn boundary`), { code: "turn_active" });
+  const isTurnActive = (error: unknown) =>
+    typeof error === "object" && error !== null && (error as { code?: unknown }).code === "turn_active";
+
   const handleCommand = async (command: Frame, ctx: ExtensionContext) => {
     const requestId = typeof command.request_id === "string" ? command.request_id : "";
     const kind = command.kind;
@@ -248,14 +253,11 @@ export default function (pi: ExtensionAPI) {
         throw new Error("Pi Helm input text must not be empty");
       }
       if (kind === "send") {
-        if (ctx.isIdle()) {
-          await Promise.resolve(pi.sendUserMessage(content, { expandPromptTemplates: false }));
-        } else {
-          await Promise.resolve(pi.sendUserMessage(content, {
-            deliverAs: "followUp",
-            expandPromptTemplates: false,
-          }));
-        }
+        // A busy turn's follow-up queue lives in this process and dies with
+        // it, so accepting into it is not delivery. Refuse; the Runtime Host
+        // keeps the durable receipt queued for the turn-boundary drain.
+        if (!ctx.isIdle()) throw turnActive("Pi");
+        await Promise.resolve(pi.sendUserMessage(content, { expandPromptTemplates: false }));
       } else if (kind === "steer") {
         if (ctx.isIdle()) throw new Error("Pi provider has no active turn to steer");
         await Promise.resolve(pi.sendUserMessage(content, { deliverAs: "steer", expandPromptTemplates: false }));
@@ -274,7 +276,7 @@ export default function (pi: ExtensionAPI) {
       };
     } catch (error) {
       reply.error = {
-        code: kind === "steer" && ctx.isIdle() ? "turn_ended" : "command_failed",
+        code: isTurnActive(error) ? "turn_active" : kind === "steer" && ctx.isIdle() ? "turn_ended" : "command_failed",
         message: error instanceof Error ? error.message : String(error),
       };
     }

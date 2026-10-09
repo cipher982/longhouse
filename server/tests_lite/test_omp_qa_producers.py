@@ -1731,7 +1731,12 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
             "session_file_present": True,
         },
         "send_evidence": {"native_source_bound": True, "marker_count": 1, "channel_ack_bound": True},
-        "follow_up_evidence": {"native_source_bound": True, "marker_count": 1, "channel_ack_bound": True},
+        "follow_up_evidence": {
+            "native_source_bound": True,
+            "marker_count": 1,
+            "channel_ack_bound": True,
+            "queued_not_sent": True,
+        },
         "steer_evidence": {
             "native_source_bound": True,
             "marker_count": 1,
@@ -1778,6 +1783,10 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
     assert omp_helm_lifecycle_assertions(observation)["omp_helm_launch_registration"] is False
     observation["abort_evidence"]["terminal"] = False
     assert omp_helm_lifecycle_assertions(observation)["omp_helm_abort_native"] is False
+    # A mid-turn send the provider accepted ("sent") came from its volatile
+    # follow-up queue, not the durable receipt drain.
+    observation["follow_up_evidence"]["queued_not_sent"] = False
+    assert omp_helm_lifecycle_assertions(observation)["omp_helm_follow_up_native"] is False
 
 
 def test_omp_runtime_control_identity_rejects_missing_owner_fields() -> None:

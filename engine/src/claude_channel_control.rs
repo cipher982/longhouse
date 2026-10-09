@@ -28,6 +28,11 @@ pub enum ClaudeChannelControlError {
     SessionNotAttached { session_id: String, message: String },
     #[error("Claude channel command failed: {0}")]
     CommandFailed(String),
+    /// A steer arrived with no running turn. Refused rather than injected as an
+    /// ordinary message: the sender chose STEER, and the Runtime Host answers
+    /// this code with "queue instead".
+    #[error("{0}")]
+    TurnEnded(String),
 }
 
 #[derive(Clone, Debug)]
@@ -182,7 +187,12 @@ pub async fn send_text(
             }
             let _ = std::fs::remove_file(&steer_path);
         }
-        // No running turn: the steer is an ordinary message.
+        // No running turn. The Runtime Host only dispatches a steer it saw as
+        // active, so the turn ended in between; refuse instead of turning the
+        // steer into an ordinary message the sender did not choose.
+        return Err(ClaudeChannelControlError::TurnEnded(
+            "Claude has no active turn to steer".to_string(),
+        ));
     }
 
     inject(port, &auth_token, &config.text, meta).await?;
@@ -963,7 +973,7 @@ mod tests {
         send_text(ClaudeChannelSendConfig {
             session_id: SESSION_ID.to_string(),
             text: "course correct".to_string(),
-            meta: vec![("intent".to_string(), "steer".to_string())],
+            meta: vec![("intent".to_string(), "queue".to_string())],
             state_root: Some(temp.path().to_path_buf()),
             wait_timeout: None,
         })
@@ -972,7 +982,42 @@ mod tests {
 
         let request = rx.await.unwrap();
         assert_eq!(request.body["content"], "course correct");
-        assert_eq!(request.body["meta"]["intent"], "steer");
+        assert_eq!(request.body["meta"]["intent"], "queue");
+    }
+
+    /// A steer that arrives after the turn ended is refused, never injected as
+    /// an ordinary message the sender did not choose.
+    #[tokio::test]
+    async fn steer_without_a_running_turn_is_refused_not_injected() {
+        let temp = tempfile::tempdir().unwrap();
+        let (port, rx) = spawn_inject_server("204 No Content").await;
+        write_state(
+            temp.path(),
+            SESSION_ID,
+            json!({
+                "auth_token": "secret-token",
+                "port": port,
+                "ready": true,
+            }),
+        );
+
+        let error = send_text(ClaudeChannelSendConfig {
+            session_id: SESSION_ID.to_string(),
+            text: "course correct".to_string(),
+            meta: vec![("intent".to_string(), "steer".to_string())],
+            state_root: Some(temp.path().to_path_buf()),
+            wait_timeout: None,
+        })
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, ClaudeChannelControlError::TurnEnded(_)));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), rx)
+                .await
+                .is_err(),
+            "a refused steer must not reach the channel"
+        );
     }
 
     #[tokio::test]

@@ -535,6 +535,9 @@ _RETRYABLE_PRECONDITIONS = frozenset(
         "control_head_missing",
         "lease_expired",
         "identity_unbound",
+        # The adapter saw its turn running and refused the SEND; the boundary
+        # the drain waits for has simply not arrived yet.
+        "turn_active",
     }
 )
 

@@ -589,6 +589,32 @@ class _TurnEndedMachineWebSocket:
         )
 
 
+class _TurnActiveMachineWebSocket:
+    """Fake Machine Agent whose OMP/Pi adapter refuses a SEND as mid-turn.
+
+    The turn started after the Runtime Host observed the boundary, so the
+    adapter answers turn_active instead of parking the text in its volatile
+    follow-up queue.
+    """
+
+    def __init__(self):
+        self.sent: list[dict[str, object]] = []
+
+    async def send_json(self, message):
+        self.sent.append(message)
+        await get_machine_control_channel_registry().complete_command(
+            {
+                "type": "command_result",
+                "command_id": message["command_id"],
+                "ok": False,
+                "error": {
+                    "code": "turn_active",
+                    "message": "OMP provider is mid-turn; send waits for the turn boundary",
+                },
+            }
+        )
+
+
 async def _clear_machine_control_registry() -> None:
     await get_machine_control_channel_registry().clear_for_tests()
 
@@ -1096,6 +1122,49 @@ def test_omp_auto_input_uses_the_native_send_path_under_the_send_lock(live_catal
         provider="omp",
         support="omp.send",
     )
+
+
+def test_omp_busy_send_refusal_keeps_the_receipt_queued(live_catalog, live_catalog_client):  # noqa: F811
+    """The adapter's turn started after the observed boundary: it refuses with
+    turn_active, and the durable receipt goes back to the queue for the
+    turn-boundary drain instead of being reported sent or failed."""
+
+    email = "live-omp-busy-send@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    device_id = "omp-busy-machine"
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="omp", device_id=device_id)
+    websocket = _TurnActiveMachineWebSocket()
+    asyncio.run(
+        get_machine_control_channel_registry().register(
+            owner_id=owner_id,
+            device_id=device_id,
+            machine_name=device_id,
+            engine_build="test-engine",
+            supports=["omp.send"],
+            websocket=websocket,
+        )
+    )
+    try:
+        response = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "after this turn", "intent": "auto", "client_request_id": "omp-busy-send-1"},
+            cookies=cookies,
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["outcome"] == "queued"
+        assert len(websocket.sent) == 1
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="omp-busy-send-1",
+        )
+        assert receipt["status"] == INPUT_STATUS_QUEUED
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
 
 
 def test_omp_disconnected_input_stays_queued_for_recovery(live_catalog, live_catalog_client):  # noqa: F811
