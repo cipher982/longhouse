@@ -518,21 +518,6 @@ pub fn session_file_path_in_session_dir(session_dir: &Path, source: &Path) -> bo
     })
 }
 
-/// Whether a materialized OMP source is directly in a configured session
-/// directory or in one native cwd-bucket beneath it.
-#[cfg(test)]
-pub fn source_is_in_session_dir(session_dir: &Path, source: &Path) -> bool {
-    if !session_file_path_in_session_dir(session_dir, source) {
-        return false;
-    }
-    let session_dir = crate::storage_v2_shipper::stable_source_path(session_dir);
-    let Some(parent) = source.parent() else {
-        return false;
-    };
-    crate::storage_v2_shipper::stable_source_path(parent) == session_dir
-        || is_session_path(&session_dir, source)
-}
-
 /// Longhouse identity is derived from OMP's opaque native id only. A native
 /// file move therefore keeps the same Longhouse session while its exact source
 /// path and source epoch remain independent facts.
@@ -1109,7 +1094,7 @@ mod tests {
             format!("{}\n", session_line("bucket-native")),
         )
         .unwrap();
-        assert!(source_is_in_session_dir(staging.path(), &bucket_source));
+        assert!(session_file_path_in_session_dir(staging.path(), &bucket_source));
     }
 
     #[test]
