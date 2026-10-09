@@ -1696,16 +1696,29 @@ mod tests {
         )
     }
 
+    /// Run with a scratch Longhouse home and none of the caller's Longhouse
+    /// identity. A test run from inside a managed agent session inherits
+    /// LONGHOUSE_MANAGED_SESSION_ID and friends, which make a "bare" session
+    /// look managed and change what the hook announces; every ambient
+    /// `LONGHOUSE_*` variable is set aside for the body and restored after.
     fn with_home<T>(home: &std::path::Path, body: impl FnOnce() -> T) -> T {
         let _guard = crate::console_adapter::agent_state_guard();
-        let previous = std::env::var_os("LONGHOUSE_HOME");
-        std::env::set_var("LONGHOUSE_HOME", home);
-        let result = body();
-        match previous {
-            Some(value) => std::env::set_var("LONGHOUSE_HOME", value),
-            None => std::env::remove_var("LONGHOUSE_HOME"),
+        let ambient: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os()
+            .filter(|(key, _)| key.to_string_lossy().starts_with("LONGHOUSE_"))
+            .collect();
+        for (key, _) in &ambient {
+            std::env::remove_var(key);
         }
-        result
+        std::env::set_var("LONGHOUSE_HOME", home);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+        std::env::remove_var("LONGHOUSE_HOME");
+        for (key, value) in &ambient {
+            std::env::set_var(key, value);
+        }
+        match result {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
     }
 
     fn outbox_files(home: &std::path::Path) -> Vec<String> {
