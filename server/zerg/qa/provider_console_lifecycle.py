@@ -2558,7 +2558,13 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             cancelled = (terminal.get("result") or {}).get("terminal_state") == "run_cancelled"
             process_dead = _wait_owned_processes_dead([terminal])
             post_marker = f"LH_{provider.upper()}_POST_INTERRUPT_{uuid4().hex}"
-            post_message = f"Reply with exactly {post_marker} and nothing else."
+            # The interrupted request stays in the transcript; a small model can resume it
+            # (OMP 2026-10-09 15:09Z re-ran `sleep 8` and answered the old marker), so the
+            # follow-up cancels it explicitly. Interrupt delivery itself is asserted above.
+            post_message = (
+                "The previous request was cancelled: do not run it or any other command. "
+                f"Reply with exactly {post_marker} and nothing else."
+            )
             post_request_id = f"console-post-interrupt-{uuid4()}"
             post = _start_turn(
                 api_url=api_url,

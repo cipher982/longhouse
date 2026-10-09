@@ -204,7 +204,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0260e175640e344a031e15accf065cafb87083d82c6359b314c94a1ab522a815"
+              "oracle_digest": "b62d1b4ad2944f8707ee7c562940ac444ff183553fe43b9ffc65228b3872ca26"
             }
           ]
         },
@@ -232,7 +232,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0260e175640e344a031e15accf065cafb87083d82c6359b314c94a1ab522a815"
+              "oracle_digest": "b62d1b4ad2944f8707ee7c562940ac444ff183553fe43b9ffc65228b3872ca26"
             }
           ]
         },
@@ -1340,7 +1340,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0260e175640e344a031e15accf065cafb87083d82c6359b314c94a1ab522a815"
+              "oracle_digest": "b62d1b4ad2944f8707ee7c562940ac444ff183553fe43b9ffc65228b3872ca26"
             }
           ]
         },
@@ -1368,7 +1368,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0260e175640e344a031e15accf065cafb87083d82c6359b314c94a1ab522a815"
+              "oracle_digest": "b62d1b4ad2944f8707ee7c562940ac444ff183553fe43b9ffc65228b3872ca26"
             },
             {
               "id": "real_print_marker_returned",
@@ -2090,7 +2090,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0260e175640e344a031e15accf065cafb87083d82c6359b314c94a1ab522a815"
+              "oracle_digest": "b62d1b4ad2944f8707ee7c562940ac444ff183553fe43b9ffc65228b3872ca26"
             }
           ]
         },
@@ -2118,7 +2118,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0260e175640e344a031e15accf065cafb87083d82c6359b314c94a1ab522a815"
+              "oracle_digest": "b62d1b4ad2944f8707ee7c562940ac444ff183553fe43b9ffc65228b3872ca26"
             }
           ]
         },
@@ -3253,7 +3253,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0260e175640e344a031e15accf065cafb87083d82c6359b314c94a1ab522a815"
+              "oracle_digest": "b62d1b4ad2944f8707ee7c562940ac444ff183553fe43b9ffc65228b3872ca26"
             }
           ]
         },
