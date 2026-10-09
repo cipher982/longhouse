@@ -570,7 +570,10 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
         state_file = Path(str(summary.get("state_file") or ""))
         if not session_id or not ws_url or not state_file.is_file():
             raise RuntimeError("post-compaction bridge did not return its typed control state")
-        seed_marker = f"LONGHOUSE_COORD_COMPACT_SEED_{uuid.uuid4().hex}"
+        # 12 hex characters are unique within a run and short enough to echo: a
+        # 32-character marker was echoed with one character dropped (factory
+        # 2026-10-09 16:16Z) after the model had already called inbox.
+        seed_marker = f"LONGHOUSE_COORD_COMPACT_SEED_{uuid.uuid4().hex[:12]}"
         state = _live_send_and_wait(
             args,
             isolation_root,
@@ -599,7 +602,7 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
             and compaction_receipt.get("item_type") == "contextCompaction"
         )
 
-        marker = f"LONGHOUSE_COORD_COMPACT_{uuid.uuid4().hex}"
+        marker = f"LONGHOUSE_COORD_COMPACT_{uuid.uuid4().hex[:12]}"
         state = _live_send_and_wait(
             args,
             isolation_root,
