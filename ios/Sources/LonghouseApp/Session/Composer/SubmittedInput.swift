@@ -223,10 +223,10 @@ enum UnrecordedInputs {
     }
 
     private nonisolated static let completionPrefixes = ["Background task finished: ", "Background agent finished: "]
-    /// A wake summary this long was cut by a producer: the engine keeps 180
-    /// scalars of a Claude task summary (claude_print.rs), catalogd 512
+    /// A wake summary of exactly these lengths was cut by a producer: the engine
+    /// keeps 180 scalars of a Claude task summary (claude_print.rs), catalogd 512
     /// (`_wake_trigger_summary`). Only then may it match a longer native result.
-    private nonisolated static let cappedSummaryScalars = 180
+    private nonisolated static let cappedSummaryScalars: Set<Int> = [180, 512]
 
     /// The server folds notification whitespace (`" ".join(value.split())`);
     /// the wake receipt is only stripped. Fold both so wrapped summaries compare.
@@ -249,7 +249,7 @@ enum UnrecordedInputs {
                   let at = receipt.createdAt.flatMap(LonghouseDateParser.parse)
             else { return nil }
             let summary = String(text.dropFirst(prefix.count))
-            return (id, foldedWhitespace(summary), summary.unicodeScalars.count >= cappedSummaryScalars, at)
+            return (id, foldedWhitespace(summary), cappedSummaryScalars.contains(summary.unicodeScalars.count), at)
         }
         let notices = events.compactMap { event -> (text: String, at: Date)? in
             guard event.isHeadBranch, event.interactionKind == "provider_notification",
