@@ -102,6 +102,7 @@ def describe_directed_input_delivery(directed_input: dict[str, Any], *, max_deli
         )
     elif status == "delivering":
         meaning = "Being handed to the target's provider now."
+        expires_at = None
     elif status == "delivered":
         meaning = "The target's provider accepted it. That is not proof the model read it; tail the target to confirm."
         expires_at = None
@@ -117,4 +118,5 @@ def describe_directed_input_delivery(directed_input: dict[str, Any], *, max_deli
         expires_at = None
     else:
         meaning = f"Delivery status {status or 'unknown'}. It stays readable in the target's inbox."
+        expires_at = None
     return {"state": status or "unknown", "meaning": meaning, "expires_at": expires_at}

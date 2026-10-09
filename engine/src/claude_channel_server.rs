@@ -305,11 +305,6 @@ fn registration_pending_payload(receipt: Option<&Value>) -> Value {
              authority yet. Registration is still being retried in the background; call this tool \
              again shortly.",
         ),
-        Some("recovered") => (
-            "recovered",
-            "Registration just recovered and this session's coordination authority is being handed \
-             over; call this tool again.",
-        ),
         Some("exhausted" | "stopped" | "abandoned") => (
             "stopped",
             "Registration recovery for this session has stopped, so these tools will not work in it. \

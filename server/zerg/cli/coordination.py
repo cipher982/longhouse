@@ -111,11 +111,11 @@ def _print_directed_input(item: dict) -> None:
     input_id = str(item.get("id") or "-")
     source_session_id = str(item.get("source_session_id") or "-")
     created_at = str(item.get("created_at") or "-")
-    receipt = item.get("input_receipt") if isinstance(item.get("input_receipt"), dict) else None
-    receipt_status = str(receipt.get("status") or "-") if receipt else "not-attempted"
+    delivery = item.get("delivery") if isinstance(item.get("delivery"), dict) else {}
+    delivery_state = str(delivery.get("state") or "-")
     text = str(item.get("text") or "").strip()
 
-    typer.secho(f"#{input_id}  {receipt_status}  {created_at}", fg=typer.colors.CYAN, bold=True)
+    typer.secho(f"#{input_id}  {delivery_state}  {created_at}", fg=typer.colors.CYAN, bold=True)
     typer.echo(f"  from: {source_session_id}")
     if text:
         typer.echo(f"  {text}")
@@ -371,16 +371,11 @@ def send(
     typer.echo(f"Input ID: {payload.get('id')}")
     typer.echo(f"From: {resolved_source_session_id}")
     typer.echo(f"To: {resolved_target_session_id}")
-    receipt = payload.get("input_receipt") if isinstance(payload.get("input_receipt"), dict) else None
-    status = receipt.get("status") if receipt else None
-    if status == "queued":
-        typer.echo("Delivery: queued — the target takes it at its next turn boundary.")
-    elif status == "delivered":
-        typer.echo("Delivery: delivered to the provider — read the target transcript to confirm the model received it.")
-    elif status:
-        typer.echo(f"Delivery: {status}")
-    else:
-        typer.echo("Delivery: not attempted")
+    delivery = payload.get("delivery") if isinstance(payload.get("delivery"), dict) else {}
+    expires_at = delivery.get("expires_at")
+    typer.echo(f"Delivery: {delivery.get('state') or 'unknown'} — {delivery.get('meaning') or 'no delivery facts returned'}")
+    if expires_at:
+        typer.echo(f"Expires: {expires_at}")
 
 
 def tail(
