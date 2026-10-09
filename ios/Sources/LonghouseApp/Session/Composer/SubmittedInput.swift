@@ -222,6 +222,8 @@ enum UnrecordedInputs {
         return shown
     }
 
+    private nonisolated static let completionPrefixes = ["Background task finished: ", "Background agent finished: "]
+
     /// Claude records a completion in its transcript and Longhouse separately
     /// records the wake that delivered it. Their DTOs have no shared task id.
     /// Only an unambiguous exact body within the delivery window is redundant.
@@ -229,11 +231,11 @@ enum UnrecordedInputs {
         receipts: [SessionInputReceipt],
         events: [SessionEvent]
     ) -> Set<String> {
-        let prefix = "Background task finished: "
         let wakes = receipts.compactMap { receipt -> (id: String, text: String, at: Date)? in
             guard receipt.origin == "wake",
                   let id = receipt.clientRequestId,
-                  let text = receipt.text, text.hasPrefix(prefix),
+                  let text = receipt.text,
+                  let prefix = completionPrefixes.first(where: { text.hasPrefix($0) }),
                   let at = receipt.createdAt.flatMap(LonghouseDateParser.parse)
             else { return nil }
             return (id, String(text.dropFirst(prefix.count)), at)
@@ -243,7 +245,11 @@ enum UnrecordedInputs {
                   let text = event.contentText,
                   let at = LonghouseDateParser.parse(event.timestamp)
             else { return nil }
-            return (text, at)
+            // catalogd.store._wake_trigger_summary keeps 512 Unicode scalars,
+            // not Swift graphemes. Compare that receipt summary while retaining
+            // the native row's complete result for expansion.
+            let summary = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (String(summary.unicodeScalars.prefix(512)), at)
         }
         // Observed receipt lag: 0.189–4.107 s; 5 s adds 0.893 s of margin.
         // Do not infer identity for repeated or differently worded completions.

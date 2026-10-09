@@ -429,6 +429,41 @@ struct SessionInputReconciliationTests {
     }
 
     @Test
+    func truncatedTaskAndAgentWakeSummariesKeepOneCompleteNativeResult() {
+        // The server's scalar boundary splits this multi-scalar emoji.
+        let summary = String(repeating: "x", count: 511) + "👩‍💻 full result beyond the receipt summary"
+        let receiptSummary = String(summary.unicodeScalars.prefix(512))
+        for prefix in ["Background task finished: ", "Background agent finished: "] {
+            let event = notification("native-long", text: summary, at: "2026-10-08T04:10:00Z")
+            let inputs = UnrecordedInputs.placedInputs(
+                receipts: [served("wake:long", text: prefix + receiptSummary, at: "2026-10-08T04:10:01Z", origin: "wake")],
+                userEvents: [], notificationEvents: [event], excluding: []
+            )
+            let rows = WebTranscriptView.payloadItems(
+                timelineItems: TimelineBuilder.build(events: [event]), submittedInputs: inputs
+            )
+            #expect(rows.map(\.body) == [summary])
+        }
+    }
+
+    @Test
+    func identicalTruncatedSummariesDoNotCollapseDifferentNativeResults() {
+        let shared = String(repeating: "x", count: 512)
+        let events = [
+            notification("native-a", text: shared + " result A", at: "2026-10-08T04:10:00Z"),
+            notification("native-b", text: shared + " result B", at: "2026-10-08T04:10:01Z"),
+        ]
+        let inputs = UnrecordedInputs.placedInputs(
+            receipts: [served("wake:ambiguous", text: "Background task finished: " + shared, at: "2026-10-08T04:10:02Z", origin: "wake")],
+            userEvents: [], notificationEvents: events, excluding: []
+        )
+        let rows = WebTranscriptView.payloadItems(
+            timelineItems: TimelineBuilder.build(events: events), submittedInputs: inputs
+        )
+        #expect(rows.map(\.body) == [shared + " result A", shared + " result B", "Background task finished: " + shared])
+    }
+
+    @Test
     func ambiguousOrOutOfWindowCompletionsNeverEraseWakeEvidence() {
         let body = "Repeated command completed"
         let receipts = [
