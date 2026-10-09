@@ -100,7 +100,7 @@ extension WebTranscriptView {
             Self.payloadItem($0, serverURL: serverURL, subagents: subagents, liteBodies: liteBodies)
         }
         guard !visibleSubmittedInputs.isEmpty else {
-            return timelineItems.map(payloadItem)
+            return collapsingProviderNotifications(timelineItems.map(payloadItem))
         }
 
         // A served receipt the transcript lacks stands at its send time
@@ -134,7 +134,36 @@ extension WebTranscriptView {
 
         rows.append(contentsOf: placedInputs.map(payloadSubmittedInput))
         rows.append(contentsOf: remainingSubmittedInputs.map(payloadSubmittedInput))
-        return rows
+        return collapsingProviderNotifications(rows)
+    }
+
+    /// Consecutive background completions read as one row with a count, placed
+    /// at the latest one. Each completion used to add its own row, so a burst of
+    /// them buried the reply under a pile. A message or input between two of them
+    /// keeps them apart.
+    nonisolated static func collapsingProviderNotifications(_ rows: [WebTranscriptPayloadItem]) -> [WebTranscriptPayloadItem] {
+        var collapsed: [WebTranscriptPayloadItem] = []
+        var run: [WebTranscriptPayloadItem] = []
+        func flush() {
+            guard let latest = run.last else { return }
+            if run.count == 1 {
+                collapsed.append(latest)
+            } else {
+                let text = latest.body ?? "Background task finished"
+                collapsed.append(providerNotificationPayload(id: latest.id, text: "\(text) (\(run.count) updates)"))
+            }
+            run.removeAll()
+        }
+        for row in rows {
+            if row.kind == "providerNotification" {
+                run.append(row)
+            } else {
+                flush()
+                collapsed.append(row)
+            }
+        }
+        flush()
+        return collapsed
     }
 
     private nonisolated static func liveProvisionalAssistantDate(_ item: TimelineItem) -> Date? {

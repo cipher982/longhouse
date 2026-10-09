@@ -143,6 +143,20 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertNil(rows.first?.role)
     }
 
+    func testConsecutiveBackgroundCompletionsCollapseToOneCountedRowAtTheLatest() {
+        let rows = WebTranscriptView.payloadItems(
+            timelineItems: [],
+            submittedInputs: [
+                makeSubmittedInput(text: "Background task finished: lint", clientRequestId: "wake:1:1", serverInputId: nil, origin: "wake"),
+                makeSubmittedInput(text: "Background task finished: tests", clientRequestId: "wake:2:1", serverInputId: nil, origin: "wake"),
+                makeSubmittedInput(text: "Background task finished: build", clientRequestId: "wake:3:1", serverInputId: nil, origin: "wake"),
+            ]
+        )
+        XCTAssertEqual(rows.map(\.kind), ["providerNotification"])
+        XCTAssertEqual(rows.first?.id, "wake:3:1", "the collapsed row stands at the latest completion")
+        XCTAssertEqual(rows.first?.body, "Background task finished: build (3 updates)")
+    }
+
     func testWakeAndLonghouseCloseReceiptsRenderAsProviderNotifications() {
         let wakeText = "Background task finished: the branch is ready"
         let receiptRows = WebTranscriptView.payloadItems(
