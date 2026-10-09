@@ -534,11 +534,13 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         .session_id
         .clone();
     // Only this session's own coordination authority may act here. The device
-    // token is owner-wide, so falling back to it would let a coordination call
-    // pass as the owner; a session without authority yet gets a typed refusal.
+    // token is owner-wide: the Runtime Host refuses it for directed input, but
+    // it would still read any session's history on this session's behalf. A
+    // session without authority yet gets a typed refusal instead.
     let Some(request_token) = coordination_token() else {
         return registration_pending_result(id);
     };
+    let mut peers_repo: Option<String> = None;
     let config = match crate::config::ShipperConfig::from_env() {
         Ok(config) => config,
         Err(error) => return tool_result(id, json!({"error": error.to_string()})),
@@ -580,6 +582,7 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                     json!({"error":"peers requires repo or a current managed session cwd"}),
                 );
             };
+            peers_repo = Some(repo.clone());
             client
                 .get(format!("{base}/api/agents/sessions/wall"))
                 .query(&[
@@ -789,9 +792,21 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         Ok(response) => {
             let status = response.status().as_u16();
             match response.text().await {
-                Ok(text) if (200..300).contains(&status) => {
-                    tool_text_result(id, render_coordination_response(name, &text))
-                }
+                Ok(text) if (200..300).contains(&status) => match peers_repo.as_deref() {
+                    Some(repo) => tool_text_result(
+                        id,
+                        render_peers(
+                            &text,
+                            repo,
+                            session_id.as_deref(),
+                            arguments
+                                .get("active_only")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(true),
+                        ),
+                    ),
+                    None => tool_text_result(id, render_coordination_response(name, &text)),
+                },
                 Ok(text) => tool_result(
                     id,
                     json!({"error":format!("API returned {status}"),"detail":parse_json_or_text(&text)}),
@@ -831,6 +846,59 @@ async fn resolve_session_repo(
 
 fn parse_json_or_text(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))
+}
+
+/// Shape the wall into the peers answer the Python MCP and OMP give: the
+/// caller is not its own peer, and `active_only` (the default) keeps only
+/// sessions with live presence.
+fn render_peers(text: &str, repo: &str, current_session_id: Option<&str>, active_only: bool) -> String {
+    let Ok(payload) = serde_json::from_str::<Value>(text) else {
+        return text.to_string();
+    };
+    const FIELDS: [&str; 14] = [
+        "session_id",
+        "device_name",
+        "provider",
+        "cwd",
+        "git_repo",
+        "git_branch",
+        "summary_title",
+        "presence_state",
+        "kernel_control_label",
+        "kernel_live_control_available",
+        "kernel_host_reattach_available",
+        "kernel_observe_only",
+        "kernel_search_only",
+        "kernel_staleness_reason",
+    ];
+    let peers: Vec<Value> = payload
+        .get("sessions")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .filter(|item| {
+            current_session_id
+                .is_none_or(|current| item.get("session_id").and_then(Value::as_str) != Some(current))
+        })
+        .filter(|item| {
+            !active_only
+                || item
+                    .get("has_live_presence")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        })
+        .map(|item| {
+            Value::Object(
+                FIELDS
+                    .iter()
+                    .map(|field| (field.to_string(), item.get(*field).cloned().unwrap_or(Value::Null)))
+                    .collect(),
+            )
+        })
+        .collect();
+    json!({"repo": repo, "active_only": active_only, "total": peers.len(), "peers": peers})
+        .to_string()
 }
 
 fn render_coordination_response(name: &str, text: &str) -> String {
@@ -1829,6 +1897,28 @@ mod tests {
                 assert_eq!(coordination_token().as_deref(), Some("late-session-secret"));
             },
         );
+    }
+
+    /// peers leaves out the caller and, by default, sessions without live presence.
+    #[test]
+    fn peers_excludes_the_caller_and_honours_active_only() {
+        let wall = json!({"sessions": [
+            {"session_id": "self", "has_live_presence": true, "provider": "claude"},
+            {"session_id": "live", "has_live_presence": true, "provider": "codex", "internal": 1},
+            {"session_id": "ended", "has_live_presence": false, "provider": "omp"},
+        ]})
+        .to_string();
+        let live: Value =
+            serde_json::from_str(&render_peers(&wall, "repo", Some("self"), true)).unwrap();
+        assert_eq!(live["total"], 1);
+        assert_eq!(live["peers"][0]["session_id"], "live");
+        assert_eq!(live["peers"][0]["provider"], "codex");
+        assert!(live["peers"][0].get("internal").is_none());
+        let all: Value =
+            serde_json::from_str(&render_peers(&wall, "repo", Some("self"), false)).unwrap();
+        assert_eq!(all["total"], 2);
+        assert_eq!(all["active_only"], false);
+        assert_eq!(all["repo"], "repo");
     }
 
     /// The launcher's explicit role wins over token presence in both directions.

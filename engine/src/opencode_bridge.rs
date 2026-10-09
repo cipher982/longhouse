@@ -228,9 +228,9 @@ fn opencode_mcp_config(
     coordination_token_file: Option<&Path>,
     model: Option<&str>,
 ) -> serde_json::Value {
-    // Omit the variable entirely when this launch holds no authority. An empty
-    // string would look like a credential to the channel server; an absent one
-    // makes it fail closed.
+    // A launch without authority gets no token variable (an empty string would
+    // look like a credential); it names the launcher's late-token file instead,
+    // and calls answer registration_pending until that file is written.
     let mut environment = json!({
         crate::claude_channel_server::MCP_ROLE_ENV: crate::claude_channel_server::MCP_ROLE_COORDINATION,
         "LONGHOUSE_MANAGED_SESSION_ID": session_id,
