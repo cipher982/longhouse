@@ -123,6 +123,27 @@ pub fn group_is_alive(pgid: i32) -> bool {
     live_group_probe(pgid)
 }
 
+/// Whether `pgid` still has a member that is not a zombie.
+///
+/// [`group_is_alive`] answers for a zombie, so a leader this engine owns reads
+/// as alive from the moment it exits until its owning task reaps it. Code that
+/// verifies a stop without holding the `Child` (the OMP Console interrupt path
+/// does: the invocation loop owns the child and reaps it on its next
+/// `try_wait`) would report a stopped group as running. A group whose only
+/// members are zombies has stopped. When the process inventory is unavailable
+/// this falls back to [`group_is_alive`], the safe direction.
+pub fn group_has_running_member(pgid: i32) -> bool {
+    if !group_is_alive(pgid) {
+        return false;
+    }
+    match crate::process_identity::try_collect_process_lineage() {
+        Some(entries) => entries
+            .iter()
+            .any(|entry| entry.pgid == pgid && !entry.stat.starts_with('Z')),
+        None => true,
+    }
+}
+
 #[cfg(unix)]
 fn live_group_probe(pgid: i32) -> bool {
     // EPERM means the group exists but is not ours, which still counts as alive.
@@ -335,6 +356,33 @@ mod tests {
             });
         }
         command.spawn().expect("spawn test group leader")
+    }
+
+    #[tokio::test]
+    async fn a_group_of_unreaped_zombies_has_no_running_member() {
+        let mut child = spawn_group_leader();
+        let pid = child.id().expect("test child pid");
+        let pgid = leader_group_for(pid).expect("test child leads its group");
+        assert!(group_has_running_member(pgid));
+
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
+        // The leader is our child and is not reaped yet: killpg(_, 0) still
+        // answers for it, but nothing in the group is running.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while group_has_running_member(pgid) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+        assert!(
+            group_is_alive(pgid),
+            "the unreaped leader should still answer killpg"
+        );
+        assert!(!group_has_running_member(pgid), "only zombies remain");
+
+        let _ = child.wait().await;
+        assert!(!group_is_alive(pgid));
+        assert!(!group_has_running_member(pgid));
     }
 
     #[tokio::test]

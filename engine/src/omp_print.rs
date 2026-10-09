@@ -3338,7 +3338,7 @@ async fn cleanup_process_group(process_group_id: Option<i32>) -> bool {
         return false;
     };
     crate::console_adapter::cleanup_process_group("omp-print", Some(pgid)).await;
-    !crate::process_group::group_is_alive(pgid)
+    !crate::process_group::group_has_running_member(pgid)
 }
 
 fn live_process_group_is_safe(claim: &crate::turn_claims::TurnClaim, pgid: i32) -> bool {
@@ -3373,12 +3373,15 @@ async fn cleanup_live_claim(run_id: &str) -> bool {
     } else {
         // Never signal a group after its recorded leader/birth identity stops
         // proving ownership. Recorded PIDs are still cleaned up individually.
-        !crate::process_group::group_is_alive(pgid)
+        !crate::process_group::group_has_running_member(pgid)
     };
     let recorded_cleanup_verified = cleanup_recorded_processes(&claim.owned_processes).await;
+    // The OMP leader is this engine's child, reaped by its invocation loop, so
+    // it can still be an unreaped zombie here; that is a stopped group (the
+    // factory saw interrupts answered 502 for exactly this, 2026-10-08/09).
     group_cleanup_verified
         && recorded_cleanup_verified
-        && !crate::process_group::group_is_alive(pgid)
+        && !crate::process_group::group_has_running_member(pgid)
 }
 async fn cleanup_owned_child(child: &mut Child, run_id: &str) -> bool {
     let _ = cleanup_live_claim(run_id).await;
@@ -3446,9 +3449,10 @@ fn recorded_process_matches(
         return Ok(Some(false));
     };
     match crate::process_identity::inspect_process_fact(identity.pid) {
-        crate::process_identity::ProcessFactLookup::Present(fact) => {
-            Ok(Some(fact.lstart == expected_start))
-        }
+        // An unreaped zombie has exited; only its parent's wait is pending.
+        crate::process_identity::ProcessFactLookup::Present(fact) => Ok(Some(
+            fact.lstart == expected_start && !fact.stat.starts_with('Z'),
+        )),
         crate::process_identity::ProcessFactLookup::Absent => Ok(Some(false)),
         crate::process_identity::ProcessFactLookup::Unavailable => {
             Err(anyhow::anyhow!("process identity probe unavailable"))
@@ -3552,14 +3556,14 @@ async fn cleanup_recovered_process_group(
     let group_cleanup_verified = if recovered_process_group_is_safe(&claim, pgid) {
         cleanup_process_group(Some(pgid)).await
     } else {
-        !crate::process_group::group_is_alive(pgid)
+        !crate::process_group::group_has_running_member(pgid)
     };
     // A dead leader or surviving old group must not short-circuit the exact
     // PID/birth-identity cleanup for descendants that changed process group.
     let recorded_cleanup_verified = cleanup_recorded_processes(&claim.owned_processes).await;
     group_cleanup_verified
         && recorded_cleanup_verified
-        && !crate::process_group::group_is_alive(pgid)
+        && !crate::process_group::group_has_running_member(pgid)
 }
 fn private_output_file(path: &Path) -> Result<File> {
     Ok(OpenOptions::new()
