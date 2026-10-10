@@ -48,6 +48,8 @@ from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import write_json
+from zerg.qa.model_compliance import attach
+from zerg.qa.model_compliance import noncompliance_entry
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
 from zerg.qa.provider_coordination_oracles import awareness_post_compaction_assertions
 from zerg.qa.provider_coordination_oracles import directed_input_assertions
@@ -488,6 +490,32 @@ def _live_send_and_wait(
     return state
 
 
+_TOOL_NOT_ECHOED = "coordination_tool_used_marker_not_echoed"
+
+
+def _create_marker_noncompliance(*, tool_invoked: bool, turn_completed: bool, marker_echoed: bool) -> dict[str, Any] | None:
+    """Only the marker check failed: Longhouse exposed peers, the model called it, and the turn finished."""
+
+    if marker_echoed or not (tool_invoked and turn_completed):
+        return None
+    return noncompliance_entry(_TOOL_NOT_ECHOED, coordination_tool_invoked=True, turn_completed=True)
+
+
+def _post_compaction_marker_noncompliance(
+    *, compaction_completed: bool, tool_invoked: bool, turn_completed: bool, marker_echoed: bool
+) -> dict[str, Any] | None:
+    """Compaction completed and inbox was called in a completed turn; only the echoed marker is missing."""
+
+    if marker_echoed or not (compaction_completed and tool_invoked and turn_completed):
+        return None
+    return noncompliance_entry(
+        _TOOL_NOT_ECHOED,
+        compaction_completed=True,
+        coordination_tool_invoked=True,
+        turn_completed=True,
+    )
+
+
 def _run_awareness_create(args: argparse.Namespace, root: Path) -> tuple[dict[str, Any], dict[str, bool]]:
     isolation_root = Path(tempfile.mkdtemp(prefix="lcc-", dir="/tmp"))
     session_id = ""
@@ -530,12 +558,18 @@ def _run_awareness_create(args: argparse.Namespace, root: Path) -> tuple[dict[st
             isinstance(item.get("tool"), str) and item["tool"].rsplit("__", 1)[-1].rsplit(".", 1)[-1] == "peers" for item in tool_calls
         )
         visible = peers_invoked and marker in assistant_text
+        turn_completed = state.get("last_turn_status") == "completed"
         observation = {
             "coordination_instructions_model_visible": visible,
             "coordination_mcp_tool_invoked": peers_invoked,
-            "turn_completed": state.get("last_turn_status") == "completed",
+            "turn_completed": turn_completed,
             "marker_present_in_reply": marker in assistant_text,
         }
+        noncompliance = _create_marker_noncompliance(
+            tool_invoked=peers_invoked, turn_completed=turn_completed, marker_echoed=marker in assistant_text
+        )
+        if noncompliance is not None:
+            attach(observation, "coordination_instructions_model_visible", noncompliance)
         return observation, awareness_create_assertions(observation)
     finally:
         receipts: dict[str, dict[str, Any]] = {}
@@ -619,7 +653,9 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
         inbox_invoked = any(
             isinstance(item.get("tool"), str) and item["tool"].rsplit("__", 1)[-1].rsplit(".", 1)[-1] == "inbox" for item in tool_calls
         )
-        answered_after_compact_attempt = state.get("last_turn_status") == "completed" and inbox_invoked and marker in assistant_text
+        turn_completed = state.get("last_turn_status") == "completed"
+        marker_echoed = marker in assistant_text
+        answered_after_compact_attempt = turn_completed and inbox_invoked and marker_echoed
     finally:
         receipts: dict[str, dict[str, Any]] = {}
         if session_id:
@@ -636,6 +672,14 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
         "coordination_instructions_model_visible_after_compaction": bool(compaction_signal_observed and answered_after_compact_attempt),
     }
     observation.update(cleanup["required_cleanup"])
+    noncompliance = _post_compaction_marker_noncompliance(
+        compaction_completed=compaction_signal_observed,
+        tool_invoked=inbox_invoked,
+        turn_completed=turn_completed,
+        marker_echoed=marker_echoed,
+    )
+    if noncompliance is not None:
+        attach(observation, "coordination_instructions_model_visible_after_compaction", noncompliance)
     return observation, awareness_post_compaction_assertions(observation)
 
 

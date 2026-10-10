@@ -12,6 +12,7 @@ from __future__ import annotations
 from zerg.qa.claude_helm_lifecycle import TYPED_PROMPT_MAX_CHARS
 from zerg.qa.claude_helm_lifecycle import abort_setup_prompt
 from zerg.qa.claude_helm_lifecycle import abort_stopped_turn
+from zerg.qa.claude_helm_lifecycle import claude_steer_noncompliance
 from zerg.qa.claude_helm_lifecycle import lifecycle_assertions
 from zerg.qa.claude_helm_lifecycle import negative_control_verdict
 from zerg.qa.claude_helm_lifecycle import send_outcome
@@ -155,6 +156,77 @@ def test_steer_that_did_not_change_course_is_rejected() -> None:
     ]
 
     assert _steer(rows)["failure_code"] == "steer_did_not_change_course"
+
+
+def test_steer_answered_then_original_work_continued_is_model_noncompliance() -> None:
+    """The steer landed in the turn and was answered, then the original task ran on: Longhouse did its part."""
+
+    rows = [
+        _task(),
+        _bash(f"sleep 8; echo {STEP}_1"),
+        _queued(f"Reply with exactly {STEERED}"),
+        _bash(f"sleep 8; echo {STEP}_3"),
+        _text(f"{DONE} {STEERED}"),
+        _end(),
+    ]
+
+    verdict = _steer(rows)
+
+    assert verdict["failure_code"] == "steer_did_not_change_course"
+    assert verdict["steer_preceded_continuation"] is True
+    entry = claude_steer_noncompliance(verdict)
+    assert entry == {
+        "reason": "steer_answered_then_original_task_continued",
+        "contract_evidence": {
+            "steer_delivered_in_target_turn": True,
+            "steer_answered_in_target_turn": True,
+            "steer_preceded_continuation": True,
+        },
+    }
+
+
+def test_original_task_finished_before_the_steer_is_not_model_noncompliance() -> None:
+    """The done marker came first, so the steer never had a chance to change course: no entry."""
+
+    rows = [
+        _task(),
+        _bash(f"sleep 8; echo {STEP}_1"),
+        _text(DONE),
+        _queued(f"Reply with exactly {STEERED}"),
+        _text(STEERED),
+        _end(),
+    ]
+
+    verdict = _steer(rows)
+
+    assert verdict["failure_code"] == "steer_did_not_change_course"
+    assert verdict["steer_preceded_continuation"] is False
+    assert claude_steer_noncompliance(verdict) is None
+
+
+def test_passing_steer_attaches_nothing() -> None:
+    rows = [_task(), _bash(f"sleep 8; echo {STEP}_1"), _queued(f"Reply with exactly {STEERED}"), _text(f"Stopped.\n\n{STEERED}"), _end()]
+
+    verdict = _steer(rows)
+
+    assert verdict["passed"] is True
+    assert claude_steer_noncompliance(verdict) is None
+
+
+def test_queued_follow_up_attaches_nothing() -> None:
+    rows = [
+        _task(),
+        _bash(f"sleep 8; echo {STEP}_1"),
+        _bash(f"sleep 8; echo {STEP}_2"),
+        _bash(f"sleep 8; echo {STEP}_3"),
+        _text(DONE),
+        _end(),
+        _prompt(f"Reply with exactly {STEERED}"),
+        _text(STEERED),
+        _end(),
+    ]
+
+    assert claude_steer_noncompliance(_steer(rows)) is None
 
 
 def test_unfinished_target_turn_is_never_judged_a_pass() -> None:

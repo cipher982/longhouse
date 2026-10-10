@@ -57,6 +57,8 @@ from zerg.qa.live_session_toolkit import secret_scan
 from zerg.qa.live_session_toolkit import wait_pid_dead
 from zerg.qa.managed_claude_live import transcript_lookup_id
 from zerg.qa.managed_claude_live import transcript_paths
+from zerg.qa.model_compliance import attach
+from zerg.qa.model_compliance import noncompliance_entry
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
@@ -189,6 +191,19 @@ def _turn_bounds(rows: list[dict[str, Any]], prompt_marker: str) -> tuple[int, i
     return start, end
 
 
+def _first_index(rows: list[dict[str, Any]], predicate: Callable[[dict[str, Any]], bool], offset: int = 0) -> int | None:
+    index = next((position for position, row in enumerate(rows) if predicate(row)), None)
+    return None if index is None else index + offset
+
+
+def _row_texts(row: dict[str, Any]) -> list[str]:
+    return _assistant_texts([row])
+
+
+def _row_bash_commands(row: dict[str, Any]) -> list[str]:
+    return _bash_commands([row])
+
+
 def steer_landed_in_turn(
     rows: list[dict[str, Any]],
     *,
@@ -212,10 +227,19 @@ def steer_landed_in_turn(
     if end is None:
         return {"passed": False, "failure_code": "steer_target_turn_never_completed"}
     turn, after = rows[start : end + 1], rows[end + 1 :]
-    steer_in_turn = any(_steer_delivered(row, steer_marker) for row in turn[1:])
+    # Row positions within the turn, so the verdict can say whether the steer
+    # arrived before the work it was meant to stop.
+    steer_index = _first_index(turn[1:], lambda row: _steer_delivered(row, steer_marker), offset=1)
+    later_step_index = _first_index(turn, lambda row: any(later_step_command in command for command in _row_bash_commands(row)))
+    # Answered, not quoted: a model explaining that it skipped the done marker
+    # names it without finishing the task (7f7ec6163).
+    done_index = _first_index(turn, lambda row: any_marker_answered(_row_texts(row), done_marker))
+    steer_in_turn = steer_index is not None
     steered_here = any(steered_marker in text for text in _assistant_texts(turn))
-    later_step_ran = any(later_step_command in command for command in _bash_commands(turn))
-    finished_original = any_marker_answered(_assistant_texts(turn), done_marker)
+    later_step_ran = later_step_index is not None
+    finished_original = done_index is not None
+    continuations = [index for index in (later_step_index, done_index) if index is not None]
+    steer_preceded_continuation = steer_index is not None and all(steer_index < index for index in continuations)
     steered_elsewhere = any(_steer_delivered(row, steer_marker) for row in after) or any(
         steered_marker in text for text in _assistant_texts(after)
     )
@@ -235,7 +259,27 @@ def steer_landed_in_turn(
         "steered_in_later_turn": steered_elsewhere,
         "later_step_ran_in_target_turn": later_step_ran,
         "original_task_finished": finished_original,
+        "steer_preceded_continuation": steer_preceded_continuation,
     }
+
+
+def claude_steer_noncompliance(verdict: dict[str, Any]) -> dict[str, Any] | None:
+    """The steer reached the target turn, Claude answered it, and then the original task went on anyway."""
+
+    if verdict.get("failure_code") != "steer_did_not_change_course":
+        return None
+    if not (
+        verdict.get("steer_delivered_in_target_turn") is True
+        and verdict.get("steered_in_target_turn") is True
+        and verdict.get("steer_preceded_continuation") is True
+    ):
+        return None
+    return noncompliance_entry(
+        "steer_answered_then_original_task_continued",
+        steer_delivered_in_target_turn=True,
+        steer_answered_in_target_turn=True,
+        steer_preceded_continuation=True,
+    )
 
 
 def abort_stopped_turn(
@@ -1104,6 +1148,15 @@ def run_lifecycle(
     )
     redacted = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
     shutil.rmtree(isolation_root, ignore_errors=True)
+    observation: dict[str, Any] = {
+        "lifecycle": lifecycle,
+        "error": error,
+        "claude_helm_process_exited": cleanup_ok,
+        "native_hook_source": hook_source,
+    }
+    steer_noncompliance = claude_steer_noncompliance(lifecycle.get("steer_active") or {})
+    if steer_noncompliance is not None:
+        attach(observation, "claude_helm_steer_active", steer_noncompliance)
     result: dict[str, Any] = {
         "schema_version": 1,
         "artifact_kind": artifact_kind,
@@ -1119,12 +1172,7 @@ def run_lifecycle(
         "observation_scope": "scenario",
         "generated_at": now_iso(),
         "session_id": session_id,
-        "observation": {
-            "lifecycle": lifecycle,
-            "error": error,
-            "claude_helm_process_exited": cleanup_ok,
-            "native_hook_source": hook_source,
-        },
+        "observation": observation,
         "redacted_secret_files": redacted,
     }
     if scenario_capture is not None:

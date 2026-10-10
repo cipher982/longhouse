@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from zerg.qa.model_compliance import attach
 from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
+from zerg.qa.pi_family_turn_oracle import pi_family_steer_noncompliance
 from zerg.qa.pi_family_turn_oracle import steer_turn_verdict
 
 TASK = "TASK_abc"
@@ -113,8 +115,8 @@ def test_later_turn_from_a_backgrounded_job_does_not_void_the_steer() -> None:
 
 
 def _control(control: str, *, provider: str = "pi", assertions: dict, observation: dict, fired: bool = True) -> dict:
-    from zerg.qa.pi_family_turn_oracle import negative_control_verdict
     from zerg.qa.pi_family_turn_oracle import fault_name
+    from zerg.qa.pi_family_turn_oracle import negative_control_verdict
 
     receipts = [{"fault": fault_name(provider, control), "session_id": "sess-1"}] if fired else []
     return negative_control_verdict(
@@ -263,3 +265,36 @@ def test_terminate_preconditions_exclude_anything_gated_on_cleanup() -> None:
     )
     assert verdict["preconditions_held"] is True, verdict
     assert verdict["status"] == "pass", verdict
+
+
+def test_steer_at_a_tool_boundary_then_original_task_completed_is_model_noncompliance() -> None:
+    entries = [
+        *_task_prefix(),
+        _entry("u2", "t1", "user", text=f"Stop and reply only with {STEER}"),
+        _entry("a2", "u2", "assistant", text=f"{DONE}\n{STEER}", stop="stop"),
+    ]
+    verdict = steer_turn_verdict(entries, task_marker=TASK, steer_marker=STEER, task_done_marker=DONE)
+    assert verdict["code"] == "original_task_completed_after_steer", verdict
+
+    observation: dict = {"steer_turn_verdict": verdict}
+    entry = pi_family_steer_noncompliance(verdict)
+    assert entry is not None
+    attach(observation, "pi_helm_steer_active", entry)
+
+    assert observation["model_noncompliance"]["pi_helm_steer_active"] == {
+        "reason": "steer_delivered_then_original_task_completed",
+        "contract_evidence": {"steer_in_task_chain": True, "steer_adjacent_to_task_turn": True, "steer_at_tool_boundary": True},
+    }
+
+
+def test_queued_follow_up_attaches_no_noncompliance() -> None:
+    entries = [
+        *_task_prefix(),
+        _entry("a1b", "t1", "assistant", text=f"{DONE}", stop="stop"),
+        _entry("u2", "a1b", "user", text=f"Stop and reply only with {STEER}"),
+        _entry("a2", "u2", "assistant", text=f"{DONE}\n{STEER}", stop="stop"),
+    ]
+    verdict = steer_turn_verdict(entries, task_marker=TASK, steer_marker=STEER, task_done_marker=DONE)
+    assert verdict["code"] == "steer_delivered_as_queued_follow_up", verdict
+
+    assert pi_family_steer_noncompliance(verdict) is None

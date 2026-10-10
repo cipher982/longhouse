@@ -23,6 +23,7 @@ from typing import Iterable
 from typing import Mapping
 
 from zerg.qa.answer_markers import marker_answered
+from zerg.qa.model_compliance import noncompliance_entry
 
 _TERMINAL_STOP_REASONS = frozenset({"stop", "end_turn", "length", "error"})
 _ABORT_STOP_REASONS = frozenset({"aborted", "cancelled", "canceled"})
@@ -194,10 +195,34 @@ def steer_turn_verdict(
         }
     )
     if terminal is not None and marker_answered(_text(terminal), task_done_marker):
-        return {**verdict, "passed": False, "code": "original_task_completed_after_steer"}
+        # Reaching this point proved the steer is in the task chain, adjacent to
+        # it, and delivered at a tool boundary; the facts say so explicitly.
+        return {
+            **verdict,
+            "passed": False,
+            "code": "original_task_completed_after_steer",
+            "steer_in_task_chain": True,
+            "steer_adjacent_to_task_turn": True,
+            "steer_at_tool_boundary": True,
+        }
     if terminal is None or steer_marker not in _text(terminal):
         return {**verdict, "passed": False, "code": "steer_marker_not_answered_in_turn"}
     return {**verdict, "passed": True, "code": "steer_changed_active_turn"}
+
+
+def pi_family_steer_noncompliance(verdict: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The steer was delivered into the task turn and the original task then finished anyway."""
+
+    if verdict.get("code") != "original_task_completed_after_steer":
+        return None
+    if not all(verdict.get(fact) is True for fact in ("steer_in_task_chain", "steer_adjacent_to_task_turn", "steer_at_tool_boundary")):
+        return None
+    return noncompliance_entry(
+        "steer_delivered_then_original_task_completed",
+        steer_in_task_chain=True,
+        steer_adjacent_to_task_turn=True,
+        steer_at_tool_boundary=True,
+    )
 
 
 def abort_then_send_verdict(

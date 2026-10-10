@@ -32,11 +32,13 @@ from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.model_compliance import attach
 from zerg.qa.openrouter_routing import prepare_pi_openrouter_routing
 from zerg.qa.pi_family_turn_oracle import NEGATIVE_CONTROLS
 from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
 from zerg.qa.pi_family_turn_oracle import fault_name
 from zerg.qa.pi_family_turn_oracle import negative_control_verdict
+from zerg.qa.pi_family_turn_oracle import pi_family_steer_noncompliance
 from zerg.qa.pi_family_turn_oracle import read_fault_receipts
 from zerg.qa.pi_family_turn_oracle import read_session_entries
 from zerg.qa.pi_family_turn_oracle import steer_turn_verdict
@@ -1460,6 +1462,9 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             steer_marker=steer_marker,
             task_done_marker=steer_done_marker,
         )
+        steer_noncompliance = pi_family_steer_noncompliance(observations["steer_turn_verdict"])
+        if steer_noncompliance is not None:
+            attach(observations, "pi_helm_steer_active", steer_noncompliance)
         steer_runtime = _wait_runtime_convergence(
             args.api_url,
             args.agents_token,

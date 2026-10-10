@@ -591,3 +591,40 @@ def test_run_coordination_mixed_scenario_status_matches_complete_assertion_map(t
 
     assert result["status"] == "fail"
     assert result["assertions"] == assertions
+
+
+def test_post_compaction_marker_miss_after_a_completed_inbox_call_is_model_noncompliance() -> None:
+    entry = m._post_compaction_marker_noncompliance(compaction_completed=True, tool_invoked=True, turn_completed=True, marker_echoed=False)
+
+    assert entry == {
+        "reason": "coordination_tool_used_marker_not_echoed",
+        "contract_evidence": {"compaction_completed": True, "coordination_tool_invoked": True, "turn_completed": True},
+    }
+
+
+def test_post_compaction_without_an_inbox_call_attaches_nothing() -> None:
+    assert (
+        m._post_compaction_marker_noncompliance(compaction_completed=True, tool_invoked=False, turn_completed=True, marker_echoed=False)
+        is None
+    )
+
+
+def test_post_compaction_that_echoed_the_marker_or_never_completed_attaches_nothing() -> None:
+    assert (
+        m._post_compaction_marker_noncompliance(compaction_completed=True, tool_invoked=True, turn_completed=True, marker_echoed=True)
+        is None
+    )
+    assert (
+        m._post_compaction_marker_noncompliance(compaction_completed=True, tool_invoked=True, turn_completed=False, marker_echoed=False)
+        is None
+    )
+
+
+def test_awareness_create_marker_miss_after_a_completed_peers_call_is_model_noncompliance() -> None:
+    entry = m._create_marker_noncompliance(tool_invoked=True, turn_completed=True, marker_echoed=False)
+
+    assert entry == {
+        "reason": "coordination_tool_used_marker_not_echoed",
+        "contract_evidence": {"coordination_tool_invoked": True, "turn_completed": True},
+    }
+    assert m._create_marker_noncompliance(tool_invoked=False, turn_completed=True, marker_echoed=False) is None
