@@ -859,7 +859,9 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                 fired.append(json.loads(line))
             except json.JSONDecodeError:
                 fired.append({"unparseable_receipt_line": line[:300]})
-    status = "pass" if failure is None and all(assertions.values()) and observation["cleanup"]["status"] == "pass" else "fail"
+    # Status follows the assertion map, as the factory validator requires;
+    # cleanup is judged from the cleanup receipt (REGISTRATION.required_cleanup).
+    status = "pass" if failure is None and all(assertions.values()) else "fail"
     result: dict[str, Any] = {
         "schema_version": 1,
         "artifact_kind": "opencode_helm_lifecycle_result",

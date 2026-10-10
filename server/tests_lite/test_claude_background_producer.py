@@ -394,3 +394,34 @@ def test_a_setup_failure_reports_the_authored_variant_and_keeps_the_execution_ke
     assert any(isinstance(item, dict) and item.get("error") == "RuntimeError: setup exploded" for item in failures)
     if negative_control:
         assert result["negative_control"]["status"] == "inconclusive"
+
+
+def _run_cell(monkeypatch: Any, tmp_path: Path, result: dict[str, Any]) -> dict[str, Any]:
+    # The real Helm lifecycle result is scenario-scoped (claude_helm_lifecycle).
+    result = {**result, "observation_scope": "scenario"}
+    monkeypatch.setattr(oracle.helm, "run_lifecycle", lambda *_args, **_kwargs: result)
+    return oracle._run_direct(Namespace(evidence_root=tmp_path, variant=oracle._VARIANTS[0], negative_control=None))
+
+
+def test_cleanup_failure_after_every_assertion_held_leaves_status_to_the_assertions(monkeypatch: Any, tmp_path: Path) -> None:
+    """The factory judges cleanup from the cleanup receipt; status follows the assertion map."""
+
+    held = _scenario(target=True)
+    result = _run_cell(monkeypatch, tmp_path, _lifecycle_result(tmp_path, scenario=held, cleanup_ok=False, status="pass"))
+
+    assert result["status"] == "pass"
+    assert all(result["assertions"].values())
+    assert "failure_code" not in result
+
+
+def test_a_failed_run_whose_assertions_all_held_is_a_typed_harness_failure(monkeypatch: Any, tmp_path: Path) -> None:
+    """status fail with an all-true map is a contradiction the factory refuses; it reached no failing verdict."""
+
+    held = _scenario(target=True)
+    result = _run_cell(monkeypatch, tmp_path, _lifecycle_result(tmp_path, scenario=held, status="fail"))
+
+    assert result["status"] == "fail"
+    assert "assertions" not in result and "observation" not in result
+    assert isinstance(result["error"], str) and result["error"]
+    assert result["partial_observation"]["lifecycle"]["scenario"]["assertions"] == held["assertions"]
+    assert_result_conforms(oracle, result, variant=oracle._VARIANTS[0])

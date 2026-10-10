@@ -27,6 +27,7 @@ from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.claude_live_session_support import ScenarioError
 from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import now_iso
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import require_disposable_runtime
@@ -566,10 +567,16 @@ def _run_direct(args: argparse.Namespace) -> dict[str, Any]:
                 else "claude_background_negative_control_not_caught"
             )
     else:
-        cleanup_ok = result.get("claude_helm_process_exited", observation.get("claude_helm_process_exited"))
-        result["status"] = "pass" if result.get("status") == "pass" and cleanup_ok is True and all(assertions.values()) else "fail"
+        # Status follows the assertion map, as the factory validator requires;
+        # cleanup is judged from the cleanup receipt (REGISTRATION.required_cleanup).
+        result["status"] = "pass" if result.get("status") == "pass" and all(assertions.values()) else "fail"
         if result["status"] != "pass":
             result["failure_code"] = str(scenario.get("failure_code") or result.get("failure_code") or "claude_background_scenario_failed")
+            # A run that failed while every assertion held reached no failing
+            # verdict: a typed harness failure, which must name its cause.
+            if all(assertions.values()) and not isinstance(result.get("error"), str):
+                result["error"] = str(observation.get("error") or result["failure_code"])
+            settle_failed_result(result, observation=result.get("observation"), assertions=assertions)
     result["artifact_manifest"] = artifact_manifest(root)
     helm.write_json(root / "result.json", result)
     return result
