@@ -2,8 +2,8 @@
 """Render schemas/coordination_contract.yml for every coordination surface.
 
 The contract is the one definition of the coordination tools (names,
-descriptions, JSON schemas, instructions, peers line vectors, pending and
-delivery wording). This writes:
+descriptions, JSON schemas, instructions, the session-start awareness note,
+peers line vectors, pending and delivery wording). This writes:
 
 - engine/src/coordination_contract.generated.json   (engine MCP server, include_str!)
 - server/zerg/config/coordination_contract.json      (Python MCP server, delivery facts)
@@ -63,12 +63,15 @@ def load_contract() -> dict:
         section = payload.get(key) or {}
         if set(section) != set(states):
             _fail(f"{key} must define exactly {', '.join(states)}")
+    if not str(payload.get("session_start") or "").strip():
+        _fail("session_start must be set")
     vectors = (payload.get("peers_line") or {}).get("vectors") or []
     if not vectors:
         _fail("peers_line needs vectors")
     return {
         "version": payload["version"],
         "instructions": str(payload["instructions"]).strip(),
+        "session_start": str(payload["session_start"]).strip(),
         "tools": rendered_tools,
         "peers_line": payload["peers_line"],
         "registration_pending": payload["registration_pending"],
