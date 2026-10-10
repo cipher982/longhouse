@@ -1302,6 +1302,20 @@ class BlockingModeTests(unittest.TestCase):
             self.assertIn("touches nothing on the blocking list", result.stdout)
 
 
+    def test_blocking_without_a_policy_table_is_a_gate_fault_not_clean(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Repo(directory)
+            base = repo.commit("base", {"README.md": "x"})
+            repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+            policy = repo.dir / "policy.toml"
+            policy.write_text(FIXTURE_POLICY)
+            result = subprocess.run([sys.executable, str(GATE), "--repo", str(repo.dir), "--policy", str(policy),
+                                     "--name", "no-such-repo", "blocking", "--base", base, "--head", "HEAD"],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn("no [[repos.no-such-repo.blocking]] table", result.stderr)
+
+
 class AttestationTests(unittest.TestCase):
     """The promotion verdict published for a promoter that cannot read the receipts, and read back."""
 
@@ -1467,16 +1481,6 @@ class PathsTests(unittest.TestCase):
         self.assertIn(f"unresolved blocking finding {rid} F1", out["refused"][0]["reasons"][0])
         self.repo.disposition(rid, "F1", "rejected")
         self.assertEqual(self.run_paths()[0], 0)
-
-    def test_blocking_without_a_policy_table_is_a_gate_fault_not_clean(self):
-        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
-        policy = self.repo.dir / "policy.toml"
-        policy.write_text(FIXTURE_POLICY)
-        result = subprocess.run([sys.executable, str(GATE), "--repo", str(self.repo.dir), "--policy", str(policy),
-                                 "--name", "no-such-repo", "blocking", "--base", self.base, "--head", "HEAD"],
-                                capture_output=True, text=True)
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("no [[repos.no-such-repo.blocking]] table", result.stderr)
 
     def test_an_empty_list_is_a_gate_fault_not_a_pass(self):
         self.listed.write_text("# nothing pinned\n\n")
