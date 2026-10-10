@@ -1235,6 +1235,48 @@ async def test_a_turn_active_refusal_in_the_drain_requeues_the_send(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_a_momentarily_unreachable_control_requeues_the_drained_send(monkeypatch):
+    """The live drain shares the cold drain's not-yet predicate, transient control loss included."""
+
+    import json as _json
+
+    from zerg.services import session_input_queue as queue
+    from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
+    from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
+
+    observed: dict = {}
+
+    async def dispatch(**_kwargs):
+        body = {"error_code": SESSION_TURN_ERROR_SEND_FAILED, "error": MANAGED_CONTROL_UNAVAILABLE_ERROR}
+        return SimpleNamespace(status_code=502, body=_json.dumps(body).encode())
+
+    async def release(scope, holder):
+        observed["released"] = holder
+
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", dispatch)
+    monkeypatch.setattr(queue, "mark_live_receipt_failed", lambda *_a, **_k: pytest.fail("must not fail the receipt"))
+
+    def requeue(*_a, **kwargs):
+        observed["requeued"] = kwargs["receipt_id"]
+        return None, True
+
+    monkeypatch.setattr(queue, "requeue_live_receipt", requeue)
+    monkeypatch.setattr(queue.session_lock_manager, "release", release)
+
+    result = await queue._dispatch_claimed_live_input(
+        db=None,
+        live_session_factory=lambda: __import__("contextlib").nullcontext(),
+        source_session=SimpleNamespace(id=uuid4()),
+        claimed=SimpleNamespace(id="r-9", owner_id=7, text="plain", payload_digest=None),
+        lock_scope="scope",
+        drain_request_id="drain-9",
+    )
+
+    assert observed["requeued"] == "r-9"
+    assert result.reason == "requeued_precondition"
+
+
+@pytest.mark.asyncio
 async def test_a_restarting_runtime_requeues_the_drained_send(monkeypatch):
     import json as _json
 

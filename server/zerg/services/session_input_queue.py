@@ -455,6 +455,17 @@ async def _wake_live_session_input_queue(
 DRAIN_REQUEUE_CODES = RETRYABLE_SEND_PRECONDITIONS | frozenset({"runtime_draining", "runtime_restarting"})
 
 
+def drain_refusal_is_not_yet(error_code: str | None, error_message: str | None) -> bool:
+    """One answer, for both drains, to "does this refusal mean try again later?"
+
+    True for the shared precondition codes and for a send that failed only
+    because managed control was momentarily unreachable. Anything else is a
+    decision about the input and fails it.
+    """
+
+    return (error_code or "") in DRAIN_REQUEUE_CODES or _is_transient_managed_control_unavailable(error_code, error_message)
+
+
 async def _dispatch_claimed_live_input(
     *,
     db: Session,
@@ -519,7 +530,7 @@ async def _dispatch_claimed_live_input(
                 response_error_code = str(response_body.get("error_code") or response_body.get("code") or "")
         except Exception:
             pass
-        if response_error_code in DRAIN_REQUEUE_CODES:
+        if drain_refusal_is_not_yet(response_error_code, response_error_message):
             # The adapter refused because its turn was running (or its channel
             # was not reached): the boundary has not arrived yet. The input is
             # late, not lost; requeue_live_receipt still fails it at the
@@ -591,12 +602,8 @@ async def _dispatch_claimed_input(
                 response_error_message = str(response_body.get("error") or response_error_message)
         except Exception:
             pass
-        # Same "not yet, never no" set as the live drain: a turn that started
-        # before dispatch arrived, an unconverged control path, or a restarting
-        # Runtime Host returns the input to the queue instead of failing it.
-        if response_error_code in DRAIN_REQUEUE_CODES or _is_transient_managed_control_unavailable(
-            response_error_code, response_error_message
-        ):
+        # The same "not yet, never no" predicate as the live drain.
+        if drain_refusal_is_not_yet(response_error_code, response_error_message):
             attempt_count = int(getattr(claimed, "attempt_count", 0) or 0)
             if attempt_count >= MAX_DELIVERY_ATTEMPTS:
                 if attempt_id is not None:
