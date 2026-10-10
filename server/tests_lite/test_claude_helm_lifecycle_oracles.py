@@ -151,7 +151,7 @@ def test_steer_that_did_not_change_course_is_rejected() -> None:
         _bash(f"sleep 8; echo {STEP}_1"),
         _queued(STEERED),
         _bash(f"sleep 8; echo {STEP}_3"),
-        _text(f"{DONE} {STEERED}"),
+        _text(f"{STEERED}\n{DONE}"),
         _end(),
     ]
 
@@ -166,7 +166,7 @@ def test_steer_answered_then_original_work_continued_is_model_noncompliance() ->
         _bash(f"sleep 8; echo {STEP}_1"),
         _queued(f"Reply with exactly {STEERED}"),
         _bash(f"sleep 8; echo {STEP}_3"),
-        _text(f"{DONE} {STEERED}"),
+        _text(f"{STEERED}\n{DONE}"),
         _end(),
     ]
 

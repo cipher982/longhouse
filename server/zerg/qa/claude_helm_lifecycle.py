@@ -236,6 +236,8 @@ def steer_landed_in_turn(
     done_index = _first_index(turn, lambda row: any_marker_answered(_row_texts(row), done_marker))
     steer_in_turn = steer_index is not None
     steered_here = any(steered_marker in text for text in _assistant_texts(turn))
+    # The model-compliance claim needs the steer answered, not merely mentioned.
+    steer_answered = any_marker_answered(_assistant_texts(turn), steered_marker)
     later_step_ran = later_step_index is not None
     finished_original = done_index is not None
     continuations = [index for index in (later_step_index, done_index) if index is not None]
@@ -260,6 +262,7 @@ def steer_landed_in_turn(
         "later_step_ran_in_target_turn": later_step_ran,
         "original_task_finished": finished_original,
         "steer_preceded_continuation": steer_preceded_continuation,
+        "steer_answered_in_target_turn": steer_answered,
     }
 
 
@@ -270,7 +273,7 @@ def claude_steer_noncompliance(verdict: dict[str, Any]) -> dict[str, Any] | None
         return None
     if not (
         verdict.get("steer_delivered_in_target_turn") is True
-        and verdict.get("steered_in_target_turn") is True
+        and verdict.get("steer_answered_in_target_turn") is True
         and verdict.get("steer_preceded_continuation") is True
     ):
         return None
