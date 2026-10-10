@@ -2529,6 +2529,7 @@ providers:
       required_assertions:
       - <<: *pi_helm_lifecycle_assertion
         id: pi_helm_cold_resume_exact_file
+        minimum_scenario_revision: 8
       - <<: *pi_helm_lifecycle_assertion
         id: pi_helm_stale_owner_refused
     # Mid-turn steer on a running Console turn (docs/specs/console-full-control.md).
@@ -3076,7 +3077,6 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 86400
-        assurance_priority: sampled
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented

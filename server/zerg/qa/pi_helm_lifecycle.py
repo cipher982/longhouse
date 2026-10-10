@@ -84,7 +84,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=7,
+    scenario_revision=8,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -1980,7 +1980,12 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             "--resume-session",
             session_id,
             "--prompt",
-            f"Without reading any files, reply with the context you remember followed by {resume_marker}.",
+            # Name where the phrase is and what it starts with, never the phrase
+            # itself: only restored history can supply it, and an unambiguous ask
+            # leaves a cheap model no reason to decline (2026-10-10 deepseek
+            # refused the vaguer "the context you remember").
+            "Earlier in this conversation I gave you a context phrase that starts with PI_HELM_CONTEXT_. "
+            f"It is in the conversation history above. Reply with that exact phrase, then {resume_marker}, and nothing else.",
         ]
         resume = ProviderPtySession.start(
             argv=resume_command,
