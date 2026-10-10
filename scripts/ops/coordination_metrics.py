@@ -186,6 +186,13 @@ def process_omp_file(file_path: Path) -> Tuple[List[str], Dict[str, Any], Dict[s
                         for content_item in message.get("content", []):
                             if content_item.get("type") == "toolCall":
                                 tool_name = content_item.get("name", "")
+                                # OMP mounts extension tools as xd:// devices: a
+                                # `write xd://<tool>` is the call (a `read` only
+                                # loads its docs). A bare name is the older form.
+                                arguments = content_item.get("arguments") or {}
+                                path = str(arguments.get("path") or "") if isinstance(arguments, dict) else ""
+                                if tool_name == "write" and path.startswith("xd://"):
+                                    tool_name = path[len("xd://"):]
                                 if tool_name in COORDINATION_TOOLS:
                                     tool_counts[tool_name] += 1
                                     sessions_by_tool[tool_name].add(session_id)
@@ -273,10 +280,20 @@ def main():
                             results["claude"]["cache_rates"].append((hit_rate, inp, cache_read, cache_creation))
 
     # Process OMP files (nested in subdirectories)
-    omp_dir = Path.home() / ".omp" / "agent" / "sessions"
-    if omp_dir.exists():
-        for file_path in omp_dir.glob("**/*.jsonl"):
-            if should_process_file(file_path, cutoff):
+    # The denominator is the OMP Helm sessions Longhouse launched: they are the
+    # ones given the coordination tools. Other files under ~/.omp are native
+    # subagents and plain OMP runs, which have no coordination authority.
+    helm_files = set()
+    for record in (Path.home() / ".longhouse" / "managed-local" / "omp-helm").glob("*.json"):
+        try:
+            session_file = json.loads(record.read_text()).get("session_file")
+        except (OSError, ValueError):
+            continue
+        if session_file:
+            helm_files.add(Path(session_file))
+    if helm_files:
+        for file_path in sorted(helm_files):
+            if file_path.exists() and should_process_file(file_path, cutoff):
                 session_ids, tools, sessions_by_tool = process_omp_file(file_path)
                 results["omp"]["sessions_total"].update(session_ids)
                 for tool, count in tools.items():
