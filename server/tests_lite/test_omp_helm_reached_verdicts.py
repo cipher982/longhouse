@@ -132,3 +132,17 @@ def test_reached_markers_cover_every_assertion_and_none_is_pre_initialized() -> 
     markers = {key for keys in producer.REACHED_MARKERS.values() for key in keys}
     pre_set = {key: initial[key] for key in markers if key in initial and initial[key] not in ({}, [], None, "")}
     assert not pre_set, f"markers initialized before any step runs: {pre_set}"
+
+    # And every marker is actually written somewhere in the producer, so a typo
+    # cannot leave a step permanently "unreached".
+    written = {
+        target.slice.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Subscript)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "observation"
+        and isinstance(target.slice, ast.Constant)
+    }
+    assert markers <= written, f"markers the producer never writes: {sorted(markers - written)}"

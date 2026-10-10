@@ -181,7 +181,10 @@ def _helm_result_status(
 # that errors reports a verdict only for assertions whose markers are all present
 # and non-empty: an unreached step is absent from the map (the factory files "no
 # verdict for assertion" as harness), never False (a product finding) and never
-# True. A test pins that no marker is pre-initialized to a non-empty value.
+# True. Launch registration also needs runtime_agents_api_control_paths, which is
+# decided only after every control ran, so an errored run never judges launch:
+# harness, the conservative answer. Tests pin that every marker is written by the
+# run and none is pre-initialized to a non-empty value.
 REACHED_MARKERS: dict[str, tuple[str, ...]] = {
     "omp_helm_launch_registration": (
         "channel_binding",
