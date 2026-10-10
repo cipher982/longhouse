@@ -235,7 +235,6 @@ pub async fn wait_for_group_exit(pgid: i32, budget: Duration) -> bool {
     wait_for_group_exit_until(pgid, tokio::time::Instant::now() + budget).await
 }
 
-/// Poll until the group is gone or `deadline` passes. True when it is gone.
 /// [`group_has_running_member`] from async code: its `ps` pass is blocking
 /// (bounded by the inventory timeout), so it runs on the blocking pool rather
 /// than stalling the runtime. A task that cannot run answers "running", the
@@ -257,6 +256,7 @@ async fn running_member_within(pgid: i32, limit: Duration) -> bool {
     }
 }
 
+/// Poll until the group is gone or `deadline` passes. True when it is gone.
 async fn wait_for_group_exit_until(pgid: i32, deadline: tokio::time::Instant) -> bool {
     // `killpg` every poll is cheap; the `ps` pass that tells a zombie-only group
     // from a running one runs at most every MEMBER_CHECK_INTERVAL.
