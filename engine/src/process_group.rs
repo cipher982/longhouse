@@ -34,11 +34,11 @@
 //! process — want [`shutdown_group`], because such a process is not our child
 //! and cannot be waited on.
 //!
-//! That split is load-bearing rather than stylistic. Liveness is probed with
-//! `killpg(pgid, 0)`, which succeeds on a zombie, so a leader we own reads as
-//! alive until we reap it. `shutdown_owned_child` therefore reaps before it
-//! polls; `shutdown_group` would spin to its budget and wrongly report
-//! `Survived`. Picking the wrong one is not a style error.
+//! The split is about the reap, not the verdict. `killpg(pgid, 0)` succeeds on
+//! a zombie, so a leader we own reads as present until we reap it; the waits
+//! here count a group of zombies as stopped (one bounded `ps` pass), so either
+//! function reports a stopped group correctly. Only `shutdown_owned_child`
+//! also removes the defunct entry, which a caller holding the `Child` owes.
 
 use std::time::Duration;
 
@@ -108,7 +108,8 @@ impl GroupShutdown {
 /// A group whose only remaining members are zombies has stopped: they have
 /// exited and wait only for their parent's `wait`. [`wait_for_group_exit`] and
 /// [`shutdown_group`] treat it as gone (via [`group_has_running_member`]), so
-/// [`GroupShutdown::Survived`] means a member is still running. That matters
+/// [`GroupShutdown::Survived`] means a member is still running, or that `ps`
+/// was unavailable and a zombie could not be told apart (the safe direction). That matters
 /// whenever this engine owns the leader through a `Child` another task holds:
 /// the group reads alive to `killpg(_, 0)` until that task reaps it, and the
 /// OMP Console interrupt reported HTTP 502 for stopped turns exactly that way
@@ -193,9 +194,9 @@ pub fn leader_group_for(_pid: u32) -> Option<i32> {
 /// is closing a parked Console invocation, whose `Child` belongs to a provider
 /// monitor task that reaps it concurrently; that caller waits for the monitor
 /// before it believes `Survived`. If you hold a `Child` for the leader, use
-/// [`shutdown_owned_child`] instead: an unreaped child of ours stays a zombie,
-/// `killpg(pgid, 0)` still succeeds on it, and this would poll until the budget
-/// expired and then report `Survived` for a process that had in fact stopped.
+/// [`shutdown_owned_child`] instead, so the defunct entry is reaped. A zombie
+/// leader no longer reads as `Survived` here: a group whose members have all
+/// exited is reported gone even before its parent reaps it.
 #[cfg(unix)]
 pub async fn shutdown_group(pgid: i32, grace: Duration) -> GroupShutdown {
     if pgid <= 0 || !group_has_running_member(pgid) {
@@ -255,11 +256,9 @@ async fn wait_for_group_exit_until(pgid: i32, deadline: tokio::time::Instant) ->
 
 /// Stop a group we own through a `Child`, then reap the leader.
 ///
-/// This cannot delegate to [`shutdown_group`], because the leader is our child:
-/// between exiting and being waited on it is a zombie, and `killpg(pgid, 0)`
-/// succeeds on a zombie. Polling group liveness before reaping would therefore
-/// never observe the group leave, and every well-behaved child would be
-/// reported as `Survived`. The reap has to come first.
+/// The leader is our child: between exiting and being waited on it is a zombie.
+/// This reaps it before polling, so the defunct entry goes away and the poll
+/// sees the group leave without needing the zombie-aware `ps` pass.
 ///
 /// The reap also matters on its own. A child that exited but was never waited
 /// on stays in the process table as a defunct entry; twelve were present during
