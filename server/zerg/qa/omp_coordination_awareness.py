@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -156,8 +157,12 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
     provider_home = isolation / "home"
     longhouse_home = provider_home / ".longhouse"
     workspace = isolation / "workspace"
-    provider_home.mkdir(mode=0o700, parents=True)
-    workspace.mkdir(mode=0o700, parents=True)
+    try:
+        provider_home.mkdir(mode=0o700, parents=True)
+        workspace.mkdir(mode=0o700, parents=True)
+    except BaseException:
+        shutil.rmtree(isolation, ignore_errors=True)
+        raise
     env = dict(os.environ)
     env.update(
         {
@@ -251,6 +256,8 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
             runtime_cleanup_verified=processes_stopped and cleanup["canary_session_hidden"] is True,
             cleanup=cleanup,
         )
+        required = ("provider_process_dead", "process_group_dead", "canary_session_hidden", "isolation_removed")
+        cleanup["status"] = "pass" if all(cleanup.get(key) is True for key in required) else "fail"
         cleanup = redact_state_for_evidence(cleanup)
         lifecycle.write_json(root / "cleanup-receipt.json", cleanup)
     lifecycle.write_json(root / "tool-invocation-evidence.json", invocation or {"found": False})
@@ -320,6 +327,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": "fail",
             "failure_code": "omp_coordination_awareness_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            "observation": {},
             "assertions": awareness_create_assertions({}),
         }
         if args.evidence_root is not None:
