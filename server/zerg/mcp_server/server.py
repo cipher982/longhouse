@@ -398,7 +398,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             "mode": mode,
         }
         if since_days is not None:
-            params["since_days"] = max(1, min(since_days, 3650))
+            params["since_days"] = max(1, min(since_days, 365))
         if project:
             params["project"] = project
         if provider:

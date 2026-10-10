@@ -582,3 +582,16 @@ def test_coordination_tools_match_the_contract():
         schema = tool.parameters
         assert set(schema.get("properties", {})) == set(expected["inputSchema"]["properties"]), expected["name"]
         assert sorted(schema.get("required", [])) == sorted(expected["inputSchema"].get("required", [])), expected["name"]
+
+
+def test_python_bounds_follow_the_contract():
+    """The Python surface clamps to the contract's published bounds."""
+
+    import inspect
+
+    from zerg.mcp_server import server as module
+
+    contract_max = next(t for t in module._COORDINATION_CONTRACT["tools"] if t["name"] == "recall")["inputSchema"]["properties"][
+        "since_days"
+    ]["maximum"]
+    assert f"min(since_days, {contract_max})" in inspect.getsource(module)

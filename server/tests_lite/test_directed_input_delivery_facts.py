@@ -42,3 +42,10 @@ def test_expiry_is_named_and_the_inbox_copy_remains():
     assert "inbox" in facts["meaning"]
     other = describe_directed_input_delivery(_with_receipt("failed", error_json={"message": "channel closed"}), max_delivery_age=AGE)
     assert other["state"] == "failed" and "channel closed" in other["meaning"]
+
+
+def test_a_steered_peer_message_says_it_entered_the_running_turn():
+    facts = describe_directed_input_delivery(_with_receipt("delivered", intent="steer"), max_delivery_age=AGE)
+    assert facts["state"] == "steered"
+    assert "running turn" in facts["meaning"]
+    assert facts["expires_at"] is None

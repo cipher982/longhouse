@@ -1975,8 +1975,11 @@ async def _attempt_directed_input_delivery(
             # as an ordinary SEND instead of dropping it.
             response = None
         except Exception:
-            logger.warning("Directed input %s steer failed", directed_input.get("id"), exc_info=True)
-            response = None
+            # Not a definite refusal: the steer may have reached the model, so
+            # it is not resent; the message stays readable in the inbox.
+            logger.warning("Directed input %s steer outcome unknown", directed_input.get("id"), exc_info=True)
+            receipt = await _directed_input_receipt_for(owner_id, target_session, steer_request_id)
+            return await _link_directed_input_receipt(owner_id, directed_input, receipt)
         if response is not None:
             return await _link_directed_input_receipt(owner_id, directed_input, response.live_input_id)
 

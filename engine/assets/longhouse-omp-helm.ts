@@ -208,7 +208,7 @@ const COORDINATION_CONTRACT = {
     },
     {
       "name": "send",
-      "description": "Send attributed input to another managed session; it sees the message as coming from this session. A target that is mid-turn receives it after its current tool call, as information it may use or ignore; an idle target receives it as a new message. The result's delivery field says in plain words what happened (queued, delivered, stored for the target's inbox only, or expired). A delivered receipt means the provider accepted the input, not that the model has read it: confirm with tail(session_id, roles=\"user,assistant\"). Never relay a message through a CLI that sends with the owner's credential.",
+      "description": "Send attributed input to another managed session; it sees the message as coming from this session. A target that is mid-turn receives it after its current tool call, as information it may use or ignore; an idle target receives it as a new message. The result's delivery field says in plain words what happened (steered into a running turn, queued, delivered, stored for the target's inbox only, or expired). A delivered receipt means the provider accepted the input, not that the model has read it: confirm with tail(session_id, roles=\"user,assistant\"). Never relay a message through a CLI that sends with the owner's credential.",
       "inputSchema": {
         "type": "object",
         "properties": {

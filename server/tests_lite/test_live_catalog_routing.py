@@ -517,3 +517,33 @@ def test_a_busy_target_that_cannot_steer_gets_a_durable_send(monkeypatch):
     )
 
     assert observed["intents"] == ["queue"]
+
+
+def test_an_unexpected_peer_steer_error_is_not_sent_twice(monkeypatch):
+    observed = {"intents": []}
+
+    async def create_input_response(**kwargs):
+        observed["intents"].append(kwargs["body"].intent)
+        raise RuntimeError("control channel dropped mid-steer")
+
+    async def receipt_for(owner_id, target_session, client_request_id):
+        observed["lookup"] = client_request_id
+        return None
+
+    _patch_busy(monkeypatch)
+    monkeypatch.setattr("zerg.routers.session_chat._create_catalog_session_input_response", create_input_response)
+    monkeypatch.setattr("zerg.routers.agents_sessions._directed_input_receipt_for", receipt_for)
+    monkeypatch.setattr("zerg.routers.agents_sessions._directed_input_call", _linking_catalog(observed))
+    directed_input = {"id": 31, "text": "lint is red on main"}
+    response = asyncio.run(
+        _attempt_directed_input_delivery(
+            owner_id=7,
+            sender_session=SimpleNamespace(id=UUID("00000000-0000-0000-0000-000000000059")),
+            target_session=_busy_target(UUID("00000000-0000-0000-0000-000000000060")),
+            directed_input=directed_input,
+        )
+    )
+
+    assert observed["intents"] == ["steer"]
+    assert observed["lookup"] == "directed-input-31-steer"
+    assert response is directed_input
