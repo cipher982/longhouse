@@ -418,6 +418,7 @@ def test_codex_turn_boundary_bounded_bridge_failure_is_typed(tmp_path: Path, mon
     [
         (claude_create, "run_awareness_create_scenario"),
         (claude_compaction, "run_awareness_post_compaction_scenario"),
+        (claude_directed, "run_directed_input_scenario"),
     ],
 )
 def test_claude_coordination_authority_unavailable_is_a_result_the_factory_accepts(
@@ -436,5 +437,6 @@ def test_claude_coordination_authority_unavailable_is_a_result_the_factory_accep
     result = getattr(producer, runner)(_claude_args(root, binary, variant=variant))
     persisted = _assert_persisted_failure(root, result)
     assert persisted["failure_code"] == "runtime_host_coordination_authority_unavailable"
-    assert isinstance(persisted["observation"], dict)
+    # Infrastructure, not a verdict: no observation and no assertion to misread as a finding.
+    assert "observation" not in persisted and "assertions" not in persisted
     assert_result_conforms(producer, persisted, variant=variant)

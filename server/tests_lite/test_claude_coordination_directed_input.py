@@ -246,7 +246,7 @@ def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(t
     result = m.run_directed_input_scenario(args)
 
     assert result["status"] == "fail"
-    assert result["assertions"] == {m._ASSERTION_SEND: False}
+    assert "assertions" not in result and "observation" not in result
     assert fake_shipper.stopped is True
     assert "cleanup-receipt.json" in {row["path"] for row in result["artifact_manifest"]}
     cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))

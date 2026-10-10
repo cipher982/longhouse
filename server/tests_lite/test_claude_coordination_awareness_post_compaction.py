@@ -179,7 +179,9 @@ def test_run_rejects_a_launch_without_coordination_authority_before_prompting(tm
     result = m.run_awareness_post_compaction_scenario(args)
 
     assert result["failure_code"] == "runtime_host_coordination_authority_unavailable"
-    assert result["assertions"] == {m._ASSERTION_VISIBLE: False}
+    # No verdict was reached: a typed harness failure, never an assertion the
+    # factory would classify as a product finding.
+    assert "assertions" not in result and "observation" not in result
     assert fake_session.submitted == []
 
 
@@ -229,7 +231,7 @@ def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(t
     result = m.run_awareness_post_compaction_scenario(args)
 
     assert result["status"] == "fail"
-    assert result["assertions"] == {m._ASSERTION_VISIBLE: False}
+    assert "assertions" not in result and "observation" not in result
     assert fake_shipper.stopped is True
     assert "cleanup-receipt.json" in {row["path"] for row in result["artifact_manifest"]}
     cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))

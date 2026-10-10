@@ -418,9 +418,6 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             error_detail = f"RuntimeHostHTTPError[{exc.status}]: {exc.detail}"
         failure = {
             **result,
-            # The factory reads a null observation as a malformed result; a
-            # failure before the observation was built still says so.
-            "observation": result.get("observation") or {"completed": False},
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
             "producer": REGISTRATION.to_dict(),
@@ -438,9 +435,18 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "error": error_detail,
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
-            "assertions": result.get("assertions") or {requested_assertion_id: False},
             "artifact_manifest": artifact_manifest(root),
         }
+        # A failure with evidence carries its observation and a verdict; one
+        # before any observation (no coordination authority, a launch that
+        # never came up) is a typed harness failure, with neither, so the
+        # factory reports its cause as infrastructure rather than reading a
+        # false assertion as a product or model finding.
+        if isinstance(result.get("observation"), dict):
+            failure["assertions"] = result.get("assertions") or {requested_assertion_id: False}
+        else:
+            failure.pop("observation", None)
+            failure.pop("assertions", None)
         write_json(root / "result.json", failure)
         return failure
     finally:
