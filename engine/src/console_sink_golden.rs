@@ -49,6 +49,11 @@ impl GoldenHome {
     where
         F: std::future::Future<Output = ()>,
     {
+        // LONGHOUSE_HOME and HOME are process-global. Without the shared lock a
+        // golden run swapped them under every guarded test running beside it
+        // (and was swapped itself): claim reads landed in another test's home
+        // and the goldens drifted, only in parallel runs.
+        let _guard = crate::console_adapter::agent_state_guard();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
