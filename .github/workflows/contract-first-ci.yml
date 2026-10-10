@@ -515,6 +515,14 @@ jobs:
 
       - uses: ./.github/actions/hosted-docker-disk
 
+      - name: Engine rustfmt gate
+        # Host cargo (rustup ships on the runner image); the suite below runs
+        # inside a container and does not check formatting. Formatting is
+        # enforced here, not in pre-commit: rustfmt walks mod children, which
+        # the pre-commit autofix wrapper cannot restore safely.
+        timeout-minutes: 5
+        run: cargo fmt --manifest-path engine/Cargo.toml -- --check
+
       - name: Run engine and shipper suite in one isolated container
         if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
         run: make test-shipper-premerge
