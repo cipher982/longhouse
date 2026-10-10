@@ -35,8 +35,6 @@ const userContent = (
 
 type Frame = Record<string, unknown>;
 
-/// OMP's session transcript suffix. A session's artifacts — and every subagent
-/// session it opens — live in the sibling directory named after the file.
 // BEGIN GENERATED COORDINATION CONTRACT (scripts/generate/generate_coordination_contract.py)
 // Do not edit: run the generator. Source: schemas/coordination_contract.yml
 const COORDINATION_CONTRACT = {
@@ -853,6 +851,8 @@ export function registerLonghouseCoordination(
 }
 // END GENERATED COORDINATION RUNTIME
 
+/// OMP's session transcript suffix. A session's artifacts — and every subagent
+/// session it opens — live in the sibling directory named after the file.
 const SESSION_FILE_SUFFIX = ".jsonl";
 
 const socketPath = process.env.LONGHOUSE_OMP_HELM_CHANNEL_PATH;

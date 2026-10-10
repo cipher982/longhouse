@@ -86,6 +86,8 @@ REGISTRATION = ProducerRegistration(
 def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    if os.environ.get("LONGHOUSE_PI_LIVE") not in {"1", "true", "yes", "on"}:
+        raise RuntimeError("Pi coordination qualification requires explicit LONGHOUSE_PI_LIVE opt-in")
     if not args.api_url or not args.agents_token:
         raise RuntimeError("Pi coordination qualification requires Runtime Host URL and token")
     if not str(args.model or "").strip():
