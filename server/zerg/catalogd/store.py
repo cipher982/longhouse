@@ -4146,6 +4146,31 @@ def _resolve_session_id_by_source_id(
     return str(rows[0][0]) if len(rows) == 1 else None
 
 
+def _without_retired_sessions(connection, session_ids: set[str]) -> set[str]:
+    """Drop retired sessions: a retired session is never a parent.
+
+    A source replacement retires the predecessor session but keeps its row,
+    which still carries the same native id and source aliases as its
+    successor. Counting it made every parent of a replaced source ambiguous,
+    so its subagents never bound and every append of the parent re-resolved
+    them inside the catalog writer (~0.9 s holds on david010, 2026-10-08).
+    """
+
+    if not session_ids:
+        return session_ids
+    storage_table = StorageSession.__table__
+    retired = {
+        str(row[0])
+        for row in connection.execute(
+            select(storage_table.c.session_id).where(
+                storage_table.c.session_id.in_(sorted(session_ids)),
+                storage_table.c.raw_state == "retired",
+            )
+        ).all()
+    }
+    return session_ids - retired
+
+
 def _resolve_session_id_by_provider_session_id(
     connection,
     *,
@@ -4225,22 +4250,7 @@ def _resolve_session_id_by_provider_session_id(
         ).all()
     )
     session_ids.update(str(row[0]) for row in fact_rows)
-    # A source replacement retires the predecessor session but leaves its row,
-    # which still carries the same native id. Counting it made every parent of
-    # a replaced source ambiguous, so its subagents never bound and every
-    # append of the parent re-resolved them all (~0.9 s writer holds on
-    # david010, 2026-10-08). A retired session is never a parent.
-    if len(session_ids) > 1:
-        retired = {
-            str(row[0])
-            for row in connection.execute(
-                select(storage_table.c.session_id).where(
-                    storage_table.c.session_id.in_(sorted(session_ids)),
-                    storage_table.c.raw_state == "retired",
-                )
-            ).all()
-        }
-        session_ids -= retired
+    session_ids = _without_retired_sessions(connection, session_ids)
     return next(iter(session_ids)) if len(session_ids) == 1 else None
 
 
@@ -4310,6 +4320,7 @@ def _resolve_session_id_by_source_path(
         )
         if resolved is not None:
             session_ids.add(resolved)
+    session_ids = _without_retired_sessions(connection, session_ids)
     return next(iter(session_ids)) if len(session_ids) == 1 else None
 
 
@@ -4420,19 +4431,35 @@ def adopt_orphan_subagents_once(engine) -> int:
                 session_table.c.owner_id,
                 session_table.c.machine_id,
                 session_table.c.subagent_parent_provider_session_id,
+                session_table.c.subagent_parent_source_id,
             ).where(
                 session_table.c.subagent_parent_session_id.is_(None),
-                session_table.c.subagent_parent_provider_session_id.is_not(None),
+                or_(
+                    session_table.c.subagent_parent_provider_session_id.is_not(None),
+                    session_table.c.subagent_parent_source_id.is_not(None),
+                ),
             )
         ).all()
         now = datetime.now(UTC)
-        for child_id, provider, owner_id, machine_id, pointer in orphans:
-            parent = _resolve_session_id_by_provider_session_id(
-                connection,
-                provider=str(provider),
-                provider_session_id=str(pointer),
-                owner_id=owner_id,
-                machine_id=str(machine_id),
+        for child_id, provider, owner_id, machine_id, pointer, source_pointer in orphans:
+            # The same evidence a commit uses: the native pointer, or the raw
+            # source identity when that is all the child carries.
+            parent = (
+                _resolve_session_id_by_provider_session_id(
+                    connection,
+                    provider=str(provider),
+                    provider_session_id=str(pointer),
+                    owner_id=owner_id,
+                    machine_id=str(machine_id),
+                )
+                if pointer
+                else _resolve_session_id_by_source_id(
+                    connection,
+                    provider=str(provider),
+                    opaque_source_id=str(source_pointer),
+                    owner_id=owner_id,
+                    machine_id=str(machine_id),
+                )
             )
             if parent is None or parent == str(child_id):
                 continue

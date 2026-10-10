@@ -170,3 +170,94 @@ def test_hot_path_reads_are_pinned_to_their_indexes(tmp_path):
             plan = connection.execute(explain, {**scope, **params}).fetchall()
             assert any(index in str(row) for row in plan), (index, plan)
             assert not any("TEMP B-TREE FOR ORDER BY" in str(row) for row in plan), plan
+
+
+def _fill_required(table, **values):
+    """A row with every NOT NULL column filled, for tables these tests only need to exist."""
+
+    from sqlalchemy import BigInteger
+    from sqlalchemy import Boolean
+    from sqlalchemy import DateTime
+    from sqlalchemy import Integer
+
+    row = {}
+    for column in table.columns:
+        if column.name in values or column.nullable or column.server_default is not None:
+            continue
+        if isinstance(column.type, (Integer, BigInteger)):
+            row[column.name] = 1
+        elif isinstance(column.type, Boolean):
+            row[column.name] = False
+        elif isinstance(column.type, DateTime):
+            row[column.name] = NOW
+        else:
+            row[column.name] = uuid4().hex
+    row.update(values)
+    return row
+
+
+def test_a_lone_retired_session_is_never_a_parent(tmp_path):
+    engine = _engine(tmp_path)
+    native_id = str(uuid4())
+    with engine.begin() as connection:
+        _session(connection, session_id=native_id, native_id=native_id, raw_state="retired")
+        assert _resolve(connection, native_id) is None
+
+
+def test_a_retired_session_with_the_same_source_path_alias_is_not_a_parent(tmp_path):
+    from zerg.catalogd.store import _resolve_session_id_by_source_path
+    from zerg.models.live_store import LiveSessionThread
+    from zerg.models.live_store import LiveSessionThreadAlias
+
+    engine = _engine(tmp_path)
+    path = "/Users/dev/.omp/agent/sessions/parent.jsonl"
+    with engine.begin() as connection:
+        live = _session(connection, provider="omp")
+        retired = _session(connection, provider="omp", raw_state="retired")
+        for session_id in (live, retired):
+            thread_id = str(uuid4())
+            connection.execute(
+                LiveSessionThread.__table__.insert().values(
+                    id=thread_id, session_id=session_id, provider="omp", is_primary=1, created_at=NOW, updated_at=NOW
+                )
+            )
+            connection.execute(
+                LiveSessionThreadAlias.__table__.insert().values(
+                    thread_id=thread_id,
+                    provider="omp",
+                    alias_kind="source_path",
+                    alias_value=path,
+                    first_seen_at=NOW,
+                    last_seen_at=NOW,
+                )
+            )
+        resolved = _resolve_session_id_by_source_path(connection, provider="omp", source_path=path, owner_id="1", machine_id="cinder")
+    assert resolved == live
+
+
+def test_startup_adopts_an_orphan_that_carries_only_a_source_pointer(tmp_path):
+    from zerg.catalogd.models import RawObject as LiveRawObject
+
+    engine = _engine(tmp_path)
+    source_id = "path-sha256:" + "a" * 64
+    with engine.begin() as connection:
+        parent = _session(connection)
+        connection.execute(
+            LiveRawObject.__table__.insert().values(
+                **_fill_required(
+                    LiveRawObject.__table__,
+                    session_id=parent,
+                    provider="claude",
+                    opaque_source_id=source_id,
+                    machine_id="cinder",
+                    retired_at=None,
+                )
+            )
+        )
+        child = _session(connection, is_subagent=1, subagent_parent_source_id=source_id)
+        connection.execute(catalog_meta.update().values(subagent_parent_generation=None))
+
+    assert adopt_orphan_subagents_once(engine) == 1
+    with engine.begin() as connection:
+        bound = connection.execute(select(StorageSession.subagent_parent_session_id).where(StorageSession.session_id == child)).scalar_one()
+    assert bound == parent

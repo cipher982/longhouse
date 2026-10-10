@@ -1120,6 +1120,7 @@
       "path": "server/tests_lite/test_catalogd_retired_parent_resolution.py",
       "providers": [
         "claude",
+        "omp",
         "opencode"
       ]
     },
