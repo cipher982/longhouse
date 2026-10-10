@@ -47,6 +47,11 @@ PROVIDER_SPAWN = re.compile(
     # meant its entire overlay could be deleted and this check stayed green --
     # which is exactly what a reviewer demonstrated.
     r"|libc::execve"
+    # The shared PTY relay execs whatever command it is handed, so its own
+    # execve carries the no-identity marker and the obligation moves to every
+    # caller: a Helm launcher that runs its provider through pty_relay::spawn
+    # must still apply the overlay where it builds the command.
+    r"|pty_relay::spawn\("
 )
 SPAWN_WINDOW = 2500
 NO_IDENTITY_MARKER = "no managed identity:"

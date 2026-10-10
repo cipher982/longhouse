@@ -217,7 +217,6 @@ struct PtyWriterInner {
 #[derive(Default)]
 struct DraftState {
     pending: bool,
-    last_input_at: Option<Instant>,
 }
 
 impl PtyWriter {
@@ -257,7 +256,6 @@ impl PtyWriter {
             .draft
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        draft.last_input_at = Some(Instant::now());
         for byte in bytes {
             match byte {
                 // Enter submits; ^C interrupts; ^U kills the line.
@@ -276,6 +274,9 @@ impl PtyWriter {
             .pending
     }
 
+    // Claude Helm's owner input is the first caller (step 2 of the
+    // claude-owner-input-delivery spec); Cursor's TUI writes do not wait.
+    #[allow(dead_code)]
     /// Wait up to `timeout` for the user's draft to clear. True when it did
     /// (or none was pending); false means the user is still typing and a
     /// remote write would land inside their draft.
@@ -303,6 +304,9 @@ impl PtyWriteGuard<'_> {
         write_all(self.master, bytes)
     }
 
+    // Claude Helm's multiline owner input is the first caller (step 2 of the
+    // claude-owner-input-delivery spec); Cursor sends its text unbracketed.
+    #[allow(dead_code)]
     /// Write `text` as one bracketed paste, so newlines in it do not submit.
     /// Only for a TUI that enabled paste mode; the caller sends the submit key.
     pub fn write_paste(&self, text: &[u8]) -> std::io::Result<()> {
