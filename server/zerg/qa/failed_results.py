@@ -8,6 +8,7 @@ leaf so pinning it does not pull the server in.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Any
 
 
@@ -42,3 +43,39 @@ def settle_failed_result(failure: dict[str, Any], *, observation: Any, assertion
         if isinstance(observation, Mapping) and observation:
             failure["partial_observation"] = observation
     return failure
+
+
+def reached_only(
+    assertions: Mapping[str, bool],
+    observation: Mapping[str, Any],
+    markers: Mapping[str, Sequence[str]],
+) -> dict[str, bool]:
+    """The verdicts of the steps an errored run actually reached.
+
+    ``markers`` names, per assertion, the observation records that exist only once
+    that step's verdict was decided (an evidence record, a turn verdict, a key added
+    after dispatch). A dotted marker reads a nested key (``launch.runtime_input_accepted``).
+    An assertion is kept only when every marker is present and non-empty. An
+    unreached step is absent from the result: the factory files a missing cell as
+    "no verdict for assertion" (harness), where a False would be a product finding
+    and a True would claim a step that never ran. Pass the result to
+    ``settle_failed_result``: a reached False stays a verdict; if every reached step
+    held, the run is a typed harness failure.
+    """
+
+    def value_at(path: str) -> Any:
+        value: Any = observation
+        for part in path.split("."):
+            if not isinstance(value, Mapping):
+                return None
+            value = value.get(part)
+        return value
+
+    def present(value: Any) -> bool:
+        return value is not None and not (isinstance(value, (Mapping, list, str)) and not value)
+
+    return {
+        assertion_id: verdict
+        for assertion_id, verdict in assertions.items()
+        if all(present(value_at(marker)) for marker in markers[assertion_id])
+    }

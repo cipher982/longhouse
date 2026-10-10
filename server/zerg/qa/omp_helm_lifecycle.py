@@ -25,6 +25,7 @@ from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import event_text
+from zerg.qa.failed_results import reached_only
 from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
@@ -206,14 +207,7 @@ REACHED_MARKERS: dict[str, tuple[str, ...]] = {
 def reached_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
     """The verdicts of the steps this observation actually reached."""
 
-    def present(value: object) -> bool:
-        return value is not None and not (isinstance(value, (Mapping, list, str)) and not value)
-
-    return {
-        assertion_id: verdict
-        for assertion_id, verdict in omp_helm_lifecycle_assertions(observation).items()
-        if all(present(observation.get(key)) for key in REACHED_MARKERS[assertion_id])
-    }
+    return reached_only(omp_helm_lifecycle_assertions(observation), observation, REACHED_MARKERS)
 
 
 def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str, bool]:

@@ -49,6 +49,7 @@ from urllib.request import urlopen
 
 from zerg.qa import live_session_toolkit
 from zerg.qa import provider_console_lifecycle as console_lifecycle
+from zerg.qa.failed_results import reached_only
 from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_release_identity import artifact_manifest
@@ -469,6 +470,20 @@ def abort_observation(
         "idle_after_abort": idle_after_abort,
         "follow_up_answered": any(follow_marker in row["text"] and row["finish"] == "stop" for row in follow_chain),
     }
+
+
+# What proves each step was reached and its verdict decided. The send, steer,
+# abort and terminate records are assigned whole when their step finishes; launch
+# is recorded at registration but its verdict also needs runtime_input_accepted,
+# added only once the first send was dispatched. An errored run reports verdicts
+# only for these (failed_results.reached_only).
+REACHED_MARKERS: dict[str, tuple[str, ...]] = {
+    "opencode_helm_launch_registration": ("launch.runtime_input_accepted",),
+    "opencode_helm_send_idle": ("send",),
+    "opencode_helm_steer_active": ("steer",),
+    "opencode_helm_abort_native": ("abort",),
+    "opencode_helm_terminate_owned": ("terminate",),
+}
 
 
 def opencode_helm_lifecycle_assertions(observation: dict[str, Any]) -> dict[str, bool]:
@@ -915,10 +930,15 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         result["failure_code"] = "opencode_helm_lifecycle_failed"
         result["error"] = f"{type(failure).__name__}: {failure}"
         if not args.negative_control:
-            # An exception cannot leave a failed result with an all-true map (the
-            # factory refuses the contradiction): keep a failing verdict, otherwise
-            # a typed harness failure with the observation kept as evidence.
-            settle_failed_result(result, observation=result.get("observation"), assertions=result.get("assertions") or {})
+            # Verdicts only for the steps this run reached: a reached failing step
+            # is a finding; if every reached step held, a typed harness failure
+            # with the observation kept as evidence.
+            observed = result.get("observation") or {}
+            settle_failed_result(
+                result,
+                observation=observed,
+                assertions=reached_only(result.get("assertions") or {}, observed, REACHED_MARKERS),
+            )
     secrets = list(live_session_toolkit.qualification_secrets(environment, str(args.agents_token)))
     result["redacted_secret_files"] = live_session_toolkit.secret_scan(root, secrets)
     result["artifact_manifest"] = artifact_manifest(root)

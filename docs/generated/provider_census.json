@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 320,
+  "file_count": 321,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1286,6 +1286,13 @@
         "omp",
         "opencode",
         "pi"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_helm_reached_verdicts.py",
+      "providers": [
+        "codex",
+        "opencode"
       ]
     },
     {

@@ -215,8 +215,11 @@ def test_codex_entrypoint_retains_rollout_before_native_late_failure(monkeypatch
 
     assert result["status"] == "fail"
     assert payload["status"] == "fail"
-    assert payload["assertions"]["codex_helm_send_idle"] is True
-    assert payload["assertions"]["codex_helm_steer_active"] is False
+    # Steer raised before its phase returned, so it was never reached; send and
+    # terminate held. No failing verdict was reached: a typed harness failure,
+    # with the phases it saw kept as evidence and steer never reported False.
+    assert "observation" not in payload and "assertions" not in payload
+    assert "send" in payload["partial_observation"] and "steer" not in payload["partial_observation"]
     assert payload["error"] == "RuntimeError: late Codex native steer failure"
     assert cleanup["required_cleanup"]["final_bridge_stopped"] is True
     assert _json(tmp_path / "evidence" / "provider-rollout.json")[0]["type"] == "event_msg"
@@ -424,7 +427,13 @@ def test_opencode_entrypoint_retains_send_before_runtime_steer_failure(monkeypat
     result = producer.run_opencode_helm_lifecycle(_args(tmp_path, binary, variant=variant))
     payload = _json(tmp_path / "evidence" / "result.json")
     assert_result_conforms(producer, payload, variant=variant)
+    # Steer raised before its record was written, so it is never reported. Launch
+    # was reached (its input was dispatched) and fails on this fixture, which has
+    # no connection_id: a reached failing step, so the result stays a verdict over
+    # the reached steps only.
+    assert payload["assertions"] == {"opencode_helm_launch_registration": False, "opencode_helm_send_idle": True}
     observation = payload["observation"]
+    assert "steer" not in observation
 
     assert result["status"] == "fail"
     assert payload["status"] == "fail"

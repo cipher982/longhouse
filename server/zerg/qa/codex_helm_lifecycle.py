@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa.failed_results import reached_only
 from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
@@ -256,6 +257,18 @@ def terminate_owned_holds(obs: dict[str, Any]) -> bool:
         and obs.get("recorded_pids")
         and not obs.get("recorded_pids_alive")
     )
+
+
+# What proves each phase was reached and its verdict decided: a phase's record is
+# assigned only when its phase function returns (terminate runs in the cleanup
+# path whenever a session started), so an exception mid-phase leaves it absent. An
+# errored run reports verdicts only for these (failed_results.reached_only).
+REACHED_MARKERS: dict[str, tuple[str, ...]] = {
+    SEND_IDLE: ("send",),
+    STEER_ACTIVE: ("steer",),
+    ABORT_NATIVE: ("abort",),
+    TERMINATE_OWNED: ("terminate",),
+}
 
 
 def codex_helm_lifecycle_assertions(observations: dict[str, Any], records: list[dict[str, Any]]) -> dict[str, bool]:
@@ -551,10 +564,14 @@ def run_codex_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         result["failure_code"] = "codex_helm_lifecycle_failed"
         result["error"] = f"{type(failure).__name__}: {failure}"
         if not negative:
-            # An exception cannot leave a failed result with an all-true map (the
-            # factory refuses the contradiction): keep a failing verdict, otherwise
-            # a typed harness failure with the observation kept as evidence.
-            settle_failed_result(result, observation=result.get("observation"), assertions=result.get("assertions") or {})
+            # Verdicts only for the phases this run reached: a reached failing
+            # phase is a finding; if every reached phase held, a typed harness
+            # failure with the observation kept as evidence.
+            settle_failed_result(
+                result,
+                observation=observations,
+                assertions=reached_only(assertions, observations, REACHED_MARKERS),
+            )
     result["artifact_manifest"] = artifact_manifest(root)
     write_json(root / "result.json", result)
     return result
