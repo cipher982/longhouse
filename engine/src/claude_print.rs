@@ -936,7 +936,7 @@ pub async fn recover_claude_print_turns(
         };
         if let Some(pgid) = claim
             .process_group_id
-            .filter(|pgid| crate::process_group::group_is_alive(*pgid))
+            .filter(|pgid| crate::process_group::group_has_running_member(*pgid))
         {
             if !claim.process_group_is_from_this_boot()
                 || !claim.has_live_group_identity(&inventory)
