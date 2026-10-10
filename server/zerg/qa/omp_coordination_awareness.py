@@ -101,26 +101,29 @@ def _is_peers_invocation(call: Mapping[str, Any]) -> bool:
         return True
     arguments = call.get("arguments")
     path = str(arguments.get("path") or "") if isinstance(arguments, Mapping) else ""
-    return name == "write" and path.split("?", 1)[0] == "xd://peers"
+    return name == "write" and path.split("?", 1)[0].rstrip("/") == "xd://peers"
 
 
 def peers_invocation_evidence(rows: list[Mapping[str, Any]]) -> dict[str, Any] | None:
-    """The first ``peers`` invocation in an OMP session and its tool result.
+    """A ``peers`` invocation in an OMP session and its tool result.
 
     A result counts only when OMP reports no error and the body is not a
     Longhouse error object (the extension answers a refused call with
-    ``{"error": ...}``).
+    ``{"error": ...}``). The first successful invocation wins, so a refusal
+    followed by a good retry still proves the tool works; with none, the
+    first refusal is returned as the evidence.
     """
 
     calls: dict[str, Mapping[str, Any]] = {}
+    first_refusal: dict[str, Any] | None = None
     for row in rows:
         message = row.get("message") if row.get("type") == "message" else None
         if not isinstance(message, Mapping):
             continue
         if message.get("role") == "assistant" and isinstance(message.get("content"), list):
             for part in message["content"]:
-                if isinstance(part, Mapping) and part.get("type") == "toolCall" and _is_peers_invocation(part):
-                    calls[str(part.get("id") or "")] = part
+                if isinstance(part, Mapping) and part.get("type") == "toolCall" and part.get("id") and _is_peers_invocation(part):
+                    calls[str(part["id"])] = part
         elif message.get("role") == "toolResult" and str(message.get("toolCallId") or "") in calls:
             call = calls[str(message["toolCallId"])]
             text = _tool_text(message)
@@ -129,13 +132,16 @@ def peers_invocation_evidence(rows: list[Mapping[str, Any]]) -> dict[str, Any] |
             except ValueError:
                 body = None
             refused = isinstance(body, Mapping) and "error" in body
-            return {
+            evidence = {
                 "tool_name": call.get("name"),
                 "arguments": call.get("arguments"),
                 "is_error": message.get("isError") is True or refused,
                 "result_excerpt": text[:400],
             }
-    return None
+            if evidence["is_error"] is not True:
+                return evidence
+            first_refusal = first_refusal or evidence
+    return first_refusal
 
 
 def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
@@ -224,8 +230,11 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
             if owner_records
             else {"status": "fail", "provider_process_dead": False, "process_group_dead": False}
         )
-        retirement = retire_qualification_session(str(args.api_url), str(args.agents_token), session_id, provider="omp")
-        cleanup["canary_session_hidden"] = _exact_session_retirement(retirement, session_id) if session_id else False
+        if session_id:
+            retirement = retire_qualification_session(str(args.api_url), str(args.agents_token), session_id, provider="omp")
+            cleanup["canary_session_hidden"] = _exact_session_retirement(retirement, session_id)
+        else:
+            cleanup["canary_session_hidden"] = False
         shipper_stop: dict[str, Any] = {}
         if shipper is not None:
             try:
@@ -255,9 +264,6 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
         "cleanup": cleanup,
     }
     assertions = awareness_create_assertions(observation)
-    cleanup_ready = all(
-        cleanup.get(key) is True for key in ("provider_process_dead", "process_group_dead", "canary_session_hidden", "isolation_removed")
-    )
     result = {
         "schema_version": 1,
         "artifact_kind": _ARTIFACT_KIND,
@@ -268,7 +274,9 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
         "scenario_revision": REGISTRATION.scenario_revision,
         "evidence_class": "live_token",
         "generated_at": now(),
-        "status": "pass" if failure is None and assertions[ASSERTION_ID] and cleanup_ready else "fail",
+        # Status follows the assertion map, as the factory validator requires;
+        # cleanup is judged from the cleanup receipt (REGISTRATION.required_cleanup).
+        "status": "pass" if failure is None and assertions[ASSERTION_ID] else "fail",
         "observation": observation,
         "assertions": assertions,
         **({"failure_code": "omp_coordination_awareness_failed", "error": failure} if failure else {}),
@@ -296,7 +304,28 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
     if args.longhouse_cli is None:
         args.longhouse_cli = Path(os.environ.get("LONGHOUSE_CLI_BIN") or "longhouse")
-    result = run_scenario(args)
+    try:
+        result = run_scenario(args)
+    except Exception as exc:  # noqa: BLE001 - a precondition failure still writes a typed result
+        result = {
+            "schema_version": 1,
+            "artifact_kind": _ARTIFACT_KIND,
+            "producer": REGISTRATION.to_dict(),
+            "provider": "omp",
+            "variant": None,
+            "scenario_id": SCENARIO_ID,
+            "scenario_revision": REGISTRATION.scenario_revision,
+            "evidence_class": "live_token",
+            "generated_at": now(),
+            "status": "fail",
+            "failure_code": "omp_coordination_awareness_failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "assertions": awareness_create_assertions({}),
+        }
+        if args.evidence_root is not None:
+            args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            result["artifact_manifest"] = artifact_manifest(args.evidence_root)
+            lifecycle.write_json(args.evidence_root / "result.json", result)
     print(json.dumps(result, sort_keys=True, default=str))
     return 0 if result.get("status") == "pass" else 1
 

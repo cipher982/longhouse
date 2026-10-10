@@ -51,3 +51,14 @@ def test_registration_names_the_omp_coordination_cell():
     assert REGISTRATION.providers == ("omp",)
     assert REGISTRATION.assertion_cells == (("coordination_instructions_model_visible", None),)
     assert REGISTRATION.scenario_id == "omp_coordination_awareness_create"
+
+
+def test_a_refusal_then_a_successful_retry_proves_the_tool():
+    rows = [
+        _assistant({"type": "toolCall", "id": "a", "name": "write", "arguments": {"path": "xd://peers/"}}),
+        _result("a", json.dumps({"error": "registration_pending"})),
+        _assistant({"type": "toolCall", "id": "b", "name": "write", "arguments": {"path": "xd://peers"}}),
+        _result("b", json.dumps({"total": 0, "peers": []})),
+    ]
+    evidence = peers_invocation_evidence(rows)
+    assert evidence is not None and evidence["is_error"] is False
