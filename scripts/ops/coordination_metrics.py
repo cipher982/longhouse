@@ -164,11 +164,11 @@ def process_omp_file(file_path: Path) -> Tuple[List[str], Dict[str, Any], Dict[s
 
     try:
         with open(file_path, "r") as f:
-            # Extract session ID from filename (longhouse-<uuid>.jsonl)
+            # One file is one session. Longhouse-launched files are named
+            # longhouse-<uuid>.jsonl; OMP's own are timestamped and nested.
             filename = file_path.stem
-            if filename.startswith("longhouse-"):
-                session_id = filename[10:]  # Remove "longhouse-" prefix
-                session_ids.append(session_id)
+            session_id = filename.removeprefix("longhouse-")
+            session_ids.append(session_id)
 
             for line in f:
                 line = line.strip()
@@ -276,7 +276,7 @@ def main():
     omp_dir = Path.home() / ".omp" / "agent" / "sessions"
     if omp_dir.exists():
         for file_path in omp_dir.glob("**/*.jsonl"):
-            if file_path.stem.startswith("longhouse-") and should_process_file(file_path, cutoff):
+            if should_process_file(file_path, cutoff):
                 session_ids, tools, sessions_by_tool = process_omp_file(file_path)
                 results["omp"]["sessions_total"].update(session_ids)
                 for tool, count in tools.items():
