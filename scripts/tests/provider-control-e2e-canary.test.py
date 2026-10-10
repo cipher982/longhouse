@@ -436,7 +436,7 @@ def test_claude_channel_canary_uses_native_channel_module() -> None:
         assert result.returncode == 0, result.stderr + result.stdout
         claude = payload["canaries"]["claude"]
         assert claude["status"] == "pass"
-        assert claude["send_meta"]["injected_by"] == "longhouse"
+        assert claude["send_meta"]["from"] == "session-owner"
         assert claude["steer_meta"]["intent"] == "steer"
         # The canary verifies the marker before deliberately deleting its
         # scratch work root. The retained artifact records that proof outcome,

@@ -195,7 +195,7 @@ def serve(args):
 
 def send(args):
     state = read_state(args)
-    meta = {"injected_by": "longhouse", "longhouse_session_id": arg_value(args, "--session-id")}
+    meta = {"from": "session-owner", "longhouse_session_id": arg_value(args, "--session-id")}
     meta.update(meta_entries(args))
     payload = json.dumps({"text": arg_value(args, "--text"), "meta": meta}).encode("utf-8")
     request = urllib.request.Request(
@@ -2493,11 +2493,11 @@ def test_claude_interrupt_cancel_uses_channel_control_canary(tmp_path: Path, mon
                     "status": "pass",
                     "session_id": "claude-channel-control-session",
                     "send_meta": {
-                        "injected_by": "longhouse",
+                        "from": "session-owner",
                         "longhouse_session_id": "claude-channel-control-session",
                     },
                     "steer_meta": {
-                        "injected_by": "longhouse",
+                        "from": "session-owner",
                         "intent": "steer",
                         "longhouse_session_id": "claude-channel-control-session",
                     },
@@ -2570,11 +2570,11 @@ def test_claude_steer_active_turn_uses_channel_control_canary(tmp_path: Path, mo
                     "status": "pass",
                     "session_id": "claude-channel-steer-session",
                     "send_meta": {
-                        "injected_by": "longhouse",
+                        "from": "session-owner",
                         "longhouse_session_id": "claude-channel-steer-session",
                     },
                     "steer_meta": {
-                        "injected_by": "longhouse",
+                        "from": "session-owner",
                         "intent": "steer",
                         "longhouse_session_id": "claude-channel-steer-session",
                     },

@@ -481,7 +481,7 @@ def _send(args):
     wait_secs = _one(options, "--wait-secs", "10")
     state = _read_state(session_id, state_root, wait_secs)
     meta = {
-        "injected_by": "longhouse",
+        "from": "session-owner",
         "longhouse_session_id": session_id,
     }
     for entry in options.get("--meta") or []:
@@ -657,7 +657,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
         send_params = send_notification.get("params", {})
         send_meta = send_params.get("meta")
         expected_send_meta = {
-            "injected_by": "longhouse",
+            "from": "session-owner",
             "longhouse_session_id": session_id,
         }
         if send_params.get("content") != "hello from provider control canary" or send_meta != expected_send_meta:
@@ -698,7 +698,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
         steer_params = steer_notification.get("params", {})
         steer_meta = steer_params.get("meta")
         expected_steer_meta = {
-            "injected_by": "longhouse",
+            "from": "session-owner",
             "intent": "steer",
             "longhouse_session_id": session_id,
         }

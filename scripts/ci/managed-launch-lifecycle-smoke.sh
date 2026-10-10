@@ -672,7 +672,7 @@ def record_notifications():
             continue
         content = message["params"]["content"]
         wrapped = (
-            '<channel source="longhouse-channel" injected_by="longhouse">\n'
+            '<channel source="longhouse-channel" from="session-owner">\n'
             + content
             + "\n</channel>"
         )
