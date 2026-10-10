@@ -216,8 +216,7 @@ final class SessionChatUITests: XCTestCase {
         let sendButton = app.buttons["session-chat-send"]
         let message = "ui harness immediate reveal"
 
-        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
-        composer.tap()
+        focusComposer(composer, in: app)
         composer.typeText(message)
         sendButton.tap()
 
@@ -232,8 +231,7 @@ final class SessionChatUITests: XCTestCase {
         let sendButton = app.buttons["session-chat-send"]
         let message = "console reconciliation probe"
 
-        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
-        composer.tap()
+        focusComposer(composer, in: app)
         composer.typeText(message)
         sendButton.tap()
 
@@ -253,8 +251,7 @@ final class SessionChatUITests: XCTestCase {
         let sendButton = app.buttons["session-chat-send"]
         let message = "completed Console input without an echo"
 
-        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
-        composer.tap()
+        focusComposer(composer, in: app)
         composer.typeText(message)
         sendButton.tap()
 
@@ -279,7 +276,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(sendButton.waitForExistence(timeout: Self.patient(5)))
         XCTAssertEqual(sendButton.label, "Send update mid-turn")
-        composer.tap()
+        focusComposer(composer, in: app)
         composer.typeText(message)
         sendButton.tap()
 
@@ -512,8 +509,7 @@ final class SessionChatUITests: XCTestCase {
 
         XCTAssertTrue(currentLastMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: Self.patient(5)))
-        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
-        composer.tap()
+        focusComposer(composer, in: app)
         composer.typeText("typing keeps transcript pinned")
 
         XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: Self.patient(5)))
@@ -552,12 +548,7 @@ final class SessionChatUITests: XCTestCase {
         let composer = app.textFields["session-chat-composer"]
         let liveUpdate = app.staticTexts["Assistant fixture keyboard update at bottom."]
 
-        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
-        composer.tap()
-        XCTAssertTrue(
-            app.keyboards.firstMatch.waitForExistence(timeout: Self.patient(3)),
-            "Composer keyboard should appear promptly"
-        )
+        focusComposer(composer, in: app, requireKeyboard: true)
 
         XCTAssertTrue(liveUpdate.waitForExistence(timeout: Self.webTranscriptTimeout))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
@@ -570,12 +561,7 @@ final class SessionChatUITests: XCTestCase {
         let composer = app.textFields["session-chat-composer"]
         let finalChunk = app.staticTexts["Assistant fixture streaming update at bottom."]
 
-        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
-        composer.tap()
-        XCTAssertTrue(
-            app.keyboards.firstMatch.waitForExistence(timeout: Self.patient(3)),
-            "Composer keyboard should appear promptly"
-        )
+        focusComposer(composer, in: app, requireKeyboard: true)
 
         XCTAssertTrue(finalChunk.waitForExistence(timeout: Self.webTranscriptTimeout))
         assertAnchoredAboveBottomChrome(finalChunk, app: app)
@@ -780,6 +766,40 @@ final class SessionChatUITests: XCTestCase {
             }
             previousFrame = frame
         }
+    }
+
+    /// Give the composer keyboard focus, which every composer test needs first.
+    ///
+    /// Waiting for the field to exist was not enough: on the hosted VM a
+    /// synthesized tap occasionally reached an existing, hittable composer and
+    /// left no focus, no caret and no keyboard (run 38015970561: the update was
+    /// already rendered, the tap synthesized cleanly, nothing changed after it).
+    /// Wait until the field can take the tap; if the first tap leaves neither a
+    /// keyboard nor focus, keep the evidence and tap once more. A composer that
+    /// never takes focus still fails, so a real focus bug cannot hide here.
+    private func focusComposer(_ composer: XCUIElement, in app: XCUIApplication, requireKeyboard: Bool = false) {
+        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(waitUntilHittable(composer, timeout: Self.patient(5)), "Composer should accept a tap")
+        composer.tap()
+        if composerTookFocus(composer, in: app, requireKeyboard: requireKeyboard) { return }
+        XCTContext.runActivity(named: "First composer tap took no focus; tapping once more") { activity in
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = "composer-tap-without-focus"
+            screenshot.lifetime = .keepAlways
+            activity.add(screenshot)
+        }
+        composer.tap()
+        XCTAssertTrue(
+            composerTookFocus(composer, in: app, requireKeyboard: requireKeyboard),
+            requireKeyboard ? "Composer keyboard should appear promptly" : "Composer should take keyboard focus"
+        )
+    }
+
+    /// The keyboard-layout tests need the software keyboard on screen; typing
+    /// needs only focus.
+    private func composerTookFocus(_ composer: XCUIElement, in app: XCUIApplication, requireKeyboard: Bool) -> Bool {
+        if app.keyboards.firstMatch.waitForExistence(timeout: Self.patient(3)) { return true }
+        return !requireKeyboard && (composer.value(forKey: "hasKeyboardFocus") as? Bool) == true
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
