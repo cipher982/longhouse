@@ -2168,6 +2168,44 @@ def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch,
     assert result.reason == "transient_dispatch_failure"
 
 
+@pytest.mark.parametrize("error_code", ["turn_active", "runtime_restarting", "control_unavailable"])
+def test_queue_drain_requeues_the_shared_precondition_refusals(monkeypatch, tmp_path, error_code):
+    """The cold-DB drain requeues the same refusals as the live drain, e.g. a turn that just started."""
+
+    from fastapi.responses import JSONResponse
+
+    from zerg.services.session_input_queue import DRAIN_REQUEUE_CODES
+    from zerg.services.session_input_queue import wake_session_input_queue
+    from zerg.services.session_inputs import create_session_input
+
+    assert error_code in DRAIN_REQUEUE_CODES
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="arrives at the boundary",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id=f"drain-requeue-{error_code}",
+        )
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+
+    async def fake_dispatch(**_kwargs):
+        return JSONResponse(status_code=409, content={"accepted": False, "error": "not yet", "code": error_code})
+
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", fake_dispatch)
+    result = asyncio.run(wake_session_input_queue(db_bind=db_bind, session_id=session_id, reason="test", lock_scope_id=str(session_id)))
+    with session_local() as db:
+        row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+        assert row.status == INPUT_STATUS_QUEUED
+        assert row.next_attempt_at is not None
+    assert result.reason == "transient_dispatch_failure"
+
+
 def test_next_attempt_at_is_respected_after_transient_failure(monkeypatch, tmp_path):
     from fastapi.responses import JSONResponse
 

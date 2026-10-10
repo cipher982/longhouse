@@ -587,11 +587,16 @@ async def _dispatch_claimed_input(
         try:
             response_body = json.loads(getattr(dispatch_response, "body", b"{}") or b"{}")
             if isinstance(response_body, dict):
-                response_error_code = str(response_body.get("error_code") or response_error_code)
+                response_error_code = str(response_body.get("error_code") or response_body.get("code") or response_error_code)
                 response_error_message = str(response_body.get("error") or response_error_message)
         except Exception:
             pass
-        if _is_transient_managed_control_unavailable(response_error_code, response_error_message):
+        # Same "not yet, never no" set as the live drain: a turn that started
+        # before dispatch arrived, an unconverged control path, or a restarting
+        # Runtime Host returns the input to the queue instead of failing it.
+        if response_error_code in DRAIN_REQUEUE_CODES or _is_transient_managed_control_unavailable(
+            response_error_code, response_error_message
+        ):
             attempt_count = int(getattr(claimed, "attempt_count", 0) or 0)
             if attempt_count >= MAX_DELIVERY_ATTEMPTS:
                 if attempt_id is not None:
