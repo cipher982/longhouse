@@ -359,3 +359,32 @@ def test_settle_failed_result_keeps_a_verdict_only_with_evidence() -> None:
     no_verdict = factory.settle_failed_result(stale, observation=None, assertions={"a": False})
     assert "observation" not in no_verdict and "assertions" not in no_verdict
     assert factory.typed_harness_failure(no_verdict)
+
+
+def test_failed_results_is_a_leaf_and_producers_never_import_factory_registration() -> None:
+    """The factory pins every module a producer imports (its verifier closure).
+
+    failed_results must import nothing from Longhouse, and producers take the
+    failure helpers from it, never from factory_registration, whose closure is
+    most of the server: one such import made every Longhouse commit read as a
+    verifier change and blocked an epoch accept (2026-10-10).
+    """
+
+    qa = Path(factory.__file__).resolve().parent
+    leaf = ast.parse((qa / "failed_results.py").read_text(encoding="utf-8"))
+    leaf_imports = {node.module or "" for node in ast.walk(leaf) if isinstance(node, ast.ImportFrom)} | {
+        alias.name for node in ast.walk(leaf) if isinstance(node, ast.Import) for alias in node.names
+    }
+    assert not {name for name in leaf_imports if name.startswith("zerg")}, leaf_imports
+
+    offenders = []
+    for path in sorted(qa.glob("*.py")):
+        if path.name == "factory_registration.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if "def main(" not in path.read_text(encoding="utf-8"):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "zerg.qa.factory_registration":
+                offenders.append(path.name)
+    assert not offenders, f"producers importing factory_registration: {offenders}"

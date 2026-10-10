@@ -48,7 +48,7 @@ from typing import Any
 from zerg.qa import antigravity_hook_qualification
 from zerg.qa import provider_release_semantic_oracles as semantic_oracles
 from zerg.qa.antigravity_hook_qualification import _NO_TOKEN_REQUIRED_CANARIES
-from zerg.qa.factory_registration import settle_failed_result
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file

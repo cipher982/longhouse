@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import provider_console_lifecycle as lifecycle
-from zerg.qa.factory_registration import settle_failed_result
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import require_disposable_runtime

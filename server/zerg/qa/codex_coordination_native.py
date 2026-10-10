@@ -41,7 +41,7 @@ from typing import Any
 from websockets.sync.client import connect as websocket_connect
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
-from zerg.qa.factory_registration import settle_failed_result
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import qualification_secrets
