@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import provider_console_lifecycle as lifecycle
+from zerg.qa.factory_registration import settle_failed_result
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import require_disposable_runtime
@@ -290,9 +291,9 @@ def main(argv: list[str] | None = None) -> int:
             "status": "fail",
             "failure_code": "pi_coordination_awareness_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "observation": {},
-            "assertions": awareness_create_assertions({}),
         }
+        # A precondition failure ran no session, so it reached no verdict.
+        settle_failed_result(result, observation=None, assertions={})
         if args.evidence_root is not None:
             args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
             result["artifact_manifest"] = artifact_manifest(args.evidence_root)

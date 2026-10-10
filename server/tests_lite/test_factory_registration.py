@@ -343,3 +343,19 @@ def test_the_static_check_sees_the_912b6e979_literal_and_leaves_authored_variant
     assert _invocation_variant_reports('result = {"variant": None if steer else variant}', mixed=True) == []
     assert _invocation_variant_reports('result = {"variant": None if steer else variant}') == [1]
     assert _invocation_variant_reports('result = {"variant": args.variant}', mixed=True) == [1]
+
+
+def test_settle_failed_result_keeps_a_verdict_only_with_evidence() -> None:
+    """Evidence carries its verdict; no observation means a typed harness failure."""
+
+    base = {"status": "fail", "failure_code": "x_failed", "error": "RuntimeError: bridge never came up"}
+
+    with_evidence = factory.settle_failed_result(dict(base), observation={"seen": True}, assertions={"a": False})
+    assert with_evidence["observation"] == {"seen": True}
+    assert with_evidence["assertions"] == {"a": False}
+    assert not factory.typed_harness_failure(with_evidence)
+
+    stale = {**base, "observation": {}, "assertions": {"a": False}}
+    no_verdict = factory.settle_failed_result(stale, observation=None, assertions={"a": False})
+    assert "observation" not in no_verdict and "assertions" not in no_verdict
+    assert factory.typed_harness_failure(no_verdict)

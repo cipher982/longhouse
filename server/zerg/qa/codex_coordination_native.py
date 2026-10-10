@@ -41,6 +41,7 @@ from typing import Any
 from websockets.sync.client import connect as websocket_connect
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa.factory_registration import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import qualification_secrets
@@ -891,12 +892,11 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "error": f"{type(exc).__name__}: {exc}",
             "artifact_manifest": artifact_manifest(root),
         }
-        if isinstance(existing_observation, dict):
-            failure["observation"] = existing_observation
-            failure["assertions"] = result.get("assertions") or {assertion_id: False}
-        else:
-            failure.pop("observation", None)
-            failure.pop("assertions", None)
+        settle_failed_result(
+            failure,
+            observation=existing_observation,
+            assertions=result.get("assertions") or {assertion_id: False},
+        )
         write_json(root / "result.json", failure)
         return failure
 

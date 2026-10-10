@@ -172,7 +172,12 @@ def test_hook_inbox_launch_fails_closed_on_unexpected_assertion_set(tmp_path: Pa
     assert result["status"] == "fail"
     assert result["failure_code"] == "antigravity_launch_hook_inbox_failed"
     assert "assertion set" in result["error"]
-    assert result["assertions"] == {"hook_inbox_contract_preserved": False}
+    # The harness could not reach a verdict: a typed harness failure, which the
+    # factory reports by cause instead of filing a false assertion as a finding.
+    assert "assertions" not in result and "observation" not in result
+    from tests_lite._factory_envelope import assert_result_conforms
+
+    assert_result_conforms(antigravity_launch_hook_inbox, result, variant=args.variant)
 
 
 def test_main_rejects_missing_provider_binary(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

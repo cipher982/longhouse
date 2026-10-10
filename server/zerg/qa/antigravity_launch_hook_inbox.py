@@ -48,6 +48,7 @@ from typing import Any
 from zerg.qa import antigravity_hook_qualification
 from zerg.qa import provider_release_semantic_oracles as semantic_oracles
 from zerg.qa.antigravity_hook_qualification import _NO_TOKEN_REQUIRED_CANARIES
+from zerg.qa.factory_registration import settle_failed_result
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
@@ -219,9 +220,10 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
             **_base_result(status="fail", execution_variant=getattr(args, "variant", None)),
             "failure_code": "antigravity_launch_hook_inbox_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "assertions": {ASSERTION_ID: False},
             "artifact_manifest": artifact_manifest(root),
         }
+        # The crash came before the result was built, so no verdict was reached.
+        settle_failed_result(failure, observation=None, assertions={})
         _write_json(root / "result.json", failure)
         return failure
 

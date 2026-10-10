@@ -49,6 +49,7 @@ from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_until
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
+from zerg.qa.factory_registration import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import prepare_claude_profile
@@ -442,11 +443,11 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         # never came up) is a typed harness failure, with neither, so the
         # factory reports its cause as infrastructure rather than reading a
         # false assertion as a product or model finding.
-        if isinstance(result.get("observation"), dict):
-            failure["assertions"] = result.get("assertions") or {requested_assertion_id: False}
-        else:
-            failure.pop("observation", None)
-            failure.pop("assertions", None)
+        settle_failed_result(
+            failure,
+            observation=result.get("observation"),
+            assertions=result.get("assertions") or {requested_assertion_id: False},
+        )
         write_json(root / "result.json", failure)
         return failure
     finally:
