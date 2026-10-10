@@ -149,6 +149,9 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
     }
     _write_json(root / "provider-binary-receipt.json", provider_receipt)
 
+    # Evidence reached before a later step failed; a verdict stays a verdict.
+    observation: dict[str, Any] | None = None
+    passed = False
     try:
         declared_assertion_ids = semantic_oracles.assertions_for(SCENARIO_ID)
         canary_root = root / "semantic-evidence"
@@ -222,8 +225,8 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
             "error": f"{type(exc).__name__}: {exc}",
             "artifact_manifest": artifact_manifest(root),
         }
-        # The crash came before the result was built, so no verdict was reached.
-        settle_failed_result(failure, observation=None, assertions={})
+        # Only a failure before the observation was built lacks a verdict.
+        settle_failed_result(failure, observation=observation, assertions={ASSERTION_ID: passed})
         _write_json(root / "result.json", failure)
         return failure
 

@@ -284,7 +284,7 @@ def factory_commands(registration: Mapping[str, Any], rows: Sequence[Mapping[str
 
 
 def settle_failed_result(failure: dict[str, Any], *, observation: Any, assertions: Mapping[str, Any]) -> dict[str, Any]:
-    """Finish a failed producer result under the one rule every producer follows.
+    """Finish a failed producer result: the rule the coordination producers follow, and every producer should.
 
     A failure with evidence carries its observation and the verdict it reached. A
     failure before any observation existed (no coordination authority, a launch or
