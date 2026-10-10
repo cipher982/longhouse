@@ -62,3 +62,24 @@ def test_a_refusal_then_a_successful_retry_proves_the_tool():
     ]
     evidence = peers_invocation_evidence(rows)
     assert evidence is not None and evidence["is_error"] is False
+
+
+def test_cleanup_carries_the_retirement_receipt_the_factory_admits():
+    """2026-10-10: the factory refused the first live run because the cleanup
+    receipt had only the boolean, not the session retirement it checks."""
+
+    from zerg.qa.omp_coordination_awareness import session_retirement_cleanup
+
+    retirement = {
+        "status": "pass",
+        "session_id": "11111111-1111-4111-8111-111111111111",
+        "hidden": True,
+        "archived": True,
+        "present_in_served_inventory": False,
+    }
+    facts = session_retirement_cleanup(retirement, "11111111-1111-4111-8111-111111111111")
+    assert facts["session_retirement"] == retirement
+    receipt = facts["session_retirement"]
+    assert receipt["status"] == "pass" and receipt["hidden"] is True and receipt["archived"] is True
+    assert receipt["present_in_served_inventory"] is False
+    assert session_retirement_cleanup(None, "x")["session_retirement"] is None

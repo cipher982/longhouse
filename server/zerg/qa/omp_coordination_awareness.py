@@ -56,11 +56,26 @@ ASSERTION_ID = "coordination_instructions_model_visible"
 _EXECUTION_VARIANT = execution_variant_key(provider="omp", assertion_id=ASSERTION_ID, scenario_id=SCENARIO_ID, variant=None)
 _ARTIFACT_KIND = "omp_coordination_awareness_create_result"
 
+
+def session_retirement_cleanup(retirement: object, session_id: str) -> dict[str, Any]:
+    """Cleanup facts for the retired canary session.
+
+    The factory admits ``canary_session_hidden`` only from the retirement
+    receipt itself (status, session id, hidden, archived, absent from served
+    inventory), never from the boolean alone, so both are recorded.
+    """
+
+    return {
+        "canary_session_hidden": _exact_session_retirement(retirement, session_id),
+        "session_retirement": dict(retirement) if isinstance(retirement, dict) else None,
+    }
+
+
 REGISTRATION = ProducerRegistration(
     producer_id="omp.coordination_awareness_create.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -237,7 +252,7 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
         )
         if session_id:
             retirement = retire_qualification_session(str(args.api_url), str(args.agents_token), session_id, provider="omp")
-            cleanup["canary_session_hidden"] = _exact_session_retirement(retirement, session_id)
+            cleanup.update(session_retirement_cleanup(retirement, session_id))
         else:
             cleanup["canary_session_hidden"] = False
         shipper_stop: dict[str, Any] = {}
