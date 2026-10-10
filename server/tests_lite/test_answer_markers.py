@@ -28,8 +28,6 @@ MARKER = "LONGHOUSE_CLAUDE_UNSTEERED_abc123"
         f"`{MARKER}`",
         f"**{MARKER}**",
         f"{MARKER}.",
-        f"- {MARKER}",
-        f"> {MARKER}",
         f"All three checks ran.\n\n{MARKER}",
     ],
 )
@@ -44,6 +42,9 @@ def test_a_marker_alone_on_a_line_is_the_answer(text: str) -> None:
         f"so I did not include the {MARKER} marker.",
         f"I won't reply with {MARKER} because the steer said to stop.",
         f"{MARKER}_extra",
+        f"Not reached:\n- {MARKER}",
+        f"> {MARKER}",
+        f"* {MARKER}",
         "",
     ],
 )

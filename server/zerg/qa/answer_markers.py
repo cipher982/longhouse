@@ -8,19 +8,22 @@ include `LONGHOUSE_CLAUDE_UNSTEERED_<id>`" (and, in the next run, the same
 sentence without backticks). The substring check read that quote as the
 original task finishing and failed a steer that worked.
 
-A marker is *answered* when it stands alone on a line of the reply. Markdown
-wrapping (backticks, emphasis, quotes, a bullet or blockquote mark) and
-trailing punctuation are allowed; any other word on the line makes it a
-mention. Verdicts that fail a turn because the model said a marker it was told
-not to reach use this; checks that a marker was produced at all can keep a
-substring match, since each is paired with independent evidence (the commands
-that ran, the tool that completed, the turn's stop reason).
+A marker is *answered* when it stands alone on a line of the reply. Inline
+markdown wrapping (backticks, emphasis, quotes) and trailing punctuation are
+allowed; any other word on the line makes it a mention, and so does a list
+item or blockquote, because a model lists or quotes markers while explaining
+what it did or did not reach. Verdicts that fail a turn because the model said
+a marker it was told not to reach use this; checks that a marker was produced
+at all can keep a substring match, since each is paired with independent
+evidence (the commands that ran, the tool that completed, the turn's stop
+reason).
 """
 
 from __future__ import annotations
 
-_LEADING = "`*\"'>-+ \t“”‘’"
+_WRAPPING = "`*\"' \t“”‘’"
 _TRAILING = "`*\"' \t“”‘’.!,;:"
+_LIST_OR_QUOTE = ("- ", "+ ", "* ", "> ")
 
 
 def marker_answered(text: str, marker: str) -> bool:
@@ -29,7 +32,9 @@ def marker_answered(text: str, marker: str) -> bool:
     if not marker or marker not in text:
         return False
     for line in text.splitlines():
-        if line.strip(_LEADING).rstrip(_TRAILING).strip(_LEADING) == marker:
+        if line.lstrip().startswith(_LIST_OR_QUOTE):
+            continue
+        if line.strip(_WRAPPING).rstrip(_TRAILING).strip(_WRAPPING) == marker:
             return True
     return False
 
