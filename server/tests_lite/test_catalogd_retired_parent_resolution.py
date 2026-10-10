@@ -295,3 +295,32 @@ def test_adoption_is_a_catalog_commit(tmp_path):
         stamped = connection.execute(select(StorageSession.commit_seq).where(StorageSession.session_id == child)).scalar_one()
     assert after == before + 1
     assert stamped == after
+
+
+def test_a_retired_duplicate_worker_does_not_hide_the_live_one_from_its_spawn(tmp_path):
+    """The spawn path's native-less fallback must not count a retired worker row."""
+
+    from zerg.catalogd.store import _bind_spawn_child
+
+    engine = _engine(tmp_path)
+    native_id = str(uuid4())
+    with engine.begin() as connection:
+        parent = _session(connection, native_id=native_id)
+        live_worker = _session(connection, is_subagent=1, subagent_parent_provider_session_id=native_id)
+        _session(connection, is_subagent=1, subagent_parent_provider_session_id=native_id, raw_state="retired")
+        bound = _bind_spawn_child(
+            connection,
+            parent_session_id=parent,
+            parent_provider="claude",
+            parent_owner_id="1",
+            parent_machine_id="cinder",
+            parent_native_ids=[native_id],
+            child={"parent_tool_call_id": "toolu_1"},
+            commit_seq=2,
+            commit_time=NOW,
+        )
+        resolved = connection.execute(
+            select(StorageSession.subagent_parent_session_id).where(StorageSession.session_id == live_worker)
+        ).scalar_one()
+    assert bound == 1
+    assert resolved == parent

@@ -2127,6 +2127,10 @@ def _bind_spawn_child(
                 storage.c.machine_id == parent_machine_id,
                 storage.c.is_subagent == 1,
                 storage.c.subagent_parent_provider_session_id.in_(parent_native_ids),
+                # A retired duplicate child is not a candidate either; counting
+                # it left the live worker unresolved (same defect as parents).
+                storage.c.raw_state != "retired",
+                storage.c.render_state != "retired",
             )
         ).all()
         # A native-less row must already identify itself as a worker. A plain
