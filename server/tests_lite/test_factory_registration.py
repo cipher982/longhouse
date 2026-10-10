@@ -391,6 +391,9 @@ def test_failed_results_is_a_leaf_and_producers_never_import_factory_registratio
         alias.name for node in ast.walk(leaf) if isinstance(node, ast.Import) for alias in node.names
     }
     assert not {name for name in leaf_imports if name.startswith("zerg")}, leaf_imports
+    # A stdlib-only leaf has no reason for a relative import, and one would
+    # reach into the package whatever its spelling.
+    assert not [node for node in ast.walk(leaf) if isinstance(node, ast.ImportFrom) and node.level], "failed_results uses a relative import"
 
     # Producers are registered in several shapes (a script's main(), a wrapper
     # around a shared runner), so the rule is simply: nothing under zerg imports
@@ -408,7 +411,10 @@ def test_failed_results_is_a_leaf_and_producers_never_import_factory_registratio
                 package = ".".join(("zerg", *path.relative_to(qa.parent).parent.parts))
                 base = node.module or ""
                 if node.level:
-                    anchor = package.split(".")[: len(package.split(".")) - (node.level - 1)]
+                    keep = len(package.split(".")) - (node.level - 1)
+                    if keep <= 0:
+                        continue  # beyond the top package: not an import of ours
+                    anchor = package.split(".")[:keep]
                     base = ".".join([*anchor, *([base] if base else [])])
                 imported = [base] + [f"{base}.{alias.name}" for alias in node.names]
             elif isinstance(node, ast.Import):
