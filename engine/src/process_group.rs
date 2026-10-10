@@ -53,6 +53,9 @@ pub const KILL_CONFIRM_BUDGET: Duration = Duration::from_millis(500);
 /// Gap between liveness checks while waiting for a group to exit.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+/// Gap between the `ps` passes that tell a zombie-only group from a running one.
+const MEMBER_CHECK_INTERVAL: Duration = Duration::from_millis(250);
+
 /// What actually happened to a process group that was asked to exit.
 ///
 /// Deliberately distinguishes `Terminated` from `Killed` so callers can log the
@@ -102,20 +105,21 @@ impl GroupShutdown {
 ///   and its numeric pgid be reused in between. Nothing closes this; it is why
 ///   the callers that matter re-verify identity immediately before signalling.
 ///
-/// [`GroupShutdown::Survived`] also means "could not confirm gone" rather than
-/// "definitely still running": a member that exited but lingers unreaped by its
-/// own parent still answers `killpg(_, 0)`. `is_gone()` treats it as not-gone,
-/// which is the safe direction.
+/// A group whose only remaining members are zombies has stopped: they have
+/// exited and wait only for their parent's `wait`. [`wait_for_group_exit`] and
+/// [`shutdown_group`] treat it as gone (via [`group_has_running_member`]), so
+/// [`GroupShutdown::Survived`] means a member is still running. That matters
+/// whenever this engine owns the leader through a `Child` another task holds:
+/// the group reads alive to `killpg(_, 0)` until that task reaps it, and the
+/// OMP Console interrupt reported HTTP 502 for stopped turns exactly that way
+/// (2026-10-08/09).
 ///
-/// Whether any process remains in `pgid`.
+/// Whether any process, zombies included, remains in `pgid`.
 ///
 /// Uses `killpg(_, 0)`, which counts a zombie as present because a not-yet
-/// reaped pid still exists. That is the right trade here: callers that own the
-/// leader use [`shutdown_owned_child`], which reaps before it polls, and every
-/// caller of [`shutdown_group`] is stopping a process it did not spawn — a pid
-/// from a state file whose spawner has exited, which is exactly the shape the
-/// orphans in the motivating incident had (all 81 were reparented to `launchd`
-/// and reaped promptly on exit).
+/// reaped pid still exists. It is the cheap first check and the right question
+/// for "could this pgid still be in use" (reuse and identity checks). For "is
+/// anything still running", use [`group_has_running_member`].
 pub fn group_is_alive(pgid: i32) -> bool {
     if pgid <= 0 {
         return false;
@@ -194,7 +198,7 @@ pub fn leader_group_for(_pid: u32) -> Option<i32> {
 /// expired and then report `Survived` for a process that had in fact stopped.
 #[cfg(unix)]
 pub async fn shutdown_group(pgid: i32, grace: Duration) -> GroupShutdown {
-    if pgid <= 0 || !group_is_alive(pgid) {
+    if pgid <= 0 || !group_has_running_member(pgid) {
         return GroupShutdown::Absent;
     }
     unsafe {
@@ -228,13 +232,22 @@ pub async fn wait_for_group_exit(pgid: i32, budget: Duration) -> bool {
 
 /// Poll until the group is gone or `deadline` passes. True when it is gone.
 async fn wait_for_group_exit_until(pgid: i32, deadline: tokio::time::Instant) -> bool {
+    // `killpg` every poll is cheap; the `ps` pass that tells a zombie-only group
+    // from a running one runs at most every MEMBER_CHECK_INTERVAL.
+    let mut next_member_check = tokio::time::Instant::now() + MEMBER_CHECK_INTERVAL;
     loop {
         if !group_is_alive(pgid) {
             return true;
         }
         let now = tokio::time::Instant::now();
         if now >= deadline {
-            return !group_is_alive(pgid);
+            return !group_has_running_member(pgid);
+        }
+        if now >= next_member_check {
+            if !group_has_running_member(pgid) {
+                return true;
+            }
+            next_member_check = now + MEMBER_CHECK_INTERVAL;
         }
         tokio::time::sleep(POLL_INTERVAL.min(deadline - now)).await;
     }
@@ -351,6 +364,24 @@ mod tests {
             });
         }
         command.spawn().expect("spawn test group leader")
+    }
+
+    #[tokio::test]
+    async fn shutting_down_an_unreaped_owned_group_reports_it_gone() {
+        // The trap this module used to document: the leader is our child and
+        // nobody has reaped it yet, so `killpg(_, 0)` keeps answering for its
+        // zombie. A stopped group must still read as gone.
+        let _guard = crate::console_adapter::agent_state_guard();
+        let mut child = spawn_group_leader();
+        let pid = child.id().expect("test child pid");
+        let pgid = leader_group_for(pid).expect("test child leads its group");
+
+        let outcome = shutdown_group(pgid, DEFAULT_GRACE).await;
+
+        assert!(outcome.is_gone(), "{outcome:?}");
+        assert!(!group_has_running_member(pgid));
+        let _ = child.wait().await;
+        assert!(!group_is_alive(pgid));
     }
 
     #[tokio::test]
