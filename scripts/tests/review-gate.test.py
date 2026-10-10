@@ -1468,6 +1468,20 @@ class PathsTests(unittest.TestCase):
         self.repo.disposition(rid, "F1", "rejected")
         self.assertEqual(self.run_paths()[0], 0)
 
+    def test_an_empty_list_is_a_gate_fault_not_a_pass(self):
+        self.listed.write_text("# nothing pinned\n\n")
+        self.repo.commit("oracle change", {"server/zerg/qa/oracle.py": "1"})
+        result = self.repo.run("paths", "--range", f"{self.base}..HEAD", "--paths-file", str(self.listed))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("lists no paths", result.stderr)
+
+    def test_paths_never_reads_the_policy(self):
+        self.repo.commit("oracle change", {"server/zerg/qa/oracle.py": "1"})
+        result = subprocess.run([sys.executable, str(GATE), "--repo", str(self.repo.dir), "--policy",
+                                 str(self.repo.dir / "missing.toml"), "paths", "--range", f"{self.base}..HEAD",
+                                 "--paths-file", str(self.listed)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+
     def test_a_listed_test_or_doc_path_is_judged_even_though_the_policy_exempts_it(self):
         self.listed.write_text("docs/oracle.md\n")
         self.repo.commit("doc", {"docs/oracle.md": "1"})

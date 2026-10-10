@@ -33,6 +33,8 @@ written by `hatch review --merge <sha>`, which reviews exactly that diff.
   review_gate.py blocking --base A --head B    (commits touching the blocking list; the dogfood fast lane's guard)
   review_gate.py attest [--target REV ...]     (post the promotion verdict as a GitHub status; see "attestations")
   review_gate.py status [--range A..B]
+  review_gate.py paths --range A..B --paths-file F [--json]   (commits touching the listed files must be cleanly
+                                              reviewed; the provider factory's epoch gate)
   review_gate.py backfill --range A..B         (start background reviews for the range's unreviewed commits)
   review_gate.py queue [--wait SECONDS]        (the background reviews: queued, running, done, failed)
 
@@ -1351,6 +1353,9 @@ def paths_mode(repo: str, rng: str, paths_file: Path, as_json: bool) -> int:
     list (an epoch's pinned verifier files are not a policy area). Exempt globs do not apply for the same reason."""
     wanted = {line.strip() for line in paths_file.read_text(encoding="utf-8").splitlines()
               if line.strip() and not line.lstrip().startswith("#")}
+    if not wanted:
+        # An empty list would judge nothing and pass: a truncated or failed caller must not read as clean.
+        raise GateError(f"{paths_file} lists no paths; refusing to judge an empty set")
     commits = [c for c in commits_in(repo, rng) if wanted.intersection(c.files)]
     verdicts = check_commits(repo, commits, load_events(repo), Landed.for_revs(repo, [rng]))
     refused = [v for v in verdicts if v.reasons]
@@ -1422,6 +1427,8 @@ def main(argv: list[str] | None = None) -> int:
     policy_path = args.policy or str(Path(__file__).resolve().parent / "review-policy.toml")
     started = None
     try:
+        if args.mode == "paths":  # judges the caller's list, never the policy
+            return paths_mode(repo, args.rng, Path(args.paths_file), args.json)
         try:
             policy = Policy.load(policy_path, args.name or repo_name(repo))
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -1468,8 +1475,6 @@ def main(argv: list[str] | None = None) -> int:
             kind, what, target = "promotion", f"in {served[:12]}..{args.target[:12]} lack a completed review or hold unresolved findings", args.target
             if verdicts and args.start_reviews and not os.environ.get(OVERRIDE_ENV):
                 started = start_reviews_quietly(repo, policy, promotion_revs(repo, served, args.target), "promotion")
-        elif args.mode == "paths":
-            return paths_mode(repo, args.rng, Path(args.paths_file), args.json)
         elif args.mode == "backfill":
             jobs = enqueue_reviews(repo, policy, [args.rng], session=None, reason="backfill")
             print(queued_note(repo, jobs) if jobs else "review-gate: nothing to start (every commit is exempt, reviewed, "
