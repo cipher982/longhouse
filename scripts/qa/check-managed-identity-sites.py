@@ -49,9 +49,10 @@ PROVIDER_SPAWN = re.compile(
     r"|libc::execve"
     # The shared PTY relay execs whatever command it is handed, so its own
     # execve carries the no-identity marker and the obligation moves to every
-    # caller: a Helm launcher that runs its provider through pty_relay::spawn
-    # must still apply the overlay where it builds the command.
-    r"|pty_relay::spawn\("
+    # caller. Anchored on building the PtyCommand rather than on the call:
+    # spawn needs one however it is imported or aliased, and the function
+    # that builds it is the one that must apply the overlay.
+    r"|\bPtyCommand\s*\{"
 )
 SPAWN_WINDOW = 2500
 NO_IDENTITY_MARKER = "no managed identity:"

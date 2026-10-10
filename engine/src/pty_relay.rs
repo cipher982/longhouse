@@ -214,9 +214,72 @@ struct PtyWriterInner {
     draft: Mutex<DraftState>,
 }
 
+/// An estimate of the user's unsubmitted line, from the bytes they type.
+///
+/// It counts characters, not cursor positions: printable bytes (UTF-8
+/// continuation bytes excluded) add one, backspace or delete removes one,
+/// and Enter, ^C or ^U empty it. Escape sequences (arrows, focus reports,
+/// bracketed-paste delimiters) are skipped whole, so moving the cursor or
+/// focusing the window never reads as typing. Text pasted by the user counts
+/// like typed text. Editing in the middle of a line can leave the count
+/// wrong in either direction until the next submit; a remote write waits
+/// only while the count is above zero.
 #[derive(Default)]
 struct DraftState {
-    pending: bool,
+    chars: usize,
+    escape: EscapeState,
+}
+
+#[derive(Default, Clone, Copy, PartialEq)]
+enum EscapeState {
+    #[default]
+    None,
+    /// After ESC: the next byte decides the sequence kind.
+    Start,
+    /// Inside CSI (`ESC [` ...), ended by a byte in 0x40..=0x7e.
+    Csi,
+    /// Inside SS3 (`ESC O` x): one more byte.
+    Ss3,
+}
+
+impl DraftState {
+    fn note(&mut self, byte: u8) {
+        match self.escape {
+            EscapeState::Start => {
+                self.escape = match byte {
+                    b'[' => EscapeState::Csi,
+                    b'O' => EscapeState::Ss3,
+                    // ESC followed by one byte (Alt+key): consumed.
+                    _ => EscapeState::None,
+                };
+                return;
+            }
+            EscapeState::Csi => {
+                if (0x40..=0x7e).contains(&byte) {
+                    self.escape = EscapeState::None;
+                }
+                return;
+            }
+            EscapeState::Ss3 => {
+                self.escape = EscapeState::None;
+                return;
+            }
+            EscapeState::None => {}
+        }
+        match byte {
+            0x1b => self.escape = EscapeState::Start,
+            // Enter submits; ^C interrupts; ^U kills the line.
+            b'\r' | b'\n' | 0x03 | 0x15 => self.chars = 0,
+            // Backspace and DEL remove a character.
+            0x08 | 0x7f => self.chars = self.chars.saturating_sub(1),
+            // Other control bytes (tab completion, ^A, ^E ...) do not change
+            // how much text is on the line.
+            0x00..=0x1f => {}
+            // UTF-8 continuation bytes belong to the character already counted.
+            0x80..=0xbf => {}
+            _ => self.chars += 1,
+        }
+    }
 }
 
 impl PtyWriter {
@@ -257,21 +320,21 @@ impl PtyWriter {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         for byte in bytes {
-            match byte {
-                // Enter submits; ^C interrupts; ^U kills the line.
-                b'\r' | b'\n' | 0x03 | 0x15 => draft.pending = false,
-                _ => draft.pending = true,
-            }
+            draft.note(*byte);
         }
     }
 
+    // Claude Helm's owner input is the first caller (step 2 of the
+    // claude-owner-input-delivery spec).
+    #[allow(dead_code)]
     /// Whether the user has typed something not yet submitted.
     pub fn local_draft_pending(&self) -> bool {
         self.inner
             .draft
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .pending
+            .chars
+            > 0
     }
 
     // Claude Helm's owner input is the first caller (step 2 of the
@@ -574,6 +637,30 @@ mod tests {
         });
         assert!(writer.wait_for_clear_draft(Duration::from_secs(2)));
         submit.join().unwrap();
+
+        // Backspacing a draft away empties it; escape sequences and other
+        // control bytes never start one.
+        writer.relay_local_input(b"ab\x7f\x7f").unwrap();
+        assert!(!writer.local_draft_pending(), "backspaced away");
+        writer
+            .relay_local_input(b"\x1b[A\x1b[B\x1bOP\x1b[I\x1b[O\x1b[200~\x09\x01")
+            .unwrap();
+        assert!(
+            !writer.local_draft_pending(),
+            "arrows, F1, focus, paste start, tab, ^A"
+        );
+        writer.relay_local_input("é".as_bytes()).unwrap();
+        writer.relay_local_input(b"\x7f").unwrap();
+        assert!(
+            !writer.local_draft_pending(),
+            "one multibyte character, one backspace"
+        );
+        writer.relay_local_input(b"q\x1b[D").unwrap();
+        assert!(
+            writer.local_draft_pending(),
+            "text stays a draft after a cursor move"
+        );
+        writer.relay_local_input(b"\r").unwrap();
 
         for clear in [b"x\x03".as_slice(), b"y\x15".as_slice()] {
             writer.relay_local_input(clear).unwrap();
