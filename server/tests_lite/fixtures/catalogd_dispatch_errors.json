@@ -1569,6 +1569,20 @@
    "message": "owner_id must be a positive integer",
    "retry_after_ms": null,
    "retryable": false
+  },
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.attachment.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.attachment.list.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
   }
  },
  "session.input.attachment.read.v2": {
