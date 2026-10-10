@@ -2275,21 +2275,16 @@ def _apply_delegation_lineage(
     ).scalar_one_or_none()
     if not native_ids and not str(current_parent_pointer or "").strip():
         return bound
-    facts = SessionProviderFact.__table__
-    parents = StorageSession.__table__
     rows = (
         connection.execute(
-            select(facts.c.payload_json, facts.c.source_position, facts.c.at, parents.c.session_id)
-            .select_from(facts.join(parents, parents.c.session_id == facts.c.session_id))
-            .where(
-                facts.c.kind == "delegation.spawn",
-                parents.c.owner_id == str(owner_id),
-                parents.c.machine_id == machine_id,
-                parents.c.provider == provider,
-                parents.c.session_id != session_id,
-            )
-            .order_by(facts.c.at.desc(), facts.c.source_position.desc(), facts.c.id.desc())
-            .limit(_SESSION_READ_DELEGATION_FACT_LIMIT)
+            _NEWEST_SCOPED_SPAWN_FACTS,
+            {
+                "session_id": session_id,
+                "owner_id": str(owner_id),
+                "machine_id": machine_id,
+                "provider": provider,
+                "limit": _SESSION_READ_DELEGATION_FACT_LIMIT,
+            },
         )
         .mappings()
         .all()
@@ -4349,32 +4344,19 @@ def _bind_orphan_subagents_to_parent(
     if not source_match and not alias_values:
         return 0
     session_table = StorageSession.__table__
-    predicates = []
+    # One select per pointer kind, each pinned to its own selective index. As
+    # one OR the planner chose subagent_parent_session_id IS NULL, true for
+    # almost every session, and walked them all on every append (17 ms on
+    # david010); without fresh statistics it picks ix_sessions_owner_id, which
+    # one owner's catalog also walks end to end. INDEXED BY holds either way.
+    scope = {"provider": provider, "owner_id": str(owner_id), "machine_id": machine_id, "session_key": session_key}
+    orphan_rows = []
     if source_match:
-        predicates.append(session_table.c.subagent_parent_source_id == parent_source_id)
+        orphan_rows.extend(connection.execute(_ORPHANS_BY_PARENT_SOURCE, {**scope, "parent_source_id": parent_source_id}).all())
     if alias_values:
-        predicates.append(
-            and_(
-                session_table.c.subagent_parent_source_id.is_(None),
-                session_table.c.subagent_parent_provider_session_id.in_(alias_values),
-            )
-        )
-    if not predicates:
+        orphan_rows.extend(connection.execute(_ORPHANS_BY_PARENT_NATIVE_ID, {**scope, "alias_values": list(alias_values)}).all())
+    if not orphan_rows:
         return 0
-    orphan_rows = connection.execute(
-        select(
-            session_table.c.session_id,
-            session_table.c.subagent_parent_provider_session_id,
-            session_table.c.subagent_parent_source_id,
-        ).where(
-            session_table.c.provider == provider,
-            session_table.c.owner_id == str(owner_id),
-            session_table.c.machine_id == machine_id,
-            session_table.c.subagent_parent_session_id.is_(None),
-            session_table.c.session_id != session_key,
-            or_(*predicates),
-        )
-    ).all()
     bound = 0
     for child_session_id, parent_pointer, child_source_id in orphan_rows:
         if source_match and child_source_id == parent_source_id:
@@ -5769,6 +5751,47 @@ def _projector_repair_predicates() -> SimpleNamespace:
 
 
 __all__ = ["CatalogStore", "DEVICE_TOKEN_LIMIT_PER_OWNER"]
+
+
+# Every commit with a native id reads the newest delegation.spawn facts in its
+# owner/machine/provider scope. Walk ix_session_provider_facts_kind_at newest
+# first and check each fact's scope by primary key, so the read stops at the
+# limit. As a join the planner started from every session of the provider and
+# sorted all their spawn facts (22.7 ms for claude on david010 with 290 spawn
+# facts, ~300 ms with ~100k); the index's trailing columns are the full ORDER BY.
+_NEWEST_SCOPED_SPAWN_FACTS = text(
+    """
+    SELECT f.payload_json, f.source_position, f.at, f.session_id
+    FROM session_provider_facts AS f INDEXED BY ix_session_provider_facts_kind_at
+    WHERE f.kind = 'delegation.spawn'
+      AND f.session_id != :session_id
+      AND EXISTS (
+        SELECT 1 FROM sessions AS s
+        WHERE s.session_id = f.session_id
+          AND s.owner_id = :owner_id AND s.machine_id = :machine_id AND s.provider = :provider
+      )
+    ORDER BY f.at DESC, f.source_position DESC, f.id DESC
+    LIMIT :limit
+    """
+)
+
+_ORPHAN_SCOPE = """
+      AND provider = :provider AND owner_id = :owner_id AND machine_id = :machine_id
+      AND subagent_parent_session_id IS NULL AND session_id != :session_key
+"""
+
+_ORPHANS_BY_PARENT_SOURCE = text(
+    "SELECT session_id, subagent_parent_provider_session_id, subagent_parent_source_id "
+    "FROM sessions INDEXED BY ix_sessions_subagent_parent_source_id "
+    "WHERE subagent_parent_source_id = :parent_source_id" + _ORPHAN_SCOPE
+)
+
+_ORPHANS_BY_PARENT_NATIVE_ID = text(
+    "SELECT session_id, subagent_parent_provider_session_id, subagent_parent_source_id "
+    "FROM sessions INDEXED BY ix_sessions_subagent_parent_provider_session_id "
+    "WHERE subagent_parent_provider_session_id IN :alias_values "
+    "AND subagent_parent_source_id IS NULL" + _ORPHAN_SCOPE
+).bindparams(bindparam("alias_values", expanding=True))
 
 
 # Every claim poll looks its token up. The production catalog's planner

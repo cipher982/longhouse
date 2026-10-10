@@ -145,3 +145,28 @@ def test_the_native_id_lookup_has_an_index(tmp_path):
             "WHERE provider = 'claude' AND provider_session_id = 'x' AND owner_id = '1' AND machine_id = 'cinder'"
         ).fetchall()
     assert any("ix_sessions_provider_native_scope" in str(row) for row in plan), plan
+
+
+def test_hot_path_reads_are_pinned_to_their_indexes(tmp_path):
+    """Planner statistics on a long-lived catalog can be stale; the plans may not drift."""
+
+    from zerg.catalogd import store
+
+    engine = _engine(tmp_path)
+    cases = (
+        (store._ORPHANS_BY_PARENT_SOURCE, {"parent_source_id": "s"}, "ix_sessions_subagent_parent_source_id"),
+        (store._ORPHANS_BY_PARENT_NATIVE_ID, {"alias_values": ["p"]}, "ix_sessions_subagent_parent_provider_session_id"),
+        (store._NEWEST_SCOPED_SPAWN_FACTS, {"session_id": "x", "limit": 256}, "ix_session_provider_facts_kind_at"),
+    )
+    scope = {"provider": "claude", "owner_id": "1", "machine_id": "cinder", "session_key": "x"}
+    from sqlalchemy import bindparam
+    from sqlalchemy import text
+
+    with engine.connect() as connection:
+        for statement, params, index in cases:
+            explain = text("EXPLAIN QUERY PLAN " + statement.text)
+            if "alias_values" in params:
+                explain = explain.bindparams(bindparam("alias_values", expanding=True))
+            plan = connection.execute(explain, {**scope, **params}).fetchall()
+            assert any(index in str(row) for row in plan), (index, plan)
+            assert not any("TEMP B-TREE FOR ORDER BY" in str(row) for row in plan), plan

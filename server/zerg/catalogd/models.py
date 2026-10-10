@@ -647,6 +647,13 @@ class SessionProviderFact(CatalogBase):
     __table_args__ = (
         UniqueConstraint("session_id", "source_epoch", "source_position", "kind", name="uq_session_provider_facts_source"),
         Index("ix_session_provider_facts_session_kind_at", "session_id", "kind", "at"),
+        # Every commit with a native id reads the newest delegation.spawn facts
+        # in its owner/machine/provider scope. Without this the planner walked
+        # every session of the provider and sorted the result (22.7 ms for
+        # claude on david010 with 290 spawn facts); with it, it reads the
+        # newest spawn facts and stops at the limit. The trailing columns are
+        # the query's full ORDER BY, so ties on `at` need no sort either.
+        Index("ix_session_provider_facts_kind_at", "kind", "at", "source_position", "id"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
