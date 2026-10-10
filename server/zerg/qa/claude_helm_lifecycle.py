@@ -32,6 +32,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from zerg.qa.answer_markers import any_marker_answered
 from zerg.qa.claude_live_session_support import ScenarioError
 from zerg.qa.claude_live_session_support import api_json
 from zerg.qa.claude_live_session_support import api_json_tolerant
@@ -83,7 +84,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=6,
+    scenario_revision=7,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     # Claude on macOS keeps credentials in the desktop Keychain; a relocated
@@ -214,7 +215,7 @@ def steer_landed_in_turn(
     steer_in_turn = any(_steer_delivered(row, steer_marker) for row in turn[1:])
     steered_here = any(steered_marker in text for text in _assistant_texts(turn))
     later_step_ran = any(later_step_command in command for command in _bash_commands(turn))
-    finished_original = any(done_marker in text for text in _assistant_texts(turn))
+    finished_original = any_marker_answered(_assistant_texts(turn), done_marker)
     steered_elsewhere = any(_steer_delivered(row, steer_marker) for row in after) or any(
         steered_marker in text for text in _assistant_texts(after)
     )
@@ -268,7 +269,7 @@ def abort_stopped_turn(
     if end is None:
         return {"passed": False, "failure_code": "abort_did_not_stop_turn", "turn_completed": False}
     turn = rows[start : end + 1]
-    said_forbidden = any(forbidden_marker in text for text in _assistant_texts(turn))
+    said_forbidden = any_marker_answered(_assistant_texts(turn), forbidden_marker)
     # The promised reply is only evidence of a failed abort when the long tool
     # actually completed: the prompt says "when it finishes, reply <marker>".
     # A killed tool returns an error result, and a literal-minded model (Haiku

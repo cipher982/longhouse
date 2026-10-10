@@ -22,6 +22,8 @@ from uuid import uuid4
 
 import httpx
 
+from zerg.qa.answer_markers import any_marker_answered
+from zerg.qa.answer_markers import marker_answered
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.services.longhouse_paths import get_managed_local_dir
 
@@ -117,7 +119,7 @@ def steer_landed_in_generation(
         row.get("event") == "beforeShellExecution" and later_step_command in str(row.get("command") or "") for row in in_generation
     )
     steered_here = any(steered_marker in text for text in responses)
-    finished_original = any(done_marker in text for text in responses)
+    finished_original = any_marker_answered(list(responses), done_marker)
     steered_elsewhere = any(
         row.get("event") == "afterAgentResponse"
         and row.get("generation_id") != generation_id
@@ -171,7 +173,9 @@ def abort_stopped_generation(
 
     in_generation = [row for row in rows if row.get("generation_id") == generation_id]
     aborted = any(row.get("event") == "stop" and row.get("status") in {"aborted", "error"} for row in in_generation)
-    responded = any(row.get("event") == "afterAgentResponse" and forbidden_marker in str(row.get("text") or "") for row in in_generation)
+    responded = any(
+        row.get("event") == "afterAgentResponse" and marker_answered(str(row.get("text") or ""), forbidden_marker) for row in in_generation
+    )
     passed = aborted and not responded
     following_completed = None
     if recovery_marker is not None:

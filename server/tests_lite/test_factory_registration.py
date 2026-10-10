@@ -224,7 +224,7 @@ def test_a_result_reporting_the_execution_key_as_its_variant_is_refused_as_at_91
         ({"observation": None}, "observation is not an object"),
         ({"assertions": None}, "assertions is not an object"),
         ({"producer": {"producer_id": "other.v1"}}, "producer_id is 'other.v1', expected 'claude.helm_lifecycle.v1'"),
-        ({"scenario_revision": 1}, "scenario_revision is 1, expected 6"),
+        ({"scenario_revision": 1}, "scenario_revision is 1, expected 7"),
         ({"evidence_class": "hermetic"}, "evidence_class is 'hermetic', expected 'live_token'"),
         ({"provider": "codex"}, "provider is 'codex', expected 'claude'"),
         ({"generated_at": "yesterday"}, "invalid generated_at"),

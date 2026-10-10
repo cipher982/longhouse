@@ -22,6 +22,8 @@ from typing import Any
 from typing import Iterable
 from typing import Mapping
 
+from zerg.qa.answer_markers import marker_answered
+
 _TERMINAL_STOP_REASONS = frozenset({"stop", "end_turn", "length", "error"})
 _ABORT_STOP_REASONS = frozenset({"aborted", "cancelled", "canceled"})
 
@@ -184,14 +186,14 @@ def steer_turn_verdict(
         (item for item in after if _role(item) == "assistant" and _stop_reason(item) in _TERMINAL_STOP_REASONS),
         None,
     )
-    later_task_done = [item for item in entries if _role(item) == "assistant" and task_done_marker in _text(item)]
+    later_task_done = [item for item in entries if _role(item) == "assistant" and marker_answered(_text(item), task_done_marker)]
     verdict.update(
         {
             "steered_turn_terminal_id": terminal.get("id") if terminal else None,
             "task_done_rows": len(later_task_done),
         }
     )
-    if terminal is not None and task_done_marker in _text(terminal):
+    if terminal is not None and marker_answered(_text(terminal), task_done_marker):
         return {**verdict, "passed": False, "code": "original_task_completed_after_steer"}
     if terminal is None or steer_marker not in _text(terminal):
         return {**verdict, "passed": False, "code": "steer_marker_not_answered_in_turn"}
@@ -213,7 +215,7 @@ def abort_then_send_verdict(
         return {**verdict, "passed": False, "code": "task_prompt_not_unique"}
     task_turn = _descendants(task, list(entries))
     aborted = [item for item in task_turn if _role(item) == "assistant" and _stop_reason(item) in _ABORT_STOP_REASONS]
-    completed = [item for item in entries if _role(item) == "assistant" and task_done_marker in _text(item)]
+    completed = [item for item in entries if _role(item) == "assistant" and marker_answered(_text(item), task_done_marker)]
     verdict.update({"aborted_rows": len(aborted), "task_done_rows": len(completed)})
     if completed or not aborted:
         return {**verdict, "passed": False, "code": "abort_did_not_stop_active_turn"}
