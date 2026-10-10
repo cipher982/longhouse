@@ -36,3 +36,16 @@ def test_a_pi_peers_call_with_a_result_is_the_evidence():
     ]
     evidence = peers_invocation_evidence(rows)
     assert evidence is not None and evidence["tool_name"] == "peers" and evidence["is_error"] is False
+
+
+def test_cleanup_passes_only_with_verified_birth_identities():
+    """Dead process groups whose identities never matched their birth records prove nothing."""
+
+    from zerg.qa.pi_coordination_awareness import REGISTRATION
+    from zerg.qa.pi_coordination_awareness import _cleanup_status
+
+    held = {key: True for key in REGISTRATION.required_cleanup}
+    assert _cleanup_status({**held, "birth_identities_verified": True}) == "pass"
+    assert _cleanup_status({**held, "birth_identities_verified": False}) == "fail"
+    assert _cleanup_status(held) == "fail"
+    assert _cleanup_status({**held, "birth_identities_verified": True, "isolation_removed": False}) == "fail"

@@ -85,3 +85,16 @@ def test_cleanup_carries_the_retirement_receipt_the_factory_admits():
     assert receipt["present_in_served_inventory"] is False
     missing = session_retirement_cleanup(None, "x")
     assert missing["session_retirement"] is None and missing["canary_session_hidden"] is False
+
+
+def test_cleanup_passes_only_with_verified_birth_identities():
+    """Dead process groups whose identities never matched their birth records prove nothing."""
+
+    from zerg.qa.omp_coordination_awareness import REGISTRATION
+    from zerg.qa.omp_coordination_awareness import _cleanup_status
+
+    held = {key: True for key in REGISTRATION.required_cleanup}
+    assert _cleanup_status({**held, "birth_identities_verified": True}) == "pass"
+    assert _cleanup_status({**held, "birth_identities_verified": False}) == "fail"
+    assert _cleanup_status(held) == "fail"
+    assert _cleanup_status({**held, "birth_identities_verified": True, "isolation_removed": False}) == "fail"

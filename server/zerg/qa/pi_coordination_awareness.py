@@ -20,6 +20,7 @@ import signal
 import subprocess
 import sys
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -220,8 +221,7 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
             runtime_cleanup_verified=processes_stopped and cleanup["canary_session_hidden"] is True,
             cleanup=cleanup,
         )
-        required = ("provider_process_dead", "process_group_dead", "canary_session_hidden", "isolation_removed")
-        cleanup["status"] = "pass" if all(cleanup.get(key) is True for key in required) else "fail"
+        cleanup["status"] = _cleanup_status(cleanup)
         cleanup = redact_state_for_evidence(cleanup)
         lifecycle.write_json(root / "cleanup-receipt.json", cleanup)
     lifecycle.write_json(root / "tool-invocation-evidence.json", invocation or {"found": False})
@@ -270,6 +270,17 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--agents-token", default=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"))
     parser.add_argument("--response-timeout-secs", type=float, default=180.0)
     return parser
+
+
+def _cleanup_status(cleanup: Mapping[str, Any]) -> str:
+    """Pass only when every registered cleanup fact holds and the owned processes were proven ours.
+
+    Dead process groups prove nothing when the recorded identities never matched
+    their birth records: the pids may have been someone else's.
+    """
+
+    keys = (*REGISTRATION.required_cleanup, "birth_identities_verified")
+    return "pass" if all(cleanup.get(key) is True for key in keys) else "fail"
 
 
 def main(argv: list[str] | None = None) -> int:
