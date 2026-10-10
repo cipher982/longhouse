@@ -115,7 +115,21 @@ pub async fn send_text(
         .to_string();
 
     let mut meta = serde_json::Map::new();
-    meta.insert("injected_by".to_string(), json!("longhouse"));
+    // Claude Code renders meta as attributes on the <channel> tag and labels
+    // every channel message "NOT from your user". The old attribute,
+    // injected_by="longhouse", read to small models as a prompt injection
+    // (factory 2026-10-10T06:51Z: Haiku 4.5 refused an owner send as "a
+    // suspicious message in the system reminder"). `from` states the sender
+    // the channel instructions explain: the owner, or a peer whose text is the
+    // envelope the Runtime Host renders.
+    meta.insert(
+        "from".to_string(),
+        json!(if config.text.starts_with(PEER_ENVELOPE_PREFIX) {
+            "peer-session"
+        } else {
+            "session-owner"
+        }),
+    );
     meta.insert(
         "longhouse_session_id".to_string(),
         json!(config.session_id.clone()),
@@ -984,7 +998,8 @@ mod tests {
             .to_ascii_lowercase()
             .contains("x-longhouse-channel-token: secret-token"));
         assert_eq!(request.body["content"], "hello");
-        assert_eq!(request.body["meta"]["injected_by"], "longhouse");
+        assert_eq!(request.body["meta"]["from"], "session-owner");
+        assert!(request.body["meta"].get("injected_by").is_none());
         assert_eq!(request.body["meta"]["longhouse_session_id"], SESSION_ID);
     }
 

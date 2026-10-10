@@ -2600,7 +2600,7 @@ mod tests {
         let body: Value = serde_json::from_str(&request.body).unwrap();
         assert_eq!(request.target, "/inject");
         assert_eq!(body["content"], "hello");
-        assert_eq!(body["meta"]["injected_by"], "longhouse");
+        assert_eq!(body["meta"]["from"], "session-owner");
         assert_eq!(body["meta"]["longhouse_session_id"], session_id);
 
         let result = handle_command_frame(
