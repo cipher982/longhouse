@@ -7315,7 +7315,9 @@ mod tests {
             &path,
             true,
             Some(ENGINE_STALE_SECONDS + 1),
-            Some(json!({"storage_v2_outbox": {"blocked_source_count": 2, "unresolved_blocked_source_count": 0}})),
+            Some(
+                json!({"storage_v2_outbox": {"blocked_source_count": 2, "unresolved_blocked_source_count": 0}}),
+            ),
             None,
         );
         apply_native_machine_setup(&mut health, setup_for(dir.path()));

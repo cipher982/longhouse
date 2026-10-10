@@ -1882,7 +1882,10 @@ impl LateCoordinationToken {
                 ));
                 return;
             };
-            let open = file.open.lock().unwrap_or_else(|poison| poison.into_inner());
+            let open = file
+                .open
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
             if !*open {
                 return;
             }
@@ -2503,9 +2506,10 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         Some(value) => start
             .env("LONGHOUSE_COORDINATION_TOKEN", value)
             .env_remove("LONGHOUSE_COORDINATION_TOKEN_FILE"),
-        None => start
-            .env_remove("LONGHOUSE_COORDINATION_TOKEN")
-            .env("LONGHOUSE_COORDINATION_TOKEN_FILE", late_coordination_token.path()),
+        None => start.env_remove("LONGHOUSE_COORDINATION_TOKEN").env(
+            "LONGHOUSE_COORDINATION_TOKEN_FILE",
+            late_coordination_token.path(),
+        ),
     };
     if let Some(name) = &args.name {
         start.args(["--display-name", name]);
@@ -3280,9 +3284,10 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         Some(value) => bridge
             .env("LONGHOUSE_COORDINATION_TOKEN", value)
             .env_remove("LONGHOUSE_COORDINATION_TOKEN_FILE"),
-        None => bridge
-            .env_remove("LONGHOUSE_COORDINATION_TOKEN")
-            .env("LONGHOUSE_COORDINATION_TOKEN_FILE", late_coordination_token.path()),
+        None => bridge.env_remove("LONGHOUSE_COORDINATION_TOKEN").env(
+            "LONGHOUSE_COORDINATION_TOKEN_FILE",
+            late_coordination_token.path(),
+        ),
     };
     if !attach {
         bridge.arg("--create-initial-thread");
@@ -5584,15 +5589,24 @@ mod tests {
         // Unreachable, an older host without the route, and a refusal all leave
         // a live credential somewhere; deleting the only local copy would make
         // that permanent.
-        for status in [None, Some("404 Not Found"), Some("500 Internal Server Error")] {
+        for status in [
+            None,
+            Some("404 Not Found"),
+            Some("500 Internal Server Error"),
+        ] {
             let home = tempfile::tempdir().unwrap();
             let host = status.map(one_shot_host);
             let url = host
                 .as_ref()
                 .map_or("http://127.0.0.1:1".to_string(), |(url, _)| url.clone());
             stored_machine(home.path(), &url);
-            let error = clear_credentials(home.path(), false).unwrap_err().to_string();
-            assert!(error.contains("credentials were kept"), "{status:?}: {error}");
+            let error = clear_credentials(home.path(), false)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("credentials were kept"),
+                "{status:?}: {error}"
+            );
             assert!(error.contains("--local-only"), "{error}");
             assert_eq!(
                 std::fs::read_to_string(home.path().join("machine/device-token")).unwrap(),
@@ -6503,7 +6517,10 @@ mod tests {
                 );
                 let coordination = &payload["mcpServers"]["longhouse-coordination"]["env"];
                 assert_eq!(coordination["LONGHOUSE_MCP_ROLE"], "coordination");
-                assert_eq!(coordination["LONGHOUSE_COORDINATION_TOKEN"], "session-secret");
+                assert_eq!(
+                    coordination["LONGHOUSE_COORDINATION_TOKEN"],
+                    "session-secret"
+                );
                 assert_eq!(
                     coordination["LONGHOUSE_COORDINATION_TOKEN_FILE"],
                     token_path.display().to_string()

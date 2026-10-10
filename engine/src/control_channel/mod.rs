@@ -2619,7 +2619,10 @@ mod tests {
         // Runtime Host offers "queue instead"), never injected as a message.
         assert_eq!(result["ok"], false);
         assert_eq!(result["error"]["code"], "turn_ended");
-        assert!(rx.try_recv().is_err(), "a refused steer must not reach the channel");
+        assert!(
+            rx.try_recv().is_err(),
+            "a refused steer must not reach the channel"
+        );
 
         let result = handle_command_frame(
             json!({

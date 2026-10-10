@@ -6,13 +6,13 @@
 //! - less frequent server heartbeats to `/api/agents/heartbeat`
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::hash::{BuildHasher, Hash, Hasher};
-use std::sync::Arc;
 #[cfg(target_os = "linux")]
 use std::fs;
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::process::Command;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -43,9 +43,9 @@ use crate::error_tracker::RecentIssueTracker;
 use crate::shipping::client::ShipperClient;
 use crate::shipping_stats::RecentShipStatsTracker;
 use crate::shipping_stats::ShipLaneSummarySet;
+use crate::state::archive_backlog::ArchiveBacklogSnapshot;
 use crate::state::pending_source_envelope::{self, StorageV2OutboxSnapshot};
 use crate::state::session_phase::PhaseLedgerRow;
-use crate::state::archive_backlog::ArchiveBacklogSnapshot;
 
 const HEARTBEAT_POST_TIMEOUT: Duration = Duration::from_secs(6);
 const MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY: usize = 2_048;
@@ -640,9 +640,10 @@ fn acknowledged_evidence_hash<'a>(
     identity: &EvidenceIdentity,
 ) -> Option<&'a str> {
     let fingerprint = evidence_identity_key_fingerprint(identity, hashes.hasher());
-    hashes.get(&fingerprint)?.iter().find_map(|(key, hash)| {
-        key.matches_identity(identity).then_some(hash.as_str())
-    })
+    hashes
+        .get(&fingerprint)?
+        .iter()
+        .find_map(|(key, hash)| key.matches_identity(identity).then_some(hash.as_str()))
 }
 
 /// Content hashes acknowledged by the Runtime Host, bounded to rows still
@@ -679,8 +680,7 @@ impl AcknowledgedEvidenceHashes {
             return;
         }
         for identity in identities {
-            let fingerprint =
-                evidence_identity_key_fingerprint(identity, self.hashes.hasher());
+            let fingerprint = evidence_identity_key_fingerprint(identity, self.hashes.hasher());
             let bucket = self.hashes.entry(fingerprint).or_default();
             if let Some((_, hash)) = bucket
                 .iter_mut()
@@ -706,11 +706,9 @@ impl AcknowledgedEvidenceHashes {
 
     #[cfg(test)]
     fn identity_changed(&self, identity: &EvidenceIdentity) -> bool {
-        acknowledged_evidence_hash(&self.hashes, identity)
-            != Some(identity.evidence_hash.as_str())
+        acknowledged_evidence_hash(&self.hashes, identity) != Some(identity.evidence_hash.as_str())
     }
 }
-
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ProcessSnapshotScope {
@@ -3012,10 +3010,8 @@ fn changed_first_evidence_identities(
     acknowledged: &HashMap<u64, Vec<(EvidenceIdentityKey, String)>>,
     rotation: usize,
 ) -> Vec<EvidenceIdentity> {
-    let mut changed_families: [Vec<&EvidenceIdentity>; 7] =
-        std::array::from_fn(|_| Vec::new());
-    let mut unchanged_families: [Vec<&EvidenceIdentity>; 7] =
-        std::array::from_fn(|_| Vec::new());
+    let mut changed_families: [Vec<&EvidenceIdentity>; 7] = std::array::from_fn(|_| Vec::new());
+    let mut unchanged_families: [Vec<&EvidenceIdentity>; 7] = std::array::from_fn(|_| Vec::new());
     for identity in candidates {
         let Some(family_index) = evidence_family_index(&identity.fact_family) else {
             continue;
@@ -3037,12 +3033,8 @@ fn changed_first_evidence_identities(
         .min(target_count);
     let changed_budget = changed_count.min(target_count - rotating_budget);
     let changed_shares = family_shares_for_budget(&changed_families, changed_budget);
-    let mut selected = select_rotating_identity_refs(
-        &changed_families,
-        rotation,
-        changed_budget,
-        &changed_shares,
-    );
+    let mut selected =
+        select_rotating_identity_refs(&changed_families, rotation, changed_budget, &changed_shares);
 
     // Changed facts lead, but reserve a rotating repair slice so timestamp
     // churn cannot keep previously acknowledged stable facts out forever.
@@ -3066,12 +3058,9 @@ fn changed_first_evidence_identities(
             std::array::from_fn(|_| Vec::new());
         for (family_index, family) in changed_families.iter().enumerate() {
             remaining_changed_families[family_index].extend(
-                family
-                    .iter()
-                    .copied()
-                    .filter(|identity| {
-                        !selected_keys.contains(&evidence_identity_key_ref(identity))
-                    }),
+                family.iter().copied().filter(|identity| {
+                    !selected_keys.contains(&evidence_identity_key_ref(identity))
+                }),
             );
         }
         let remaining_budget = target_count - selected.len();
@@ -3113,11 +3102,7 @@ fn compact_machine_evidence_for_send(evidence: &mut MachineEvidence) -> Result<(
     }
     compact_evidence_family("run", &mut evidence.run, &mut evidence.identities)?;
     compact_evidence_family("process", &mut evidence.process, &mut evidence.identities)?;
-    compact_evidence_family(
-        "activity",
-        &mut evidence.activity,
-        &mut evidence.identities,
-    )?;
+    compact_evidence_family("activity", &mut evidence.activity, &mut evidence.identities)?;
     compact_evidence_family("control", &mut evidence.control, &mut evidence.identities)?;
     compact_evidence_family(
         "transcript",
@@ -3184,7 +3169,6 @@ fn compact_evidence_family<T>(
     }
     Ok(())
 }
-
 
 fn evidence_identity<T: Serialize>(
     fact_family: &str,
@@ -7539,8 +7523,7 @@ mod tests {
 
     fn canonical_evidence_hash<T: Serialize>(fact: &T) -> String {
         let value = serde_json::to_value(fact).unwrap();
-        let bytes =
-            serde_json::to_vec(&canonical_evidence_value(value).unwrap()).unwrap();
+        let bytes = serde_json::to_vec(&canonical_evidence_value(value).unwrap()).unwrap();
         format!("{:x}", Sha256::digest(bytes))
     }
 
@@ -7674,10 +7657,7 @@ mod tests {
 
         acknowledged.prune_to_current(&identities[..1]);
 
-        assert_eq!(
-            acknowledged.hashes.values().map(Vec::len).sum::<usize>(),
-            1
-        );
+        assert_eq!(acknowledged.hashes.values().map(Vec::len).sum::<usize>(), 1);
         assert!(!acknowledged.identity_changed(&identities[0]));
         assert!(acknowledged.identity_changed(&identities[1]));
     }
@@ -7719,20 +7699,19 @@ mod tests {
         let mut seen_stable = HashSet::new();
         let rotations = stable_count.div_ceil(ROTATING_EVIDENCE_REFRESH_BUDGET) + 1;
         for rotation in 0..rotations {
-            let selected = changed_first_evidence_identities(
-                &current,
-                &acknowledged.hashes,
-                rotation,
-            );
+            let selected =
+                changed_first_evidence_identities(&current, &acknowledged.hashes, rotation);
             assert_eq!(selected.len(), MAX_REDUCER_EVIDENCE_FACTS);
-            assert!(selected[..MAX_REDUCER_EVIDENCE_FACTS
-                - ROTATING_EVIDENCE_REFRESH_BUDGET]
-                .iter()
-                .all(|identity| identity.evidence_hash.starts_with("changed-")));
-            assert!(selected[MAX_REDUCER_EVIDENCE_FACTS
-                - ROTATING_EVIDENCE_REFRESH_BUDGET..]
-                .iter()
-                .all(|identity| identity.evidence_hash.starts_with("hash-")));
+            assert!(
+                selected[..MAX_REDUCER_EVIDENCE_FACTS - ROTATING_EVIDENCE_REFRESH_BUDGET]
+                    .iter()
+                    .all(|identity| identity.evidence_hash.starts_with("changed-"))
+            );
+            assert!(
+                selected[MAX_REDUCER_EVIDENCE_FACTS - ROTATING_EVIDENCE_REFRESH_BUDGET..]
+                    .iter()
+                    .all(|identity| identity.evidence_hash.starts_with("hash-"))
+            );
             seen_stable.extend(
                 selected[MAX_REDUCER_EVIDENCE_FACTS - ROTATING_EVIDENCE_REFRESH_BUDGET..]
                     .iter()
@@ -8431,7 +8410,7 @@ mod tests {
 
         let status_path = dir.path().join("agent").join("engine-status.json");
         let mut projection =
-            build_status_file_projection(payload,  phase_ledger, PhaseLedgerStatus::Ok);
+            build_status_file_projection(payload, phase_ledger, PhaseLedgerStatus::Ok);
         let mut progress_observation = ShippingProgressObservation::new(Instant::now());
         write_status_file(
             &mut projection,
@@ -8506,7 +8485,6 @@ mod tests {
         let status_path = dir.path().join("agent").join("engine-status.json");
         let mut projection = build_status_file_projection(
             payload,
-
             Vec::new(),
             PhaseLedgerStatus::ReadFailed("db locked".to_string()),
         );

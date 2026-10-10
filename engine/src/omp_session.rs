@@ -1094,7 +1094,10 @@ mod tests {
             format!("{}\n", session_line("bucket-native")),
         )
         .unwrap();
-        assert!(session_file_path_in_session_dir(staging.path(), &bucket_source));
+        assert!(session_file_path_in_session_dir(
+            staging.path(),
+            &bucket_source
+        ));
     }
 
     #[test]

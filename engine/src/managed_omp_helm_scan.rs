@@ -85,11 +85,10 @@ fn source_ownership_in(
     let stable = crate::storage_v2_shipper::stable_source_path;
     let mut owner = None;
     let mut pending = false;
-    let states = crate::dir_cache::parsed_json_dir(
-        state_dir,
-        parse_source_state,
-        |left, right| left.0.cmp(&right.0),
-    )?;
+    let states =
+        crate::dir_cache::parsed_json_dir(state_dir, parse_source_state, |left, right| {
+            left.0.cmp(&right.0)
+        })?;
     for (state_path, state) in states.iter() {
         let (Some(session_id), Some(run_id), Some(session_dir)) = (
             state.session_id.as_deref(),
@@ -531,7 +530,8 @@ mod tests {
             fs::write(
                 state_dir.join(format!("{stale_session}.json")),
                 serde_json::to_vec(&stale).unwrap(),
-            ).unwrap();
+            )
+            .unwrap();
             assert_eq!(
                 source_ownership_in(&state_dir, &source).unwrap(),
                 crate::omp_session::SourceOwnership::Managed(session_id)

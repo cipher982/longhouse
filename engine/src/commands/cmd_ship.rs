@@ -311,9 +311,9 @@ pub async fn cmd_ship_file(
 mod tests {
     use super::*;
     use crate::state::file_state::FileState;
-    use std::path::PathBuf;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::path::PathBuf;
 
     fn make_claude_file(dir: &tempfile::TempDir, name: &str, content: &str) -> PathBuf {
         let path = dir.path().join(name);

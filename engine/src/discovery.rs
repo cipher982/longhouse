@@ -648,7 +648,11 @@ fn antigravity_task_log_parent_transcript(path: &Path) -> Option<PathBuf> {
         return None;
     }
     let conversation = system_generated.parent()?;
-    if conversation.file_name().and_then(|value| value.to_str()).is_none() {
+    if conversation
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_none()
+    {
         return None;
     }
     let brain = conversation.parent()?;

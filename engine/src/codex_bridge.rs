@@ -3702,8 +3702,7 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     // A launch that started without authority names the file its launcher
     // writes once registration recovers; the coordination server reads it on
     // every call, so the tools Codex listed at startup begin to work.
-    let late_token_file =
-        std::env::var_os("LONGHOUSE_COORDINATION_TOKEN_FILE").map(PathBuf::from);
+    let late_token_file = std::env::var_os("LONGHOUSE_COORDINATION_TOKEN_FILE").map(PathBuf::from);
     command.args(codex_app_server_args(
         config,
         &coordination_command,

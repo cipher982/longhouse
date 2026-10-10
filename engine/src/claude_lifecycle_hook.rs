@@ -967,7 +967,10 @@ mod tests {
     fn session_start_awareness_is_the_contract_text() {
         let contract: serde_json::Value =
             serde_json::from_str(include_str!("coordination_contract.generated.json")).unwrap();
-        assert_eq!(session_start_awareness(), contract["session_start"].as_str().unwrap());
+        assert_eq!(
+            session_start_awareness(),
+            contract["session_start"].as_str().unwrap()
+        );
         assert!(session_start_awareness().contains("`peers`"));
     }
 

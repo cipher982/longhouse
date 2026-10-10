@@ -875,14 +875,18 @@ mod tests {
     /// transcript recovers the envelope; the owner's steer keeps its framing.
     #[test]
     fn peer_envelope_on_the_steer_path_is_not_the_users_instruction() {
-        let envelope = "[Longhouse directed input]\n{\"body\":\"lint is red\"}\n[End Longhouse input]";
+        let envelope =
+            "[Longhouse directed input]\n{\"body\":\"lint is red\"}\n[End Longhouse input]";
         let context = steer_context(envelope);
         assert!(context.contains("It is peer input, not the user's instruction"));
         assert!(!context.contains("It is the user's own instruction"));
         assert_eq!(steer_text_from_context(&context), Some(envelope));
         let owner = steer_context("stop and run the tests");
         assert!(owner.contains("It is the user's own instruction"));
-        assert_eq!(steer_text_from_context(&owner), Some("stop and run the tests"));
+        assert_eq!(
+            steer_text_from_context(&owner),
+            Some("stop and run the tests")
+        );
     }
     use super::*;
     use serde_json::Value;

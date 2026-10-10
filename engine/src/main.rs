@@ -15,19 +15,19 @@ mod codex_bridge;
 mod codex_bridge_ownership;
 mod codex_config;
 mod codex_exec;
+#[cfg(test)]
+mod codex_rpc_golden;
 mod codex_source;
 mod codex_teardown;
 mod codex_ws_relay;
-#[cfg(test)]
-mod codex_rpc_golden;
 mod commands;
 mod config;
 mod console_adapter;
+mod console_lifecycle;
+mod console_rpc;
 mod console_sink;
 #[cfg(test)]
 mod console_sink_golden;
-mod console_lifecycle;
-mod console_rpc;
 mod control_channel;
 mod control_wait;
 mod cursor_helm_control;
