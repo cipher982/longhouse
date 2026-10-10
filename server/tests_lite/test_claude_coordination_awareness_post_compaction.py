@@ -216,7 +216,7 @@ def test_run_fails_the_no_duplicate_bootstrap_cell_when_a_second_config_appears(
     assert result["observation"]["visible_bootstrap_count"] == 2
 
 
-def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_records_a_typed_failure_as_a_typed_harness_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     variant = execution_variant_key(provider="claude", assertion_id=m._ASSERTION_VISIBLE, scenario_id=m._SCENARIO_ID, variant=None)
     args = _args(tmp_path, variant)
     fake_shipper = _FakeShipper()

@@ -728,8 +728,10 @@ def mcp_bootstrap_config_paths(longhouse_home: Path, session_id: str) -> list[Pa
 # when the background retry recovers (engine LateCoordinationToken). Retry
 # sleeps are 1, 2, 4 s and each attempt is bounded by
 # RECOVERY_REGISTRATION_TIMEOUT (12 s), so three attempts finish within
-# 2 + (1 + 12) + (2 + 12) + (4 + 12) = 45 s. Past that the Runtime Host is not
-# merely slow, and "no authority" is the true answer.
+# 2 + (1 + 12) + (2 + 12) + (4 + 12) = 45 s. Recovery itself keeps going for the
+# provider's life; this is how long a qualification run waits for it. A token
+# that arrives later still reaches the session, but this run reports it had no
+# authority when it needed it, as a typed harness failure, never a product one.
 COORDINATION_TOKEN_RECOVERY_WAIT_SECS = 45.0
 
 

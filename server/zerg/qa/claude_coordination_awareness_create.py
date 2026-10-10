@@ -268,7 +268,7 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
         # factory reports its cause as infrastructure rather than reading a
         # false assertion as a product or model finding.
         if isinstance(result.get("observation"), dict):
-            failure["assertions"] = result.get("assertions") or {"coordination_instructions_model_visible": False}
+            failure["assertions"] = result.get("assertions") or {_ASSERTION_ID: False}
         else:
             failure.pop("observation", None)
             failure.pop("assertions", None)

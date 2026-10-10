@@ -231,7 +231,7 @@ def test_run_rejects_a_terminal_failed_provider_receipt(tmp_path: Path, monkeypa
     assert result["observation"]["input_receipt_status"] == "failed"
 
 
-def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_records_a_typed_failure_as_a_typed_harness_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     variant = execution_variant_key(provider="claude", assertion_id=m._ASSERTION_SEND, scenario_id=m._SCENARIO_ID, variant=None)
     args = _args(tmp_path, variant)
     fake_shipper = _FakeShipper()
