@@ -5,6 +5,10 @@
 #   - Python MCP server   server/zerg/config/coordination_contract.json
 #   - OMP extension       the generated block in engine/assets/longhouse-omp-helm.ts
 # `make validate-coordination-contract` fails when a rendered copy drifts.
+# OMP mounts extension tools as xd:// devices (setting tools.xdevDocs, default
+# `catalog`): the model reads `xd://peers` for the schema and invokes it as
+# `write xd://peers`, so usage counts must match those calls as well as
+# top-level tool names (zerg.qa.omp_coordination_awareness does both).
 # Spec: control-plane/docs/specs/agent-coordination-contract.md
 version: 1
 
