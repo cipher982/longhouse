@@ -72,7 +72,8 @@ def coordination_tool_name(name: str, arguments: Any = None) -> str:
     if name == "write" and isinstance(arguments, dict):
         path = str(arguments.get("path") or "")
         if path.startswith("xd://"):
-            name = path[len("xd://"):]
+            # As the producer reads it: xd://peers/ and xd://peers?x are peers.
+            name = path[len("xd://"):].split("?", 1)[0].rstrip("/")
     if name.startswith("mcp__"):
         rest = name[len("mcp__"):]
         if "__" in rest:
@@ -304,7 +305,7 @@ def main():
         except (OSError, ValueError):
             continue
         if session_file:
-            helm_files.add(Path(session_file))
+            helm_files.add(Path(session_file).resolve())
     if helm_files:
         for file_path in sorted(helm_files):
             if file_path.exists() and should_process_file(file_path, cutoff):
@@ -322,7 +323,7 @@ def main():
     omp_root = Path.home() / ".omp" / "agent" / "sessions"
     if omp_root.exists():
         for file_path in omp_root.glob("**/*.jsonl"):
-            if file_path in helm_files or not should_process_file(file_path, cutoff):
+            if file_path.resolve() in helm_files or not should_process_file(file_path, cutoff):
                 continue
             session_ids, tools, sessions_by_tool = process_omp_file(file_path)
             results["omp_other"]["sessions_total"].update(session_ids)
@@ -330,6 +331,9 @@ def main():
                 results["omp_other"]["tool_calls"][tool] += count
             for tool, sessions in sessions_by_tool.items():
                 results["omp_other"]["sessions_by_tool"][tool].update(sessions)
+            hit_rate, inp, cache_read, cache_write = process_omp_cache_file(file_path)
+            if hit_rate > 0 or inp > 0:
+                results["omp_other"]["cache_rates"].append((hit_rate, inp, cache_read, cache_write))
 
     # Prepare output
     output = {
