@@ -540,17 +540,15 @@ def test_run_coordination_dispatches_by_variant_and_uses_pass_not_passed(tmp_pat
     assert on_disk == result
 
 
-def test_run_coordination_crash_before_observation_still_yields_typed_observation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A crash/timeout raised from inside _run_directed_input (e.g. the bridge
-    never comes up, or the send/poll loop blows its deadline) propagates before
-    that helper ever returns an observation dict, so the caller's local
-    `result` stays {} with no "observation" key at all. The assurance
-    validator (provider_factory/assurance.py) requires `observation` to be a
-    Mapping and otherwise reports the whole result as a malformed shape
-    ("observation is not an object"), which misclassifies a real producer
-    crash as a harness defect. The producer must always persist a typed,
-    dict-shaped observation describing the crash so the failure is judged on
-    its merits instead of shape-rejected."""
+def test_run_coordination_crash_before_observation_is_a_typed_harness_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A crash or timeout inside _run_directed_input (the bridge never comes up,
+    the send/poll loop blows its deadline) propagates before any observation
+    exists. That run reached no verdict, so it must not claim one: the factory
+    files a false assertion as a product finding. The result is a typed harness
+    failure (status fail, an error, neither observation nor assertions), still
+    scenario-scoped, which the factory accepts and reports by cause."""
+
+    from tests_lite._factory_envelope import assert_result_conforms
 
     args = _args(tmp_path)
     args.evidence_root = tmp_path / "evidence-crash"
@@ -565,14 +563,13 @@ def test_run_coordination_crash_before_observation_still_yields_typed_observatio
     result = m.run_coordination(args)
 
     assert result["status"] == "fail"
-    assert isinstance(result["observation"], dict)
-    assert result["observation"]["producer_crashed"] is True
-    assert "timed out waiting for target session" in result["observation"]["crash_reason"]
-    assert result["assertions"] == {"provider_input_receipt_linked": False}
     assert result["failure_code"] == "codex_coordination_scenario_failed"
+    assert "timed out waiting for target session" in result["error"]
+    assert "observation" not in result and "assertions" not in result
+    assert result["observation_scope"] == "scenario"
+    assert_result_conforms(m, result, variant=args.variant)
 
     on_disk = json.loads((args.evidence_root / "result.json").read_text(encoding="utf-8"))
-    assert isinstance(on_disk["observation"], dict)
     assert on_disk == result
 
 

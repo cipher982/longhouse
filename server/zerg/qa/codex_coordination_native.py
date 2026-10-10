@@ -865,19 +865,15 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
         write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-        # A crash or timeout inside _run_awareness_create/_run_awareness_post_compaction/
-        # _run_directed_input propagates before those helpers ever return an
-        # observation dict, so `result` above is still {} and has no "observation"
-        # key. Without this, the assurance validator's shape check ("observation
-        # is not an object") rejects the whole result and a real producer crash
-        # is reported as a harness shape defect instead of a classified failure.
-        # Preserve any observation fields a helper already wrote (the late-write
-        # failure case) and otherwise synthesize a typed crash observation so the
-        # key is always a dict.
+        # One rule for every coordination producer: a failure with evidence
+        # (the late-write case, where the helpers already returned an
+        # observation) carries it and its verdict; a crash or timeout before any
+        # observation existed reached no verdict, so it is a typed harness
+        # failure with neither. The factory accepts that shape and reports the
+        # cause as infrastructure or harness; a synthesized observation plus a
+        # false assertion would be filed as a product finding
+        # (control-plane failure_class: "an assertion evaluated False").
         existing_observation = result.get("observation")
-        failure_observation: dict[str, Any] = dict(existing_observation) if isinstance(existing_observation, dict) else {}
-        failure_observation.setdefault("producer_crashed", True)
-        failure_observation.setdefault("crash_reason", f"{type(exc).__name__}: {exc}")
         failure = {
             **result,
             "schema_version": 1,
@@ -891,12 +887,16 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "generated_at": now(),
             "status": "fail",
             "observation_scope": "scenario",
-            "observation": failure_observation,
             "failure_code": "codex_coordination_scenario_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "assertions": result.get("assertions") or {assertion_id: False},
             "artifact_manifest": artifact_manifest(root),
         }
+        if isinstance(existing_observation, dict):
+            failure["observation"] = existing_observation
+            failure["assertions"] = result.get("assertions") or {assertion_id: False}
+        else:
+            failure.pop("observation", None)
+            failure.pop("assertions", None)
         write_json(root / "result.json", failure)
         return failure
 
