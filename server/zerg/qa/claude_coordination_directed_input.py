@@ -418,6 +418,9 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             error_detail = f"RuntimeHostHTTPError[{exc.status}]: {exc.detail}"
         failure = {
             **result,
+            # The factory reads a null observation as a malformed result; a
+            # failure before the observation was built still says so.
+            "observation": result.get("observation") or {"completed": False},
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
             "producer": REGISTRATION.to_dict(),

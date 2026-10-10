@@ -339,6 +339,9 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
             cleanup_recording_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
         failure = {
             **result,
+            # The factory reads a null observation as a malformed result; a
+            # failure before the observation was built still says so.
+            "observation": result.get("observation") or {"completed": False},
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
             "producer": REGISTRATION.to_dict(),

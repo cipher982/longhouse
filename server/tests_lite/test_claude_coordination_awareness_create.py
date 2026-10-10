@@ -227,3 +227,45 @@ def test_main_serializes_result_and_exit_code(tmp_path: Path, monkeypatch: pytes
 def test_main_rejects_a_variant_it_does_not_recognize(tmp_path: Path) -> None:
     with pytest.raises(SystemExit):
         m.main(["--variant", "bogus-variant", "--evidence-root", str(tmp_path / "evidence")])
+
+
+def test_read_coordination_token_resolves_the_late_token_file(tmp_path):
+    """A launch that recovered registration late carries its token in a file."""
+
+    import json
+    import threading
+
+    from zerg.qa.claude_live_session_support import read_coordination_token
+
+    session_id = "11111111-1111-4111-8111-111111111111"
+    config_dir = tmp_path / "run" / "claude-mcp"
+    config_dir.mkdir(parents=True)
+    token_file = tmp_path / "late.coordination-token"
+    (config_dir / f"{session_id}-a.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "longhouse-coordination": {
+                        "env": {"LONGHOUSE_MCP_ROLE": "coordination", "LONGHOUSE_COORDINATION_TOKEN_FILE": str(token_file)}
+                    }
+                }
+            }
+        )
+    )
+    assert read_coordination_token(tmp_path, session_id, wait_secs=0) is None
+    threading.Timer(0.3, lambda: token_file.write_text("late-secret\n")).start()
+    assert read_coordination_token(tmp_path, session_id, wait_secs=5) == "late-secret"
+
+
+def test_read_coordination_token_prefers_the_launch_token(tmp_path):
+    import json
+
+    from zerg.qa.claude_live_session_support import read_coordination_token
+
+    session_id = "22222222-2222-4222-8222-222222222222"
+    config_dir = tmp_path / "run" / "claude-mcp"
+    config_dir.mkdir(parents=True)
+    (config_dir / f"{session_id}-a.json").write_text(
+        json.dumps({"mcpServers": {"longhouse-coordination": {"env": {"LONGHOUSE_COORDINATION_TOKEN": "launch-secret"}}}})
+    )
+    assert read_coordination_token(tmp_path, session_id, wait_secs=0) == "launch-secret"

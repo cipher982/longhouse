@@ -723,25 +723,61 @@ def mcp_bootstrap_config_paths(longhouse_home: Path, session_id: str) -> list[Pa
     return sorted(directory.glob(f"{session_id}-*.json"))
 
 
-def read_coordination_token(longhouse_home: Path, session_id: str) -> str | None:
-    """Read the real per-session coordination token Longhouse issued at launch.
+# A launch that misses its 2 s foreground registration budget gets its
+# coordination token later, through the late-token file its launcher writes
+# when the background retry recovers (engine LateCoordinationToken). Retry
+# sleeps are 1, 2, 4 s and each attempt is bounded by
+# RECOVERY_REGISTRATION_TIMEOUT (12 s), so three attempts finish within
+# 2 + (1 + 12) + (2 + 12) + (4 + 12) = 45 s. Past that the Runtime Host is not
+# merely slow, and "no authority" is the true answer.
+COORDINATION_TOKEN_RECOVERY_WAIT_SECS = 45.0
 
-    This is the exact token value the model's own MCP ``send``/``inbox``/``reply``
-    tool calls use (``mcpServers.longhouse-coordination.env.LONGHOUSE_COORDINATION_TOKEN``
-    in the bootstrap config written by ``write_claude_mcp_config``), so a
-    producer authenticating with it exercises the real per-session coordination
-    authority path rather than a synthetic substitute.
-    """
 
+def _coordination_token_now(longhouse_home: Path, session_id: str) -> str | None:
     for path in mcp_bootstrap_config_paths(longhouse_home, session_id):
         try:
             config = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        token = config.get("mcpServers", {}).get("longhouse-coordination", {}).get("env", {}).get("LONGHOUSE_COORDINATION_TOKEN")
-        if isinstance(token, str) and token:
-            return token
+        env = config.get("mcpServers", {}).get("longhouse-coordination", {}).get("env", {})
+        token = env.get("LONGHOUSE_COORDINATION_TOKEN")
+        if isinstance(token, str) and token.strip():
+            return token.strip()
+        token_file = env.get("LONGHOUSE_COORDINATION_TOKEN_FILE")
+        if isinstance(token_file, str) and token_file:
+            try:
+                token = Path(token_file).read_text(encoding="utf-8").strip()
+            except OSError:
+                token = ""
+            if token:
+                return token
     return None
+
+
+def read_coordination_token(
+    longhouse_home: Path,
+    session_id: str,
+    *,
+    wait_secs: float = COORDINATION_TOKEN_RECOVERY_WAIT_SECS,
+) -> str | None:
+    """Read the real per-session coordination token Longhouse issued.
+
+    This is the exact token the model's own MCP ``send``/``inbox``/``reply``
+    tool calls use, so a producer authenticating with it exercises the real
+    per-session coordination authority path. A launch that registered within
+    its foreground budget carries it as
+    ``mcpServers.longhouse-coordination.env.LONGHOUSE_COORDINATION_TOKEN``; one
+    that recovered later carries it in the file named by
+    ``LONGHOUSE_COORDINATION_TOKEN_FILE``, so this waits up to ``wait_secs``
+    for recovery before reporting no authority.
+    """
+
+    deadline = time.monotonic() + max(0.0, wait_secs)
+    while True:
+        token = _coordination_token_now(longhouse_home, session_id)
+        if token is not None or time.monotonic() >= deadline:
+            return token
+        time.sleep(0.5)
 
 
 def close_session(session: ProviderPtySession, *, exit_command: str | None = "/exit") -> dict[str, Any]:
