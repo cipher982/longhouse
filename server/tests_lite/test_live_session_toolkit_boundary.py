@@ -35,17 +35,17 @@ def _public_names(path: pathlib.Path) -> set[str]:
     }
 
 
-def _imported_names(source: str, package: str) -> set[str]:
-    """Every module (and `from` member) a source imports, as absolute dotted names.
+def _import_edges(source: str, package: str) -> list[tuple[str, str | None]]:
+    """Every import in a source as (absolute module, member or None).
 
     Relative imports are resolved against the importing module's package, and a
     level that climbs past the top package is skipped (not an import of ours),
     so `from . import x` and `from .x import y` are seen as `zerg.qa.x`.
     """
-    names: set[str] = set()
+    edges: list[tuple[str, str | None]] = []
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
-            names.update(alias.name for alias in node.names)
+            edges.extend((alias.name, None) for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             base = node.module or ""
             if node.level:
@@ -54,8 +54,17 @@ def _imported_names(source: str, package: str) -> set[str]:
                 if keep <= 0:
                     continue
                 base = ".".join([*parts[:keep], *([base] if base else [])])
-            names.add(base)
-            names.update(f"{base}.{alias.name}" for alias in node.names)
+            edges.extend((base, alias.name) for alias in node.names)
+    return edges
+
+
+def _imported_names(source: str, package: str) -> set[str]:
+    """Every module and `from` member a source imports, as absolute dotted names."""
+    names: set[str] = set()
+    for module, member in _import_edges(source, package):
+        names.add(module)
+        if member:
+            names.add(f"{module}.{member}")
     return names
 
 
@@ -66,24 +75,50 @@ def _imports_a_resume_producer(source: str, package: str = "zerg.qa") -> bool:
 PRODUCER_MODULE = "zerg.qa.provider_native_resume"
 
 
-def _producer_surface_used_by_siblings() -> dict[str, set[str]]:
-    """Per sibling: the producer members it imports, in any import spelling.
+def _producer_members_in(source: str, package: str = "zerg.qa") -> set[str]:
+    """The producer members a source imports, in any spelling.
 
-    A bare module import (`import zerg.qa.provider_native_resume`,
+    A whole-module reach (`import zerg.qa.provider_native_resume`,
     `from zerg.qa import provider_native_resume`, `from . import ...`) reaches
-    every member, so it is recorded as `*`.
+    every member, so it adds `*` even when the file also imports named members.
     """
+    members: set[str] = set()
+    for module, member in _import_edges(source, package):
+        if module == PRODUCER_MODULE and member:
+            members.add(member)
+        if (module == PRODUCER_MODULE and member is None) or (member and f"{module}.{member}" == PRODUCER_MODULE):
+            members.add("*")
+    return members
+
+
+def _producer_surface_used_by_siblings() -> dict[str, set[str]]:
+    """Per sibling: the producer members it imports, in any import spelling."""
     used: dict[str, set[str]] = {}
     for path in QA_DIR.glob("*.py"):
         if path.name == "provider_native_resume.py":
             continue
-        names = _imported_names(path.read_text(encoding="utf-8"), "zerg.qa")
-        members = {name.removeprefix(PRODUCER_MODULE + ".") for name in names if name.startswith(PRODUCER_MODULE + ".")}
-        if PRODUCER_MODULE in names and not members:
-            members = {"*"}
+        members = _producer_members_in(path.read_text(encoding="utf-8"))
         if members:
             used[path.name] = members
     return used
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("from zerg.qa.provider_native_resume import SPECS", {"SPECS"}),
+        ("from zerg.qa.provider_native_resume import _private", {"_private"}),
+        ("import zerg.qa.provider_native_resume", {"*"}),
+        ("from zerg.qa import provider_native_resume", {"*"}),
+        ("from . import provider_native_resume", {"*"}),
+        ("from .provider_native_resume import SPECS", {"SPECS"}),
+        # A whole-module reach is not masked by a named import in the same file.
+        ("import zerg.qa.provider_native_resume\nfrom zerg.qa.provider_native_resume import SPECS", {"*", "SPECS"}),
+        ("from .. import provider_native_resume", set()),
+    ],
+)
+def test_the_sibling_surface_guard_sees_every_spelling_and_does_not_mask_a_whole_module_reach(source: str, expected: set[str]) -> None:
+    assert _producer_members_in(source) == expected
 
 
 def test_no_sibling_reaches_into_the_resume_producers_privates() -> None:
