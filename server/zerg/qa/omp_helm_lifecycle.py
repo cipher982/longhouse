@@ -93,7 +93,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
     producer_revision=10,
     scenario_id=SCENARIO_ID,
-    scenario_revision=12,
+    scenario_revision=13,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -2563,7 +2563,14 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             resume_offset = _read_source_size(current_session_file)
             pre_resume_source = root / "pre-resume-native-source.raw"
             pre_resume_source.write_bytes(current_session_file.read_bytes())
-            resume_prompt = f"Without reading any files, reply with the context phrase you remember followed by exactly {resume_marker}."
+            # Name where the phrase is and what it starts with, never the phrase
+            # itself: only restored history can supply it, and an unambiguous
+            # ask leaves a cheap model no reason to decline (the Pi sibling
+            # failed that way on 2026-10-10).
+            resume_prompt = (
+                "Earlier in this conversation I gave you a context phrase that starts with OMP_HELM_CONTEXT_. "
+                f"It is in the conversation history above. Reply with that exact phrase, then {resume_marker}, and nothing else."
+            )
             resumed = ProviderPtySession.start(
                 argv=_launch_argv(
                     args,

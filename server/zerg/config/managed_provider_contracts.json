@@ -4613,7 +4613,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             }
           ],
           "level": "live_token",
@@ -4633,12 +4633,12 @@
               "id": "omp_helm_cold_resume_exact_file",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 11,
+              "minimum_scenario_revision": 13,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             }
           ],
           "level": "live_token",
@@ -4656,7 +4656,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             }
           ],
           "level": "live_token",
@@ -4674,7 +4674,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             }
           ],
           "level": "live_token",
@@ -4692,7 +4692,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             }
           ],
           "level": "live_token",
@@ -4718,7 +4718,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             }
           ],
           "level": "live_token",
@@ -4804,7 +4804,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             },
             {
               "id": "omp_helm_send_idle",
@@ -4815,7 +4815,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             },
             {
               "id": "omp_helm_follow_up_native",
@@ -4826,7 +4826,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             },
             {
               "id": "omp_helm_steer_active",
@@ -4837,7 +4837,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             },
             {
               "id": "omp_helm_abort_native",
@@ -4848,7 +4848,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             },
             {
               "id": "omp_helm_terminate_owned",
@@ -4859,7 +4859,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             },
             {
               "id": "omp_helm_native_replacement_bound",
@@ -4870,7 +4870,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             }
           ]
         },
@@ -4892,12 +4892,12 @@
               "id": "omp_helm_cold_resume_exact_file",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 11,
+              "minimum_scenario_revision": 13,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             },
             {
               "id": "omp_helm_stale_owner_refused",
@@ -4908,7 +4908,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "6ff1a3337d9d8bd082066666c029afffc855939f2dcacc4344d0cd3e289286ef"
+              "oracle_digest": "ad25ef178d497542be1c37e32ca72fb3f938b9f46e0ddf56dadda3db9d261e38"
             }
           ]
         },

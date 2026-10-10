@@ -2899,7 +2899,7 @@ providers:
       - id: omp_helm_cold_resume_exact_file
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
-        minimum_scenario_revision: 11
+        minimum_scenario_revision: 13
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -3008,6 +3008,7 @@ providers:
       required_assertions:
       - <<: *omp_helm_lifecycle_assertion
         id: omp_helm_cold_resume_exact_file
+        minimum_scenario_revision: 13
       - <<: *omp_helm_lifecycle_assertion
         id: omp_helm_stale_owner_refused
     # Mid-turn steer on a running Console turn (docs/specs/console-full-control.md).

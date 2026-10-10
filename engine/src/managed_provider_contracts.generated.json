@@ -4488,7 +4488,7 @@
               "id": "omp_helm_cold_resume_exact_file",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 11,
+              "minimum_scenario_revision": 13,
               "acceptable_evidence": [
                 "live_token"
               ],
@@ -4734,7 +4734,7 @@
               "id": "omp_helm_cold_resume_exact_file",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 11,
+              "minimum_scenario_revision": 13,
               "acceptable_evidence": [
                 "live_token"
               ],

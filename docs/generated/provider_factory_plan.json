@@ -2385,7 +2385,7 @@
           "assertion_id": "omp_helm_cold_resume_exact_file",
           "variant": null,
           "scenario_id": "omp_helm_lifecycle",
-          "minimum_scenario_revision": 11,
+          "minimum_scenario_revision": 13,
           "acceptable_evidence": [
             "live_token"
           ],
