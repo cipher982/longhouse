@@ -56,6 +56,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// Gap between the `ps` passes that tell a zombie-only group from a running one.
 const MEMBER_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 
+/// How long a one-off running-member check may take before it answers
+/// "running" (a `ps` pass normally takes tens of milliseconds).
+const MEMBER_CHECK_LIMIT: Duration = Duration::from_secs(2);
+
 /// What actually happened to a process group that was asked to exit.
 ///
 /// Deliberately distinguishes `Terminated` from `Killed` so callers can log the
@@ -237,12 +241,20 @@ pub async fn wait_for_group_exit(pgid: i32, budget: Duration) -> bool {
 /// than stalling the runtime. A task that cannot run answers "running", the
 /// safe direction.
 pub async fn running_member_off_runtime(pgid: i32) -> bool {
+    running_member_within(pgid, MEMBER_CHECK_LIMIT).await
+}
+
+/// [`running_member_off_runtime`] that gives up after `limit`, answering
+/// "running", so a slow `ps` never stretches a caller's budget.
+async fn running_member_within(pgid: i32, limit: Duration) -> bool {
     if !group_is_alive(pgid) {
         return false;
     }
-    tokio::task::spawn_blocking(move || group_has_running_member(pgid))
-        .await
-        .unwrap_or(true)
+    let probe = tokio::task::spawn_blocking(move || group_has_running_member(pgid));
+    match tokio::time::timeout(limit, probe).await {
+        Ok(Ok(running)) => running,
+        _ => true,
+    }
 }
 
 async fn wait_for_group_exit_until(pgid: i32, deadline: tokio::time::Instant) -> bool {
@@ -255,10 +267,11 @@ async fn wait_for_group_exit_until(pgid: i32, deadline: tokio::time::Instant) ->
         }
         let now = tokio::time::Instant::now();
         if now >= deadline {
-            return !running_member_off_runtime(pgid).await;
+            // One last look, briefly: the budget is spent.
+            return !running_member_within(pgid, POLL_INTERVAL * 4).await;
         }
         if now >= next_member_check {
-            if !running_member_off_runtime(pgid).await {
+            if !running_member_within(pgid, (deadline - now).max(POLL_INTERVAL)).await {
                 return true;
             }
             next_member_check = now + MEMBER_CHECK_INTERVAL;
