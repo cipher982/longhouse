@@ -384,21 +384,21 @@ def test_failed_results_is_a_leaf_and_producers_never_import_factory_registratio
     }
     assert not {name for name in leaf_imports if name.startswith("zerg")}, leaf_imports
 
+    # Producers are registered in several shapes (a script's main(), a wrapper
+    # around a shared runner), so the rule is simply: nothing under zerg imports
+    # factory_registration. Today nothing does; the tests and the control plane
+    # are its only callers.
     offenders = []
-    for path in sorted(qa.glob("*.py")):
-        if path.name == "factory_registration.py":
+    for path in sorted(qa.parent.rglob("*.py")):
+        if path == Path(factory.__file__).resolve():
             continue
-        source = path.read_text(encoding="utf-8")
-        if "def main(" not in source:
-            continue
-        for node in ast.walk(ast.parse(source)):
-            imported = (
-                [node.module or ""] + [f"{node.module}.{alias.name}" for alias in node.names]
-                if isinstance(node, ast.ImportFrom)
-                else [alias.name for alias in node.names]
-                if isinstance(node, ast.Import)
-                else []
-            )
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom):
+                imported = [node.module or ""] + [f"{node.module}.{alias.name}" for alias in node.names]
+            elif isinstance(node, ast.Import):
+                imported = [alias.name for alias in node.names]
+            else:
+                continue
             if "zerg.qa.factory_registration" in imported:
-                offenders.append(path.name)
-    assert not offenders, f"producers importing factory_registration: {offenders}"
+                offenders.append(str(path.relative_to(qa.parent)))
+    assert not offenders, f"modules importing factory_registration: {offenders}"

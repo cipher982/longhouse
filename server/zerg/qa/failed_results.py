@@ -17,7 +17,7 @@ def settle_failed_result(failure: dict[str, Any], *, observation: Any, assertion
     A failure with evidence carries its observation and the verdict it reached. A
     failure before any observation existed (no coordination authority, a launch or
     bridge that never came up, a precondition crash) reached no verdict, so it
-    carries neither and is a typed harness failure (``typed_harness_failure``):
+    carries neither and is a typed harness failure (``factory_registration.typed_harness_failure``):
     the factory reports its cause as infrastructure or harness, where a false
     assertion would be filed as a product finding.
     """
