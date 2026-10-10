@@ -799,7 +799,7 @@ def test_the_busy_sampler_and_the_idle_watch_survive_a_status_read_that_keeps_fa
 
 
 @pytest.mark.parametrize("module", ["omp_background_producer", "claude_background_producer"])
-def test_a_scenario_producers_failed_result_is_scenario_scoped(monkeypatch, tmp_path, capsys, module) -> None:
+def test_a_scenario_producers_failed_result_is_scenario_scoped(monkeypatch, tmp_path, module) -> None:
     """A failure path that drops ``observation_scope`` made the factory report "returned a
     cell-specific result" instead of the failure (omp.background_jobs.v1, 2026-10-08..10)."""
 

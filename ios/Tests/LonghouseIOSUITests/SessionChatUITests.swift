@@ -798,8 +798,13 @@ final class SessionChatUITests: XCTestCase {
     /// The keyboard-layout tests need the software keyboard on screen; typing
     /// needs only focus.
     private func composerTookFocus(_ composer: XCUIElement, in app: XCUIApplication, requireKeyboard: Bool) -> Bool {
-        if app.keyboards.firstMatch.waitForExistence(timeout: Self.patient(3)) { return true }
-        return !requireKeyboard && (composer.value(forKey: "hasKeyboardFocus") as? Bool) == true
+        let deadline = Date().addingTimeInterval(Self.patient(3))
+        repeat {
+            if app.keyboards.firstMatch.exists { return true }
+            if !requireKeyboard, (composer.value(forKey: "hasKeyboardFocus") as? Bool) == true { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        } while Date() < deadline
+        return false
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
