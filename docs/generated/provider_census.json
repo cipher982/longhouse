@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 319,
+  "file_count": 318,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2168,14 +2168,6 @@
     },
     {
       "path": "server/zerg/managed_provider_contract_manifest.py",
-      "providers": [
-        "claude",
-        "codex",
-        "omp"
-      ]
-    },
-    {
-      "path": "server/zerg/mcp_server/server.py",
       "providers": [
         "claude",
         "codex",

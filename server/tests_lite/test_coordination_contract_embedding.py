@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
-
 ROOT = Path(__file__).resolve().parents[2]
 PINNED_READERS = (
     ROOT / "server" / "zerg" / "mcp_server" / "server.py",
@@ -24,9 +22,16 @@ def test_pinned_contract_readers_read_no_file_at_import() -> None:
 
 
 def test_the_inline_copies_match_the_schema() -> None:
+    import importlib.util
+
     from zerg.mcp_server import server
     from zerg.services.shipper import hooks
 
-    schema = yaml.safe_load((ROOT / "schemas" / "coordination_contract.yml").read_text(encoding="utf-8"))
-    assert server.COORDINATION_INSTRUCTIONS == str(schema["instructions"]).strip()
-    assert hooks.COORDINATION_BOOTSTRAP == str(schema["session_start"]).strip()
+    spec = importlib.util.spec_from_file_location(
+        "generate_coordination_contract", ROOT / "scripts" / "generate" / "generate_coordination_contract.py"
+    )
+    generator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generator)
+    contract = generator.load_contract()
+    assert server._COORDINATION_CONTRACT == {"instructions": contract["instructions"], "tools": contract["tools"]}
+    assert hooks.COORDINATION_BOOTSTRAP == contract["session_start"]

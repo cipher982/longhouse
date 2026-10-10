@@ -173,10 +173,10 @@ repos:
       # -----------------------------------------------------------------------
       - id: coordination-contract
         name: Coordination contract (self-staging)
-        entry: python3 scripts/qa/precommit_autofix.py fix --name "coordination contract" --cmd "uv run --project server --extra dev python scripts/generate/generate_coordination_contract.py --write" --watch engine/src/coordination_contract.generated.json --watch server/zerg/config/coordination_contract.json --watch engine/assets/longhouse-omp-helm.ts --how "cd server && uv run --extra dev python ../scripts/generate/generate_coordination_contract.py --write"
+        entry: python3 scripts/qa/precommit_autofix.py fix --name "coordination contract" --cmd "uv run --project server --extra dev python scripts/generate/generate_coordination_contract.py --write" --watch engine/src/coordination_contract.generated.json --watch server/zerg/config/coordination_contract.json --watch engine/assets/longhouse-omp-helm.ts --watch server/zerg/mcp_server/server.py --watch server/zerg/services/shipper/hooks.py --how "cd server && uv run --extra dev python ../scripts/generate/generate_coordination_contract.py --write"
         language: system
         require_serial: true
-        files: ^(schemas/coordination_contract\.yml|scripts/generate/generate_coordination_contract\.py|engine/assets/longhouse-omp-helm\.ts|engine/src/coordination_contract\.generated\.json|server/zerg/config/coordination_contract\.json)$
+        files: ^(schemas/coordination_contract\.yml|scripts/generate/generate_coordination_contract\.py|engine/assets/longhouse-omp-helm\.ts|engine/src/coordination_contract\.generated\.json|server/zerg/config/coordination_contract\.json|server/zerg/mcp_server/server\.py|server/zerg/services/shipper/hooks\.py)$
         pass_filenames: false
       - id: check-provider-contract-digest
         name: Managed provider contract digest (self-staging)

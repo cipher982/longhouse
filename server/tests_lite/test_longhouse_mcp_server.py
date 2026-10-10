@@ -560,10 +560,14 @@ async def test_search_sessions_marks_search_unavailable_as_not_absence():
 def test_peer_line_matches_every_contract_vector():
     from datetime import datetime
 
-    from zerg.mcp_server.server import _COORDINATION_CONTRACT
+    import json
+    from pathlib import Path
+
     from zerg.mcp_server.server import _peer_line
 
-    section = _COORDINATION_CONTRACT["peers_line"]
+    # The vectors live in the full contract; the MCP server embeds only what it reads.
+    contract = Path(__file__).resolve().parents[1] / "zerg" / "config" / "coordination_contract.json"
+    section = json.loads(contract.read_text(encoding="utf-8"))["peers_line"]
     now = datetime.fromisoformat(section["now"].replace("Z", "+00:00"))
     for vector in section["vectors"]:
         assert _peer_line(vector["item"], now) == vector["line"]

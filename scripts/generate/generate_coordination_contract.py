@@ -107,9 +107,9 @@ def render_omp(contract: dict, current: str) -> str:
 def _python_literal(value: object) -> str:
     """A raw triple-quoted JSON literal the module parses at import, no file read."""
 
+    # json.dumps escapes every quote and backslash, so the text can never close the
+    # raw string or end it with a backslash.
     text = json.dumps(value, indent=2, ensure_ascii=False)
-    if '"""' in text or text.endswith("\\"):
-        raise SystemExit("coordination contract text cannot be embedded in a raw triple-quoted string")
     return f'json.loads(\n    r"""\n{text}\n"""\n)'
 
 
@@ -139,7 +139,8 @@ def main() -> int:
         MCP_SERVER: render_python_block(
             MCP_SERVER,
             MCP_SERVER.read_text(encoding="utf-8"),
-            f"_COORDINATION_CONTRACT = {_python_literal(contract)}",
+            # Only what the MCP server reads: its instructions and tool descriptions.
+            f"_COORDINATION_CONTRACT = {_python_literal({'instructions': contract['instructions'], 'tools': contract['tools']})}",
         ),
         SHIPPER_HOOKS: render_python_block(
             SHIPPER_HOOKS,
