@@ -48,6 +48,8 @@ from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_until
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
+from zerg.qa.failed_results import reached_only
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import prepare_claude_profile
@@ -418,6 +420,19 @@ def _timestamp(row: dict[str, Any]) -> float | None:
         return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
+
+
+# What proves each phase was reached and its verdict decided: the phase writes its
+# record, with a boolean ``passed``, only once it ran. An errored run reports
+# verdicts only for these (failed_results.reached_only), each judged on its own
+# record, so a step the run never reached is absent rather than False.
+REACHED_MARKERS: dict[str, tuple[str, ...]] = {
+    "claude_helm_launch_registration": ("lifecycle.launch_registration.passed",),
+    "claude_helm_send_idle": ("lifecycle.send_idle.passed",),
+    "claude_helm_steer_active": ("lifecycle.steer_active.passed",),
+    "claude_helm_abort_native": ("lifecycle.abort_native.passed",),
+    "claude_helm_terminate_owned": ("lifecycle.terminate_owned.passed",),
+}
 
 
 def lifecycle_assertions(lifecycle: dict[str, Any], *, completed: bool, cleanup_ok: bool) -> dict[str, bool]:
@@ -1191,8 +1206,17 @@ def run_lifecycle(
         observed = lifecycle.get("steer_active" if target == "claude_helm_steer_active" else "abort_native") or {}
         verdict = negative_control_verdict(lifecycle, fault=fault, fault_receipt=observed.get("qa_fault_receipt"))
         result.update({"status": verdict["status"], "negative_control": verdict})
+    elif error is not None:
+        # An error used to fail steer, abort and terminate wholesale, even when
+        # they had run and held, and to report unreached phases False: product
+        # findings for steps that never ran. Judge each reached phase on its own
+        # record; a reached failure stays a verdict, and if every reached phase
+        # held the run is a typed harness failure with the observation kept.
+        result.update({"status": "fail", "failure_code": "claude_helm_lifecycle_failed", "error": str(error)})
+        judged = lifecycle_assertions(lifecycle, completed=True, cleanup_ok=cleanup_ok)
+        settle_failed_result(result, observation=observation, assertions=reached_only(judged, observation, REACHED_MARKERS))
     else:
-        assertions = lifecycle_assertions(lifecycle, completed=error is None, cleanup_ok=cleanup_ok)
+        assertions = lifecycle_assertions(lifecycle, completed=True, cleanup_ok=cleanup_ok)
         result.update({"status": "pass" if all(assertions.values()) else "fail", "assertions": assertions})
         if result["status"] == "fail":
             result["failure_code"] = "claude_helm_lifecycle_failed"

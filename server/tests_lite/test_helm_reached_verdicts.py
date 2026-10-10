@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from zerg.qa import claude_helm_lifecycle as claude
 from zerg.qa import codex_helm_lifecycle as codex
 from zerg.qa import factory_registration
 from zerg.qa import opencode_helm_lifecycle as opencode
@@ -27,6 +28,31 @@ SCHEMA = Path(__file__).resolve().parents[2] / "schemas" / "managed_providers.ym
 # Per producer: an observation where send was reached (and failed or held), with
 # the full map the producer computes, which reads unreached steps as False.
 CASES: dict[str, dict[str, Any]] = {
+    "claude": {
+        "module": claude,
+        "send_reached": {
+            "lifecycle": {"launch_registration": {"passed": True}, "send_idle": {"passed": False}},
+            "error": "late failure",
+        },
+        "send_failed_map": {
+            "claude_helm_launch_registration": True,
+            "claude_helm_send_idle": False,
+            "claude_helm_steer_active": False,
+            "claude_helm_abort_native": False,
+            "claude_helm_terminate_owned": False,
+        },
+        "send_held_map": {
+            "claude_helm_launch_registration": True,
+            "claude_helm_send_idle": True,
+            "claude_helm_steer_active": False,
+            "claude_helm_abort_native": False,
+            "claude_helm_terminate_owned": False,
+        },
+        "reached": {"claude_helm_launch_registration", "claude_helm_send_idle"},
+        # Claude's phase records are lifecycle["<phase>"] = {..., "passed": ...}.
+        "written_as": lambda marker: marker.removeprefix("lifecycle.").removesuffix(".passed"),
+        "written_names": {"lifecycle"},
+    },
     "codex": {
         "module": codex,
         "send_reached": {"send": {"turn_id": "t1"}, "terminate": {"stop_verification": {"verified": True}}},
@@ -79,7 +105,7 @@ def _errored_result(module: ModuleType, observation: dict, full_map: dict[str, b
         "producer": registration,
         "provider": registration["providers"][0],
         "variant": None,
-        "scenario_id": module.SCENARIO_ID,
+        "scenario_id": module.REGISTRATION.scenario_id,
         "scenario_revision": module.REGISTRATION.scenario_revision,
         "evidence_class": "live_token",
         "observation_scope": "scenario",
@@ -156,13 +182,14 @@ def test_reached_markers_cover_every_assertion_are_written_and_never_pre_initial
     assert set(module.REACHED_MARKERS) == set(module.ASSERTIONS)
 
     tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
-    written = _written_paths(tree, {"observation", "observations"})
+    written_as = CASES[name].get("written_as", lambda marker: marker)
+    written = _written_paths(tree, CASES[name].get("written_names", {"observation", "observations"}))
     # Codex assigns each phase's record as observations[name] over its phases dict.
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "phases" for t in node.targets):
             if isinstance(node.value, ast.Dict):
                 written |= {key.value for key in node.value.keys if isinstance(key, ast.Constant)}
-    markers = {marker for markers in module.REACHED_MARKERS.values() for marker in markers}
+    markers = {written_as(marker) for markers in module.REACHED_MARKERS.values() for marker in markers}
     assert markers <= written, f"markers the producer never writes: {sorted(markers - written)}"
 
     # The observation's initializer must not pre-set a marker's top-level record.
@@ -171,7 +198,7 @@ def test_reached_markers_cover_every_assertion_are_written_and_never_pre_initial
         for node in ast.walk(tree)
         if isinstance(node, ast.AnnAssign)
         and isinstance(node.target, ast.Name)
-        and node.target.id in {"observation", "observations"}
+        and node.target.id in CASES[name].get("written_names", {"observation", "observations"})
         and isinstance(node.value, ast.Dict)
     ]
     assert initializers
@@ -193,3 +220,5 @@ def test_reached_only_reads_nested_markers_and_treats_empty_as_unreached() -> No
         "b": False,
     }
     assert reached_only(assertions, {"launch": {}}, markers) == {}
+    # An assertion with no marker entry is unreached, not a KeyError on the error path.
+    assert reached_only({"new": False}, {"send": {"x": 1}}, markers) == {}

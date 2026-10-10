@@ -1291,6 +1291,7 @@
     {
       "path": "server/tests_lite/test_helm_reached_verdicts.py",
       "providers": [
+        "claude",
         "codex",
         "opencode"
       ]

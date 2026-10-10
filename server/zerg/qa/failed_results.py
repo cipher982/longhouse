@@ -74,8 +74,10 @@ def reached_only(
     def present(value: Any) -> bool:
         return value is not None and not (isinstance(value, (Mapping, list, str)) and not value)
 
+    # An assertion with no marker entry was never proven reached: absent, so a
+    # producer that grows an assertion cannot crash its own error path.
     return {
         assertion_id: verdict
         for assertion_id, verdict in assertions.items()
-        if all(present(value_at(marker)) for marker in markers[assertion_id])
+        if markers.get(assertion_id) and all(present(value_at(marker)) for marker in markers[assertion_id])
     }
