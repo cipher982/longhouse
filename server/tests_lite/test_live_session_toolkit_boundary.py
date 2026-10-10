@@ -35,48 +35,6 @@ def _public_names(path: pathlib.Path) -> set[str]:
     }
 
 
-def test_no_sibling_reaches_into_the_resume_producers_privates() -> None:
-    """The reach-through this extraction existed to remove must not come back."""
-    offenders = []
-    for path in QA_DIR.glob("*.py"):
-        if path.name == "provider_native_resume.py":
-            continue
-        for match in re.finditer(r"from zerg\.qa\.provider_native_resume import (\w+)", path.read_text(encoding="utf-8")):
-            if match.group(1).startswith("_"):
-                offenders.append(f"{path.name}: {match.group(1)}")
-    assert offenders == []
-
-
-def test_siblings_only_import_the_resume_producers_own_surface() -> None:
-    imported: set[str] = set()
-    for path in QA_DIR.glob("*.py"):
-        if path.name == "provider_native_resume.py":
-            continue
-        imported.update(re.findall(r"from zerg\.qa\.provider_native_resume import (\w+)", path.read_text(encoding="utf-8")))
-    assert imported <= RESUME_PRODUCER_EXPORTS
-
-
-def test_toolkit_exposes_the_shared_surface_publicly() -> None:
-    """Everything a sibling needs is public; nothing needs an underscore."""
-    public = _public_names(TOOLKIT)
-    for expected in (
-        "isolated_provider_home",
-        "launch_command",
-        "qualification_secrets",
-        "redact_state_for_evidence",
-        "secret_scan",
-        "start_transcript_shipper",
-        "stop_session",
-        "wait_state",
-        "wait_session_tail",
-        "wait_assistant_response_after_marker",
-        "write_json",
-        "PtyProcess",
-        "TranscriptShipper",
-    ):
-        assert expected in public, expected
-
-
 def _imported_names(source: str, package: str) -> set[str]:
     """Every module (and `from` member) a source imports, as absolute dotted names.
 
@@ -105,6 +63,66 @@ def _imports_a_resume_producer(source: str, package: str = "zerg.qa") -> bool:
     return any(name.startswith("zerg.qa.") and name.endswith("_resume") for name in _imported_names(source, package))
 
 
+PRODUCER_MODULE = "zerg.qa.provider_native_resume"
+
+
+def _producer_surface_used_by_siblings() -> dict[str, set[str]]:
+    """Per sibling: the producer members it imports, in any import spelling.
+
+    A bare module import (`import zerg.qa.provider_native_resume`,
+    `from zerg.qa import provider_native_resume`, `from . import ...`) reaches
+    every member, so it is recorded as `*`.
+    """
+    used: dict[str, set[str]] = {}
+    for path in QA_DIR.glob("*.py"):
+        if path.name == "provider_native_resume.py":
+            continue
+        names = _imported_names(path.read_text(encoding="utf-8"), "zerg.qa")
+        members = {name.removeprefix(PRODUCER_MODULE + ".") for name in names if name.startswith(PRODUCER_MODULE + ".")}
+        if PRODUCER_MODULE in names and not members:
+            members = {"*"}
+        if members:
+            used[path.name] = members
+    return used
+
+
+def test_no_sibling_reaches_into_the_resume_producers_privates() -> None:
+    """The reach-through this extraction existed to remove must not come back."""
+    offenders = [
+        f"{name}: {member}"
+        for name, members in _producer_surface_used_by_siblings().items()
+        for member in members
+        if member.startswith("_")
+    ]
+    assert offenders == []
+
+
+def test_siblings_only_import_the_resume_producers_own_surface() -> None:
+    imported = set().union(*_producer_surface_used_by_siblings().values())
+    assert imported <= RESUME_PRODUCER_EXPORTS
+
+
+def test_toolkit_exposes_the_shared_surface_publicly() -> None:
+    """Everything a sibling needs is public; nothing needs an underscore."""
+    public = _public_names(TOOLKIT)
+    for expected in (
+        "isolated_provider_home",
+        "launch_command",
+        "qualification_secrets",
+        "redact_state_for_evidence",
+        "secret_scan",
+        "start_transcript_shipper",
+        "stop_session",
+        "wait_state",
+        "wait_session_tail",
+        "wait_assistant_response_after_marker",
+        "write_json",
+        "PtyProcess",
+        "TranscriptShipper",
+    ):
+        assert expected in public, expected
+
+
 def test_toolkit_does_not_import_the_resume_producer() -> None:
     """The dependency runs one way: producers depend on the library."""
     assert not _imports_a_resume_producer(TOOLKIT.read_text(encoding="utf-8"))
@@ -122,7 +140,7 @@ def test_toolkit_does_not_import_the_resume_producer() -> None:
     ],
 )
 def test_the_resume_producer_import_guard_sees_every_spelling(line: str) -> None:
-    assert _imports_a_resume_producer(line) is (line != "from .. import qa")
+    assert _imports_a_resume_producer(line) == (line != "from .. import qa")
 
 
 def test_the_resume_producer_import_guard_skips_levels_beyond_the_top_package() -> None:
