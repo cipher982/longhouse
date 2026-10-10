@@ -1415,8 +1415,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         .env(
             "LONGHOUSE_PI_HELM_INITIAL_PROMPT",
             config.prompt.as_deref().unwrap_or(""),
-        )
-        .env("LONGHOUSE_PI_HELM_URL", &url);
+        );
     if let Some(model) = &effective_model {
         command.arg("--model").arg(model);
     }

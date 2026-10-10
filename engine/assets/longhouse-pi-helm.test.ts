@@ -90,3 +90,23 @@ describe("Pi coordination tools", () => {
     expect(child.content[0].text).toContain("Native subagents");
   });
 });
+
+describe("Pi coordination child-session fence", () => {
+  it("refuses a context whose session file sits under the owned session's artifacts", async () => {
+    const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<void>>();
+    const tools = new Map<string, RegisteredTool>();
+    registerExtension({
+      on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<void>) => handlers.set(name, handler),
+      registerTool: (tool: RegisteredTool) => tools.set(tool.name, tool),
+    } as never);
+    const owned = join(channelDir, "sessions", "main.jsonl");
+    const ctxFor = (file: string) => ({ sessionManager: { getSessionFile: () => file } });
+    // Only the ownership bookkeeping matters here; the channel connect is not under test.
+    await handlers.get("session_start")!({ reason: "startup" }, { ...ctxFor(owned), isIdle: () => true }).catch(() => undefined);
+    const child = await tools
+      .get("tail")!
+      .execute("t", { session_id: "x" }, new AbortController().signal, undefined, ctxFor(join(channelDir, "sessions", "main", "child.jsonl")));
+    expect(child.isError).toBe(true);
+    expect(child.content[0].text).toContain("Native subagents");
+  });
+});

@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
+import { resolve, sep } from "node:path";
 
 // BEGIN GENERATED COORDINATION CONTRACT (scripts/generate/generate_coordination_contract.py)
 // Do not edit: run the generator. Source: schemas/coordination_contract.yml
@@ -860,16 +861,30 @@ export default function (pi: ExtensionAPI) {
   // Coordination authority arrives at launch, or later through a
   // coordination_authority frame when registration recovers in the background.
   let coordinationToken = (process.env.LONGHOUSE_COORDINATION_TOKEN ?? "").trim();
+  // Every session file this launch has spoken for; a context whose file sits
+  // inside one of their artifact directories is a child session, the same
+  // fence OMP uses because an agent-kind check alone proved insufficient there.
+  const ownedSessionFiles = new Set<string>();
+  const sessionFileOf = (ctx: unknown): string | undefined => {
+    const manager = (ctx as { sessionManager?: { getSessionFile?: () => unknown } } | null)?.sessionManager;
+    const file = typeof manager?.getSessionFile === "function" ? manager.getSessionFile() : undefined;
+    return typeof file === "string" && file.trim() ? resolve(file.trim()) : undefined;
+  };
+  const isChildSession = (ctx: unknown): boolean => {
+    if ((ctx as { agent?: { kind?: unknown } } | null)?.agent?.kind === "sub") return true;
+    const file = sessionFileOf(ctx);
+    if (!file || ownedSessionFiles.has(file)) return false;
+    for (const owned of ownedSessionFiles) {
+      const artifactsDir = owned.endsWith(".jsonl") ? owned.slice(0, -".jsonl".length) : owned;
+      if (file.startsWith(`${artifactsDir}${sep}`)) return true;
+    }
+    return false;
+  };
   registerLonghouseCoordination(pi, {
     runtimeUrl: (process.env.LONGHOUSE_PI_HELM_URL ?? "").trim().replace(/\/+$/, ""),
     sessionId: launchSessionId!,
     token: () => coordinationToken,
-    isSubagent: (ctx) =>
-      typeof ctx === "object" &&
-      ctx !== null &&
-      "agent" in ctx &&
-      typeof (ctx as { agent?: unknown }).agent === "object" &&
-      ((ctx as { agent?: { kind?: unknown } }).agent?.kind === "sub"),
+    isSubagent: isChildSession,
   });
   let socket: Socket | undefined;
   let buffer = "";
@@ -1122,6 +1137,8 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("session_start", async (event, ctx) => {
+    const file = sessionFileOf(ctx);
+    if (file && !isChildSession(ctx)) ownedSessionFiles.add(file);
     shuttingDown = false;
     reconnectAttempts = 0;
     if (socket) closeChannel();

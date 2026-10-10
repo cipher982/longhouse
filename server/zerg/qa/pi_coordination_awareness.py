@@ -88,6 +88,8 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     if not args.api_url or not args.agents_token:
         raise RuntimeError("Pi coordination qualification requires Runtime Host URL and token")
+    if not str(args.model or "").strip():
+        raise RuntimeError("Pi coordination qualification requires an explicit --model (LONGHOUSE_PI_QUALIFICATION_MODEL)")
     require_disposable_runtime(args.api_url)
     isolation = new_qualification_isolation_root("pi-coordination")
     provider_home = isolation / "provider-home"
@@ -253,7 +255,9 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_factory_provider_arguments(parser, variants=(_EXECUTION_VARIANT,))
-    parser.add_argument("--model", default=os.environ.get("LONGHOUSE_PI_QUALIFICATION_MODEL", "anthropic/claude-haiku-4.5:off"))
+    # No default: the factory names the qualification model, and an Anthropic
+    # model must never be routed through OpenRouter.
+    parser.add_argument("--model", default=os.environ.get("LONGHOUSE_PI_QUALIFICATION_MODEL", ""))
     parser.add_argument("--api-url", default=os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
     parser.add_argument("--agents-token", default=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"))
     parser.add_argument("--response-timeout-secs", type=float, default=180.0)
