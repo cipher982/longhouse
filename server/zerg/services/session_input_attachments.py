@@ -186,6 +186,56 @@ async def delete_catalog_attachment_blobs(
     return int(result.get("deleted") or 0)
 
 
+def attachment_ref_for_engine(*, session_id: str, input_id: int | str, stored: StoredAttachment) -> dict:
+    """The JSON the engine needs to fetch this blob over machine auth.
+
+    The path is relative to the runtime host's public origin; the engine
+    resolves it against its own ``api_url``. Sha256 + mime + id round-trip into
+    the engine's ``AttachmentRef``.
+    """
+
+    return {
+        "id": str(stored.id),
+        "mime_type": stored.mime_type,
+        "sha256": stored.sha256,
+        "blob_url": (f"/api/agents/sessions/{session_id}/inputs/{input_id}/attachments/{stored.id}/blob"),
+    }
+
+
+def _stored_from_catalog(row: dict) -> StoredAttachment:
+    return StoredAttachment(
+        id=UUID(str(row["id"])),
+        session_input_id=str(row["input_receipt_id"]),
+        session_id=UUID(str(row["session_id"])),
+        mime_type=str(row["mime_type"]),
+        byte_size=int(row["byte_size"]),
+        sha256=str(row["sha256"]),
+        blob_path=attachment_blob_root() / str(row["blob_path"]),
+        original_filename=row.get("original_filename"),
+        original_byte_size=(int(row["original_byte_size"]) if row.get("original_byte_size") is not None else None),
+    )
+
+
+async def list_catalog_attachments(*, owner_id: int, session_id: UUID | str, input_receipt_id: str) -> list[StoredAttachment]:
+    """Every unexpired attachment of one receipt, in upload order."""
+
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise RuntimeError("catalogd is unavailable")
+    result = await catalogd.call(
+        "session.input.attachment.list.v2",
+        {
+            "owner_id": int(owner_id),
+            "session_id": str(session_id),
+            "input_receipt_id": str(UUID(str(input_receipt_id))),
+        },
+        timeout_seconds=1.0,
+    )
+    return [_stored_from_catalog(row) for row in result.get("attachments") or [] if isinstance(row, dict)]
+
+
 async def get_catalog_attachment(
     *,
     owner_id: int,

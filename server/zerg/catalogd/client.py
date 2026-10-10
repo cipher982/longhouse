@@ -69,6 +69,7 @@ _SAFE_RETRY_METHODS = {
     "session.input.finish.v2",
     "session.input.attachment.create.v2",
     "session.input.attachment.delete.v2",
+    "session.input.attachment.list.v2",
     "session.input.attachment.read.v2",
     "session.input.receipt.read.v2",
     "session.input.recent.list.v2",

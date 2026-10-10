@@ -791,6 +791,11 @@ class CatalogDaemon:
             frozenset({"input_receipt_id", "owner_id", "session_id"}),
             "session.input.attachment.delete.v2 has invalid parameters",
         ),
+        "session.input.attachment.list.v2": _Route(
+            "_list_input_attachments",
+            frozenset({"input_receipt_id", "owner_id", "session_id"}),
+            "session.input.attachment.list.v2 has invalid parameters",
+        ),
         "session.input.attachment.read.v2": _Route(
             "_read_input_attachment",
             frozenset({"attachment_id", "input_receipt_id", "owner_id", "session_id"}),
@@ -2398,6 +2403,16 @@ class CatalogDaemon:
             session_id=request.params["session_id"],
             input_receipt_id=request.params["input_receipt_id"],
         )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_input_attachments(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if type(request.params["owner_id"]) is not int or request.params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        for field in ("session_id", "input_receipt_id"):
+            if not _is_canonical_uuid(request.params[field]):
+                return self._error(request, "invalid_request", f"{field} must be a canonical UUID")
+        assert self._store is not None
+        result = await self._run_read_store(self._store.list_input_attachments, **request.params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_input_attachment(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

@@ -55,6 +55,7 @@ from zerg.routers.session_chat import _live_receipt_outcome
 from zerg.routers.session_chat import _runtime_draining_error
 from zerg.routers.session_chat import _set_catalog_live_receipt_error
 from zerg.services.input_attachments_support import attachments_supported
+from zerg.services.live_control_catalog import RETRYABLE_SEND_PRECONDITIONS
 from zerg.services.live_session_inputs import LiveInputReceiptUnavailable
 from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request
 from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
@@ -65,13 +66,14 @@ from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_input_attachments import ALLOWED_MIME_TYPES
 from zerg.services.session_input_attachments import MAX_ATTACHMENT_BYTES
 from zerg.services.session_input_attachments import MAX_ATTACHMENTS_PER_INPUT
-from zerg.services.session_input_attachments import StoredAttachment
+from zerg.services.session_input_attachments import attachment_ref_for_engine
 from zerg.services.session_input_attachments import delete_catalog_attachment_blobs
 from zerg.services.session_input_attachments import get_catalog_attachment
 from zerg.services.session_input_attachments import store_catalog_attachment_blob
 from zerg.services.session_inputs import INPUT_INTENT_AUTO
 from zerg.services.session_inputs import INPUT_INTENT_QUEUE
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
+from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_preferences import stamp_owner_input_soon
@@ -83,25 +85,7 @@ router = APIRouter(prefix="/sessions", tags=["session-chat"])
 agents_router = APIRouter(prefix="/agents/sessions", tags=["agents"])
 
 
-def _attachment_ref_for_engine(
-    *,
-    session_id: str,
-    input_id: int | str,
-    stored: StoredAttachment,
-) -> dict:
-    """Build the JSON the engine needs to fetch this blob over machine auth.
-
-    The path is relative to the runtime host's public origin; the engine
-    resolves it against its own ``api_url`` so we don't need to know the
-    public hostname here. Sha256 + mime + id round-trip into the engine's
-    ``AttachmentRef``.
-    """
-    return {
-        "id": str(stored.id),
-        "mime_type": stored.mime_type,
-        "sha256": stored.sha256,
-        "blob_url": (f"/api/agents/sessions/{session_id}/inputs/{input_id}/attachments/{stored.id}/blob"),
-    }
+_attachment_ref_for_engine = attachment_ref_for_engine
 
 
 def _validate_attachments(files: List[UploadFile]) -> None:
@@ -387,6 +371,53 @@ async def _enqueue_console_input_with_attachments(
         turn=_console_turn_response(turn),
         intent=intent,
         queued=[],
+    )
+
+
+async def _helm_send_can_dispatch_now(source_session, *, owner_id: int) -> bool:
+    from zerg.routers.session_chat import _catalog_recent_input_summaries
+    from zerg.services.live_control_catalog import live_control_session_activity_state
+    from zerg.services.session_state_contract import SEND_DISPATCHABLE_ACTIVITY_STATES
+
+    activity_state = await live_control_session_activity_state(source_session.id, owner_id=owner_id)
+    if activity_state not in SEND_DISPATCHABLE_ACTIVITY_STATES:
+        return False
+    queued_state = await _catalog_recent_input_summaries(source_session.id)
+    # The receipt being dispatched is not queued yet, so any queued one is older.
+    return queued_state is not None and queued_state[1] == 0
+
+
+async def _park_attachment_input(
+    *,
+    source_session,
+    receipt_id: str,
+    delivery_request_id: str,
+    lock_scope_id: str | None,
+    text: str,
+    intent: str,
+    client_request_id: str,
+    record_outcome,
+    error: str | None = None,
+) -> SessionInputResponse:
+    from zerg.routers.session_chat import SessionInputRequest
+    from zerg.routers.session_chat import _finish_catalog_input_receipt
+    from zerg.routers.session_chat import _queued_input_response
+
+    await _finish_catalog_input_receipt(
+        receipt_id=receipt_id,
+        delivery_request_id=delivery_request_id,
+        error=error,
+        status_value=INPUT_STATUS_QUEUED,
+    )
+    if lock_scope_id is not None:
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
+    record_outcome("parked")
+    return await _queued_input_response(
+        source_session=source_session,
+        receipt_id=receipt_id,
+        client_request_id=client_request_id,
+        body=SessionInputRequest(text=text, intent=INPUT_INTENT_QUEUE, client_request_id=client_request_id),
+        source="turn_boundary",
     )
 
 
@@ -883,6 +914,22 @@ async def _create_session_input_with_attachments(
             ),
         ) from exc
 
+    if not runtime_replay and not await _helm_send_can_dispatch_now(source_session, owner_id=int(current_user.id)):
+        # A SEND is dispatched only at an observed turn boundary with nothing
+        # older waiting. Mid-turn, the receipt and its stored images wait
+        # durably for the queue drain, which replays them, instead of in the
+        # provider's in-memory follow-up queue, which died with the process.
+        return await _park_attachment_input(
+            source_session=source_session,
+            receipt_id=catalog_receipt_id,
+            delivery_request_id=delivery_request_id,
+            lock_scope_id=lock_scope_id,
+            text=text,
+            intent=intent,
+            client_request_id=request_id,
+            record_outcome=_record_outcome,
+        )
+
     try:
         dispatch_response = await _build_managed_local_chat_response(
             source_session=source_session,
@@ -1023,6 +1070,21 @@ async def _create_session_input_with_attachments(
                     disposition="accepted",
                     delivery_status="unknown",
                 ),
+            )
+        if isinstance(payload, dict) and str(payload.get("error_code") or "") in RETRYABLE_SEND_PRECONDITIONS:
+            # The adapter refused because its turn was running (or its channel
+            # was not reached): the images stay with the queued receipt for
+            # the drain, exactly like a text SEND.
+            return await _park_attachment_input(
+                source_session=source_session,
+                receipt_id=catalog_receipt_id,
+                delivery_request_id=delivery_request_id,
+                lock_scope_id=None,
+                text=text,
+                intent=intent,
+                client_request_id=request_id,
+                record_outcome=_record_outcome,
+                error=str(payload.get("error_code")),
             )
         await _cleanup_catalog_attachment_group(
             owner_id=int(current_user.id),

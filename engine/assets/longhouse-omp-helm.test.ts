@@ -819,8 +819,8 @@ describe("busy send", () => {
       expect((busy.error as Record<string, unknown>).code).toBe("turn_active");
       expect(sent.length).toBe(0);
 
-      // The durable drain cannot carry images yet, so a busy send with
-      // attachments still rides the provider's follow-up queue.
+      // Images wait durably on the server like any SEND, so a busy send
+      // with attachments is refused the same way, never parked in memory.
       const authority = [...frames]
         .reverse()
         .find((frame) => typeof frame.auth_token === "string" && frame.connection_id === "c1")!;
@@ -840,8 +840,10 @@ describe("busy send", () => {
       );
       for (let attempt = 0; attempt < 50 && !frames.some((f) => f.request_id === "busy-image"); attempt += 1)
         await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(sent.length).toBe(1);
-      expect(sent[0][1]).toEqual({ deliverAs: "followUp" });
+      const busyImage = frames.find((f) => f.request_id === "busy-image")!;
+      expect(busyImage.ok).toBe(false);
+      expect((busyImage.error as Record<string, unknown>).code).toBe("turn_active");
+      expect(sent.length).toBe(0);
       sent.length = 0;
 
       idle = true;

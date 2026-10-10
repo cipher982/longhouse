@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from types import SimpleNamespace
 from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogClient
@@ -830,6 +831,17 @@ async def test_catalogd_attachment_metadata_is_receipt_scoped_and_bounded(daemon
             },
         )
         assert expired["created"] is True
+        listed = await client.call(
+            "session.input.attachment.list.v2",
+            {"owner_id": 7, "session_id": str(session_id), "input_receipt_id": receipt_id},
+        )
+        # The drain replays a parked SEND's images: only unexpired ones, in order.
+        assert [row["id"] for row in listed["attachments"]] == [attachment_id]
+        foreign = await client.call(
+            "session.input.attachment.list.v2",
+            {"owner_id": 8, "session_id": str(session_id), "input_receipt_id": receipt_id},
+        )
+        assert foreign["attachments"] == []
         expired_read = await client.call(
             "session.input.attachment.read.v2",
             {
@@ -1061,3 +1073,56 @@ def test_unsettled_turn_of_an_ended_run_stays_stale_beside_a_reporting_run(tmp_p
         assert by_request["console-queued"]["is_fresh"] is False
     finally:
         engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_the_drain_replays_a_parked_sends_images(monkeypatch):
+    """A SEND parked mid-turn keeps its images: the drain dispatches them with the text."""
+
+    from zerg.services import session_input_queue as queue
+    from zerg.services.session_input_attachments import StoredAttachment
+
+    session_id = uuid4()
+    receipt_id = str(uuid4())
+    attachment_id = uuid4()
+    observed: dict = {}
+
+    async def list_attachments(**kwargs):
+        observed["listed"] = kwargs
+        return [
+            StoredAttachment(
+                id=attachment_id,
+                session_input_id=receipt_id,
+                session_id=session_id,
+                mime_type="image/png",
+                byte_size=67,
+                sha256="a" * 64,
+                blob_path=None,
+                original_filename="a.png",
+                original_byte_size=67,
+            )
+        ]
+
+    async def dispatch(**kwargs):
+        observed["dispatch"] = kwargs
+        return SimpleNamespace(status_code=200, body=b"{}")
+
+    monkeypatch.setattr("zerg.services.session_input_attachments.list_catalog_attachments", list_attachments)
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", dispatch)
+    monkeypatch.setattr(queue, "mark_live_receipt_failed", lambda *_a, **_k: None)
+    monkeypatch.setattr(queue, "mark_live_receipt_delivered_with_projection", lambda *_a, **_k: None)
+
+    claimed = SimpleNamespace(id=receipt_id, owner_id=7, text="look at this")
+    await queue._dispatch_claimed_live_input(
+        db=None,
+        live_session_factory=lambda: __import__("contextlib").nullcontext(),
+        source_session=SimpleNamespace(id=session_id),
+        claimed=claimed,
+        lock_scope="scope",
+        drain_request_id="drain-1",
+    )
+
+    assert observed["listed"]["input_receipt_id"] == receipt_id
+    refs = observed["dispatch"]["attachments"]
+    assert len(refs) == 1
+    assert refs[0]["blob_url"] == f"/api/agents/sessions/{session_id}/inputs/{receipt_id}/attachments/{attachment_id}/blob"

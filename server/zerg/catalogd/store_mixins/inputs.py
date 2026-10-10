@@ -394,6 +394,41 @@ class InputsMixin:
                 "commit_seq": str(commit_seq),
             }
 
+    def list_input_attachments(
+        self,
+        *,
+        owner_id: int,
+        session_id: str,
+        input_receipt_id: str,
+    ) -> dict[str, Any]:
+        """Every unexpired attachment of one receipt, in upload order.
+
+        The queue drain replays a parked SEND with its images, so a mid-turn
+        image send waits durably like any SEND instead of in provider memory.
+        """
+
+        table = LiveSessionInputAttachment.__table__
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            rows = (
+                connection.execute(
+                    select(table)
+                    .where(
+                        table.c.input_receipt_id == input_receipt_id,
+                        table.c.owner_id == owner_id,
+                        table.c.session_id == session_id,
+                        table.c.expires_at > observed_at,
+                    )
+                    .order_by(table.c.created_at.asc(), table.c.id.asc())
+                )
+                .mappings()
+                .all()
+            )
+            return {
+                "attachments": [_input_attachment_dto(SimpleNamespace(**row)) for row in rows],
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
     def read_input_attachment(
         self,
         *,

@@ -1812,7 +1812,8 @@
       "providers": [
         "antigravity",
         "claude",
-        "codex"
+        "codex",
+        "omp"
       ]
     },
     {

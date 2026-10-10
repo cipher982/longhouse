@@ -457,8 +457,17 @@ async def _dispatch_claimed_live_input(
     drain_request_id: str,
 ) -> QueueWakeResult:
     from zerg.services.session_chat_impl import _dispatch_managed_local_text
+    from zerg.services.session_input_attachments import attachment_ref_for_engine
+    from zerg.services.session_input_attachments import list_catalog_attachments
 
     try:
+        # A parked SEND keeps its images; replay them with the text.
+        stored = await list_catalog_attachments(
+            owner_id=int(claimed.owner_id),
+            session_id=source_session.id,
+            input_receipt_id=str(claimed.id),
+        )
+        attachments = [attachment_ref_for_engine(session_id=str(source_session.id), input_id=str(claimed.id), stored=row) for row in stored]
         dispatch_response = await _dispatch_managed_local_text(
             source_session=source_session,
             owner_id=int(claimed.owner_id),
@@ -467,6 +476,7 @@ async def _dispatch_claimed_live_input(
             lock_scope_id=lock_scope,
             db=db,
             session_input_id=None,
+            attachments=attachments or None,
         )
     except Exception as exc:
         with live_session_factory() as live_db:
