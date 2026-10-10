@@ -1112,7 +1112,7 @@ async def test_the_drain_replays_a_parked_sends_images(monkeypatch):
     monkeypatch.setattr(queue, "mark_live_receipt_failed", lambda *_a, **_k: None)
     monkeypatch.setattr(queue, "mark_live_receipt_delivered_with_projection", lambda *_a, **_k: None)
 
-    claimed = SimpleNamespace(id=receipt_id, owner_id=7, text="look at this")
+    claimed = SimpleNamespace(id=receipt_id, owner_id=7, text="look at this", payload_digest="sha256:multipart")
     await queue._dispatch_claimed_live_input(
         db=None,
         live_session_factory=lambda: __import__("contextlib").nullcontext(),
@@ -1155,7 +1155,7 @@ async def test_unreadable_attachments_requeue_the_parked_send(monkeypatch):
         db=None,
         live_session_factory=lambda: __import__("contextlib").nullcontext(),
         source_session=SimpleNamespace(id=uuid4()),
-        claimed=SimpleNamespace(id="r-1", owner_id=7, text="look"),
+        claimed=SimpleNamespace(id="r-1", owner_id=7, text="look", payload_digest="sha256:multipart"),
         lock_scope="scope",
         drain_request_id="drain-2",
     )
@@ -1163,3 +1163,67 @@ async def test_unreadable_attachments_requeue_the_parked_send(monkeypatch):
     assert observed["requeued"] == "r-1"
     assert observed["released"] == "drain-2"
     assert result.reason == "attachments_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_a_text_send_never_waits_on_the_attachment_store(monkeypatch):
+    from zerg.services import session_input_queue as queue
+
+    observed: dict = {}
+
+    async def list_attachments(**_kwargs):
+        pytest.fail("a text SEND carries no images")
+
+    async def dispatch(**kwargs):
+        observed["attachments"] = kwargs.get("attachments")
+        return SimpleNamespace(status_code=200, body=b"{}")
+
+    monkeypatch.setattr("zerg.services.session_input_attachments.list_catalog_attachments", list_attachments)
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", dispatch)
+    monkeypatch.setattr(queue, "mark_live_receipt_delivered_with_projection", lambda *_a, **_k: None)
+
+    await queue._dispatch_claimed_live_input(
+        db=None,
+        live_session_factory=lambda: __import__("contextlib").nullcontext(),
+        source_session=SimpleNamespace(id=uuid4()),
+        claimed=SimpleNamespace(id="r-2", owner_id=7, text="plain", payload_digest=None),
+        lock_scope="scope",
+        drain_request_id="drain-3",
+    )
+
+    assert observed["attachments"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_turn_active_refusal_in_the_drain_requeues_the_send(monkeypatch):
+    """The drain raced a turn start: the SEND is late, not lost."""
+
+    import json as _json
+
+    from zerg.services import session_input_queue as queue
+
+    observed: dict = {}
+
+    async def dispatch(**_kwargs):
+        return SimpleNamespace(status_code=409, body=_json.dumps({"error_code": "turn_active", "error": "mid-turn"}).encode())
+
+    async def release(scope, holder):
+        observed["released"] = holder
+
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", dispatch)
+    monkeypatch.setattr(queue, "mark_live_receipt_failed", lambda *_a, **_k: pytest.fail("must not fail the receipt"))
+    monkeypatch.setattr(queue, "requeue_live_receipt", lambda *_a, **kwargs: observed.setdefault("requeued", kwargs["receipt_id"]))
+    monkeypatch.setattr(queue.session_lock_manager, "release", release)
+
+    result = await queue._dispatch_claimed_live_input(
+        db=None,
+        live_session_factory=lambda: __import__("contextlib").nullcontext(),
+        source_session=SimpleNamespace(id=uuid4()),
+        claimed=SimpleNamespace(id="r-3", owner_id=7, text="plain", payload_digest=None),
+        lock_scope="scope",
+        drain_request_id="drain-4",
+    )
+
+    assert observed["requeued"] == "r-3"
+    assert observed["released"] == "drain-4"
+    assert result.reason == "requeued_precondition"

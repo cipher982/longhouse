@@ -1048,8 +1048,13 @@ export default function (pi: any) {
     },
   );
 
-  const bounded = (value: unknown, fallback: number, min: number, max: number) =>
-    String(Math.max(min, Math.min(max, Number.isFinite(Number(value)) && value !== null && value !== undefined ? Number(value) : fallback)));
+  const bounded = (value: unknown, fallback: number, min: number, max: number) => {
+    const given =
+      typeof value === "number" || (typeof value === "string" && value.trim() !== "")
+        ? Number(value)
+        : Number.NaN;
+    return String(Math.max(min, Math.min(max, Number.isFinite(given) ? given : fallback)));
+  };
 
   coordination(
     "recall",

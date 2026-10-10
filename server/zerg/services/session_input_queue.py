@@ -26,6 +26,7 @@ from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionInputDeliveryAttempt
 from zerg.models.agents import SessionTurn
 from zerg.models.user import User
+from zerg.services.live_control_catalog import RETRYABLE_SEND_PRECONDITIONS
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.live_session_inputs import claim_next_live_queued_receipt
 from zerg.services.live_session_inputs import mark_live_receipt_delivered_with_projection
@@ -465,10 +466,16 @@ async def _dispatch_claimed_live_input(
     # read them is transient catalog trouble, not a delivery failure: the
     # receipt goes back to the queue rather than being terminalized.
     try:
-        stored = await list_catalog_attachments(
-            owner_id=int(claimed.owner_id),
-            session_id=source_session.id,
-            input_receipt_id=str(claimed.id),
+        # Only a multipart receipt carries a payload digest, so a text SEND
+        # never waits on the attachment store.
+        stored = (
+            await list_catalog_attachments(
+                owner_id=int(claimed.owner_id),
+                session_id=source_session.id,
+                input_receipt_id=str(claimed.id),
+            )
+            if getattr(claimed, "payload_digest", None)
+            else []
         )
     except Exception as exc:
         with live_session_factory() as live_db:
@@ -498,12 +505,23 @@ async def _dispatch_claimed_live_input(
     dispatch_status = int(getattr(dispatch_response, "status_code", 200) or 200)
     if dispatch_status >= 400:
         response_error_message = f"drain dispatch returned {dispatch_status}"
+        response_error_code = ""
         try:
             response_body = json.loads(getattr(dispatch_response, "body", b"{}") or b"{}")
             if isinstance(response_body, dict):
                 response_error_message = str(response_body.get("error") or response_error_message)
+                response_error_code = str(response_body.get("error_code") or response_body.get("code") or "")
         except Exception:
             pass
+        if response_error_code in RETRYABLE_SEND_PRECONDITIONS:
+            # The adapter refused because its turn was running (or its channel
+            # was not reached): the boundary has not arrived yet. The input is
+            # late, not lost; requeue_live_receipt still fails it at the
+            # delivery deadline.
+            with live_session_factory() as live_db:
+                requeue_live_receipt(live_db, receipt_id=claimed.id, error=response_error_message[:200])
+            await session_lock_manager.release(lock_scope, drain_request_id)
+            return QueueWakeResult(live_input_id=claimed.id, reason="requeued_precondition")
         with live_session_factory() as live_db:
             mark_live_receipt_failed(live_db, receipt_id=claimed.id, error=response_error_message)
         await session_lock_manager.release(lock_scope, drain_request_id)
