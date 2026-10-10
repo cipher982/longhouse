@@ -239,7 +239,11 @@ fi
 echo "Verifying public demo reports $SHA..." >&2
 deadline=$(( $(date +%s) + DEMO_VERIFY_TIMEOUT ))
 demo_commit=""
-while [[ "$(date +%s)" -lt "$deadline" ]]; do
+# Poll at least once: the deadline has whole-second resolution, so a short
+# timeout started late in a second used to expire before the first look.
+first_poll=1
+while [[ "$first_poll" == 1 || "$(date +%s)" -lt "$deadline" ]]; do
+  first_poll=0
   demo_body="$(curl -sfL --max-time 10 "$DEMO_HEALTH_URL" 2>/dev/null || echo '{}')"
   demo_commit="$(jq -r '.build.commit // empty' <<<"$demo_body" 2>/dev/null || true)"
   if [[ "$demo_commit" == "$SHA" ]]; then

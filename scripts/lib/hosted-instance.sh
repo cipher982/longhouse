@@ -257,7 +257,10 @@ lh_hosted_wait_for_deployment() {
     return 1
   fi
   lh_hosted_prepare_control_plane_auth || return 1
-  while [[ "$(date +%s)" -lt "$deadline" ]]; do
+  # Poll at least once: the deadline has whole-second resolution.
+  local first_poll=1
+  while [[ "$first_poll" == 1 || "$(date +%s)" -lt "$deadline" ]]; do
+    first_poll=0
     response_file="$(mktemp)"
     if ! http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
       --connect-timeout 10 --max-time 30 \
