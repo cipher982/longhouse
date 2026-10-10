@@ -5014,6 +5014,34 @@
               "oracle_digest": "a37a9682b2127bbd09ac79d18922304cd7c4c825ec0489396d8cddce0e021722"
             }
           ]
+        },
+        "coordination.awareness.create": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.omp.coordination_awareness",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "coordination_instructions_model_visible",
+              "scenario_id": "omp_coordination_awareness_create",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 86400,
+              "assurance_priority": "sampled",
+              "oracle_digest": "704120f0072cc223e1c8edc602507b5ee70f04ad2a280150b8f445ef82bf1f6d"
+            }
+          ]
         }
       },
       "transcript_signals": {

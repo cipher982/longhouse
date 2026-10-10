@@ -66,6 +66,8 @@ producers:
     module: zerg.qa.omp_console_producer
   - producer_id: omp.helm_lifecycle.v1
     module: zerg.qa.omp_helm_lifecycle
+  - producer_id: omp.coordination_awareness_create.v1
+    module: zerg.qa.omp_coordination_awareness
   - producer_id: cursor.helm_lifecycle.v1
     module: zerg.qa.cursor_helm_lifecycle
   - producer_id: claude.helm_lifecycle.v1
