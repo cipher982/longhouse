@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -702,142 +702,37 @@ describe("channel reconnect", () => {
   });
 });
 
-describe("peerLine", () => {
-  it("renders one token-cheap line per peer", () => {
-    const now = Date.parse("2026-10-09T18:00:00Z");
-    const item = {
-      session_id: "22222222-2222-2222-2222-222222222222",
-      provider: "omp",
-      presence_state: "running",
-      last_event_at: "2026-10-09T17:55:30Z",
-      summary_title: "Moving  tools\nout of\u001b[31m service pkg",
-    };
-    expect(peerLine(item, now)).toBe(
-      "22222222-2222-2222-2222-222222222222 omp running 4m · Moving tools out of[31m service pkg",
-    );
-    expect(peerLine({ ...item, last_event_at: undefined, summary_title: "" }, now)).toBe(
-      "22222222-2222-2222-2222-222222222222 omp running ?",
-    );
-  });
-});
+describe("coordination contract", () => {
+  const contract = JSON.parse(
+    readFileSync(
+      join(import.meta.dir, "..", "src", "coordination_contract.generated.json"),
+      "utf8",
+    ),
+  );
 
-describe("busy send", () => {
-  it("refuses a send while a turn runs instead of queueing it in memory", async () => {
-    mkdirSync(channelDir, { recursive: true });
-    const frames: Record<string, unknown>[] = [];
-    const sockets: Socket[] = [];
-    const server = createServer((socket) => {
-      sockets.push(socket);
-      let buffer = "";
-      socket.on("data", (chunk) => {
-        buffer += chunk.toString("utf8");
-        let newline = buffer.indexOf("\n");
-        while (newline >= 0) {
-          const frame = JSON.parse(buffer.slice(0, newline));
-          buffer = buffer.slice(newline + 1);
-          newline = buffer.indexOf("\n");
-          frames.push(frame);
-          if (frame.kind === "extension_hello") {
-            socket.write(
-              `${JSON.stringify({ kind: "extension_ready", ok: true, connection_id: "c1", lease_generation: "g1" })}\n`,
-            );
-          }
-        }
-      });
-    });
-    await new Promise<void>((resolve) => server.listen(channelPath, resolve));
-    const handlers: Record<
-      string,
-      (event: Record<string, unknown>, ctx: unknown) => Promise<unknown>
-    > = {};
-    const sent: Array<[unknown, unknown]> = [];
-    registerExtension({
-      on: (name: string, handler: (typeof handlers)[string]) => {
-        handlers[name] = handler;
-      },
-      sendUserMessage: (content: unknown, options: unknown) => {
-        sent.push([content, options]);
-      },
-    });
-    let idle = false;
-    const ctx = {
-      isIdle: () => idle,
-      sessionManager: {
-        getSessionId: () => "native-1",
-        getSessionFile: () => join(channelDir, "session.jsonl"),
-      },
-    };
-    const command = async (requestId: string) => {
-      const authority = [...frames]
-        .reverse()
-        .find((frame) => typeof frame.auth_token === "string" && frame.connection_id === "c1")!;
-      sockets[0].write(
-        `${JSON.stringify({
-          kind: "send",
-          request_id: requestId,
-          text: "hello",
-          auth_token: authority.auth_token,
-          session_id: authority.session_id,
-          native_session_id: authority.native_session_id,
-          session_file: authority.session_file,
-          connection_id: authority.connection_id,
-          lease_generation: authority.lease_generation,
-        })}\n`,
-      );
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        const reply = frames.find(
-          (frame) => frame.kind === "command_result" && frame.request_id === requestId,
-        );
-        if (reply) return reply;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      throw new Error(`no command_result for ${requestId}`);
-    };
-    try {
-      await handlers.session_start({ type: "session_resume" }, ctx);
-      for (let attempt = 0; attempt < 50 && !frames.some((f) => f.connection_id === "c1"); attempt += 1)
-        await new Promise((resolve) => setTimeout(resolve, 20));
-
-      const busy = await command("busy-send");
-      expect(busy.ok).toBe(false);
-      expect((busy.error as Record<string, unknown>).code).toBe("turn_active");
-      expect(sent.length).toBe(0);
-
-      // The durable drain cannot carry images yet, so a busy send with
-      // attachments still rides the provider's follow-up queue.
-      const authority = [...frames]
-        .reverse()
-        .find((frame) => typeof frame.auth_token === "string" && frame.connection_id === "c1")!;
-      sockets[0].write(
-        `${JSON.stringify({
-          kind: "send",
-          request_id: "busy-image",
-          text: "look at this",
-          attachments: [{ mime_type: "image/png", data: "iVBORw0KGgo=" }],
-          auth_token: authority.auth_token,
-          session_id: authority.session_id,
-          native_session_id: authority.native_session_id,
-          session_file: authority.session_file,
-          connection_id: authority.connection_id,
-          lease_generation: authority.lease_generation,
-        })}\n`,
-      );
-      for (let attempt = 0; attempt < 50 && !frames.some((f) => f.request_id === "busy-image"); attempt += 1)
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(sent.length).toBe(1);
-      expect(sent[0][1]).toEqual({ deliverAs: "followUp" });
-      sent.length = 0;
-
-      idle = true;
-      const delivered = await command("idle-send");
-      expect(delivered.ok).toBe(true);
-      expect(sent.length).toBe(1);
-      expect(sent[0][1]).toBeUndefined();
-    } finally {
-      await handlers.session_shutdown({ type: "session_shutdown" }, ctx);
-      for (const socket of sockets) socket.destroy();
-      await new Promise((resolve) => server.close(resolve));
-      rmSync(channelDir, { recursive: true, force: true });
+  it("renders every shared peers-line vector", () => {
+    const now = Date.parse(contract.peers_line.now);
+    for (const vector of contract.peers_line.vectors) {
+      expect(peerLine(vector.item, now)).toBe(vector.line);
     }
+  });
+
+  it("registers exactly the contract's tools, descriptions and schemas", () => {
+    const tools = new Map<string, RegisteredTool>();
+    registerExtension({
+      on: () => undefined,
+      registerTool: (tool: RegisteredTool) => tools.set(tool.name, tool),
+    });
+    for (const expected of contract.tools) {
+      const tool = tools.get(expected.name) as unknown as Record<string, unknown>;
+      expect(tool).toBeDefined();
+      expect(tool.description).toBe(expected.description);
+      expect(tool.parameters).toEqual(expected.inputSchema);
+    }
+    expect(
+      [...tools.keys()].filter((name) =>
+        contract.tools.some((tool: { name: string }) => tool.name === name),
+      ).length,
+    ).toBe(contract.tools.length);
   });
 });

@@ -58,34 +58,28 @@ def render_directed_input_envelope(*, source_session: Any, input_id: int, text: 
     )
 
 
+def _delivery_wording() -> dict[str, str]:
+    from pathlib import Path
+
+    contract = Path(__file__).resolve().parents[1] / "config" / "coordination_contract.json"
+    return json.loads(contract.read_text(encoding="utf-8"))["delivery"]
+
+
 def describe_directed_input_delivery(directed_input: dict[str, Any], *, max_delivery_age: timedelta) -> dict[str, Any]:
     """Say plainly what happened to a directed input, from the facts it carries.
 
     The record itself is always stored, and the target can always read it with
     inbox. What varies is automatic delivery into the target's conversation:
-    whether it is waiting, done, impossible, or expired. Senders read this
-    instead of decoding receipt statuses, and "durable" is never mistaken for
-    "will certainly be injected".
+    whether it is waiting, done (as a new message or inside a running turn),
+    impossible, or expired. The wording is the coordination contract's
+    (schemas/coordination_contract.yml), shared with every tool surface.
     """
 
+    wording = _delivery_wording()
     receipt = directed_input.get("input_receipt")
     if not isinstance(receipt, dict):
-        return {
-            "state": "stored",
-            "meaning": (
-                "Stored for the target, but it cannot receive pushed input right now, so it will not be "
-                "injected automatically. The target sees it only if it calls inbox."
-            ),
-            "expires_at": None,
-        }
+        return {"state": "stored", "meaning": wording["stored"], "expires_at": None}
     status = str(receipt.get("status") or "")
-    expires_at = None
-    created_at = str(receipt.get("created_at") or "")
-    if created_at:
-        try:
-            expires_at = (datetime.fromisoformat(created_at.replace("Z", "+00:00")) + max_delivery_age).isoformat().replace("+00:00", "Z")
-        except ValueError:
-            expires_at = None
     reason = ""
     error = receipt.get("error_json")
     if isinstance(error, str) and error:
@@ -96,27 +90,23 @@ def describe_directed_input_delivery(directed_input: dict[str, Any], *, max_deli
     if isinstance(error, dict):
         reason = str(error.get("reason") or error.get("message") or "")
     if status == "queued":
-        meaning = (
-            "Waiting for the target's next turn boundary; it is injected then if that comes before "
-            "expires_at, otherwise it stays readable in the target's inbox."
-        )
-    elif status == "delivering":
-        meaning = "Being handed to the target's provider now."
         expires_at = None
-    elif status == "delivered":
-        meaning = "The target's provider accepted it. That is not proof the model read it; tail the target to confirm."
-        expires_at = None
+        created_at = str(receipt.get("created_at") or "")
+        if created_at:
+            try:
+                expires_at = (
+                    (datetime.fromisoformat(created_at.replace("Z", "+00:00")) + max_delivery_age).isoformat().replace("+00:00", "Z")
+                )
+            except ValueError:
+                expires_at = None
+        return {"state": "queued", "meaning": wording["queued"], "expires_at": expires_at}
+    if status == "delivered" and str(receipt.get("intent") or "") == "steer":
+        state = "steered"
     elif status == "failed" and reason == "delivery_expired":
-        status = "expired"
-        meaning = "Not injected before expiry. It stays readable in the target's inbox."
-        expires_at = None
-    elif status == "failed":
-        meaning = f"Automatic delivery failed ({reason or 'no reason recorded'}). It stays readable in the target's inbox."
-        expires_at = None
-    elif status == "cancelled":
-        meaning = "Automatic delivery was cancelled. It stays readable in the target's inbox."
-        expires_at = None
+        state = "expired"
+    elif status in wording:
+        state = status
     else:
-        meaning = f"Delivery status {status or 'unknown'}. It stays readable in the target's inbox."
-        expires_at = None
-    return {"state": status or "unknown", "meaning": meaning, "expires_at": expires_at}
+        state = "unknown"
+    meaning = wording[state].format(reason=reason or "no reason recorded", status=status or "unknown")
+    return {"state": state if state != "unknown" else (status or "unknown"), "meaning": meaning, "expires_at": None}

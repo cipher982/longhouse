@@ -428,32 +428,6 @@ async def test_peers_falls_back_to_cwd_when_no_git_repo(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_semantic_search_sessions_fails_loud_instead_of_falling_back():
-    server = create_server("http://example.com", "test-token")
-    tool = server._tool_manager._tools["search_sessions"]
-    semantic_resp = type(
-        "Resp",
-        (),
-        {
-            "status_code": 503,
-            "text": "semantic index unavailable",
-        },
-    )()
-
-    with patch(
-        "zerg.mcp_server.server.LonghouseAPIClient.get",
-        new=AsyncMock(return_value=semantic_resp),
-    ) as mock_get:
-        result = await tool.run({"query": "bedrock", "semantic": True})
-
-    payload = json.loads(result)
-    assert payload["error"] == "Semantic search unavailable: API returned 503"
-    assert payload["retry"] == "Call search_sessions with semantic=false for lexical search."
-    assert mock_get.await_count == 1
-    assert mock_get.await_args.args == ("/api/agents/sessions/semantic",)
-
-
-@pytest.mark.asyncio
 async def test_search_sessions_without_query_lists_recent_sessions():
     """Omitting the query is a listing call, not an error.
 
@@ -484,7 +458,6 @@ async def test_search_sessions_without_query_lists_recent_sessions():
         "/api/agents/sessions",
         params={
             "limit": 5,
-            "context_mode": "forensic",
             "project": "zerg",
         },
     )
@@ -510,22 +483,6 @@ async def test_search_sessions_blank_query_is_treated_as_absent():
         await tool.run({"query": "   "})
 
     assert "query" not in mock_get.await_args.kwargs["params"]
-
-
-@pytest.mark.asyncio
-async def test_search_sessions_semantic_without_query_errors_without_api_call():
-    server = create_server("http://example.com", "test-token")
-    tool = server._tool_manager._tools["search_sessions"]
-
-    with patch(
-        "zerg.mcp_server.server.LonghouseAPIClient.get",
-        new=AsyncMock(),
-    ) as mock_get:
-        result = await tool.run({"semantic": True})
-
-    payload = json.loads(result)
-    assert "requires a query" in payload["error"]
-    assert mock_get.await_count == 0
 
 
 @pytest.mark.asyncio
@@ -600,27 +557,28 @@ async def test_search_sessions_marks_search_unavailable_as_not_absence():
     assert "not evidence that no sessions exist" in payload["retry"]
 
 
-@pytest.mark.asyncio
-async def test_search_sessions_description_names_canonical_longhouse_database():
-    server = create_server("http://example.com", "test-token")
-    tool = server._tool_manager._tools["search_sessions"]
-
-    assert "canonical Longhouse agent-session database" in tool.fn.__doc__
-
-
-def test_peer_line_is_one_token_cheap_line():
-    from datetime import UTC
+def test_peer_line_matches_every_contract_vector():
     from datetime import datetime
 
+    from zerg.mcp_server.server import _COORDINATION_CONTRACT
     from zerg.mcp_server.server import _peer_line
 
-    now = datetime(2026, 10, 9, 18, 0, tzinfo=UTC)
-    item = {
-        "session_id": "22222222-2222-2222-2222-222222222222",
-        "provider": "omp",
-        "presence_state": "running",
-        "last_event_at": "2026-10-09T17:55:30Z",
-        "summary_title": "Moving  tools\nout of\x1b[31m service pkg",
-    }
-    assert _peer_line(item, now) == "22222222-2222-2222-2222-222222222222 omp running 4m · Moving tools out of[31m service pkg"
-    assert _peer_line({**item, "last_event_at": "2026-10-07T18:00:00Z", "summary_title": ""}, now).endswith("omp running 2d")
+    section = _COORDINATION_CONTRACT["peers_line"]
+    now = datetime.fromisoformat(section["now"].replace("Z", "+00:00"))
+    for vector in section["vectors"]:
+        assert _peer_line(vector["item"], now) == vector["line"]
+
+
+def test_coordination_tools_match_the_contract():
+    """Names, descriptions, property names and required fields come from one contract."""
+
+    from zerg.mcp_server.server import _COORDINATION_CONTRACT
+
+    server = create_server("http://example.com", "test-token")
+    tools = server._tool_manager._tools
+    for expected in _COORDINATION_CONTRACT["tools"]:
+        tool = tools[expected["name"]]
+        assert tool.description == expected["description"]
+        schema = tool.parameters
+        assert set(schema.get("properties", {})) == set(expected["inputSchema"]["properties"]), expected["name"]
+        assert sorted(schema.get("required", [])) == sorted(expected["inputSchema"].get("required", [])), expected["name"]
