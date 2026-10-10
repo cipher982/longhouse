@@ -449,6 +449,12 @@ async def _wake_live_session_input_queue(
     return result
 
 
+# Refusals that mean "not yet", never "no": the adapter's turn is running or
+# its channel was not reached, or the Runtime Host is restarting. The drain
+# returns the receipt to the queue for these, as the direct send paths do.
+DRAIN_REQUEUE_CODES = RETRYABLE_SEND_PRECONDITIONS | frozenset({"runtime_draining", "runtime_restarting"})
+
+
 async def _dispatch_claimed_live_input(
     *,
     db: Session,
@@ -513,15 +519,18 @@ async def _dispatch_claimed_live_input(
                 response_error_code = str(response_body.get("error_code") or response_body.get("code") or "")
         except Exception:
             pass
-        if response_error_code in RETRYABLE_SEND_PRECONDITIONS:
+        if response_error_code in DRAIN_REQUEUE_CODES:
             # The adapter refused because its turn was running (or its channel
             # was not reached): the boundary has not arrived yet. The input is
             # late, not lost; requeue_live_receipt still fails it at the
             # delivery deadline.
             with live_session_factory() as live_db:
-                requeue_live_receipt(live_db, receipt_id=claimed.id, error=response_error_message[:200])
+                _snapshot, requeued = requeue_live_receipt(live_db, receipt_id=claimed.id, error=response_error_message[:200])
             await session_lock_manager.release(lock_scope, drain_request_id)
-            return QueueWakeResult(live_input_id=claimed.id, reason="requeued_precondition")
+            return QueueWakeResult(
+                live_input_id=claimed.id,
+                reason="requeued_precondition" if requeued else "dispatch_failed",
+            )
         with live_session_factory() as live_db:
             mark_live_receipt_failed(live_db, receipt_id=claimed.id, error=response_error_message)
         await session_lock_manager.release(lock_scope, drain_request_id)

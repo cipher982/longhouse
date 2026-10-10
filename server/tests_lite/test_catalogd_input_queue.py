@@ -1212,7 +1212,12 @@ async def test_a_turn_active_refusal_in_the_drain_requeues_the_send(monkeypatch)
 
     monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", dispatch)
     monkeypatch.setattr(queue, "mark_live_receipt_failed", lambda *_a, **_k: pytest.fail("must not fail the receipt"))
-    monkeypatch.setattr(queue, "requeue_live_receipt", lambda *_a, **kwargs: observed.setdefault("requeued", kwargs["receipt_id"]))
+
+    def requeue(*_a, **kwargs):
+        observed["requeued"] = kwargs["receipt_id"]
+        return None, True
+
+    monkeypatch.setattr(queue, "requeue_live_receipt", requeue)
     monkeypatch.setattr(queue.session_lock_manager, "release", release)
 
     result = await queue._dispatch_claimed_live_input(
@@ -1227,3 +1232,40 @@ async def test_a_turn_active_refusal_in_the_drain_requeues_the_send(monkeypatch)
     assert observed["requeued"] == "r-3"
     assert observed["released"] == "drain-4"
     assert result.reason == "requeued_precondition"
+
+
+@pytest.mark.asyncio
+async def test_a_restarting_runtime_requeues_the_drained_send(monkeypatch):
+    import json as _json
+
+    from zerg.services import session_input_queue as queue
+
+    observed: dict = {}
+
+    async def dispatch(**_kwargs):
+        return SimpleNamespace(status_code=503, body=_json.dumps({"error_code": "runtime_restarting"}).encode())
+
+    async def release(scope, holder):
+        observed["released"] = holder
+
+    def requeue(*_a, **kwargs):
+        observed["requeued"] = kwargs["receipt_id"]
+        return None, False
+
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", dispatch)
+    monkeypatch.setattr(queue, "mark_live_receipt_failed", lambda *_a, **_k: pytest.fail("must not fail the receipt"))
+    monkeypatch.setattr(queue, "requeue_live_receipt", requeue)
+    monkeypatch.setattr(queue.session_lock_manager, "release", release)
+
+    result = await queue._dispatch_claimed_live_input(
+        db=None,
+        live_session_factory=lambda: __import__("contextlib").nullcontext(),
+        source_session=SimpleNamespace(id=uuid4()),
+        claimed=SimpleNamespace(id="r-4", owner_id=7, text="plain", payload_digest=None),
+        lock_scope="scope",
+        drain_request_id="drain-5",
+    )
+
+    assert observed["requeued"] == "r-4"
+    # requeue_live_receipt failed it at the deadline, and the result says so.
+    assert result.reason == "dispatch_failed"
