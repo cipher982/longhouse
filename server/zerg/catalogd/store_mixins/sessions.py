@@ -1654,6 +1654,9 @@ class SessionsMixin:
         thread = LiveSessionThread.__table__
         live = LiveSession.__table__
         storage = StorageSession.__table__
+        # A source replacement retires the predecessor session but keeps its
+        # row and native id; it is never what a provider-native id names.
+        retired = or_(storage.c.raw_state == "retired", storage.c.render_state == "retired")
         with _read_snapshot(self.engine) as connection:
             row = (
                 connection.execute(
@@ -1661,6 +1664,7 @@ class SessionsMixin:
                     .select_from(alias.join(thread, alias.c.thread_id == thread.c.id))
                     .where(alias.c.alias_kind == "provider_session_id")
                     .where(alias.c.alias_value == provider_session_id)
+                    .where(~select(storage.c.session_id).where(storage.c.session_id == thread.c.session_id, retired).exists())
                     .where(
                         or_(
                             select(live.c.session_id)
@@ -1681,7 +1685,11 @@ class SessionsMixin:
                 candidates = (
                     connection.execute(
                         select(storage.c.session_id)
-                        .where(storage.c.provider_session_id == provider_session_id, storage.c.owner_id == str(owner_id))
+                        .where(
+                            storage.c.provider_session_id == provider_session_id,
+                            storage.c.owner_id == str(owner_id),
+                            ~retired,
+                        )
                         .limit(2)
                     )
                     .mappings()

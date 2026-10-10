@@ -172,7 +172,7 @@ class _Corpus:
 
     def subagents(self, session_id: str) -> list[str]:
         rows = self.connection.execute(
-            "SELECT session_id FROM sessions WHERE subagent_parent_session_id = ? AND render_state != 'retired'",
+            "SELECT session_id FROM sessions WHERE subagent_parent_session_id = ? AND render_state != 'retired' AND raw_state != 'retired'",
             (session_id,),
         )
         return [str(row[0]) for row in rows]

@@ -324,3 +324,18 @@ def test_a_retired_duplicate_worker_does_not_hide_the_live_one_from_its_spawn(tm
         ).scalar_one()
     assert bound == 1
     assert resolved == parent
+
+
+def test_a_replaced_sources_native_id_resolves_to_the_live_session(tmp_path):
+    """resolve_session_alias (claude --resume, deep links) skips the retired predecessor."""
+
+    from zerg.catalogd.store import CatalogStore
+
+    engine = _engine(tmp_path)
+    native_id = str(uuid4())
+    with engine.begin() as connection:
+        live = _session(connection, native_id=native_id)
+        _session(connection, session_id=native_id, native_id=native_id, raw_state="retired")
+    resolved = CatalogStore(engine).resolve_session_alias(provider_session_id=native_id, owner_id=1)
+    assert resolved["found"] is True
+    assert resolved["session_id"] == live

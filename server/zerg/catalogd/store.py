@@ -4463,6 +4463,15 @@ def adopt_orphan_subagents_once(engine) -> int:
                 if pointer
                 else None
             )
+            if parent is None and pointer:
+                # OMP names its parent by an absolute session-file path.
+                parent = _resolve_session_id_by_source_path(
+                    connection,
+                    provider=str(provider),
+                    source_path=str(pointer),
+                    owner_id=owner_id,
+                    machine_id=str(machine_id),
+                )
             if parent is None and source_pointer:
                 parent = _resolve_session_id_by_source_id(
                     connection,
