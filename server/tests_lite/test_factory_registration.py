@@ -362,6 +362,14 @@ def test_settle_failed_result_keeps_a_verdict_only_with_evidence() -> None:
     assert with_evidence["assertions"] == {"a": False}
     assert not factory.typed_harness_failure(with_evidence)
 
+    all_held = settle_failed_result(dict(base), observation={"seen": True}, assertions={"a": True})
+    assert "observation" not in all_held and "assertions" not in all_held
+    assert all_held["partial_observation"] == {"seen": True}
+    assert factory.typed_harness_failure(all_held)
+
+    empty_observation = settle_failed_result(dict(base), observation={}, assertions={"a": False})
+    assert factory.typed_harness_failure(empty_observation)
+
     stale = {**base, "observation": {}, "assertions": {"a": False}}
     no_verdict = settle_failed_result(stale, observation=None, assertions={"a": False})
     assert "observation" not in no_verdict and "assertions" not in no_verdict

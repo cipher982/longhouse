@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
@@ -582,6 +583,9 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     resume_contract_paths: tuple[Path, Path] | None = None
     shipper: TranscriptShipper | None = None
     retained_result: dict[str, Any] | None = None
+    # Evidence reached before a later step failed; a reached verdict stays one.
+    observation: dict[str, Any] | None = None
+    assertions: dict[str, bool] = {}
     try:
         # Start the real Machine Agent before the detached bridge.  Engine
         # startup performs its own provider-state reconciliation; if it comes
@@ -845,14 +849,14 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "direct_native_resume_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "observation": {
-                "failure_code": "direct_native_resume_failed",
-                "error_type": type(exc).__name__,
-            },
-            "assertions": {"native_provider_resume_proven": False},
             "redacted_secret_files": redacted_secret_files,
             "artifact_manifest": artifact_manifest(root),
         }
+        settle_failed_result(
+            failure,
+            observation=observation,
+            assertions=assertions,
+        )
         retained_result = failure
         write_json(root / "result.json", failure)
         return failure

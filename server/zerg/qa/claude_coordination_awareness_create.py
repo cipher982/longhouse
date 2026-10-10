@@ -271,7 +271,7 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
         settle_failed_result(
             failure,
             observation=result.get("observation"),
-            assertions=result.get("assertions") or {_ASSERTION_ID: False},
+            assertions=result.get("assertions") or {},
         )
         write_json(root / "result.json", failure)
         return failure

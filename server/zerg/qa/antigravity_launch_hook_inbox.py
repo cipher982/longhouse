@@ -225,7 +225,8 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
             "error": f"{type(exc).__name__}: {exc}",
             "artifact_manifest": artifact_manifest(root),
         }
-        # Only a failure before the observation was built lacks a verdict.
+        # Keeps the verdict only if the run reached a failing one; otherwise a
+        # typed harness failure with what it observed as partial_observation.
         settle_failed_result(failure, observation=observation, assertions={ASSERTION_ID: passed})
         _write_json(root / "result.json", failure)
         return failure

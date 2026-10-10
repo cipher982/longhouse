@@ -40,6 +40,7 @@ from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_for_served_quiescent
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import prepare_claude_profile
@@ -276,6 +277,7 @@ def run_turn_boundary_scenario(args: argparse.Namespace) -> dict[str, Any]:
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "artifact_manifest": artifact_manifest(root),
         }
+        settle_failed_result(failure, observation=result.get("observation"), assertions=result.get("assertions") or {})
         write_json(root / "result.json", failure)
         return failure
     finally:

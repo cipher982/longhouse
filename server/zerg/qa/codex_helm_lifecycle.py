@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
@@ -549,6 +550,11 @@ def run_codex_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     if failure is not None:
         result["failure_code"] = "codex_helm_lifecycle_failed"
         result["error"] = f"{type(failure).__name__}: {failure}"
+        if not negative:
+            # An exception cannot leave a failed result with an all-true map (the
+            # factory refuses the contradiction): keep a failing verdict, otherwise
+            # a typed harness failure with the observation kept as evidence.
+            settle_failed_result(result, observation=result.get("observation"), assertions=result.get("assertions") or {})
     result["artifact_manifest"] = artifact_manifest(root)
     write_json(root / "result.json", result)
     return result

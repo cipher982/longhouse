@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from tests_lite._factory_envelope import assert_result_conforms
 from zerg.qa import antigravity_launch_hook_inbox
 from zerg.qa import antigravity_resume_policy
 from zerg.qa import cursor_coordination_producer
@@ -249,6 +250,7 @@ def test_cursor_coordination_failure_retains_launch_and_cleanup_receipts(tmp_pat
     ]
     assert not stale_socket.exists()
     assert json.loads((evidence / "result.json").read_text()) == result
+    assert_result_conforms(module, result, variant=args.variant)
 
 
 @pytest.mark.parametrize(
@@ -401,6 +403,7 @@ def test_cursor_turn_boundary_failure_keeps_failure_report_and_stop_receipt(tmp_
     assert json.loads((evidence / "transcript-shipper-receipt.json").read_text())["status"] == "pass"
     assert shipper.stop_calls >= 2
     assert json.loads((evidence / "result.json").read_text()) == result
+    assert_result_conforms(module, result, variant=args.variant)
 
 
 def test_ios_workspace_source_failure_keeps_typed_result_and_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -419,7 +422,8 @@ def test_ios_workspace_source_failure_keeps_typed_result_and_cleanup(tmp_path: P
     cleanup = json.loads((evidence / "cleanup-receipt.json").read_text())
     assert cleanup["status"] == "pass"
     assert cleanup["orphan_count"] == 0
-    assert result["assertions"]["ios_fresh_ranking_replaces_implicit_cache"] is False
+    # The source boundary failed before the oracle returned: no verdict.
+    assert "assertions" not in result and "observation" not in result
     assert json.loads((evidence / "result.json").read_text()) == result
 
 
@@ -531,3 +535,4 @@ def test_opencode_turn_boundary_failure_preserves_activity_and_cleanup_receipts(
     }
     assert shipper.stop_calls >= 1
     assert json.loads((evidence / "result.json").read_text()) == result
+    assert_result_conforms(module, result, variant=args.variant)

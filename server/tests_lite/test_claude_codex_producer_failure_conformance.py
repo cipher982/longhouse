@@ -21,6 +21,7 @@ from zerg.qa import codex_helm_launch_visibility as codex_launch
 from zerg.qa import codex_native_resume
 from zerg.qa import codex_turn_boundary_native as codex_boundary
 from zerg.qa import provider_native_resume
+from zerg.qa.factory_registration import typed_harness_failure
 from zerg.qa.provider_semantic_qualification import AssertionOutcome
 
 
@@ -147,8 +148,10 @@ def test_claude_awareness_create_late_persistence_keeps_judgment_and_cleanup(tmp
     _fail_first_result_write(claude_create, monkeypatch)
     result = claude_create.run_awareness_create_scenario(_claude_args(root, binary))
     persisted = _assert_persisted_failure(root, result)
-    assert persisted["observation"]["coordination_instructions_model_visible"] is True
-    assert persisted["assertions"]["coordination_instructions_model_visible"] is True
+    # Every assertion held and only the write failed: the evidence is kept, but a
+    # failed result cannot carry an all-true verdict, so it is a harness failure.
+    assert persisted["partial_observation"]["coordination_instructions_model_visible"] is True
+    assert typed_harness_failure(persisted)
     assert sessions and sessions[0].submitted
     assert shipper.stop_calls == 1
     assert json.loads((root / "cleanup-receipt.json").read_text())["status"] == "pass"
@@ -174,8 +177,8 @@ def test_claude_awareness_post_compaction_late_persistence_keeps_assertions_and_
     variant = next(iter(claude_compaction._CELL_BY_VARIANT))
     result = claude_compaction.run_awareness_post_compaction_scenario(_claude_args(root, binary, variant=variant))
     persisted = _assert_persisted_failure(root, result)
-    assert persisted["observation"]["coordination_instructions_model_visible_after_compaction"] is True
-    assert all(persisted["assertions"].values())
+    assert persisted["partial_observation"]["coordination_instructions_model_visible_after_compaction"] is True
+    assert typed_harness_failure(persisted)
     assert sessions and sessions[0].submitted
     assert shipper.stop_calls == 1
     assert json.loads((root / "cleanup-receipt.json").read_text())["status"] == "pass"
@@ -206,11 +209,11 @@ def test_claude_directed_input_late_persistence_keeps_assertions_and_cleanup(tmp
     variant = next(iter(claude_directed._CELL_BY_VARIANT))
     result = claude_directed.run_directed_input_scenario(_claude_args(root, binary, variant=variant))
     persisted = _assert_persisted_failure(root, result)
-    observation = persisted["observation"]
+    observation = persisted["partial_observation"]
     assert observation["input_persisted"] is True
     assert observation["input_receipt_linked"] is True
     assert observation["input_visible"] is True
-    assert all(persisted["assertions"].values())
+    assert typed_harness_failure(persisted)
     assert len(sessions) == 2 and all(session.submitted == [] for session in sessions)
     assert shipper.stop_calls == 1
     assert json.loads((root / "cleanup-receipt.json").read_text())["status"] == "pass"
@@ -266,8 +269,8 @@ def test_claude_turn_boundary_late_persistence_keeps_observation_and_cleanup(tmp
     _fail_first_result_write(claude_boundary, monkeypatch)
     result = claude_boundary.run_turn_boundary_scenario(_claude_args(root, binary))
     persisted = _assert_persisted_failure(root, result)
-    assert persisted["observation"]["returned_to_quiescent"] is True
-    assert persisted["assertions"]["activity_returns_to_quiescent_at_turn_boundary"] is True
+    assert persisted["partial_observation"]["returned_to_quiescent"] is True
+    assert typed_harness_failure(persisted)
     assert sessions and sessions[0].submitted
     assert shipper.stop_calls == 1
     assert json.loads((root / "cleanup-receipt.json").read_text())["status"] == "pass"
@@ -369,8 +372,8 @@ def test_codex_coordination_late_persistence_keeps_native_assertion_and_cleanup(
     variant = next(key for key, value in codex_coordination._CELL_BY_VARIANT.items() if value[1] == "codex_coordination_awareness_create")
     result = codex_coordination.run_coordination(_codex_args(root, binary, variant=variant))
     persisted = _assert_persisted_failure(root, result)
-    assert persisted["observation"]["coordination_instructions_model_visible"] is True
-    assert persisted["assertions"]["coordination_instructions_model_visible"] is True
+    assert persisted["partial_observation"]["coordination_instructions_model_visible"] is True
+    assert typed_harness_failure(persisted)
     assert json.loads((root / "cleanup-receipt.json").read_text())["status"] == "pass"
 
 

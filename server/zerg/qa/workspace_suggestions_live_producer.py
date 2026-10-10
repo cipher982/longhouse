@@ -15,6 +15,7 @@ from urllib.parse import quote
 
 import httpx
 
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.resume_assurance import ProducerRegistration
@@ -242,12 +243,10 @@ def run(evidence_root: Path) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "workspace_suggestions_live_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "observation": {},
-            # Transport/setup failure is not evidence that the Longhouse
-            # assertion is false. An empty map deliberately classifies this as
-            # a harness failure and leaves the product verdict unknown.
-            "assertions": {},
         }
+        # Transport/setup failure is not evidence that the Longhouse assertion
+        # is false: a typed harness failure leaves the product verdict unknown.
+        settle_failed_result(result, observation=None, assertions={})
     result["generated_at"] = datetime.now(UTC).isoformat()
     result["artifact_manifest"] = artifact_manifest(evidence_root)
     _write_json(evidence_root / "result.json", result)

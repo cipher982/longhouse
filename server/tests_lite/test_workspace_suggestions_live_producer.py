@@ -113,7 +113,7 @@ def test_transient_projection_exhaustion_is_harness_failure_not_missing_coverage
     assert result["status"] == "fail"
     assert result["failure_code"] == "workspace_suggestions_live_failed"
     assert "failed status=503" in result["error"]
-    assert result["assertions"] == {}
+    assert "assertions" not in result and "observation" not in result
 
 
 def test_no_human_workspace_is_blocked_not_a_product_failure(tmp_path, monkeypatch) -> None:

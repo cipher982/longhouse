@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 from typing import Callable
 
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.resume_assurance import ProducerRegistration
 
@@ -426,9 +427,9 @@ def run(evidence_root: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             "status": "fail",
             "failure_code": "ios_workspace_selection_source_contract_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "observation": {},
-            "assertions": {ASSERTION_ID: False},
         }
+        # The run stopped before the oracle returned: no verdict was reached.
+        settle_failed_result(result, observation=None, assertions={})
     result["generated_at"] = datetime.now(UTC).isoformat()
     result["artifact_manifest"] = artifact_manifest(evidence_root)
     _write_json(evidence_root / "result.json", result)

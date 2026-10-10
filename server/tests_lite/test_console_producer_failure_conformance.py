@@ -390,9 +390,11 @@ def test_transcript_search_main_retains_turn_and_cleanup_evidence_when_search_fa
     result = _json(root / "result.json")
     assert result["status"] == "fail"
     assert result["failure_code"] == "transcript_search_harness_failed"
-    assert result["observation"]["provider_marker_count"] == 1
-    assert result["observation"]["flush_ok"] is True
-    assert "search" not in result["observation"]
+    # The search boundary raised: no verdict, and what the run observed stays as evidence.
+    assert "assertions" not in result and "observation" not in result
+    assert result["partial_observation"]["provider_marker_count"] == 1
+    assert result["partial_observation"]["flush_ok"] is True
+    assert "search" not in result["partial_observation"]
     assert _json(root / "transcript-flush-receipt.json")["status"] == "pass"
     assert _json(root / "cleanup-receipt.json")["status"] == "pass"
     assert _json(root / "provider-binary-receipt.json")["version"] == "fixture-1"

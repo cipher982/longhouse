@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.title_dependency_oracles import TitleDependencyTemporarilyUnavailable
 from zerg.qa.title_dependency_oracles import artifact_manifest
@@ -95,9 +96,9 @@ def run(evidence_root: Path) -> dict[str, Any]:
                 else "title_dependency_health_failed"
             ),
             "error": f"{type(exc).__name__}: {exc}",
-            "observation": {},
-            "assertions": {ASSERTION_ID: False},
         }
+        # The run stopped before the oracle returned: no verdict was reached.
+        settle_failed_result(result, observation=None, assertions={})
     result["generated_at"] = datetime.now(UTC).isoformat()
     result["artifact_manifest"] = artifact_manifest(evidence_root)
     _write_json(evidence_root / "result.json", result)

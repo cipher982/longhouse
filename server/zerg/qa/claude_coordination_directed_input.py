@@ -446,7 +446,7 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         settle_failed_result(
             failure,
             observation=result.get("observation"),
-            assertions=result.get("assertions") or {requested_assertion_id: False},
+            assertions=result.get("assertions") or {},
         )
         write_json(root / "result.json", failure)
         return failure

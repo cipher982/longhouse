@@ -28,6 +28,7 @@ from uuid import uuid4
 from zerg.qa import provider_console_lifecycle as console
 from zerg.qa import search_ingest_oracle as oracle
 from zerg.qa.codex_auth import login_with_api_key
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
@@ -315,6 +316,11 @@ def run_transcript_search(provider: str, args: argparse.Namespace, root: Path) -
     if failure is not None:
         result["failure_code"] = "transcript_search_harness_failed"
         result["error"] = f"{type(failure).__name__}: {failure}"
+        if not args.negative_control:
+            # The harness raised, so the run never finished: a search verdict
+            # over its partial observation is not one. A typed harness failure
+            # keeps that observation as evidence instead of filing a False.
+            settle_failed_result(result, observation=observation, assertions={})
     elif not args.negative_control and not verdict["passed"]:
         result["failure_code"] = verdict["failure_code"]
     result["artifact_manifest"] = artifact_manifest(root)

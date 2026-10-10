@@ -143,6 +143,42 @@ def test_hook_inbox_launch_pass_writes_admissible_result(tmp_path: Path, monkeyp
     assert cleanup["required_cleanup"] == {"no_orphan_provider_processes": True}
 
 
+def test_a_passing_verdict_followed_by_a_late_failure_is_a_typed_harness_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The oracle passed, then writing the result raised.
+
+    A failed result cannot carry an all-true assertion map (the factory refuses
+    the contradiction), and a synthesized False would read as a product finding.
+    The run is a typed harness failure, and what it observed stays as evidence.
+    """
+
+    from tests_lite._factory_envelope import assert_result_conforms
+
+    _install_fake_execute(monkeypatch, hook_inbox_outcome=AssertionOutcome.PASS)
+    binary = _fake_binary(tmp_path)
+    evidence_root = tmp_path / "evidence"
+    args = _run_args(tmp_path, evidence_root=evidence_root, provider_bin=binary)
+    real_write = antigravity_launch_hook_inbox._write_json
+    result_writes = {"count": 0}
+
+    def write_json_failing_once_on_result(path: Path, payload: object) -> None:
+        if path.name == "result.json":
+            result_writes["count"] += 1
+            if result_writes["count"] == 1:
+                raise OSError("evidence volume full")
+        real_write(path, payload)
+
+    monkeypatch.setattr(antigravity_launch_hook_inbox, "_write_json", write_json_failing_once_on_result)
+
+    result = antigravity_launch_hook_inbox.run_hook_inbox_launch(args)
+
+    assert result["status"] == "fail"
+    assert result["error"] == "OSError: evidence volume full"
+    assert "assertions" not in result and "observation" not in result
+    assert result["partial_observation"]["hook_inbox_contract_preserved"] is True
+    assert_result_conforms(antigravity_launch_hook_inbox, result, variant=args.variant)
+    assert json.loads((evidence_root / "result.json").read_text()) == result
+
+
 def test_hook_inbox_launch_fail_when_oracle_reports_semantic_fail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_execute(monkeypatch, hook_inbox_outcome=AssertionOutcome.SEMANTIC_FAIL)
     binary = _fake_binary(tmp_path)

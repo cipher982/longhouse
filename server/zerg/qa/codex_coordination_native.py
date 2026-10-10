@@ -895,7 +895,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
         settle_failed_result(
             failure,
             observation=existing_observation,
-            assertions=result.get("assertions") or {assertion_id: False},
+            assertions=result.get("assertions") or {},
         )
         write_json(root / "result.json", failure)
         return failure

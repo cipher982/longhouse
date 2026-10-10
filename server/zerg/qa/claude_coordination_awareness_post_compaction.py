@@ -367,7 +367,7 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
         settle_failed_result(
             failure,
             observation=result.get("observation"),
-            assertions=result.get("assertions") or {requested_assertion_id: False},
+            assertions=result.get("assertions") or {},
         )
         write_json(root / "result.json", failure)
         return failure

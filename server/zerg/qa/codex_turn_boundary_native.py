@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import qualification_secrets
@@ -186,6 +187,9 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
     isolation_root: Path | None = None
     session_id = ""
     final_cleanup: dict[str, Any] = {"verified": False}
+    # Evidence reached before a later step failed; a reached verdict stays one.
+    observation: dict[str, Any] | None = None
+    assertions: dict[str, bool] = {}
     try:
         # codex-bridge places a UUID-named Unix socket below this root. Keep
         # the prefix short enough that the complete path stays below Linux's
@@ -316,9 +320,9 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "codex_turn_boundary_quiescent_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "assertions": {_ASSERTION_ID: False},
             "artifact_manifest": artifact_manifest(root),
         }
+        settle_failed_result(failure, observation=observation, assertions=assertions)
         write_json(root / "result.json", failure)
         return failure
     finally:

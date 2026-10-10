@@ -203,7 +203,7 @@ def test_result_status_fails_when_cleanup_receipt_fails(monkeypatch, tmp_path):
     assert result["status"] == "fail"
 
 
-def test_failure_result_retains_vehicle_identity_and_false_verdicts():
+def test_infrastructure_failure_is_a_typed_harness_failure_with_vehicle_identity():
     result = producer._failure_result(
         model="gpt-5.6-sol",
         provider="codex",
@@ -215,11 +215,35 @@ def test_failure_result_retains_vehicle_identity_and_false_verdicts():
     assert result["provider"] is None
     assert result["vehicle_provider"] == "codex"
     assert result["vehicle_qualification_model"] == "gpt-5.6-sol"
-    assert result["assertions"] == {
-        producer.ASSERTION_LIVE: False,
-        producer.ASSERTION_SETTLED: False,
-        producer.ASSERTION_CAPABILITY: False,
+    assert result["failure_context"] == {"vehicle_device_id": "factory-machine", "session_id": "session-1"}
+    # No observation was reached, so no verdict: the factory reports the cause
+    # instead of filing three false assertions as product findings.
+    assert "observation" not in result and "assertions" not in result
+
+
+def test_late_failure_keeps_a_failing_verdict_the_run_reached():
+    reached = {
+        "observation": {"marker_served": False},
+        "assertions": {producer.ASSERTION_LIVE: False, producer.ASSERTION_SETTLED: True, producer.ASSERTION_CAPABILITY: True},
     }
+    result = producer._failure_result(
+        model="m", provider="codex", device_id="d", session_id="s", failure=RuntimeError("cleanup"), reached=reached
+    )
+
+    assert result["observation"] == {"marker_served": False}
+    assert result["assertions"][producer.ASSERTION_LIVE] is False
+
+
+def test_cleanup_failure_after_every_assertion_held_is_a_harness_failure():
+    reached = {
+        "observation": {"marker_served": True},
+        "assertions": {producer.ASSERTION_LIVE: True, producer.ASSERTION_SETTLED: True, producer.ASSERTION_CAPABILITY: True},
+    }
+    result = producer._failure_result(
+        model="m", provider="codex", device_id="d", session_id="s", failure=RuntimeError("cleanup"), reached=reached
+    )
+
+    assert "observation" not in result and "assertions" not in result
 
 
 def _qualified_report():

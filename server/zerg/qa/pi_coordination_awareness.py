@@ -251,6 +251,11 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
         **({"failure_code": "pi_coordination_awareness_failed", "error": failure} if failure else {}),
         "artifact_manifest": artifact_manifest(root),
     }
+    if failure:
+        # An exception cannot leave a failed result with an all-true map (the
+        # factory refuses the contradiction): keep a failing verdict, otherwise
+        # a typed harness failure with the observation kept as evidence.
+        settle_failed_result(result, observation=result.get("observation"), assertions=result.get("assertions") or {})
     lifecycle.write_json(root / "result.json", result)
     return result
 

@@ -49,6 +49,7 @@ from urllib.request import urlopen
 
 from zerg.qa import live_session_toolkit
 from zerg.qa import provider_console_lifecycle as console_lifecycle
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
@@ -911,6 +912,11 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     if failure is not None:
         result["failure_code"] = "opencode_helm_lifecycle_failed"
         result["error"] = f"{type(failure).__name__}: {failure}"
+        if not args.negative_control:
+            # An exception cannot leave a failed result with an all-true map (the
+            # factory refuses the contradiction): keep a failing verdict, otherwise
+            # a typed harness failure with the observation kept as evidence.
+            settle_failed_result(result, observation=result.get("observation"), assertions=result.get("assertions") or {})
     secrets = list(live_session_toolkit.qualification_secrets(environment, str(args.agents_token)))
     result["redacted_secret_files"] = live_session_toolkit.secret_scan(root, secrets)
     result["artifact_manifest"] = artifact_manifest(root)

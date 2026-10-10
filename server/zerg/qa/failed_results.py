@@ -12,20 +12,33 @@ from typing import Any
 
 
 def settle_failed_result(failure: dict[str, Any], *, observation: Any, assertions: Mapping[str, Any]) -> dict[str, Any]:
-    """Finish a failed producer result: the rule the coordination producers follow, and every producer should.
+    """Finish a failed producer result: the rule every producer follows.
 
-    A failure with evidence carries its observation and the verdict it reached. A
-    failure before any observation existed (no coordination authority, a launch or
-    bridge that never came up, a precondition crash) reached no verdict, so it
-    carries neither and is a typed harness failure (``factory_registration.typed_harness_failure``):
-    the factory reports its cause as infrastructure or harness, where a false
-    assertion would be filed as a product finding.
+    A failure keeps a verdict only when it reached one that fails: a non-empty
+    observation and a boolean assertion map with at least one False. Anything else
+    reached no failing verdict and is a typed harness failure
+    (``factory_registration.typed_harness_failure``): a crash before any
+    observation (no coordination authority, a launch or bridge that never came up),
+    or a failure from outside the assertions (cleanup, a write) after every
+    assertion held. The factory reports a typed harness failure by its cause; a
+    synthesized False would be filed as a product finding, and an all-true map on a
+    failed result contradicts itself. What the run did observe stays as
+    ``partial_observation``, evidence rather than a verdict.
     """
 
-    if isinstance(observation, Mapping):
+    reached_failing_verdict = (
+        isinstance(observation, Mapping)
+        and bool(observation)
+        and bool(assertions)
+        and all(type(value) is bool for value in assertions.values())
+        and not all(assertions.values())
+    )
+    if reached_failing_verdict:
         failure["observation"] = observation
         failure["assertions"] = dict(assertions)
     else:
         failure.pop("observation", None)
         failure.pop("assertions", None)
+        if isinstance(observation, Mapping) and observation:
+            failure["partial_observation"] = observation
     return failure

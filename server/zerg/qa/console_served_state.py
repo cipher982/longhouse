@@ -33,9 +33,11 @@ import json
 import os
 import subprocess
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 from zerg.qa.codex_auth import login_with_api_key
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
@@ -127,10 +129,11 @@ def _failure_result(
     device_id: str | None,
     session_id: str | None,
     failure: Exception,
+    reached: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    """Return a complete typed observation even when shared infrastructure fails."""
+    """Return a typed harness failure when shared infrastructure fails before any observation."""
 
-    return {
+    result: dict[str, object] = {
         "schema_version": 1,
         "artifact_kind": "longhouse_console_served_state_result",
         "producer": REGISTRATION.to_dict(),
@@ -145,19 +148,19 @@ def _failure_result(
         "generated_at": now(),
         "status": "fail",
         "failure_code": "console_served_state_failed",
-        "observation": {
-            "failure_code": "console_served_state_failed",
-            "vehicle_provider": provider,
-            "vehicle_device_id": device_id,
-            "session_id": session_id,
-        },
-        "assertions": {
-            ASSERTION_LIVE: False,
-            ASSERTION_SETTLED: False,
-            ASSERTION_CAPABILITY: False,
-        },
+        "failure_context": {"vehicle_device_id": device_id, "session_id": session_id},
         "error": f"{type(failure).__name__}: {failure}",
     }
+    # Keep a failing verdict the run reached; otherwise (infrastructure failed
+    # first, or only cleanup failed after every assertion held) no failing
+    # verdict exists and this is a typed harness failure.
+    reached = reached or {}
+    assertions = reached.get("assertions")
+    return settle_failed_result(
+        result,
+        observation=reached.get("observation"),
+        assertions=assertions if isinstance(assertions, Mapping) else {},
+    )
 
 
 def _sha256_file(path: Path) -> str:
@@ -575,6 +578,7 @@ def main(argv: list[str] | None = None) -> int:
             device_id=device_id,
             session_id=session_id,
             failure=failure or RuntimeError("served-state producer returned no result"),
+            reached=result,
         )
         result["artifact_manifest"] = _manifest(root)
         _write_json(root / "result.json", result)
