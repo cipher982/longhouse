@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -760,10 +759,16 @@ def test_omp_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp
         assert "error" not in payload
         assert payload["observation_scope"] == "scenario"
         return
-    observation = payload["observation"]
+    # The follow-up raised before recording its result, so the only reached step
+    # (send) held: no failing verdict was reached, and the run is a typed harness
+    # failure. Send's evidence stays as partial_observation; the unreached
+    # follow-up is never reported False.
+    assert "observation" not in payload and "assertions" not in payload
+    observation = payload["partial_observation"]
     assert observation["send_idle"] is True
-    assert payload["assertions"]["omp_helm_send_idle"] is True
-    assert payload["assertions"]["omp_helm_follow_up_native"] is False
+    # The follow-up never recorded evidence; its initial False flag is evidence
+    # of the run, not a verdict, and no assertion reports it.
+    assert "follow_up_evidence" not in observation
     assert payload["error"] == "RuntimeError: late OMP native follow-up failure"
     cleanup = _json(tmp_path / "evidence" / "cleanup-receipt.json")
     assert cleanup["status"] == "fail"

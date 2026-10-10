@@ -25,6 +25,7 @@ from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import event_text
+from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import require_disposable_runtime
@@ -171,6 +172,45 @@ def _helm_result_status(
     # passing selected assertion must not hide failed siblings here.
     _ = variant
     return "pass" if cleanup_ready and manifest_stable and bool(assertions) and all(assertions.values()) else "fail"
+
+
+# What proves each assertion's step was reached and its verdict decided. The run
+# initializes every step flag to False and settlement/cleanup to {} up front, so a
+# flag's presence proves nothing; these markers are written only once the step
+# ran (an evidence record, a turn verdict, the end-of-run control paths). A run
+# that errors reports a verdict only for assertions whose markers are all present
+# and non-empty: an unreached step is absent from the map (the factory files "no
+# verdict for assertion" as harness), never False (a product finding) and never
+# True. A test pins that no marker is pre-initialized to a non-empty value.
+REACHED_MARKERS: dict[str, tuple[str, ...]] = {
+    "omp_helm_launch_registration": (
+        "channel_binding",
+        "runtime_control_identity",
+        "settlement",
+        "runtime_agents_api_control_paths",
+    ),
+    "omp_helm_send_idle": ("send_evidence",),
+    "omp_helm_follow_up_native": ("follow_up_evidence",),
+    "omp_helm_steer_active": ("steer_evidence", "steer_turn_verdict"),
+    "omp_helm_abort_native": ("abort_evidence", "abort_turn_verdict"),
+    "omp_helm_terminate_owned": ("terminate_verdict", "cleanup", "settlement"),
+    "omp_helm_cold_resume_exact_file": ("cold_resume_evidence",),
+    "omp_helm_stale_owner_refused": ("stale_owner_evidence",),
+    "omp_helm_native_replacement_bound": ("replacement_evidence",),
+}
+
+
+def reached_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
+    """The verdicts of the steps this observation actually reached."""
+
+    def present(value: object) -> bool:
+        return value is not None and not (isinstance(value, (Mapping, list, str)) and not value)
+
+    return {
+        assertion_id: verdict
+        for assertion_id, verdict in omp_helm_lifecycle_assertions(observation).items()
+        if all(present(observation.get(key)) for key in REACHED_MARKERS[assertion_id])
+    }
 
 
 def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
@@ -3314,9 +3354,11 @@ def main(argv: list[str] | None = None) -> int:
             "status": "fail",
             "failure_code": "omp_helm_lifecycle_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "observation": observation,
-            "assertions": omp_helm_lifecycle_assertions(observation),
         }
+        # A verdict only over the steps this run reached: a reached failing step
+        # is a finding; if every reached step held, the run is a typed harness
+        # failure and what it saw stays as partial_observation.
+        settle_failed_result(result, observation=observation, assertions=reached_assertions(observation))
         args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         result["artifact_manifest"] = artifact_manifest(args.evidence_root)
         lifecycle.write_json(args.evidence_root / "result.json", result)

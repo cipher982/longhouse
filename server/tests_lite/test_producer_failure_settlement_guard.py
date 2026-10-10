@@ -22,15 +22,7 @@ QA_ROOT = Path(__file__).resolve().parents[1] / "zerg" / "qa"
 
 # Failure paths that still set a verdict themselves, each with the reason it is
 # not settled yet. This list only shrinks.
-ALLOWED = {
-    # An errored lifecycle keeps the verdicts of steps it reached (send passed)
-    # and reports unreached steps False, because the factory envelope needs a
-    # complete map. Those Falses read as AssertionNotMet, which
-    # failure_class.classify_failure files as `product`; the fix belongs in the
-    # factory classifier (a result carrying a producer `error` is not a product
-    # finding for its false cells), owned by the factory.
-    ("omp_helm_lifecycle.py", "main"),
-}
+ALLOWED: set[tuple[str, str]] = set()
 
 _VERDICT_KEYS = {"observation", "assertions"}
 
