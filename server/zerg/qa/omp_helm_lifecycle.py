@@ -3295,6 +3295,8 @@ def main(argv: list[str] | None = None) -> int:
         observation = partial.get("observation")
         if not isinstance(observation, dict):
             observation = {}
+        # An errored run vouches for nothing, model compliance included.
+        observation.pop("model_noncompliance", None)
         cleanup = _read_state(args.evidence_root / "cleanup-receipt.json")
         if cleanup is not None:
             observation["cleanup"] = cleanup

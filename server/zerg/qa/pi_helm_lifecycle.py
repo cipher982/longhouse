@@ -2372,6 +2372,8 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     if failure is not None:
         result["failure_code"] = "pi_helm_lifecycle_failed"
         result["error"] = f"{type(failure).__name__}: {failure}"
+        # An errored run vouches for nothing, model compliance included.
+        result["observation"].pop("model_noncompliance", None)
         result["diagnostic_observation"] = result.pop("observation")
         result["diagnostic_assertions"] = result.pop("assertions")
     _write_json(root / "result.json", result)

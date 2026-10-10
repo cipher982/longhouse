@@ -239,7 +239,7 @@ def steer_landed_in_turn(
     later_step_ran = later_step_index is not None
     finished_original = done_index is not None
     continuations = [index for index in (later_step_index, done_index) if index is not None]
-    steer_preceded_continuation = steer_index is not None and all(steer_index < index for index in continuations)
+    steer_preceded_continuation = steer_index is not None and bool(continuations) and all(steer_index < index for index in continuations)
     steered_elsewhere = any(_steer_delivered(row, steer_marker) for row in after) or any(
         steered_marker in text for text in _assistant_texts(after)
     )
