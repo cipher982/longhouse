@@ -1560,15 +1560,48 @@ def _configure_claude_hook(args: argparse.Namespace, environment: dict[str, str]
         raise RuntimeError(f"staged Longhouse could not configure the isolated Claude profile: {completed.stderr[-1000:]}")
 
 
+_TURN_IDENTITY_FIELDS = ("provider", "session_id", "thread_id", "run_id", "adapter", "provider_identity_confirmed")
+
+
+def turn_identity_mismatches(
+    claim: Mapping[str, object], *, provider: str, session_id: str, thread_id: str, run_id: str
+) -> dict[str, dict[str, object]]:
+    """Each identity field a Console turn's claim did not carry as expected, with both values.
+
+    A lost identity is either a product regression (the turn ran on another
+    session or provider thread) or a harness timing gap (identity not yet
+    confirmed); which one is only readable from the fields that differed.
+    They are ids, never secrets.
+    """
+
+    expected: dict[str, object] = {
+        "provider": provider,
+        "session_id": session_id,
+        "thread_id": thread_id,
+        "run_id": run_id,
+        "adapter": ADAPTERS.get(provider),
+        "provider_identity_confirmed": True,
+    }
+    return {
+        field: {"expected": value, "observed": claim.get(field)}
+        for field, value in expected.items()
+        if (claim.get(field) is not True if field == "provider_identity_confirmed" else claim.get(field) != value)
+    }
+
+
 def _turn_identity_ok(claim: Mapping[str, object], *, provider: str, session_id: str, thread_id: str, run_id: str) -> bool:
-    return (
-        claim.get("provider") == provider
-        and claim.get("session_id") == session_id
-        and claim.get("thread_id") == thread_id
-        and claim.get("run_id") == run_id
-        and claim.get("adapter") == ADAPTERS[provider]
-        and claim.get("provider_identity_confirmed") is True
-    )
+    return not turn_identity_mismatches(claim, provider=provider, session_id=session_id, thread_id=thread_id, run_id=run_id)
+
+
+def claim_identity_summary(claim: Mapping[str, object]) -> dict[str, object]:
+    """The identity a turn's claim carried, for a failure's partial evidence (no argv, no output)."""
+
+    result = claim.get("result")
+    return {
+        **{field: claim.get(field) for field in _TURN_IDENTITY_FIELDS},
+        "state": claim.get("state"),
+        "terminal_state": result.get("terminal_state") if isinstance(result, Mapping) else None,
+    }
 
 
 def _claim_uses_provider_binary(claim: Mapping[str, object], provider_binary: Path) -> bool:
@@ -2228,14 +2261,17 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
         claims.append(first_claim)
         if first_claim.get("state") != "terminal" or (first_claim.get("result") or {}).get("terminal_state") != "run_completed":
             raise RuntimeError(f"first Console turn did not complete: {first_claim}")
-        if not _turn_identity_ok(
+        mismatches = turn_identity_mismatches(
             first_claim,
             provider=provider,
             session_id=session_id,
             thread_id=thread_id,
             run_id=run_id,
-        ):
-            raise RuntimeError("adapter claim did not preserve exact Console identity")
+        )
+        if mismatches:
+            raise RuntimeError(
+                f"adapter claim did not preserve exact Console identity: {json.dumps(mismatches, sort_keys=True, default=str)}"
+            )
         if not _claim_uses_provider_binary(first_claim, args.provider_bin):
             raise RuntimeError("Console adapter did not launch the exact staged provider binary")
         if not _claim_uses_selected_model(first_claim, provider=provider, model=args.model):

@@ -125,8 +125,9 @@ def _search_turn(
     claims.append(claim)
     if claim.get("state") != "terminal":
         raise RuntimeError(f"search Console turn did not complete: {claim.get('state')}")
-    if not console._turn_identity_ok(claim, provider=provider, session_id=session_id, thread_id=thread_id, run_id=run_id):
-        raise RuntimeError("search Console turn lost its exact session identity")
+    mismatches = console.turn_identity_mismatches(claim, provider=provider, session_id=session_id, thread_id=thread_id, run_id=run_id)
+    if mismatches:
+        raise RuntimeError(f"search Console turn lost its exact session identity: {json.dumps(mismatches, sort_keys=True, default=str)}")
     if not console._claim_uses_provider_binary(claim, args.provider_bin):
         raise RuntimeError("search Console turn did not launch the staged provider binary")
     console._wait_turn_terminal(
@@ -248,6 +249,9 @@ def run_transcript_search(provider: str, args: argparse.Namespace, root: Path) -
         write_json(root / "search-probe-receipt.json", search)
     except Exception as exc:  # noqa: BLE001 - retained as a typed failure
         failure = exc
+        # What each turn's claim actually carried, so a lost identity can be
+        # read as a product regression or a harness gap from the evidence.
+        observation["claims"] = [console.claim_identity_summary(claim) for claim in claims]
     finally:
         # A completed Console turn has already released its run; terminate only
         # a run a failure may have left owning a provider.

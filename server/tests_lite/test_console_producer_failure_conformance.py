@@ -341,7 +341,7 @@ def test_transcript_search_main_retains_turn_and_cleanup_evidence_when_search_fa
         "_wait_claim",
         lambda *_args, **_kwargs: {"state": "terminal", "run_id": "run-1", "result": {"terminal_state": "run_completed"}},
     )
-    monkeypatch.setattr(transcript_search_producer.console, "_turn_identity_ok", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(transcript_search_producer.console, "turn_identity_mismatches", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(transcript_search_producer.console, "_claim_uses_provider_binary", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(transcript_search_producer.console, "_wait_turn_terminal", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(

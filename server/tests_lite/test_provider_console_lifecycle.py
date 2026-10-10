@@ -1232,3 +1232,29 @@ def test_opencode_model_binding_reads_the_model_the_adapter_sent_not_argv() -> N
     assert not lifecycle._claim_uses_selected_model(  # noqa: SLF001
         {"result": {"argv": ["opencode", "serve"]}}, provider="opencode", model="deepseek/x"
     )
+
+
+def test_turn_identity_mismatches_names_each_differing_field() -> None:
+    from zerg.qa import provider_console_lifecycle as console
+
+    expected = dict(provider="opencode", session_id="s1", thread_id="t1", run_id="r1")
+    good = {
+        "provider": "opencode",
+        "session_id": "s1",
+        "thread_id": "t1",
+        "run_id": "r1",
+        "adapter": console.ADAPTERS["opencode"],
+        "provider_identity_confirmed": True,
+    }
+    assert console.turn_identity_mismatches(good, **expected) == {}
+    assert console._turn_identity_ok(good, **expected)
+
+    drifted = {**good, "thread_id": "t2", "provider_identity_confirmed": None}
+    assert console.turn_identity_mismatches(drifted, **expected) == {
+        "thread_id": {"expected": "t1", "observed": "t2"},
+        "provider_identity_confirmed": {"expected": True, "observed": None},
+    }
+    assert not console._turn_identity_ok(drifted, **expected)
+    summary = console.claim_identity_summary({**drifted, "state": "terminal", "result": {"terminal_state": "run_completed", "argv": ["x"]}})
+    assert summary["thread_id"] == "t2" and summary["terminal_state"] == "run_completed"
+    assert "argv" not in summary and "result" not in summary

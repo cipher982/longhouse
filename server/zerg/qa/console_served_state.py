@@ -46,7 +46,7 @@ from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.provider_console_lifecycle import _force_cleanup
 from zerg.qa.provider_console_lifecycle import _terminate_live_qualification_session
-from zerg.qa.provider_console_lifecycle import _turn_identity_ok
+from zerg.qa.provider_console_lifecycle import turn_identity_mismatches
 from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
 
@@ -226,9 +226,10 @@ def _vehicle_dispatch_receipt(
             binary_bound = False
         encoded_model = model.replace("\\", "\\\\").replace('"', '\\"')
         model_bound = f'model="{encoded_model}"' in argv
+    identity_mismatches = turn_identity_mismatches(claim, provider="codex", session_id=session_id, thread_id=thread_id, run_id=run_id)
     identity_bound = (
         bool(thread_id)
-        and _turn_identity_ok(claim, provider="codex", session_id=session_id, thread_id=thread_id, run_id=run_id)
+        and not identity_mismatches
         and claim.get("state") == "terminal"
         and isinstance(result, dict)
         and result.get("terminal_state") == "run_completed"
@@ -243,6 +244,7 @@ def _vehicle_dispatch_receipt(
         "qualification_model": model,
         "binary_bound": binary_bound,
         "model_bound": model_bound,
+        "identity_mismatches": identity_mismatches,
         "identity_bound": identity_bound,
         "claim_state": claim.get("state"),
         "terminal_state": result.get("terminal_state") if isinstance(result, dict) else None,
