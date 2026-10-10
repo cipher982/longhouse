@@ -255,9 +255,16 @@ def test_startup_adopts_an_orphan_that_carries_only_a_source_pointer(tmp_path):
             )
         )
         child = _session(connection, is_subagent=1, subagent_parent_source_id=source_id)
+        # A native pointer that resolves nowhere still falls back to the source.
+        both = _session(
+            connection,
+            is_subagent=1,
+            subagent_parent_source_id=source_id,
+            subagent_parent_provider_session_id="/Users/dev/.omp/unknown-parent.jsonl",
+        )
         connection.execute(catalog_meta.update().values(subagent_parent_generation=None))
 
-    assert adopt_orphan_subagents_once(engine) == 1
+    assert adopt_orphan_subagents_once(engine) == 2
     with engine.begin() as connection:
         bound = connection.execute(select(StorageSession.subagent_parent_session_id).where(StorageSession.session_id == child)).scalar_one()
     assert bound == parent

@@ -4442,8 +4442,8 @@ def adopt_orphan_subagents_once(engine) -> int:
         ).all()
         now = datetime.now(UTC)
         for child_id, provider, owner_id, machine_id, pointer, source_pointer in orphans:
-            # The same evidence a commit uses: the native pointer, or the raw
-            # source identity when that is all the child carries.
+            # The same evidence and order a commit uses: the native pointer
+            # first, then the raw source identity.
             parent = (
                 _resolve_session_id_by_provider_session_id(
                     connection,
@@ -4453,14 +4453,16 @@ def adopt_orphan_subagents_once(engine) -> int:
                     machine_id=str(machine_id),
                 )
                 if pointer
-                else _resolve_session_id_by_source_id(
+                else None
+            )
+            if parent is None and source_pointer:
+                parent = _resolve_session_id_by_source_id(
                     connection,
                     provider=str(provider),
                     opaque_source_id=str(source_pointer),
                     owner_id=owner_id,
                     machine_id=str(machine_id),
                 )
-            )
             if parent is None or parent == str(child_id):
                 continue
             bound += int(
