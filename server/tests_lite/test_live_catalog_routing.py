@@ -381,3 +381,139 @@ def test_directed_input_delivery_queues_until_quiescent(monkeypatch, target_phas
     assert response["input_receipt"]["status"] == "queued"
     assert observed["input"].intent == "queue"
     assert observed["method"] == "directed_input.link_receipt.v2"
+
+
+def _busy_target(target_id, provider="omp"):
+    return SimpleNamespace(
+        id=target_id,
+        provider=provider,
+        catalog_facts={
+            "runtime": {"phase": "executing"},
+            "latest_run": {"id": "run-1", "ended_at": None},
+            "connections": [{"state": "attached", "released_at": None, "can_send_input": 1}],
+        },
+    )
+
+
+def _patch_busy(monkeypatch, *, steerable=True):
+    from zerg.services.session_state_contract import STEERABLE_ACTIVITY_STATES
+
+    busy_state = sorted(STEERABLE_ACTIVITY_STATES)[0]
+
+    async def activity(*_args, **_kwargs):
+        return busy_state
+
+    monkeypatch.setattr("zerg.services.live_control_catalog.live_control_session_activity_state", activity)
+    monkeypatch.setattr("zerg.services.live_control_catalog.live_control_session_capability_available", lambda *_a, **_k: True)
+    monkeypatch.setattr("zerg.routers.session_chat._provider_supports_steer", lambda _session: steerable)
+
+
+def _linking_catalog(observed):
+    async def catalog_call(method, params):
+        observed.setdefault("links", []).append(params.get("input_receipt_id"))
+        return {"directed_input": {"id": 31, "input_receipt": {"id": params["input_receipt_id"], "status": "delivered"}}}
+
+    return catalog_call
+
+
+def test_directed_input_to_a_busy_target_arrives_after_its_current_tool_call(monkeypatch):
+    """A coworker reads a message between tasks: STEER, not wait for the turn to end."""
+
+    observed = {"intents": []}
+
+    async def create_input_response(**kwargs):
+        observed["intents"].append((kwargs["body"].intent, kwargs["body"].client_request_id))
+        return SimpleNamespace(outcome="delivered", live_input_id="steer-receipt")
+
+    _patch_busy(monkeypatch)
+    monkeypatch.setattr("zerg.routers.session_chat._create_catalog_session_input_response", create_input_response)
+    monkeypatch.setattr("zerg.routers.agents_sessions._directed_input_call", _linking_catalog(observed))
+    asyncio.run(
+        _attempt_directed_input_delivery(
+            owner_id=7,
+            sender_session=SimpleNamespace(id=UUID("00000000-0000-0000-0000-000000000051"), device_name="cinder"),
+            target_session=_busy_target(UUID("00000000-0000-0000-0000-000000000052")),
+            directed_input={"id": 31, "text": "lint is red on main"},
+        )
+    )
+
+    assert observed["intents"] == [("steer", "directed-input-31-steer")]
+    assert observed["links"] == ["steer-receipt"]
+
+
+def test_a_refused_peer_steer_falls_back_to_a_durable_send(monkeypatch):
+    """The turn ended between observation and steer: the message is queued, never dropped."""
+
+    observed = {"intents": []}
+
+    async def create_input_response(**kwargs):
+        observed["intents"].append(kwargs["body"].intent)
+        if kwargs["body"].intent == "steer":
+            raise HTTPException(status_code=409, detail={"code": "turn_ended", "delivery_status": "failed"})
+        return SimpleNamespace(outcome="queued", live_input_id="queue-receipt")
+
+    _patch_busy(monkeypatch)
+    monkeypatch.setattr("zerg.routers.session_chat._create_catalog_session_input_response", create_input_response)
+    monkeypatch.setattr("zerg.routers.agents_sessions._directed_input_call", _linking_catalog(observed))
+    asyncio.run(
+        _attempt_directed_input_delivery(
+            owner_id=7,
+            sender_session=SimpleNamespace(id=UUID("00000000-0000-0000-0000-000000000053")),
+            target_session=_busy_target(UUID("00000000-0000-0000-0000-000000000054")),
+            directed_input={"id": 31, "text": "lint is red on main"},
+        )
+    )
+
+    assert observed["intents"] == ["steer", "queue"]
+    assert observed["links"] == ["queue-receipt"]
+
+
+def test_an_unknown_peer_steer_outcome_is_not_sent_twice(monkeypatch):
+    observed = {"intents": []}
+
+    async def create_input_response(**kwargs):
+        observed["intents"].append(kwargs["body"].intent)
+        raise HTTPException(status_code=502, detail={"code": "delivery_unknown"})
+
+    async def receipt_for(owner_id, target_session, client_request_id):
+        observed["lookup"] = client_request_id
+        return "steer-receipt"
+
+    _patch_busy(monkeypatch)
+    monkeypatch.setattr("zerg.routers.session_chat._create_catalog_session_input_response", create_input_response)
+    monkeypatch.setattr("zerg.routers.agents_sessions._directed_input_receipt_for", receipt_for)
+    monkeypatch.setattr("zerg.routers.agents_sessions._directed_input_call", _linking_catalog(observed))
+    asyncio.run(
+        _attempt_directed_input_delivery(
+            owner_id=7,
+            sender_session=SimpleNamespace(id=UUID("00000000-0000-0000-0000-000000000055")),
+            target_session=_busy_target(UUID("00000000-0000-0000-0000-000000000056")),
+            directed_input={"id": 31, "text": "lint is red on main"},
+        )
+    )
+
+    assert observed["intents"] == ["steer"]
+    assert observed["lookup"] == "directed-input-31-steer"
+    assert observed["links"] == ["steer-receipt"]
+
+
+def test_a_busy_target_that_cannot_steer_gets_a_durable_send(monkeypatch):
+    observed = {"intents": []}
+
+    async def create_input_response(**kwargs):
+        observed["intents"].append(kwargs["body"].intent)
+        return SimpleNamespace(outcome="queued", live_input_id="queue-receipt")
+
+    _patch_busy(monkeypatch, steerable=False)
+    monkeypatch.setattr("zerg.routers.session_chat._create_catalog_session_input_response", create_input_response)
+    monkeypatch.setattr("zerg.routers.agents_sessions._directed_input_call", _linking_catalog(observed))
+    asyncio.run(
+        _attempt_directed_input_delivery(
+            owner_id=7,
+            sender_session=SimpleNamespace(id=UUID("00000000-0000-0000-0000-000000000057")),
+            target_session=_busy_target(UUID("00000000-0000-0000-0000-000000000058"), provider="opencode"),
+            directed_input={"id": 31, "text": "lint is red on main"},
+        )
+    )
+
+    assert observed["intents"] == ["queue"]

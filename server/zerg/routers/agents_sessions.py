@@ -1925,11 +1925,62 @@ async def _attempt_directed_input_delivery(
         input_id=int(directed_input["id"]),
         text=str(directed_input["text"]),
     )
-    try:
-        from zerg.routers.session_chat import INPUT_INTENT_QUEUE
-        from zerg.routers.session_chat import SessionInputRequest
-        from zerg.routers.session_chat import _create_catalog_session_input_response
+    from zerg.routers.session_chat import INPUT_INTENT_QUEUE
+    from zerg.routers.session_chat import INPUT_INTENT_STEER
+    from zerg.routers.session_chat import SessionInputRequest
+    from zerg.routers.session_chat import _create_catalog_session_input_response
+    from zerg.routers.session_chat import _provider_supports_steer
+    from zerg.services.live_control_catalog import live_control_session_activity_state
+    from zerg.services.session_state_contract import STEERABLE_ACTIVITY_STATES
 
+    async def _deliver(intent: str, client_request_id: str):
+        return await _create_catalog_session_input_response(
+            source_session=target_session,
+            owner_id=owner_id,
+            body=SessionInputRequest(text=injected_text, intent=intent, client_request_id=client_request_id),
+            db=None,
+        )
+
+    # A coworker reads a message between tasks, not after the whole project:
+    # a target with a running turn gets the message after its current tool
+    # call (STEER), as attributed peer input it may use or ignore. OMP turns
+    # run for hours, so waiting for the turn boundary let most peer messages
+    # expire undelivered (83 expired vs 35 delivered on david010, 14 days to
+    # 2026-10-09). A target at a turn boundary gets an ordinary durable SEND.
+    response = None
+    steer_request_id = f"{input_request_id}-steer"
+    try:
+        activity_state = await live_control_session_activity_state(target_session.id, owner_id=owner_id)
+    except Exception:
+        logger.debug("Directed input %s could not read target activity", directed_input.get("id"), exc_info=True)
+        activity_state = None
+    if activity_state in STEERABLE_ACTIVITY_STATES and _provider_supports_steer(target_session):
+        try:
+            response = await _deliver(INPUT_INTENT_STEER, steer_request_id)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            definite_refusal = exc.status_code == status.HTTP_409_CONFLICT and (
+                detail.get("delivery_status") == "failed"
+                or detail.get("code") == "steer_requires_active_turn"
+                or detail.get("error_code") == "steer_requires_active_turn"
+                or detail.get("disposition") == "rejected"
+            )
+            if not definite_refusal:
+                # The steer may have reached the model; sending it again could
+                # duplicate it. The message stays readable in the target's inbox.
+                logger.info("Directed input %s steer outcome unknown: %s", directed_input.get("id"), exc.detail)
+                receipt = await _directed_input_receipt_for(owner_id, target_session, steer_request_id)
+                return await _link_directed_input_receipt(owner_id, directed_input, receipt)
+            # The turn ended between the observation and the steer: deliver it
+            # as an ordinary SEND instead of dropping it.
+            response = None
+        except Exception:
+            logger.warning("Directed input %s steer failed", directed_input.get("id"), exc_info=True)
+            response = None
+        if response is not None:
+            return await _link_directed_input_receipt(owner_id, directed_input, response.live_input_id)
+
+    try:
         # Directed input is always durable. It used to pick `auto` when the
         # target looked idle, which dispatched live and failed terminally if the
         # control channel happened to be down — so a message to an idle peer was
@@ -1937,18 +1988,7 @@ async def _attempt_directed_input_delivery(
         # target's phase is a fact about timing, never about whether the message
         # survives; the sender chose to send, and that choice owns the
         # semantics.
-        intent = INPUT_INTENT_QUEUE
-
-        response = await _create_catalog_session_input_response(
-            source_session=target_session,
-            owner_id=owner_id,
-            body=SessionInputRequest(
-                text=injected_text,
-                intent=intent,
-                client_request_id=input_request_id,
-            ),
-            db=None,
-        )
+        response = await _deliver(INPUT_INTENT_QUEUE, input_request_id)
     except HTTPException as exc:
         logger.info("Directed input %s was persisted without live delivery: %s", directed_input.get("id"), exc.detail)
         response = None
@@ -1958,27 +1998,34 @@ async def _attempt_directed_input_delivery(
 
     receipt_id = response.live_input_id if response is not None else None
     if receipt_id is None:
-        from zerg.services.live_session_inputs import LiveInputReceiptUnavailable
-        from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request
+        receipt_id = await _directed_input_receipt_for(owner_id, target_session, input_request_id)
+    return await _link_directed_input_receipt(owner_id, directed_input, receipt_id)
 
-        try:
-            receipt = await load_live_input_receipt_by_client_request(
-                owner_id=owner_id,
-                session_id=target_session.id,
-                client_request_id=input_request_id,
-            )
-        except LiveInputReceiptUnavailable as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "input_receipt_unknown",
-                    "message": "The server could not confirm directed input delivery; retry with the same client_request_id.",
-                },
-            ) from exc
-        receipt_id = receipt.id if receipt is not None else None
+
+async def _directed_input_receipt_for(owner_id: int, target_session, client_request_id: str) -> str | None:
+    from zerg.services.live_session_inputs import LiveInputReceiptUnavailable
+    from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request
+
+    try:
+        receipt = await load_live_input_receipt_by_client_request(
+            owner_id=owner_id,
+            session_id=target_session.id,
+            client_request_id=client_request_id,
+        )
+    except LiveInputReceiptUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "input_receipt_unknown",
+                "message": "The server could not confirm directed input delivery; retry with the same client_request_id.",
+            },
+        ) from exc
+    return receipt.id if receipt is not None else None
+
+
+async def _link_directed_input_receipt(owner_id: int, directed_input: dict[str, Any], receipt_id: str | None) -> dict[str, Any]:
     if receipt_id is None:
         return directed_input
-
     result = await _directed_input_call(
         "directed_input.link_receipt.v2",
         {
