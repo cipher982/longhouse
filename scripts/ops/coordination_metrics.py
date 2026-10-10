@@ -58,6 +58,31 @@ def should_process_file(file_path: Path, cutoff: float) -> bool:
         return False
 
 
+def coordination_tool_name(name: str, arguments: Any = None) -> str:
+    """The Longhouse coordination tool a call names, in any harness's spelling.
+
+    - Claude: mcp__<server>__<tool>, for any Longhouse server key
+      (longhouse, longhouse-coordination, longhouse-channel).
+    - OMP: a ``write`` to ``xd://<tool>`` is the call (a ``read`` only loads its
+      docs), and the device may itself carry an MCP-style name such as
+      ``xd://mcp__longhouse_recall``.
+    - A bare tool name is the older form.
+    """
+
+    if name == "write" and isinstance(arguments, dict):
+        path = str(arguments.get("path") or "")
+        if path.startswith("xd://"):
+            name = path[len("xd://"):]
+    if name.startswith("mcp__"):
+        rest = name[len("mcp__"):]
+        if "__" in rest:
+            server, tool = rest.split("__", 1)
+            name = tool if "longhouse" in server else name
+        elif rest.startswith("longhouse_"):
+            name = rest[len("longhouse_"):]
+    return name
+
+
 def process_claude_file(file_path: Path) -> Tuple[List[str], Dict[str, Any], Dict[str, set]]:
     """
     Process a Claude transcript file.
@@ -88,23 +113,7 @@ def process_claude_file(file_path: Path) -> Tuple[List[str], Dict[str, Any], Dic
                     if message.get("role") == "assistant" and "content" in message:
                         for content_item in message.get("content", []):
                             if content_item.get("type") == "tool_use":
-                                tool_name = content_item.get("name", "")
-                                # Strip mcp__ prefix if present
-                                if tool_name.startswith("mcp__"):
-                                    tool_name = tool_name[5:]
-                                    # Handle variations like mcp__longhouse__peers
-                                    if "__" in tool_name and tool_name.split("__")[0] in (
-                                        "claude_ai",
-                                        "context7",
-                                        "life-hub-agents",
-                                        "longhouse",
-                                        "longhouse-channel",
-                                    ):
-                                        # Extract just the tool name part
-                                        parts = tool_name.split("__")
-                                        if len(parts) > 1:
-                                            tool_name = parts[-1]
-
+                                tool_name = coordination_tool_name(content_item.get("name", ""))
                                 if tool_name in COORDINATION_TOOLS:
                                     tool_counts[tool_name] += 1
                                     sessions_by_tool[tool_name].add(
@@ -185,14 +194,9 @@ def process_omp_file(file_path: Path) -> Tuple[List[str], Dict[str, Any], Dict[s
                     if message.get("role") == "assistant" and "content" in message:
                         for content_item in message.get("content", []):
                             if content_item.get("type") == "toolCall":
-                                tool_name = content_item.get("name", "")
-                                # OMP mounts extension tools as xd:// devices: a
-                                # `write xd://<tool>` is the call (a `read` only
-                                # loads its docs). A bare name is the older form.
-                                arguments = content_item.get("arguments") or {}
-                                path = str(arguments.get("path") or "") if isinstance(arguments, dict) else ""
-                                if tool_name == "write" and path.startswith("xd://"):
-                                    tool_name = path[len("xd://"):]
+                                tool_name = coordination_tool_name(
+                                    content_item.get("name", ""), content_item.get("arguments")
+                                )
                                 if tool_name in COORDINATION_TOOLS:
                                     tool_counts[tool_name] += 1
                                     sessions_by_tool[tool_name].add(session_id)
@@ -257,6 +261,16 @@ def main():
             "sessions_by_tool": defaultdict(set),
             "cache_rates": [],
         },
+        # OMP files Longhouse did not launch as Helm sessions: native subagents
+        # and plain OMP runs. Reported apart so the Helm denominator stays the
+        # sessions that were given the tools, while calls made elsewhere are
+        # still counted, not dropped.
+        "omp_other": {
+            "sessions_total": set(),
+            "tool_calls": defaultdict(int),
+            "sessions_by_tool": defaultdict(set),
+            "cache_rates": [],
+        },
     }
 
     # Process Claude files
@@ -305,13 +319,25 @@ def main():
                 if hit_rate > 0 or inp > 0:
                     results["omp"]["cache_rates"].append((hit_rate, inp, cache_read, cache_write))
 
+    omp_root = Path.home() / ".omp" / "agent" / "sessions"
+    if omp_root.exists():
+        for file_path in omp_root.glob("**/*.jsonl"):
+            if file_path in helm_files or not should_process_file(file_path, cutoff):
+                continue
+            session_ids, tools, sessions_by_tool = process_omp_file(file_path)
+            results["omp_other"]["sessions_total"].update(session_ids)
+            for tool, count in tools.items():
+                results["omp_other"]["tool_calls"][tool] += count
+            for tool, sessions in sessions_by_tool.items():
+                results["omp_other"]["sessions_by_tool"][tool].update(sessions)
+
     # Prepare output
     output = {
         "window_days": args.days,
         "providers": {},
     }
 
-    for provider in ["claude", "omp"]:
+    for provider in ["claude", "omp", "omp_other"]:
         sessions_total = len(results[provider]["sessions_total"])
         tool_calls = results[provider]["tool_calls"]
         sessions_by_tool = results[provider]["sessions_by_tool"]
@@ -375,7 +401,7 @@ def main():
         # Pretty-print table format
         print(f"Coordination Metrics — Last {args.days} days\n")
 
-        for provider in ["claude", "omp"]:
+        for provider in ["claude", "omp", "omp_other"]:
             provider_data = output["providers"][provider]
             coord = provider_data["coordination"]
             cache = provider_data["cache"]
