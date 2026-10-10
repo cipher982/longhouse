@@ -3244,7 +3244,7 @@
           "assertion_id": "pi_helm_cold_resume_exact_file",
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
-          "minimum_scenario_revision": 6,
+          "minimum_scenario_revision": 8,
           "acceptable_evidence": [
             "live_token"
           ],
