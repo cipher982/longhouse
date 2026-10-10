@@ -748,28 +748,20 @@ def test_omp_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp
 
     assert exit_code == 1
     assert payload["status"] == "fail"
-    observation = payload["partial_observation"] if background else payload["observation"]
-    assert observation["send_idle"] is True
     if background:
-        assert payload["failure_code"] == "omp_background_failed"
-        assert "observation" not in payload
-        assert "assertions" not in payload
-        assert datetime.fromisoformat(payload["generated_at"].replace("Z", "+00:00")).tzinfo is not None
-        manifest_paths = {item["path"] for item in payload["artifact_manifest"]}
-        assert manifest_paths == {
-            path.relative_to(args.evidence_root).as_posix()
-            for path in args.evidence_root.rglob("*")
-            if path.is_file() and path.name != "result.json"
-        }
-        failures = [
-            json.loads((args.evidence_root / item["path"]).read_text())
-            for item in payload["artifact_manifest"]
-            if item["path"].endswith(".json")
-        ]
-        assert any(isinstance(item, dict) and item.get("error") == "RuntimeError: late OMP native follow-up failure" for item in failures)
-    else:
-        assert payload["assertions"]["omp_helm_send_idle"] is True
-        assert payload["assertions"]["omp_helm_follow_up_native"] is False
+        # Revision 2: the background scenario ends after its first turn and goes
+        # to teardown, so a late failure in the Helm controls cannot reach it.
+        # The controls never run: no send, no follow-up, no error.
+        assert calls["send"] == 0
+        assert payload["observation"]["scenario_scope"] == "background"
+        assert payload["observation"]["send_idle"] is False
+        assert "error" not in payload
+        assert payload["observation_scope"] == "scenario"
+        return
+    observation = payload["observation"]
+    assert observation["send_idle"] is True
+    assert payload["assertions"]["omp_helm_send_idle"] is True
+    assert payload["assertions"]["omp_helm_follow_up_native"] is False
     assert payload["error"] == "RuntimeError: late OMP native follow-up failure"
     cleanup = _json(tmp_path / "evidence" / "cleanup-receipt.json")
     assert cleanup["status"] == "fail"
@@ -804,3 +796,49 @@ def test_the_busy_sampler_and_the_idle_watch_survive_a_status_read_that_keeps_fa
     monkeypatch.setattr(sampler._stop, "wait", lambda _s: sampler._stop.is_set() or sampler._stop.set())
     sampler._run()
     assert "error" in sampler.samples[0]
+
+
+@pytest.mark.parametrize("module", ["omp_background_producer", "claude_background_producer"])
+def test_a_scenario_producers_failed_result_is_scenario_scoped(monkeypatch, tmp_path, capsys, module) -> None:
+    """A failure path that drops ``observation_scope`` made the factory report "returned a
+    cell-specific result" instead of the failure (omp.background_jobs.v1, 2026-10-08..10)."""
+
+    import importlib
+
+    producer = importlib.import_module(f"zerg.qa.{module}")
+    assert producer.REGISTRATION.observation_scope == "scenario"
+
+    def boom(*_a, **_k):
+        raise RuntimeError("harness exploded before the observation boundary")
+
+    if module == "omp_background_producer":
+        monkeypatch.setattr(producer, "run_omp_background", boom)
+    else:
+        monkeypatch.setattr(producer, "require_disposable_runtime", lambda _url: None)
+        monkeypatch.setattr(producer, "_run_direct", boom)
+    binary = _binary(tmp_path, "provider")
+    engine = _binary(tmp_path, "longhouse-engine")
+    variant = producer._VARIANTS[0]
+    argv = [
+        "--variant",
+        variant,
+        "--evidence-root",
+        str(tmp_path / "evidence"),
+        "--repo-root",
+        str(tmp_path),
+        "--engine",
+        str(engine),
+        "--provider-bin",
+        str(binary),
+        "--api-url",
+        "http://127.0.0.1:1",
+        "--agents-token",
+        "token",
+    ]
+    if module == "omp_background_producer":
+        argv += ["--longhouse-cli", str(engine), "--provider-version", "omp/1.2.3", "--model", "m"]
+    assert producer.main(argv) == 1
+    payload = _json(tmp_path / "evidence" / "result.json")
+    assert payload["observation_scope"] == "scenario"
+    assert payload["status"] == "fail"
+    assert_result_conforms(producer, payload, variant=variant)

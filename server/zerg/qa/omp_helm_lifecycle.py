@@ -2009,39 +2009,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         observation["omp_runtime_transcript_converged"] = observation["omp_transcript_flush_completed"]
         observation["runtime_control_identity"] = {"initial": initial_control_receipt}
         observation["runtime_convergence"] = runtime_convergence
-        old_state = dict(current_state)
-        old_native_id = str(current_state.get("native_session_id") or "")
-        if first.alive() is not True:
-            raise RuntimeError("OMP original owner was not live for stale-launcher proof")
-        stale_launcher = ProviderPtySession.start(
-            argv=_launch_argv(
-                args,
-                workspace=workspace,
-                prompt="This launcher must be refused while the original OMP owner remains live.",
-                resume_session=current_session_id,
-            ),
-            cwd=workspace,
-            env=env,
-            terminal_path=root / "omp-helm-stale-launcher.raw",
-            thread_name="omp-helm-stale-launcher-terminal-drain",
-        )
-        sessions.append(stale_launcher)
-        try:
-            stale_launcher_returncode = stale_launcher.process.wait(timeout=15)
-        except subprocess.TimeoutExpired as exc:
-            stale_launcher.close()
-            raise RuntimeError("OMP stale launcher did not refuse a live owner") from exc
-        stale_launcher.close()
-        stale_launcher_output = stale_launcher.terminal_path.read_text(encoding="utf-8", errors="replace")
-        stale_launcher_evidence = {
-            "returncode": stale_launcher_returncode,
-            "terminal_path": str(stale_launcher.terminal_path),
-            "original_owner_live": True,
-            "owner_refusal_observed": (
-                stale_launcher_returncode != 0
-                and ("execution owner" in stale_launcher_output or "already attached" in stale_launcher_output)
-            ),
-        }
+        # Bound before the stale-launcher proof: it reads only the first owner state.
         observation["omp_native_extension_channel_bound"] = bool(
             current_state.get("ready") is True
             and current_state.get("connection_id")
@@ -2050,764 +2018,826 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             and current_state.get("session_file")
         )
         observation["channel_binding"] = _channel_binding_evidence(current_state)
-        source_generations.append(
-            {
-                "label": "initial",
-                "native_session_id": current_state.get("native_session_id"),
-                "source_path": str(current_session_file),
-                "marker": initial_marker,
-                "controls": ["send", "follow_up", "steer", "abort"],
-            }
-        )
-
-        send_marker = f"OMP_HELM_SEND_{os.urandom(8).hex()}"
-        send_offset = _read_source_size(current_session_file)
-        send_prompt = _exact_marker_prompt(send_marker)
-        send = _run_engine(args.engine, "send", current_session_id, env, text=send_prompt)
-        send_channel_evidence = _channel_command_evidence(send, current_state)
-        controls["send"] = {
-            "action_label": "send",
-            "prompt": send_prompt,
-            "state": dict(current_state),
-            "command": send,
-            "marker_wait": {
-                "status": "pending",
-                "marker": send_marker,
-                "source_offset": send_offset,
-                "source_size_before": send_offset,
-            },
-            "evidence": send_channel_evidence,
-        }
-        try:
-            send_row = _wait_native_marker(current_session_file, send_marker, minimum_offset=send_offset)
-        except BaseException as exc:
-            controls["send"]["marker_wait"] = {
-                **controls["send"]["marker_wait"],
-                "status": "failed",
-                "source_size_after": _read_source_size(current_session_file),
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-            observation["send_evidence"] = {
-                **send_channel_evidence,
-                "marker": send_marker,
-                "minimum_offset": send_offset,
-                "marker_observed": False,
-            }
-            raise
-        send_evidence = _native_marker_evidence(
-            send_row,
-            current_session_file,
-            marker=send_marker,
-            minimum_offset=send_offset,
-            native_session_id=str(current_state.get("native_session_id") or ""),
-        )
-        send_evidence.update(send_channel_evidence)
-        send_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
-        controls["send"].update({"marker_row": send_row, "evidence": send_evidence})
-        observation["send_idle"] = (
-            send_evidence["channel_ack_bound"] and send_evidence["native_source_bound"] and send_evidence["marker_count"] == 1
-        )
-        observation["send_evidence"] = send_evidence
-
-        active_marker = f"OMP_HELM_ACTIVE_{os.urandom(8).hex()}"
-        follow_up_marker = f"OMP_HELM_FOLLOW_UP_{os.urandom(8).hex()}"
-        steer_marker = f"OMP_HELM_STEER_{os.urandom(8).hex()}"
-        active_offset = _read_source_size(current_session_file)
-        follow_up_active = _run_engine(
-            args.engine,
-            "send",
-            current_session_id,
-            env,
-            text=_setup_marker_prompt(
-                active_marker,
-                setup="Use the bash tool to run `sleep 8` in the foreground (not as a named or background job), then",
-            ),
-        )
-        active_state = _wait_state(
-            longhouse_home,
-            session_id=current_session_id,
-            predicate=lambda value: value.get("phase") in {"running", "thinking"},
-            timeout=30,
-        )
-        follow_up_prompt = _exact_marker_prompt(follow_up_marker)
-        follow_up = _run_engine(
-            args.engine,
-            "send",
-            current_session_id,
-            env,
-            text=follow_up_prompt,
-        )
-        follow_up_row = _wait_native_marker(current_session_file, follow_up_marker, minimum_offset=active_offset)
-        follow_up_evidence = _native_marker_evidence(
-            follow_up_row,
-            current_session_file,
-            marker=follow_up_marker,
-            minimum_offset=active_offset,
-            native_session_id=str(current_state.get("native_session_id") or ""),
-        )
-        active_command_evidence = _channel_command_evidence(follow_up_active, active_state)
-        follow_up_command_evidence = _channel_command_evidence(follow_up, current_state)
-        follow_up_evidence["active_state"] = _redacted_state_snapshot(active_state)
-        follow_up_evidence["active_command_bound"] = (
-            active_state.get("phase") in {"running", "thinking"} and active_command_evidence["channel_ack_bound"]
-        )
-        follow_up_evidence["follow_up_delivery"] = follow_up_command_evidence["channel_ack_bound"]
-        # Revision 12: a mid-turn SEND is a durable receipt delivered by the
-        # turn-boundary drain, never an acknowledged entry in the extension's
-        # volatile follow-up queue. The Runtime Host answers "queued"; "sent"
-        # would mean the provider accepted it mid-turn.
-        follow_up_payload = follow_up.get("payload")
-        follow_up_evidence["queued_not_sent"] = isinstance(follow_up_payload, Mapping) and follow_up_payload.get("outcome") == "queued"
-        follow_up_evidence.update(_channel_command_evidence(follow_up, current_state))
-        follow_up_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
-        controls["follow_up"] = {
-            "action_label": "follow_up",
-            "prompt": follow_up_prompt,
-            "state": dict(current_state),
-            "active_action_label": "active_turn_setup",
-            "active_command": follow_up_active,
-            "active_state": dict(active_state),
-            "command": follow_up,
-            "marker_row": follow_up_row,
-            "evidence": follow_up_evidence,
-        }
-        observation["follow_up_native"] = (
-            follow_up_evidence["active_command_bound"]
-            and follow_up_evidence["queued_not_sent"]
-            and follow_up_evidence["follow_up_delivery"]
-            and follow_up_evidence["channel_ack_bound"]
-            and follow_up_evidence["native_source_bound"]
-            and follow_up_evidence["marker_count"] == 1
-        )
-        observation["follow_up_evidence"] = follow_up_evidence
-
-        _wait_state(
-            longhouse_home,
-            session_id=current_session_id,
-            predicate=lambda value: value.get("phase") == "idle",
-            timeout=30,
-        )
-        steer_active_offset = _read_source_size(current_session_file)
-        steer_task_marker = f"OMP_HELM_STEER_TASK_{os.urandom(8).hex()}"
-        observation["control_session_id"] = current_session_id
-        steer_done_marker = f"OMP_HELM_STEER_TASK_DONE_{os.urandom(8).hex()}"
-        steer_active = _run_engine(
-            args.engine,
-            "send",
-            current_session_id,
-            env,
-            text=step_task_prompt(steer_task_marker, steer_done_marker),
-        )
-        steer_active_state = _wait_state(
-            longhouse_home,
-            session_id=current_session_id,
-            predicate=lambda value: value.get("phase") in {"running", "thinking"},
-            timeout=30,
-        )
-        observation["steer_tool_boundary"] = _wait_task_tool_boundary(current_session_file, steer_task_marker)
-        steer_prompt = f"Stop: skip every remaining step and reply with exactly {steer_marker} and no other text."
-        steer = _run_engine(args.engine, "steer", current_session_id, env, text=steer_prompt)
-        steer_row = _wait_native_marker(current_session_file, steer_marker, minimum_offset=steer_active_offset, timeout=150)
-        _wait_idle_quietly(longhouse_home, current_session_id)
-        observation["steer_turn_verdict"] = steer_turn_verdict(
-            read_session_entries(current_session_file),
-            task_marker=steer_task_marker,
-            steer_marker=steer_marker,
-            task_done_marker=steer_done_marker,
-        )
-        steer_evidence = _native_marker_evidence(
-            steer_row,
-            current_session_file,
-            marker=steer_marker,
-            minimum_offset=steer_active_offset,
-            native_session_id=str(steer_active_state.get("native_session_id") or ""),
-        )
-        steer_active_command_evidence = _channel_command_evidence(steer_active, steer_active_state)
-        steer_command_evidence = _channel_command_evidence(steer, steer_active_state)
-        steer_evidence["active_state"] = _redacted_state_snapshot(steer_active_state)
-        steer_evidence["active_command_bound"] = steer_active_command_evidence["channel_ack_bound"]
-        steer_evidence["steer_command_bound"] = steer_command_evidence["channel_ack_bound"]
-        steer_evidence.update(steer_command_evidence)
-        steer_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
-        controls["steer"] = {
-            "action_label": "steer",
-            "prompt": steer_prompt,
-            "state": dict(steer_active_state),
-            "active_action_label": "active_turn_setup",
-            "active_command": steer_active,
-            "active_state": dict(steer_active_state),
-            "command": steer,
-            "marker_row": steer_row,
-            "evidence": steer_evidence,
-        }
-        observation["steer_active"] = (
-            steer_evidence["active_command_bound"]
-            and steer_evidence["channel_ack_bound"]
-            and steer_evidence["native_source_bound"]
-            and steer_evidence["marker_count"] == 1
-            and observation["steer_turn_verdict"]["passed"] is True
-        )
-        observation["steer_evidence"] = steer_evidence
-
-        abort_idle_state = _wait_state(
-            longhouse_home,
-            session_id=current_session_id,
-            predicate=lambda value: value.get("phase") == "idle",
-            timeout=30,
-        )
-        abort_task_marker = f"OMP_HELM_ABORT_TASK_{os.urandom(8).hex()}"
-        abort_done_marker = f"OMP_HELM_ABORT_TASK_DONE_{os.urandom(8).hex()}"
-        abort_after_marker = f"OMP_HELM_AFTER_ABORT_{os.urandom(8).hex()}"
-        active_for_abort = _run_engine(
-            args.engine,
-            "send",
-            current_session_id,
-            env,
-            text=step_task_prompt(abort_task_marker, abort_done_marker),
-        )
-        abort_active_state = _wait_state(
-            longhouse_home,
-            session_id=current_session_id,
-            predicate=lambda value: (
-                value.get("phase") in {"running", "thinking"} and _turn_sequence(value) > _turn_sequence(abort_idle_state)
-            ),
-            timeout=30,
-        )
-        abort_offset = _read_source_size(current_session_file)
-        observation["abort_tool_boundary"] = _wait_task_tool_boundary(current_session_file, abort_task_marker)
-        abort = _run_engine(args.engine, "abort", current_session_id, env)
-        abort_end, abort_channel_state = _wait_channel_terminal(
-            longhouse_home,
-            session_id=current_session_id,
-            native_session_id=str(current_state.get("native_session_id") or ""),
-            session_file=current_session_file,
-            minimum_turn_seq=_turn_sequence(abort_active_state),
-        )
-        abort_evidence = _channel_terminal_evidence(
-            abort_end,
-            abort_channel_state,
-            native_session_id=str(current_state.get("native_session_id") or ""),
-            session_file=current_session_file,
-        )
-        abort_evidence["channel_ack_bound"] = abort.get("accepted") is True and observation["channel_binding"]["ready"] is True
-        abort_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
-        controls["abort"] = {
-            "action_label": "abort",
-            "state": dict(current_state),
-            "active_action_label": "abort_turn_setup",
-            "active_command": active_for_abort,
-            "command": abort,
-            "agent_end": abort_end,
-            "evidence": abort_evidence,
-        }
-        # An abort proves nothing if the session cannot take the next turn.
-        _wait_idle_quietly(longhouse_home, current_session_id)
-        try:
-            after_abort = _run_engine(args.engine, "send", current_session_id, env, text=_exact_marker_prompt(abort_after_marker))
-        except RuntimeError as exc:
-            after_abort = {"accepted": False, "error": f"{type(exc).__name__}: {exc}"}
-        try:
-            _wait_native_marker(current_session_file, abort_after_marker, minimum_offset=abort_offset, timeout=150)
-        except RuntimeError as exc:
-            observation["after_abort_wait_error"] = f"{type(exc).__name__}: {exc}"
-        _wait_idle_quietly(longhouse_home, current_session_id)
-        observation["abort_turn_verdict"] = {
-            **abort_then_send_verdict(
-                read_session_entries(current_session_file),
-                task_marker=abort_task_marker,
-                task_done_marker=abort_done_marker,
-                after_marker=abort_after_marker,
-            ),
-            "after_send_accepted": after_abort.get("accepted") is True,
-        }
-        observation["abort_native"] = (
-            abort_evidence["channel_ack_bound"]
-            and abort_evidence["channel_source_bound"]
-            and observation["abort_turn_verdict"]["passed"] is True
-            and observation["abort_turn_verdict"]["after_send_accepted"] is True
-        )
-        observation["abort_evidence"] = abort_evidence
-
-        # No retirement wait here. Abort ends the turn, not the run: the managed
-        # run is keyed to the launch (provisional_run_id(session_id)) and `/new`
-        # keeps it, so the served run correctly stays `running` until terminate.
-        # Waiting for it to retire at this point failed every cell from
-        # ba27894b9 onward; the terminate below proves this same run retired.
-        first.submit_line("/new")
-        replaced_state = _wait_state(
-            longhouse_home,
-            session_id=current_session_id,
-            predicate=lambda value: bool(value.get("native_session_id"))
-            and value.get("native_session_id") != old_native_id
-            and value.get("ready") is True,
-            timeout=60,
-        )
-        stale = _stale_frame(old_state, text="stale OMP owner must be refused")
-        controls["stale_owner"] = {
-            "second_launcher": stale_launcher_evidence,
-            "response": stale,
-            "old_state": old_state,
-            "new_state": replaced_state,
-        }
-        observation["stale_owner_refused"] = (
-            stale_launcher_evidence["owner_refusal_observed"]
-            and stale.get("ok") is False
-            and (stale.get("error") or {}).get("code") == "stale_channel"
-        )
-        observation["stale_owner_evidence"] = {
-            "second_launcher": stale_launcher_evidence,
-            "error_code": (stale.get("error") or {}).get("code"),
-            "old_native_session_id": old_state.get("native_session_id"),
-            "new_native_session_id": replaced_state.get("native_session_id"),
-        }
-        current_state = replaced_state
-        current_session_file = Path(str(replaced_state["session_file"]))
-        _append_retirement_claim(retirement_claims, session_id=current_session_id, state=current_state)
-        owner_records.append(
-            _process_record(
-                current_state.get("launcher_pid"),
-                current_state.get("launcher_process_start_time"),
-                "launcher",
-                owner="replacement",
+        # The background-jobs scenario proves what the first turn did: native async
+        # frames, the served terminal statuses captured above, the archive and the
+        # cleanup. The control steps below (stale owner, send, follow-up, steer,
+        # abort, /new, cold resume) prove other cells; running them here only made
+        # the background cells fail whenever an unrelated live step flaked. Settle
+        # the first session file and go straight to teardown, which `finally`
+        # performs for every run (Runtime Host terminate plus served retirement).
+        background_scope = bool(getattr(args, "background_prompt", None))
+        if background_scope:
+            observation["scenario_scope"] = "background"
+            source_generations.append(
+                {
+                    "label": "initial",
+                    "native_session_id": current_state.get("native_session_id"),
+                    "source_path": str(current_session_file),
+                    "marker": initial_marker,
+                    "controls": [],
+                }
             )
-        )
-        owner_records.append(
-            _process_record(
-                current_state.get("provider_pid"),
-                current_state.get("provider_process_start_time"),
-                "provider",
-                owner="replacement",
+            observation["settlement"] = _native_settlement(
+                current_session_file,
+                channel_state=current_state,
+                native_session_id=str(current_state.get("native_session_id") or ""),
             )
-        )
-        current_native_id = str(replaced_state["native_session_id"])
-        context_phrase = f"OMP_HELM_CONTEXT_{os.urandom(8).hex()}"
-        _register_native_source(
-            source_claims,
-            label="replacement",
-            source_path=str(current_session_file),
-            session_id=current_session_id,
-            run_id=replaced_state.get("run_id"),
-            native_session_id=current_native_id,
-        )
-        replacement_control_identity = _wait_runtime_control_identity(
-            str(args.api_url),
-            str(args.agents_token),
-            home=longhouse_home,
-            session_id=current_session_id,
-            state=replaced_state,
-        )
-        replacement_control_receipt = _control_identity_receipt(replacement_control_identity)
-        runtime_control_identity = observation["runtime_control_identity"]
-        if isinstance(runtime_control_identity, dict):
-            runtime_control_identity["replacement"] = replacement_control_receipt
-        replacement_marker = f"OMP_HELM_REPLACEMENT_{os.urandom(8).hex()}"
-        source_generations.append(
-            {
-                "label": "replacement",
-                "native_session_id": current_native_id,
-                "source_path": str(current_session_file),
-                "marker": replacement_marker,
-                "controls": ["replacement", "cold_resume"],
+            settlement = observation["settlement"]
+            if isinstance(settlement, Mapping):
+                observation["omp_agent_end_settlement_observed"] = settlement.get("agent_end_terminal") is True
+                observation["omp_native_archive_bound"] = settlement.get("native_archive_bound") is True
+        if not background_scope:
+            old_state = dict(current_state)
+            old_native_id = str(current_state.get("native_session_id") or "")
+            if first.alive() is not True:
+                raise RuntimeError("OMP original owner was not live for stale-launcher proof")
+            stale_launcher = ProviderPtySession.start(
+                argv=_launch_argv(
+                    args,
+                    workspace=workspace,
+                    prompt="This launcher must be refused while the original OMP owner remains live.",
+                    resume_session=current_session_id,
+                ),
+                cwd=workspace,
+                env=env,
+                terminal_path=root / "omp-helm-stale-launcher.raw",
+                thread_name="omp-helm-stale-launcher-terminal-drain",
+            )
+            sessions.append(stale_launcher)
+            try:
+                stale_launcher_returncode = stale_launcher.process.wait(timeout=15)
+            except subprocess.TimeoutExpired as exc:
+                stale_launcher.close()
+                raise RuntimeError("OMP stale launcher did not refuse a live owner") from exc
+            stale_launcher.close()
+            stale_launcher_output = stale_launcher.terminal_path.read_text(encoding="utf-8", errors="replace")
+            stale_launcher_evidence = {
+                "returncode": stale_launcher_returncode,
+                "terminal_path": str(stale_launcher.terminal_path),
+                "original_owner_live": True,
+                "owner_refusal_observed": (
+                    stale_launcher_returncode != 0
+                    and ("execution owner" in stale_launcher_output or "already attached" in stale_launcher_output)
+                ),
             }
-        )
-        replacement_offset = _read_source_size(current_session_file)
-        # Pi's wording. The two-part "Then\n\nNew machine-check request" frame
-        # read as a prompt injection to the qualification model, which refused
-        # it or went exploring the workspace instead of replying.
-        replacement_prompt = f"Remember this context phrase for later: {context_phrase}. Do not read any file for it and do not repeat it now. Reply with exactly {replacement_marker} and no other text."
-        replacement = _run_engine(
-            args.engine,
-            "send",
-            current_session_id,
-            env,
-            text=replacement_prompt,
-        )
-        replacement_row = _wait_native_marker(
-            current_session_file,
-            replacement_marker,
-            minimum_offset=replacement_offset,
-        )
-        replacement_evidence = _native_marker_evidence(
-            replacement_row,
-            current_session_file,
-            marker=replacement_marker,
-            minimum_offset=replacement_offset,
-            native_session_id=current_native_id,
-        )
-        context_seed_row = _wait_native_marker(
-            current_session_file,
-            context_phrase,
-            minimum_offset=replacement_offset,
-            role="user",
-        )
-        context_seed_evidence = _native_marker_evidence(
-            context_seed_row,
-            current_session_file,
-            marker=context_phrase,
-            minimum_offset=replacement_offset,
-            native_session_id=current_native_id,
-            role="user",
-        )
-        replacement_evidence.update(_channel_command_evidence(replacement, replaced_state))
-        replacement_evidence.update({"observation_scope": "replacement", "source_generation": "replacement"})
-        controls["replacement"] = {
-            "action_label": "replacement_send",
-            "prompt": replacement_prompt,
-            "state": dict(replaced_state),
-            "command": replacement,
-            "marker_row": replacement_row,
-            "context_seed_row": context_seed_row,
-            "evidence": replacement_evidence,
-            "context_evidence": context_seed_evidence,
-            "control_identity": replacement_control_receipt,
-        }
-        observation["native_replacement_bound"] = (
-            replacement_evidence["channel_ack_bound"]
-            and replaced_state.get("native_session_id") == current_native_id
-            and replacement_evidence["native_source_bound"]
-        )
-        observation["replacement_evidence"] = replacement_evidence
+            source_generations.append(
+                {
+                    "label": "initial",
+                    "native_session_id": current_state.get("native_session_id"),
+                    "source_path": str(current_session_file),
+                    "marker": initial_marker,
+                    "controls": ["send", "follow_up", "steer", "abort"],
+                }
+            )
 
-        terminate = _run_engine(args.engine, "terminate", current_session_id, env)
-        try:
-            stopped = _wait_stopped(longhouse_home, current_session_id)
-        except RuntimeError as exc:
-            # Under the terminate control the session never reaches a stopped
-            # state -- that IS the observation the control exists to make.
-            # Letting it raise aborted the run before terminate_verdict was
-            # built, so the control recorded no_negative_control_result and
-            # OMP Interrupt could not be certified (2026-09-19). Outside a
-            # terminate control this is still a hard failure.
-            if negative_control != "terminate":
+            send_marker = f"OMP_HELM_SEND_{os.urandom(8).hex()}"
+            send_offset = _read_source_size(current_session_file)
+            send_prompt = _exact_marker_prompt(send_marker)
+            send = _run_engine(args.engine, "send", current_session_id, env, text=send_prompt)
+            send_channel_evidence = _channel_command_evidence(send, current_state)
+            controls["send"] = {
+                "action_label": "send",
+                "prompt": send_prompt,
+                "state": dict(current_state),
+                "command": send,
+                "marker_wait": {
+                    "status": "pending",
+                    "marker": send_marker,
+                    "source_offset": send_offset,
+                    "source_size_before": send_offset,
+                },
+                "evidence": send_channel_evidence,
+            }
+            try:
+                send_row = _wait_native_marker(current_session_file, send_marker, minimum_offset=send_offset)
+            except BaseException as exc:
+                controls["send"]["marker_wait"] = {
+                    **controls["send"]["marker_wait"],
+                    "status": "failed",
+                    "source_size_after": _read_source_size(current_session_file),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                observation["send_evidence"] = {
+                    **send_channel_evidence,
+                    "marker": send_marker,
+                    "minimum_offset": send_offset,
+                    "marker_observed": False,
+                }
                 raise
-            stopped = {"terminal_reason": None, "status": "owners_alive_at_deadline", "detail": str(exc)[:500]}
-        if negative_control == "terminate":
-            # The fault keeps this launcher alive on purpose, so the wait times
-            # out by design. Outside the control a launcher that outlives an
-            # accepted terminate is exactly the failure we want, so it stays
-            # fatal there.
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                first.process.wait(timeout=15)
-        else:
-            first.process.wait(timeout=15)
-        terminated_run_id = str(current_state.get("run_id") or "")
-        controls["terminate"] = {
-            "action_label": "terminate",
-            "state": dict(replaced_state),
-            "command": terminate,
-            "stopped_state": stopped,
-            "control_identity": replacement_control_receipt,
-        }
-        observation["terminate_owned"] = terminate.get("accepted") is True and stopped.get("terminal_reason") == "remote_terminate"
-        observation["terminate_verdict"] = {
-            "passed": observation["terminate_owned"],
-            "accepted": terminate.get("accepted") is True,
-            "terminal_reason": stopped.get("terminal_reason"),
-            "code": (
-                None
-                if observation["terminate_owned"]
-                # Accepted while the session never reached a remote-terminate
-                # terminal state: the owners outlived the command.
-                else "terminate_left_owners_alive"
-                if terminate.get("accepted") is True
-                else "terminate_not_accepted"
-            ),
-        }
-        # Retirement is the cleanup proof, not the terminate assertion, so it
-        # is recorded after the verdict. Running it first meant the no-op
-        # terminate raised here -- the run stays `running` by design, so the
-        # claim never reaches retired -- while
-        # _terminate_control_made_its_observation still saw no typed verdict
-        # and re-raised, and the factory recorded no_negative_control_result
-        # (2026-09-19). Judge the edge, then prove retirement.
-        _record_retirement_claim_terminal(
-            str(args.api_url),
-            str(args.agents_token),
-            retirement_claims,
-            session_id=current_session_id,
-            run_id=terminated_run_id,
-        )
+            send_evidence = _native_marker_evidence(
+                send_row,
+                current_session_file,
+                marker=send_marker,
+                minimum_offset=send_offset,
+                native_session_id=str(current_state.get("native_session_id") or ""),
+            )
+            send_evidence.update(send_channel_evidence)
+            send_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
+            controls["send"].update({"marker_row": send_row, "evidence": send_evidence})
+            observation["send_idle"] = (
+                send_evidence["channel_ack_bound"] and send_evidence["native_source_bound"] and send_evidence["marker_count"] == 1
+            )
+            observation["send_evidence"] = send_evidence
 
-        resume_marker = f"OMP_HELM_RESUME_{os.urandom(8).hex()}"
-        resume_offset = _read_source_size(current_session_file)
-        pre_resume_source = root / "pre-resume-native-source.raw"
-        pre_resume_source.write_bytes(current_session_file.read_bytes())
-        resume_prompt = f"Without reading any files, reply with the context phrase you remember followed by exactly {resume_marker}."
-        resumed = ProviderPtySession.start(
-            argv=_launch_argv(
-                args,
-                workspace=workspace,
-                prompt=resume_prompt,
-                resume_session=current_session_id,
-            ),
-            cwd=workspace,
-            env=env,
-            terminal_path=root / "omp-helm-resume-terminal.raw",
-            thread_name="omp-helm-resume-qualification-terminal-drain",
-        )
-        sessions.append(resumed)
-        resume_state = _wait_state(
-            longhouse_home,
-            session_id=current_session_id,
-            predicate=lambda value: bool(value.get("run_id")) and value.get("run_id") != terminated_run_id,
-        )
-        current_state = dict(resume_state)
-        current_session_file = Path(str(resume_state["session_file"]))
-        _append_retirement_claim(retirement_claims, session_id=current_session_id, state=current_state)
-        owner_records.append(
-            _process_record(
-                resume_state.get("launcher_pid"),
-                resume_state.get("launcher_process_start_time"),
-                "launcher",
-                owner="cold_resume",
+            active_marker = f"OMP_HELM_ACTIVE_{os.urandom(8).hex()}"
+            follow_up_marker = f"OMP_HELM_FOLLOW_UP_{os.urandom(8).hex()}"
+            steer_marker = f"OMP_HELM_STEER_{os.urandom(8).hex()}"
+            active_offset = _read_source_size(current_session_file)
+            follow_up_active = _run_engine(
+                args.engine,
+                "send",
+                current_session_id,
+                env,
+                text=_setup_marker_prompt(
+                    active_marker,
+                    setup="Use the bash tool to run `sleep 8` in the foreground (not as a named or background job), then",
+                ),
             )
-        )
-        owner_records.append(
-            _process_record(
-                resume_state.get("provider_pid"),
-                resume_state.get("provider_process_start_time"),
-                "provider",
-                owner="cold_resume",
+            active_state = _wait_state(
+                longhouse_home,
+                session_id=current_session_id,
+                predicate=lambda value: value.get("phase") in {"running", "thinking"},
+                timeout=30,
             )
-        )
-        resume_control_identity = _wait_runtime_control_identity(
-            str(args.api_url),
-            str(args.agents_token),
-            home=longhouse_home,
-            session_id=current_session_id,
-            state=resume_state,
-        )
-        resume_control_receipt = _control_identity_receipt(resume_control_identity)
-        runtime_control_identity = observation["runtime_control_identity"]
-        if isinstance(runtime_control_identity, dict):
-            runtime_control_identity["cold_resume"] = resume_control_receipt
-        resume_file = Path(str(resume_state["session_file"]))
-        _register_native_source(
-            source_claims,
-            label="cold_resume",
-            source_path=str(resume_file),
-            session_id=current_session_id,
-            run_id=resume_state.get("run_id"),
-            native_session_id=resume_state.get("native_session_id"),
-        )
-        source_generations.append(
-            {
-                "label": "cold_resume",
-                "native_session_id": resume_state.get("native_session_id"),
-                "source_path": str(resume_file),
-                "marker": resume_marker,
-                "controls": ["cold_resume"],
+            follow_up_prompt = _exact_marker_prompt(follow_up_marker)
+            follow_up = _run_engine(
+                args.engine,
+                "send",
+                current_session_id,
+                env,
+                text=follow_up_prompt,
+            )
+            follow_up_row = _wait_native_marker(current_session_file, follow_up_marker, minimum_offset=active_offset)
+            follow_up_evidence = _native_marker_evidence(
+                follow_up_row,
+                current_session_file,
+                marker=follow_up_marker,
+                minimum_offset=active_offset,
+                native_session_id=str(current_state.get("native_session_id") or ""),
+            )
+            active_command_evidence = _channel_command_evidence(follow_up_active, active_state)
+            follow_up_command_evidence = _channel_command_evidence(follow_up, current_state)
+            follow_up_evidence["active_state"] = _redacted_state_snapshot(active_state)
+            follow_up_evidence["active_command_bound"] = (
+                active_state.get("phase") in {"running", "thinking"} and active_command_evidence["channel_ack_bound"]
+            )
+            follow_up_evidence["follow_up_delivery"] = follow_up_command_evidence["channel_ack_bound"]
+            # Revision 12: a mid-turn SEND is a durable receipt delivered by the
+            # turn-boundary drain, never an acknowledged entry in the extension's
+            # volatile follow-up queue. The Runtime Host answers "queued"; "sent"
+            # would mean the provider accepted it mid-turn.
+            follow_up_payload = follow_up.get("payload")
+            follow_up_evidence["queued_not_sent"] = isinstance(follow_up_payload, Mapping) and follow_up_payload.get("outcome") == "queued"
+            follow_up_evidence.update(_channel_command_evidence(follow_up, current_state))
+            follow_up_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
+            controls["follow_up"] = {
+                "action_label": "follow_up",
+                "prompt": follow_up_prompt,
+                "state": dict(current_state),
+                "active_action_label": "active_turn_setup",
+                "active_command": follow_up_active,
+                "active_state": dict(active_state),
+                "command": follow_up,
+                "marker_row": follow_up_row,
+                "evidence": follow_up_evidence,
             }
-        )
-        resume_row = _wait_native_marker(
-            resume_file,
-            resume_marker,
-            minimum_offset=resume_offset,
-            timeout=180,
-        )
-        resume_input_row = _wait_native_marker(
-            resume_file,
-            resume_prompt,
-            minimum_offset=resume_offset,
-            role="user",
-            timeout=300,
-        )
-        resume_context_row = _wait_native_marker(
-            resume_file,
-            context_phrase,
-            minimum_offset=resume_offset,
-            role="assistant",
-            timeout=300,
-        )
-        resume_terminal, resume_channel_state = _wait_channel_terminal(
-            longhouse_home,
-            session_id=current_session_id,
-            native_session_id=str(resume_state.get("native_session_id") or ""),
-            session_file=resume_file,
-            minimum_turn_seq=_turn_sequence(resume_state),
-        )
-        resume_marker_evidence = _native_marker_evidence(
-            resume_row,
-            resume_file,
-            marker=resume_marker,
-            minimum_offset=resume_offset,
-            native_session_id=str(resume_state.get("native_session_id") or ""),
-        )
-        resume_input_evidence = _native_marker_evidence(
-            resume_input_row,
-            resume_file,
-            marker=resume_prompt,
-            minimum_offset=resume_offset,
-            native_session_id=str(resume_state.get("native_session_id") or ""),
-            role="user",
-        )
-        resume_context_evidence = _native_marker_evidence(
-            resume_context_row,
-            resume_file,
-            marker=context_phrase,
-            minimum_offset=resume_offset,
-            native_session_id=str(resume_state.get("native_session_id") or ""),
-        )
-        context_recalled = (
-            context_seed_evidence["native_source_bound"]
-            and context_seed_evidence["marker_count"] == 1
-            and resume_context_evidence["native_source_bound"]
-            and resume_context_evidence["marker_count"] == 1
-            and resume_input_evidence["native_source_bound"]
-            and resume_input_evidence["marker_count"] == 1
-            and context_phrase not in resume_prompt
-        )
-        resume_terminal_evidence = _channel_terminal_evidence(
-            resume_terminal,
-            resume_channel_state,
-            native_session_id=str(resume_state.get("native_session_id") or ""),
-            session_file=resume_file,
-        )
-        resume_marker_evidence.update({"observation_scope": "cold_resume", "source_generation": "cold_resume"})
-        resume_terminal_evidence.update({"observation_scope": "cold_resume", "source_generation": "cold_resume"})
-        observation["cold_resume_exact_file"] = (
-            resume_state.get("native_session_id") == current_native_id
-            and resume_state.get("session_file") == str(current_session_file)
-            and resume_file == current_session_file
-            and resume_row.get("_source_offset", -1) >= 0
-            and resume_terminal.get("type") == "agent_end"
-        )
-        observation["cold_resume_evidence"] = {
-            **resume_marker_evidence,
-            "context_phrase": context_phrase,
-            "resume_prompt": resume_prompt,
-            "pre_resume_source_path": pre_resume_source.name,
-            "pre_resume_source_offset": resume_offset,
-            "context_recalled": context_recalled,
-            "context_marker_count": resume_context_evidence["marker_count"],
-            "context_marker_present": resume_context_evidence["marker_count"] >= 1,
-            "context_marker_exactly_once": resume_context_evidence["marker_count"] == 1,
-            "context_seed": context_seed_evidence,
-            "context_resume": resume_context_evidence,
-            "resume_input": resume_input_evidence,
-            "native_source_bound": resume_marker_evidence["native_source_bound"],
-            "channel_terminal_bound": resume_terminal_evidence["channel_source_bound"],
-            "terminal": resume_terminal_evidence["terminal"],
-            "exact_file": (
+            observation["follow_up_native"] = (
+                follow_up_evidence["active_command_bound"]
+                and follow_up_evidence["queued_not_sent"]
+                and follow_up_evidence["follow_up_delivery"]
+                and follow_up_evidence["channel_ack_bound"]
+                and follow_up_evidence["native_source_bound"]
+                and follow_up_evidence["marker_count"] == 1
+            )
+            observation["follow_up_evidence"] = follow_up_evidence
+
+            _wait_state(
+                longhouse_home,
+                session_id=current_session_id,
+                predicate=lambda value: value.get("phase") == "idle",
+                timeout=30,
+            )
+            steer_active_offset = _read_source_size(current_session_file)
+            steer_task_marker = f"OMP_HELM_STEER_TASK_{os.urandom(8).hex()}"
+            observation["control_session_id"] = current_session_id
+            steer_done_marker = f"OMP_HELM_STEER_TASK_DONE_{os.urandom(8).hex()}"
+            steer_active = _run_engine(
+                args.engine,
+                "send",
+                current_session_id,
+                env,
+                text=step_task_prompt(steer_task_marker, steer_done_marker),
+            )
+            steer_active_state = _wait_state(
+                longhouse_home,
+                session_id=current_session_id,
+                predicate=lambda value: value.get("phase") in {"running", "thinking"},
+                timeout=30,
+            )
+            observation["steer_tool_boundary"] = _wait_task_tool_boundary(current_session_file, steer_task_marker)
+            steer_prompt = f"Stop: skip every remaining step and reply with exactly {steer_marker} and no other text."
+            steer = _run_engine(args.engine, "steer", current_session_id, env, text=steer_prompt)
+            steer_row = _wait_native_marker(current_session_file, steer_marker, minimum_offset=steer_active_offset, timeout=150)
+            _wait_idle_quietly(longhouse_home, current_session_id)
+            observation["steer_turn_verdict"] = steer_turn_verdict(
+                read_session_entries(current_session_file),
+                task_marker=steer_task_marker,
+                steer_marker=steer_marker,
+                task_done_marker=steer_done_marker,
+            )
+            steer_evidence = _native_marker_evidence(
+                steer_row,
+                current_session_file,
+                marker=steer_marker,
+                minimum_offset=steer_active_offset,
+                native_session_id=str(steer_active_state.get("native_session_id") or ""),
+            )
+            steer_active_command_evidence = _channel_command_evidence(steer_active, steer_active_state)
+            steer_command_evidence = _channel_command_evidence(steer, steer_active_state)
+            steer_evidence["active_state"] = _redacted_state_snapshot(steer_active_state)
+            steer_evidence["active_command_bound"] = steer_active_command_evidence["channel_ack_bound"]
+            steer_evidence["steer_command_bound"] = steer_command_evidence["channel_ack_bound"]
+            steer_evidence.update(steer_command_evidence)
+            steer_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
+            controls["steer"] = {
+                "action_label": "steer",
+                "prompt": steer_prompt,
+                "state": dict(steer_active_state),
+                "active_action_label": "active_turn_setup",
+                "active_command": steer_active,
+                "active_state": dict(steer_active_state),
+                "command": steer,
+                "marker_row": steer_row,
+                "evidence": steer_evidence,
+            }
+            observation["steer_active"] = (
+                steer_evidence["active_command_bound"]
+                and steer_evidence["channel_ack_bound"]
+                and steer_evidence["native_source_bound"]
+                and steer_evidence["marker_count"] == 1
+                and observation["steer_turn_verdict"]["passed"] is True
+            )
+            observation["steer_evidence"] = steer_evidence
+
+            abort_idle_state = _wait_state(
+                longhouse_home,
+                session_id=current_session_id,
+                predicate=lambda value: value.get("phase") == "idle",
+                timeout=30,
+            )
+            abort_task_marker = f"OMP_HELM_ABORT_TASK_{os.urandom(8).hex()}"
+            abort_done_marker = f"OMP_HELM_ABORT_TASK_DONE_{os.urandom(8).hex()}"
+            abort_after_marker = f"OMP_HELM_AFTER_ABORT_{os.urandom(8).hex()}"
+            active_for_abort = _run_engine(
+                args.engine,
+                "send",
+                current_session_id,
+                env,
+                text=step_task_prompt(abort_task_marker, abort_done_marker),
+            )
+            abort_active_state = _wait_state(
+                longhouse_home,
+                session_id=current_session_id,
+                predicate=lambda value: (
+                    value.get("phase") in {"running", "thinking"} and _turn_sequence(value) > _turn_sequence(abort_idle_state)
+                ),
+                timeout=30,
+            )
+            abort_offset = _read_source_size(current_session_file)
+            observation["abort_tool_boundary"] = _wait_task_tool_boundary(current_session_file, abort_task_marker)
+            abort = _run_engine(args.engine, "abort", current_session_id, env)
+            abort_end, abort_channel_state = _wait_channel_terminal(
+                longhouse_home,
+                session_id=current_session_id,
+                native_session_id=str(current_state.get("native_session_id") or ""),
+                session_file=current_session_file,
+                minimum_turn_seq=_turn_sequence(abort_active_state),
+            )
+            abort_evidence = _channel_terminal_evidence(
+                abort_end,
+                abort_channel_state,
+                native_session_id=str(current_state.get("native_session_id") or ""),
+                session_file=current_session_file,
+            )
+            abort_evidence["channel_ack_bound"] = abort.get("accepted") is True and observation["channel_binding"]["ready"] is True
+            abort_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
+            controls["abort"] = {
+                "action_label": "abort",
+                "state": dict(current_state),
+                "active_action_label": "abort_turn_setup",
+                "active_command": active_for_abort,
+                "command": abort,
+                "agent_end": abort_end,
+                "evidence": abort_evidence,
+            }
+            # An abort proves nothing if the session cannot take the next turn.
+            _wait_idle_quietly(longhouse_home, current_session_id)
+            try:
+                after_abort = _run_engine(args.engine, "send", current_session_id, env, text=_exact_marker_prompt(abort_after_marker))
+            except RuntimeError as exc:
+                after_abort = {"accepted": False, "error": f"{type(exc).__name__}: {exc}"}
+            try:
+                _wait_native_marker(current_session_file, abort_after_marker, minimum_offset=abort_offset, timeout=150)
+            except RuntimeError as exc:
+                observation["after_abort_wait_error"] = f"{type(exc).__name__}: {exc}"
+            _wait_idle_quietly(longhouse_home, current_session_id)
+            observation["abort_turn_verdict"] = {
+                **abort_then_send_verdict(
+                    read_session_entries(current_session_file),
+                    task_marker=abort_task_marker,
+                    task_done_marker=abort_done_marker,
+                    after_marker=abort_after_marker,
+                ),
+                "after_send_accepted": after_abort.get("accepted") is True,
+            }
+            observation["abort_native"] = (
+                abort_evidence["channel_ack_bound"]
+                and abort_evidence["channel_source_bound"]
+                and observation["abort_turn_verdict"]["passed"] is True
+                and observation["abort_turn_verdict"]["after_send_accepted"] is True
+            )
+            observation["abort_evidence"] = abort_evidence
+
+            # No retirement wait here. Abort ends the turn, not the run: the managed
+            # run is keyed to the launch (provisional_run_id(session_id)) and `/new`
+            # keeps it, so the served run correctly stays `running` until terminate.
+            # Waiting for it to retire at this point failed every cell from
+            # ba27894b9 onward; the terminate below proves this same run retired.
+            first.submit_line("/new")
+            replaced_state = _wait_state(
+                longhouse_home,
+                session_id=current_session_id,
+                predicate=lambda value: bool(value.get("native_session_id"))
+                and value.get("native_session_id") != old_native_id
+                and value.get("ready") is True,
+                timeout=60,
+            )
+            stale = _stale_frame(old_state, text="stale OMP owner must be refused")
+            controls["stale_owner"] = {
+                "second_launcher": stale_launcher_evidence,
+                "response": stale,
+                "old_state": old_state,
+                "new_state": replaced_state,
+            }
+            observation["stale_owner_refused"] = (
+                stale_launcher_evidence["owner_refusal_observed"]
+                and stale.get("ok") is False
+                and (stale.get("error") or {}).get("code") == "stale_channel"
+            )
+            observation["stale_owner_evidence"] = {
+                "second_launcher": stale_launcher_evidence,
+                "error_code": (stale.get("error") or {}).get("code"),
+                "old_native_session_id": old_state.get("native_session_id"),
+                "new_native_session_id": replaced_state.get("native_session_id"),
+            }
+            current_state = replaced_state
+            current_session_file = Path(str(replaced_state["session_file"]))
+            _append_retirement_claim(retirement_claims, session_id=current_session_id, state=current_state)
+            owner_records.append(
+                _process_record(
+                    current_state.get("launcher_pid"),
+                    current_state.get("launcher_process_start_time"),
+                    "launcher",
+                    owner="replacement",
+                )
+            )
+            owner_records.append(
+                _process_record(
+                    current_state.get("provider_pid"),
+                    current_state.get("provider_process_start_time"),
+                    "provider",
+                    owner="replacement",
+                )
+            )
+            current_native_id = str(replaced_state["native_session_id"])
+            context_phrase = f"OMP_HELM_CONTEXT_{os.urandom(8).hex()}"
+            _register_native_source(
+                source_claims,
+                label="replacement",
+                source_path=str(current_session_file),
+                session_id=current_session_id,
+                run_id=replaced_state.get("run_id"),
+                native_session_id=current_native_id,
+            )
+            replacement_control_identity = _wait_runtime_control_identity(
+                str(args.api_url),
+                str(args.agents_token),
+                home=longhouse_home,
+                session_id=current_session_id,
+                state=replaced_state,
+            )
+            replacement_control_receipt = _control_identity_receipt(replacement_control_identity)
+            runtime_control_identity = observation["runtime_control_identity"]
+            if isinstance(runtime_control_identity, dict):
+                runtime_control_identity["replacement"] = replacement_control_receipt
+            replacement_marker = f"OMP_HELM_REPLACEMENT_{os.urandom(8).hex()}"
+            source_generations.append(
+                {
+                    "label": "replacement",
+                    "native_session_id": current_native_id,
+                    "source_path": str(current_session_file),
+                    "marker": replacement_marker,
+                    "controls": ["replacement", "cold_resume"],
+                }
+            )
+            replacement_offset = _read_source_size(current_session_file)
+            # Pi's wording. The two-part "Then\n\nNew machine-check request" frame
+            # read as a prompt injection to the qualification model, which refused
+            # it or went exploring the workspace instead of replying.
+            replacement_prompt = f"Remember this context phrase for later: {context_phrase}. Do not read any file for it and do not repeat it now. Reply with exactly {replacement_marker} and no other text."
+            replacement = _run_engine(
+                args.engine,
+                "send",
+                current_session_id,
+                env,
+                text=replacement_prompt,
+            )
+            replacement_row = _wait_native_marker(
+                current_session_file,
+                replacement_marker,
+                minimum_offset=replacement_offset,
+            )
+            replacement_evidence = _native_marker_evidence(
+                replacement_row,
+                current_session_file,
+                marker=replacement_marker,
+                minimum_offset=replacement_offset,
+                native_session_id=current_native_id,
+            )
+            context_seed_row = _wait_native_marker(
+                current_session_file,
+                context_phrase,
+                minimum_offset=replacement_offset,
+                role="user",
+            )
+            context_seed_evidence = _native_marker_evidence(
+                context_seed_row,
+                current_session_file,
+                marker=context_phrase,
+                minimum_offset=replacement_offset,
+                native_session_id=current_native_id,
+                role="user",
+            )
+            replacement_evidence.update(_channel_command_evidence(replacement, replaced_state))
+            replacement_evidence.update({"observation_scope": "replacement", "source_generation": "replacement"})
+            controls["replacement"] = {
+                "action_label": "replacement_send",
+                "prompt": replacement_prompt,
+                "state": dict(replaced_state),
+                "command": replacement,
+                "marker_row": replacement_row,
+                "context_seed_row": context_seed_row,
+                "evidence": replacement_evidence,
+                "context_evidence": context_seed_evidence,
+                "control_identity": replacement_control_receipt,
+            }
+            observation["native_replacement_bound"] = (
+                replacement_evidence["channel_ack_bound"]
+                and replaced_state.get("native_session_id") == current_native_id
+                and replacement_evidence["native_source_bound"]
+            )
+            observation["replacement_evidence"] = replacement_evidence
+
+            terminate = _run_engine(args.engine, "terminate", current_session_id, env)
+            try:
+                stopped = _wait_stopped(longhouse_home, current_session_id)
+            except RuntimeError as exc:
+                # Under the terminate control the session never reaches a stopped
+                # state -- that IS the observation the control exists to make.
+                # Letting it raise aborted the run before terminate_verdict was
+                # built, so the control recorded no_negative_control_result and
+                # OMP Interrupt could not be certified (2026-09-19). Outside a
+                # terminate control this is still a hard failure.
+                if negative_control != "terminate":
+                    raise
+                stopped = {"terminal_reason": None, "status": "owners_alive_at_deadline", "detail": str(exc)[:500]}
+            if negative_control == "terminate":
+                # The fault keeps this launcher alive on purpose, so the wait times
+                # out by design. Outside the control a launcher that outlives an
+                # accepted terminate is exactly the failure we want, so it stays
+                # fatal there.
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    first.process.wait(timeout=15)
+            else:
+                first.process.wait(timeout=15)
+            terminated_run_id = str(current_state.get("run_id") or "")
+            controls["terminate"] = {
+                "action_label": "terminate",
+                "state": dict(replaced_state),
+                "command": terminate,
+                "stopped_state": stopped,
+                "control_identity": replacement_control_receipt,
+            }
+            observation["terminate_owned"] = terminate.get("accepted") is True and stopped.get("terminal_reason") == "remote_terminate"
+            observation["terminate_verdict"] = {
+                "passed": observation["terminate_owned"],
+                "accepted": terminate.get("accepted") is True,
+                "terminal_reason": stopped.get("terminal_reason"),
+                "code": (
+                    None
+                    if observation["terminate_owned"]
+                    # Accepted while the session never reached a remote-terminate
+                    # terminal state: the owners outlived the command.
+                    else "terminate_left_owners_alive"
+                    if terminate.get("accepted") is True
+                    else "terminate_not_accepted"
+                ),
+            }
+            # Retirement is the cleanup proof, not the terminate assertion, so it
+            # is recorded after the verdict. Running it first meant the no-op
+            # terminate raised here -- the run stays `running` by design, so the
+            # claim never reaches retired -- while
+            # _terminate_control_made_its_observation still saw no typed verdict
+            # and re-raised, and the factory recorded no_negative_control_result
+            # (2026-09-19). Judge the edge, then prove retirement.
+            _record_retirement_claim_terminal(
+                str(args.api_url),
+                str(args.agents_token),
+                retirement_claims,
+                session_id=current_session_id,
+                run_id=terminated_run_id,
+            )
+
+            resume_marker = f"OMP_HELM_RESUME_{os.urandom(8).hex()}"
+            resume_offset = _read_source_size(current_session_file)
+            pre_resume_source = root / "pre-resume-native-source.raw"
+            pre_resume_source.write_bytes(current_session_file.read_bytes())
+            resume_prompt = f"Without reading any files, reply with the context phrase you remember followed by exactly {resume_marker}."
+            resumed = ProviderPtySession.start(
+                argv=_launch_argv(
+                    args,
+                    workspace=workspace,
+                    prompt=resume_prompt,
+                    resume_session=current_session_id,
+                ),
+                cwd=workspace,
+                env=env,
+                terminal_path=root / "omp-helm-resume-terminal.raw",
+                thread_name="omp-helm-resume-qualification-terminal-drain",
+            )
+            sessions.append(resumed)
+            resume_state = _wait_state(
+                longhouse_home,
+                session_id=current_session_id,
+                predicate=lambda value: bool(value.get("run_id")) and value.get("run_id") != terminated_run_id,
+            )
+            current_state = dict(resume_state)
+            current_session_file = Path(str(resume_state["session_file"]))
+            _append_retirement_claim(retirement_claims, session_id=current_session_id, state=current_state)
+            owner_records.append(
+                _process_record(
+                    resume_state.get("launcher_pid"),
+                    resume_state.get("launcher_process_start_time"),
+                    "launcher",
+                    owner="cold_resume",
+                )
+            )
+            owner_records.append(
+                _process_record(
+                    resume_state.get("provider_pid"),
+                    resume_state.get("provider_process_start_time"),
+                    "provider",
+                    owner="cold_resume",
+                )
+            )
+            resume_control_identity = _wait_runtime_control_identity(
+                str(args.api_url),
+                str(args.agents_token),
+                home=longhouse_home,
+                session_id=current_session_id,
+                state=resume_state,
+            )
+            resume_control_receipt = _control_identity_receipt(resume_control_identity)
+            runtime_control_identity = observation["runtime_control_identity"]
+            if isinstance(runtime_control_identity, dict):
+                runtime_control_identity["cold_resume"] = resume_control_receipt
+            resume_file = Path(str(resume_state["session_file"]))
+            _register_native_source(
+                source_claims,
+                label="cold_resume",
+                source_path=str(resume_file),
+                session_id=current_session_id,
+                run_id=resume_state.get("run_id"),
+                native_session_id=resume_state.get("native_session_id"),
+            )
+            source_generations.append(
+                {
+                    "label": "cold_resume",
+                    "native_session_id": resume_state.get("native_session_id"),
+                    "source_path": str(resume_file),
+                    "marker": resume_marker,
+                    "controls": ["cold_resume"],
+                }
+            )
+            resume_row = _wait_native_marker(
+                resume_file,
+                resume_marker,
+                minimum_offset=resume_offset,
+                timeout=180,
+            )
+            resume_input_row = _wait_native_marker(
+                resume_file,
+                resume_prompt,
+                minimum_offset=resume_offset,
+                role="user",
+                timeout=300,
+            )
+            resume_context_row = _wait_native_marker(
+                resume_file,
+                context_phrase,
+                minimum_offset=resume_offset,
+                role="assistant",
+                timeout=300,
+            )
+            resume_terminal, resume_channel_state = _wait_channel_terminal(
+                longhouse_home,
+                session_id=current_session_id,
+                native_session_id=str(resume_state.get("native_session_id") or ""),
+                session_file=resume_file,
+                minimum_turn_seq=_turn_sequence(resume_state),
+            )
+            resume_marker_evidence = _native_marker_evidence(
+                resume_row,
+                resume_file,
+                marker=resume_marker,
+                minimum_offset=resume_offset,
+                native_session_id=str(resume_state.get("native_session_id") or ""),
+            )
+            resume_input_evidence = _native_marker_evidence(
+                resume_input_row,
+                resume_file,
+                marker=resume_prompt,
+                minimum_offset=resume_offset,
+                native_session_id=str(resume_state.get("native_session_id") or ""),
+                role="user",
+            )
+            resume_context_evidence = _native_marker_evidence(
+                resume_context_row,
+                resume_file,
+                marker=context_phrase,
+                minimum_offset=resume_offset,
+                native_session_id=str(resume_state.get("native_session_id") or ""),
+            )
+            context_recalled = (
+                context_seed_evidence["native_source_bound"]
+                and context_seed_evidence["marker_count"] == 1
+                and resume_context_evidence["native_source_bound"]
+                and resume_context_evidence["marker_count"] == 1
+                and resume_input_evidence["native_source_bound"]
+                and resume_input_evidence["marker_count"] == 1
+                and context_phrase not in resume_prompt
+            )
+            resume_terminal_evidence = _channel_terminal_evidence(
+                resume_terminal,
+                resume_channel_state,
+                native_session_id=str(resume_state.get("native_session_id") or ""),
+                session_file=resume_file,
+            )
+            resume_marker_evidence.update({"observation_scope": "cold_resume", "source_generation": "cold_resume"})
+            resume_terminal_evidence.update({"observation_scope": "cold_resume", "source_generation": "cold_resume"})
+            observation["cold_resume_exact_file"] = (
                 resume_state.get("native_session_id") == current_native_id
                 and resume_state.get("session_file") == str(current_session_file)
                 and resume_file == current_session_file
-            ),
-        }
-        controls["cold_resume"] = {
-            "action_label": "cold_resume",
-            "prompt": resume_prompt,
-            "state": dict(resume_state),
-            "marker_row": resume_row,
-            "context_row": resume_context_row,
-            "prompt_evidence": resume_input_evidence,
-            "terminal": resume_terminal_evidence["terminal"],
-            "marker_evidence": resume_marker_evidence,
-            "context_evidence": resume_context_evidence,
-            "evidence": resume_marker_evidence,
-            "terminal_evidence": resume_terminal_evidence,
-            "control_identity": resume_control_receipt,
-        }
-        settled_state = resume_channel_state
-        if not _resume_state_is_settled(
-            settled_state,
-            native_session_id=str(resume_state.get("native_session_id") or ""),
-            session_file=resume_file,
-        ):
-            settled_state = _wait_state(
+                and resume_row.get("_source_offset", -1) >= 0
+                and resume_terminal.get("type") == "agent_end"
+            )
+            observation["cold_resume_evidence"] = {
+                **resume_marker_evidence,
+                "context_phrase": context_phrase,
+                "resume_prompt": resume_prompt,
+                "pre_resume_source_path": pre_resume_source.name,
+                "pre_resume_source_offset": resume_offset,
+                "context_recalled": context_recalled,
+                "context_marker_count": resume_context_evidence["marker_count"],
+                "context_marker_present": resume_context_evidence["marker_count"] >= 1,
+                "context_marker_exactly_once": resume_context_evidence["marker_count"] == 1,
+                "context_seed": context_seed_evidence,
+                "context_resume": resume_context_evidence,
+                "resume_input": resume_input_evidence,
+                "native_source_bound": resume_marker_evidence["native_source_bound"],
+                "channel_terminal_bound": resume_terminal_evidence["channel_source_bound"],
+                "terminal": resume_terminal_evidence["terminal"],
+                "exact_file": (
+                    resume_state.get("native_session_id") == current_native_id
+                    and resume_state.get("session_file") == str(current_session_file)
+                    and resume_file == current_session_file
+                ),
+            }
+            controls["cold_resume"] = {
+                "action_label": "cold_resume",
+                "prompt": resume_prompt,
+                "state": dict(resume_state),
+                "marker_row": resume_row,
+                "context_row": resume_context_row,
+                "prompt_evidence": resume_input_evidence,
+                "terminal": resume_terminal_evidence["terminal"],
+                "marker_evidence": resume_marker_evidence,
+                "context_evidence": resume_context_evidence,
+                "evidence": resume_marker_evidence,
+                "terminal_evidence": resume_terminal_evidence,
+                "control_identity": resume_control_receipt,
+            }
+            settled_state = resume_channel_state
+            if not _resume_state_is_settled(
+                settled_state,
+                native_session_id=str(resume_state.get("native_session_id") or ""),
+                session_file=resume_file,
+            ):
+                settled_state = _wait_state(
+                    longhouse_home,
+                    session_id=current_session_id,
+                    predicate=lambda value: _resume_state_is_settled(
+                        value,
+                        native_session_id=str(resume_state.get("native_session_id") or ""),
+                        session_file=resume_file,
+                    ),
+                )
+            final_flush = shipper.flush("omp-helm-final")
+            if not _flush_receipt_complete(final_flush):
+                raise RuntimeError("OMP Helm cold-resume transcript flush did not complete a bounded ship")
+            final_convergence = _runtime_convergence(
+                str(args.api_url),
+                str(args.agents_token),
+                session_id=current_session_id,
+                native_session_id=str(resume_state.get("native_session_id") or ""),
+                marker=resume_marker,
+                flush=final_flush,
+                native_source_path=str(resume_file),
+            )
+            final_control_state = _wait_state(
                 longhouse_home,
                 session_id=current_session_id,
-                predicate=lambda value: _resume_state_is_settled(
-                    value,
-                    native_session_id=str(resume_state.get("native_session_id") or ""),
-                    session_file=resume_file,
+                predicate=lambda value: (
+                    value.get("phase") == "idle"
+                    and value.get("native_session_id") == str(resume_state.get("native_session_id") or "")
+                    and value.get("session_file") == str(resume_file)
                 ),
             )
-        final_flush = shipper.flush("omp-helm-final")
-        if not _flush_receipt_complete(final_flush):
-            raise RuntimeError("OMP Helm cold-resume transcript flush did not complete a bounded ship")
-        final_convergence = _runtime_convergence(
-            str(args.api_url),
-            str(args.agents_token),
-            session_id=current_session_id,
-            native_session_id=str(resume_state.get("native_session_id") or ""),
-            marker=resume_marker,
-            flush=final_flush,
-            native_source_path=str(resume_file),
-        )
-        final_control_state = _wait_state(
-            longhouse_home,
-            session_id=current_session_id,
-            predicate=lambda value: (
-                value.get("phase") == "idle"
-                and value.get("native_session_id") == str(resume_state.get("native_session_id") or "")
-                and value.get("session_file") == str(resume_file)
-            ),
-        )
-        final_control_identity = _wait_runtime_control_identity(
-            str(args.api_url),
-            str(args.agents_token),
-            home=longhouse_home,
-            session_id=current_session_id,
-            state=final_control_state,
-        )
-        final_control_receipt = _control_identity_receipt(final_control_identity)
-        final_convergence["control_identity"] = final_control_receipt
-        runtime_control_identity = observation["runtime_control_identity"]
-        if isinstance(runtime_control_identity, dict):
-            runtime_control_identity["final"] = final_control_receipt
-            observation["runtime_control_identity_complete"] = all(
-                label in runtime_control_identity for label in ("initial", "replacement", "cold_resume", "final")
+            final_control_identity = _wait_runtime_control_identity(
+                str(args.api_url),
+                str(args.agents_token),
+                home=longhouse_home,
+                session_id=current_session_id,
+                state=final_control_state,
             )
-        current_state = dict(final_control_state)
-        runtime_convergence["final"] = final_convergence
-        observation["omp_transcript_flush_completed"] = (
-            observation["omp_transcript_flush_completed"] is True and final_convergence.get("status") == "pass"
-        )
-        observation["omp_runtime_transcript_converged"] = (
-            observation["omp_runtime_transcript_converged"] is True and final_convergence.get("status") == "pass"
-        )
-        observation["runtime_convergence"] = runtime_convergence
-        lifecycle.write_json(root / "runtime-convergence-receipt.json", runtime_convergence)
-        observation["settlement"] = _native_settlement(
-            resume_file,
-            channel_state=settled_state,
-            native_session_id=str(resume_state.get("native_session_id") or ""),
-        )
-        settlement = observation["settlement"]
-        if isinstance(settlement, Mapping):
-            observation["omp_agent_end_settlement_observed"] = settlement.get("agent_end_terminal") is True
-            observation["omp_native_archive_bound"] = settlement.get("native_archive_bound") is True
-            observation["omp_native_extension_channel_bound"] = settlement.get("agent_end_evidence_shape") is True
-        current_state = dict(final_control_state)
-        final_terminate = _run_engine(args.engine, "terminate", current_session_id, env)
-        final_stopped = _wait_stopped(longhouse_home, current_session_id)
-        resumed.process.wait(timeout=15)
-        _record_retirement_claim_terminal(
-            str(args.api_url),
-            str(args.agents_token),
-            retirement_claims,
-            session_id=current_session_id,
-            run_id=str(current_state.get("run_id") or ""),
-        )
-        if shipper is not None:
-            try:
-                terminal_flush = shipper.flush("omp-helm-terminal-retirement")
-            except Exception as exc:  # noqa: BLE001 - preserve terminal-delivery evidence
-                terminal_flush = {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
-        served_run_inventory = _wait_served_run_retirement(
-            str(args.api_url),
-            str(args.agents_token),
-            str(current_session_id or ""),
-            retirement_claims,
-        )
-        controls["final_terminate"] = {
-            "action_label": "final_terminate",
-            "state": dict(final_control_state),
-            "command": final_terminate,
-            "stopped_state": final_stopped,
-            "control_identity": final_control_receipt,
-        }
+            final_control_receipt = _control_identity_receipt(final_control_identity)
+            final_convergence["control_identity"] = final_control_receipt
+            runtime_control_identity = observation["runtime_control_identity"]
+            if isinstance(runtime_control_identity, dict):
+                runtime_control_identity["final"] = final_control_receipt
+                observation["runtime_control_identity_complete"] = all(
+                    label in runtime_control_identity for label in ("initial", "replacement", "cold_resume", "final")
+                )
+            current_state = dict(final_control_state)
+            runtime_convergence["final"] = final_convergence
+            observation["omp_transcript_flush_completed"] = (
+                observation["omp_transcript_flush_completed"] is True and final_convergence.get("status") == "pass"
+            )
+            observation["omp_runtime_transcript_converged"] = (
+                observation["omp_runtime_transcript_converged"] is True and final_convergence.get("status") == "pass"
+            )
+            observation["runtime_convergence"] = runtime_convergence
+            lifecycle.write_json(root / "runtime-convergence-receipt.json", runtime_convergence)
+            observation["settlement"] = _native_settlement(
+                resume_file,
+                channel_state=settled_state,
+                native_session_id=str(resume_state.get("native_session_id") or ""),
+            )
+            settlement = observation["settlement"]
+            if isinstance(settlement, Mapping):
+                observation["omp_agent_end_settlement_observed"] = settlement.get("agent_end_terminal") is True
+                observation["omp_native_archive_bound"] = settlement.get("native_archive_bound") is True
+                observation["omp_native_extension_channel_bound"] = settlement.get("agent_end_evidence_shape") is True
+            current_state = dict(final_control_state)
+            final_terminate = _run_engine(args.engine, "terminate", current_session_id, env)
+            final_stopped = _wait_stopped(longhouse_home, current_session_id)
+            resumed.process.wait(timeout=15)
+            _record_retirement_claim_terminal(
+                str(args.api_url),
+                str(args.agents_token),
+                retirement_claims,
+                session_id=current_session_id,
+                run_id=str(current_state.get("run_id") or ""),
+            )
+            if shipper is not None:
+                try:
+                    terminal_flush = shipper.flush("omp-helm-terminal-retirement")
+                except Exception as exc:  # noqa: BLE001 - preserve terminal-delivery evidence
+                    terminal_flush = {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
+            served_run_inventory = _wait_served_run_retirement(
+                str(args.api_url),
+                str(args.agents_token),
+                str(current_session_id or ""),
+                retirement_claims,
+            )
+            controls["final_terminate"] = {
+                "action_label": "final_terminate",
+                "state": dict(final_control_state),
+                "command": final_terminate,
+                "stopped_state": final_stopped,
+                "control_identity": final_control_receipt,
+            }
     except BaseException as exc:
         partial_observation = {
             "schema_version": 1,

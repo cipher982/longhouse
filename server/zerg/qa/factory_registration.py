@@ -277,6 +277,7 @@ def factory_commands(registration: Mapping[str, Any], rows: Sequence[Mapping[str
                 "scenario_id": row["scenario_id"],
                 "scenario_revision": registration["scenario_revision"],
                 "evidence_class": evidence[0] if evidence else None,
+                "observation_scope": registration.get("observation_scope", "cell"),
             }
         )
     return commands
@@ -308,6 +309,13 @@ def result_envelope_failures(command: Mapping[str, Any], result: Mapping[str, An
     2026-10-01 ``variant`` regression.
     """
 
+    # Mirrors the factory's assembly check, which runs before outcome
+    # validation and refuses even a typed failure: a scenario-scoped producer's
+    # every result, failed ones included, carries the scope. A failure path that
+    # forgot it hid the real cause behind "returned a cell-specific result"
+    # (omp.background_jobs.v1, 2026-10-08..10).
+    if command.get("observation_scope") == "scenario" and result and result.get("observation_scope") != "scenario":
+        return [f"scenario-scoped producer returned a cell-specific result (observation_scope is {result.get('observation_scope')!r})"]
     if typed_harness_failure(result):
         return []
     failures: list[str] = []

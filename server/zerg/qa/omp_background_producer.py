@@ -53,7 +53,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.background_jobs.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -223,6 +223,47 @@ def _served_terminal_pairs(root: Path, identity: Mapping[str, str] | None) -> se
     }
 
 
+def background_run_healthy(result: Mapping[str, Any] | None) -> bool:
+    """Whether the Helm run this scenario rides on did its part.
+
+    Revision 2: the Helm run stops after the first turn for this scenario
+    (`scenario_scope: background`), so health is the launch, the channel, the
+    shipper and convergence, the archive and the cleanup -- not the Helm
+    lifecycle's own control cells, which this scenario never runs. Gating on the
+    full lifecycle status made these cells fail whenever an unrelated live step
+    (abort, /new) flaked.
+    """
+
+    if not isinstance(result, Mapping) or result.get("observation_scope") != "scenario":
+        return False
+    observation = result.get("observation")
+    if not isinstance(observation, Mapping) or observation.get("scenario_scope") != "background":
+        return False
+    channel = observation.get("channel_binding")
+    channel = channel if isinstance(channel, Mapping) else {}
+    final = observation.get("final_evidence")
+    final = final if isinstance(final, Mapping) else {}
+    return (
+        all(
+            channel.get(key) is True
+            for key in (
+                "ready",
+                "session_id_present",
+                "native_session_id_present",
+                "connection_id_present",
+                "lease_generation_present",
+                "session_file_present",
+            )
+        )
+        and observation.get("omp_native_extension_channel_bound") is True
+        and observation.get("omp_transcript_shipper_started") is True
+        and observation.get("omp_transcript_flush_completed") is True
+        and observation.get("omp_native_archive_bound") is True
+        and observation.get("omp_owned_processes_dead") is True
+        and final.get("cleanup_ready") is True
+    )
+
+
 def omp_background_assertions(root: Path, result: Mapping[str, Any] | None = None) -> dict[str, bool]:
     """Judge retained native frames against the actual managed OMP Helm receipt."""
 
@@ -330,7 +371,7 @@ def run_omp_background(args: argparse.Namespace) -> dict[str, Any]:
     raw_artifacts = _retain_native_extension_artifacts(root)
     managed_identity = _managed_omp_identity(root, result)
     assertions = omp_background_assertions(root, result)
-    native_run_healthy = result.get("status") == "pass"
+    native_run_healthy = background_run_healthy(result)
     if not raw_artifacts or not native_run_healthy:
         assertions = {name: False for name in assertions}
     receipt = {
@@ -457,7 +498,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
         assertion_ids=ASSERTIONS,
         executor=execute,
         oracle_source=Path(__file__),
-        scenario_revision=1,
+        scenario_revision=REGISTRATION.scenario_revision,
     )
 
 
@@ -480,6 +521,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = run_omp_background(args)
     except Exception as exc:  # noqa: BLE001 - retain a typed failed attempt, never a proof
+        args.evidence_root.mkdir(parents=True, exist_ok=True)
         partial = helm._read_state(args.evidence_root / "partial-observation.json") or {}
         observation = dict(partial.get("observation") or {})
         cleanup = helm._read_state(args.evidence_root / "cleanup-receipt.json")
@@ -493,6 +535,10 @@ def main(argv: list[str] | None = None) -> int:
             "profile": PROFILE,
             "scenario_id": SCENARIO_ID,
             "scenario_revision": REGISTRATION.scenario_revision,
+            # Every result of a scenario-scoped producer says so, failed ones too:
+            # without it the factory reported "returned a cell-specific result"
+            # and the real failure below never reached a case.
+            "observation_scope": REGISTRATION.observation_scope,
             "variant": None,
             "execution_variant": getattr(args, "variant", None),
             "evidence_class": "live_token",

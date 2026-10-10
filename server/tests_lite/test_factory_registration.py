@@ -187,6 +187,7 @@ def _answer(command: dict[str, Any], **changes: Any) -> dict[str, Any]:
         "scenario_id": command["scenario_id"],
         "scenario_revision": command["scenario_revision"],
         "evidence_class": command["evidence_class"],
+        "observation_scope": command["observation_scope"],
         "generated_at": "2026-10-01T07:00:00Z",
         "status": "pass",
         "observation": {},
@@ -248,10 +249,21 @@ def test_a_renamed_envelope_key_is_a_refusal() -> None:
 
 def test_a_typed_harness_failure_is_accepted_because_the_factory_reports_its_cause() -> None:
     command = _claude_helm_command()
-    failure = {"status": "fail", "failure_code": "claude_helm_lifecycle_failed", "error": "RuntimeError: x"}
+    failure = {
+        "status": "fail",
+        "failure_code": "claude_helm_lifecycle_failed",
+        "error": "RuntimeError: x",
+        "observation_scope": "scenario",
+    }
 
     assert factory.typed_harness_failure(failure)
     assert factory.result_envelope_failures(command, failure) == []
+    # The factory checks the scope before the outcome: a scenario producer's typed failure without it
+    # was reported as "returned a cell-specific result" and its cause never reached a case.
+    unscoped = {key: value for key, value in failure.items() if key != "observation_scope"}
+    assert factory.result_envelope_failures(command, unscoped) == [
+        "scenario-scoped producer returned a cell-specific result (observation_scope is None)"
+    ]
     # Keeping an observation or an assertion map makes it an ordinary result, held to the whole envelope.
     assert not factory.typed_harness_failure({**failure, "assertions": {}})
     assert factory.result_envelope_failures(command, {**failure, "assertions": {}}) == ["invalid generated_at"]

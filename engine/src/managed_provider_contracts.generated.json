@@ -4822,7 +4822,7 @@
               "id": "omp_background_registry_owner_scoped",
               "scenario_id": "omp_background_jobs",
               "oracle_source": "server/zerg/qa/omp_background_producer.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
@@ -4832,7 +4832,7 @@
               "id": "omp_background_partial_progress_child_scoped",
               "scenario_id": "omp_background_jobs",
               "oracle_source": "server/zerg/qa/omp_background_producer.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
@@ -4842,7 +4842,7 @@
               "id": "omp_background_terminal_status_preserved",
               "scenario_id": "omp_background_jobs",
               "oracle_source": "server/zerg/qa/omp_background_producer.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],

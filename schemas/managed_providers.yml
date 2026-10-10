@@ -3054,7 +3054,7 @@ providers:
         id: omp_background_registry_owner_scoped
         scenario_id: omp_background_jobs
         oracle_source: server/zerg/qa/omp_background_producer.py
-        minimum_scenario_revision: 1
+        minimum_scenario_revision: 2
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - <<: *omp_background_assertion

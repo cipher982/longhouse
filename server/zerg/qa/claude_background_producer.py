@@ -682,6 +682,9 @@ def main(argv: list[str] | None = None) -> int:
             "profile": PROFILE,
             "scenario_id": SCENARIO_ID,
             "scenario_revision": REGISTRATION.scenario_revision,
+            # A scenario-scoped producer's failed result is scenario-scoped too;
+            # without this the factory masked the setup failure below.
+            "observation_scope": REGISTRATION.observation_scope,
             "evidence_class": "live_token",
             "generated_at": now_iso(),
             # The authored variant axis (none) is what the factory compares; the execution key is kept apart.
