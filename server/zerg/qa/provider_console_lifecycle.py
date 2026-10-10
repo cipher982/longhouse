@@ -1582,11 +1582,15 @@ def turn_identity_mismatches(
         "adapter": ADAPTERS.get(provider),
         "provider_identity_confirmed": True,
     }
-    return {
+    mismatches = {
         field: {"expected": value, "observed": claim.get(field)}
         for field, value in expected.items()
         if (claim.get(field) is not True if field == "provider_identity_confirmed" else claim.get(field) != value)
     }
+    if provider not in ADAPTERS:
+        # No adapter can match a provider the Console does not know.
+        mismatches["adapter"] = {"expected": f"an adapter for {provider!r}", "observed": claim.get("adapter")}
+    return mismatches
 
 
 def _turn_identity_ok(claim: Mapping[str, object], *, provider: str, session_id: str, thread_id: str, run_id: str) -> bool:

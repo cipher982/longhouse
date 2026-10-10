@@ -1258,3 +1258,5 @@ def test_turn_identity_mismatches_names_each_differing_field() -> None:
     summary = console.claim_identity_summary({**drifted, "state": "terminal", "result": {"terminal_state": "run_completed", "argv": ["x"]}})
     assert summary["thread_id"] == "t2" and summary["terminal_state"] == "run_completed"
     assert "argv" not in summary and "result" not in summary
+    unknown = console.turn_identity_mismatches({**good, "provider": "nope", "adapter": None}, **{**expected, "provider": "nope"})
+    assert "adapter" in unknown
