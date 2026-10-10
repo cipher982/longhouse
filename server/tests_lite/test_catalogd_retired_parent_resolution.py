@@ -44,7 +44,7 @@ def _session(connection, *, provider: str = "claude", native_id: str | None = No
             started_at=NOW,
             last_activity_at=NOW,
             raw_state=raw_state,
-            render_state="retired" if raw_state == "retired" else "ready",
+            render_state=values.pop("render_state", "retired" if raw_state == "retired" else "ready"),
             media_state="complete",
             commit_seq=1,
             created_at=NOW,
@@ -268,3 +268,30 @@ def test_startup_adopts_an_orphan_that_carries_only_a_source_pointer(tmp_path):
     with engine.begin() as connection:
         bound = connection.execute(select(StorageSession.subagent_parent_session_id).where(StorageSession.session_id == child)).scalar_one()
     assert bound == parent
+
+
+def test_a_render_retired_twin_is_not_a_parent(tmp_path):
+    """Render retirement (a relinked legacy twin) keeps raw_state; it is still retired."""
+
+    engine = _engine(tmp_path)
+    native_id = str(uuid4())
+    with engine.begin() as connection:
+        parent = _session(connection, native_id=native_id)
+        _session(connection, native_id=native_id, render_state="retired", hidden_from_default_timeline=1)
+        assert _resolve(connection, native_id) == parent
+
+
+def test_adoption_is_a_catalog_commit(tmp_path):
+    engine = _engine(tmp_path)
+    native_id = str(uuid4())
+    with engine.begin() as connection:
+        _session(connection, native_id=native_id)
+        child = _session(connection, is_subagent=1, subagent_parent_provider_session_id=native_id)
+        before = connection.execute(select(catalog_meta.c.commit_seq)).scalar_one()
+        connection.execute(catalog_meta.update().values(subagent_parent_generation=None))
+    assert adopt_orphan_subagents_once(engine) == 1
+    with engine.begin() as connection:
+        after = connection.execute(select(catalog_meta.c.commit_seq)).scalar_one()
+        stamped = connection.execute(select(StorageSession.commit_seq).where(StorageSession.session_id == child)).scalar_one()
+    assert after == before + 1
+    assert stamped == after

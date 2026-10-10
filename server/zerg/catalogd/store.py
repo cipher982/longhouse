@@ -4141,6 +4141,7 @@ def _resolve_session_id_by_source_id(
         .where(storage_table.c.machine_id == machine_id)
         .where(storage_table.c.provider == provider)
         .where(storage_table.c.raw_state != "retired")
+        .where(storage_table.c.render_state != "retired")
         .distinct()
     ).all()
     return str(rows[0][0]) if len(rows) == 1 else None
@@ -4164,7 +4165,9 @@ def _without_retired_sessions(connection, session_ids: set[str]) -> set[str]:
         for row in connection.execute(
             select(storage_table.c.session_id).where(
                 storage_table.c.session_id.in_(sorted(session_ids)),
-                storage_table.c.raw_state == "retired",
+                # The store's canonical retired test: a render retirement
+                # (a relinked legacy twin) keeps its raw_state.
+                or_(storage_table.c.raw_state == "retired", storage_table.c.render_state == "retired"),
             )
         ).all()
     }
@@ -4441,6 +4444,7 @@ def adopt_orphan_subagents_once(engine) -> int:
             )
         ).all()
         now = datetime.now(UTC)
+        commit_seq = None
         for child_id, provider, owner_id, machine_id, pointer, source_pointer in orphans:
             # The same evidence and order a commit uses: the native pointer
             # first, then the raw source identity.
@@ -4465,6 +4469,10 @@ def adopt_orphan_subagents_once(engine) -> int:
                 )
             if parent is None or parent == str(child_id):
                 continue
+            # A lineage write like any other: one catalog commit for the pass,
+            # stamped on every row it binds, so readers see a new version.
+            if commit_seq is None:
+                commit_seq = _advance_commit_seq(connection, now)
             bound += int(
                 connection.execute(
                     update(session_table)
@@ -4472,7 +4480,7 @@ def adopt_orphan_subagents_once(engine) -> int:
                         session_table.c.session_id == str(child_id),
                         session_table.c.subagent_parent_session_id.is_(None),
                     )
-                    .values(subagent_parent_session_id=parent, updated_at=now)
+                    .values(subagent_parent_session_id=parent, commit_seq=commit_seq, updated_at=now)
                 ).rowcount
                 or 0
             )
