@@ -1346,6 +1346,26 @@ def override(repo: str | Path, kind: str, target: str, verdicts: list[Verdict]) 
 
 # --- cli -------------------------------------------------------------------
 
+def paths_mode(repo: str, rng: str, paths_file: Path, as_json: bool) -> int:
+    """Judge exactly the commits that touch the listed files, whatever the policy's areas say: the caller owns the
+    list (an epoch's pinned verifier files are not a policy area). Exempt globs do not apply for the same reason."""
+    wanted = {line.strip() for line in paths_file.read_text(encoding="utf-8").splitlines()
+              if line.strip() and not line.lstrip().startswith("#")}
+    commits = [c for c in commits_in(repo, rng) if wanted.intersection(c.files)]
+    verdicts = check_commits(repo, commits, load_events(repo), Landed.for_revs(repo, [rng]))
+    refused = [v for v in verdicts if v.reasons]
+    if as_json:
+        print(json.dumps({"range": rng, "checked": len(commits), "refused": [
+            {"sha": v.commit.sha, "subject": v.commit.subject, "files": sorted(wanted.intersection(v.commit.files)),
+             "reasons": v.reasons} for v in refused]}))
+    else:
+        for v in refused:
+            print(f"{v.commit.sha[:12]} {v.commit.subject[:60]}: {'; '.join(v.reasons)}")
+        print(f"review-gate: {len(commits)} commit(s) in {rng} touch the listed files; {len(refused)} not cleanly reviewed.",
+              file=sys.stderr)
+    return 1 if refused else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--repo", default=".", help="repository (default: cwd)")
@@ -1378,6 +1398,12 @@ def main(argv: list[str] | None = None) -> int:
     attest.add_argument("--dogfood-url", default=DOGFOOD_HEALTH_URL)
     attest.add_argument("--dry-run", action="store_true", help="print what it would post; post and queue nothing")
     attest.add_argument("--no-reviews", action="store_true", help="do not queue reviews of unreviewed commits")
+    paths = sub.add_parser("paths", help="the verdict of every range commit that touches one of the listed files; exit 1 "
+                           "when any lacks a completed review or holds an unresolved finding (the provider factory's "
+                           "verifier epoch gate: it lists the files an epoch pins)")
+    paths.add_argument("--range", dest="rng", required=True)
+    paths.add_argument("--paths-file", required=True, help="one repo-relative path per line; '#' lines are comments")
+    paths.add_argument("--json", action="store_true", help="print {range, checked, refused: [{sha, subject, files, reasons}]}")
     status = sub.add_parser("status", help="print the verdict of every commit of a range (never refuses)")
     status.add_argument("--range", dest="rng", default="origin/main..HEAD")
     backfill = sub.add_parser("backfill", help="queue background reviews of a range's commits that lack a receipt")
@@ -1442,6 +1468,8 @@ def main(argv: list[str] | None = None) -> int:
             kind, what, target = "promotion", f"in {served[:12]}..{args.target[:12]} lack a completed review or hold unresolved findings", args.target
             if verdicts and args.start_reviews and not os.environ.get(OVERRIDE_ENV):
                 started = start_reviews_quietly(repo, policy, promotion_revs(repo, served, args.target), "promotion")
+        elif args.mode == "paths":
+            return paths_mode(repo, args.rng, Path(args.paths_file), args.json)
         elif args.mode == "backfill":
             jobs = enqueue_reviews(repo, policy, [args.rng], session=None, reason="backfill")
             print(queued_note(repo, jobs) if jobs else "review-gate: nothing to start (every commit is exempt, reviewed, "

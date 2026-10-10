@@ -1428,5 +1428,50 @@ class StatusTests(unittest.TestCase):
             self.assertIn("auth", result.stdout)
 
 
+
+class PathsTests(unittest.TestCase):
+    """The provider factory's epoch gate: every commit touching a pinned verifier file must be cleanly reviewed."""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.repo = Repo(self._dir.name)
+        self.base = self.repo.commit("base", {"README.md": "x"})
+        self.listed = Path(self._dir.name) / "pinned.txt"
+        self.listed.write_text("# pinned\nserver/zerg/qa/oracle.py\n")
+
+    def tearDown(self):
+        self._dir.cleanup()
+
+    def run_paths(self):
+        result = self.repo.run("paths", "--range", f"{self.base}..HEAD", "--paths-file", str(self.listed), "--json")
+        return result.returncode, json.loads(result.stdout)
+
+    def test_only_commits_touching_a_listed_file_are_judged(self):
+        self.repo.commit("unrelated", {"server/zerg/other.py": "1"})
+        code, out = self.run_paths()
+        self.assertEqual((code, out["checked"], out["refused"]), (0, 0, []))
+
+    def test_an_unreviewed_commit_to_a_listed_file_refuses(self):
+        sha = self.repo.commit("oracle change", {"server/zerg/qa/oracle.py": "1"})
+        code, out = self.run_paths()
+        self.assertEqual(code, 1)
+        self.assertEqual([r["sha"] for r in out["refused"]], [sha])
+        self.assertEqual(out["refused"][0]["files"], ["server/zerg/qa/oracle.py"])
+        self.assertIn("no review receipt", out["refused"][0]["reasons"][0])
+
+    def test_an_open_blocking_finding_refuses_until_dispositioned(self):
+        self.repo.commit("oracle change", {"server/zerg/qa/oracle.py": "1"})
+        rid = self.repo.receipt(self.base, findings=[finding()])
+        code, out = self.run_paths()
+        self.assertEqual(code, 1)
+        self.assertIn(f"unresolved blocking finding {rid} F1", out["refused"][0]["reasons"][0])
+        self.repo.disposition(rid, "F1", "rejected")
+        self.assertEqual(self.run_paths()[0], 0)
+
+    def test_a_listed_test_or_doc_path_is_judged_even_though_the_policy_exempts_it(self):
+        self.listed.write_text("docs/oracle.md\n")
+        self.repo.commit("doc", {"docs/oracle.md": "1"})
+        self.assertEqual(self.run_paths()[0], 1)
+
 if __name__ == "__main__":
     unittest.main()
