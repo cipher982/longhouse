@@ -8,7 +8,7 @@ from datetime import datetime
 from datetime import timedelta
 from typing import Any
 
-DIRECTED_INPUT_PROVIDERS = frozenset({"claude", "codex", "omp", "opencode", "cursor"})
+DIRECTED_INPUT_PROVIDERS = frozenset({"claude", "codex", "omp", "opencode", "cursor", "pi"})
 
 
 def provider_supports_coordination_tools(provider: object) -> bool:

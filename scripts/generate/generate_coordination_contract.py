@@ -31,6 +31,10 @@ SCHEMA_PATH = ROOT / "schemas" / "coordination_contract.yml"
 ENGINE_JSON = ROOT / "engine" / "src" / "coordination_contract.generated.json"
 SERVER_JSON = ROOT / "server" / "zerg" / "config" / "coordination_contract.json"
 OMP_EXTENSION = ROOT / "engine" / "assets" / "longhouse-omp-helm.ts"
+PI_EXTENSION = ROOT / "engine" / "assets" / "longhouse-pi-helm.ts"
+RUNTIME_SOURCE = ROOT / "engine" / "assets" / "longhouse-coordination-tools.ts"
+RUNTIME_BEGIN = "// BEGIN GENERATED COORDINATION RUNTIME (scripts/generate/generate_coordination_contract.py)"
+RUNTIME_END = "// END GENERATED COORDINATION RUNTIME"
 OMP_BEGIN = "// BEGIN GENERATED COORDINATION CONTRACT (scripts/generate/generate_coordination_contract.py)"
 OMP_END = "// END GENERATED COORDINATION CONTRACT"
 MCP_SERVER = ROOT / "server" / "zerg" / "mcp_server" / "server.py"
@@ -91,17 +95,34 @@ def render_json(contract: dict) -> str:
     return json.dumps(contract, indent=2, ensure_ascii=False) + "\n"
 
 
-def render_omp(contract: dict, current: str) -> str:
-    begin = current.find(OMP_BEGIN)
-    end = current.find(OMP_END)
+def _replace_block(current: str, begin_marker: str, end_marker: str, block: str, path: Path) -> str:
+    begin = current.find(begin_marker)
+    end = current.find(end_marker)
     if begin < 0 or end < begin:
-        raise SystemExit(f"{OMP_EXTENSION.relative_to(ROOT)} lacks the generated coordination contract markers")
-    block = (
+        raise SystemExit(f"{path.relative_to(ROOT)} lacks the markers {begin_marker!r} .. {end_marker!r}")
+    return current[:begin] + block + current[end:]
+
+
+def render_extension(contract: dict, current: str, path: Path) -> str:
+    """Inline the contract and the shared coordination runtime into one extension.
+
+    OMP and Pi extensions ship as single files, so both carry the same two
+    generated blocks: the contract data and the tool bindings from
+    engine/assets/longhouse-coordination-tools.ts.
+    """
+
+    contract_block = (
         f"{OMP_BEGIN}\n"
         "// Do not edit: run the generator. Source: schemas/coordination_contract.yml\n"
         f"const COORDINATION_CONTRACT = {json.dumps(contract, indent=2, ensure_ascii=False)} as const;\n"
     )
-    return current[:begin] + block + current[end:]
+    runtime_block = (
+        f"{RUNTIME_BEGIN}\n"
+        "// Do not edit: run the generator. Source: engine/assets/longhouse-coordination-tools.ts\n"
+        f"{RUNTIME_SOURCE.read_text(encoding='utf-8').rstrip()}\n"
+    )
+    rendered = _replace_block(current, OMP_BEGIN, OMP_END, contract_block, path)
+    return _replace_block(rendered, RUNTIME_BEGIN, RUNTIME_END, runtime_block, path)
 
 
 def _python_literal(value: object) -> str:
@@ -135,7 +156,8 @@ def main() -> int:
     targets = {
         ENGINE_JSON: rendered,
         SERVER_JSON: rendered,
-        OMP_EXTENSION: render_omp(contract, omp_current),
+        OMP_EXTENSION: render_extension(contract, omp_current, OMP_EXTENSION),
+        PI_EXTENSION: render_extension(contract, PI_EXTENSION.read_text(encoding="utf-8"), PI_EXTENSION),
         MCP_SERVER: render_python_block(
             MCP_SERVER,
             MCP_SERVER.read_text(encoding="utf-8"),

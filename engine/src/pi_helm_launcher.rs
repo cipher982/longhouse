@@ -25,8 +25,9 @@ use uuid::Uuid;
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use crate::managed_launch_lifecycle::{
-    register_managed_launch_with_timeout, spawn_managed_registration_retry, DeferredNotices,
-    ManagedLaunchTransaction, FOREGROUND_REGISTRATION_TIMEOUT,
+    register_managed_launch_with_timeout, spawn_managed_registration_retry_with_hook,
+    DeferredNotices, ManagedLaunchResponse, ManagedLaunchTransaction,
+    FOREGROUND_REGISTRATION_TIMEOUT,
 };
 use crate::managed_launch_payload::{
     ManagedLaunchProvenance, ManagedLaunchRegistration, PermissionMode,
@@ -106,6 +107,9 @@ struct PiHelmServer {
     stop: Arc<AtomicBool>,
     terminate_requested: Arc<AtomicBool>,
     status: Arc<crate::status_slot::StatusPublisher>,
+    /// Session-scoped coordination authority, handed to the extension on
+    /// connect and again whenever a degraded launch's registration recovers.
+    coordination_token: Arc<Mutex<Option<String>>>,
 }
 
 impl PiHelmServer {
@@ -132,6 +136,7 @@ impl PiHelmServer {
             state_path,
             persist_lock: Arc::new(Mutex::new(())),
             socket_dir,
+            coordination_token: Arc::new(Mutex::new(None)),
             stop: Arc::new(AtomicBool::new(false)),
             terminate_requested: Arc::new(AtomicBool::new(false)),
             status: Arc::new(crate::status_slot::StatusPublisher::for_provider(
@@ -254,6 +259,7 @@ impl PiHelmServer {
                 "lease_generation": state.lease_generation,
             }),
         );
+        self.publish_coordination_token(&connection_id);
         loop {
             let Ok(Some(frame)) = read_frame(&mut reader) else {
                 break;
@@ -300,6 +306,37 @@ impl PiHelmServer {
                 == Some(guard.state.connection_id.as_str())
             && frame.get("lease_generation").and_then(Value::as_str)
                 == Some(guard.state.lease_generation.as_str())
+    }
+
+    fn set_coordination_token(&self, token: &str) {
+        let connection_id = {
+            *self
+                .coordination_token
+                .lock()
+                .expect("Pi coordination token mutex poisoned") = Some(token.to_owned());
+            self.shared
+                .lock()
+                .expect("Pi Helm state mutex poisoned")
+                .extension_connection_id
+                .clone()
+        };
+        if let Some(connection_id) = connection_id {
+            self.publish_coordination_token(&connection_id);
+        }
+    }
+
+    fn publish_coordination_token(&self, connection_id: &str) {
+        let token = self
+            .coordination_token
+            .lock()
+            .expect("Pi coordination token mutex poisoned")
+            .clone();
+        if let Some(token) = token {
+            self.send_extension_frame(
+                connection_id,
+                json!({"kind": "coordination_authority", "token": token}),
+            );
+        }
     }
 
     fn send_extension_frame(&self, connection_id: &str, frame: Value) {
@@ -1290,17 +1327,10 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     let mut transaction = response.as_ref().map(|response| {
         ManagedLaunchTransaction::new(&runtime, &url, &token, &session_id, &response.run_id)
     });
-    let degraded = response.is_none().then(|| {
-        spawn_managed_registration_retry(
-            &url,
-            &token,
-            "Pi",
-            payload.clone(),
-            &session_id,
-            DeferredNotices::default(),
-            crate::config::get_agent_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        )
-    });
+    let coordination_token = response
+        .as_ref()
+        .and_then(|value| value.coordination_token())
+        .map(str::to_owned);
 
     let state = PiHelmStateFile {
         schema_version: 1,
@@ -1343,6 +1373,29 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     };
     let state_path = state_root.join(format!("{session_id}.json"));
     let server = PiHelmServer::start(state, socket, socket_dir, state_path)?;
+    if let Some(value) = coordination_token.as_deref() {
+        server.set_coordination_token(value);
+    }
+    // A launch that missed the registration budget still lists the
+    // coordination tools; authority reaches the extension as a frame when the
+    // retry recovers, so the tool list never changes after launch.
+    let degraded = response.is_none().then(|| {
+        let recovered_server = server.clone();
+        spawn_managed_registration_retry_with_hook(
+            &url,
+            &token,
+            "Pi",
+            payload.clone(),
+            &session_id,
+            DeferredNotices::default(),
+            crate::config::get_agent_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            Some(Arc::new(move |response: &ManagedLaunchResponse| {
+                if let Some(value) = response.coordination_token() {
+                    recovered_server.set_coordination_token(value);
+                }
+            })),
+        )
+    });
     let socket = &server.socket_path;
     let mut command = Command::new(&binary);
     command
@@ -1362,7 +1415,8 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         .env(
             "LONGHOUSE_PI_HELM_INITIAL_PROMPT",
             config.prompt.as_deref().unwrap_or(""),
-        );
+        )
+        .env("LONGHOUSE_PI_HELM_URL", &url);
     if let Some(model) = &effective_model {
         command.arg("--model").arg(model);
     }
@@ -1374,25 +1428,25 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     } else {
         command.arg("--session-id").arg(&target.provider_thread_id);
     }
+    let socket_text = socket.to_string_lossy().into_owned();
+    let channel_token = server.current_state().channel_token;
+    let mut owned_env: Vec<(&str, &str)> = vec![
+        ("LONGHOUSE_PI_HELM_CHANNEL_PATH", socket_text.as_str()),
+        ("LONGHOUSE_PI_HELM_CHANNEL_TOKEN", channel_token.as_str()),
+        (
+            "LONGHOUSE_PI_HELM_INITIAL_PROMPT",
+            config.prompt.as_deref().unwrap_or(""),
+        ),
+        ("LONGHOUSE_PI_HELM_URL", url.as_str()),
+    ];
+    // Only a session-scoped token reaches the provider. A degraded launch has
+    // none yet; the extension then receives it over the channel on recovery.
+    if let Some(value) = coordination_token.as_deref() {
+        owned_env.push(("LONGHOUSE_COORDINATION_TOKEN", value));
+    }
     ManagedIdentity::new(ManagedProvider::Pi, &session_id)
         .with_run_id(&server.current_state().run_id)
-        .apply(
-            &mut command,
-            &[
-                (
-                    "LONGHOUSE_PI_HELM_CHANNEL_PATH",
-                    socket.to_string_lossy().as_ref(),
-                ),
-                (
-                    "LONGHOUSE_PI_HELM_CHANNEL_TOKEN",
-                    server.current_state().channel_token.as_str(),
-                ),
-                (
-                    "LONGHOUSE_PI_HELM_INITIAL_PROMPT",
-                    config.prompt.as_deref().unwrap_or(""),
-                ),
-            ],
-        );
+        .apply(&mut command, &owned_env);
     let server_for_spawn = server.clone();
     let exit_code = match run_pi_provider(&mut command, &server, |pid| {
         let mut guard = server_for_spawn

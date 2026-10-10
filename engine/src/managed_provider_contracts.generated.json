@@ -4022,6 +4022,32 @@
               "max_age_seconds": 604800
             }
           ]
+        },
+        "coordination.awareness.create": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.pi.coordination_awareness",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "coordination_instructions_model_visible",
+              "scenario_id": "pi_coordination_awareness_create",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 86400
+            }
+          ]
         }
       },
       "can_resume": true,

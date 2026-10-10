@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 318,
+  "file_count": 319,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -79,6 +79,14 @@
     },
     {
       "path": "engine/assets/longhouse-omp-helm.ts",
+      "providers": [
+        "claude",
+        "codex",
+        "omp"
+      ]
+    },
+    {
+      "path": "engine/assets/longhouse-pi-helm.ts",
       "providers": [
         "claude",
         "codex",
@@ -2428,7 +2436,8 @@
         "codex",
         "cursor",
         "omp",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {

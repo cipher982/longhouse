@@ -459,8 +459,8 @@ test-engine: test-engine-omp-helm ## Rust engine tests (~20s)
 	@# completion-summary grep existed to catch.
 	$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(ENGINE_TEST_PROFILE) --bins --tests
 
-test-engine-omp-helm: ## OMP Helm extension contract tests
-	@cd engine && bun test assets/longhouse-omp-helm.test.ts
+test-engine-omp-helm: ## OMP and Pi Helm extension contract tests
+	@cd engine && bun test assets/longhouse-omp-helm.test.ts assets/longhouse-pi-helm.test.ts
 
 test-engine-projection-failure: ## Isolated real-daemon failed-observation recovery
 	@python3 scripts/build/generate_build_identity.py
