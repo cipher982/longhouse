@@ -28,6 +28,22 @@ from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.services.longhouse_paths import get_managed_local_dir
 
 
+def steer_task_prompt(step: str, done: str) -> str:
+    """The steer target: three slow steps, then the done marker the verdict judges."""
+
+    return (
+        "Run these three shell commands, each as its own separate Shell tool call, one after another, "
+        f"never in parallel: `sleep 6; echo {step}_1`, then `sleep 6; echo {step}_2`, then "
+        f"`sleep 6; echo {step}_3`. After all three, reply with exactly {done} alone on its own line"
+    )
+
+
+def abort_task_prompt(forbidden: str) -> str:
+    """The abort target: a long command, then the forbidden marker the verdict judges."""
+
+    return f"Use the Shell tool to run sleep 30, then reply with {forbidden} alone on its own line"
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -595,11 +611,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             steered = f"LONGHOUSE_CURSOR_STEERED_{steer_token}"
             done = f"LONGHOUSE_CURSOR_UNSTEERED_{steer_token}"
             steer_hook_start = len(_hook_rows(root, session_id))
-            send_live(
-                "Run these three shell commands, each as its own separate Shell tool call, one after another, "
-                f"never in parallel: `sleep 6; echo {step}_1`, then `sleep 6; echo {step}_2`, then "
-                f"`sleep 6; echo {step}_3`. After all three, reply with exactly {done}"
-            )
+            send_live(steer_task_prompt(step, done))
             first_step = _wait_until(
                 lambda: next(
                     (
@@ -660,7 +672,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             # Abort: cancel an active generation, keep the TUI, and prove the
             # surviving session completes a following turn.
             abort_hook_start = len(_hook_rows(root, session_id))
-            send_live(f"Use the Shell tool to run sleep 30, then reply with {forbidden}")
+            send_live(abort_task_prompt(forbidden))
             shell = _wait_until(
                 lambda: next(
                     (
@@ -887,9 +899,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("Cursor command ran after remote permission denial")
 
         hook_start = len(_hook_rows(root, session_id))
-        send_live(
-            f"Use the Shell tool to run sleep 30, then reply with {forbidden}",
-        )
+        send_live(abort_task_prompt(forbidden))
         shell = _wait_until(
             lambda: next(
                 (
