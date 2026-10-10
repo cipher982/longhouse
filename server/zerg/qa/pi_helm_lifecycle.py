@@ -1155,6 +1155,10 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
+    # A live provider turn spends real credentials; the factory opts in for Pi
+    # producers, ambient developer credentials never do by accident.
+    if os.environ.get("LONGHOUSE_PI_LIVE") not in {"1", "true", "yes", "on"}:
+        raise RuntimeError("Pi Helm qualification requires explicit LONGHOUSE_PI_LIVE opt-in")
     require_disposable_runtime(args.api_url or os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
     root = args.evidence_root.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)

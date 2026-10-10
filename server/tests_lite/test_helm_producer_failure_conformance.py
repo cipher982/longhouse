@@ -470,6 +470,8 @@ def test_a_failed_snapshot_write_is_reported_and_never_masks_the_failure(monkeyp
 def test_pi_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp_path) -> None:
     from zerg.qa import pi_helm_lifecycle as producer
 
+    monkeypatch.setenv("LONGHOUSE_PI_LIVE", "1")
+
     binary = _binary(tmp_path, "pi")
     session_file = tmp_path / "pi-session.jsonl"
     session_file.write_text("{}\n", encoding="utf-8")
