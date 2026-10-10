@@ -4204,7 +4204,7 @@
               "id": "pi_helm_cold_resume_exact_file",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 6,
+              "minimum_scenario_revision": 8,
               "acceptable_evidence": [
                 "live_token"
               ],
