@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 317,
+  "file_count": 318,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -665,6 +665,13 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "scripts/ops/coordination_metrics.py",
+      "providers": [
+        "claude",
+        "omp"
       ]
     },
     {
