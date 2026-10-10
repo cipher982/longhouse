@@ -1,7 +1,7 @@
 """Every producer failure path settles its verdict through one rule.
 
 A failed result keeps an observation and assertions only when the run reached a
-failing verdict (``factory_registration.settle_failed_result``). A failure path
+failing verdict (``zerg.qa.failed_results.settle_failed_result``). A failure path
 that writes ``observation`` or ``assertions`` itself can synthesize a False the
 factory files as a product finding, or an all-true map it refuses as a
 contradiction. This scans every ``except`` block of the factory producers under
