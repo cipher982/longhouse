@@ -1154,7 +1154,8 @@ def run_lifecycle(
         "claude_helm_process_exited": cleanup_ok,
         "native_hook_source": hook_source,
     }
-    steer_noncompliance = claude_steer_noncompliance(lifecycle.get("steer_active") or {})
+    # A run that errored vouches for nothing, model compliance included.
+    steer_noncompliance = None if error else claude_steer_noncompliance(lifecycle.get("steer_active") or {})
     if steer_noncompliance is not None:
         attach(observation, "claude_helm_steer_active", steer_noncompliance)
     result: dict[str, Any] = {
