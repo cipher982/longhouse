@@ -402,7 +402,15 @@ def test_failed_results_is_a_leaf_and_producers_never_import_factory_registratio
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.ImportFrom):
-                imported = [node.module or ""] + [f"{node.module}.{alias.name}" for alias in node.names]
+                # Resolve relative imports against the importing module's
+                # package, so `from .factory_registration import x` and
+                # `from . import factory_registration` are caught too.
+                package = ".".join(("zerg", *path.relative_to(qa.parent).parent.parts))
+                base = node.module or ""
+                if node.level:
+                    anchor = package.split(".")[: len(package.split(".")) - (node.level - 1)]
+                    base = ".".join([*anchor, *([base] if base else [])])
+                imported = [base] + [f"{base}.{alias.name}" for alias in node.names]
             elif isinstance(node, ast.Import):
                 imported = [alias.name for alias in node.names]
             else:
