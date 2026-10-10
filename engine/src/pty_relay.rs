@@ -236,8 +236,12 @@ enum EscapeState {
     None,
     /// After ESC: the next byte decides the sequence kind.
     Start,
+    /// Just after `ESC [`: `M` starts an X10 mouse report.
+    CsiFirst,
     /// Inside CSI (`ESC [` ...), ended by a byte in 0x40..=0x7e.
     Csi,
+    /// An X10 mouse report: three raw bytes follow `ESC [ M`.
+    Mouse(u8),
     /// Inside SS3 (`ESC O` x): one more byte.
     Ss3,
 }
@@ -245,12 +249,40 @@ enum EscapeState {
 impl DraftState {
     fn note(&mut self, byte: u8) {
         match self.escape {
-            EscapeState::Start => {
-                self.escape = match byte {
-                    b'[' => EscapeState::Csi,
-                    b'O' => EscapeState::Ss3,
-                    // ESC followed by one byte (Alt+key): consumed.
-                    _ => EscapeState::None,
+            EscapeState::Start => match byte {
+                b'[' => {
+                    self.escape = EscapeState::CsiFirst;
+                    return;
+                }
+                b'O' => {
+                    self.escape = EscapeState::Ss3;
+                    return;
+                }
+                // A bare Escape key followed by a control byte or another
+                // ESC: the Escape was its own key, so the next byte is read
+                // normally (an Enter right after Escape still submits).
+                0x00..=0x1f | 0x7f => self.escape = EscapeState::None,
+                // ESC then a printable byte is Alt+key: consumed.
+                _ => {
+                    self.escape = EscapeState::None;
+                    return;
+                }
+            },
+            EscapeState::CsiFirst => {
+                self.escape = if byte == b'M' {
+                    EscapeState::Mouse(3)
+                } else if (0x40..=0x7e).contains(&byte) {
+                    EscapeState::None
+                } else {
+                    EscapeState::Csi
+                };
+                return;
+            }
+            EscapeState::Mouse(left) => {
+                self.escape = if left > 1 {
+                    EscapeState::Mouse(left - 1)
+                } else {
+                    EscapeState::None
                 };
                 return;
             }
@@ -655,6 +687,14 @@ mod tests {
             !writer.local_draft_pending(),
             "one multibyte character, one backspace"
         );
+        // A bare Escape does not swallow the Enter after it, and an X10
+        // mouse report's raw bytes are not typing.
+        writer.relay_local_input(b"draft\x1b\r").unwrap();
+        assert!(!writer.local_draft_pending(), "Escape then Enter submits");
+        writer.relay_local_input(b"\x1b[M !!").unwrap();
+        assert!(!writer.local_draft_pending(), "X10 mouse report");
+        writer.relay_local_input(b"\x1b[<0;10;5M").unwrap();
+        assert!(!writer.local_draft_pending(), "SGR mouse report");
         writer.relay_local_input(b"q\x1b[D").unwrap();
         assert!(
             writer.local_draft_pending(),
