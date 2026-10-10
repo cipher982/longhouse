@@ -109,11 +109,11 @@ impl GroupShutdown {
 /// exited and wait only for their parent's `wait`. [`wait_for_group_exit`] and
 /// [`shutdown_group`] treat it as gone (via [`group_has_running_member`]), so
 /// [`GroupShutdown::Survived`] means a member is still running, or that `ps`
-/// was unavailable and a zombie could not be told apart (the safe direction). That matters
-/// whenever this engine owns the leader through a `Child` another task holds:
-/// the group reads alive to `killpg(_, 0)` until that task reaps it, and the
-/// OMP Console interrupt reported HTTP 502 for stopped turns exactly that way
-/// (2026-10-08/09).
+/// was unavailable and a zombie could not be told apart (the safe direction).
+/// That matters whenever this engine owns the leader through a `Child` another
+/// task holds: the group reads alive to `killpg(_, 0)` until that task reaps
+/// it, and the OMP Console interrupt reported HTTP 502 for stopped turns
+/// exactly that way (2026-10-08/09).
 ///
 /// Whether any process, zombies included, remains in `pgid`.
 ///
@@ -199,7 +199,7 @@ pub fn leader_group_for(_pid: u32) -> Option<i32> {
 /// exited is reported gone even before its parent reaps it.
 #[cfg(unix)]
 pub async fn shutdown_group(pgid: i32, grace: Duration) -> GroupShutdown {
-    if pgid <= 0 || !group_has_running_member(pgid) {
+    if pgid <= 0 || !running_member_off_runtime(pgid).await {
         return GroupShutdown::Absent;
     }
     unsafe {
@@ -232,6 +232,19 @@ pub async fn wait_for_group_exit(pgid: i32, budget: Duration) -> bool {
 }
 
 /// Poll until the group is gone or `deadline` passes. True when it is gone.
+/// [`group_has_running_member`] from async code: its `ps` pass is blocking
+/// (bounded by the inventory timeout), so it runs on the blocking pool rather
+/// than stalling the runtime. A task that cannot run answers "running", the
+/// safe direction.
+pub async fn running_member_off_runtime(pgid: i32) -> bool {
+    if !group_is_alive(pgid) {
+        return false;
+    }
+    tokio::task::spawn_blocking(move || group_has_running_member(pgid))
+        .await
+        .unwrap_or(true)
+}
+
 async fn wait_for_group_exit_until(pgid: i32, deadline: tokio::time::Instant) -> bool {
     // `killpg` every poll is cheap; the `ps` pass that tells a zombie-only group
     // from a running one runs at most every MEMBER_CHECK_INTERVAL.
@@ -242,10 +255,10 @@ async fn wait_for_group_exit_until(pgid: i32, deadline: tokio::time::Instant) ->
         }
         let now = tokio::time::Instant::now();
         if now >= deadline {
-            return !group_has_running_member(pgid);
+            return !running_member_off_runtime(pgid).await;
         }
         if now >= next_member_check {
-            if !group_has_running_member(pgid) {
+            if !running_member_off_runtime(pgid).await {
                 return true;
             }
             next_member_check = now + MEMBER_CHECK_INTERVAL;

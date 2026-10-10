@@ -1084,7 +1084,7 @@ async fn stop_invocation_group(
 ) -> (InvocationCleanup, Option<String>) {
     // A group whose only members are unreaped zombies has stopped; the monitor
     // reaps the leader on its next poll.
-    if !crate::process_group::group_has_running_member(process_group_id) {
+    if !crate::process_group::running_member_off_runtime(process_group_id).await {
         return (InvocationCleanup::Complete, None);
     }
     let verified = claim.process_group_id == Some(process_group_id)
@@ -1093,7 +1093,7 @@ async fn stop_invocation_group(
             .is_some_and(|inventory| claim.has_live_group_identity(&inventory));
     if !verified {
         if crate::process_group::wait_for_group_exit(process_group_id, OWNER_REAP_SETTLE).await
-            || !crate::process_group::group_has_running_member(process_group_id)
+            || !crate::process_group::running_member_off_runtime(process_group_id).await
         {
             return (InvocationCleanup::Complete, None);
         }
@@ -1108,7 +1108,7 @@ async fn stop_invocation_group(
     let shutdown = crate::process_group::shutdown_group(process_group_id, Duration::ZERO).await;
     if shutdown.is_gone()
         || crate::process_group::wait_for_group_exit(process_group_id, OWNER_REAP_SETTLE).await
-        || !crate::process_group::group_has_running_member(process_group_id)
+        || !crate::process_group::running_member_off_runtime(process_group_id).await
     {
         return (InvocationCleanup::Complete, None);
     }
@@ -2011,12 +2011,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_waits_for_the_monitor_to_reap_before_calling_the_group_a_survivor() {
+    async fn a_zombie_leader_the_monitor_has_not_reaped_is_not_a_survivor() {
         // A monitor that reaps less often than the kill-confirm budget leaves
         // the dead leader a zombie past `shutdown_group`'s own check, and
-        // `killpg(pgid, 0)` still counts it. That is macOS behaviour; the
-        // Linux test container does not count the zombie, so this only bites
-        // when run natively on a Mac.
+        // `killpg(pgid, 0)` still counts it (macOS; the Linux test container
+        // does not). A group of zombies has stopped, so close reports it
+        // complete without waiting, and the monitor reaps it afterwards.
         const MONITOR_POLL: Duration = Duration::from_millis(700);
         assert!(MONITOR_POLL > crate::process_group::KILL_CONFIRM_BUDGET);
         assert!(MONITOR_POLL * 2 < crate::process_group::KILL_CONFIRM_BUDGET + OWNER_REAP_SETTLE);
@@ -2040,8 +2040,8 @@ mod tests {
             (InvocationCleanup::Complete, None)
         );
 
-        assert!(!crate::process_group::group_is_alive(pid as i32));
         assert!(!monitor.await.unwrap().success());
+        assert!(!crate::process_group::group_is_alive(pid as i32));
     }
 
     #[tokio::test]

@@ -3338,7 +3338,7 @@ async fn cleanup_process_group(process_group_id: Option<i32>) -> bool {
         return false;
     };
     crate::console_adapter::cleanup_process_group("omp-print", Some(pgid)).await;
-    !crate::process_group::group_has_running_member(pgid)
+    !crate::process_group::running_member_off_runtime(pgid).await
 }
 
 fn live_process_group_is_safe(claim: &crate::turn_claims::TurnClaim, pgid: i32) -> bool {
@@ -3373,7 +3373,7 @@ async fn cleanup_live_claim(run_id: &str) -> bool {
     } else {
         // Never signal a group after its recorded leader/birth identity stops
         // proving ownership. Recorded PIDs are still cleaned up individually.
-        !crate::process_group::group_has_running_member(pgid)
+        !crate::process_group::running_member_off_runtime(pgid).await
     };
     let recorded_cleanup_verified = cleanup_recorded_processes(&claim.owned_processes).await;
     // The OMP leader is this engine's child, reaped by its invocation loop, so
@@ -3381,7 +3381,7 @@ async fn cleanup_live_claim(run_id: &str) -> bool {
     // factory saw interrupts answered 502 for exactly this, 2026-10-08/09).
     group_cleanup_verified
         && recorded_cleanup_verified
-        && !crate::process_group::group_has_running_member(pgid)
+        && !crate::process_group::running_member_off_runtime(pgid).await
 }
 async fn cleanup_owned_child(child: &mut Child, run_id: &str) -> bool {
     let _ = cleanup_live_claim(run_id).await;
@@ -3557,14 +3557,14 @@ async fn cleanup_recovered_process_group(
     let group_cleanup_verified = if recovered_process_group_is_safe(&claim, pgid) {
         cleanup_process_group(Some(pgid)).await
     } else {
-        !crate::process_group::group_has_running_member(pgid)
+        !crate::process_group::running_member_off_runtime(pgid).await
     };
     // A dead leader or surviving old group must not short-circuit the exact
     // PID/birth-identity cleanup for descendants that changed process group.
     let recorded_cleanup_verified = cleanup_recorded_processes(&claim.owned_processes).await;
     group_cleanup_verified
         && recorded_cleanup_verified
-        && !crate::process_group::group_has_running_member(pgid)
+        && !crate::process_group::running_member_off_runtime(pgid).await
 }
 fn private_output_file(path: &Path) -> Result<File> {
     Ok(OpenOptions::new()

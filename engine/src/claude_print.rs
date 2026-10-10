@@ -934,10 +934,13 @@ pub async fn recover_claude_print_turns(
             ClaimLiveness::Live => false,
             ClaimLiveness::Gone => true,
         };
-        if let Some(pgid) = claim
-            .process_group_id
-            .filter(|pgid| crate::process_group::group_has_running_member(*pgid))
-        {
+        let running_group = match claim.process_group_id {
+            Some(pgid) if crate::process_group::running_member_off_runtime(pgid).await => {
+                Some(pgid)
+            }
+            _ => None,
+        };
+        if let Some(pgid) = running_group {
             if !claim.process_group_is_from_this_boot()
                 || !claim.has_live_group_identity(&inventory)
             {

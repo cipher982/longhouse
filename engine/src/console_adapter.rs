@@ -160,9 +160,9 @@ pub async fn cleanup_process_group(tag: &str, process_group_id: Option<i32>) {
     };
     let outcome =
         crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE).await;
-    // `shutdown_group` counts an unreaped zombie leader as present; only a
-    // group with a running member was really left running.
-    if !outcome.is_gone() && crate::process_group::group_has_running_member(pgid) {
+    // Survived can also mean `ps` was unavailable; only a group with a running
+    // member was really left running.
+    if !outcome.is_gone() && crate::process_group::running_member_off_runtime(pgid).await {
         eprintln!("[{tag}] process group {pgid} survived SIGKILL and was left running");
     }
 }
