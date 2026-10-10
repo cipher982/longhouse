@@ -265,7 +265,8 @@ def test_read_coordination_token_prefers_the_launch_token(tmp_path):
     session_id = "22222222-2222-4222-8222-222222222222"
     config_dir = tmp_path / "run" / "claude-mcp"
     config_dir.mkdir(parents=True)
-    (config_dir / f"{session_id}-a.json").write_text(
-        json.dumps({"mcpServers": {"longhouse-coordination": {"env": {"LONGHOUSE_COORDINATION_TOKEN": "launch-secret"}}}})
-    )
+    token_file = tmp_path / "late.coordination-token"
+    token_file.write_text("late-secret")
+    env = {"LONGHOUSE_COORDINATION_TOKEN": "launch-secret", "LONGHOUSE_COORDINATION_TOKEN_FILE": str(token_file)}
+    (config_dir / f"{session_id}-a.json").write_text(json.dumps({"mcpServers": {"longhouse-coordination": {"env": env}}}))
     assert read_coordination_token(tmp_path, session_id, wait_secs=0) == "launch-secret"

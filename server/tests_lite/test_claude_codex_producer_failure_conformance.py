@@ -411,3 +411,30 @@ def test_codex_turn_boundary_bounded_bridge_failure_is_typed(tmp_path: Path, mon
     result = codex_boundary.run_turn_boundary_quiescent(_codex_args(root, binary, variant=codex_boundary._EXECUTION_VARIANT))
     persisted = _assert_persisted_failure(root, result)
     assert persisted["failure_code"]
+
+
+@pytest.mark.parametrize(
+    ("producer", "runner"),
+    [
+        (claude_create, "run_awareness_create_scenario"),
+        (claude_compaction, "run_awareness_post_compaction_scenario"),
+    ],
+)
+def test_claude_coordination_authority_unavailable_is_a_result_the_factory_accepts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, producer: object, runner: str
+) -> None:
+    """No coordination authority fails before any observation exists; the factory must still read the cause."""
+
+    from tests_lite._factory_envelope import assert_result_conforms
+
+    root = tmp_path / "evidence"
+    binary = _executable(tmp_path / "claude")
+    # The execution variant the factory passes as --variant for this producer's cell.
+    variant = getattr(producer, "_EXECUTION_VARIANT", None) or next(iter(getattr(producer, "_CELL_BY_VARIANT")))
+    _install_claude_session_boundaries(producer, monkeypatch, root)
+    monkeypatch.setattr(producer, "read_coordination_token", lambda *_args, **_kwargs: None)
+    result = getattr(producer, runner)(_claude_args(root, binary, variant=variant))
+    persisted = _assert_persisted_failure(root, result)
+    assert persisted["failure_code"] == "runtime_host_coordination_authority_unavailable"
+    assert isinstance(persisted["observation"], dict)
+    assert_result_conforms(producer, persisted, variant=variant)

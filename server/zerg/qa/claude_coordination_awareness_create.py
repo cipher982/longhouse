@@ -263,6 +263,9 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "error": f"{type(exc).__name__}: {exc}",
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
+            # A typed harness failure names its assertion, as the sibling
+            # producers do; without it the envelope reads as malformed.
+            "assertions": result.get("assertions") or {"coordination_instructions_model_visible": False},
             "artifact_manifest": artifact_manifest(root),
         }
         write_json(root / "result.json", failure)
