@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 from datetime import datetime
 from datetime import timedelta
@@ -58,6 +59,7 @@ def render_directed_input_envelope(*, source_session: Any, input_id: int, text: 
     )
 
 
+@functools.cache
 def _delivery_wording() -> dict[str, str]:
     from pathlib import Path
 

@@ -1126,3 +1126,40 @@ async def test_the_drain_replays_a_parked_sends_images(monkeypatch):
     refs = observed["dispatch"]["attachments"]
     assert len(refs) == 1
     assert refs[0]["blob_url"] == f"/api/agents/sessions/{session_id}/inputs/{receipt_id}/attachments/{attachment_id}/blob"
+
+
+@pytest.mark.asyncio
+async def test_unreadable_attachments_requeue_the_parked_send(monkeypatch):
+    """Transient catalog trouble reading images requeues the receipt; it is not failed."""
+
+    from zerg.services import session_input_queue as queue
+
+    observed: dict = {}
+
+    async def list_attachments(**_kwargs):
+        raise RuntimeError("catalogd timed out")
+
+    async def dispatch(**_kwargs):
+        pytest.fail("nothing is dispatched without its images")
+
+    async def release(scope, holder):
+        observed["released"] = holder
+
+    monkeypatch.setattr("zerg.services.session_input_attachments.list_catalog_attachments", list_attachments)
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", dispatch)
+    monkeypatch.setattr(queue, "mark_live_receipt_failed", lambda *_a, **_k: pytest.fail("must not fail the receipt"))
+    monkeypatch.setattr(queue, "requeue_live_receipt", lambda *_a, **kwargs: observed.setdefault("requeued", kwargs["receipt_id"]))
+    monkeypatch.setattr(queue.session_lock_manager, "release", release)
+
+    result = await queue._dispatch_claimed_live_input(
+        db=None,
+        live_session_factory=lambda: __import__("contextlib").nullcontext(),
+        source_session=SimpleNamespace(id=uuid4()),
+        claimed=SimpleNamespace(id="r-1", owner_id=7, text="look"),
+        lock_scope="scope",
+        drain_request_id="drain-2",
+    )
+
+    assert observed["requeued"] == "r-1"
+    assert observed["released"] == "drain-2"
+    assert result.reason == "attachments_unavailable"

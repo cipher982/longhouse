@@ -30,6 +30,7 @@ from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.live_session_inputs import claim_next_live_queued_receipt
 from zerg.services.live_session_inputs import mark_live_receipt_delivered_with_projection
 from zerg.services.live_session_inputs import mark_live_receipt_failed
+from zerg.services.live_session_inputs import requeue_live_receipt
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_inputs import ACTIVE_DELIVERY_ATTEMPT_STATUSES
@@ -460,14 +461,23 @@ async def _dispatch_claimed_live_input(
     from zerg.services.session_input_attachments import attachment_ref_for_engine
     from zerg.services.session_input_attachments import list_catalog_attachments
 
+    # A parked SEND keeps its images; replay them with the text. Failing to
+    # read them is transient catalog trouble, not a delivery failure: the
+    # receipt goes back to the queue rather than being terminalized.
     try:
-        # A parked SEND keeps its images; replay them with the text.
         stored = await list_catalog_attachments(
             owner_id=int(claimed.owner_id),
             session_id=source_session.id,
             input_receipt_id=str(claimed.id),
         )
-        attachments = [attachment_ref_for_engine(session_id=str(source_session.id), input_id=str(claimed.id), stored=row) for row in stored]
+    except Exception as exc:
+        with live_session_factory() as live_db:
+            requeue_live_receipt(live_db, receipt_id=claimed.id, error=f"attachments unavailable: {exc}"[:200])
+        await session_lock_manager.release(lock_scope, drain_request_id)
+        logger.warning("Live queue could not read attachments for receipt %s; requeued", claimed.id, exc_info=True)
+        return QueueWakeResult(live_input_id=claimed.id, reason="attachments_unavailable")
+    attachments = [attachment_ref_for_engine(session_id=str(source_session.id), input_id=str(claimed.id), stored=row) for row in stored]
+    try:
         dispatch_response = await _dispatch_managed_local_text(
             source_session=source_session,
             owner_id=int(claimed.owner_id),

@@ -469,9 +469,10 @@ async def create_session_input_with_attachments(
     same FIFO enqueue as ``auto`` and the turn record carries the image refs,
     so a user can attach while a turn runs. ``steer`` would need the live
     steer chain to accept attachments and would race the dispatch lock
-    that this route already acquires for the regular send path. Helm
-    queue-with-attachments stays rejected: its queued-input drain path does
-    not load attachments.
+    that this route already acquires for the regular send path. A Helm
+    ``auto`` send parks durably, images included, when the target is mid-turn;
+    the queue drain replays the images. An explicit Helm ``queue`` intent is
+    still rejected here: ``auto`` already waits for the turn boundary.
     """
 
     try:
