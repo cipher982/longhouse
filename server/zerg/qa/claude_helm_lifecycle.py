@@ -665,7 +665,7 @@ def steer_setup_prompt(step: str, done: str) -> str:
     return (
         "This disposable Longhouse QA session owns its workspace. Run these three checks one at a time, each in its "
         f"own foreground Bash call: {_slow_echo(8, step + '_1')}, then {_slow_echo(8, step + '_2')}, then "
-        f"{_slow_echo(8, step + '_3')}. Then report the output and include {done}"
+        f"{_slow_echo(8, step + '_3')}. Then report the output and end your reply with {done} alone on its own line"
     )
 
 
@@ -674,7 +674,8 @@ def abort_setup_prompt(marker: str, forbidden: str, seconds: int) -> str:
         "This disposable Longhouse QA session owns its workspace. To verify that Runtime Host can interrupt "
         "an active owned process without ending the session, start one foreground process-monitoring check (not "
         "background) and keep it active for its observation window: "
-        f"{_slow_echo(seconds, marker)}. When it finishes, include completion token {forbidden} in your report"
+        f"{_slow_echo(seconds, marker)}. When it finishes, end your report with completion token {forbidden} alone on its "
+        "own line"
     )
 
 

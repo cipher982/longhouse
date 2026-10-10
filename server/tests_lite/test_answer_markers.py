@@ -126,3 +126,16 @@ def test_pi_family_abort_ignores_a_quoted_done_marker_but_not_an_answered_one() 
     )
     assert quoted["code"] != "abort_did_not_stop_active_turn", quoted
     assert answered["code"] == "abort_did_not_stop_active_turn", answered
+
+
+def test_every_prompt_that_elicits_a_judged_marker_asks_for_it_alone_on_a_line() -> None:
+    from zerg.qa.claude_helm_lifecycle import abort_setup_prompt
+    from zerg.qa.claude_helm_lifecycle import steer_setup_prompt
+    from zerg.qa.pi_family_turn_oracle import step_task_prompt
+
+    for prompt, marker in (
+        (steer_setup_prompt("lh_step", "DONE_X"), "DONE_X"),
+        (abort_setup_prompt("lh_abort", "FORBIDDEN_X", 30), "FORBIDDEN_X"),
+        (step_task_prompt("TASK_X", "DONE_X"), "DONE_X"),
+    ):
+        assert f"{marker} alone on its own line" in prompt

@@ -122,7 +122,7 @@ def step_task_prompt(task_marker: str, done_marker: str) -> str:
     return (
         f"Task {task_marker}: run each of these bash commands as its own separate tool call, one at a time, "
         "in the foreground (do not name it or run it as a background job or service), "
-        f"waiting for each to finish: {steps}. After all six, reply with {done_marker}."
+        f"waiting for each to finish: {steps}. After all six, reply with {done_marker} alone on its own line."
     )
 
 
