@@ -346,17 +346,24 @@ def test_the_static_check_sees_the_912b6e979_literal_and_leaves_authored_variant
 
 
 def test_settle_failed_result_keeps_a_verdict_only_with_evidence() -> None:
-    """Evidence carries its verdict; no observation means a typed harness failure."""
+    """Evidence carries its verdict; no observation means a typed harness failure.
+
+    settle_failed_result (the producers' leaf helper) and typed_harness_failure
+    (the factory's mirror of control-plane validation) live in different
+    modules, so this also pins that they agree.
+    """
+
+    from zerg.qa.failed_results import settle_failed_result
 
     base = {"status": "fail", "failure_code": "x_failed", "error": "RuntimeError: bridge never came up"}
 
-    with_evidence = factory.settle_failed_result(dict(base), observation={"seen": True}, assertions={"a": False})
+    with_evidence = settle_failed_result(dict(base), observation={"seen": True}, assertions={"a": False})
     assert with_evidence["observation"] == {"seen": True}
     assert with_evidence["assertions"] == {"a": False}
     assert not factory.typed_harness_failure(with_evidence)
 
     stale = {**base, "observation": {}, "assertions": {"a": False}}
-    no_verdict = factory.settle_failed_result(stale, observation=None, assertions={"a": False})
+    no_verdict = settle_failed_result(stale, observation=None, assertions={"a": False})
     assert "observation" not in no_verdict and "assertions" not in no_verdict
     assert factory.typed_harness_failure(no_verdict)
 
@@ -381,10 +388,17 @@ def test_failed_results_is_a_leaf_and_producers_never_import_factory_registratio
     for path in sorted(qa.glob("*.py")):
         if path.name == "factory_registration.py":
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        if "def main(" not in path.read_text(encoding="utf-8"):
+        source = path.read_text(encoding="utf-8")
+        if "def main(" not in source:
             continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "zerg.qa.factory_registration":
+        for node in ast.walk(ast.parse(source)):
+            imported = (
+                [node.module or ""] + [f"{node.module}.{alias.name}" for alias in node.names]
+                if isinstance(node, ast.ImportFrom)
+                else [alias.name for alias in node.names]
+                if isinstance(node, ast.Import)
+                else []
+            )
+            if "zerg.qa.factory_registration" in imported:
                 offenders.append(path.name)
     assert not offenders, f"producers importing factory_registration: {offenders}"

@@ -32,9 +32,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from zerg.qa.failed_results import settle_failed_result  # noqa: F401 - re-exported for factory callers
-from zerg.qa.failed_results import typed_harness_failure
-
 MANIFEST_PATH = "schemas/factory_producers.yml"
 SCHEMA_PATH = "schemas/managed_providers.yml"
 MANIFEST_SCHEMA_VERSION = 1
@@ -284,6 +281,22 @@ def factory_commands(registration: Mapping[str, Any], rows: Sequence[Mapping[str
             }
         )
     return commands
+
+
+def typed_harness_failure(result: Mapping[str, Any]) -> bool:
+    """A producer that could not reach its observation boundary and says so, which the factory records as its cause.
+
+    Mirrors the branch at the top of control-plane ``_validate_execution_outcome``: a failing result with a
+    ``failure_code`` and an ``error`` and neither an ``observation`` nor an ``assertions`` object.
+    """
+
+    return (
+        result.get("status") == "fail"
+        and isinstance(result.get("failure_code"), str)
+        and isinstance(result.get("error"), str)
+        and not isinstance(result.get("observation"), Mapping)
+        and not isinstance(result.get("assertions"), Mapping)
+    )
 
 
 def result_envelope_failures(command: Mapping[str, Any], result: Mapping[str, Any]) -> list[str]:

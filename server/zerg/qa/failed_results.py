@@ -29,19 +29,3 @@ def settle_failed_result(failure: dict[str, Any], *, observation: Any, assertion
         failure.pop("observation", None)
         failure.pop("assertions", None)
     return failure
-
-
-def typed_harness_failure(result: Mapping[str, Any]) -> bool:
-    """A producer that could not reach its observation boundary and says so, which the factory records as its cause.
-
-    Mirrors the branch at the top of control-plane ``_validate_execution_outcome``: a failing result with a
-    ``failure_code`` and an ``error`` and neither an ``observation`` nor an ``assertions`` object.
-    """
-
-    return (
-        result.get("status") == "fail"
-        and isinstance(result.get("failure_code"), str)
-        and isinstance(result.get("error"), str)
-        and not isinstance(result.get("observation"), Mapping)
-        and not isinstance(result.get("assertions"), Mapping)
-    )
