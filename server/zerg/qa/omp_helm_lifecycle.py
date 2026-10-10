@@ -2037,10 +2037,11 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                     "controls": [],
                 }
             )
+            # The settled first turn, not the launch state from before it.
             observation["settlement"] = _native_settlement(
                 current_session_file,
-                channel_state=current_state,
-                native_session_id=str(current_state.get("native_session_id") or ""),
+                channel_state=initial_channel_state,
+                native_session_id=str(initial_channel_state.get("native_session_id") or ""),
             )
             settlement = observation["settlement"]
             if isinstance(settlement, Mapping):
