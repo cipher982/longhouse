@@ -1562,6 +1562,15 @@
    "retryable": false
   }
  },
+ "session.input.attachment.list.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "owner_id must be a positive integer",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
  "session.input.attachment.read.v2": {
   "declared_nulls": {
    "code": "invalid_request",
