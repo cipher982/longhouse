@@ -116,12 +116,14 @@ def process_claude_file(file_path: Path) -> Tuple[List[str], Dict[str, Any], Dic
     return list(session_ids), dict(tool_counts), dict(sessions_by_tool)
 
 
-def process_claude_cache_file(file_path: Path) -> List[float]:
+def process_claude_cache_file(file_path: Path) -> Tuple[float, int, int, int]:
     """
-    Calculate cache hit rates for Claude sessions.
-    Returns list of per-session hit rates.
+    Calculate cache hit rate for a Claude session file.
+    Returns (session_hit_rate, total_input, total_cache_read, total_cache_creation)
     """
-    session_rates = []
+    total_input = 0
+    total_cache_creation = 0
+    total_cache_read = 0
 
     try:
         with open(file_path, "r") as f:
@@ -138,18 +140,17 @@ def process_claude_cache_file(file_path: Path) -> List[float]:
                     message = entry["message"]
                     usage = message.get("usage", {})
                     if usage:
-                        input_tokens = usage.get("input_tokens", 0)
-                        cache_creation = usage.get("cache_creation_input_tokens", 0)
-                        cache_read = usage.get("cache_read_input_tokens", 0)
-
-                        total = input_tokens + cache_creation + cache_read
-                        if total > 0:
-                            hit_rate = cache_read / total
-                            session_rates.append(hit_rate)
+                        total_input += usage.get("input_tokens", 0)
+                        total_cache_creation += usage.get("cache_creation_input_tokens", 0)
+                        total_cache_read += usage.get("cache_read_input_tokens", 0)
     except (IOError, OSError):
         pass
 
-    return session_rates
+    total = total_input + total_cache_creation + total_cache_read
+    if total > 0:
+        hit_rate = total_cache_read / total
+        return hit_rate, total_input, total_cache_read, total_cache_creation
+    return 0.0, 0, 0, 0
 
 
 def process_omp_file(file_path: Path) -> Tuple[List[str], Dict[str, Any], Dict[str, set]]:
@@ -194,12 +195,14 @@ def process_omp_file(file_path: Path) -> Tuple[List[str], Dict[str, Any], Dict[s
     return session_ids, dict(tool_counts), dict(sessions_by_tool)
 
 
-def process_omp_cache_file(file_path: Path) -> List[float]:
+def process_omp_cache_file(file_path: Path) -> Tuple[float, int, int, int]:
     """
-    Calculate cache hit rates for OMP sessions.
-    Returns list of per-session hit rates.
+    Calculate cache hit rate for an OMP session file.
+    Returns (session_hit_rate, total_input, total_cache_read, total_cache_write)
     """
-    session_rates = []
+    total_input = 0
+    total_cache_write = 0
+    total_cache_read = 0
 
     try:
         with open(file_path, "r") as f:
@@ -216,18 +219,17 @@ def process_omp_cache_file(file_path: Path) -> List[float]:
                     message = entry.get("message", {})
                     usage = message.get("usage", {})
                     if usage:
-                        input_tokens = usage.get("input", 0)
-                        cache_write = usage.get("cacheWrite", 0)
-                        cache_read = usage.get("cacheRead", 0)
-
-                        total = input_tokens + cache_write + cache_read
-                        if total > 0:
-                            hit_rate = cache_read / total
-                            session_rates.append(hit_rate)
+                        total_input += usage.get("input", 0)
+                        total_cache_write += usage.get("cacheWrite", 0)
+                        total_cache_read += usage.get("cacheRead", 0)
     except (IOError, OSError):
         pass
 
-    return session_rates
+    total = total_input + total_cache_write + total_cache_read
+    if total > 0:
+        hit_rate = total_cache_read / total
+        return hit_rate, total_input, total_cache_read, total_cache_write
+    return 0.0, 0, 0, 0
 
 
 def main():
@@ -266,14 +268,15 @@ def main():
                         for tool, sessions in sessions_by_tool.items():
                             results["claude"]["sessions_by_tool"][tool].update(sessions)
 
-                        cache_rates = process_claude_cache_file(file_path)
-                        results["claude"]["cache_rates"].extend(cache_rates)
+                        hit_rate, inp, cache_read, cache_creation = process_claude_cache_file(file_path)
+                        if hit_rate > 0 or inp > 0:
+                            results["claude"]["cache_rates"].append((hit_rate, inp, cache_read, cache_creation))
 
-    # Process OMP files
+    # Process OMP files (nested in subdirectories)
     omp_dir = Path.home() / ".omp" / "agent" / "sessions"
     if omp_dir.exists():
-        for file_path in omp_dir.glob("longhouse-*.jsonl"):
-            if should_process_file(file_path, cutoff):
+        for file_path in omp_dir.glob("**/*.jsonl"):
+            if file_path.stem.startswith("longhouse-") and should_process_file(file_path, cutoff):
                 session_ids, tools, sessions_by_tool = process_omp_file(file_path)
                 results["omp"]["sessions_total"].update(session_ids)
                 for tool, count in tools.items():
@@ -281,8 +284,9 @@ def main():
                 for tool, sessions in sessions_by_tool.items():
                     results["omp"]["sessions_by_tool"][tool].update(sessions)
 
-                cache_rates = process_omp_cache_file(file_path)
-                results["omp"]["cache_rates"].extend(cache_rates)
+                hit_rate, inp, cache_read, cache_write = process_omp_cache_file(file_path)
+                if hit_rate > 0 or inp > 0:
+                    results["omp"]["cache_rates"].append((hit_rate, inp, cache_read, cache_write))
 
     # Prepare output
     output = {
@@ -311,14 +315,23 @@ def main():
         # Calculate cache stats
         cache_stats = {}
         if cache_rates:
-            sorted_rates = sorted(cache_rates)
+            # cache_rates is list of (hit_rate, input, cache_read, cache_creation/write)
+            per_session_rates = [rate for rate, _, _, _ in cache_rates]
+            sorted_rates = sorted(per_session_rates)
             median_rate = statistics.median(sorted_rates)
             p10_rate = sorted_rates[int(len(sorted_rates) * 0.1)]
 
-            # Calculate totals (sum across all entries)
-            total_input = 0
-            total_cache_read = 0
-            total_cache_creation = 0
+            # Calculate token-weighted overall hit rate
+            total_input = sum(inp for _, inp, _, _ in cache_rates)
+            total_cache_read = sum(read for _, _, read, _ in cache_rates)
+            total_cache_creation = sum(creation for _, _, _, creation in cache_rates)
+
+            if provider == "claude":
+                grand_total = total_input + total_cache_creation + total_cache_read
+            else:  # omp
+                grand_total = total_input + total_cache_creation + total_cache_read
+
+            weighted_hit_rate = total_cache_read / grand_total if grand_total > 0 else 0.0
 
             cache_stats = {
                 "sessions_with_usage": len(cache_rates),
@@ -326,6 +339,9 @@ def main():
                 "p10_hit_rate": round(p10_rate, 4),
                 "median_hit_rate_pct": f"{median_rate * 100:.2f}%",
                 "p10_hit_rate_pct": f"{p10_rate * 100:.2f}%",
+                "weighted_hit_rate": round(weighted_hit_rate, 4),
+                "weighted_hit_rate_pct": f"{weighted_hit_rate * 100:.2f}%",
+                "total_tokens": grand_total,
             }
 
         output["providers"][provider] = {
@@ -372,6 +388,8 @@ def main():
                 )
                 print(f"Median hit rate: {cache['median_hit_rate_pct']}")
                 print(f"P10 hit rate: {cache['p10_hit_rate_pct']}")
+                print(f"Token-weighted hit rate: {cache['weighted_hit_rate_pct']}")
+                print(f"Total tokens (input + cache): {cache['total_tokens']:,}")
             else:
                 print("\nPrompt Cache: No usage data found")
 
