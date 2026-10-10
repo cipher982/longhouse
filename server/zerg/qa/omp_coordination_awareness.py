@@ -67,7 +67,7 @@ def session_retirement_cleanup(retirement: object, session_id: str) -> dict[str,
 
     return {
         "canary_session_hidden": _exact_session_retirement(retirement, session_id),
-        "session_retirement": dict(retirement) if isinstance(retirement, dict) else None,
+        "session_retirement": dict(retirement) if isinstance(retirement, Mapping) else None,
     }
 
 
@@ -254,7 +254,7 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
             retirement = retire_qualification_session(str(args.api_url), str(args.agents_token), session_id, provider="omp")
             cleanup.update(session_retirement_cleanup(retirement, session_id))
         else:
-            cleanup["canary_session_hidden"] = False
+            cleanup.update(session_retirement_cleanup(None, ""))
         shipper_stop: dict[str, Any] = {}
         if shipper is not None:
             try:

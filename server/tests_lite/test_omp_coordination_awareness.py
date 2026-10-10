@@ -79,7 +79,9 @@ def test_cleanup_carries_the_retirement_receipt_the_factory_admits():
     }
     facts = session_retirement_cleanup(retirement, "11111111-1111-4111-8111-111111111111")
     assert facts["session_retirement"] == retirement
+    assert facts["canary_session_hidden"] is True
     receipt = facts["session_retirement"]
     assert receipt["status"] == "pass" and receipt["hidden"] is True and receipt["archived"] is True
     assert receipt["present_in_served_inventory"] is False
-    assert session_retirement_cleanup(None, "x")["session_retirement"] is None
+    missing = session_retirement_cleanup(None, "x")
+    assert missing["session_retirement"] is None and missing["canary_session_hidden"] is False
