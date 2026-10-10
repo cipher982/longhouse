@@ -77,12 +77,56 @@ def test_toolkit_exposes_the_shared_surface_publicly() -> None:
         assert expected in public, expected
 
 
+def _imported_names(source: str, package: str) -> set[str]:
+    """Every module (and `from` member) a source imports, as absolute dotted names.
+
+    Relative imports are resolved against the importing module's package, and a
+    level that climbs past the top package is skipped (not an import of ours),
+    so `from . import x` and `from .x import y` are seen as `zerg.qa.x`.
+    """
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                parts = package.split(".")
+                keep = len(parts) - (node.level - 1)
+                if keep <= 0:
+                    continue
+                base = ".".join([*parts[:keep], *([base] if base else [])])
+            names.add(base)
+            names.update(f"{base}.{alias.name}" for alias in node.names)
+    return names
+
+
+def _imports_a_resume_producer(source: str, package: str = "zerg.qa") -> bool:
+    return any(name.startswith("zerg.qa.") and name.endswith("_resume") for name in _imported_names(source, package))
+
+
 def test_toolkit_does_not_import_the_resume_producer() -> None:
     """The dependency runs one way: producers depend on the library."""
-    imported = {
-        node.module for node in ast.walk(ast.parse(TOOLKIT.read_text(encoding="utf-8"))) if isinstance(node, ast.ImportFrom) and node.module
-    }
-    assert not any(module.startswith("zerg.qa.") and module.endswith("_resume") for module in imported)
+    assert not _imports_a_resume_producer(TOOLKIT.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "from zerg.qa import provider_native_resume",
+        "from zerg.qa.provider_native_resume import main_for",
+        "import zerg.qa.provider_native_resume",
+        "from . import provider_native_resume",
+        "from .provider_native_resume import main_for",
+        "from .. import qa",  # climbs to zerg: `zerg.qa` is not a producer
+    ],
+)
+def test_the_resume_producer_import_guard_sees_every_spelling(line: str) -> None:
+    assert _imports_a_resume_producer(line) is (line != "from .. import qa")
+
+
+def test_the_resume_producer_import_guard_skips_levels_beyond_the_top_package() -> None:
+    assert not _imports_a_resume_producer("from ...... import provider_native_resume")
 
 
 def test_resume_producer_reaches_the_toolkit_through_the_module() -> None:
