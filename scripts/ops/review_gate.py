@@ -1451,6 +1451,7 @@ def main(argv: list[str] | None = None) -> int:
             if not verdicts:
                 pushed_review_note(repo, policy, updates)
         elif args.mode == "blocking":
+            check_policy(repo, policy, args.name or repo_name(repo))  # no table would list nothing and read as clean
             found = blocking_commits(repo, policy, args.base, args.head)
             for commit, areas in found:
                 print(f"{commit.sha[:12]} [{', '.join(areas)}] {commit.subject[:80]}")
