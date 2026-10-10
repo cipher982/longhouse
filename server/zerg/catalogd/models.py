@@ -247,6 +247,10 @@ class StorageSession(CatalogBase):
             "session_id",
         ),
         Index("ix_sessions_project_provider", "project", "provider", "last_activity_at"),
+        # Parent resolution looks sessions up by provider-native id in one
+        # owner/machine scope; without this it scanned every session of the
+        # provider (13 ms on david010's 41k rows, per resolution).
+        Index("ix_sessions_provider_native_scope", "provider", "provider_session_id", "owner_id", "machine_id"),
     )
 
 

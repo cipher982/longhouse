@@ -44,6 +44,7 @@ CATALOG_SCHEMA_VERSION = 5
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 STORAGE_TELEMETRY_ACCOUNTING_GENERATION = "storage-telemetry-v1"
 SESSION_RENDER_STATE_GENERATION = "session-render-state-v1"
+SUBAGENT_PARENT_GENERATION = "subagent-parent-retired-v1"
 
 
 class CatalogSchemaError(RuntimeError):
@@ -102,6 +103,8 @@ catalog_meta = Table(
     # One-shot data reconciliation marker. Additive and ignored by older
     # binaries, so it never moves the catalog schema contract.
     Column("render_state_generation", Text, nullable=True),
+    # One-shot orphan-subagent adoption marker; additive like the one above.
+    Column("subagent_parent_generation", Text, nullable=True),
     CheckConstraint("singleton = 1", name="ck_catalog_meta_singleton"),
     CheckConstraint("schema_version > 0", name="ck_catalog_meta_schema_version_positive"),
     CheckConstraint("commit_seq >= 0", name="ck_catalog_meta_commit_seq_nonnegative"),

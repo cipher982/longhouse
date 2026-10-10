@@ -37,6 +37,7 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.schema import read_catalog_meta
 from zerg.catalogd.schema import read_deployment_activation
 from zerg.catalogd.store import CatalogStore
+from zerg.catalogd.store import adopt_orphan_subagents_once
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +292,12 @@ class CatalogDaemon:
             self._engine = create_catalog_engine(self.database_path)
             self._meta = initialize_catalog_schema(self._engine)
             _log_startup_stage("initialize_schema", stage_started)
+
+            stage_started = time.perf_counter()
+            adopted = adopt_orphan_subagents_once(self._engine)
+            _log_startup_stage("adopt_orphan_subagents", stage_started)
+            if adopted:
+                logger.info("catalogd adopted %d orphan subagent(s) whose parent now resolves", adopted)
 
             stage_started = time.perf_counter()
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-sqlite")

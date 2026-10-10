@@ -4145,6 +4145,7 @@ def _resolve_session_id_by_source_id(
         .where(storage_table.c.owner_id == str(owner_id))
         .where(storage_table.c.machine_id == machine_id)
         .where(storage_table.c.provider == provider)
+        .where(storage_table.c.raw_state != "retired")
         .distinct()
     ).all()
     return str(rows[0][0]) if len(rows) == 1 else None
@@ -4209,19 +4210,42 @@ def _resolve_session_id_by_provider_session_id(
     # native id in the parent's delegation.spawn fact metadata instead. Resolve
     # that durable source evidence in the same owner/machine/provider scope.
     fact_table = SessionProviderFact.__table__
-    fact_rows = connection.execute(
-        select(fact_table.c.session_id)
-        .select_from(fact_table.join(storage_table, storage_table.c.session_id == fact_table.c.session_id))
-        .where(
-            fact_table.c.kind == "delegation.spawn",
-            fact_table.c.payload_json.contains(f'"parentSessionId":"{provider_session_id}"', autoescape=True),
-            storage_table.c.owner_id == str(owner_id),
-            storage_table.c.machine_id == machine_id,
-            storage_table.c.provider == provider,
-        )
-        .distinct()
-    ).all()
+    # Only OpenCode keeps the parent's native id in delegation.spawn facts. The
+    # match is a LIKE over the JSON payload, which no index serves, so other
+    # providers must not pay a fact-table scan for evidence they never write.
+    fact_rows = (
+        []
+        if provider.strip().lower() != "opencode"
+        else connection.execute(
+            select(fact_table.c.session_id)
+            .select_from(fact_table.join(storage_table, storage_table.c.session_id == fact_table.c.session_id))
+            .where(
+                fact_table.c.kind == "delegation.spawn",
+                fact_table.c.payload_json.contains(f'"parentSessionId":"{provider_session_id}"', autoescape=True),
+                storage_table.c.owner_id == str(owner_id),
+                storage_table.c.machine_id == machine_id,
+                storage_table.c.provider == provider,
+            )
+            .distinct()
+        ).all()
+    )
     session_ids.update(str(row[0]) for row in fact_rows)
+    # A source replacement retires the predecessor session but leaves its row,
+    # which still carries the same native id. Counting it made every parent of
+    # a replaced source ambiguous, so its subagents never bound and every
+    # append of the parent re-resolved them all (~0.9 s writer holds on
+    # david010, 2026-10-08). A retired session is never a parent.
+    if len(session_ids) > 1:
+        retired = {
+            str(row[0])
+            for row in connection.execute(
+                select(storage_table.c.session_id).where(
+                    storage_table.c.session_id.in_(sorted(session_ids)),
+                    storage_table.c.raw_state == "retired",
+                )
+            ).all()
+        }
+        session_ids -= retired
     return next(iter(session_ids)) if len(session_ids) == 1 else None
 
 
@@ -4380,6 +4404,69 @@ def _bind_orphan_subagents_to_parent(
                 .values(subagent_parent_session_id=session_key, commit_seq=commit_seq, updated_at=commit_time)
             ).rowcount
             or 0
+        )
+    return bound
+
+
+def adopt_orphan_subagents_once(engine) -> int:
+    """Once per catalog, bind orphan subagents whose parent now resolves.
+
+    A parent adopts its orphans only while it commits. Subagents that named a
+    parent made ambiguous by a retired predecessor session never bound, and a
+    parent that has since gone quiet will not commit again to adopt them. This
+    pass resolves each orphan's parent pointer with the same rules a commit
+    uses and binds the unambiguous ones. It is a data reconciliation gated by
+    its own ``catalog_meta`` marker, so the catalog schema contract does not
+    move.
+    """
+
+    from zerg.catalogd.schema import SUBAGENT_PARENT_GENERATION
+    from zerg.catalogd.schema import catalog_meta
+
+    session_table = StorageSession.__table__
+    bound = 0
+    with engine.begin() as connection:
+        marker = connection.execute(
+            select(catalog_meta.c.subagent_parent_generation).where(catalog_meta.c.singleton == 1)
+        ).scalar_one_or_none()
+        if marker == SUBAGENT_PARENT_GENERATION:
+            return 0
+        orphans = connection.execute(
+            select(
+                session_table.c.session_id,
+                session_table.c.provider,
+                session_table.c.owner_id,
+                session_table.c.machine_id,
+                session_table.c.subagent_parent_provider_session_id,
+            ).where(
+                session_table.c.subagent_parent_session_id.is_(None),
+                session_table.c.subagent_parent_provider_session_id.is_not(None),
+            )
+        ).all()
+        now = datetime.now(UTC)
+        for child_id, provider, owner_id, machine_id, pointer in orphans:
+            parent = _resolve_session_id_by_provider_session_id(
+                connection,
+                provider=str(provider),
+                provider_session_id=str(pointer),
+                owner_id=owner_id,
+                machine_id=str(machine_id),
+            )
+            if parent is None or parent == str(child_id):
+                continue
+            bound += int(
+                connection.execute(
+                    update(session_table)
+                    .where(
+                        session_table.c.session_id == str(child_id),
+                        session_table.c.subagent_parent_session_id.is_(None),
+                    )
+                    .values(subagent_parent_session_id=parent, updated_at=now)
+                ).rowcount
+                or 0
+            )
+        connection.execute(
+            catalog_meta.update().where(catalog_meta.c.singleton == 1).values(subagent_parent_generation=SUBAGENT_PARENT_GENERATION)
         )
     return bound
 
