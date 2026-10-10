@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use std::thread;
 use std::{collections::BTreeMap, process::Stdio, time::Duration};
@@ -29,6 +29,7 @@ use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 
 use crate::managed_launch_lifecycle::ManagedLaunchResponse;
+use crate::pty_relay::{self, PtyCommand, PtyWriter};
 
 const STATE_DIR: &str = "managed-local/cursor-helm";
 
@@ -447,66 +448,6 @@ pub(crate) fn create_cursor_chat(bin: &str, cwd: &Path) -> anyhow::Result<String
         )),
         Err(error) => Err(error),
     }
-}
-fn raw(fd: RawFd) -> anyhow::Result<libc::termios> {
-    unsafe {
-        let mut saved = std::mem::zeroed();
-        if libc::tcgetattr(fd, &mut saved) != 0 {
-            anyhow::bail!("read terminal state failed")
-        };
-        let mut next = saved;
-        libc::cfmakeraw(&mut next);
-        if libc::tcsetattr(fd, libc::TCSADRAIN, &next) != 0 {
-            anyhow::bail!("set terminal raw mode failed")
-        };
-        Ok(saved)
-    }
-}
-struct Terminal(RawFd, libc::termios);
-impl Drop for Terminal {
-    fn drop(&mut self) {
-        unsafe {
-            libc::tcsetattr(self.0, libc::TCSADRAIN, &self.1);
-        }
-    }
-}
-fn sync_winsize(master: RawFd) {
-    copy_winsize(1, master);
-}
-fn copy_winsize(source: RawFd, target: RawFd) -> bool {
-    unsafe {
-        let mut size: libc::winsize = std::mem::zeroed();
-        if libc::ioctl(source, libc::TIOCGWINSZ, &mut size) == 0 {
-            return libc::ioctl(target, libc::TIOCSWINSZ, &size) == 0;
-        }
-    }
-    false
-}
-fn terminal_winsize(fd: RawFd) -> libc::winsize {
-    unsafe {
-        let mut size: libc::winsize = std::mem::zeroed();
-        if libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) != 0 || size.ws_row == 0 || size.ws_col == 0
-        {
-            size.ws_row = 24;
-            size.ws_col = 80;
-        }
-        size
-    }
-}
-fn write_all(fd: RawFd, mut bytes: &[u8]) -> std::io::Result<()> {
-    while !bytes.is_empty() {
-        let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
-        if written > 0 {
-            bytes = &bytes[written as usize..];
-        } else if written < 0
-            && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
-        {
-            continue;
-        } else {
-            return Err(std::io::Error::last_os_error());
-        }
-    }
-    Ok(())
 }
 struct CursorMcpConfig {
     path: PathBuf,
@@ -1112,11 +1053,10 @@ fn response(stream: &mut UnixStream, value: Value) {
 }
 fn serve(
     mut stream: UnixStream,
-    master: RawFd,
+    writer: &PtyWriter,
     child: libc::pid_t,
     stop: &AtomicBool,
     requested_session_end: &AtomicBool,
-    pty_lock: &Mutex<()>,
     dir: &Path,
     session_id: &str,
     conversation: &str,
@@ -1190,9 +1130,9 @@ fn serve(
                     json!({"ok":false,"error":{"code":"provider_not_idle","message":"Cursor provider is not idle; send was not injected"}}),
                 );
             }
-            let _hold = pty_lock.lock().unwrap();
+            let terminal = writer.lock();
             let text = request["text"].as_str().unwrap().as_bytes();
-            if let Err(error) = write_all(master, text) {
+            if let Err(error) = terminal.write(text) {
                 return response(
                     &mut stream,
                     json!({"ok":false,"error":{"code":"command_indeterminate","message":error.to_string()}}),
@@ -1204,7 +1144,7 @@ fn serve(
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(300),
             ));
-            if let Err(error) = write_all(master, b"\x1b") {
+            if let Err(error) = terminal.write(b"\x1b") {
                 return response(
                     &mut stream,
                     json!({"ok":false,"error":{"code":"command_indeterminate","message":error.to_string()}}),
@@ -1216,7 +1156,7 @@ fn serve(
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(100),
             ));
-            if let Err(error) = write_all(master, b"\r") {
+            if let Err(error) = terminal.write(b"\r") {
                 return response(
                     &mut stream,
                     json!({"ok":false,"error":{"code":"command_indeterminate","message":error.to_string()}}),
@@ -1254,7 +1194,7 @@ fn serve(
                     json!({"ok":false,"error":{"code":"provider_generation_mismatch","message":"Cursor active generation changed; steer was not injected"}}),
                 );
             }
-            let _hold = pty_lock.lock().unwrap();
+            let terminal = writer.lock();
             let settle = |name: &str, default: u64| {
                 thread::sleep(std::time::Duration::from_millis(
                     std::env::var(name)
@@ -1284,7 +1224,7 @@ fn serve(
                 );
             }
             for (bytes, settle_env, default_ms) in writes {
-                if let Err(error) = write_all(master, bytes) {
+                if let Err(error) = terminal.write(bytes) {
                     return response(
                         &mut stream,
                         json!({"ok":false,"error":{"code":"command_indeterminate","message":error.to_string()}}),
@@ -1315,7 +1255,7 @@ fn serve(
                     json!({"ok":false,"error":{"code":"provider_generation_mismatch","message":"Cursor active generation changed; cancel was not injected"}}),
                 );
             }
-            let _hold = pty_lock.lock().unwrap();
+            let terminal = writer.lock();
             // Negative control: acknowledge the abort without sending ^C, so the
             // active generation runs to completion and answers. The lifecycle
             // producer must then fail its abort assertion.
@@ -1330,7 +1270,7 @@ fn serve(
                     json!({"ok":true,"exit_code":0,"stdout":"","stderr":""}),
                 );
             }
-            if let Err(error) = write_all(master, b"\x03") {
+            if let Err(error) = terminal.write(b"\x03") {
                 return response(
                     &mut stream,
                     json!({"ok":false,"error":{"code":"command_indeterminate","message":error.to_string()}}),
@@ -1571,7 +1511,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     ] {
         env_pairs.retain(|(name, _)| name.as_slice() != key);
     }
-    let mut size = terminal_winsize(1);
+    let mut size = pty_relay::terminal_winsize(1);
     env_pairs.retain(|(name, _)| !matches!(name.as_slice(), b"LINES" | b"COLUMNS"));
     env_pairs.push((b"LINES".to_vec(), size.ws_row.to_string().into_bytes()));
     env_pairs.push((b"COLUMNS".to_vec(), size.ws_col.to_string().into_bytes()));
@@ -1601,54 +1541,23 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         })
         .collect::<Result<_, _>>()
         .context("Cursor environment cannot contain NUL")?;
-    let mut argv_ptrs: Vec<*const libc::c_char> = argv.iter().map(|value| value.as_ptr()).collect();
-    argv_ptrs.push(std::ptr::null());
-    let mut env_ptrs: Vec<*const libc::c_char> = env.iter().map(|value| value.as_ptr()).collect();
-    env_ptrs.push(std::ptr::null());
     let cwd_c = CString::new(cwd.as_os_str().as_bytes())
         .context("Cursor working directory cannot contain NUL")?;
-    let mut master = -1;
-    let mut slave_name = [0 as libc::c_char; 1024];
-    let slave_name_ptr = if cfg!(target_os = "macos") {
-        slave_name.as_mut_ptr()
-    } else {
-        std::ptr::null_mut()
-    };
-    let pid =
-        unsafe { libc::forkpty(&mut master, slave_name_ptr, std::ptr::null_mut(), &mut size) };
-    if pid < 0 {
-        anyhow::bail!("forkpty failed: {}", std::io::Error::last_os_error());
-    }
-    if pid == 0 {
-        unsafe {
-            libc::chdir(cwd_c.as_ptr());
-            libc::execve(argv[0].as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
-            libc::_exit(127)
-        }
-    }
+    let child = pty_relay::spawn(
+        &PtyCommand {
+            argv,
+            env,
+            cwd: cwd_c,
+        },
+        &mut size,
+    )
+    .context("start cursor-agent under a PTY")?;
+    let pid = child.pid;
+    let master = child.master;
     // Once Cursor exists, liveness belongs to the provider child rather than
     // the relay process. A stuck relay must not keep a stale global
     // reservation alive after its provider has exited.
     artifacts.bind_provider_owner(pid);
-    // XNU can discard queued PTY output or hold a session-leader child in the
-    // exiting state until the master reads it. Keeping the slave open in the
-    // parent makes POLLIN observable; the relay loop drains it and reaps with
-    // WNOHANG before releasing this hold.
-    #[cfg(target_os = "macos")]
-    let slave_hold = unsafe { libc::open(slave_name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
-    #[cfg(not(target_os = "macos"))]
-    let slave_hold = -1;
-    if cfg!(target_os = "macos") && slave_hold < 0 {
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-            libc::close(master);
-            libc::waitpid(pid, std::ptr::null_mut(), 0);
-        }
-        anyhow::bail!(
-            "open Cursor PTY slave hold failed: {}",
-            std::io::Error::last_os_error()
-        );
-    }
     let stop = Arc::new(AtomicBool::new(false));
     let requested_session_end = Arc::new(AtomicBool::new(false));
     let resized = Arc::new(AtomicBool::new(true));
@@ -1679,8 +1588,8 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     }
     // Terminal setup stays fatal. Without raw mode and signal handling there is
     // no relay to run, so the child could not be used even if it were spared.
-    let setup = (|| -> anyhow::Result<Terminal> {
-        let terminal = Terminal(0, raw(0)?);
+    let setup = (|| -> anyhow::Result<pty_relay::RawTerminal> {
+        let terminal = pty_relay::raw_mode(0)?;
         signal_hook::flag::register(libc::SIGWINCH, resized.clone())?;
         signal_hook::flag::register(libc::SIGTERM, stop.clone())?;
         signal_hook::flag::register(libc::SIGHUP, stop.clone())?;
@@ -1690,14 +1599,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let terminal = match setup {
         Ok(terminal) => terminal,
         Err(error) => {
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
-                if slave_hold >= 0 {
-                    libc::close(slave_hold);
-                }
-                libc::close(master);
-                libc::waitpid(pid, std::ptr::null_mut(), 0);
-            }
+            child.abort();
             return Err(error);
         }
     };
@@ -1711,11 +1613,11 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         // let the background retry converge.
         transaction.confirm_or_degrade("Cursor", &confirm_agent_dir, &deferred_notices);
     }
-    sync_winsize(master);
+    pty_relay::sync_winsize(master);
     let socket_stop = stop.clone();
     let socket_requested_session_end = requested_session_end.clone();
-    let guard = Arc::new(Mutex::new(()));
-    let socket_guard = guard.clone();
+    let writer = PtyWriter::new(master);
+    let socket_writer = writer.clone();
     let server_dir = dir.clone();
     let server_session = session_id.clone();
     let server_conversation = conversation.clone();
@@ -1726,11 +1628,10 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             match listener.accept() {
                 Ok((stream, _)) => serve(
                     stream,
-                    master,
+                    &socket_writer,
                     pid,
                     &socket_stop,
                     &socket_requested_session_end,
-                    &socket_guard,
                     &server_dir,
                     &server_session,
                     &server_conversation,
@@ -1744,61 +1645,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             }
         }
     });
-    let mut input = [0u8; 8192];
-    let mut output = [0u8; 65536];
-    let mut reaped_status = None;
-    loop {
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
-        if resized.swap(false, Ordering::Relaxed) {
-            sync_winsize(master);
-        }
-        let mut fds = [
-            libc::pollfd {
-                fd: 0,
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: master,
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, 250) } < 0 {
-            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-                continue;
-            }
-            break;
-        }
-        if fds[0].revents & libc::POLLIN != 0 {
-            let count = unsafe { libc::read(0, input.as_mut_ptr().cast(), input.len()) };
-            if count > 0 {
-                let _hold = guard.lock().unwrap();
-                if write_all(master, &input[..count as usize]).is_err() {
-                    break;
-                }
-            }
-        }
-        if fds[1].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
-            let count = unsafe { libc::read(master, output.as_mut_ptr().cast(), output.len()) };
-            if count > 0 {
-                if write_all(1, &output[..count as usize]).is_err() {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-        let mut status = 0;
-        if cfg!(target_os = "macos")
-            && unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } == pid
-        {
-            reaped_status = Some(status);
-            break;
-        }
-    }
+    let reaped_status = pty_relay::relay(&child, &writer, 0, 1, &stop, &resized);
     let launcher_requested_stop = stop.load(Ordering::Relaxed);
     if let Some(registration) = &degraded_registration {
         registration.provider_alive.store(false, Ordering::Release);
@@ -1818,46 +1665,10 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     }
     stop.store(true, Ordering::Relaxed);
     let _ = server.join();
-    if slave_hold >= 0 {
-        unsafe {
-            libc::close(slave_hold);
-        }
-    }
-    let exit_code = unsafe {
-        let mut status = reaped_status.unwrap_or(0);
-        if reaped_status.is_none() {
-            // Reap with a deadline whether or not the stop was requested. The
-            // relay loop can also exit with cursor-agent still alive -- a poll
-            // error, or a write to stdout failing when an SSH connection drops
-            // -- and this path used to block in waitpid forever. Nothing drains
-            // the PTY master after the loop ends, so cursor-agent blocks writing
-            // into a full buffer while the launcher blocks waiting for it to
-            // exit. Neither can progress and the user's shell never returns.
-            //
-            // A normal exit is unaffected: the relay ends on PTY EOF, which
-            // means the child is already gone and the first probe reaps it. The
-            // grace only elapses when the child genuinely outlived the relay,
-            // and is longer here because this exit was not asked for.
-            let grace_ticks = if launcher_requested_stop { 25 } else { 200 };
-            let mut observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
-            for _ in 0..grace_ticks {
-                if observed != 0 {
-                    break;
-                }
-                thread::sleep(std::time::Duration::from_millis(10));
-                observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
-            }
-            if observed == 0 {
-                libc::kill(pid, libc::SIGKILL);
-                libc::waitpid(pid, &mut status, 0);
-            }
-        }
-        if libc::WIFEXITED(status) {
-            libc::WEXITSTATUS(status)
-        } else {
-            128 + libc::WTERMSIG(status)
-        }
-    };
+    child.release_slave_hold();
+    // Reap with a deadline whether or not the stop was requested; see
+    // pty_relay::reap for why the relay can end with cursor-agent alive.
+    let exit_code = pty_relay::reap(&child, reaped_status, launcher_requested_stop);
     enqueue_terminal_event(
         &config,
         &session_id,
@@ -2033,22 +1844,27 @@ mod tests {
         request: Value,
     ) -> (Value, Arc<AtomicBool>, Arc<AtomicBool>) {
         let (mut client, server) = UnixStream::pair().unwrap();
-        client.write_all(format!("{request}\n").as_bytes()).unwrap();
+        // Write from another thread: a macOS socketpair buffers about 8 KiB, so
+        // a larger request written before serve starts reading would block
+        // this thread forever (Linux buffers more, which hid it in CI).
+        let mut request_writer = client.try_clone().unwrap();
+        let request_bytes = format!("{request}\n").into_bytes();
+        let writer_thread = thread::spawn(move || request_writer.write_all(&request_bytes));
         let stop = Arc::new(AtomicBool::new(false));
         let requested_session_end = Arc::new(AtomicBool::new(false));
         serve(
             server,
-            master,
+            &PtyWriter::new(master),
             child,
             &stop,
             &requested_session_end,
-            &Mutex::new(()),
             dir,
             "session-id",
             "conversation-id",
             "launch-id",
             None,
         );
+        writer_thread.join().unwrap().unwrap();
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
         (
@@ -2435,11 +2251,10 @@ mod tests {
         let requested_session_end = AtomicBool::new(false);
         serve(
             server,
-            pipe[1],
+            &PtyWriter::new(pipe[1]),
             -1,
             &stop,
             &requested_session_end,
-            &Mutex::new(()),
             root.path(),
             "session-id",
             "conversation-id",
@@ -2645,13 +2460,13 @@ mod tests {
             unsafe { libc::ioctl(source_slave, libc::TIOCSWINSZ, &expected) },
             0
         );
-        assert!(copy_winsize(source_slave, target_slave));
-        let actual = terminal_winsize(target_slave);
+        assert!(pty_relay::copy_winsize(source_slave, target_slave));
+        let actual = pty_relay::terminal_winsize(target_slave);
         assert_eq!((actual.ws_row, actual.ws_col), (41, 133));
 
         let mut before: libc::termios = unsafe { std::mem::zeroed() };
         assert_eq!(unsafe { libc::tcgetattr(target_slave, &mut before) }, 0);
-        let guard = Terminal(target_slave, raw(target_slave).unwrap());
+        let guard = pty_relay::raw_mode(target_slave).unwrap();
         drop(guard);
         let mut after: libc::termios = unsafe { std::mem::zeroed() };
         assert_eq!(unsafe { libc::tcgetattr(target_slave, &mut after) }, 0);

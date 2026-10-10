@@ -99,6 +99,7 @@ mod plaintext_http;
 mod process_group;
 mod process_identity;
 mod provider_readiness;
+mod pty_relay;
 mod qa_fault;
 mod raw_records;
 mod report_bundle;
