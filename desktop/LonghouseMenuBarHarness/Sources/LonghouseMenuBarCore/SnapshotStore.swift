@@ -323,8 +323,13 @@ public final class SnapshotStore: ObservableObject {
         }
 
         // Relative age labels advance while the panel is visible
-        // (`armPresentationDeadline` only runs with a consumer).
-        append(now.addingTimeInterval(Self.presentationUpdateIntervalSeconds))
+        // (`armPresentationDeadline` only runs with a consumer). Anchored to
+        // the last presentation date, not to "now": re-arming on every
+        // realtime or local update must not keep pushing the tick away.
+        append(max(
+            presentationDate.addingTimeInterval(Self.presentationUpdateIntervalSeconds),
+            now.addingTimeInterval(0.01)
+        ))
         if let lastSuccess = refreshState.lastSuccessAt {
             append(lastSuccess.addingTimeInterval(refreshDeadline + 0.01))
         }

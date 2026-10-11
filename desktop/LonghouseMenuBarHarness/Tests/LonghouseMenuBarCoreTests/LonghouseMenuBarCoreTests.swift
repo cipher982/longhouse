@@ -1650,6 +1650,65 @@ struct LonghouseMenuBarCoreTests {
 
     @Test
     @MainActor
+    func ageLabelsAdvanceUnderSustainedLocalUpdates() async throws {
+        let store = SnapshotStore(
+            source: StaticHealthSnapshotSource(snapshot: presentationSnapshot(sessions: [])),
+            cacheURL: nil
+        )
+        store.beginPresentationUpdates()
+        defer { store.endPresentationUpdates() }
+        let first = store.presentationDate
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(SnapshotStore.presentationUpdateIntervalSeconds + 2))
+        // A local update every 200 ms re-arms the deadline each time; the age
+        // tick must still land.
+        while store.presentationDate == first, clock.now < deadline {
+            store.ingestLocalStatus(LocalStatusMonitor.Projection(sessions: [], engine: nil))
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        #expect(store.presentationDate > first)
+    }
+
+    @Test
+    func heartbeatSendTelemetryAloneNeverRequiresARefresh() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-status-telemetry-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let statusURL = directory.appendingPathComponent("engine-status.json")
+        func write(sends: Int) throws {
+            let payload: [String: Any] = [
+                "managed_sessions": [],
+                "heartbeat_transport": [
+                    "state": "connected",
+                    "send_metrics": ["last_send_wire_bytes": 57_000 + sends, "post_latency_sample_count": sends],
+                ],
+            ]
+            try JSONSerialization.data(withJSONObject: payload).write(to: statusURL, options: .atomic)
+        }
+        try write(sends: 0)
+        let changed = ChangeCounter()
+        let monitor = LocalStatusMonitor(statusPath: statusURL.path) { projection in
+            Task {
+                await changed.increment(
+                    presentationChanged: projection.presentationChanged,
+                    requiresSnapshotRefresh: projection.requiresSnapshotRefresh
+                )
+            }
+        }
+        monitor.start()
+        defer { monitor.stop() }
+        #expect(try await changed.waitForChange(after: 0))
+        for sends in 1...5 {
+            try write(sends: sends)
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(await changed.refreshRequirements.allSatisfy { $0 == false })
+        #expect(await changed.presentationChanges.dropFirst().allSatisfy { $0 == false })
+    }
+
+    @Test
+    @MainActor
     func sessionLeaseExpiryInvalidatesPresentationWithoutFileEvent() async throws {
         let expiry = Date().addingTimeInterval(0.4)
         let validUntil = ISO8601DateFormatters.fractionalTimestamp(for: expiry)

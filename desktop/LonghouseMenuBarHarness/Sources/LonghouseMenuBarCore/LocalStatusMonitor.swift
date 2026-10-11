@@ -488,6 +488,7 @@ private indirect enum StatusJSONValue: Decodable, Equatable {
             || lowercased == "valid_until"
             || compact == "validuntil"
             || compact == "lastupdated"
+            || compact == "sendmetrics"
             || lowercased.contains("_ewma_")
             || key.contains("Ewma")
             || lowercased.hasSuffix("_1h")
