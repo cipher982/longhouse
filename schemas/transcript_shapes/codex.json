@@ -313,7 +313,7 @@
   "event_msg/task_complete": {
    "classification": "signal:turn.duration",
    "first_seen_version": "0.142.2",
-   "last_seen_version": "0.151.0",
+   "last_seen_version": "0.163.0-alpha.5",
    "entrypoints": [
     "codex-tui",
     "codex_cli_rs",
@@ -326,6 +326,7 @@
     "duration_ms",
     "error",
     "last_agent_message",
+    "root_turn_id",
     "started_at",
     "time_to_first_token_ms",
     "turn_id",
@@ -339,7 +340,7 @@
   "event_msg/task_started": {
    "classification": "signal:turn.usage",
    "first_seen_version": "0.142.2",
-   "last_seen_version": "0.151.0",
+   "last_seen_version": "0.163.0-alpha.5",
    "entrypoints": [
     "codex-tui",
     "codex_cli_rs",
@@ -350,7 +351,9 @@
    "keys": [
     "collaboration_mode_kind",
     "model_context_window",
+    "root_turn_id",
     "started_at",
+    "turn_attribution",
     "turn_id",
     "type"
    ],
@@ -387,13 +390,14 @@
   "event_msg/thread_settings_applied": {
    "classification": "state:thread settings",
    "first_seen_version": "0.144.0",
-   "last_seen_version": "0.151.0",
+   "last_seen_version": "0.163.0-alpha.5",
    "entrypoints": [
     "codex-tui",
     "longhouse_codex_bridge",
     "longhouse_console"
    ],
    "keys": [
+    "thread_id",
     "thread_settings",
     "type"
    ]
@@ -434,16 +438,18 @@
   "event_msg/turn_aborted": {
    "classification": "signal:turn.duration",
    "first_seen_version": "0.133.0",
-   "last_seen_version": "0.151.0",
+   "last_seen_version": "0.163.0-alpha.5",
    "entrypoints": [
     "codex-tui",
     "codex_cli_rs",
-    "longhouse_codex_bridge"
+    "longhouse_codex_bridge",
+    "longhouse_console"
    ],
    "keys": [
     "completed_at",
     "duration_ms",
     "reason",
+    "root_turn_id",
     "started_at",
     "turn_id",
     "type"
@@ -649,14 +655,17 @@
   "response_item/message/user/provider_system": {
    "classification": "provider_system:context_injection",
    "first_seen_version": "0.53.0",
-   "last_seen_version": "0.133.0",
+   "last_seen_version": "0.163.0-alpha.5",
    "entrypoints": [
-    "codex_cli_rs"
+    "codex_cli_rs",
+    "longhouse_console"
    ],
    "keys": [
     "content",
     "content[].text",
     "content[].type",
+    "id",
+    "internal_chat_message_metadata_passthrough",
     "role",
     "type"
    ],
@@ -735,7 +744,7 @@
   "session_meta": {
    "classification": "state:session meta",
    "first_seen_version": "0.53.0",
-   "last_seen_version": "0.151.0",
+   "last_seen_version": "0.163.0-alpha.5",
    "entrypoints": [
     "codex-tui",
     "codex_cli_rs",
@@ -759,6 +768,7 @@
     "multi_agent_version",
     "originator",
     "parent_thread_id",
+    "runtime_workspace_roots",
     "session_id",
     "source",
     "thread_source",
@@ -768,7 +778,7 @@
   "turn_context": {
    "classification": "state:turn settings",
    "first_seen_version": "0.142.2",
-   "last_seen_version": "0.151.0",
+   "last_seen_version": "0.163.0-alpha.5",
    "entrypoints": [
     "codex-tui",
     "codex_cli_rs",
@@ -786,6 +796,7 @@
     "comp_hash",
     "current_date",
     "cwd",
+    "disabled_plugin_ids",
     "effort",
     "file_system_sandbox_policy",
     "model",
@@ -794,6 +805,7 @@
     "permission_profile",
     "personality",
     "realtime_active",
+    "root_turn_id",
     "sandbox_policy",
     "summary",
     "timezone",
