@@ -65,13 +65,19 @@ public final class StatusWindowController: NSWindowController, NSWindowDelegate 
         guard let window else {
             return
         }
-        updateContentSizeToFit()
-        if !visibility.isOnScreen {
+        let shouldStartPresentation = !visibility.isOnScreen
+        if shouldStartPresentation {
             store.beginPresentationUpdates()
-            visibility.isOnScreen = true
         }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        if shouldStartPresentation {
+            visibility.isOnScreen = true
+        }
+        updateContentSizeToFit()
+        DispatchQueue.main.async { [weak self] in
+            self?.updateContentSizeToFit()
+        }
     }
 
     public func windowWillClose(_ notification: Notification) {
@@ -83,11 +89,12 @@ public final class StatusWindowController: NSWindowController, NSWindowDelegate 
     }
 
     private func observe(store: SnapshotStore) {
-        Publishers.Merge4(
+        Publishers.Merge5(
             store.$snapshot.map { _ in () },
             store.$isInitialLoading.map { _ in () },
             store.$loadError.map { _ in () },
-            store.$isRecovering.map { _ in () }
+            store.$isRecovering.map { _ in () },
+            store.$presentationDate.map { _ in () }
         )
         .sink { [weak self] _ in
             DispatchQueue.main.async {
@@ -98,7 +105,7 @@ public final class StatusWindowController: NSWindowController, NSWindowDelegate 
     }
 
     private func updateContentSizeToFit() {
-        guard let window else {
+        guard visibility.isOnScreen, let window, window.isVisible else {
             return
         }
 

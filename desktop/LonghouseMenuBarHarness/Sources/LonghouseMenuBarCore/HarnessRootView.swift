@@ -46,39 +46,46 @@ public struct HarnessRootView: View {
 
     public var body: some View {
         Group {
-            // Bounded, not raw `isRecovering`. A producer that times out on
-            // every attempt reports transient forever, so the raw flag would
-            // pin this on the settling view with nothing else ever shown.
-            if store.isBrieflyRecovering && store.snapshot == nil {
-                MenuBarSettlingView()
-            } else if store.isBooting && (store.snapshot?.parsedSeverity ?? .gray) != .green {
-                MenuBarBootingView()
-            } else if let snapshot = store.snapshot {
-                let projectionTrust = store.projectionTrustForPresentation(relativeTo: store.presentationDate)
-                let displayedSnapshot = projectionTrust.isCurrent
-                    ? snapshot
-                    : snapshot.markingRuntimeHostProjectionUnavailable()
-                MenuBarPanelView(
-                    snapshot: displayedSnapshot,
-                    history: store.history,
-                    presentationDate: store.snapshotPresentationDate,
-                    feedback: store.feedback,
-                    setFeedback: store.setFeedback,
-                    actionSink: actionSink,
-                    isManualRefreshing: store.isManualRefreshActive || store.isBrieflyRecovering,
-                    // Recomputed against presentationDate so the banner appears
-                    // and its age advances while the panel stays open.
-                    dataTrust: store.dataTrust(relativeTo: store.presentationDate),
-                    projectionTrust: projectionTrust
-                ) {
-                    store.refresh(reason: .manual)
+            if isOnScreen {
+                Group {
+                    let snapshot = store.snapshotForPresentation(relativeTo: store.presentationDate)
+                    // Bounded, not raw `isRecovering`. A producer that times out on
+                    // every attempt reports transient forever, so the raw flag would
+                    // pin this on the settling view with nothing else ever shown.
+                    if store.isBrieflyRecovering && snapshot == nil {
+                        MenuBarSettlingView()
+                    } else if store.isBooting && (snapshot?.parsedSeverity ?? .gray) != .green {
+                        MenuBarBootingView()
+                    } else if let snapshot {
+                        let projectionTrust = store.projectionTrustForPresentation(relativeTo: store.presentationDate)
+                        let displayedSnapshot = projectionTrust.isCurrent
+                            ? snapshot
+                            : snapshot.markingRuntimeHostProjectionUnavailable()
+                        MenuBarPanelView(
+                            snapshot: displayedSnapshot,
+                            history: store.history,
+                            presentationDate: store.snapshotPresentationDate,
+                            feedback: store.feedback,
+                            setFeedback: store.setFeedback,
+                            actionSink: actionSink,
+                            isManualRefreshing: store.isManualRefreshActive || store.isBrieflyRecovering,
+                            // Recomputed against presentationDate so the banner appears
+                            // and its age advances while the panel stays open.
+                            dataTrust: store.dataTrust(relativeTo: store.presentationDate),
+                            projectionTrust: projectionTrust
+                        ) {
+                            store.refresh(reason: .manual)
+                        }
+                    } else if store.isInitialLoading {
+                        MenuBarLoadingView()
+                    } else {
+                        MenuBarFailureView(message: store.loadError ?? "Unknown load failure") {
+                            store.refresh(reason: .manual)
+                        }
+                    }
                 }
-            } else if store.isInitialLoading {
-                MenuBarLoadingView()
             } else {
-                MenuBarFailureView(message: store.loadError ?? "Unknown load failure") {
-                    store.refresh(reason: .manual)
-                }
+                Color.clear
             }
         }
         // Flames animate only while this host is on screen.

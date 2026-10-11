@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import Testing
 
@@ -49,8 +50,18 @@ private final class FlakyHealthSnapshotSource: HealthSnapshotSource, @unchecked 
 
 private actor ChangeCounter {
     private(set) var value = 0
-    func increment() { value += 1 }
+    private(set) var presentationChanges: [Bool] = []
+    private(set) var refreshRequirements: [Bool] = []
 
+    func increment(presentationChanged: Bool? = nil, requiresSnapshotRefresh: Bool? = nil) {
+        value += 1
+        if let presentationChanged {
+            self.presentationChanges.append(presentationChanged)
+        }
+        if let requiresSnapshotRefresh {
+            self.refreshRequirements.append(requiresSnapshotRefresh)
+        }
+    }
     func waitForChange(after previousValue: Int, timeout: Duration = .seconds(3)) async throws -> Bool {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
@@ -1415,11 +1426,24 @@ struct LonghouseMenuBarCoreTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let statusURL = directory.appendingPathComponent("engine-status.json")
-        func writeStatus(pulse: String, reconciliation: String = "idle", sequence: Int = 1) throws {
+        func writeStatus(
+            pulse: String,
+            reconciliation: String = "idle",
+            sessionId: String = "session-1",
+            pending: Int = 0
+        ) throws {
             let payload: [String: Any] = [
-                "sessions_sequence": sequence,
+                "managed_sessions": [["session_id": sessionId]],
+                "machine_evidence": [
+                    "schema_version": 1,
+                    "observed_at": pulse,
+                    "control": [],
+                ],
+                "spool_pending_count": pending,
+                "last_updated": pulse,
                 "local_projection": [
                     "version": 1,
+                    "generated_at": pulse,
                     "engine_pulse_at": pulse,
                     "reconciliation": ["state": reconciliation],
                 ],
@@ -1429,11 +1453,18 @@ struct LonghouseMenuBarCoreTests {
 
         try writeStatus(pulse: "initial")
         let changed = ChangeCounter()
-        let monitor = LocalStatusMonitor(statusPath: statusURL.path) { _ in
-            Task { await changed.increment() }
+        let monitor = LocalStatusMonitor(statusPath: statusURL.path) { projection in
+            Task {
+                await changed.increment(
+                    presentationChanged: projection.presentationChanged,
+                    requiresSnapshotRefresh: projection.requiresSnapshotRefresh
+                )
+            }
         }
         monitor.start()
         defer { monitor.stop() }
+        #expect(try await changed.waitForChange(after: 0))
+        let beforePulse = await changed.value
 
         // start() arms the directory watcher asynchronously. Observe a pulse
         // rather than assuming registration and delivery fit a fixed sleep.
@@ -1442,22 +1473,167 @@ struct LonghouseMenuBarCoreTests {
         for attempt in 0..<30 {
             pulse = "pulse-\(attempt)"
             try writeStatus(pulse: pulse)
-            if try await changed.waitForChange(after: 0, timeout: .milliseconds(100)) {
+            if try await changed.waitForChange(after: beforePulse, timeout: .milliseconds(100)) {
                 observedPulse = true
                 break
             }
         }
         try #require(observedPulse)
+        #expect(await changed.presentationChanges.last == false)
+        #expect(await changed.refreshRequirements.last == false)
 
-        // Change one semantic axis at a time; a changing pulse must not mask a
-        // regression that drops reconciliation or session-sequence wakeups.
+        // A changed clock must not mask state or managed-session changes.
         let beforeReconciliation = await changed.value
         try writeStatus(pulse: pulse, reconciliation: "reconciling")
         #expect(try await changed.waitForChange(after: beforeReconciliation))
+        #expect(await changed.presentationChanges.last == true)
+        #expect(await changed.refreshRequirements.last == false)
 
         let beforeSessions = await changed.value
-        try writeStatus(pulse: pulse, reconciliation: "reconciling", sequence: 2)
+        try writeStatus(pulse: pulse, reconciliation: "reconciling", sessionId: "session-2")
         #expect(try await changed.waitForChange(after: beforeSessions))
+        #expect(await changed.presentationChanges.last == true)
+        #expect(await changed.refreshRequirements.last == true)
+    }
+
+    @Test
+    @MainActor
+    func localClockUpdatesDoNotPublishButSemanticChangesDo() throws {
+        let now = Date()
+        let firstPulse = ISO8601DateFormatters.fractionalTimestamp(for: now.addingTimeInterval(-8))
+        let secondPulse = ISO8601DateFormatters.fractionalTimestamp(for: now.addingTimeInterval(-4))
+        let thirdPulse = ISO8601DateFormatters.fractionalTimestamp(for: now)
+        let baseSnapshot = presentationSnapshot(
+            sessions: [],
+            shippingProgress: ShippingProgressSnapshot(
+                pendingWork: false,
+                stalled: false,
+                secondsWithoutProgress: 0,
+                observedAt: firstPulse
+            ),
+            localProjection: LocalProjectionStatus(
+                version: 1,
+                generatedAt: firstPulse,
+                enginePulseAt: firstPulse,
+                lastReconciledAt: nil,
+                reconciliation: nil
+            )
+        )
+        let basePayload = try #require(baseSnapshot.engineStatus?.payload)
+        let baseStorage = try #require(basePayload.storageV2Outbox)
+
+        func payload(pulse: String, pending: Int) -> EngineStatusPayload {
+            EngineStatusPayload(
+                version: basePayload.version,
+                daemonPid: basePayload.daemonPid,
+                lastShipAt: basePayload.lastShipAt,
+                spoolPendingCount: basePayload.spoolPendingCount,
+                spoolDeadCount: basePayload.spoolDeadCount,
+                archiveBacklog: basePayload.archiveBacklog,
+                storageV2Outbox: StorageV2OutboxStatus(
+                    pendingCount: pending,
+                    pendingBytes: baseStorage.pendingBytes,
+                    blockedSourceCount: baseStorage.blockedSourceCount,
+                    reconcilingBlockedSourceCount: baseStorage.reconcilingBlockedSourceCount,
+                    unresolvedBlockedSourceCount: baseStorage.unresolvedBlockedSourceCount,
+                    blockedBytes: baseStorage.blockedBytes,
+                    latestBlockSourceEpoch: baseStorage.latestBlockSourceEpoch,
+                    latestUnresolvedBlockSourceEpoch: baseStorage.latestUnresolvedBlockSourceEpoch,
+                    latestBlockKind: baseStorage.latestBlockKind,
+                    latestBlockDetail: baseStorage.latestBlockDetail,
+                    byteLimit: baseStorage.byteLimit,
+                    error: baseStorage.error,
+                    malformedCounter: baseStorage.malformedCounter
+                ),
+                parseErrorCount1H: basePayload.parseErrorCount1H,
+                diskFreeBytes: basePayload.diskFreeBytes,
+                isOffline: basePayload.isOffline,
+                localProjection: LocalProjectionStatus(
+                    version: 1,
+                    generatedAt: pulse,
+                    enginePulseAt: pulse,
+                    lastReconciledAt: nil,
+                    reconciliation: nil
+                ),
+                shippingProgress: ShippingProgressSnapshot(
+                    pendingWork: pending > 0,
+                    stalled: pending > 0,
+                    secondsWithoutProgress: pending > 0 ? 90 : 0,
+                    observedAt: pulse
+                ),
+                recentDeadLetters: basePayload.recentDeadLetters,
+                lastUpdated: pulse,
+                build: basePayload.build
+            )
+        }
+
+        let store = SnapshotStore(source: StaticHealthSnapshotSource(snapshot: baseSnapshot), cacheURL: nil)
+        var snapshotPublications = 0
+        let subscription = store.$snapshot.dropFirst().sink { _ in snapshotPublications += 1 }
+
+        store.ingestLocalStatus(
+            LocalStatusMonitor.Projection(sessions: [], engine: payload(pulse: firstPulse, pending: 0))
+        )
+        store.ingestLocalStatus(
+            LocalStatusMonitor.Projection(sessions: [], engine: payload(pulse: secondPulse, pending: 0))
+        )
+        #expect(snapshotPublications == 0)
+
+        store.ingestLocalStatus(
+            LocalStatusMonitor.Projection(
+                sessions: [],
+                engine: payload(pulse: thirdPulse, pending: 1),
+                presentationChanged: true
+            )
+        )
+        #expect(snapshotPublications == 1)
+        #expect(store.snapshot?.engineStatus?.payload?.storageV2Outbox?.pendingCount == 1)
+        _ = subscription
+    }
+
+    @Test
+    @MainActor
+    func sessionLeaseExpiryInvalidatesPresentationWithoutFileEvent() async throws {
+        let expiry = Date().addingTimeInterval(0.4)
+        let validUntil = ISO8601DateFormatters.fractionalTimestamp(for: expiry)
+        let session = ManagedSessionSnapshot(
+            sessionId: "lease-session",
+            provider: "codex",
+            workspaceLabel: "longhouse",
+            branch: "main",
+            state: "attached",
+            phase: "Working",
+            lastActivityAt: nil,
+            bridgeStatus: "ready",
+            bridgePid: 42,
+            bridgeHeartbeatAt: nil,
+            reasonCodes: [],
+            presentation: SessionPresentationSnapshot(
+                primary: SessionPresentationLabelSnapshot(key: "needs_answer", label: "Needs answer", tone: "attention"),
+                signal: SessionSignalSnapshot(state: "attention", validUntil: validUntil),
+                access: nil
+            )
+        )
+        let store = SnapshotStore(
+            source: StaticHealthSnapshotSource(snapshot: presentationSnapshot(sessions: [session])),
+            cacheURL: nil
+        )
+        store.beginPresentationUpdates()
+        defer { store.endPresentationUpdates() }
+        let initialPresentationDate = store.presentationDate
+        #expect(session.menuBarAttentionKind(asOf: initialPresentationDate) == .needsYou)
+
+        var presentationUpdates = 0
+        let subscription = store.$presentationDate.dropFirst().sink { _ in presentationUpdates += 1 }
+        try await Task.sleep(for: .milliseconds(700))
+
+        #expect(presentationUpdates >= 1)
+        #expect(store.presentationDate >= expiry)
+        #expect(
+            store.snapshot?.managedSessions?.first?.menuBarAttentionKind(asOf: store.presentationDate)
+                == .unknown("activity unknown")
+        )
+        _ = subscription
     }
 
     @Test

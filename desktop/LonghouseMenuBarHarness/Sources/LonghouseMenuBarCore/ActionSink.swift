@@ -537,7 +537,7 @@ public struct SpyHealthActionSink: HealthActionSink {
             target: target,
             headline: snapshot.headline,
             collectedAt: snapshot.collectedAt ?? "",
-            loggedAt: ISO8601DateFormatter().string(from: Date())
+            loggedAt: ISO8601DateFormatters.actionLogTimestamp(for: Date())
         )
         append(record: record)
     }

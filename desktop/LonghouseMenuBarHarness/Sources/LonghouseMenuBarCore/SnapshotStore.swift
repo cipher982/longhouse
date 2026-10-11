@@ -12,10 +12,6 @@ public final class SnapshotStore: ObservableObject {
     public static let historyRetentionMinutes = 30
     public static let bootGraceSeconds: TimeInterval = 10
     public static let presentationRefreshFreshnessSeconds: TimeInterval = 10
-    /// Visible ages are deliberately coarse (seconds, then minutes), so a
-    /// five-second presentation tick keeps them useful without rebuilding a
-    /// large SwiftUI session list every second while the menu is open.
-    public static let presentationUpdateIntervalSeconds: TimeInterval = 5
     /// Backstop for a producer that goes quiet without reporting a failure.
     /// The primary mechanism is the outcome of the last completed attempt; this
     /// only catches a wedged refresh that never completes at all.
@@ -62,6 +58,7 @@ public final class SnapshotStore: ObservableObject {
     private var pendingRealtimeProjections: [String: SessionProjection] = [:]
     private var pendingRealtimeRemovals: Set<String> = []
     private var localStatusMonitor: LocalStatusMonitor?
+    private var latestLocalProjection: LocalStatusMonitor.Projection?
     private var localStatusPath: String?
     private var activeRefreshReason: SnapshotRefreshReason?
     private var queuedManualRefresh = false
@@ -146,6 +143,15 @@ public final class SnapshotStore: ObservableObject {
             return collectedAt
         }
         return presentationDate
+    }
+    /// Applies the latest local evidence without publishing a new panel snapshot.
+    /// Clock-only file updates are ingested immediately and become visible on
+    /// the next presentation invalidation.
+    public func snapshotForPresentation(relativeTo date: Date = Date()) -> HealthSnapshot? {
+        guard let snapshot, let latestLocalProjection else {
+            return snapshot
+        }
+        return snapshot.applyingLocalProjection(latestLocalProjection, relativeTo: date)
     }
 
     /// How much the app may trust what it is currently displaying.
@@ -253,22 +259,10 @@ public final class SnapshotStore: ObservableObject {
 
     public func beginPresentationUpdates() {
         presentationConsumerCount += 1
-        presentationDate = Date()
-        guard presentationTimer == nil else {
-            return
-        }
-
-        let timer = Timer(timeInterval: Self.presentationUpdateIntervalSeconds, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, self.presentationConsumerCount > 0 else {
-                    return
-                }
-                self.presentationDate = Date()
-            }
-        }
-        timer.tolerance = 1.0
-        RunLoop.main.add(timer, forMode: .common)
-        presentationTimer = timer
+        let now = Date()
+        presentationDate = now
+        refreshLocalPresentation(relativeTo: now)
+        armPresentationDeadline()
     }
 
     public func endPresentationUpdates() {
@@ -279,6 +273,114 @@ public final class SnapshotStore: ObservableObject {
 
         presentationTimer?.invalidate()
         presentationTimer = nil
+    }
+
+    private func armPresentationDeadline() {
+        presentationTimer?.invalidate()
+        presentationTimer = nil
+        guard presentationConsumerCount > 0,
+              let deadline = nextPresentationDeadline(relativeTo: Date()) else {
+            return
+        }
+
+        let timer = Timer(
+            timeInterval: max(0.01, deadline.timeIntervalSinceNow),
+            repeats: false
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.presentationConsumerCount > 0 else { return }
+                let now = Date()
+                self.presentationDate = now
+                self.refreshLocalPresentation(relativeTo: now)
+                self.armPresentationDeadline()
+            }
+        }
+        timer.tolerance = 0
+        RunLoop.main.add(timer, forMode: .common)
+        presentationTimer = timer
+    }
+
+    private func nextPresentationDeadline(relativeTo now: Date) -> Date? {
+        var deadlines: [Date] = []
+        func append(_ date: Date?) {
+            if let date, date > now {
+                deadlines.append(date)
+            }
+        }
+        func appendThreshold(_ raw: String?, seconds: TimeInterval) {
+            guard let raw, let date = HealthSnapshot.parseISO8601(raw) else { return }
+            append(date.addingTimeInterval(seconds))
+        }
+
+        if let lastSuccess = refreshState.lastSuccessAt {
+            append(lastSuccess.addingTimeInterval(refreshDeadline + 0.01))
+        }
+        if let lastProjectionSuccess = projectionState.lastSuccessAt {
+            append(lastProjectionSuccess.addingTimeInterval(projectionDeadline + 0.01))
+        }
+        if let snapshot {
+            if let collectedAt = snapshot.collectedAtDate {
+                append(collectedAt.addingTimeInterval(60.01))
+            }
+            for session in snapshot.managedSessions ?? [] {
+                guard let signal = session.presentation?.signal,
+                      signal.state == "working" || signal.state == "attention" else { continue }
+                appendThreshold(signal.validUntil, seconds: 0)
+            }
+            if let hostLink = snapshot.hostLink,
+               hostLink.isUpdateInProgress,
+               let claim = hostLink.claim,
+               claim.state == "updating" {
+                appendThreshold(claim.deadline, seconds: 0)
+                appendThreshold(claim.cutoff, seconds: 0)
+            }
+
+            let payload = latestLocalProjection?.engine ?? snapshot.engineStatus?.payload
+            appendThreshold(payload?.localProjection?.enginePulseAt ?? payload?.lastUpdated, seconds: 31)
+            appendThreshold(payload?.localProjection?.enginePulseAt ?? payload?.lastUpdated, seconds: 121)
+            appendThreshold(payload?.localProjection?.generatedAt, seconds: 31)
+            appendThreshold(payload?.localProjection?.generatedAt, seconds: 61)
+            appendThreshold(payload?.localProjection?.generatedAt, seconds: 121)
+            appendThreshold(latestLocalProjection?.evidenceObservedAt, seconds: 61)
+        }
+        return deadlines.min()
+    }
+
+    private func refreshLocalPresentation(relativeTo date: Date) {
+        guard let snapshot else { return }
+        let projection = latestLocalProjection ?? LocalStatusMonitor.Projection(
+            sessions: [],
+            engine: snapshot.engineStatus?.payload
+        )
+        let updated = snapshot.applyingLocalProjection(projection, relativeTo: date)
+        guard !Self.hasSameLocalStatusPresentation(snapshot, updated) else { return }
+        self.snapshot = updated
+        persistCachedSnapshot(updated)
+    }
+
+    private static func hasSameLocalStatusPresentation(
+        _ lhs: HealthSnapshot,
+        _ rhs: HealthSnapshot
+    ) -> Bool {
+        lhs.healthState == rhs.healthState
+            && lhs.severity == rhs.severity
+            && lhs.headline == rhs.headline
+            && lhs.reasons == rhs.reasons
+            && lhs.suggestedActions == rhs.suggestedActions
+            && lhs.suggestedActionIds == rhs.suggestedActionIds
+            && lhs.attention == rhs.attention
+            && lhs.transport == rhs.transport
+            && lhs.engineStatus?.path == rhs.engineStatus?.path
+            && lhs.engineStatus?.exists == rhs.engineStatus?.exists
+            && lhs.engineStatus?.fresh == rhs.engineStatus?.fresh
+            && lhs.engineStatus?.error == rhs.engineStatus?.error
+            && LocalStatusMonitor.PresentationKey(
+                sessionIds: [],
+                engine: lhs.engineStatus?.payload
+            ) == LocalStatusMonitor.PresentationKey(
+                sessionIds: [],
+                engine: rhs.engineStatus?.payload
+            )
     }
 
     public func setFeedback(_ feedback: HealthActionFeedback?) {
@@ -316,6 +418,9 @@ public final class SnapshotStore: ObservableObject {
                 // opens a stream at all, and must not strip anything.
                 if case .lastKnown = self.projectionTrust() {
                     snapshot = snapshot.markingRuntimeHostProjectionUnavailable()
+                }
+                if let latestLocalProjection = self.latestLocalProjection {
+                    snapshot = snapshot.applyingLocalProjection(latestLocalProjection)
                 }
                 if self.snapshot?.isSetupRequired == true, !snapshot.isSetupRequired {
                     // "Sign-in opened in Terminal ... then click Refresh" is
@@ -388,6 +493,8 @@ public final class SnapshotStore: ObservableObject {
             localStatusMonitor?.stop()
             localStatusMonitor = nil
             localStatusPath = nil
+            latestLocalProjection = nil
+            armPresentationDeadline()
             return
         }
         // A watch that could not open the status directory (the engine had not
@@ -395,8 +502,12 @@ public final class SnapshotStore: ObservableObject {
         guard path != localStatusPath || !isWatchingLocalStatus else { return }
         localStatusMonitor?.stop()
         localStatusMonitor = nil
+        latestLocalProjection = nil
         localStatusPath = path
-        guard let path, !path.isEmpty else { return }
+        guard let path, !path.isEmpty else {
+            armPresentationDeadline()
+            return
+        }
         let monitor = LocalStatusMonitor(
             statusPath: path,
             onWatchLost: { [weak self] in
@@ -405,21 +516,32 @@ public final class SnapshotStore: ObservableObject {
             }
         ) { [weak self] projection in
             Task { @MainActor [weak self] in
-                guard let self, let snapshot = self.snapshot else { return }
-                let currentIds = Set((snapshot.managedSessions ?? []).compactMap(\.sessionId))
-                let nextIds = Set(projection.sessions.map(\.sessionId))
-                let classificationChanged = Self.classificationChanged(
-                    from: snapshot.engineStatus?.payload,
-                    to: projection.engine
-                )
-                self.snapshot = snapshot.applyingLocalProjection(projection)
-                if currentIds != nextIds || classificationChanged {
-                    self.refresh(reason: .background)
-                }
+                self?.ingestLocalStatus(projection)
             }
         }
         localStatusMonitor = monitor
         monitor.start()
+    }
+
+    func ingestLocalStatus(_ projection: LocalStatusMonitor.Projection) {
+        latestLocalProjection = projection
+        if let snapshot {
+            let currentIds = Set((snapshot.managedSessions ?? []).compactMap(\.sessionId))
+            let nextIds = Set(projection.sessions.map(\.sessionId))
+            let classificationChanged = Self.classificationChanged(
+                from: snapshot.engineStatus?.payload,
+                to: projection.engine
+            )
+            let updated = snapshot.applyingLocalProjection(projection)
+            if !Self.hasSameLocalStatusPresentation(snapshot, updated) {
+                self.snapshot = updated
+                persistCachedSnapshot(updated)
+            }
+            if projection.requiresSnapshotRefresh || currentIds != nextIds || classificationChanged {
+                refresh(reason: .background)
+            }
+        }
+        armPresentationDeadline()
     }
 
     var isWatchingLocalStatus: Bool {
@@ -485,6 +607,7 @@ public final class SnapshotStore: ObservableObject {
                 switch event {
                 case .connected, .alive:
                     self.projectionState = self.projectionState.recordingSuccess(at: Date())
+                    self.armPresentationDeadline()
                 case let .failed(message):
                     self.flushQueuedRealtimeEvents()
                     self.projectionState = self.projectionState.recordingFailure(
@@ -494,6 +617,7 @@ public final class SnapshotStore: ObservableObject {
                             observedAt: Date()
                         )
                     )
+                    self.armPresentationDeadline()
                 case let .delta(projection):
                     self.queueRealtimeProjection(projection)
                 case let .remove(sessionId):
@@ -552,6 +676,7 @@ public final class SnapshotStore: ObservableObject {
             updated = updated.removingSession(sessionId)
         }
         snapshot = updated
+        armPresentationDeadline()
         persistCachedSnapshot(updated)
     }
 
@@ -575,6 +700,7 @@ public final class SnapshotStore: ObservableObject {
         if reason == .manual {
             isManualRefreshActive = false
         }
+        armPresentationDeadline()
     }
 
     private static func loadSnapshot(from source: any HealthSnapshotSource) async -> SnapshotLoadResult {
@@ -692,12 +818,7 @@ public final class SnapshotStore: ObservableObject {
     }
 
     private static func parseISO8601(_ value: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: value) {
-            return date
-        }
-        return ISO8601DateFormatter().date(from: value)
+        ISO8601DateFormatters.parse(value)
     }
 
     private func persistCachedSnapshot(_ snapshot: HealthSnapshot) {

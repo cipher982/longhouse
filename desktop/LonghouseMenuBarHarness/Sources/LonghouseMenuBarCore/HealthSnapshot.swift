@@ -163,12 +163,24 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         replacingManagedSessions(managedSessions?.filter { $0.sessionId != sessionId })
     }
 
-    func applyingLocalProjection(_ projection: LocalStatusMonitor.Projection) -> HealthSnapshot {
+    func applyingLocalProjection(
+        _ projection: LocalStatusMonitor.Projection,
+        relativeTo now: Date = Date()
+    ) -> HealthSnapshot {
         let payload = projection.engine ?? engineStatus?.payload
         let pulse = payload?.localProjection?.enginePulseAt ?? payload?.lastUpdated
         let pulseAge = pulse
             .flatMap(Self.parseISO8601)
-            .map { max(0, Int(Date().timeIntervalSince($0))) }
+            .map { max(0, Int(now.timeIntervalSince($0))) }
+        let nativeEvidenceAge = projection.evidenceObservedAt
+            .flatMap(Self.parseISO8601)
+            .map { max(0, Int(now.timeIntervalSince($0))) }
+        let generatedAtAge = payload?.localProjection?.generatedAt
+            .flatMap(Self.parseISO8601)
+            .map { max(0, Int(now.timeIntervalSince($0))) }
+        let engineIsFresh = (pulseAge.map { $0 <= 30 } ?? engineStatus?.fresh ?? true)
+            && (nativeEvidenceAge.map { $0 <= 60 } ?? true)
+            && (generatedAtAge.map { $0 <= 60 } ?? true)
         let progressIsCurrent = pulseAge.map { $0 <= 120 } ?? true
         let projectedTransport = progressIsCurrent
             ? projectingLocalTransport(
@@ -186,7 +198,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         let updatedEngine = EngineStatusSnapshot(
             path: engineStatus?.path,
             exists: true,
-            fresh: pulseAge.map { $0 <= 30 } ?? engineStatus?.fresh,
+            fresh: pulseAge != nil || nativeEvidenceAge != nil || generatedAtAge != nil || engineStatus?.fresh != nil
+                ? engineIsFresh
+                : nil,
             ageSeconds: pulseAge ?? engineStatus?.ageSeconds,
             payload: payload,
             error: nil
@@ -232,7 +246,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
                 updateInfo: updateInfo,
                 hostLink: hostLink
             )
-            let presentation = projectedSnapshot.menuBarPresentation(relativeTo: Date())
+            let presentation = projectedSnapshot.menuBarPresentation(relativeTo: now)
             projectedHealthState = "degraded"
             projectedSeverity = "yellow"
             projectedHeadline = presentation.headline
@@ -1451,21 +1465,11 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     internal static func parseISO8601(_ raw: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let parsed = fractional.date(from: raw) {
-            return parsed
-        }
-
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: raw)
+        ISO8601DateFormatters.parse(raw)
     }
 
     private static func relativeLabel(for date: Date, relativeTo referenceDate: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return formatter.localizedString(for: date, relativeTo: referenceDate)
+        ISO8601DateFormatters.relativeLabel(for: date, relativeTo: referenceDate)
     }
 
     public func compactTimestampLabel(_ raw: String?, relativeTo referenceDate: Date) -> String {
@@ -1539,14 +1543,13 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public static func setupRequiredSnapshot(detail: String? = nil) -> HealthSnapshot {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let collectedAt = ISO8601DateFormatters.fractionalTimestamp(for: Date())
         let suggestedAction = "Sign in from this app to install the Longhouse CLI and connect this Mac."
         let reason = detail?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return HealthSnapshot(
             schemaVersion: 1,
-            collectedAt: formatter.string(from: Date()),
+            collectedAt: collectedAt,
             healthState: "broken",
             severity: "red",
             headline: "Longhouse setup required",
@@ -1573,14 +1576,13 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         currentPath: String,
         canonicalPath: String = "/Applications/Longhouse.app"
     ) -> HealthSnapshot {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let collectedAt = ISO8601DateFormatters.fractionalTimestamp(for: Date())
         let normalizedCurrentPath = currentPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let suggestedAction = "Quit Longhouse, move Longhouse.app to \(canonicalPath), then relaunch."
 
         return HealthSnapshot(
             schemaVersion: 1,
-            collectedAt: formatter.string(from: Date()),
+            collectedAt: collectedAt,
             healthState: "broken",
             severity: "red",
             headline: "Move Longhouse.app to Applications",

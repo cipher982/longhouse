@@ -42,6 +42,9 @@ final class MenuBarStatusController: NSObject {
         configureStatusItem()
         configureRefreshTimer(refreshIntervalSeconds)
         observeStore()
+        // The status item remains a presentation consumer while its panel is
+        // closed so lease and freshness deadlines can repaint the icon.
+        store.beginPresentationUpdates()
         DispatchQueue.main.async { [weak self] in
             self?.refreshPanelLayout()
         }
@@ -103,11 +106,12 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func observeStore() {
-        Publishers.Merge4(
+        Publishers.Merge5(
             store.$snapshot.map { _ in () },
             store.$isInitialLoading.map { _ in () },
             store.$loadError.map { _ in () },
-            store.$isRecovering.map { _ in () }
+            store.$isRecovering.map { _ in () },
+            store.$presentationDate.map { _ in () }
         )
             .sink { [weak self] _ in
                 DispatchQueue.main.async {
@@ -122,8 +126,11 @@ final class MenuBarStatusController: NSObject {
         panelGeneration &+= 1
         store.beginPresentationUpdates()
         store.refreshForPresentation()
-        panelController.show(relativeTo: button)
         panelVisibility.isOnScreen = true
+        panelController.show(relativeTo: button)
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshPanelLayout()
+        }
         installEventMonitors(for: panelGeneration)
     }
 
@@ -151,9 +158,11 @@ final class MenuBarStatusController: NSObject {
             return
         }
 
-        let attentionColor = statusItemAttentionColor()
-        let tooltip = statusItemAttentionLabel()
-            ?? store.snapshot?.menuBarPresentation(relativeTo: Date()).headline
+        let referenceDate = Date()
+        let presentation = store.snapshot?.menuBarPresentation(relativeTo: referenceDate)
+        let attentionColor = statusItemAttentionColor(presentation: presentation, relativeTo: referenceDate)
+        let tooltip = statusItemAttentionLabel(presentation: presentation, relativeTo: referenceDate)
+            ?? presentation?.headline
             ?? "Longhouse"
 
         let colorChanged = switch (renderedAttentionColor, attentionColor) {
@@ -173,12 +182,15 @@ final class MenuBarStatusController: NSObject {
         renderedStatusItem = true
     }
 
-    private func statusItemAttentionColor() -> NSColor? {
+    private func statusItemAttentionColor(
+        presentation: MenuBarPresentation?,
+        relativeTo referenceDate: Date
+    ) -> NSColor? {
         // A failing producer must reach the icon whether or not a cached
         // snapshot is on screen. Gating this on `snapshot == nil` is what let a
         // stale cache hold the icon normal through eleven days of failures.
         if !store.isBrieflyRecovering {
-            switch store.dataTrust() {
+            switch store.dataTrust(relativeTo: referenceDate) {
             case .neverLoaded:
                 return .systemRed
             case .lastKnown:
@@ -187,10 +199,10 @@ final class MenuBarStatusController: NSObject {
                 break
             }
         }
-        guard let snapshot = store.snapshot else {
+        guard let presentation else {
             return nil
         }
-        switch snapshot.menuBarPresentation(relativeTo: Date()).promotion {
+        switch presentation.promotion {
         case .normal:
             return nil
         case .needsUser:
@@ -205,26 +217,25 @@ final class MenuBarStatusController: NSObject {
         }
     }
 
-    private func statusItemAttentionLabel() -> String? {
+    private func statusItemAttentionLabel(
+        presentation: MenuBarPresentation?,
+        relativeTo referenceDate: Date
+    ) -> String? {
         if store.isBrieflyRecovering {
             return "Longhouse is catching up"
         }
-        switch store.dataTrust() {
+        switch store.dataTrust(relativeTo: referenceDate) {
         case .neverLoaded:
             return "Longhouse needs attention"
         case let .lastKnown(context):
-            if let age = context.age(relativeTo: Date()) {
+            if let age = context.age(relativeTo: referenceDate) {
                 return "Longhouse status is \(SnapshotAgeFormatter.compact(age)) old — refresh is failing"
             }
             return "Longhouse status is out of date — refresh is failing"
         case .current:
             break
         }
-        guard let snapshot = store.snapshot else {
-            return nil
-        }
-        let presentation = snapshot.menuBarPresentation(relativeTo: Date())
-        guard presentation.needsStatusItemBadge else { return nil }
+        guard let presentation, presentation.needsStatusItemBadge else { return nil }
         return presentation.headline
     }
 
