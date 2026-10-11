@@ -562,7 +562,8 @@ def test_served_marker_events_are_the_answers_and_mentions_are_kept_apart():
 
     assert [event["id"] for event in core.assistant_marker_events(events, _MARKER)] == ["reply"]
     assert [event["id"] for event in core.assistant_marker_mentions(events, _MARKER)] == ["narration"]
-    assert core.marker_answer_fault(events, _MARKER, reply_event_id="reply") is None
+    assert core.served_answer_fault(events, _MARKER, {"reply": 1}) is None
+    assert core.served_answer_correspondence(events, _MARKER, {"reply": 1})["converged"] is True
 
     workspace = {
         "projection": {
@@ -577,22 +578,69 @@ def test_served_marker_events_are_the_answers_and_mentions_are_kept_apart():
     assert evidence["marker_counts"] == [1]
 
 
-def test_a_complete_page_with_a_wrong_number_of_answers_is_a_typed_fault():
+def test_a_page_converges_when_it_serves_the_providers_own_answers_however_many():
+    """The 2026-10-11 11:23Z OMP background run: the model answered, OMP woke it when the second
+    background job ended, and it answered again. Two rows of OMP's transcript, served as two events."""
+    first = _served_event(
+        "f1b18140", f"Both native terminal events are in: the command job exited 0 and the worker completed.\n\n{_MARKER}"
+    )
+    second = _served_event("adf024ae", _MARKER)
+    native = {"f1b18140": 1, "adf024ae": 1}
+
+    found = core.served_answer_correspondence([first, second], _MARKER, native)
+    assert found["converged"] is True
+    assert found["served_answer_event_ids"] == ["f1b18140", "adf024ae"]
+    assert found["served_answer_rows"] == native == found["native_answer_rows"]
+    assert core.served_answer_fault([first, second], _MARKER, native) is None
+
+    # The page has not reached the second answer yet: lag, not a fault and not convergence.
+    behind = core.served_answer_correspondence([first], _MARKER, native)
+    assert behind["converged"] is False and behind["unserved_native_row_ids"] == ["adf024ae"]
+    assert core.served_answer_fault([first], _MARKER, native) is None
+
+
+def test_narration_that_quotes_the_marker_is_no_answer_on_either_side():
+    """The 2026-10-11 02:10Z case: a turn narrated the marker ahead of a tool call, then answered once."""
     narration = _served_event("narration", _NARRATION)
     reply = _served_event("reply", _FINAL_REPLY)
-    again = _served_event("again", _MARKER)
 
-    twice = core.marker_answer_fault([narration, reply, again], _MARKER, reply_event_id="reply")
-    assert twice is not None and twice.reason == core.MARKER_ANSWERED_MORE_THAN_ONCE
-    assert twice.answer_event_ids == ["reply", "again"] and twice.mention_event_ids == ["narration"]
-    assert str(twice).startswith("marker_answered_more_than_once: ")
+    found = core.served_answer_correspondence([narration, reply], _MARKER, {"reply": 1})
+    assert found["converged"] is True and found["served_answer_event_ids"] == ["reply"]
+    assert core.served_answer_fault([narration, reply], _MARKER, {"reply": 1}) is None
+
+
+def test_a_served_answer_the_providers_transcript_does_not_account_for_is_a_typed_fault():
+    narration = _served_event("narration", _NARRATION)
+    reply = _served_event("reply", _FINAL_REPLY)
+
+    # One native answer, and the page serves that row twice.
+    twice = core.served_answer_fault([narration, reply, dict(reply)], _MARKER, {"reply": 1})
+    assert twice is not None and twice.reason == core.NATIVE_ANSWER_SERVED_MORE_THAN_ONCE
+    assert twice.answer_event_ids == ["reply", "reply"] and twice.mention_event_ids == ["narration"]
+    assert str(twice).startswith("native_answer_served_more_than_once: ")
+    # The same row's answer under a second event of that row.
+    split = core.served_answer_fault([reply, _served_event("reply-text-1", _MARKER)], _MARKER, {"reply": 1})
+    assert split is not None and split.reason == core.NATIVE_ANSWER_SERVED_MORE_THAN_ONCE
+    # An answering event that belongs to no answering row of the transcript.
+    stray = core.served_answer_fault([reply, _served_event("again", _MARKER)], _MARKER, {"reply": 1})
+    assert stray is not None and stray.reason == core.SERVED_ANSWER_WITHOUT_NATIVE_ROW
+    assert stray.answer_event_ids == ["reply", "again"]
+    assert "belong to none" in str(stray) and "The command finished" not in str(stray)
+
+    # A row that answers in its second text block is served under the row's id plus a suffix.
+    later_block = _served_event("reply-text-1", _MARKER)
+    assert core.served_answer_correspondence([later_block], _MARKER, {"reply": 1})["converged"] is True
+    # A row that answers twice is served as it stands.
+    both = [_served_event("reply", _MARKER), _served_event("reply-text-1", _MARKER)]
+    assert core.served_answer_correspondence(both, _MARKER, {"reply": 2})["converged"] is True
 
     # Marker only in narration. Until the page carries the row that answered,
     # the reply may simply not be ingested yet: no fault, the caller keeps waiting.
-    assert core.marker_answer_fault([narration], _MARKER, reply_event_id="reply") is None
-    assert core.marker_answer_fault([narration], _MARKER) is None
+    assert core.served_answer_fault([narration], _MARKER, {"reply": 1}) is None
+    assert core.served_answer_fault([narration], _MARKER, {}) is None
+    assert core.served_answer_correspondence([narration], _MARKER, {})["converged"] is False
     # Marker never answered, and the page already carries the reply row.
-    unanswered = core.marker_answer_fault([narration, _served_event("reply", "Done.")], _MARKER, reply_event_id="reply")
+    unanswered = core.served_answer_fault([narration, _served_event("reply", "Done.")], _MARKER, {"reply": 1})
     assert unanswered is not None and unanswered.reason == core.MARKER_REPLY_SERVED_WITHOUT_ANSWER
     assert unanswered.answer_event_ids == [] and unanswered.mention_event_ids == ["narration"]
 

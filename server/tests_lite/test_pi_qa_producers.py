@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -79,7 +80,9 @@ def test_helm_auth_failure_is_not_hidden_as_a_convergence_timeout(monkeypatch) -
 
     monkeypatch.setattr(helm, "_runtime_snapshot", rejected)
     with pytest.raises(helm._RuntimeHostHTTPError) as error:
-        helm._wait_runtime_convergence("https://runtime.invalid", "fixture", "session", "native", "marker", timeout=1)
+        helm._wait_runtime_convergence(
+            "https://runtime.invalid", "fixture", "session", "native", "marker", session_file=Path("/native/session.jsonl"), timeout=1
+        )
     assert error.value.status == 403
 
 
@@ -100,7 +103,17 @@ def _pi_snapshot(events: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
-def _pi_converge(monkeypatch, events: list[dict[str, object]], *, reads: list[int] | None = None, **kwargs: object):
+def _pi_converge(
+    monkeypatch,
+    events: list[dict[str, object]],
+    *,
+    reads: list[int] | None = None,
+    native_answers: dict[str, int] | None = None,
+    **kwargs: object,
+):
+    """Converge on a fixed served page. ``native_answers`` is what Pi's own transcript
+    answers with: entry id to count, by default the one entry ``reply``."""
+
     from zerg.qa import pi_helm_lifecycle as helm
 
     def snapshot(*_args: object) -> dict[str, object]:
@@ -109,7 +122,9 @@ def _pi_converge(monkeypatch, events: list[dict[str, object]], *, reads: list[in
         return _pi_snapshot(events)
 
     monkeypatch.setattr(helm, "_runtime_snapshot", snapshot)
-    arguments = {"reply_event_id": "reply", "timeout": 30, **kwargs}
+    answers = {"reply": 1} if native_answers is None else native_answers
+    monkeypatch.setattr(helm, "_native_answer_rows", lambda *_a, **_k: dict(answers))
+    arguments = {"reply_event_id": "reply", "session_file": Path("/native/session.jsonl"), "timeout": 30, **kwargs}
     marker = str(arguments.pop("marker", _PI_MARKER))
     return helm._wait_runtime_convergence("https://runtime.invalid", "fixture", "session-1", "native-1", marker, **arguments)
 
@@ -129,9 +144,24 @@ def test_pi_runtime_convergence_counts_the_answer_not_the_narration_that_quotes_
     assert reads == [1]
 
 
-def test_pi_runtime_convergence_fails_at_once_on_a_wrong_number_of_answers(monkeypatch) -> None:
+def test_pi_runtime_convergence_serves_the_providers_own_answers_however_many(monkeypatch) -> None:
+    twice = [
+        {"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY},
+        {"id": "again", "role": "assistant", "content_text": _PI_MARKER},
+    ]
+    reads: list[int] = []
+
+    # Pi's transcript answers in two entries and the page serves both: converged.
+    runtime = _pi_converge(monkeypatch, twice, reads=reads, native_answers={"reply": 1, "again": 1})
+    assert reads == [1]
+    assert [event["id"] for event in runtime["assistant_events"]] == ["reply", "again"]
+    assert runtime["answer_correspondence"]["native_answer_rows"] == {"reply": 1, "again": 1}
+
+
+def test_pi_runtime_convergence_fails_at_once_on_an_answer_the_transcript_does_not_account_for(monkeypatch) -> None:
     from zerg.qa import pi_helm_lifecycle as helm
 
+    # Pi answered once, and the page carries a second answering event of no entry.
     twice = [
         {"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY},
         {"id": "again", "role": "assistant", "content_text": _PI_MARKER},
@@ -141,10 +171,16 @@ def test_pi_runtime_convergence_fails_at_once_on_a_wrong_number_of_answers(monke
         _pi_converge(monkeypatch, twice, reads=reads)
     assert reads == [1]
     assert raised.value.cause_type == "MarkerAnswerCountError"
-    assert "marker_answered_more_than_once: " in str(raised.value)
+    assert "served_answer_without_native_row: " in str(raised.value)
     assert "has 2 answering served assistant event(s)" in str(raised.value)
     assert "timed out" not in str(raised.value)
     assert raised.value.last_runtime_observation["assistant_marker_event_ids"] == ["reply", "again"]
+
+    # The one entry that answered, served twice.
+    reply = {"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY}
+    with pytest.raises(helm._RuntimeConvergenceError) as raised:
+        _pi_converge(monkeypatch, [reply, dict(reply)])
+    assert "native_answer_served_more_than_once: " in str(raised.value)
 
     # The page carries the native reply row, and it does not answer.
     served_without_answer = [{"id": "reply", "role": "assistant", "content_text": _PI_NARRATION}]

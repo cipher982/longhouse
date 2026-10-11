@@ -335,12 +335,21 @@ def assistant_marker_mentions(
     ]
 
 
+# A count of replies that no later event can bring back to what was expected.
+# Kept for the surfaces that count one finished turn of a Console run (the
+# provider's own rows, a finished run's output stream, the archive of a turn
+# with a known ceiling). A served page of a Helm session is not judged by a
+# count at all: see `served_answer_fault`.
 MARKER_ANSWERED_MORE_THAN_ONCE = "marker_answered_more_than_once"
 MARKER_REPLY_SERVED_WITHOUT_ANSWER = "marker_reply_served_without_answer"
+# The Runtime Host serves an answer the provider's own transcript does not
+# hold, or serves one of its answers more often than the provider wrote it.
+SERVED_ANSWER_WITHOUT_NATIVE_ROW = "served_answer_without_native_row"
+NATIVE_ANSWER_SERVED_MORE_THAN_ONCE = "native_answer_served_more_than_once"
 
 
 class MarkerAnswerCountError(RuntimeError):
-    """A transcript that can no longer change did not answer a marker exactly once.
+    """What was served or retained cannot be the provider's answers to a marker.
 
     Raised as soon as that is certain, instead of polling to a deadline: nothing
     was slow, so waiting cannot help and a timeout would misreport the cause.
@@ -387,42 +396,119 @@ class MarkerAnswerCountError(RuntimeError):
         }
 
 
-def marker_answer_fault(
+def served_answer_correspondence(
     events: Iterable[object],
     marker: str,
+    native_answers: Mapping[str, int],
     *,
     default_origin: str | None = None,
     alongside: Iterable[str] = (),
     recalled: bool = False,
-    reply_event_id: object = None,
+) -> dict[str, object]:
+    """Set the served events that answer ``marker`` beside the provider's own rows that do.
+
+    Convergence is a claim about Longhouse: it serves what the provider wrote.
+    How often the model answered is the provider's business. A provider that
+    wakes its agent again when a background job ends gets a second reply to the
+    same prompt, both replies are real, and a page that serves both has
+    converged.
+
+    ``native_answers`` maps the id of each row of the provider's own transcript
+    that answers to how many times that row answers (occurrences under the rule
+    in ``zerg.qa.answer_markers``; for ``recalled``, of the phrase). The Runtime
+    Host serves a row's first event under the row's id and its later blocks
+    under ``<row id>-...``, so a served event belongs to the row whose id it
+    carries or extends, and a row's answers are counted across its events.
+
+    ``converged`` is True when at least one row answers and every answering
+    row is served exactly as often as it answers. ``unserved_native_row_ids``
+    are the rows the page has not caught up with, which is lag.
+    ``unbound_served_event_ids`` and ``overserved_native_row_ids`` are answers
+    the provider's transcript does not account for; `served_answer_fault` turns
+    them into a typed failure.
+    """
+    alongside = tuple(alongside)
+    answers = assistant_marker_events(events, marker, default_origin=default_origin, alongside=alongside, recalled=recalled)
+    native = {str(row): int(count) for row, count in native_answers.items() if int(count) > 0}
+    # Longest id first, so a row whose id extends another's is not taken for it.
+    rows = sorted(native, key=len, reverse=True)
+    served: dict[str, int] = {}
+    unbound: list[object] = []
+    for event in answers:
+        event_id = str(event.get("id"))
+        row = next((candidate for candidate in rows if event_id == candidate or event_id.startswith(f"{candidate}-")), None)
+        if row is None:
+            unbound.append(event.get("id"))
+            continue
+        text = event_text(event)
+        served[row] = served.get(row, 0) + (text.count(marker) if recalled else marker_answer_count(text, marker, alongside=alongside))
+    event_ids = [event.get("id") for event in answers]
+    repeated = sorted({str(event_id) for event_id in event_ids if event_ids.count(event_id) > 1})
+    return {
+        "native_answer_rows": native,
+        "served_answer_rows": served,
+        "served_answer_event_ids": event_ids,
+        "unserved_native_row_ids": [row for row in native if served.get(row, 0) < native[row]],
+        "overserved_native_row_ids": [row for row in native if served.get(row, 0) > native[row]],
+        "unbound_served_event_ids": unbound,
+        "repeated_served_event_ids": repeated,
+        "converged": bool(native) and served == native and not unbound and not repeated,
+    }
+
+
+def served_answer_fault(
+    events: Iterable[object],
+    marker: str,
+    native_answers: Mapping[str, int],
+    *,
+    default_origin: str | None = None,
+    alongside: Iterable[str] = (),
+    recalled: bool = False,
 ) -> MarkerAnswerCountError | None:
-    """Why a complete served page can never hold exactly one reply, or None.
+    """Why a complete served page can never be the provider's answers, or None.
 
     Call it only with a complete page: every event the Runtime Host serves on
-    the session's head branch, read to the end under one generation.
+    the session's head branch, read to the end under one generation, and with
+    ``native_answers`` read from the provider's transcript after that page, so
+    that nothing served is newer than what was read.
 
-    Two or more replies are final. Events still to arrive can add a reply but
-    never take one back, so the count cannot return to one.
-
-    No reply is final only once the page has caught up with the turn.
-    ``reply_event_id`` is the id of the provider's own transcript row that
-    replied; the Runtime Host serves the first event of a row under the row's
-    id. While that id is absent the reply has not been ingested yet, which is
-    the lag this proof exists to wait out, and the caller keeps polling. Once
-    it is present and still nothing replies, the host served the row in a form
-    that is not a reply, and more waiting cannot change that.
+    Three things are final, because events still to arrive can add to a page
+    and never take from it. An answering event that belongs to no answering
+    row of the provider's transcript; a row served more often than it answers,
+    or one event served twice; and a row whose first event is on the page while
+    nothing served for it answers, which is the row served in a form that is
+    not a reply. A row the page has not reached yet is none of these: that is
+    the lag a convergence wait exists to wait out, and the caller keeps polling.
     """
     events = list(events)
     alongside = tuple(alongside)
-    answers = assistant_marker_events(events, marker, default_origin=default_origin, alongside=alongside, recalled=recalled)
-    if len(answers) == 1:
-        return None
-    mentions = assistant_marker_mentions(events, marker, default_origin=default_origin, alongside=alongside, recalled=recalled)
-    if len(answers) > 1:
-        return MarkerAnswerCountError(MARKER_ANSWERED_MORE_THAN_ONCE, marker=marker, answers=answers, mentions=mentions)
-    reply_served = reply_event_id is not None and any(isinstance(event, dict) and event.get("id") == reply_event_id for event in events)
-    if reply_served:
-        return MarkerAnswerCountError(MARKER_REPLY_SERVED_WITHOUT_ANSWER, marker=marker, answers=answers, mentions=mentions)
+    found = served_answer_correspondence(
+        events, marker, native_answers, default_origin=default_origin, alongside=alongside, recalled=recalled
+    )
+    native: dict[str, int] = found["native_answer_rows"]  # type: ignore[assignment]
+    served: dict[str, int] = found["served_answer_rows"]  # type: ignore[assignment]
+
+    def fault(reason: str, expected: str) -> MarkerAnswerCountError:
+        return MarkerAnswerCountError(
+            reason,
+            marker=marker,
+            answers=assistant_marker_events(events, marker, default_origin=default_origin, alongside=alongside, recalled=recalled),
+            mentions=assistant_marker_mentions(events, marker, default_origin=default_origin, alongside=alongside, recalled=recalled),
+            expected=expected,
+        )
+
+    account = f"the provider's own answering rows {native}"
+    if found["unbound_served_event_ids"]:
+        return fault(SERVED_ANSWER_WITHOUT_NATIVE_ROW, f"only events of {account}; {found['unbound_served_event_ids']} belong to none")
+    if found["repeated_served_event_ids"] or found["overserved_native_row_ids"]:
+        return fault(
+            NATIVE_ANSWER_SERVED_MORE_THAN_ONCE,
+            f"each of {account} served as often as it answers; served {served}, event ids served twice {found['repeated_served_event_ids']}",
+        )
+    served_ids = {str(event.get("id")) for event in events if isinstance(event, dict)}
+    unanswered = [row for row in native if row in served_ids and not served.get(row)]
+    if unanswered:
+        return fault(MARKER_REPLY_SERVED_WITHOUT_ANSWER, f"an answer from each served row of {account}; {unanswered} served without one")
     return None
 
 

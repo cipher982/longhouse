@@ -31,7 +31,8 @@ from zerg.qa.answer_markers import marker_answered
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import assistant_marker_mentions
 from zerg.qa.console_served_state_core import event_text
-from zerg.qa.console_served_state_core import marker_answer_fault
+from zerg.qa.console_served_state_core import served_answer_correspondence
+from zerg.qa.console_served_state_core import served_answer_fault
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retire_qualification_session
@@ -90,7 +91,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=10,
+    scenario_revision=11,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -628,17 +629,21 @@ def _wait_runtime_convergence(
     alongside: tuple[str, ...] = (),
     recalled: bool = False,
     reply_event_id: object = None,
+    session_file: Path,
     timeout: float = 90,
 ) -> dict[str, Any]:
-    """Wait until the Runtime Host serves the turn's one reply to ``marker``.
+    """Wait until the Runtime Host serves what Pi answered ``marker`` with.
 
-    ``alongside`` names the other markers the reply was asked to carry;
-    ``recalled`` is for a phrase the model brings back from restored history,
-    which it may put in a sentence. ``reply_event_id`` is the native entry that
-    replied. A complete served page that already holds two replies, or that
-    entry without a reply, fails at once with a typed reason
-    (`marker_answer_fault`); a page the reply has not reached yet is the lag
-    this waits out.
+    The served events that answer must be the entries of Pi's own transcript
+    (``session_file``) that answer, entry for entry
+    (`served_answer_correspondence`); how many there are is the provider's
+    business. ``alongside`` names the other markers the reply was asked to
+    carry; ``recalled`` is for a phrase the model brings back from restored
+    history, which it may put in a sentence. ``reply_event_id`` is the native
+    entry the native wait returned. A complete served page with an answer the
+    transcript does not account for fails at once with a typed reason
+    (`served_answer_fault`); a page that has not reached an answering entry yet
+    is the lag this waits out.
     """
 
     last_runtime_observation: dict[str, Any] | None = None
@@ -665,24 +670,27 @@ def _wait_runtime_convergence(
             alongside=alongside,
             recalled=recalled,
         )
-        if events_payload.get("has_more") is False:
-            fault = marker_answer_fault(
-                events,
-                marker,
-                default_origin="durable",
-                alongside=alongside,
-                recalled=recalled,
-                reply_event_id=reply_event_id,
-            )
+        # Read after the page, so nothing served is newer than what is read here.
+        native_answers = _native_answer_rows(session_file, marker, alongside=alongside, recalled=recalled)
+        native_readable = native_answers is not None
+        native_answers = native_answers or {}
+        correspondence = served_answer_correspondence(
+            events, marker, native_answers, default_origin="durable", alongside=alongside, recalled=recalled
+        )
+        correspondence["native_transcript_readable"] = native_readable
+        last_runtime_observation["answer_correspondence"] = correspondence
+        last_runtime_observation["native_reply_served"] = reply_event_id is not None and any(
+            isinstance(event, dict) and event.get("id") == reply_event_id for event in events
+        )
+        # Without Pi's transcript there is nothing to hold the page to: no
+        # verdict either way, and the wait runs to its deadline saying so.
+        if native_readable and events_payload.get("has_more") is False:
+            fault = served_answer_fault(events, marker, native_answers, default_origin="durable", alongside=alongside, recalled=recalled)
             if fault is not None:
                 fault.observation = dict(last_runtime_observation)
                 raise fault
-        once = event_text(matches[0]).count(marker) if recalled and matches else None
-        if not recalled and matches:
-            once = marker_answer_count(event_text(matches[0]), marker, alongside=alongside)
         if (
-            len(matches) == 1
-            and once == 1
+            correspondence["converged"] is True
             and binding["one_session"]
             and binding["one_thread"]
             and binding["provider"] == "pi"
@@ -693,6 +701,10 @@ def _wait_runtime_convergence(
                 "snapshot": snapshot,
                 "binding": binding,
                 "assistant_events": matches,
+                # The entries of Pi's transcript that answered and the served
+                # events that carry them. More than one entry is a model that
+                # answered more than once, which is recorded and decides nothing.
+                "answer_correspondence": correspondence,
                 "alongside": list(alongside),
                 "recalled": recalled,
             }
@@ -709,6 +721,33 @@ def _wait_runtime_convergence(
         raise
     except Exception as exc:
         raise _RuntimeConvergenceError(marker, exc, last_runtime_observation) from exc
+
+
+def _native_answer_rows(
+    session_file: Path, marker: str, *, alongside: tuple[str, ...] = (), recalled: bool = False
+) -> dict[str, int] | None:
+    """The assistant entries of Pi's own transcript that answer ``marker``, and how often each does.
+
+    None when the transcript cannot be read: what the provider wrote is then
+    unknown, which is not the same as the provider having written nothing.
+    """
+
+    if not session_file.is_file():
+        return None
+    try:
+        rows, _metadata, _taxonomy = _native_snapshot(session_file)
+    except OSError:
+        return None
+    answers: dict[str, int] = {}
+    for row in rows:
+        entry_id = row.get("entry_id")
+        if row.get("role") != "assistant" or not isinstance(entry_id, str) or not entry_id:
+            continue
+        text = str(row.get("text") or "")
+        count = text.count(marker) if recalled else marker_answer_count(text, marker, alongside=alongside)
+        if count:
+            answers[entry_id] = max(answers.get(entry_id, 0), count)
+    return answers
 
 
 def _native_snapshot(session_file: Path) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
@@ -1179,7 +1218,7 @@ def pi_helm_lifecycle_assertions(observation: dict[str, Any]) -> dict[str, bool]
             and steer_receipt.get("accepted") is True
             and steer_runtime.get("active_turn_observed") is True
             and steer_active_state.get("phase") in {"running", "thinking"}
-            and steer_native.get("assistant_answer_rows") == 1
+            and (steer_native.get("assistant_answer_rows") or 0) >= 1
             and (observation.get("steer_turn_verdict") or {}).get("passed") is True
         ),
         "pi_helm_follow_up_native": (
@@ -1236,13 +1275,13 @@ def pi_helm_lifecycle_assertions(observation: dict[str, Any]) -> dict[str, bool]
             and context_pre.get("native_user_marker_rows") == 1
             and context_pre.get("native_user_marker_occurrences") == 1
             and context_native.get("marker") == context_phrase
-            and context_native.get("assistant_answer_rows") == 1
+            and (context_native.get("assistant_answer_rows") or 0) >= 1
             and context_native.get("user_marker_rows") == 0
             and context_native.get("user_marker_occurrences") == 0
             and context_evidence.get("resume_prompt")
             and context_phrase not in str(context_evidence["resume_prompt"])
             and context_runtime.get("marker") == context_phrase
-            and context_runtime.get("assistant_marker_count") == 1
+            and (context_runtime.get("assistant_marker_count") or 0) >= 1
             and all(context_binding.get(field) is True for field in ("one_session", "one_thread", "provider_session_bound"))
         ),
         "pi_helm_stale_owner_refused": observation.get("stale_owner_refused") is True,
@@ -1413,6 +1452,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             str(current_state.get("provider_session_id") or ""),
             marker,
             reply_event_id=native.get("assistant_reply_entry_id"),
+            session_file=session_file,
         )
         observations["runtime_launch"] = {
             "flush": launch_flush,
@@ -1481,6 +1521,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             str(current_state.get("provider_session_id") or ""),
             send_marker,
             reply_event_id=send_native.get("assistant_reply_entry_id"),
+            session_file=session_file,
         )
         observations["runtime_send"] = _runtime_receipt(
             runtime_send,
@@ -1491,7 +1532,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         observations["send_idle"] = (
             send["accepted"]
             and bool(send_native["invocation_rows"])
-            and send_native["assistant_answer_rows"] == 1
+            and send_native["assistant_answer_rows"] >= 1
             and send_flush.get("status") == "pass"
             and runtime_send["binding"]["one_session"]
             and runtime_send["binding"]["one_thread"]
@@ -1531,6 +1572,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             str(current_state.get("provider_session_id") or ""),
             follow_marker,
             reply_event_id=follow_native.get("assistant_reply_entry_id"),
+            session_file=session_file,
         )
         steer_task_marker = f"PI_HELM_STEER_TASK_{os.urandom(8).hex()}"
         steer_done_marker = f"PI_HELM_STEER_TASK_DONE_{os.urandom(8).hex()}"
@@ -1578,6 +1620,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             str(current_state.get("provider_session_id") or ""),
             steer_marker,
             reply_event_id=steer_native.get("assistant_reply_entry_id"),
+            session_file=session_file,
         )
         observations["runtime_steer"] = _runtime_receipt(
             steer_runtime,
@@ -1602,14 +1645,14 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             and bool(steer_active_state)
             and steer["accepted"]
             and bool(steer_native["invocation_rows"])
-            and steer_native["assistant_answer_rows"] == 1
+            and steer_native["assistant_answer_rows"] >= 1
             and observations["steer_turn_verdict"]["passed"] is True
         )
         observations["follow_up_native"] = (
             active["accepted"]
             and follow["accepted"]
             and bool(follow_native["invocation_rows"])
-            and follow_native["assistant_answer_rows"] == 1
+            and follow_native["assistant_answer_rows"] >= 1
             and follow_native["user_marker_rows"] == 1
             and follow_native["user_marker_occurrences"] == 1
             and follow_submitted_while_active
@@ -1730,6 +1773,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             str(reloaded.get("provider_session_id") or ""),
             reload_marker,
             reply_event_id=reload_native.get("assistant_reply_entry_id"),
+            session_file=session_file,
         )["snapshot"]
         reload_binding = _runtime_binding(
             reload_snapshot,
@@ -1758,7 +1802,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             and bool(reloaded.get("lease_generation"))
             and reloaded.get("lease_generation") != old_connection.get("lease_generation")
             and reload_send["accepted"]
-            and reload_native["assistant_answer_rows"] == 1
+            and reload_native["assistant_answer_rows"] >= 1
             and reload_binding["one_session"]
             and reload_binding["one_thread"]
             and reload_binding["provider"] == "pi"
@@ -1826,6 +1870,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             str(replaced.get("provider_session_id") or ""),
             replacement_marker,
             reply_event_id=replacement_native.get("assistant_reply_entry_id"),
+            session_file=session_file,
         )
         observations["replacement_runtime"] = {
             "send": replacement_send,
@@ -2153,6 +2198,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             resume_marker,
             alongside=(context_phrase,),
             reply_event_id=resumed_native.get("assistant_reply_entry_id"),
+            session_file=resumed_file,
         )
         runtime_resume_context = _wait_runtime_convergence(
             args.api_url,
@@ -2162,6 +2208,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             context_phrase,
             recalled=True,
             reply_event_id=resumed_context_native.get("assistant_reply_entry_id"),
+            session_file=resumed_file,
         )
         observations["runtime_resume"] = _runtime_receipt(
             runtime_resume,
@@ -2176,7 +2223,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             and resumed_native["metadata"].get("provider_session_id") == resumed_state.get("provider_session_id")
             and bool(resumed_native["invocation_rows"])
             and resumed_native["assistant_answer_rows"] > 0
-            and resumed_context_native["assistant_answer_rows"] == 1
+            and resumed_context_native["assistant_answer_rows"] >= 1
             and resumed_context_native["user_marker_rows"] == 0
             and resumed_context_native["user_marker_occurrences"] == 0
             and resume_flush.get("status") == "pass"

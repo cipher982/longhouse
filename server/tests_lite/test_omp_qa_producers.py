@@ -1077,6 +1077,8 @@ def test_omp_helm_zero_delta_flush_is_accepted_only_before_independent_marker_pr
         },
     )
 
+    # OMP's own transcript answers in the row the page serves.
+    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._native_answer_rows", lambda *_a, **_k: {"event-1": 1})
     convergence = _runtime_convergence(
         "https://runtime.example",
         "token",
@@ -2039,9 +2041,19 @@ def _served_events_snapshot(events: list[dict[str, object]]) -> dict[str, object
     }
 
 
-def _converge(monkeypatch, events: list[dict[str, object]], *, reads: list[int] | None = None, **kwargs: object) -> dict[str, object]:
+def _converge(
+    monkeypatch,
+    events: list[dict[str, object]],
+    *,
+    reads: list[int] | None = None,
+    native_answers: dict[str, int] | None = None,
+    **kwargs: object,
+) -> dict[str, object]:
     """Converge on a fixed served page. ``reads`` counts the Runtime Host reads:
-    one read means the verdict came from the first complete page, with no polling."""
+    one read means the verdict came from the first complete page, with no polling.
+    ``native_answers`` is what OMP's own transcript answers with: row id to count,
+    by default the one row ``reply``. A test that passes ``native_source_path``
+    reads a real session file instead."""
 
     def snapshot(*_args: object) -> dict[str, object]:
         if reads is not None:
@@ -2049,6 +2061,9 @@ def _converge(monkeypatch, events: list[dict[str, object]], *, reads: list[int] 
         return _served_events_snapshot(events)
 
     monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_snapshot", snapshot)
+    if "native_source_path" not in kwargs:
+        answers = {"reply": 1} if native_answers is None else native_answers
+        monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._native_answer_rows", lambda *_a, **_k: dict(answers))
     arguments = {
         "session_id": "session-1",
         "native_session_id": "native-1",
@@ -2083,30 +2098,95 @@ def test_omp_runtime_convergence_counts_the_answer_not_the_narration_that_quotes
     assert reads == [1]
 
 
-def test_omp_runtime_convergence_fails_at_once_when_the_marker_is_answered_twice(monkeypatch) -> None:
+def test_omp_runtime_convergence_serves_both_answers_of_a_model_woken_by_a_background_job(monkeypatch, tmp_path) -> None:
+    """Replay of the 2026-10-11 11:23Z background run through OMP's own transcript reader.
+
+    The model answered, OMP woke it when the second background job ended, and
+    it answered again: two assistant rows that both stop, served as two events.
+    """
+
+    def row(row_id: str, role: str, text: str, **message: object) -> str:
+        content = [{"type": "text", "text": text}]
+        return json.dumps({"type": "message", "id": row_id, "message": {"role": role, "content": content, **message}})
+
+    first = (
+        f"Both native terminal events are in: the command job `bg_cmd` exited 0, and the inspection worker completed.\n\n{_REPLY_MARKER}"
+    )
+    session_file = tmp_path / "session.jsonl"
+    session_file.write_text(
+        "\n".join(
+            (
+                row("00a7607a", "user", f"Start both jobs. After both report, reply with exactly {_REPLY_MARKER}."),
+                row("be06f98c", "assistant", "I'll start both background jobs in parallel.", stopReason="toolUse"),
+                row("f1b18140", "assistant", first, stopReason="stop"),
+                json.dumps({"type": "custom_message", "id": "4ed4c4b1"}),
+                row("adf024ae", "assistant", _REPLY_MARKER, stopReason="stop"),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     events = [
-        {"id": "narration", "role": "assistant", "content_text": _NARRATION},
-        {"id": "reply", "role": "assistant", "content_text": _FINAL_REPLY},
-        {"id": "again", "role": "assistant", "content_text": _REPLY_MARKER},
+        {"id": "00a7607a", "role": "user", "content_text": f"Start both jobs. After both report, reply with exactly {_REPLY_MARKER}."},
+        {"id": "be06f98c", "role": "assistant", "content_text": "I'll start both background jobs in parallel."},
+        {"id": "be06f98c-tool-call_1", "role": "assistant", "tool_name": "task", "content_text": ""},
+        {"id": "f1b18140", "role": "assistant", "content_text": first},
+        {"id": "adf024ae", "role": "assistant", "content_text": _REPLY_MARKER},
     ]
 
     reads: list[int] = []
+    convergence = _converge(monkeypatch, events, reads=reads, native_source_path=str(session_file), native_reply_id="f1b18140")
+
+    assert convergence["status"] == "pass" and reads == [1]
+    # Recorded, and it decides nothing: the model answered twice.
+    assert convergence["answer_correspondence"]["native_answer_rows"] == {"f1b18140": 1, "adf024ae": 1}
+    assert convergence["answer_correspondence"]["served_answer_event_ids"] == ["f1b18140", "adf024ae"]
+    projection = convergence["served_projection"]
+    assert projection["marker_event_ids"] == ["f1b18140", "adf024ae"] and projection["marker_event_id"] is None
+    assert projection["marker_event_durable"] is True and projection["marker_event_identity_bound"] is True
+
+    # The page has reached only the first answer: lag, which the wait polls through to its deadline.
+    with pytest.raises(RuntimeConvergenceTimeout) as lagging:
+        _converge(monkeypatch, events[:-1], native_source_path=str(session_file), native_reply_id="f1b18140", timeout=0.5)
+    assert lagging.value.observation["unserved_native_row_ids"] == ["adf024ae"]
+
+
+def test_omp_runtime_convergence_gives_no_verdict_without_omps_transcript(monkeypatch, tmp_path) -> None:
+    """A transcript that cannot be read is unknown, not empty: the served answer is neither refused nor accepted."""
+
+    reply = {"id": "reply", "role": "assistant", "content_text": _FINAL_REPLY}
+    with pytest.raises(RuntimeConvergenceTimeout) as raised:
+        _converge(monkeypatch, [reply], native_source_path=str(tmp_path / "missing.jsonl"), timeout=0.5)
+    assert "'native_transcript_readable': False" in str(raised.value)
+
+
+def test_omp_runtime_convergence_refuses_an_answer_the_transcript_does_not_account_for(monkeypatch) -> None:
+    narration = {"id": "narration", "role": "assistant", "content_text": _NARRATION}
+    reply = {"id": "reply", "role": "assistant", "content_text": _FINAL_REPLY}
+
+    # OMP answered once, in the row `reply`, and the page serves that row twice.
+    reads: list[int] = []
     with pytest.raises(MarkerAnswerCountError) as raised:
-        _converge(monkeypatch, events, reads=reads)
+        _converge(monkeypatch, [narration, reply, dict(reply)], reads=reads)
 
     error = raised.value
     assert reads == [1]
-    assert error.reason == "marker_answered_more_than_once"
-    assert str(error).startswith("marker_answered_more_than_once: ")
-    assert "has 2 answering served assistant event(s), expected exactly 1" in str(error)
-    assert error.answer_event_ids == ["reply", "again"]
+    assert error.reason == "native_answer_served_more_than_once"
+    assert str(error).startswith("native_answer_served_more_than_once: ")
+    assert error.answer_event_ids == ["reply", "reply"]
     assert error.mention_event_ids == ["narration"]
     # The message is structure only: a classifier must not read the model's words.
     assert "INFERENCE" not in str(error) and "timed out" not in str(error)
-    # What the Runtime Host served stays with the error.
-    served = error.evidence()["observation"]["served_projection"]
-    assert [event["id"] for event in served["marker_events"]] == ["reply", "again"]
-    assert served["events_page"]["complete"] is True
+    # What the Runtime Host served stays with the error, beside what OMP wrote.
+    observation = error.evidence()["observation"]
+    assert observation["answer_correspondence"]["native_answer_rows"] == {"reply": 1}
+    assert observation["served_projection"]["events_page"]["complete"] is True
+
+    # An answering event that belongs to no row of OMP's transcript that answers.
+    with pytest.raises(MarkerAnswerCountError) as stray:
+        _converge(monkeypatch, [reply, {"id": "again", "role": "assistant", "content_text": _REPLY_MARKER}])
+    assert stray.value.reason == "served_answer_without_native_row"
+    assert stray.value.answer_event_ids == ["reply", "again"]
 
 
 def test_omp_runtime_convergence_fails_at_once_when_the_served_reply_row_does_not_answer(monkeypatch) -> None:

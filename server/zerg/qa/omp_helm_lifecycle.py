@@ -29,7 +29,8 @@ from zerg.qa.console_served_state_core import MarkerAnswerCountError
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import assistant_marker_mentions
 from zerg.qa.console_served_state_core import event_text
-from zerg.qa.console_served_state_core import marker_answer_fault
+from zerg.qa.console_served_state_core import served_answer_correspondence
+from zerg.qa.console_served_state_core import served_answer_fault
 from zerg.qa.failed_results import reached_only
 from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
@@ -102,7 +103,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
     producer_revision=10,
     scenario_id=SCENARIO_ID,
-    scenario_revision=15,
+    scenario_revision=16,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -537,7 +538,10 @@ def _served_projection_evidence(
     members = thread.get("sessions") if isinstance(thread.get("sessions"), list) else []
     marker_matches = assistant_marker_events(events, marker, default_origin="durable", alongside=alongside)
     marker_mentions = assistant_marker_mentions(events, marker, default_origin="durable", alongside=alongside)
-    marker_event_id = marker_matches[0].get("id") if len(marker_matches) == 1 else None
+    marker_event_ids = [event.get("id") for event in marker_matches]
+    # The one id when the turn was answered once; a turn answered more than
+    # once has no single id and is read from `marker_event_ids`.
+    marker_event_id = marker_event_ids[0] if len(marker_event_ids) == 1 else None
     diagnostic = snapshot.get("diagnostic") if isinstance(snapshot.get("diagnostic"), Mapping) else {}
     return {
         "requested_session_id": session_id,
@@ -570,14 +574,40 @@ def _served_projection_evidence(
         "marker_events": [dict(event) for event in marker_matches],
         "marker_mention_events": [dict(event) for event in marker_mentions],
         "marker_event_id": marker_event_id,
-        "marker_event_durable": (len(marker_matches) == 1 and marker_matches[0].get("event_origin", "durable") == "durable"),
-        "marker_event_identity_bound": len(marker_matches) == 1 and _stable_event_id(marker_event_id),
+        "marker_event_ids": marker_event_ids,
+        "marker_event_durable": bool(marker_matches) and all(event.get("event_origin", "durable") == "durable" for event in marker_matches),
+        "marker_event_identity_bound": bool(marker_event_ids) and all(_stable_event_id(event_id) for event_id in marker_event_ids),
         "events_page": events_page,
         "diagnostic": {
             "session_id": diagnostic.get("session_id"),
             "served_path": diagnostic.get("served_path"),
         },
     }
+
+
+def _native_answer_rows(session_file: Path, marker: str, *, alongside: tuple[str, ...] = ()) -> dict[str, int] | None:
+    """The assistant rows of OMP's own transcript that answer ``marker``, and how often each does.
+
+    None when the transcript cannot be read: what the provider wrote is then
+    unknown, which is not the same as the provider having written nothing.
+    """
+
+    if not session_file.is_file():
+        return None
+    answers: dict[str, int] = {}
+    for row in _native_rows(session_file):
+        message = row.get("message")
+        row_id = row.get("id")
+        if row.get("type") != "message" or not isinstance(message, Mapping) or message.get("role") != "assistant":
+            continue
+        if not isinstance(row_id, str) or not row_id:
+            continue
+        count = marker_answer_count(_native_message_text(message), marker, alongside=alongside)
+        if count:
+            # OMP can retain a message more than once while it reconciles its
+            # stream; the record that answers most is the row as it stands.
+            answers[row_id] = max(answers.get(row_id, 0), count)
+    return answers
 
 
 def _runtime_convergence(
@@ -593,13 +623,18 @@ def _runtime_convergence(
     native_reply_id: object = None,
     timeout: float = 90,
 ) -> dict[str, Any]:
-    """Wait until the Runtime Host serves the turn's one reply to ``marker``.
+    """Wait until the Runtime Host serves what OMP answered ``marker`` with.
 
-    ``alongside`` names the other markers the reply was asked to carry, and
-    ``native_reply_id`` the id of the native row that answered. A complete
-    served page that already holds two answers, or the reply row without an
-    answer, fails at once with a typed reason (`marker_answer_fault`); a page
-    the reply has not reached yet is the lag this waits out.
+    The served events that answer must be the rows of OMP's own transcript
+    (``native_source_path``) that answer, row for row
+    (`served_answer_correspondence`). How many there are is OMP's business: it
+    ends a reply while a background job runs and wakes the agent when the job
+    finishes, and the agent may answer again. ``alongside`` names the other
+    markers the reply was asked to carry, and ``native_reply_id`` the row the
+    native wait returned. A complete served page with an answer the transcript
+    does not account for fails at once with a typed reason
+    (`served_answer_fault`); a page that has not reached an answering row yet
+    is the lag this waits out.
     """
 
     last: dict[str, Any] = {}
@@ -636,13 +671,17 @@ def _runtime_convergence(
                 "events_page": dict(events_page) if isinstance(events_page, Mapping) else {},
                 "served_projection": served_projection,
             }
-        fault = marker_answer_fault(
-            events,
-            marker,
-            default_origin="durable",
-            alongside=alongside,
-            reply_event_id=native_reply_id,
+        # Read after the page, so nothing served is newer than what is read here.
+        native_answers = _native_answer_rows(Path(native_source_path), marker, alongside=alongside)
+        native_readable = native_answers is not None
+        native_answers = native_answers or {}
+        # Without OMP's transcript there is nothing to hold the page to: no
+        # verdict either way, and the wait runs to its deadline saying so.
+        fault = (
+            served_answer_fault(events, marker, native_answers, default_origin="durable", alongside=alongside) if native_readable else None
         )
+        correspondence = served_answer_correspondence(events, marker, native_answers, default_origin="durable", alongside=alongside)
+        correspondence["native_transcript_readable"] = native_readable
         if fault is not None:
             fault.observation = {
                 "provider": "omp",
@@ -651,6 +690,7 @@ def _runtime_convergence(
                 "native_source_path": native_source_path,
                 "native_reply_id": native_reply_id,
                 "flush": dict(flush),
+                "answer_correspondence": correspondence,
                 "served_projection": served_projection,
             }
             raise fault
@@ -668,11 +708,9 @@ def _runtime_convergence(
             and session_id in (thread.get("session_ids") if isinstance(thread.get("session_ids"), list) else [])
         )
         marker_bound_durable_event = (
-            len(matches) == 1
-            and marker_answer_count(event_text(matches[0]), marker, alongside=alongside) == 1
-            and matches[0].get("event_origin", "durable") == "durable"
-            and _stable_event_id(served_projection.get("marker_event_id"))
-            and served_projection.get("marker_event_id") in served_event_ids
+            correspondence["converged"] is True
+            and bool(matches)
+            and all(event.get("id") in served_event_ids for event in matches)
             and served_projection.get("marker_event_durable") is True
             and served_projection.get("marker_event_identity_bound") is True
         )
@@ -682,6 +720,9 @@ def _runtime_convergence(
         last.update(
             {
                 "answer_event_count": len(matches),
+                "native_transcript_readable": native_readable,
+                "native_answer_rows": correspondence["native_answer_rows"],
+                "unserved_native_row_ids": correspondence["unserved_native_row_ids"],
                 "mention_event_count": len(served_projection["marker_mention_events"]),
                 "served_event_count": len(served_event_ids),
                 "native_reply_served": native_reply_id is not None and native_reply_id in served_event_ids,
@@ -701,6 +742,10 @@ def _runtime_convergence(
             "marker": marker,
             "flush": dict(flush),
             "native_source_path": native_source_path,
+            # The rows of OMP's transcript that answered and the served events
+            # that carry them. More than one row is a model that answered more
+            # than once, which is recorded here and decides nothing.
+            "answer_correspondence": correspondence,
             "served_projection": served_projection,
         }
 
