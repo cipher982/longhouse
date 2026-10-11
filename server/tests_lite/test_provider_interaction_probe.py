@@ -345,6 +345,10 @@ def test_cursor_model_probe_fails_closed_without_a_matching_model_receipt(
         },
     )
     assert evaluation["status"] == evaluation["provider_status"] == "blocked"
+    # The verdict row names the probe's own reason beside the evaluator's generic one.
+    verdict = evaluation["assertions"][0]
+    assert (verdict["failure_code"], verdict["probe_failure_code"]) == ("interaction_post_state_evidence_missing", failure_code)
+    assert verdict["probe_message"] == row["message"]
 
 
 def test_codex_model_probe_keeps_provider_auth_outside_the_artifact_root(monkeypatch, tmp_path: Path) -> None:

@@ -648,9 +648,16 @@ def evaluate_observation(
         unresolved_evidence: list[str] = []
         provenance_status = STATUS_PASS
         provenance_failure_code: str | None = None
+        probe_reason: dict[str, str] = {}
         if live_evidence:
             if row.get("status") != "observed":
                 unresolved_evidence.append("provider_probe_not_observed")
+                # The producer knows why it did not observe the probe. Keep its
+                # reason on the verdict row: the row's own code only says that
+                # evidence is missing.
+                probe_reason = {
+                    f"probe_{key}": row[key] for key in ("failure_code", "message") if isinstance(row.get(key), str) and row[key]
+                }
             provenance_status, provenance_failure_code = _live_raw_provenance(
                 row,
                 event_rows,
@@ -742,6 +749,7 @@ def evaluate_observation(
                     else {"classifier": "provider_interaction_semantics"}
                 ),
                 **({"failure_code": failure_code or provenance_failure_code} if failure_code or provenance_failure_code else {}),
+                **probe_reason,
             }
         )
 
