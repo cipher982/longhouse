@@ -293,16 +293,33 @@ def _cursor_store_shape(
 
 
 def cursor_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
+    """Name a Cursor line by the precedence the engine parses it by.
+
+    A store row is named by `_cursor_store_shape`. A projection line that
+    carries a `role` is a Cursor message whatever else it carries, `type`
+    included (`extract_events` hands it to `extract_cursor_events`). Without a
+    `role` the engine goes by `type`: a line with a `message` is parsed as a
+    message of that type, through the path Claude's lines take and not
+    Cursor's, so it is named apart (`type/assistant/text`); any other line is
+    a lifecycle record such as `turn_ended` (`event/turn_ended`).
+    """
     store_kind = entry.get("_census_store")
     if isinstance(store_kind, str):
         return _cursor_store_shape(entry, store_kind)
-    if "role" not in entry and isinstance(entry.get("type"), str):
-        # A projection line that is not a message: a lifecycle record such as
-        # `turn_ended`, discriminated by its own `type`.
+    message = entry.get("message")
+    typed = None
+    if not isinstance(entry.get("role"), str) and isinstance(entry.get("type"), str):
         keys = [key for key in _sorted_keys(entry) if not key.startswith("_census_")]
-        return f"event/{entry['type']}", keys, None, None
-    role = str(entry.get("role") or "?")
-    message = entry.get("message") or {}
+        if not isinstance(message, dict):
+            return f"event/{entry['type']}", keys, None, None
+        # As the engine does: a `message` line takes its role from the message.
+        typed = (
+            str(message.get("role") or "?")
+            if entry["type"] == "message"
+            else entry["type"]
+        )
+    role = typed if typed is not None else str(entry.get("role") or "?")
+    message = message or {}
     content = message.get("content") if isinstance(message, dict) else None
     block_types: set[str] = set()
     if isinstance(content, list):
@@ -311,7 +328,7 @@ def cursor_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
         )
     elif isinstance(content, str):
         block_types.add("string")
-    if role == "user":
+    if role == "user" and typed is None:
         text_values = []
         if isinstance(content, str):
             text_values.append(content)
@@ -335,7 +352,9 @@ def cursor_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
         entry.get("entrypoint") if isinstance(entry.get("entrypoint"), str) else None
     )
     return (
-        f"{role}/" + "+".join(sorted(block_types) or ["?"]),
+        ("type/" if typed is not None else "")
+        + f"{role}/"
+        + "+".join(sorted(block_types) or ["?"]),
         keys,
         version,
         entrypoint,

@@ -199,6 +199,48 @@ def test_cursor_projection_catalog_holds_every_block_spelling_the_parser_has_a_p
         assert tool.unclassified(catalog, {shape: {"count": 1, "keys": []}}) == [shape]
 
 
+def test_a_cursor_projection_line_is_named_by_the_precedence_the_engine_parses_it_by():
+    # A line with a role goes to the Cursor arm before its `type` is looked at.
+    dispatch = _rust_function(PARSER, "extract_events")
+    by_role = dispatch.index("if obj.role.is_some() {\n        extract_cursor_events(")
+    by_type = dispatch.index("let effective_role = match event_type {")
+    assert by_role < by_type
+    # A line that reaches the typed path is a message only if it has one, and is rendered for these types.
+    assert "None => return," in dispatch[by_role:by_type]
+    assert _arms(PARSER, "extract_events") >= {"message", "user", "assistant"}
+
+    tool = _tool()
+    catalog = _catalog("cursor")
+    message = {"content": [{"type": "text", "text": "x"}]}
+    named = {
+        # role and type together: the role decides, and the Cursor arm renders it.
+        "assistant/text": {"role": "assistant", "type": "turn_ended", "message": message},
+        "tool/tool-result": {"role": "tool", "type": "assistant", "message": {"content": [{"type": "tool-result"}]}},
+        # no role and no message: a lifecycle record.
+        "event/turn_ended": {"type": "turn_ended", "status": "completed"},
+        "event/note": {"type": "note", "role": None, "message": "not a message object"},
+    }
+    for shape, line in named.items():
+        assert tool.SHAPERS["cursor"](line)[0] == shape
+    assert tool.unclassified(catalog, _shapes_of(tool, named.values())) == ["event/note"]
+
+    # No role but a message: the engine parses it by `type`, through the path Claude's lines take. That
+    # path gives a Cursor line a new event id on every parse and the parse-time clock, so it is a finding.
+    typed = {
+        "type/assistant/text": {"type": "assistant", "message": message},
+        "type/user/text": {"type": "user", "role": None, "message": {"content": [{"type": "text", "text": "<user_query>x</user_query>"}]}},
+        "type/user/string": {"type": "message", "message": {"role": "user", "content": "x"}},
+        "type/turn_ended/text": {"type": "turn_ended", "message": message},
+    }
+    for shape, line in typed.items():
+        assert tool.SHAPERS["cursor"](line)[0] == shape
+    assert tool.unclassified(catalog, _shapes_of(tool, typed.values())) == sorted(typed)
+
+
+def _shapes_of(tool: ModuleType, lines) -> dict:
+    return {tool.SHAPERS["cursor"](line)[0]: {"count": 1, "keys": []} for line in lines}
+
+
 CURSOR_STORE_BLOCKS = {
     "text": {"type": "text", "text": "prose"},
     "reasoning": {"type": "reasoning", "text": "thought", "providerOptions": {}},
