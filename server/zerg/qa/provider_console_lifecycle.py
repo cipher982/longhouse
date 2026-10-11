@@ -1726,6 +1726,21 @@ def _pi_native_tool_receipt(
     return receipt
 
 
+def _flush_shipped(receipt: Mapping[str, object]) -> bool:
+    """A flush that stopped the Machine Agent, shipped with it stopped, and started it again."""
+
+    shipped = receipt.get("events_shipped")
+    return (
+        receipt.get("status") == "pass"
+        and receipt.get("exit_code") == 0
+        and receipt.get("daemon_paused") is True
+        and receipt.get("daemon_restarted") is True
+        and isinstance(shipped, int)
+        and not isinstance(shipped, bool)
+        and shipped >= 0
+    )
+
+
 def _retain_flush_diagnostics(receipt: Mapping[str, object]) -> dict[str, object]:
     retained = dict(receipt)
     raw_path = retained.pop("log_path", None)
@@ -3074,31 +3089,39 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 raise RuntimeError("Console transcript flush receipt has an invalid turns field")
             turn_receipts[label] = receipt
             write_json(root / "transcript-flush-receipt.json", flush_receipt)
-            flush_ok = (
-                receipt.get("status") == "pass"
-                and receipt.get("exit_code") == 0
-                and receipt.get("daemon_paused") is True
-                and receipt.get("daemon_restarted") is True
-                and isinstance(receipt.get("events_shipped"), int)
-                and not isinstance(receipt.get("events_shipped"), bool)
-                and receipt.get("events_shipped") >= 0
-            )
-            if not flush_ok:
+            if not _flush_shipped(receipt):
                 raise RuntimeError(f"Console transcript flush failed before {label} projection")
             return receipt
+
+        def completed_turn(turn: str, message: str, turn_marker: str, **served: Any) -> tuple[dict[str, Any], list[dict[str, Any]], Any]:
+            """Run one turn that has to complete; return its claim, the served events that answer and their account.
+
+            The turn is started, its claim held to ``run_completed``, the Runtime
+            Host seen to end it, the engine flushed once its provider is gone,
+            and the served reply waited for.
+            """
+
+            request_id = f"console-{turn}-{uuid4()}"
+            started = _start_turn(api_url=api_url, token=token, session_id=session_id, message=message, request_id=request_id)
+            claim = _wait_claim(_claim_path(longhouse_home, str(started["run_id"])), states=frozenset({"terminal", "failed"}))
+            claims.append(claim)
+            _require_run_completed(provider, claim, turn=turn, marker=turn_marker, alongside=served.get("alongside", ()))
+            _wait_turn_terminal(
+                api_url=api_url,
+                token=token,
+                session_id=session_id,
+                message=message,
+                request_id=request_id,
+                turn_id=str(started["turn_id"]),
+                run_id=str(started["run_id"]),
+            )
+            flush_for_projection(f"console-{turn}-turn", claim)
+            return (claim, *_wait_turn_served(api_url, token, session_id, provider, claim, turn_marker, turn=turn, **served))
 
         flush_receipt["turns"] = {"console-first-turn": flush_receipt.copy()}
         write_json(root / "transcript-flush-receipt.json", flush_receipt)
         marker_count = provider_response_evidence.get("provider_response_marker_count") if provider_response_evidence is not None else None
-        flush_ok = (
-            flush_receipt.get("status") == "pass"
-            and flush_receipt.get("exit_code") == 0
-            and flush_receipt.get("daemon_paused") is True
-            and flush_receipt.get("daemon_restarted") is True
-            and isinstance(flush_receipt.get("events_shipped"), int)
-            and not isinstance(flush_receipt.get("events_shipped"), bool)
-            and flush_receipt.get("events_shipped") >= 0
-        )
+        flush_ok = _flush_shipped(flush_receipt)
         boundary_receipt = {
             "status": "pass" if flush_ok and isinstance(marker_count, int) and marker_count >= 1 else "fail",
             "provider": provider,
@@ -3163,38 +3186,10 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             resume_message = f"Reply with exactly {resume_marker} and nothing else."
             if provider in {"pi", "omp"}:
                 resume_message = _omp_continuation_prompt(context_marker, resume_marker)
-            resume_request_id = f"console-resume-{uuid4()}"
-            resume = _start_turn(
-                api_url=api_url,
-                token=token,
-                session_id=session_id,
-                message=resume_message,
-                request_id=resume_request_id,
-            )
-            resume_claim = _wait_claim(
-                _claim_path(longhouse_home, str(resume["run_id"])),
-                states=frozenset({"terminal", "failed"}),
-            )
-            claims.append(resume_claim)
-            _require_run_completed(provider, resume_claim, turn="resume", marker=resume_marker, alongside=reply_alongside)
-            _wait_turn_terminal(
-                api_url=api_url,
-                token=token,
-                session_id=session_id,
-                message=resume_message,
-                request_id=resume_request_id,
-                turn_id=str(resume["turn_id"]),
-                run_id=str(resume["run_id"]),
-            )
-            flush_for_projection("console-resume-turn", resume_claim)
-            resume_events, resume_correspondence = _wait_turn_served(
-                api_url,
-                token,
-                session_id,
-                provider,
-                resume_claim,
+            resume_claim, resume_events, resume_correspondence = completed_turn(
+                "resume",
+                resume_message,
                 resume_marker,
-                turn="resume",
                 alongside=reply_alongside,
                 # Pi's and OMP's continuation asks for a value an earlier turn stored, so a
                 # reply without it is the model's only when the resumed session held that turn.
@@ -3244,7 +3239,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             )
             if provider in {"pi", "omp"} and continuation_linkage is not None and continuation_linkage.get("proven") is not True:
                 raise RuntimeError(f"Console {provider} continuation did not prove native/projected assistant linkage")
-            dispatch["resume_run_id"] = resume.get("run_id")
+            dispatch["resume_run_id"] = resume_claim.get("run_id")
             dispatch["native_thread_resumed"] = True
             write_json(root / "adapter-dispatch-receipt.json", dispatch)
             continuation_receipt = {
@@ -3367,33 +3362,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 "The previous request was cancelled: do not run it or any other command. "
                 f"Reply with exactly {post_marker} and nothing else."
             )
-            post_request_id = f"console-post-interrupt-{uuid4()}"
-            post = _start_turn(
-                api_url=api_url,
-                token=token,
-                session_id=session_id,
-                message=post_message,
-                request_id=post_request_id,
-            )
-            post_claim = _wait_claim(
-                _claim_path(longhouse_home, str(post["run_id"])),
-                states=frozenset({"terminal", "failed"}),
-            )
-            claims.append(post_claim)
-            _require_run_completed(provider, post_claim, turn="post-interrupt", marker=post_marker)
-            _wait_turn_terminal(
-                api_url=api_url,
-                token=token,
-                session_id=session_id,
-                message=post_message,
-                request_id=post_request_id,
-                turn_id=str(post["turn_id"]),
-                run_id=str(post["run_id"]),
-            )
-            flush_for_projection("console-post-interrupt-turn", post_claim)
-            post_events, _post_correspondence = _wait_turn_served(
-                api_url, token, session_id, provider, post_claim, post_marker, turn="post-interrupt"
-            )
+            post_claim, post_events, _post_correspondence = completed_turn("post-interrupt", post_message, post_marker)
             interrupt_receipt = {
                 "status": "pass" if interrupted.get("interrupt_dispatched") is True and cancelled and process_dead else "fail",
                 "expectation": "supported",
@@ -3498,31 +3467,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             _wait_turn_served(api_url, token, session_id, provider, terminal, interrupt_marker, turn="unsupported-interrupt", timeout=60)
             post_marker = f"LH_{provider.upper()}_AFTER_UNSUPPORTED_{uuid4().hex}"
             post_message = f"Reply with exactly {post_marker} and nothing else."
-            post_request_id = f"console-after-unsupported-{uuid4()}"
-            post = _start_turn(
-                api_url=api_url,
-                token=token,
-                session_id=session_id,
-                message=post_message,
-                request_id=post_request_id,
-            )
-            post_claim = _wait_claim(
-                _claim_path(longhouse_home, str(post["run_id"])),
-                states=frozenset({"terminal", "failed"}),
-            )
-            claims.append(post_claim)
-            _require_run_completed(provider, post_claim, turn="after-unsupported", marker=post_marker)
-            _wait_turn_terminal(
-                api_url=api_url,
-                token=token,
-                session_id=session_id,
-                message=post_message,
-                request_id=post_request_id,
-                turn_id=str(post["turn_id"]),
-                run_id=str(post["run_id"]),
-            )
-            flush_for_projection("console-after-unsupported-post-turn", post_claim)
-            _wait_turn_served(api_url, token, session_id, provider, post_claim, post_marker, turn="after-unsupported")
+            post_claim, _post_events, _post_correspondence = completed_turn("after-unsupported", post_message, post_marker)
             interrupt_receipt = {
                 "status": "pass" if refused else "fail",
                 "expectation": "unsupported",
