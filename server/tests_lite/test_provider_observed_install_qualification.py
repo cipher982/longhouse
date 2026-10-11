@@ -30,7 +30,7 @@ def _fake_cursor_install(tmp_path: Path) -> tuple[Path, Path, str]:
     return root, binary, identity
 
 
-def _gate0_artifact(tmp_path: Path, *, identity: str) -> Path:
+def _gate0_artifact(tmp_path: Path, *, identity: str, active_steer: str = "passed") -> Path:
     native_root = tmp_path / "native-stores"
     native_root.mkdir(exist_ok=True)
     store = native_root / "store.db"
@@ -70,7 +70,7 @@ def _gate0_artifact(tmp_path: Path, *, identity: str) -> Path:
                 ],
                 "scenarios": {
                     name: {
-                        "status": "passed",
+                        "status": active_steer if name == "active_steer" else "passed",
                         "provider_conversation_id": "cursor-session-1",
                         **(
                             {"prompt_sha256": hashlib.sha256("LONGHOUSE UNIVERSAL HARNESS".encode("utf-8")).hexdigest()}
@@ -86,6 +86,7 @@ def _gate0_artifact(tmp_path: Path, *, identity: str) -> Path:
                         "permission_allow",
                         "permission_deny",
                         "permission_ask",
+                        "active_steer",
                     )
                 },
             }
@@ -105,8 +106,13 @@ def test_observed_closure_ignores_cursor_pid_leases(tmp_path: Path) -> None:
     assert observed_closure(root) == before
 
 
+def _suite_actions(result: dict) -> dict[str, dict]:
+    suite = next(row for row in result["harness_result"]["results"] if row["scenario"] == "full_action_suite")
+    return {row["action_id"]: row for row in suite["data"]["actions"]}
+
+
 @pytest.mark.timeout(60)
-def test_cursor_observed_install_keeps_native_resume_unqualified_until_direct_producer(tmp_path: Path) -> None:
+def test_cursor_observed_install_column_passes_with_native_cold_resume_as_a_declared_limit(tmp_path: Path) -> None:
     root, binary, identity = _fake_cursor_install(tmp_path)
     gate0 = _gate0_artifact(tmp_path, identity=identity)
 
@@ -118,26 +124,54 @@ def test_cursor_observed_install_keeps_native_resume_unqualified_until_direct_pr
         output_root=tmp_path / "output",
     )
 
-    assert result["status"] == "fail"
+    gate = result["full_column_gate"]
+    assert result["status"] == "pass"
     assert result["build_provenance"] == "observed_install"
-    assert result["full_column_gate"]["status"] == "fail"
-    assert result["full_column_gate"]["captured_scenario_count"] == 32
-    assert result["full_column_gate"]["coverage_gap_kind_counts"] == {
-        "passed": 27,
+    assert gate["status"] == "pass"
+    assert gate["unexpected_results"] == []
+    assert gate["captured_scenario_count"] == 32
+    assert gate["coverage_gap_kind_counts"] == {
+        "passed": 28,
         "no_token_safety_gate": 1,
-        # Cursor Helm steer is implemented now, so an observed install whose
-        # Gate 0 artifact has no steer evidence reads as a missing live canary
-        # rather than an inapplicable scenario.
+        # Native cold Resume: Gate 0 proves reattach, and the column runs no
+        # cold Resume of its own. The assurance cells prove it.
         "missing_live_canary": 1,
         "not_applicable": 1,
         "provider_contract_unsupported": 1,
-        "unexpected_failure": 1,
     }
-    assert any(
-        item.get("actual_failure_code") == "native_provider_resume_requires_live_token"
-        for item in result["full_column_gate"]["unexpected_results"]
-    )
+    cold_resume = next(row for row in result["harness_result"]["results"] if row["scenario"] == "helm_cold_resume")
+    assert (cold_resume["status"], cold_resume["failure_code"]) == ("unsupported_gap", "cursor_cold_resume_canary_missing")
+    assert gate["expected_limits"]["helm_cold_resume"] == {"status": "unsupported_gap", "failure_code": "cursor_cold_resume_canary_missing"}
+    native = cold_resume["data"]["native_resume_evidence"]
+    assert native["status"] == "unsupported_gap"
+    assert native["proof_scope"] == "assurance_cells.native_provider_resume_proven"
+    assert cold_resume["data"]["assertions"]["native_provider_resume_proven"] is False
+    actions = _suite_actions(result)
+    # Gate 0's active_steer scenario is the steer evidence.
+    assert actions["steer_active_turn"]["coverage_status"] == "pass"
+    assert actions["resume_reattach"]["coverage_gap_kind"] == "missing_live_canary"
+    assert actions["resume_reattach"]["scenario_statuses"]["resume_reattach"] == "pass"
     assert Path(result["artifact_path"]).is_file()
+
+
+@pytest.mark.timeout(60)
+def test_cursor_observed_install_fails_when_gate0_did_not_steer(tmp_path: Path) -> None:
+    root, binary, identity = _fake_cursor_install(tmp_path)
+    # Gate 0 records "unsupported" when the reply after a mid-turn message was the original one.
+    gate0 = _gate0_artifact(tmp_path, identity=identity, active_steer="unsupported")
+
+    result = qualify_cursor_observed_install(
+        provider_bin=binary,
+        provider_root=root,
+        gate0_artifact=gate0,
+        expected_version="2026.07.23-test",
+        output_root=tmp_path / "output",
+    )
+
+    assert result["status"] == "fail"
+    assert result["full_column_gate"]["unexpected_coverage_gap_kinds"] == {"unexpected_failure": 1}
+    steer = _suite_actions(result)["steer_active_turn"]
+    assert (steer["coverage_status"], steer["failure_code"]) == ("fail", "cursor_gate0_contract_failed")
 
 
 @pytest.mark.timeout(60)

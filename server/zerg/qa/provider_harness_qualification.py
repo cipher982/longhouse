@@ -139,6 +139,10 @@ _EXPECTED_CURSOR_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     "control_surface": ("blocked", None),
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
     "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
+    # Gate 0 proves reattach, not a Helm cold Resume. Cursor's native Resume is
+    # proven by the native_provider_resume_proven assurance cells (clean_exit,
+    # process_loss), outside this column.
+    "helm_cold_resume": ("unsupported_gap", "cursor_cold_resume_canary_missing"),
     "resume_unsupported": ("not_applicable", None),
     # Only Codex declares fork_thread.
     "console_thread_fork": ("not_applicable", None),

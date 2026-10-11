@@ -241,6 +241,14 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
             required_input_sha256=prompt_sha256,
         ) or super().send_receive(package, prompt)
 
+    def steer_active_turn(self, package: EvidencePackage) -> dict[str, Any]:
+        return self._gate0_result(
+            package,
+            scenario="steer_active_turn",
+            required_scenarios=("active_steer",),
+            operations=("steer_active_turn",),
+        ) or super().steer_active_turn(package)
+
     def interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
         return self._gate0_result(
             package,
@@ -258,13 +266,20 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
         ) or super().resume_reattach(package)
 
     def cold_resume(self, package: EvidencePackage) -> dict[str, Any]:
-        payload = self._gate0_result(
-            package,
-            scenario="helm_cold_resume_native",
-            required_scenarios=("native_resume_continuity",),
-            operations=("reattach",),
-        ) or super().cold_resume(package)
-        payload["scenario"] = "helm_cold_resume_native"
+        # Gate 0's native_resume_continuity resumes a stock chat in a new CLI
+        # process: that is resume_reattach's claim. A Helm cold Resume also
+        # needs the run, bridge and process-loss facts only the direct native
+        # Resume producer observes, so this column declares the limit and
+        # names the assertion that proves the capability.
+        payload = self._unsupported_payload(
+            "helm_cold_resume_native",
+            "cursor_cold_resume_canary_missing",
+            "The universal column runs no native cold Resume for Cursor; the assurance cells "
+            "native_provider_resume_proven (clean_exit, process_loss) prove it.",
+        )
+        payload["proof_scope"] = "assurance_cells.native_provider_resume_proven"
+        payload["next"] = "Read native_provider_resume_proven (clean_exit, process_loss) for Cursor's native cold Resume."
+        package.write_json("assertions/helm_cold_resume_native.json", payload)
         return payload
 
     def permission_prompt(self, package: EvidencePackage) -> dict[str, Any]:
