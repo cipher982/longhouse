@@ -1638,6 +1638,78 @@ struct LonghouseMenuBarCoreTests {
 
     @Test
     @MainActor
+    func quietMachineRefreshesProducerBeforeTrustExpires() async throws {
+        let source = CountingHealthSnapshotSource(snapshots: [presentationSnapshot(sessions: [])])
+        let store = SnapshotStore(source: source, cacheURL: nil, refreshDeadline: 0.4)
+        store.refresh()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(3))
+        while source.loadCount < 3, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        // No engine event and no --refresh-seconds: the backstop alone keeps
+        // the producer inside its trust deadline.
+        #expect(source.loadCount >= 3)
+        #expect(store.dataTrust() == .current)
+    }
+
+    @Test
+    @MainActor
+    func presentationUpdatesNeverInventEngineFileEvidence() async throws {
+        let missing = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-10-11T00:00:00Z",
+            healthState: "degraded",
+            severity: "yellow",
+            headline: "Engine status file is missing",
+            reasons: ["engine_status_missing"],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: EngineStatusSnapshot(
+                path: "/nonexistent/engine-status.json",
+                exists: false,
+                fresh: false,
+                ageSeconds: nil,
+                payload: nil,
+                error: "No such file"
+            ),
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+        let store = SnapshotStore(source: StaticHealthSnapshotSource(snapshot: missing), cacheURL: nil)
+        store.refresh()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(3))
+        while store.snapshot == nil, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        store.beginPresentationUpdates()
+        defer { store.endPresentationUpdates() }
+        #expect(store.snapshot?.engineStatus?.exists == false)
+        #expect(store.snapshot?.engineStatus?.error == "No such file")
+    }
+
+    @Test
+    @MainActor
+    func visiblePanelAgeLabelsAdvanceWithoutStateChanges() async throws {
+        let store = SnapshotStore(
+            source: StaticHealthSnapshotSource(snapshot: presentationSnapshot(sessions: [])),
+            cacheURL: nil
+        )
+        store.beginPresentationUpdates()
+        defer { store.endPresentationUpdates() }
+        let first = store.presentationDate
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(SnapshotStore.presentationUpdateIntervalSeconds + 2))
+        while store.presentationDate == first, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(store.presentationDate > first)
+    }
+
+    @Test
+    @MainActor
     func snapshotStoreRefreshesWhenReconciliationClassificationChanges() {
         func payload(
             state: String,

@@ -25,6 +25,10 @@ public final class SnapshotStore: ObservableObject {
     /// setup on this Mac" after the machine was connected and healthy, until
     /// a manual Refresh. `longhouse local-health --json` costs ~30 ms.
     public static let defaultSetupRefreshIntervalSeconds: TimeInterval = 5
+    /// How often relative age labels ("updated 12s ago") move while a panel is
+    /// visible. Only while a presentation consumer exists; hidden panels never
+    /// tick.
+    public static let presentationUpdateIntervalSeconds: TimeInterval = 5
 
     @Published public private(set) var snapshot: HealthSnapshot?
     @Published public private(set) var history: [SnapshotHistorySample]
@@ -53,6 +57,11 @@ public final class SnapshotStore: ObservableObject {
     private var realtimeFlushTask: Task<Void, Never>?
     private var transientRetryTask: Task<Void, Never>?
     private var setupFollowUpTask: Task<Void, Never>?
+    /// Producer refresh before `refreshDeadline` lapses. Engine pulses that
+    /// change nothing no longer trigger a refresh, so without it a healthy,
+    /// quiet machine with no `--refresh-seconds` aged into "refresh is
+    /// failing".
+    private var trustBackstopTask: Task<Void, Never>?
     private var realtimeConnection: RealtimeConnectionSnapshot?
     private var realtimeSessionIds: [String] = []
     private var pendingRealtimeProjections: [String: SessionProjection] = [:]
@@ -201,6 +210,7 @@ public final class SnapshotStore: ObservableObject {
         realtimeFlushTask?.cancel()
         transientRetryTask?.cancel()
         setupFollowUpTask?.cancel()
+        trustBackstopTask?.cancel()
         localStatusMonitor?.stop()
     }
 
@@ -312,6 +322,9 @@ public final class SnapshotStore: ObservableObject {
             append(date.addingTimeInterval(seconds))
         }
 
+        // Relative age labels advance while the panel is visible
+        // (`armPresentationDeadline` only runs with a consumer).
+        append(now.addingTimeInterval(Self.presentationUpdateIntervalSeconds))
         if let lastSuccess = refreshState.lastSuccessAt {
             append(lastSuccess.addingTimeInterval(refreshDeadline + 0.01))
         }
@@ -347,11 +360,10 @@ public final class SnapshotStore: ObservableObject {
     }
 
     private func refreshLocalPresentation(relativeTo date: Date) {
-        guard let snapshot else { return }
-        let projection = latestLocalProjection ?? LocalStatusMonitor.Projection(
-            sessions: [],
-            engine: snapshot.engineStatus?.payload
-        )
+        // Only a real file observation re-derives local engine evidence:
+        // synthesizing one from the snapshot would mark a missing or
+        // unreadable status file as present and clear its error.
+        guard let snapshot, let projection = latestLocalProjection else { return }
         let updated = snapshot.applyingLocalProjection(projection, relativeTo: date)
         guard !Self.hasSameLocalStatusPresentation(snapshot, updated) else { return }
         self.snapshot = updated
@@ -701,6 +713,21 @@ public final class SnapshotStore: ObservableObject {
             isManualRefreshActive = false
         }
         armPresentationDeadline()
+        scheduleTrustBackstop()
+    }
+
+    private func scheduleTrustBackstop() {
+        trustBackstopTask?.cancel()
+        trustBackstopTask = nil
+        // Fixture sources never refresh on their own.
+        guard source.supportsLiveMonitoring else { return }
+        let delay = refreshDeadline / 2
+        trustBackstopTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            self.trustBackstopTask = nil
+            self.refresh(reason: .background)
+        }
     }
 
     private static func loadSnapshot(from source: any HealthSnapshotSource) async -> SnapshotLoadResult {
