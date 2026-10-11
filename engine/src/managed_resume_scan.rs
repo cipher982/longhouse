@@ -344,10 +344,28 @@ fn verify_omp_session_file_cached(
     cwd: &str,
 ) -> anyhow::Result<()> {
     // Stamp before reading, so a write that lands during the read moves the
-    // stamp the next scan compares against.
+    // stamp the next scan compares against. The stamp also carries what the
+    // verdict depends on besides content: the path's own file type (a
+    // symlink swapped in or out), the target's identity, and where the
+    // workspace resolves to now.
+    let link = fs::symlink_metadata(session_file)
+        .ok()
+        .map(|metadata| metadata.file_type().is_symlink());
+    let workspace = fs::canonicalize(cwd).ok();
+    let resolved = fs::canonicalize(session_file).ok();
     let stamp = fs::metadata(session_file)
         .ok()
-        .and_then(|metadata| crate::state::file_identity::rest_stamp(&metadata));
+        .and_then(|metadata| crate::state::file_identity::rest_stamp(&metadata))
+        .zip(link)
+        .zip(workspace)
+        .zip(resolved)
+        .map(|(((stamp, link), workspace), resolved)| {
+            format!(
+                "{stamp}|link={link}|{}|{}",
+                workspace.display(),
+                resolved.display()
+            )
+        });
     let key = (
         session_file.to_path_buf(),
         native_id.to_string(),
@@ -737,6 +755,24 @@ mod tests {
         // earlier success must not be reused.
         write("someone-else", rested + std::time::Duration::from_secs(1));
         assert!(verify_omp_session_file_cached(&session_file, "native-omp", cwd_text).is_err());
+
+        // Swapping the path for a symlink to an identical, already-verified
+        // file must reach the real validator, not the cached verdict.
+        write("native-omp", rested + std::time::Duration::from_secs(2));
+        verify_omp_session_file_cached(&session_file, "native-omp", cwd_text).unwrap();
+        let target = root.path().join("moved.jsonl");
+        fs::rename(&session_file, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &session_file).unwrap();
+        let uncached = crate::omp_session::verify_exact_session_file(
+            &session_file,
+            "native-omp",
+            Some(cwd_text),
+        )
+        .is_ok();
+        assert_eq!(
+            verify_omp_session_file_cached(&session_file, "native-omp", cwd_text).is_ok(),
+            uncached
+        );
     }
 
     #[test]
