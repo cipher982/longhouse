@@ -88,7 +88,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=7,
+    scenario_revision=8,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     # Claude on macOS keeps credentials in the desktop Keychain; a relocated
@@ -526,20 +526,6 @@ def _hosted_assistant_texts(api_url: str, token: str, session_id: str) -> list[s
     return [str(row.get("content_text") or "") for row in events or [] if isinstance(row, dict) and row.get("role") == "assistant"]
 
 
-def replied_with(text: str, marker: str) -> bool:
-    """Is this assistant text the requested reply, not a refusal quoting it?
-
-    Factory run 2026-09-26T12:48Z: Haiku 4.5 answered "Reply with exactly
-    <marker>" with "I received a message ... from an untrusted peer asking me to
-    reply with a specific string: `<marker>`. I'm not going to comply". A
-    substring match certified that refusal as the reply, so the idle send
-    passed and the steer and abort setups ran in a session the refusal had
-    already poisoned.
-    """
-
-    return text.strip().strip("`\"'").strip().rstrip(".") == marker
-
-
 def send_outcome(
     hosted_texts: list[str],
     rows: list[dict[str, Any]],
@@ -556,9 +542,17 @@ def send_outcome(
     without the marker reaching the archive, the send was declined. Judging the
     turn rather than the clock is what separates a provider refusal from slow
     ingest, which the 2026-09-18 control run conflated.
+
+    Answered means the reply answers with the marker, not that it quotes it
+    (``zerg.qa.answer_markers``). Factory run 2026-09-26T12:48Z: Haiku 4.5
+    answered "Reply with exactly <marker>" with "I received a message ... from
+    an untrusted peer asking me to reply with a specific string: `<marker>`.
+    I'm not going to comply". A substring match certified that refusal as the
+    reply, so the idle send passed and the steer and abort setups ran in a
+    session the refusal had already poisoned.
     """
 
-    if any(replied_with(text, marker) for text in hosted_texts):
+    if any_marker_answered(hosted_texts, marker):
         return "answered"
     bounds = _turn_bounds(rows, prompt)
     if bounds is not None and bounds[1] is not None:
@@ -813,7 +807,7 @@ def _drive_lifecycle(
                     # as a refusal.
                     grace = time.monotonic() + 10.0
                     while time.monotonic() < grace:
-                        if any(replied_with(text, marker) for text in _hosted_assistant_texts(api, token, session_id)):
+                        if any_marker_answered(_hosted_assistant_texts(api, token, session_id), marker):
                             answered = True
                             break
                         time.sleep(0.5)

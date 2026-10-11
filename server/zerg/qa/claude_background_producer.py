@@ -24,6 +24,7 @@ from zerg.qa import claude_helm_lifecycle as helm
 from zerg.qa import claude_release_identity as release_identity
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
+from zerg.qa.answer_markers import any_marker_answered
 from zerg.qa.claude_live_session_support import ScenarioError
 from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import now_iso
@@ -53,7 +54,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.background_jobs.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     platforms=("linux",),
@@ -372,9 +373,9 @@ def _capture_background(
         end_row = rows()[bounds[1]]
         parent_start_at = helm._timestamp(rows()[bounds[0]])
         parent_end_at = helm._timestamp(end_row)
-        parent_archived = any(
-            helm.replied_with(text, parent_marker) for text in helm._hosted_assistant_texts(args.api_url, args.agents_token, session_id)
-        )
+        # Answered, not equal to: after launching two jobs a model often writes a
+        # line about them before the marker.
+        parent_archived = any_marker_answered(helm._hosted_assistant_texts(args.api_url, args.agents_token, session_id), parent_marker)
         observation["parent_turn"] = {
             "bounds": bounds,
             "end_timestamp": parent_end_at,
@@ -629,7 +630,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         assertion_ids=ASSERTIONS,
         executor=execute,
         oracle_source=Path(__file__),
-        scenario_revision=1,
+        scenario_revision=REGISTRATION.scenario_revision,
     )
 
 

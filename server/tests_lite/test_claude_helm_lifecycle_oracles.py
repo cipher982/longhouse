@@ -519,6 +519,17 @@ def test_a_refusal_that_quotes_the_marker_is_not_the_reply():
     assert send_outcome([f"{MARKER}.\n"], rows, marker=MARKER, prompt=PROMPT) == "answered"
 
 
+def test_a_reply_that_puts_a_line_before_the_marker_still_answers_the_send():
+    """The send is judged by the shared answered rule, not by the whole reply equalling the marker."""
+
+    rows = [_prompt(PROMPT), _text(f"Both jobs are launched.\n\n{MARKER}"), _end()]
+
+    assert send_outcome([f"Both jobs are launched.\n\n{MARKER}"], rows, marker=MARKER, prompt=PROMPT) == "answered"
+    # Narration that names the marker while the turn is still working is not the reply.
+    working = [_prompt(PROMPT), _bash("echo working")]
+    assert send_outcome([f"I will reply with `{MARKER}` once the jobs are launched."], working, marker=MARKER, prompt=PROMPT) == "pending"
+
+
 def test_typed_setup_prompts_stay_below_claude_paste_framing():
     """Claude Code frames a long terminal write as <pasted_content>, which the
     model is told not to act on without a typed request around it."""

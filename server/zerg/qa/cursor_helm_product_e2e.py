@@ -92,6 +92,17 @@ def _assistant_texts(payload: dict[str, Any]) -> list[str]:
     return [str(row.get("content_text") or "") for row in payload.get("events", []) if row.get("role") == "assistant"]
 
 
+def _answered_in(payload: dict[str, Any] | None, marker: str) -> dict[str, Any] | None:
+    """The hosted archive page once an assistant event answers with the marker.
+
+    Answered under ``zerg.qa.answer_markers``, not equal to the whole event
+    text: a reply that wraps the marker in backticks or puts a line before it
+    is still the reply.
+    """
+
+    return payload if payload and any_marker_answered(_assistant_texts(payload), marker) else None
+
+
 def _pending_pause(payload: dict[str, Any]) -> dict[str, Any] | None:
     return next(
         (row for row in payload.get("requests", []) if row.get("status") == "pending" and row.get("can_respond") is True),
@@ -570,7 +581,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             )
 
         first = _wait_until(
-            lambda: (payload if marker_one in _assistant_texts(payload) else None) if (payload := hosted_events()) else None,
+            lambda: _answered_in(hosted_events(), marker_one),
             timeout=args.timeout,
             description="first Cursor reply in hosted archive",
         )
@@ -584,7 +595,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         )
         send_live(f"Reply with exactly {marker_two}")
         second = _wait_until(
-            lambda: (payload if marker_two in _assistant_texts(payload) else None) if (payload := hosted_events()) else None,
+            lambda: _answered_in(hosted_events(), marker_two),
             timeout=args.timeout,
             description="remote Cursor reply in hosted archive",
         )
@@ -730,7 +741,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             settled(args.timeout)
             send_live(f"Reply with exactly {recovery}")
             _wait_until(
-                lambda: (payload if recovery in _assistant_texts(payload) else None) if (payload := hosted_events()) else None,
+                lambda: _answered_in(hosted_events(), recovery),
                 timeout=args.timeout,
                 description="post-abort Cursor turn in hosted archive",
             )
@@ -855,7 +866,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             machine_agent_restart["server_control_status"] = "connected"
             send_live(f"Reply with exactly {restart_marker}")
             _wait_until(
-                lambda: (payload if restart_marker in _assistant_texts(payload) else None) if (payload := hosted_events()) else None,
+                lambda: _answered_in(hosted_events(), restart_marker),
                 timeout=args.timeout,
                 description="post-Machine-Agent-restart Cursor reply in hosted archive",
             )
@@ -870,7 +881,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         answer_pause(allow_pause, "answer")
         _wait_until(allow_path.exists, timeout=args.timeout, description="approved Cursor command side effect")
         _wait_until(
-            lambda: (payload if permission_allow in _assistant_texts(payload) else None) if (payload := hosted_events()) else None,
+            lambda: _answered_in(hosted_events(), permission_allow),
             timeout=args.timeout,
             description="approved Cursor response in hosted archive",
         )
@@ -942,7 +953,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
 
         send_live(f"Reply with exactly {recovery}")
         recovered = _wait_until(
-            lambda: (payload if recovery in _assistant_texts(payload) else None) if (payload := hosted_events()) else None,
+            lambda: _answered_in(hosted_events(), recovery),
             timeout=args.timeout,
             description="post-cancel Cursor recovery in hosted archive",
         )

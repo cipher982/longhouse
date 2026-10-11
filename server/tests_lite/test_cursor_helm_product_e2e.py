@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import httpx
 
 from zerg.qa.cursor_helm_product_e2e import _accept_workspace_trust_if_prompted
+from zerg.qa.cursor_helm_product_e2e import _answered_in
 from zerg.qa.cursor_helm_product_e2e import _assistant_texts
 from zerg.qa.cursor_helm_product_e2e import _can_send_canonical
 from zerg.qa.cursor_helm_product_e2e import _can_send_live
@@ -168,3 +169,24 @@ def test_cursor_generation_completion_accepts_response_receipt_only_for_target()
     assert _generation_completed(rows, "target") is True
     assert _generation_completed(rows, "other") is True
     assert _generation_completed(rows, "missing") is False
+
+
+def test_a_hosted_reply_is_the_event_that_answers_with_the_marker():
+    marker = "LONGHOUSE_CURSOR_PRODUCT_ONE_abc"
+
+    def page(*texts: str) -> dict:
+        return {
+            "events": [
+                {"role": "user", "content_text": f"Reply with exactly {marker}"},
+                *({"role": "assistant", "content_text": text} for text in texts),
+            ]
+        }
+
+    assert _answered_in(None, marker) is None
+    assert _answered_in(page(), marker) is None
+    # Narration that names the marker in a sentence is not the reply.
+    assert _answered_in(page(f"I will run the command and then reply with `{marker}`."), marker) is None
+    # The marker alone, wrapped, or after a line about the work is.
+    for reply in (marker, f"`{marker}`\n", f"The command finished.\n\n{marker}"):
+        answered = page(reply)
+        assert _answered_in(answered, marker) is answered

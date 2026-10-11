@@ -49,6 +49,7 @@ from urllib.request import urlopen
 
 from zerg.qa import live_session_toolkit
 from zerg.qa import provider_console_lifecycle as console_lifecycle
+from zerg.qa.answer_markers import marker_answered
 from zerg.qa.failed_results import reached_only
 from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
@@ -104,7 +105,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="opencode.helm_lifecycle.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),  # type: ignore[arg-type]
     providers=("opencode",),
     platforms=("linux", "darwin"),
@@ -434,7 +435,10 @@ def steer_observation(
     idle_gap = any(sample["busy"] is False for sample in window)
     commands = [command for row in task_chain + steer_chain for command in row["tool_commands"]]
     original_turn_completed = any(row["finish"] == "stop" for row in task_chain)
-    completion_marker_seen = any(completion_marker in row["text"] for row in rows if row["role"] == "assistant")
+    # Answered, not quoted: a model that stopped names the marker it never
+    # reached. The answers above are bound to the reply that ended their turn
+    # (`finish == "stop"`), so narration cannot satisfy them and presence is enough.
+    completion_marker_seen = any(marker_answered(row["text"], completion_marker) for row in rows if row["role"] == "assistant")
     return {
         "task_message_id": task_id,
         "steer_message_id": steer_id,
@@ -465,7 +469,7 @@ def abort_observation(
         "tool_commands": commands,
         "last_task_message_error": task_chain[-1]["error"] if task_chain else None,
         "task_completed": any(row["finish"] == "stop" for row in task_chain),
-        "completion_marker_seen": any(completion_marker in row["text"] for row in rows if row["role"] == "assistant"),
+        "completion_marker_seen": any(marker_answered(row["text"], completion_marker) for row in rows if row["role"] == "assistant"),
         "final_task_step_ran": any(f"{_TASK_STEPS}.txt" in command for command in commands),
         "idle_after_abort": idle_after_abort,
         "follow_up_answered": any(follow_marker in row["text"] and row["finish"] == "stop" for row in follow_chain),

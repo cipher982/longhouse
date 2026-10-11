@@ -163,6 +163,43 @@ def test_abort_that_does_nothing_is_typed() -> None:
     assert failure_codes(assertions, observation)["opencode_helm_abort_native"] == "abort_did_not_stop_active_turn"
 
 
+def test_a_quoted_completion_marker_is_not_the_task_completing() -> None:
+    """A model that stopped names the marker it never reached; only answering with it finishes the task."""
+
+    def abort(final_text: str) -> dict:
+        rows = [
+            _user("u3", "ABORT TASK"),
+            _assistant("u3", finish="tool-calls", commands=("sleep 4; cat abort1.txt",), error="MessageAbortedError"),
+            _user("u4", "FOLLOW"),
+            _assistant("u4", finish="stop", text=final_text),
+        ]
+        return abort_observation(
+            rows,
+            task_text="ABORT TASK",
+            completion_marker="ABORT_DONE",
+            follow_text="FOLLOW",
+            follow_marker="FOLLOW_X",
+            idle_after_abort=True,
+        )
+
+    quoted = abort("FOLLOW_X\n\nThe earlier task was stopped, so I never sent `ABORT_DONE`.")
+    assert quoted["completion_marker_seen"] is False
+    assert quoted["follow_up_answered"] is True
+    assert abort("ABORT_DONE\nFOLLOW_X")["completion_marker_seen"] is True
+
+    steered = [
+        _user("u1", TASK),
+        _assistant("u1", finish="tool-calls", commands=("sleep 4; cat steer1.txt",), completed_ms=99_000),
+        _user("u2", STEER),
+        _assistant(
+            "u2", finish="stop", text="STEER_X\n\nI stopped before the last step and did not reply with DONE_X.", completed_ms=108_000
+        ),
+    ]
+    assert _steer(steered, _busy_samples(100.0, 110.0))["completion_marker_seen"] is False
+    steered[-1]["text"] = "STEER_X\nDONE_X"
+    assert _steer(steered, _busy_samples(100.0, 110.0))["completion_marker_seen"] is True
+
+
 def test_abort_requires_a_following_turn_on_the_same_owner() -> None:
     rows = [
         _user("u3", "ABORT TASK"),
