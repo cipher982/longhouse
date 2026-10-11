@@ -36,9 +36,35 @@
   "message/assistant/text": {
    "classification": "transcript:assistant",
    "first_seen_version": "0.1.0",
-   "last_seen_version": "0.1.0",
+   "last_seen_version": "1.0.0",
    "entrypoints": [],
-   "keys": ["id", "message", "message.content", "message.content[].text", "message.content[].type", "message.role", "parentId", "timestamp", "type", "version"],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.content",
+    "message.content[].text",
+    "message.content[].type",
+    "message.model",
+    "message.provider",
+    "message.rawStopReason",
+    "message.responseId",
+    "message.role",
+    "message.stopReason",
+    "message.timestamp",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.reasoning",
+    "message.usage.totalTokens",
+    "parentId",
+    "timestamp",
+    "type",
+    "version"
+   ],
    "required_keys": ["type", "message.role", "message.content"]
   },
   "message/assistant/text+thinking+toolCall": {
@@ -57,6 +83,28 @@
    "keys": ["id", "message", "message.content", "message.content[].data", "message.content[].mimeType", "message.content[].type", "message.isError", "message.role", "message.toolCallId", "message.toolName", "parentId", "timestamp", "type"],
    "required_keys": ["type", "id", "parentId", "message.role", "message.toolCallId", "message.content"]
   },
+  "message/toolResult/text": {
+   "classification": "provider_tool:result",
+   "first_seen_version": "0.99.2",
+   "last_seen_version": "1.0.0",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.content",
+    "message.content[].text",
+    "message.content[].type",
+    "message.isError",
+    "message.role",
+    "message.timestamp",
+    "message.toolCallId",
+    "message.toolName",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": ["type", "message.role", "message.toolCallId", "message.content", "message.content[].text"]
+  },
   "message/user/image+text": {
    "classification": "transcript:user_with_image",
    "first_seen_version": null,
@@ -68,9 +116,21 @@
   "message/user/text": {
    "classification": "transcript:user",
    "first_seen_version": "0.1.0",
-   "last_seen_version": "0.1.0",
+   "last_seen_version": "1.0.0",
    "entrypoints": [],
-   "keys": ["id", "message", "message.content", "message.content[].text", "message.content[].type", "message.role", "parentId", "timestamp", "type", "version"],
+   "keys": [
+    "id",
+    "message",
+    "message.content",
+    "message.content[].text",
+    "message.content[].type",
+    "message.role",
+    "message.timestamp",
+    "parentId",
+    "timestamp",
+    "type",
+    "version"
+   ],
    "required_keys": ["type", "message.role", "message.content"]
   },
   "model_change": {
