@@ -34,6 +34,8 @@ pub const OMP_PRINT_ADAPTER: &str = "omp_print";
 const OMP_RUNTIME_SOURCE: &str = "omp_console";
 const OMP_ASYNC_WORK_PLACEHOLDER_ID: &str = "omp:async-work";
 const TERMINAL_DRAIN_GRACE: Duration = Duration::from_secs(5);
+/// How a turn fails once OMP reports that it no longer saves to the bound file.
+const SESSION_MOVED: &str = "OMP stopped saving to this session's file";
 
 #[derive(Clone, Debug)]
 pub struct OmpPrintRunConfig {
@@ -2813,6 +2815,20 @@ impl OmpStreamProjection {
                 }
             }
             Some("session_settled") => self.session_settled = true,
+            Some("notice") => {
+                // OMP left the bound file to another writer (the session is open
+                // in another omp process, or the file was replaced or contested)
+                // and continues as a fork: a new native id in a new file. The
+                // managed session is bound to the identity it started with, so
+                // the turn ends here, with OMP's own account of why. The notice
+                // carries no reason field; its three messages share these words.
+                let message = event.get("message").and_then(Value::as_str);
+                if event.get("source").and_then(Value::as_str) == Some("session-persistence") {
+                    if let Some(message) = message.filter(|text| text.contains("now saves to")) {
+                        anyhow::bail!("{SESSION_MOVED}: {message}");
+                    }
+                }
+            }
             Some("agent_settled" | "session_stop" | "turn_end") => {}
             Some("agent_end") => {
                 let is_terminal = is_terminal_agent_end(event);
@@ -2848,8 +2864,11 @@ fn terminal_reason_code(terminal_state: &str, detail: Option<&str>) -> &'static 
                 || lower.contains("authentication_error")
                 || lower.contains("unauthorized")
         });
+    let session_moved = terminal_state == "run_failed"
+        && detail.is_some_and(|text| text.starts_with(SESSION_MOVED));
     match (terminal_state, auth_refused) {
         (_, true) => "provider_auth_required",
+        _ if session_moved => "provider_session_moved",
         ("run_completed", _) => "run_completed",
         ("run_cancelled", _) => "run_cancelled",
         _ => "run_failed",
@@ -4356,6 +4375,10 @@ for line in sys.stdin:
         out({"id":command.get("id"),"type":"response","command":"prompt","success":True})
         if prompt == "scenario=slow-exit":
             signal.signal(signal.SIGTERM, lambda *_: (time.sleep(0.3), os._exit(0)))
+        if prompt == "scenario=moved":
+            moved = source + ".moved.jsonl"
+            out({"type":"notice","level":"warning","source":"session-persistence","message":"Session " + source + " is open for writing in another omp process, so this session now saves to " + moved + " instead of mixing its entries into that file."})
+            source = moved
         if prompt == "scenario=sentinel":
             user_message(prompt)
             pending_jobs.discard("job-0")
@@ -5969,6 +5992,33 @@ for line in sys.stdin:
         assert!(
             !stop_if_running(process_group_id),
             "the next Machine Agent start left the orphaned provider running"
+        );
+        restore_test_longhouse_home(previous);
+    }
+
+    #[tokio::test]
+    async fn a_session_omp_moved_to_another_file_fails_the_turn_with_omps_reason() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = set_test_longhouse_home(temp.path().join("longhouse"));
+
+        let (started, run_id) = start_fake_turn(temp.path(), "scenario=moved", None).await;
+        let claim = wait_for_terminal(&run_id).await;
+        wait_for_process_group_exit(started.unwrap().process_group_id.unwrap()).await;
+
+        assert_eq!(
+            claim.result.as_ref().unwrap()["terminal_state"],
+            "run_failed"
+        );
+        let reason = claim.error.clone().unwrap_or_default();
+        assert!(
+            reason.starts_with("OMP stopped saving to this session's file: Session ")
+                && reason.contains("is open for writing in another omp process"),
+            "{reason}"
+        );
+        assert_eq!(
+            claim.terminal_event.unwrap()["payload"]["terminal_reason"],
+            "provider_session_moved"
         );
         restore_test_longhouse_home(previous);
     }
