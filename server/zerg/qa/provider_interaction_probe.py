@@ -32,7 +32,6 @@ from uuid import uuid4
 
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
-from zerg.provider_sqlite import open_readonly
 from zerg.qa import antigravity_release_identity
 from zerg.qa import claude_release_identity
 from zerg.qa import codex_release_identity
@@ -53,6 +52,7 @@ from zerg.qa.provider_adapters.pi import PI_PROVIDER
 from zerg.qa.provider_interaction_semantics import MIN_NEGATIVE_PROOF_QUIESCENCE_SECONDS
 from zerg.qa.provider_interaction_semantics import raw_event_digest
 from zerg.qa.provider_interaction_semantics import semantic_boundary_fixture
+from zerg.qa.provider_sqlite import open_readonly
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.pty_session import wait_for_terminal_quiescence
 from zerg.services.managed_provider_contracts import contract_for_provider

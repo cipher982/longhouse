@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any
 from typing import Iterator
 
-from zerg.provider_sqlite import open_readonly
 from zerg.services.agents.models import EventIngest
 from zerg.services.agents.models import SessionIngest
 
@@ -122,11 +121,52 @@ def _is_id(v: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# SQLite's primary codes for "read-only" and "cannot open": the two ways it says
+# a store could not be read through its write-ahead log.
+_UNREADABLE_THROUGH_WAL = (8, 14)
+_UNREADABLE_MESSAGES = ("attempt to write a readonly database", "unable to open database file")
+
+
+def _open_readonly(path: Path, *, timeout: float = 5.0) -> sqlite3.Connection:
+    """Open a cursor store read-only and WAL-aware.
+
+    ``mode=ro`` reads the WAL (WAL readers don't block the writer), so the
+    live-transcript tailer can decode an in-flight session whose conversation
+    is still in the log. It also needs the log's ``-shm``. cursor-agent
+    checkpoints on exit and leaves none, and when the directory cannot take a
+    new one the open still succeeds: it is the first read that fails
+    (``attempt to write a readonly database``). So a read decides, and only
+    then is the store opened ``immutable=1``, which sees the checkpointed main
+    file alone: all a cold store has.
+
+    Any other failure is raised. A locked or busy store still has its writer,
+    and its main file alone would be a stale answer. The fallback is read-only
+    too, so a store that is not there is never created.
+
+    The QA producers keep the same opener on their side of the verifier
+    boundary (``zerg/qa/provider_sqlite.py``), because the verifier does not
+    import the code it judges; ``tests_lite/test_provider_sqlite.py`` holds
+    the two to the same behaviour.
+    """
+    target = Path(path).absolute().as_uri()
+    try:
+        con = sqlite3.connect(f"{target}?mode=ro", uri=True, timeout=timeout)
+        try:
+            con.execute("select name from sqlite_master limit 1").fetchall()
+        except sqlite3.OperationalError:
+            con.close()
+            raise
+        return con
+    except sqlite3.OperationalError as error:
+        code = getattr(error, "sqlite_errorcode", None)
+        unreadable = str(error).startswith(_UNREADABLE_MESSAGES) if code is None else code & 0xFF in _UNREADABLE_THROUGH_WAL
+        if not unreadable:
+            raise
+        return sqlite3.connect(f"{target}?mode=ro&immutable=1", uri=True, timeout=timeout)
+
+
 def _load_meta_and_blobs(path: Path) -> tuple[dict[str, str], dict[bytes, bytes]]:
-    # WAL-aware, so the live-transcript tailer can decode an in-flight
-    # session, and still able to read a closed store from a directory that
-    # cannot be written: see `open_readonly`.
-    con = open_readonly(path)
+    con = _open_readonly(path)
     try:
         meta = dict(con.execute("select key, value from meta"))
         blobs = {bytes.fromhex(r[0]): r[1] for r in con.execute("select id, data from blobs")}

@@ -11,8 +11,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from zerg.provider_sqlite import open_readonly
 from zerg.qa.provider_event_digest import raw_event_digest
+from zerg.qa.provider_sqlite import open_readonly
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL_OUTPUT
 from zerg.services.provider_interaction_semantics import classify_provider_interaction

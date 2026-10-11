@@ -30,11 +30,11 @@ from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
-from zerg.provider_sqlite import open_readonly
 from zerg.qa.conversation_reset import classify_identity_transition
 from zerg.qa.conversation_reset import evaluate_reset_observation
 from zerg.qa.conversation_reset import longhouse_provider_aliases
 from zerg.qa.conversation_reset import longhouse_source_binding
+from zerg.qa.provider_sqlite import open_readonly
 from zerg.qa.pty_session import ProviderPtySession as CursorPtySession
 
 _DEFAULT_TIMEOUT_SECONDS = 90.0

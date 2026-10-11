@@ -41,9 +41,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from zerg.provider_sqlite import open_readonly
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
+from zerg.qa.provider_sqlite import open_readonly
 
 QUALIFICATION_SANDBOX_ENV = "LONGHOUSE_QUALIFICATION_SANDBOX"
 

@@ -1,4 +1,9 @@
-"""One way to open a provider's SQLite store for reading."""
+"""How a provider's SQLite store is opened for reading.
+
+The QA producers and the product's Cursor reader sit on opposite sides of the
+verifier boundary and may not import each other, so each has its opener. Every
+test here runs over both, which is what keeps them one behaviour.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from zerg.provider_sqlite import open_readonly
+from zerg.qa.provider_sqlite import open_readonly as qa_open_readonly
+from zerg.services.cursor_transcript import _open_readonly as reader_open_readonly
+
+pytestmark = pytest.mark.parametrize("open_readonly", [qa_open_readonly, reader_open_readonly], ids=["qa", "cursor-reader"])
 
 
 def _closed_wal_store(path: Path) -> Path:
@@ -47,7 +55,7 @@ def _fail_the_first_read(monkeypatch, *, message: str, code: int | None) -> list
     return opened
 
 
-def test_a_store_being_written_is_read_through_its_log(tmp_path: Path) -> None:
+def test_a_store_being_written_is_read_through_its_log(tmp_path: Path, open_readonly) -> None:
     store = tmp_path / "store.db"
     writer = sqlite3.connect(store)
     writer.execute("PRAGMA journal_mode=wal")
@@ -67,7 +75,7 @@ def test_a_store_being_written_is_read_through_its_log(tmp_path: Path) -> None:
         writer.close()
 
 
-def test_a_closed_store_in_a_directory_that_cannot_be_written_is_read(tmp_path: Path) -> None:
+def test_a_closed_store_in_a_directory_that_cannot_be_written_is_read(tmp_path: Path, open_readonly) -> None:
     store = _closed_wal_store(tmp_path / "a dir with spaces" / "store.db")
     store.parent.chmod(0o555)
     try:
@@ -95,7 +103,7 @@ def test_a_closed_store_in_a_directory_that_cannot_be_written_is_read(tmp_path: 
     ],
 )
 def test_the_main_file_alone_is_read_when_the_first_read_cannot_use_the_log(
-    tmp_path: Path, monkeypatch, message: str, code: int | None
+    tmp_path: Path, monkeypatch, open_readonly, message: str, code: int | None
 ) -> None:
     store = _closed_wal_store(tmp_path / "store.db")
     opened = _fail_the_first_read(monkeypatch, message=message, code=code)
@@ -108,7 +116,9 @@ def test_the_main_file_alone_is_read_when_the_first_read_cannot_use_the_log(
 
 
 @pytest.mark.parametrize(("message", "code"), [("database is locked", sqlite3.SQLITE_BUSY), ("disk I/O error", sqlite3.SQLITE_IOERR)])
-def test_a_store_that_is_busy_is_not_answered_from_its_main_file(tmp_path: Path, monkeypatch, message: str, code: int) -> None:
+def test_a_store_that_is_busy_is_not_answered_from_its_main_file(
+    tmp_path: Path, monkeypatch, open_readonly, message: str, code: int
+) -> None:
     """Its writer is still there, so the main file alone would be a stale answer."""
     store = _closed_wal_store(tmp_path / "store.db")
     opened = _fail_the_first_read(monkeypatch, message=message, code=code)
@@ -117,7 +127,7 @@ def test_a_store_that_is_busy_is_not_answered_from_its_main_file(tmp_path: Path,
     assert opened == ["mode=ro", "closed"]
 
 
-def test_a_missing_store_is_an_error_and_is_not_created(tmp_path: Path) -> None:
+def test_a_missing_store_is_an_error_and_is_not_created(tmp_path: Path, open_readonly) -> None:
     with pytest.raises(sqlite3.OperationalError):
         open_readonly(tmp_path / "absent.db")
     assert list(tmp_path.iterdir()) == []

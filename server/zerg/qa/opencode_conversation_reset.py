@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from zerg.provider_sqlite import open_readonly
 from zerg.qa.claude_conversation_reset import _read_json
 from zerg.qa.claude_conversation_reset import _sha256
 from zerg.qa.claude_conversation_reset import _tail
@@ -27,6 +26,7 @@ from zerg.qa.conversation_reset import longhouse_source_binding
 from zerg.qa.conversation_reset import marker_digest
 from zerg.qa.conversation_reset import observation_exit_code
 from zerg.qa.conversation_reset import tail_sequence
+from zerg.qa.provider_sqlite import open_readonly
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.pty_session import wait_for_terminal_quiescence
 

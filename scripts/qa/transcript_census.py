@@ -459,14 +459,14 @@ def iter_files(paths: list[str], provider: str) -> list[Path]:
 
 
 def _load_open_readonly():
-    """The server's one way to open a provider's SQLite store for reading.
+    """The QA producers' one way to open a provider's SQLite store for reading.
 
-    `zerg.provider_sqlite` is loaded by path, not imported: this tool runs
+    `zerg.qa.provider_sqlite` is loaded by path, not imported: this tool runs
     where the `zerg` package is not installed, beside a checkout that has the
     file. It reads through the write-ahead log, and reads the main file alone
     when a closed store sits in a directory that cannot be written.
     """
-    path = REPO_ROOT / "server" / "zerg" / "provider_sqlite.py"
+    path = REPO_ROOT / "server" / "zerg" / "qa" / "provider_sqlite.py"
     spec = importlib.util.spec_from_file_location("longhouse_provider_sqlite", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {path}")
