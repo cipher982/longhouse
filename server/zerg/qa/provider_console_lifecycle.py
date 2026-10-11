@@ -678,7 +678,7 @@ def _wait_served_answers(
     native_answers: Callable[[], tuple[dict[str, int] | None, str]] | None = None,
     one_reply: bool = True,
     unanswered: Callable[[str], RuntimeError] | None = None,
-    stream_answers: Callable[[], bool | None] | None = None,
+    stream_unanswered: Callable[[], bool] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, object] | None]:
     """Wait until the archive serves what the provider answered ``marker`` with.
 
@@ -710,15 +710,17 @@ def _wait_served_answers(
     held by id.
 
     The provider's turn is over before this is called, so what it waits on is
-    Longhouse serving the reply, and it waits only while there is one to
-    serve. ``stream_answers`` says whether the provider's own stream for the
-    turn holds a reply that answers (None when the stream cannot be read).
-    That stream is complete, its process having exited, so once it holds no
-    answer and the page serves none the wait gives up as soon as that has
-    stood for the time a converged page must. Otherwise it gives up at the
-    deadline. Either way, why is decided from the provider's stream and not
-    from the count that never came: ``unanswered`` takes the last served count
-    and returns the failure (`_unanswered_turn_error`). A served-answer fault
+    Longhouse serving the reply. It may stop before its deadline only when
+    the outcome is already certain, and never on something it failed to find:
+    ``stream_unanswered`` is True when the provider's own stream for the turn
+    positively shows a finished turn that did not answer (`_wait_turn_served`
+    says what that takes). Then, once the page serves no answer, no row of the
+    provider's record is still to be served and no fault is on the page, the
+    wait gives up after that has stood for the time a converged page must.
+    In every other case it runs to the deadline, as it always did. Either way,
+    why it gave up is decided from the provider's stream and not from the
+    count that never came: ``unanswered`` takes the last served count and
+    returns the failure (`_unanswered_turn_error`). A served-answer fault
     still standing when the wait gives up is reported as that fault. Only a
     caller with no turn to read, which no live path is, gets the bare count.
     """
@@ -793,10 +795,11 @@ def _wait_served_answers(
                 MARKER_REPEATED_IN_ONE_REPLY, marker=marker, answers=repeated, mentions=mentions, expected="each to say its marker once"
             )
         # Nothing is coming once the page serves no answer, nothing above is still
-        # awaited and the provider's own stream holds no reply for Longhouse to serve.
-        nothing_to_serve = not (converged or awaited or last_count) and stream_answers is not None and stream_answers() is False
+        # awaited and the provider's own stream shows a finished turn that did not answer.
+        nothing_to_serve = not (converged or awaited or last_count) and stream_unanswered is not None and stream_unanswered()
         if converged or nothing_to_serve:
-            stable_since = stable_since or time.monotonic()
+            if stable_since is None:
+                stable_since = time.monotonic()
             if time.monotonic() - stable_since >= 2:
                 if converged:
                     return matches, correspondence
@@ -839,11 +842,35 @@ def _wait_turn_served(
     steered: bool = False,
     **wait: Any,
 ) -> tuple[list[dict[str, Any]], dict[str, object] | None]:
-    """`_wait_served_answers` for one Console turn: held to the rows its claim names, and given up from what its stream holds."""
+    """`_wait_served_answers` for one Console turn: held to the rows its claim names, and given up from what its stream holds.
 
-    def stream_answers() -> bool | None:
+    The wait ends early only on a positive reading of the turn's own stream
+    (`_turn_account`), the same for every adapter: the stream was read, the
+    provider's own end of the turn is the last thing it says of the turn, at
+    least one assistant reply was recognised in it, and none of them answers.
+    A stream that cannot be read, has no end of turn, or in which no reply was
+    recognised (a reply in a shape the reader does not know looks like that)
+    decides nothing, and the wait runs to its deadline.
+
+    The end of the turn is the provider's own terminal event (`_stream_event`):
+    the ``result`` line of a Claude or Cursor print run, Codex's
+    ``task_complete`` for the task that started last, Pi's ``agent_end``, an
+    OMP ``agent_end`` that is terminal. Each is written after the last message
+    of the loop it closes, so it is never there while that loop's final reply
+    is still being written. OpenCode's is the ``step_finish`` of a step that
+    does not hand off to a tool, which ends a step and not the turn. A stream
+    read while its provider still runs could gain another loop or step after
+    such an event (a retry, a queued input, a steer taken at the step's end),
+    so it is read only once the engine has reported the run terminal and the
+    provider has closed, which every caller waits for first. The engine
+    writes OpenCode's stream itself and, before it reports terminal, adds
+    what the event stream missed from OpenCode's own messages when that read
+    answers.
+    """
+
+    def stream_unanswered() -> bool:
         account = _turn_account(provider, claim, marker, alongside=alongside)
-        return None if account is None else bool(account["answering_replies"])
+        return bool(account and account["turn_ended"] and account["assistant_replies"] and not account["answering_replies"])
 
     return _wait_served_answers(
         api_url,
@@ -855,7 +882,7 @@ def _wait_turn_served(
         unanswered=lambda served: _unanswered_turn_error(
             provider, claim, marker, turn=turn, alongside=alongside, served=served, context_marker=context_marker, steered=steered
         ),
-        stream_answers=stream_answers,
+        stream_unanswered=stream_unanswered,
         **wait,
     )
 
