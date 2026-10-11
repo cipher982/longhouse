@@ -7,13 +7,20 @@ active-turn steer, abort, and terminate all use the Runtime Host. The oracles
 judge Claude's own transcript turn boundaries (``system/turn_duration``), not
 the requests Longhouse sent.
 
-``--negative-control claude_steer_after_turn`` or ``claude_interrupt_noop`` runs
-the same scenario against a Machine Agent built with the ``qa-fault-injection``
-feature. The steer fault delivers the steer only after the active turn has
-ended, the shape of a queued follow-up; the interrupt fault reports success
-without stopping anything. The targeted oracle must then fail with a typed code
-and a receipt must show the fault fired; anything else is inconclusive or a
-broken oracle.
+A Longhouse send must reach Claude as the owner's own words: with Claude Code
+2.1.287 and later the Machine Agent submits it through Longhouse's Claude Code
+mod, so the transcript records an ordinary user turn, never a channel message
+Claude Code labels "NOT from your user". An abort must also stop the command
+the turn was running, as Esc does.
+
+``--negative-control claude_steer_after_turn``, ``claude_interrupt_noop`` or
+``claude_owner_input_via_channel`` runs the same scenario against a Machine
+Agent built with the ``qa-fault-injection`` feature. The steer fault delivers
+the steer only after the active turn has ended, the shape of a queued
+follow-up; the interrupt fault reports success without stopping anything; the
+owner-input fault sends the owner's message through the channel instead of the
+mod. The targeted oracle must then fail with a typed code and a receipt must
+show the fault fired; anything else is inconclusive or a broken oracle.
 """
 
 from __future__ import annotations
@@ -82,13 +89,16 @@ NEGATIVE_CONTROLS = {
     # fault -> the assertion it must break, and the failure codes that count as caught
     "claude_steer_after_turn": ("claude_helm_steer_active", frozenset({"steer_delivered_as_followup", "steer_did_not_change_course"})),
     "claude_interrupt_noop": ("claude_helm_abort_native", frozenset({"abort_did_not_stop_turn"})),
+    "claude_owner_input_via_channel": ("claude_helm_owner_send_is_user_input", frozenset({"owner_send_not_user_input"})),
 }
 
 ASSERTIONS = (
     "claude_helm_launch_registration",
     "claude_helm_send_idle",
+    "claude_helm_owner_send_is_user_input",
     "claude_helm_steer_active",
     "claude_helm_abort_native",
+    "claude_helm_abort_stops_tool",
     "claude_helm_terminate_owned",
 )
 _VARIANTS = tuple(
@@ -97,9 +107,9 @@ _VARIANTS = tuple(
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.helm_lifecycle.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=10,
+    scenario_revision=11,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     # Claude on macOS keeps credentials in the desktop Keychain; a relocated
@@ -111,8 +121,10 @@ REGISTRATION = ProducerRegistration(
     observed_activity=(
         "stock_longhouse_claude_helm_launch",
         "remote_send_reply_archived",
+        "remote_send_recorded_as_user_turn",
         "steer_landed_in_target_turn",
         "aborted_turn_followed_by_completed_turn",
+        "aborted_turn_command_stopped",
         "remote_terminate_provider_dead",
     ),
     acquisition_methods=("staged_release", "observed_install"),
@@ -379,6 +391,89 @@ def abort_stopped_turn(
     }
 
 
+# Origins Claude Code delivers without its "NOT from your user" framing: a
+# message typed at the terminal, and a mod's prompt submitted as the user's own
+# words (`$.prompt.submit({ asUser: true })`). Every other origin -- the channel
+# among them -- reaches the model as outside input.
+_CHANNEL_WRAPPER_MARKERS = ("<channel", "NOT from your user")
+
+
+def _row_origin_is_user(row: dict[str, Any]) -> bool:
+    origin = row.get("origin") if isinstance(row.get("origin"), dict) else {}
+    kind = origin.get("kind")
+    return kind == "human" or (kind == "plugin" and origin.get("asUser") is True)
+
+
+def owner_send_is_user_input(rows: list[dict[str, Any]], *, prompts: list[str]) -> dict[str, Any]:
+    """Did every Longhouse send reach Claude as the owner's own words?
+
+    Each prompt the Runtime Host sent must open a turn with an ordinary user
+    message: not meta, no channel wrapper, the owner's text verbatim, and an
+    origin Claude Code delivers unlabelled. A channel message fails this
+    (origin ``channel``, text inside ``<channel>``), whatever the model then did
+    with it.
+    """
+
+    if not prompts:
+        return {"passed": False, "failure_code": "owner_send_not_attempted"}
+    checked: list[dict[str, Any]] = []
+    for prompt in prompts:
+        row = next((row for row in rows if row.get("type") == "user" and _user_prompt_contains(row, prompt)), None)
+        if row is None:
+            checked.append({"prompt": prompt, "found": False})
+            continue
+        content = str((row.get("message") or {}).get("content") or "")
+        checked.append(
+            {
+                "prompt": prompt,
+                "found": True,
+                "origin": row.get("origin"),
+                "is_meta": row.get("isMeta") is True,
+                "verbatim": content.strip() == prompt,
+                "wrapped": any(marker in content for marker in _CHANNEL_WRAPPER_MARKERS),
+                "origin_is_user": _row_origin_is_user(row),
+            }
+        )
+    if not all(item["found"] for item in checked):
+        return {"passed": False, "failure_code": "owner_send_row_missing", "sends": checked}
+    user_input = all(item["origin_is_user"] and item["verbatim"] and not item["wrapped"] and not item["is_meta"] for item in checked)
+    return {
+        "passed": user_input,
+        "failure_code": None if user_input else "owner_send_not_user_input",
+        "sends": checked,
+    }
+
+
+def processes_matching(marker: str) -> list[dict[str, Any]]:
+    """Live processes whose command line holds ``marker`` (this probe excluded)."""
+
+    import subprocess
+
+    listing = subprocess.run(["ps", "-A", "-o", "pid=,args="], capture_output=True, text=True, check=False).stdout
+    found = []
+    for line in listing.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if marker in command and pid.isdigit() and int(pid) != os.getpid():
+            found.append({"pid": int(pid), "command": command[:200]})
+    return found
+
+
+def abort_stopped_tool(survivors: list[dict[str, Any]], *, seconds_waited: float) -> dict[str, Any]:
+    """Esc ends the turn and kills the command it was running; so must an abort.
+
+    A turn ended with ``$.turn.abort`` alone leaves its running Bash command
+    alive as a background shell, which later finishes and starts a turn of its
+    own. The command's process must be gone shortly after the abort.
+    """
+
+    return {
+        "passed": not survivors,
+        "failure_code": None if not survivors else "aborted_command_still_running",
+        "surviving_processes": survivors,
+        "seconds_waited": seconds_waited,
+    }
+
+
 def _started_tool(row: dict[str, Any]) -> bool:
     """Did the model start a tool call in this row?"""
 
@@ -420,8 +515,10 @@ def _timestamp(row: dict[str, Any]) -> float | None:
 REACHED_MARKERS: dict[str, tuple[str, ...]] = {
     "claude_helm_launch_registration": ("lifecycle.launch_registration.passed",),
     "claude_helm_send_idle": ("lifecycle.send_idle.passed",),
+    "claude_helm_owner_send_is_user_input": ("lifecycle.owner_send_user_input.passed",),
     "claude_helm_steer_active": ("lifecycle.steer_active.passed",),
     "claude_helm_abort_native": ("lifecycle.abort_native.passed",),
+    "claude_helm_abort_stops_tool": ("lifecycle.abort_stops_tool.passed",),
     "claude_helm_terminate_owned": ("lifecycle.terminate_owned.passed",),
 }
 
@@ -434,20 +531,36 @@ def lifecycle_assertions(lifecycle: dict[str, Any], *, completed: bool, cleanup_
     return {
         "claude_helm_launch_registration": held("launch_registration"),
         "claude_helm_send_idle": held("send_idle"),
+        "claude_helm_owner_send_is_user_input": held("owner_send_user_input"),
         "claude_helm_steer_active": completed and held("steer_active"),
         "claude_helm_abort_native": completed and held("abort_native"),
+        "claude_helm_abort_stops_tool": completed and held("abort_stops_tool"),
         "claude_helm_terminate_owned": completed and held("terminate_owned") and cleanup_ok,
     }
+
+
+# The lifecycle record each targeted assertion is judged on, and the phases that
+# must have held first for a caught fault to mean anything.
+_NEGATIVE_CONTROL_RECORDS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "claude_helm_owner_send_is_user_input": ("owner_send_user_input", ("launch_registration",)),
+    "claude_helm_steer_active": ("steer_active", ("launch_registration", "send_idle")),
+    "claude_helm_abort_native": ("abort_native", ("launch_registration", "send_idle", "steer_active")),
+}
+
+
+def negative_control_record(lifecycle: dict[str, Any], fault: str) -> dict[str, Any]:
+    key, _preconditions = _NEGATIVE_CONTROL_RECORDS[NEGATIVE_CONTROLS[fault][0]]
+    record = lifecycle.get(key)
+    return record if isinstance(record, dict) else {}
 
 
 def negative_control_verdict(lifecycle: dict[str, Any], *, fault: str, fault_receipt: dict[str, Any] | None) -> dict[str, Any]:
     """Pass only when the injected fault fired and its target oracle caught it."""
 
     target, caught_codes = NEGATIVE_CONTROLS[fault]
-    key = "steer_active" if target == "claude_helm_steer_active" else "abort_native"
+    key, preconditions = _NEGATIVE_CONTROL_RECORDS[target]
     observed = lifecycle.get(key) if isinstance(lifecycle.get(key), dict) else {}
     fault_fired = isinstance(fault_receipt, dict) and fault_receipt.get("fault") == fault
-    preconditions = ["launch_registration", "send_idle"] + (["steer_active"] if key == "abort_native" else [])
     preconditions_held = all(isinstance(lifecycle.get(item), dict) and lifecycle[item].get("passed") is True for item in preconditions)
     if not fault_fired or not preconditions_held or not observed:
         status = "inconclusive"
@@ -792,6 +905,7 @@ def _drive_lifecycle(
                 f"Please reply with exactly {marker} and nothing else."
             )
             wait_can_send()
+            sent_prompts.append(prompt)
             _post(api, token, f"sessions/{session_id}/send-live", {"message": prompt})
             deadline = time.monotonic() + args.response_timeout_secs
             answered = False
@@ -829,13 +943,24 @@ def _drive_lifecycle(
 
     token_hex = uuid.uuid4().hex[:10]
     reply = f"LONGHOUSE_CLAUDE_SEND_{token_hex}"
-    declined = send_marker_prompt(reply, "remote Claude reply in hosted archive")
+    sent_prompts: list[str] = []
+    try:
+        declined = send_marker_prompt(reply, "remote Claude reply in hosted archive")
+    finally:
+        # Judged even when Claude declined: a declined send still shows how it
+        # arrived, and a channel-labelled send is the usual reason for one.
+        lifecycle["owner_send_user_input"] = owner_send_is_user_input(rows(), prompts=sent_prompts)
+        lifecycle["owner_send_user_input"]["qa_fault_receipt"] = (
+            _fault_receipt(home, session_id) if fault == "claude_owner_input_via_channel" else None
+        )
     lifecycle["send_idle"] = {
         "passed": True,
         "remote_reply_archived": True,
         "provider_declined_first_send": bool(declined),
         "declines": declined,
     }
+    if fault == "claude_owner_input_via_channel":
+        return
 
     # Steer: aim at a turn mid-way through three slow sequential Bash steps.
     step = f"lh_claude_step_{token_hex}"
@@ -961,6 +1086,16 @@ def _drive_lifecycle(
         abort_verdict["session_alive_after_abort"] = session.alive()
         abort_verdict["qa_fault_receipt"] = _fault_receipt(home, session_id) if fault == "claude_interrupt_noop" else None
         lifecycle["abort_native"] = abort_verdict
+        # The long command's own process: gone once the turn has ended, as with Esc.
+        waited_from = time.monotonic()
+        try:
+            wait_until(lambda: not processes_matching(abort_prompt), timeout=10, description="aborted command exit")
+        except ScenarioError:
+            pass
+        lifecycle["abort_stops_tool"] = abort_stopped_tool(
+            processes_matching(abort_prompt),
+            seconds_waited=round(time.monotonic() - waited_from, 1),
+        )
         if fault == "claude_interrupt_noop":
             return
         if not abort_verdict["passed"] or not session.alive():
@@ -1223,8 +1358,7 @@ def run_lifecycle(
             scenario_wait = scenario.get(WAITED_ON_FIELD)
             result.update(declared_wait(scenario_wait) or error_wait)
     elif fault:
-        target, _codes = NEGATIVE_CONTROLS[fault]
-        observed = lifecycle.get("steer_active" if target == "claude_helm_steer_active" else "abort_native") or {}
+        observed = negative_control_record(lifecycle, fault)
         verdict = negative_control_verdict(lifecycle, fault=fault, fault_receipt=observed.get("qa_fault_receipt"))
         result.update({"status": verdict["status"], "negative_control": verdict})
     elif error is not None:

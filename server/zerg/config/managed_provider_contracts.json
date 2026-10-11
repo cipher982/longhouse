@@ -1269,7 +1269,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a4d05134a8427dc649e0f6b351877214912ef1674efc699145c31dad27be03a8"
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
             },
             {
               "id": "claude_helm_send_idle",
@@ -1280,7 +1280,18 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a4d05134a8427dc649e0f6b351877214912ef1674efc699145c31dad27be03a8"
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
+            },
+            {
+              "id": "claude_helm_owner_send_is_user_input",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
             },
             {
               "id": "claude_helm_steer_active",
@@ -1291,7 +1302,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a4d05134a8427dc649e0f6b351877214912ef1674efc699145c31dad27be03a8"
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
             },
             {
               "id": "claude_helm_abort_native",
@@ -1302,7 +1313,18 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a4d05134a8427dc649e0f6b351877214912ef1674efc699145c31dad27be03a8"
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
+            },
+            {
+              "id": "claude_helm_abort_stops_tool",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
             },
             {
               "id": "claude_helm_terminate_owned",
@@ -1313,7 +1335,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a4d05134a8427dc649e0f6b351877214912ef1674efc699145c31dad27be03a8"
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
             }
           ]
         },
@@ -1603,7 +1625,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a4d05134a8427dc649e0f6b351877214912ef1674efc699145c31dad27be03a8"
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
             }
           ],
           "level": "live_token",
@@ -1634,11 +1656,22 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a4d05134a8427dc649e0f6b351877214912ef1674efc699145c31dad27be03a8"
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
+            },
+            {
+              "id": "claude_helm_owner_send_is_user_input",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
             }
           ],
           "level": "live_token",
-          "source": "factory assertions: claude_helm_send_idle"
+          "source": "factory assertions: claude_helm_send_idle, claude_helm_owner_send_is_user_input"
         },
         "interrupt": {
           "disposition": "implemented",
@@ -1652,11 +1685,22 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a4d05134a8427dc649e0f6b351877214912ef1674efc699145c31dad27be03a8"
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
+            },
+            {
+              "id": "claude_helm_abort_stops_tool",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 11,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
             }
           ],
           "level": "live_token",
-          "source": "factory assertions: claude_helm_abort_native"
+          "source": "factory assertions: claude_helm_abort_native, claude_helm_abort_stops_tool"
         },
         "steer_active_turn": {
           "disposition": "implemented",
@@ -1670,7 +1714,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a4d05134a8427dc649e0f6b351877214912ef1674efc699145c31dad27be03a8"
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
             }
           ],
           "level": "live_token",
@@ -1695,7 +1739,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a4d05134a8427dc649e0f6b351877214912ef1674efc699145c31dad27be03a8"
+              "oracle_digest": "43b4350e1524b71eddb563926ec496b48e831500a94372bbac67d0af8fed63bf"
             }
           ],
           "level": "live_token",

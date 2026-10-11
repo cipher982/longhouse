@@ -796,6 +796,16 @@ providers:
         minimum_scenario_revision: 6
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
+      # The owner's send reaches Claude as the user's own words through
+      # Longhouse's Claude Code mod, not as a channel message Claude Code
+      # labels "NOT from your user" (control-plane
+      # docs/specs/claude-owner-input-delivery.md).
+      - id: claude_helm_owner_send_is_user_input
+        scenario_id: claude_helm_lifecycle
+        oracle_source: server/zerg/qa/claude_helm_lifecycle.py
+        minimum_scenario_revision: 11
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
       - id: claude_helm_steer_active
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
@@ -806,6 +816,12 @@ providers:
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
         minimum_scenario_revision: 6
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - id: claude_helm_abort_stops_tool
+        scenario_id: claude_helm_lifecycle
+        oracle_source: server/zerg/qa/claude_helm_lifecycle.py
+        minimum_scenario_revision: 11
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - id: claude_helm_terminate_owned
@@ -980,6 +996,10 @@ providers:
       owner_action: "claude launch, restart, reattach, and send against one session id"
     send_input:
       disposition: "implemented"
+      # From Claude Code 2.1.287 the owner's send goes through Longhouse's
+      # Claude Code mod as the user's own words; older Claude Code, or settings
+      # that turn mods off, keep the channel, and every send result names the
+      # path (`owner_input_path`, `owner_input_reason`).
       required_assertions:
       - id: claude_helm_send_idle
         scenario_id: claude_helm_lifecycle
@@ -988,16 +1008,32 @@ providers:
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
+      - id: claude_helm_owner_send_is_user_input
+        scenario_id: claude_helm_lifecycle
+        oracle_source: server/zerg/qa/claude_helm_lifecycle.py
+        minimum_scenario_revision: 11
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     interrupt:
       disposition: "implemented"
-      # Claude Code shuts down on SIGINT, so interrupt is a hook-driven turn
-      # stop: the foreground Bash tool is terminated and the lifecycle hook
-      # returns continue=false at the next tool boundary.
+      # Claude Code shuts down on SIGINT, so interrupt never signals Claude.
+      # With Longhouse's mod attached the turn ends at once through
+      # `$.turn.abort`; otherwise the lifecycle hook returns continue=false at
+      # the next tool boundary. Either way the running foreground Bash command
+      # is terminated, as Esc does.
       required_assertions:
       - id: claude_helm_abort_native
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
         minimum_scenario_revision: 6
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
+      - id: claude_helm_abort_stops_tool
+        scenario_id: claude_helm_lifecycle
+        oracle_source: server/zerg/qa/claude_helm_lifecycle.py
+        minimum_scenario_revision: 11
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800

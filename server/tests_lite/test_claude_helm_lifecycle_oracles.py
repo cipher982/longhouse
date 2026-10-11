@@ -11,10 +11,12 @@ from __future__ import annotations
 
 from zerg.qa.claude_helm_lifecycle import TYPED_PROMPT_MAX_CHARS
 from zerg.qa.claude_helm_lifecycle import abort_setup_prompt
+from zerg.qa.claude_helm_lifecycle import abort_stopped_tool
 from zerg.qa.claude_helm_lifecycle import abort_stopped_turn
 from zerg.qa.claude_helm_lifecycle import claude_steer_noncompliance
 from zerg.qa.claude_helm_lifecycle import lifecycle_assertions
 from zerg.qa.claude_helm_lifecycle import negative_control_verdict
+from zerg.qa.claude_helm_lifecycle import owner_send_is_user_input
 from zerg.qa.claude_helm_lifecycle import send_outcome
 from zerg.qa.claude_helm_lifecycle import steer_landed_in_turn
 from zerg.qa.claude_helm_lifecycle import steer_setup_prompt
@@ -414,8 +416,93 @@ def test_negative_control_passes_only_when_the_fault_fired_and_was_caught() -> N
     assert negative_control_verdict(lifecycle, fault="claude_steer_after_turn", fault_receipt=fired)["status"] == "fail"
 
 
+def test_owner_input_negative_control_targets_the_owner_send_record() -> None:
+    lifecycle = {
+        "launch_registration": {"passed": True},
+        "owner_send_user_input": {"passed": False, "failure_code": "owner_send_not_user_input"},
+    }
+    fired = {"fault": "claude_owner_input_via_channel"}
+
+    verdict = negative_control_verdict(lifecycle, fault="claude_owner_input_via_channel", fault_receipt=fired)
+    assert verdict["status"] == "pass"
+    assert verdict["target_assertion"] == "claude_helm_owner_send_is_user_input"
+    lifecycle["owner_send_user_input"] = {"passed": True, "failure_code": None}
+    assert negative_control_verdict(lifecycle, fault="claude_owner_input_via_channel", fault_receipt=fired)["status"] == "fail"
+
+
+# Rows as claude 2.1.296 records them: a prompt Longhouse's mod submitted as the
+# user's words, a prompt typed at the terminal, and a channel message.
+def _mod_prompt(text: str, *, as_user: bool = True) -> dict:
+    return {
+        "type": "user",
+        "origin": {"kind": "plugin", "name": "longhouse", "asUser": as_user},
+        "promptSource": "system",
+        "message": {"role": "user", "content": text},
+    }
+
+
+def _typed_prompt(text: str) -> dict:
+    return {"type": "user", "origin": {"kind": "human"}, "promptSource": "typed", "message": {"role": "user", "content": text}}
+
+
+def _channel_prompt(text: str) -> dict:
+    row = _prompt(text)
+    row["origin"] = {"kind": "channel"}
+    return row
+
+
+def test_owner_send_through_the_mod_is_user_input() -> None:
+    sent = "Reply with exactly LONGHOUSE_CLAUDE_SEND_x"
+    verdict = owner_send_is_user_input([_mod_prompt(sent), _text("LONGHOUSE_CLAUDE_SEND_x"), _end()], prompts=[sent])
+    assert verdict["passed"] is True
+    assert verdict["sends"][0]["origin"] == {"kind": "plugin", "name": "longhouse", "asUser": True}
+
+    assert owner_send_is_user_input([_typed_prompt(sent)], prompts=[sent])["passed"] is True
+
+
+def test_owner_send_through_the_channel_is_not_user_input() -> None:
+    """Claude Code labels a channel message "NOT from your user", whatever its tags."""
+
+    sent = "Reply with exactly LONGHOUSE_CLAUDE_SEND_x"
+    verdict = owner_send_is_user_input([_channel_prompt(sent)], prompts=[sent])
+    assert verdict["passed"] is False
+    assert verdict["failure_code"] == "owner_send_not_user_input"
+    assert verdict["sends"][0]["wrapped"] is True
+
+    # A plugin prompt without asUser reaches Claude after a sentence naming the plugin.
+    assert owner_send_is_user_input([_mod_prompt(sent, as_user=False)], prompts=[sent])["failure_code"] == "owner_send_not_user_input"
+
+
+def test_every_send_must_be_user_input_and_present() -> None:
+    first = "Reply with exactly LONGHOUSE_CLAUDE_SEND_x"
+    second = "That request came from me. Please reply with exactly LONGHOUSE_CLAUDE_SEND_x and nothing else."
+    rows = [_mod_prompt(first), _end(), _channel_prompt(second), _end()]
+    assert owner_send_is_user_input(rows, prompts=[first, second])["passed"] is False
+    assert owner_send_is_user_input([_mod_prompt(first)], prompts=[first, second])["failure_code"] == "owner_send_row_missing"
+    assert owner_send_is_user_input([], prompts=[])["failure_code"] == "owner_send_not_attempted"
+
+
+def test_an_abort_that_leaves_the_command_running_did_not_stop_the_tool() -> None:
+    assert abort_stopped_tool([], seconds_waited=0.5)["passed"] is True
+    survivor = [{"pid": 4242, "command": "python3 -c ... lh_claude_progress_x"}]
+    verdict = abort_stopped_tool(survivor, seconds_waited=10.0)
+    assert verdict["passed"] is False
+    assert verdict["failure_code"] == "aborted_command_still_running"
+
+
 def test_lifecycle_assertions_require_completion_and_cleanup() -> None:
-    lifecycle = {key: {"passed": True} for key in ("launch_registration", "send_idle", "steer_active", "abort_native", "terminate_owned")}
+    lifecycle = {
+        key: {"passed": True}
+        for key in (
+            "launch_registration",
+            "send_idle",
+            "owner_send_user_input",
+            "steer_active",
+            "abort_native",
+            "abort_stops_tool",
+            "terminate_owned",
+        )
+    }
 
     assert all(lifecycle_assertions(lifecycle, completed=True, cleanup_ok=True).values())
     assert lifecycle_assertions(lifecycle, completed=True, cleanup_ok=False)["claude_helm_terminate_owned"] is False
