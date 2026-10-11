@@ -26,10 +26,19 @@ PROFILE_INFO = {
 }
 
 
-def test_redacted_native_capture_refreshes_result_and_model_source_digests(tmp_path: Path) -> None:
-    source_path = tmp_path / "native.jsonl"
-    original_events = [
-        {"type": "system", "subtype": "init", "model": "grok-4.5", "detail": "provider-secret"},
+def _write_jsonl(path: Path, events: list[dict[str, object]]) -> None:
+    path.write_text(
+        "".join(json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+
+def test_redacted_native_capture_refreshes_result_and_hook_model_source_digests(tmp_path: Path) -> None:
+    # Cursor's shape: the stream holds the result, the sessionStart hook receipt holds the model.
+    stream_path = tmp_path / "native.jsonl"
+    hook_path = tmp_path / "hooks.jsonl"
+    original_stream = [
+        {"type": "system", "subtype": "init", "model": "Codex 5.3 Low", "detail": "provider-secret"},
         {
             "type": "result",
             "subtype": "success",
@@ -37,51 +46,84 @@ def test_redacted_native_capture_refreshes_result_and_model_source_digests(tmp_p
             "detail": "provider-secret",
         },
     ]
-    original_lines = [json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True) for event in original_events]
-    source_path.write_text("\n".join(original_lines) + "\n", encoding="utf-8")
-    original_init_digest = semantic._native_event_digest(original_events[0])  # noqa: SLF001
-    original_result_digest = semantic._native_event_digest(original_events[1])  # noqa: SLF001
+    original_hook = {"event": "sessionStart", "model": "gpt-5.3-codex-low", "cwd": "provider-secret"}
+    original_result_digest = semantic._native_event_digest(original_stream[1])  # noqa: SLF001
+    original_hook_digest = semantic._native_event_digest(original_hook)  # noqa: SLF001
 
-    redacted_events = [
-        {**original_events[0], "detail": "[QUALIFICATION_SECRET_1]"},
-        {**original_events[1], "detail": "[QUALIFICATION_SECRET_1]"},
-    ]
-    source_path.write_text(
-        "\n".join(json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True) for event in redacted_events) + "\n",
-        encoding="utf-8",
-    )
-    redacted_init_digest = semantic._native_event_digest(redacted_events[0])  # noqa: SLF001
-    redacted_result_digest = semantic._native_event_digest(redacted_events[1])  # noqa: SLF001
+    redacted_stream = [{**event, "detail": "[QUALIFICATION_SECRET_1]"} for event in original_stream]
+    redacted_hook = {**original_hook, "cwd": "[QUALIFICATION_SECRET_1]"}
+    _write_jsonl(stream_path, redacted_stream)
+    _write_jsonl(hook_path, [redacted_hook, {"event": "sessionEnd", "model": "gpt-5.3-codex-low"}])
+    redacted_result_digest = semantic._native_event_digest(redacted_stream[1])  # noqa: SLF001
+    redacted_hook_digest = semantic._native_event_digest(redacted_hook)  # noqa: SLF001
     observation = {
         "live_model_evidence": {
             "source_canary": "cursor_model_probe",
-            "model": "grok-4.5",
+            "model": "gpt-5.3-codex-low",
             "result_event": {
                 "type": "result",
                 "subtype": "success",
                 "native_event_sha256": original_result_digest,
-                "model_source_event_sha256": original_init_digest,
+                "model_source": "provider_hook",
+                "model_source_event_sha256": original_hook_digest,
             },
             "source_artifacts": [
                 {
-                    "path": str(source_path.resolve()),
+                    "path": str(stream_path.resolve()),
                     "sha256": "old-file-digest",
                     "kind": "provider_jsonl_stream",
                     "event_type": "result",
                     "event_sha256": original_result_digest,
-                }
+                },
+                {
+                    "path": str(hook_path.resolve()),
+                    "sha256": "old-file-digest",
+                    "kind": "provider_hook_receipt",
+                    "event_type": "sessionStart",
+                    "event_sha256": original_hook_digest,
+                },
             ],
         }
     }
 
     refreshed = semantic._refresh_native_source_digests(observation, artifact_root=tmp_path)  # noqa: SLF001
     evidence = refreshed["live_model_evidence"]
-    source = evidence["source_artifacts"][0]
+    stream_source, hook_source = evidence["source_artifacts"]
     assert evidence["result_event"]["native_event_sha256"] == redacted_result_digest
-    assert evidence["result_event"]["model_source_event_sha256"] == redacted_init_digest
-    assert source["event_sha256"] == redacted_result_digest
-    assert source["path"] == "native.jsonl"
-    assert source["sha256"] == hashlib.sha256(source_path.read_bytes()).hexdigest()
+    assert evidence["result_event"]["model_source_event_sha256"] == redacted_hook_digest
+    assert stream_source["event_sha256"] == redacted_result_digest
+    assert stream_source["path"] == "native.jsonl"
+    assert stream_source["sha256"] == hashlib.sha256(stream_path.read_bytes()).hexdigest()
+    assert hook_source["event_sha256"] == redacted_hook_digest
+    assert hook_source["path"] == "hooks.jsonl"
+    assert hook_source["sha256"] == hashlib.sha256(hook_path.read_bytes()).hexdigest()
+
+
+def test_hook_model_source_fails_closed_without_its_receipt(tmp_path: Path) -> None:
+    # A model bound to a hook receipt must never be rebound to a stream event.
+    stream_path = tmp_path / "native.jsonl"
+    events = [
+        {"type": "system", "subtype": "init", "model": "Codex 5.3 Low"},
+        {"type": "result", "subtype": "success"},
+    ]
+    _write_jsonl(stream_path, events)
+    observation = {
+        "live_model_evidence": {
+            "source_canary": "cursor_model_probe",
+            "result_event": {"model_source": "provider_hook", "model_source_event_sha256": "a" * 64},
+            "source_artifacts": [
+                {
+                    "path": str(stream_path),
+                    "kind": "provider_jsonl_stream",
+                    "event_type": "result",
+                    "event_sha256": semantic._native_event_digest(events[1]),  # noqa: SLF001
+                }
+            ],
+        }
+    }
+
+    with pytest.raises(identity.RequestError, match="hook event"):
+        semantic._refresh_native_source_digests(observation, artifact_root=tmp_path)  # noqa: SLF001
 
 
 def test_native_source_digest_refresh_fails_closed_for_missing_artifact(tmp_path: Path) -> None:
@@ -114,7 +156,7 @@ def test_native_source_digest_refresh_fails_closed_without_model_event(tmp_path:
     source_path.write_text(json.dumps(event) + "\n", encoding="utf-8")
     observation = {
         "live_model_evidence": {
-            "source_canary": "cursor_model_probe",
+            "source_canary": "claude_real_print",
             "result_event": {"model_source_event_sha256": "sha256:" + "a" * 64},
             "source_artifacts": [
                 {

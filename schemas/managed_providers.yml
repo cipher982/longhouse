@@ -1990,9 +1990,10 @@ providers:
     input_sequence: ["cursor-agent --model <fixture-model>"]
     acknowledgement_oracle: cursor_model_launch_metadata
     native_sources: [provider_file, native_archive, managed_bridge]
-    # Cursor's headless JSONL stream is the native qualification record. The
-    # launch option itself is in the invocation receipt; the stream binds the
-    # selected model and the completed provider result.
+    # Cursor's headless JSONL stream is the native qualification record of the
+    # completed provider result. It names the model only by display label, so
+    # the selected model is bound by the sessionStart hook receipt of the same
+    # session, which carries the exact --model alias.
     raw_markers: ["model", "apiKeySource"]
     raw_output_markers: ["result"]
     expected_interaction_kind: provider_system

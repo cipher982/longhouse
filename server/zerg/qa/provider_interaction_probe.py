@@ -1133,6 +1133,35 @@ def _cursor_init_event(events: list[Mapping[str, Any]]) -> Mapping[str, Any] | N
     )
 
 
+def _cursor_session_start_hook(
+    hook_events: list[dict[str, Any]],
+    *,
+    longhouse_session_id: str,
+    provider_session_id: str,
+) -> dict[str, Any] | None:
+    """Select the hook receipt that names this probe session's model.
+
+    Cursor's ``sessionStart`` hook payload carries the exact ``--model`` alias.
+    The stream's init event carries a display label and tool hooks carry the
+    base model without its tier, so neither identifies the requested model.
+    """
+
+    if not provider_session_id:
+        return None
+    return next(
+        (
+            event
+            for event in hook_events
+            if event.get("event") == "sessionStart"
+            and event.get("longhouse_session_id") == longhouse_session_id
+            and event.get("conversation_id") == provider_session_id
+            and isinstance(event.get("model"), str)
+            and event["model"].strip()
+        ),
+        None,
+    )
+
+
 def _cursor_model_probe_with_runtime_home(
     *,
     binary: Path,
@@ -1164,6 +1193,7 @@ def _cursor_model_probe_with_runtime_home(
     env["TERM"] = "xterm-256color"
     env["LINES"] = "40"
     env["COLUMNS"] = "132"
+    from zerg.qa.cursor_helm_gate0 import read_hook_events
     from zerg.qa.cursor_helm_gate0 import write_project_hooks
 
     write_project_hooks(workspace, events_path)
@@ -1222,12 +1252,18 @@ def _cursor_model_probe_with_runtime_home(
         None,
     )
     requested_model = str(environment.get("CURSOR_MODEL") or "auto").strip()
-    observed_model = str((init_event or {}).get("model") or "").strip()
+    # The init event's model is a display label ("Codex 5.3 Low" for the alias
+    # gpt-5.3-codex-low). It is retained as evidence and never compared.
+    display_model = str((init_event or {}).get("model") or "").strip()
     api_key_source = str((init_event or {}).get("apiKeySource") or "").strip()
-    model_selected = bool(observed_model) and (
-        requested_model == "auto" or _cursor_model_identity(requested_model) == _cursor_model_identity(observed_model)
+    hook_event = _cursor_session_start_hook(
+        read_hook_events(events_path),
+        longhouse_session_id=env["LONGHOUSE_MANAGED_SESSION_ID"],
+        provider_session_id=str((init_event or {}).get("session_id") or "").strip(),
     )
-    api_key_observed = api_key_source.lower() in {"apikey", "api_key", "env"}
+    observed_model = str((hook_event or {}).get("model") or "").strip()
+    stream_completed = bool(stream_events) and init_event is not None and result_event is not None
+    api_key_bound = api_key_source.lower() in {"apikey", "api_key", "env"} and bool(str(environment.get("CURSOR_API_KEY") or "").strip())
     cursor_usage = _cursor_usage_evidence(result_event) if result_event is not None else None
     capture_path = output_root / "cursor-stream.jsonl"
     stream_source_rows, capture_receipt = _write_native_event_capture(
@@ -1257,28 +1293,70 @@ def _cursor_model_probe_with_runtime_home(
             native_source_rows=native_rows or before_sources,
             submitted_input_sequence=[],
         )
-    elif (
-        result_event is not None
-        and init_event is not None
-        and model_selected
-        and api_key_observed
-        and bool(str(environment.get("CURSOR_API_KEY") or "").strip())
-        and cursor_usage is not None
-    ):
+    elif stream_completed and hook_event is None:
+        row = _probe_status_row(
+            probe,
+            status="blocked",
+            failure_code="cursor_model_hook_receipt_missing",
+            message="Cursor emitted a completed stream, but no sessionStart hook receipt names the model of that session.",
+            terminal_evidence=terminal_evidence,
+            native_source_rows=stream_source_rows,
+            submitted_input_sequence=[f"cursor-agent --model {requested_model}"],
+            raw_events=stream_events,
+            terminal_acknowledged=True,
+        )
+    elif stream_completed and requested_model != "auto" and observed_model != requested_model:
+        row = _probe_status_row(
+            probe,
+            status="blocked",
+            failure_code="cursor_model_identity_mismatch",
+            message=f"Cursor's sessionStart hook receipt names model {observed_model!r}; the probe requested {requested_model!r}.",
+            terminal_evidence=terminal_evidence,
+            native_source_rows=stream_source_rows,
+            submitted_input_sequence=[f"cursor-agent --model {requested_model}"],
+            raw_events=stream_events,
+            terminal_acknowledged=True,
+        )
+    elif stream_completed and not api_key_bound:
+        row = _probe_status_row(
+            probe,
+            status="blocked",
+            failure_code="cursor_api_key_binding_missing",
+            message="Cursor emitted a completed stream, but did not report the configured API key as its credential.",
+            terminal_evidence=terminal_evidence,
+            native_source_rows=stream_source_rows,
+            submitted_input_sequence=[f"cursor-agent --model {requested_model}"],
+            raw_events=stream_events,
+            terminal_acknowledged=True,
+        )
+    elif stream_completed and cursor_usage is None:
+        row = _probe_status_row(
+            probe,
+            status="blocked",
+            failure_code="cursor_usage_missing",
+            message="Cursor completed a model request without exposing numeric token accounting in its native result event.",
+            terminal_evidence=terminal_evidence,
+            native_source_rows=stream_source_rows,
+            submitted_input_sequence=[f"cursor-agent --model {requested_model}"],
+            raw_events=stream_events,
+            terminal_acknowledged=True,
+        )
+    elif stream_completed:
         cursor_result_event = {
             key: result_event[key]
             for key in ("type", "subtype", "session_id", "request_id", "duration_ms", "duration_api_ms")
             if key in result_event
         }
         cursor_result_event["model"] = observed_model
+        cursor_result_event["model_display_name"] = display_model
         cursor_result_event["usage"] = cursor_usage
         for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_write_input_tokens", "cacheRead", "cacheWrite"):
             if key in result_event:
                 cursor_result_event[key] = result_event[key]
         cursor_result_event["accounting_status"] = "subscription_aggregate_unreported"
         cursor_result_event["accounting_status_source"] = "producer_observation_classification"
-        cursor_result_event["model_source"] = "provider_event"
-        cursor_result_event["model_source_event_sha256"] = raw_event_digest(init_event)
+        cursor_result_event["model_source"] = "provider_hook"
+        cursor_result_event["model_source_event_sha256"] = raw_event_digest(hook_event)
         cursor_result_event["native_event_sha256"] = raw_event_digest(result_event)
         row = _probe_status_row(
             probe,
@@ -1295,6 +1373,7 @@ def _cursor_model_probe_with_runtime_home(
         row["capture_receipt"] = capture_receipt
         row["native_source_root"] = str(artifact_root.resolve())
         row["provider_model"] = observed_model
+        row["provider_model_display_name"] = display_model
         row["api_key_source"] = api_key_source
         source_artifacts = [
             {
@@ -1303,7 +1382,14 @@ def _cursor_model_probe_with_runtime_home(
                 "kind": "provider_jsonl_stream",
                 "event_type": result_event.get("type"),
                 "event_sha256": raw_event_digest(result_event),
-            }
+            },
+            {
+                "path": str(events_path.resolve()),
+                "sha256": _sha256(events_path),
+                "kind": "provider_hook_receipt",
+                "event_type": "sessionStart",
+                "event_sha256": raw_event_digest(hook_event),
+            },
         ]
         row["live_model_evidence"] = {
             "source_canary": "cursor_model_probe",
@@ -1322,38 +1408,6 @@ def _cursor_model_probe_with_runtime_home(
             "result_event": cursor_result_event,
             "source_artifacts": source_artifacts,
         }
-    elif (
-        stream_events
-        and init_event is not None
-        and result_event is not None
-        and model_selected
-        and api_key_observed
-        and bool(str(environment.get("CURSOR_API_KEY") or "").strip())
-        and cursor_usage is None
-    ):
-        row = _probe_status_row(
-            probe,
-            status="blocked",
-            failure_code="cursor_usage_missing",
-            message="Cursor completed a model request without exposing numeric token accounting in its native result event.",
-            terminal_evidence=terminal_evidence,
-            native_source_rows=stream_source_rows,
-            submitted_input_sequence=[f"cursor-agent --model {requested_model}"],
-            raw_events=stream_events,
-            terminal_acknowledged=True,
-        )
-    elif stream_events and init_event is not None and result_event is not None:
-        row = _probe_status_row(
-            probe,
-            status="blocked",
-            failure_code="cursor_model_or_auth_binding_missing",
-            message="Cursor emitted a completed stream, but did not bind the requested model to the configured API key.",
-            terminal_evidence=terminal_evidence,
-            native_source_rows=stream_source_rows,
-            submitted_input_sequence=[f"cursor-agent --model {requested_model}"],
-            raw_events=stream_events,
-            terminal_acknowledged=True,
-        )
     elif all(marker.lower() in combined.lower() for marker in (*probe.raw_markers, *probe.raw_output_markers)):
         row = _probe_status_row(
             probe,
@@ -1413,12 +1467,6 @@ def _cursor_stream_json_events(stdout: str) -> list[dict[str, Any]]:
         if isinstance(event, dict):
             events.append(event)
     return events
-
-
-def _cursor_model_identity(value: str) -> str:
-    """Compare Cursor's CLI aliases with its human-readable init model name."""
-
-    return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
 def _cursor_usage_evidence(result_event: Mapping[str, Any]) -> dict[str, Any] | None:

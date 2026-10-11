@@ -1,3 +1,5 @@
+import hashlib
+import json
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -158,34 +160,66 @@ def test_cursor_model_probe_selects_the_first_model_bearing_init_event() -> None
     assert provider_interaction_probe._cursor_init_event(events) is events[1]  # noqa: SLF001
 
 
-@pytest.mark.parametrize(
-    ("requested", "observed"),
-    (("cursor-grok-4.5-high", "Cursor Grok 4.5 High"), ("gpt-5.6-sol", "gpt-5.6-sol")),
-)
-def test_cursor_model_identity_accepts_cli_alias_and_display_name(requested: str, observed: str) -> None:
-    assert provider_interaction_probe._cursor_model_identity(requested) == provider_interaction_probe._cursor_model_identity(observed)  # noqa: SLF001
+# Cursor names the model three ways: the --model alias, a display label in the
+# print stream's init event, and the base model (no tier) on tool hooks. Only the
+# sessionStart hook receipt carries the alias.
+_CURSOR_ALIAS = "gpt-5.3-codex-low"
+_CURSOR_SESSION_START = {"event": "sessionStart", "conversation_id": "cursor-session-1", "model": _CURSOR_ALIAS}
 
 
-def test_cursor_model_probe_binds_stream_events_to_a_native_capture_receipt(monkeypatch, tmp_path: Path) -> None:
-    binary = tmp_path / "cursor-agent"
-    binary.write_text("fixture", encoding="utf-8")
-    runtime_homes: list[Path] = []
-    stdout = "\n".join(
+def _cursor_print_stream(*, api_key_source: str = "env") -> str:
+    return "\n".join(
         [
-            '{"type":"system","subtype":"init","model":"grok-4.5","apiKeySource":"apiKey","session_id":"s"}',
-            '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"OK"}]},"session_id":"s"}',
-            '{"type":"result","subtype":"success","session_id":"s","request_id":"r","result":"fixture-token","usage":{"input_tokens":12,"output_tokens":3}}',
+            json.dumps(
+                {
+                    "type": "system",
+                    "subtype": "init",
+                    "model": "Codex 5.3 Low",
+                    "apiKeySource": api_key_source,
+                    "session_id": "cursor-session-1",
+                }
+            ),
+            '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"OK"}]},"session_id":"cursor-session-1"}',
+            '{"type":"result","subtype":"success","session_id":"cursor-session-1","request_id":"r","result":"fixture-token",'
+            '"usage":{"input_tokens":12,"output_tokens":3}}',
         ]
     )
 
+
+def _cursor_print_run(stdout: str, hook_rows: list[dict[str, object]], runtime_homes: list[Path] | None = None):
+    """Answer the model probe with a print stream and the hook receipts Cursor would have written."""
+
     def fake_run(*_args, **kwargs):
-        runtime_homes.append(Path(kwargs["env"]["HOME"]))
+        env = kwargs["env"]
+        if runtime_homes is not None:
+            runtime_homes.append(Path(env["HOME"]))
+        Path(env["LONGHOUSE_CURSOR_GATE0_EVENTS"]).write_text(
+            "".join(
+                json.dumps({**row, "longhouse_session_id": env["LONGHOUSE_MANAGED_SESSION_ID"]}, sort_keys=True) + "\n" for row in hook_rows
+            ),
+            encoding="utf-8",
+        )
         return CompletedProcess([], 0, stdout, "")
 
+    return fake_run
+
+
+@pytest.mark.parametrize("requested", (_CURSOR_ALIAS, None))
+def test_cursor_model_probe_binds_model_identity_to_the_session_start_hook_receipt(
+    monkeypatch, tmp_path: Path, requested: str | None
+) -> None:
+    binary = tmp_path / "cursor-agent"
+    binary.write_text("fixture", encoding="utf-8")
+    runtime_homes: list[Path] = []
+    hook_rows = [
+        _CURSOR_SESSION_START,
+        {"event": "beforeShellExecution", "conversation_id": "cursor-session-1", "model": "gpt-5.3-codex"},
+        {"event": "sessionEnd", "conversation_id": "cursor-session-1", "model": _CURSOR_ALIAS},
+    ]
     monkeypatch.setattr(
         provider_interaction_probe.subprocess,
         "run",
-        fake_run,
+        _cursor_print_run(_cursor_print_stream(), hook_rows, runtime_homes),
     )
 
     artifact_root = tmp_path / "artifacts"
@@ -193,7 +227,7 @@ def test_cursor_model_probe_binds_stream_events_to_a_native_capture_receipt(monk
         binary=binary,
         artifact_root=artifact_root,
         timeout=1,
-        environment={"CURSOR_API_KEY": "fixture-token", "CURSOR_MODEL": "grok-4.5"},
+        environment={"CURSOR_API_KEY": "fixture-token", **({"CURSOR_MODEL": requested} if requested else {})},
     )
     row = rows[0]
 
@@ -220,14 +254,84 @@ def test_cursor_model_probe_binds_stream_events_to_a_native_capture_receipt(monk
     assert evaluation["provider_status"] == "pass"
     assert evaluation["verification_scope"] == "provider_native"
     assert evaluation["assertions"][-1]["probe_id"] == "shared_title_boundary"
-    assert row["live_model_evidence"]["result_event"]["usage"]["input_tokens"] == 12
-    assert row["live_model_evidence"]["result_event"]["model"] == "grok-4.5"
-    assert row["live_model_evidence"]["model"] == "grok-4.5"
-    assert row["live_model_evidence"]["result_event"]["model_source_event_sha256"] == provider_interaction_semantics.raw_event_digest(
-        row["raw_events"][0]
-    )
+    evidence = row["live_model_evidence"]
+    result_event = evidence["result_event"]
+    assert result_event["usage"]["input_tokens"] == 12
+    # The alias is the identity; the stream's label is kept beside it and never compared.
+    assert evidence["model"] == result_event["model"] == row["provider_model"] == _CURSOR_ALIAS
+    assert result_event["model_display_name"] == row["provider_model_display_name"] == "Codex 5.3 Low"
+    assert result_event["model_source"] == "provider_hook"
+    stream_source, hook_source = evidence["source_artifacts"]
+    assert stream_source["kind"] == "provider_jsonl_stream"
+    hook_path = Path(hook_source["path"])
+    session_start = json.loads(hook_path.read_text(encoding="utf-8").splitlines()[0])
+    assert session_start["event"] == "sessionStart"
+    assert hook_source == {
+        "path": str(hook_path),
+        "sha256": hashlib.sha256(hook_path.read_bytes()).hexdigest(),
+        "kind": "provider_hook_receipt",
+        "event_type": "sessionStart",
+        "event_sha256": provider_interaction_semantics.raw_event_digest(session_start),
+    }
+    assert result_event["model_source_event_sha256"] == hook_source["event_sha256"]
     assert runtime_homes and not runtime_homes[0].exists()
     assert all(b"fixture-token" not in path.read_bytes() for path in artifact_root.rglob("*") if path.is_file())
+
+
+@pytest.mark.parametrize(
+    ("hook_rows", "api_key_source", "failure_code"),
+    (
+        # The receipt names another model: the base model is not the requested tier.
+        ([{**_CURSOR_SESSION_START, "model": "gpt-5.3-codex"}], "env", "cursor_model_identity_mismatch"),
+        ([], "env", "cursor_model_hook_receipt_missing"),
+        # A receipt for another session, or a later hook of this one, is not this session's receipt.
+        ([{**_CURSOR_SESSION_START, "conversation_id": "cursor-session-2"}], "env", "cursor_model_hook_receipt_missing"),
+        ([{**_CURSOR_SESSION_START, "event": "afterAgentThought"}], "env", "cursor_model_hook_receipt_missing"),
+        ([{**_CURSOR_SESSION_START, "model": ""}], "env", "cursor_model_hook_receipt_missing"),
+        ([_CURSOR_SESSION_START], "login", "cursor_api_key_binding_missing"),
+    ),
+)
+def test_cursor_model_probe_fails_closed_without_a_matching_model_receipt(
+    monkeypatch,
+    tmp_path: Path,
+    hook_rows: list[dict[str, object]],
+    api_key_source: str,
+    failure_code: str,
+) -> None:
+    binary = tmp_path / "cursor-agent"
+    binary.write_text("fixture", encoding="utf-8")
+    monkeypatch.setattr(
+        provider_interaction_probe.subprocess,
+        "run",
+        _cursor_print_run(_cursor_print_stream(api_key_source=api_key_source), hook_rows),
+    )
+
+    artifact_root = tmp_path / "artifacts"
+    rows, _source_rows = provider_interaction_probe._cursor_model_probe(  # noqa: SLF001
+        binary=binary,
+        artifact_root=artifact_root,
+        timeout=1,
+        environment={"CURSOR_API_KEY": "fixture-token", "CURSOR_MODEL": _CURSOR_ALIAS},
+    )
+    row = rows[0]
+
+    assert (row["status"], row["failure_code"]) == ("blocked", failure_code)
+    assert "live_model_evidence" not in row
+    if failure_code == "cursor_model_identity_mismatch":
+        assert "'gpt-5.3-codex'" in row["message"] and f"'{_CURSOR_ALIAS}'" in row["message"]
+    evaluation = evaluate_observation(
+        "cursor",
+        {
+            "provider": "cursor",
+            "evidence_class": "live_token",
+            "synthetic": False,
+            "probes": rows,
+            "raw_events": row["raw_events"],
+            "native_source_root": str(artifact_root),
+            "semantic_boundary": provider_interaction_semantics.semantic_boundary_fixture("cursor"),
+        },
+    )
+    assert evaluation["status"] == evaluation["provider_status"] == "blocked"
 
 
 def test_codex_model_probe_keeps_provider_auth_outside_the_artifact_root(monkeypatch, tmp_path: Path) -> None:

@@ -145,16 +145,23 @@ def _select_redacted_native_event(
     return candidates[-1] if candidates else None
 
 
+def _select_redacted_hook_event(
+    events: list[dict[str, Any]],
+    *,
+    event_name: str,
+    previous_digest: str | None,
+) -> dict[str, Any] | None:
+    """Hook receipts name their event in ``event``, not ``type``."""
+
+    if previous_digest:
+        expected_digest = previous_digest.removeprefix("sha256:")
+        exact = next((event for event in events if _native_event_digest(event) == expected_digest), None)
+        if exact is not None:
+            return exact
+    return next((event for event in events if event.get("event") == event_name), None)
+
+
 def _select_model_source_event(events: list[dict[str, Any]], *, source_canary: str) -> dict[str, Any] | None:
-    if source_canary == "cursor_model_probe":
-        return next(
-            (
-                event
-                for event in events
-                if event.get("type") == "system" and event.get("subtype") == "init" and _event_has_provider_model(event)
-            ),
-            None,
-        )
     if source_canary in {"claude_real_print", "real_print_canary"}:
         return next((event for event in events if _event_has_provider_model(event)), None)
     return None
@@ -216,18 +223,24 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path, source_ro
                     break
             if path is None:
                 raise identity.RequestError("native source artifact escapes the qualification bundle or is missing")
-            source_events = _native_jsonl_events(path) if source.get("kind") == "provider_jsonl_stream" else []
+            hook_receipt = source.get("kind") == "provider_hook_receipt"
+            source_events = _native_jsonl_events(path) if hook_receipt or source.get("kind") == "provider_jsonl_stream" else []
             previous_event_digest = source.get("event_sha256")
-            selected_event = (
-                _select_redacted_native_event(
+            if not source_events or not isinstance(source.get("event_type"), str):
+                selected_event = None
+            elif hook_receipt:
+                selected_event = _select_redacted_hook_event(
                     source_events,
-                    source_canary=source_canary,
-                    event_type=str(source.get("event_type") or ""),
+                    event_name=source["event_type"],
                     previous_digest=previous_event_digest if isinstance(previous_event_digest, str) else None,
                 )
-                if source_events and isinstance(source.get("event_type"), str)
-                else None
-            )
+            else:
+                selected_event = _select_redacted_native_event(
+                    source_events,
+                    source_canary=source_canary,
+                    event_type=source["event_type"],
+                    previous_digest=previous_event_digest if isinstance(previous_event_digest, str) else None,
+                )
             event_digest = _native_event_digest(selected_event) if selected_event is not None else None
             if isinstance(event_digest, str) and isinstance(previous_event_digest, str) and previous_event_digest.startswith("sha256:"):
                 event_digest = f"sha256:{event_digest}"
@@ -255,7 +268,13 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path, source_ro
     # JSONL event exists to find. Demanding one made every OpenCode release
     # qualification end "partial" ("native model source event could not be
     # selected") from the day the store-backed digest was introduced.
-    jsonl_model_source = not (isinstance(result_event, dict) and result_event.get("model_source") == "native_store")
+    model_source = result_event.get("model_source") if isinstance(result_event, dict) else None
+    jsonl_model_source = model_source not in {"native_store", "provider_hook"}
+    # A model read from a hook receipt (Cursor's sessionStart) is bound by that
+    # receipt's own event, refreshed above with its source artifact. Falling
+    # back to a stream event would silently rebind the identity to a label.
+    if model_source == "provider_hook" and isinstance(model_source_digest, str) and model_source_digest not in rewrites:
+        raise identity.RequestError("native model source hook event could not be selected")
     if jsonl_model_source and isinstance(model_source_digest, str) and model_source_digest not in rewrites:
         source_events = [
             event
