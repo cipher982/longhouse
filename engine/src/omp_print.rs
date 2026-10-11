@@ -2716,7 +2716,7 @@ struct OmpStreamProjection {
     session_settled: bool,
     has_pending_async_work: Option<bool>,
     native_error: Option<String>,
-    /// What OMP's session store reported in this turn short of moving the session.
+    /// The error OMP's session store reported in this turn, if any.
     persistence_notice: Option<String>,
     /// OMP refused the prompt before accepting it: no run will follow.
     rpc_rejected: bool,
@@ -2868,14 +2868,16 @@ impl OmpStreamProjection {
                 // open in another omp process, or the file was replaced or
                 // contested) and continues as a fork, a new native id in a new
                 // file. The managed session is bound to the identity it started
-                // with, so the turn ends here, with OMP's own account of why. Any
-                // other notice is kept for a source that then does not drain.
+                // with, so the turn ends here, with OMP's own account of why. An
+                // error is kept for a source that then does not drain. Info, the
+                // only other level OMP defines, explains no failure.
                 let message = event.get("message").and_then(Value::as_str);
                 let message = message.unwrap_or("OMP session-persistence notice");
-                if event.get("level").and_then(Value::as_str) == Some("warning") {
-                    anyhow::bail!("{SESSION_MOVED}: {message}");
+                match event.get("level").and_then(Value::as_str) {
+                    Some("warning") => anyhow::bail!("{SESSION_MOVED}: {message}"),
+                    Some("error") => self.persistence_notice = Some(message.to_string()),
+                    _ => {}
                 }
-                self.persistence_notice = Some(message.to_string());
             }
             Some("agent_settled" | "session_stop" | "turn_end") => {}
             Some("agent_end") => {
@@ -6106,10 +6108,13 @@ for line in sys.stdin:
                 Some("Session persistence failed: disk full.".to_string())
             )
         );
-        // The notice belongs to the turn it arrived in: the next turn's own
-        // failure to drain is not explained by it.
+        // The notice belongs to the turn it arrived in, and an info notice
+        // explains nothing: the next turn's failure to drain is its own.
         projection
             .apply(None, &json!({"type": "agent_start"}))
+            .unwrap();
+        projection
+            .apply(None, &json!({"type": "notice", "level": "info", "message": "Session saved.", "source": "session-persistence"}))
             .unwrap();
         assert_eq!(
             terminal_state_for_projection(&projection, Some(true), false, None, true, true, false),
