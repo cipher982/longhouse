@@ -471,6 +471,10 @@ def test_owner_send_through_the_channel_is_not_user_input() -> None:
 
     # A plugin prompt without asUser reaches Claude after a sentence naming the plugin.
     assert owner_send_is_user_input([_mod_prompt(sent, as_user=False)], prompts=[sent])["failure_code"] == "owner_send_not_user_input"
+    # Another plugin's prompt proves nothing about Longhouse's mod.
+    other = _mod_prompt(sent)
+    other["origin"] = {"kind": "plugin", "name": "someone-else", "asUser": True}
+    assert owner_send_is_user_input([other], prompts=[sent])["passed"] is False
 
 
 def test_every_send_must_be_user_input_and_present() -> None:

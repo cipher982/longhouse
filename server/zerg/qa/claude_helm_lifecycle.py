@@ -398,10 +398,14 @@ def abort_stopped_turn(
 _CHANNEL_WRAPPER_MARKERS = ("<channel", "NOT from your user")
 
 
+# The mod's name in engine/assets/claude-mod/.claude-plugin/plugin.json.
+LONGHOUSE_MOD_NAME = "longhouse"
+
+
 def _row_origin_is_user(row: dict[str, Any]) -> bool:
     origin = row.get("origin") if isinstance(row.get("origin"), dict) else {}
     kind = origin.get("kind")
-    return kind == "human" or (kind == "plugin" and origin.get("asUser") is True)
+    return kind == "human" or (kind == "plugin" and origin.get("name") == LONGHOUSE_MOD_NAME and origin.get("asUser") is True)
 
 
 def owner_send_is_user_input(rows: list[dict[str, Any]], *, prompts: list[str]) -> dict[str, Any]:
