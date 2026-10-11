@@ -1,6 +1,18 @@
 {
  "provider": "cursor",
  "shapes": {
+  "assistant/text": {
+   "classification": "transcript:assistant",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "message",
+    "message.content",
+    "role"
+   ],
+   "required_keys": ["role", "message.content"]
+  },
   "assistant/text+tool-call": {
    "classification": "transcript:assistant",
    "first_seen_version": "1.0.0",
@@ -13,6 +25,103 @@
     "version"
    ],
    "required_keys": ["role", "message.content"]
+  },
+  "assistant/text+tool_use": {
+   "classification": "transcript:assistant_tool",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "message",
+    "message.content",
+    "role"
+   ],
+   "required_keys": ["role", "message.content"]
+  },
+  "event/turn_ended": {
+   "classification": "state:turn lifecycle",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "error",
+    "status",
+    "type"
+   ],
+   "required_keys": ["type", "status"]
+  },
+  "store/assistant/text": {
+   "classification": "transcript:assistant",
+   "first_seen_version": "2026.10.01-e373342",
+   "last_seen_version": "2026.10.01-e373342",
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].text",
+    "content[].type",
+    "id",
+    "providerOptions",
+    "role"
+   ],
+   "required_keys": ["role", "content", "content[].type", "content[].text"]
+  },
+  "store/root": {
+   "classification": "state:root message order",
+   "first_seen_version": "2026.10.01-e373342",
+   "last_seen_version": "2026.10.01-e373342",
+   "entrypoints": [],
+   "keys": [
+    "field1.len32",
+    "field1.wire2",
+    "field10.wire0",
+    "field22.wire2",
+    "field26.wire0",
+    "field27.wire2",
+    "field38.wire2",
+    "field39.wire0",
+    "field5.wire2",
+    "field8.wire2",
+    "field9.wire2"
+   ],
+   "required_keys": ["field1.wire2", "field1.len32"]
+  },
+  "store/system/string": {
+   "classification": "provider_system:system_prompt",
+   "first_seen_version": "2026.10.01-e373342",
+   "last_seen_version": "2026.10.01-e373342",
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "providerOptions",
+    "role"
+   ],
+   "required_keys": ["role", "content"]
+  },
+  "store/user/string": {
+   "classification": "transcript:user",
+   "first_seen_version": "2026.10.01-e373342",
+   "last_seen_version": "2026.10.01-e373342",
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "providerOptions",
+    "role"
+   ],
+   "required_keys": ["role", "content"]
+  },
+  "store/user/text": {
+   "classification": "transcript:user",
+   "first_seen_version": "2026.10.01-e373342",
+   "last_seen_version": "2026.10.01-e373342",
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].text",
+    "content[].type",
+    "providerOptions",
+    "role"
+   ],
+   "required_keys": ["role", "content", "content[].type", "content[].text"]
   },
   "user/provider_context+text": {
    "classification": "provider_injection:context",
