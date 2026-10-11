@@ -722,6 +722,51 @@ def _jsonl(path: Path, rows: list[dict[str, object]], *, complete: bool = True) 
     return str(path)
 
 
+def test_a_record_still_being_written_gives_its_complete_rows_and_says_so(tmp_path):
+    """The row the provider is writing must not hide the complete rows before it."""
+
+    marker = "LH_CONSOLE_abc"
+
+    def text(value: str) -> dict[str, object]:
+        return {"role": "assistant", "content": [{"type": "text", "text": value}]}
+
+    session = [
+        {"type": "session", "id": "native-1", "version": 3, "cwd": "/workspace"},
+        {"type": "message", "id": "a1", "message": {"role": "user", "content": f"Reply with exactly {marker}."}},
+        {"type": "message", "id": "a2", "message": text(marker)},
+        # The next turn's row, complete as JSON and not yet ended with a newline.
+        {"type": "message", "id": "a3", "message": text("Working on the next prompt.")},
+    ]
+    for provider in ("pi", "omp"):
+        path = Path(_jsonl(tmp_path / f"{provider}.jsonl", session, complete=False))
+        rows, state, sessions = lifecycle._native_assistant_rows(provider, path)
+        assert state == "mid_write" and sessions == ["native-1"]
+        assert [row["id"] for row in rows] == ["a2"]
+        # The turn's reply is a complete row: its native evidence is there.
+        evidence = lifecycle._native_marker_evidence(provider, path, marker)
+        assert evidence is not None and evidence["native_message_id"] == "a2"
+        # A served page is held to every answering row, which this read cannot yet give.
+        assert lifecycle._claim_native_answers(provider, {"source_path": str(path)}, marker)() == (None, "mid_write")
+        # Once the provider ends the row, the same record is read in full.
+        path.write_bytes(path.read_bytes() + b"\n")
+        rows, state, _sessions = lifecycle._native_assistant_rows(provider, path)
+        assert state == "read" and [row["id"] for row in rows] == ["a2", "a3"]
+        assert lifecycle._claim_native_answers(provider, {"source_path": str(path)}, marker)() == ({"a2": 1}, "read")
+
+    stream = [
+        {"type": "assistant", "uuid": "u-1", "message": text(marker)},
+        {"type": "assistant", "uuid": "u-2", "message": text("Still writing.")},
+    ]
+    path = Path(_jsonl(tmp_path / "claude.stdout", stream, complete=False))
+    rows, state, _sessions = lifecycle._native_assistant_rows("claude", path)
+    assert state == "mid_write" and [row["id"] for row in rows] == ["u-1"]
+    # A record with nothing in it, or that cannot be read, has no rows to give.
+    (tmp_path / "empty.jsonl").write_bytes(b"")
+    for provider in ("pi", "omp", "claude"):
+        assert lifecycle._native_assistant_rows(provider, tmp_path / "empty.jsonl")[:2] == (None, "empty")
+        assert lifecycle._native_assistant_rows(provider, tmp_path / "absent.jsonl")[:2] == (None, "unreadable")
+
+
 def test_the_providers_own_answering_rows_are_read_from_the_record_its_claim_names(tmp_path):
     marker = "LH_CONSOLE_abc"
     narration = f"I will run the command, then reply with `{marker}`."

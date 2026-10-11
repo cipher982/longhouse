@@ -217,6 +217,10 @@ def pi_transcript_rows(transcript: Path) -> tuple[list[dict[str, Any]], str | No
     metadata["source_end_offset"] = sum(len(raw_line) for raw_line in lines)
     # A last line without its newline is a row the provider is still writing.
     metadata["complete_last_line"] = bool(lines) and lines[-1].endswith(b"\n")
+    # Where the complete rows end: before that last line, when it is one.
+    metadata["complete_end_offset"] = metadata["source_end_offset"] - (
+        len(lines[-1]) if lines and not metadata["complete_last_line"] else 0
+    )
 
     source_offset = 0
     for raw_line in lines:

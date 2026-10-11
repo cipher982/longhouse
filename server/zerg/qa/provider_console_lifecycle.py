@@ -146,7 +146,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=11,
+    scenario_revision=12,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -532,10 +532,15 @@ def _native_assistant_rows(provider: str, path: Path) -> tuple[list[dict[str, ob
 
     Each row has the ``id`` the provider gave it (None when it gave none), its
     ``source_offset`` and, where the reader knows it, ``source_end`` in the
-    record, and a ``text`` that keeps one line group per text block. The rows
-    are None unless the record was read to the end of a complete line
-    (`native_transcript_state`): a record that could not be read, is empty or
-    ends inside a row is not a record without answers.
+    record, and a ``text`` that keeps one line group per text block.
+
+    What the read found is one of the states of `native_transcript_state`. A
+    record that could not be read, or is empty, has no rows to give (None). A
+    record that ends inside a row gives the complete rows before that last
+    line and says ``mid_write``: the row still being written must not hide the
+    ones already there, and a reader that needs the whole record (how many
+    rows answer, for a served page to be held to) can see that it has not got
+    it.
     """
 
     if provider == "pi":
@@ -544,8 +549,8 @@ def _native_assistant_rows(provider: str, path: Path) -> tuple[list[dict[str, ob
             return None, NATIVE_TRANSCRIPT_UNREADABLE, []
         if not metadata.get("source_end_offset") or not metadata.get("lines"):
             return None, NATIVE_TRANSCRIPT_EMPTY, []
-        if metadata.get("complete_last_line") is not True:
-            return None, NATIVE_TRANSCRIPT_MID_WRITE, []
+        state = NATIVE_TRANSCRIPT_READ if metadata.get("complete_last_line") is True else NATIVE_TRANSCRIPT_MID_WRITE
+        complete_end = int(metadata.get("complete_end_offset") or 0)
         rows = [
             {
                 "id": row.get("entry_id"),
@@ -554,7 +559,7 @@ def _native_assistant_rows(provider: str, path: Path) -> tuple[list[dict[str, ob
                 "text": str(row.get("text") or ""),
             }
             for row in parsed
-            if row.get("type") == "assistant"
+            if row.get("type") == "assistant" and int(row.get("source_offset") or 0) < complete_end
         ]
         sessions = [provider_session_id] if isinstance(provider_session_id, str) and provider_session_id else []
     else:
@@ -563,12 +568,13 @@ def _native_assistant_rows(provider: str, path: Path) -> tuple[list[dict[str, ob
         except OSError:
             content = None
         state = native_transcript_state(content)
-        if content is None or state != NATIVE_TRANSCRIPT_READ:
+        if content is None or state not in {NATIVE_TRANSCRIPT_READ, NATIVE_TRANSCRIPT_MID_WRITE}:
             return None, state, []
         rows = []
         sessions = []
         source_offset = 0
-        for raw_line in content.splitlines(keepends=True):
+        # Up to the last newline: a line without one is a row still being written.
+        for raw_line in content[: content.rfind(b"\n") + 1].splitlines(keepends=True):
             line_end = source_offset + len(raw_line)
             try:
                 event = json.loads(raw_line) if raw_line.strip() else None
@@ -599,7 +605,7 @@ def _native_assistant_rows(provider: str, path: Path) -> tuple[list[dict[str, ob
                         }
                     )
             source_offset = line_end
-    return rows, NATIVE_TRANSCRIPT_READ, sessions
+    return rows, state, sessions
 
 
 def _claim_native_answers(
@@ -624,7 +630,9 @@ def _claim_native_answers(
         if not isinstance(raw, str) or not raw:
             return None, NATIVE_TRANSCRIPT_UNREADABLE
         rows, state, _sessions = _native_assistant_rows(provider, Path(raw))
-        if rows is None:
+        # A served page is held to every answering row, so only a record read
+        # to the end will do: one still being written may yet hold another.
+        if rows is None or state != NATIVE_TRANSCRIPT_READ:
             return None, state
         answers: dict[str, int] = {}
         for row in rows:
@@ -1022,7 +1030,10 @@ def _native_marker_evidence(
 
     None when no row inside the bounds replies with the marker exactly once,
     when that row has no id, or when OMP's file does not name exactly one
-    session. Two rows that reply raise (`_one_marker_reply`).
+    session. Two rows that reply raise (`_one_marker_reply`). A record whose
+    last line is still being written is read up to that line: the turn's
+    bounds are what say which rows count, and a complete row inside them is
+    there whatever the provider is writing after it.
     """
 
     if provider not in {"pi", "omp"}:
