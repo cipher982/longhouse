@@ -11,6 +11,7 @@ import pytest
 
 from zerg.qa import omp_helm_lifecycle
 from zerg.qa import provider_console_lifecycle as lifecycle
+from zerg.qa import wait_kind
 from zerg.qa.console_served_state_core import MarkerAnswerCountError
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.omp_console_producer import _PROFILE as CONSOLE_PROFILE
@@ -1339,6 +1340,16 @@ def test_omp_wait_runtime_control_identity_retains_timeout_observation(monkeypat
     assert "last_observation=" in message
     assert "projection_not_bound" in message
     assert "connection:wrong:lease" in message
+    # A diagnostic served without the identity does not say which side has yet to act.
+    assert wait_kind.waited_on(error.value) is None
+    # Only what a pass observed is declared: the engine's missing state file, or a request the Runtime Host failed.
+    assert omp_helm_lifecycle._CONTROL_IDENTITY_WAITED_ON == {
+        "local_state_unavailable": "longhouse_engine",
+        "local_state_unavailable_during_read": "longhouse_engine",
+        "transient_runtime_read": "runtime_host",
+        "lease_rotated_during_read": None,
+        "projection_not_bound": None,
+    }
 
 
 def test_omp_runtime_convergence_does_not_prove_an_incomplete_events_page() -> None:

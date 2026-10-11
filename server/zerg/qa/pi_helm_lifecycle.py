@@ -99,7 +99,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=15,
+    scenario_revision=16,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -614,21 +614,33 @@ def _runtime_failure_diagnostic(error: BaseException) -> dict[str, Any] | None:
 
 def _wait_runtime_control_identity(url: str, token: str, session_id: str, state: dict[str, Any]) -> dict[str, Any]:
     expected = f"connection:{state['connection_id']}:{state['lease_generation']}"
+    host_failed_the_read = False
 
     def observe() -> dict[str, Any] | None:
+        nonlocal host_failed_the_read
         try:
             diagnostic = _runtime_diagnostic(url, token, session_id)
         except _RuntimeHostHTTPError as exc:
             if exc.status in _PROPAGATING_HTTP_STATUSES:
+                host_failed_the_read = True
                 return None
             raise
+        host_failed_the_read = False
         shadow = diagnostic.get("shadow") or {}
         chosen = (shadow.get("fact_sources") or {}).get("control") or {}
         if chosen.get("subject_key") == expected and _served_controls({"diagnostic": diagnostic}):
             return diagnostic
         return None
 
-    return _wait(observe, timeout=30, description=f"served Pi control identity {expected}", waited_on=RUNTIME_HOST)
+    return _wait(
+        observe,
+        timeout=30,
+        description=f"served Pi control identity {expected}",
+        # A request the Runtime Host failed is the Runtime Host. A diagnostic it
+        # served without the identity does not say whether the engine has yet
+        # to register the lease or the Runtime Host to bind it.
+        waited_on=lambda: RUNTIME_HOST if host_failed_the_read else None,
+    )
 
 
 def _wait_runtime_convergence(

@@ -1116,3 +1116,26 @@ def test_pi_accounting_includes_tool_rounds_but_never_hides_a_failed_tail(tmp_pa
             + "\n"
         )
     assert pi_native_model_evidence(transcript, source_canary="fixture", api_key_configured=True) is None
+
+
+@pytest.mark.parametrize(("host_fails", "declared"), ((True, "runtime_host"), (False, None)))
+def test_pi_control_identity_wait_declares_the_runtime_host_only_for_a_read_it_failed(monkeypatch, host_fails, declared) -> None:
+    from zerg.qa import pi_helm_lifecycle as helm
+    from zerg.qa import wait_kind
+
+    def diagnostic(*_args):
+        if host_fails:
+            raise helm._RuntimeHostHTTPError(503, "unavailable")
+        # Served, and without the identity: the engine may not have registered the lease yet.
+        return {"shadow": {"fact_sources": {"control": {"subject_key": "connection:other:lease"}}}}
+
+    ticks = iter((0.0, 0.0, 31.0))
+    monkeypatch.setattr(helm, "_runtime_diagnostic", diagnostic)
+    monkeypatch.setattr(helm.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(helm.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="timed out waiting for served Pi control identity") as timed_out:
+        helm._wait_runtime_control_identity(
+            "https://runtime.example", "token", "session-1", {"connection_id": "c", "lease_generation": "l"}
+        )
+    assert wait_kind.waited_on(timed_out.value) == declared

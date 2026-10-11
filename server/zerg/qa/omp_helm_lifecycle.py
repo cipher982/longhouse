@@ -110,7 +110,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
     producer_revision=10,
     scenario_id=SCENARIO_ID,
-    scenario_revision=20,
+    scenario_revision=21,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -939,6 +939,21 @@ def _control_observation_diagnostic(diagnostic: Mapping[str, Any]) -> dict[str, 
     }
 
 
+# Why a pass of the control-identity wait returned nothing, and what that pass
+# was waiting on. Without the engine's own state file the engine is awaited;
+# a request the Runtime Host failed is the Runtime Host. A lease that rotated
+# during the read, and a diagnostic served without the identity, do not say
+# which side has yet to act (the engine registering the lease, or the Runtime
+# Host binding it), so they declare nothing.
+_CONTROL_IDENTITY_WAITED_ON = {
+    "local_state_unavailable": LONGHOUSE_ENGINE,
+    "local_state_unavailable_during_read": LONGHOUSE_ENGINE,
+    "transient_runtime_read": RUNTIME_HOST,
+    "lease_rotated_during_read": None,
+    "projection_not_bound": None,
+}
+
+
 def _wait_runtime_control_identity(
     url: str,
     token: str,
@@ -1045,19 +1060,12 @@ def _wait_runtime_control_identity(
             "transient_errors": list(transient_errors),
         }
 
-    def stopped_on() -> str:
-        # The engine's own state file is read first on every pass. While it is
-        # missing the engine is what is awaited; once it is there, the Runtime
-        # Host binding the lease it names is.
-        reason = str(last_observation.get("reason") or "")
-        return LONGHOUSE_ENGINE if reason.startswith("local_state_unavailable") else RUNTIME_HOST
-
     try:
         return _wait(
             observe,
             timeout=timeout,
             description=f"Runtime Host managed control identity for {session_id}",
-            waited_on=stopped_on,
+            waited_on=lambda: _CONTROL_IDENTITY_WAITED_ON.get(str(last_observation.get("reason") or "")),
         )
     except RuntimeError as exc:
         evidence = json.dumps(last_observation, sort_keys=True, separators=(",", ":"))
