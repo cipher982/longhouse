@@ -49,6 +49,7 @@ from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
 from zerg.qa.pi_family_turn_oracle import fault_name
 from zerg.qa.pi_family_turn_oracle import negative_control_verdict
 from zerg.qa.pi_family_turn_oracle import pi_family_steer_noncompliance
+from zerg.qa.pi_family_turn_oracle import provider_holds_prompt
 from zerg.qa.pi_family_turn_oracle import read_fault_receipts
 from zerg.qa.pi_family_turn_oracle import read_session_entries
 from zerg.qa.pi_family_turn_oracle import steer_turn_verdict
@@ -103,7 +104,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=14,
+    scenario_revision=15,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -875,8 +876,11 @@ def _wait_native_marker(
         timeout=timeout,
         description=f"native Pi marker {marker}",
         on_timeout=lambda prefix: RuntimeError(f"{prefix}: {last or None}"),
-        # The assistant row that replies, in Pi's own transcript.
-        waited_on=PROVIDER_TURN,
+        # The assistant row that replies, in Pi's own transcript. The wait was
+        # on the model only if Pi holds the prompt it would answer: a prompt
+        # Longhouse never delivered leaves the same silence. A recalled phrase
+        # is read from a turn that has already replied, which is not a stall.
+        waited_on=(lambda: PROVIDER_TURN if provider_holds_prompt(session_file, marker) else None) if not recalled else None,
     )
 
 
@@ -1013,7 +1017,13 @@ def _wait_task_tool_boundary(session_file: Path, task_marker: str, *, timeout: f
         boundary = task_tool_boundary(read_session_entries(session_file), task_marker)
         return {"tool_result_id": boundary} if boundary else None
 
-    return _wait(observe, timeout=timeout, description=f"tool boundary in task {task_marker}", waited_on=PROVIDER_TURN)
+    return _wait(
+        observe,
+        timeout=timeout,
+        description=f"tool boundary in task {task_marker}",
+        # The model's first tool call in a turn Pi holds the prompt for.
+        waited_on=lambda: PROVIDER_TURN if provider_holds_prompt(session_file, task_marker) else None,
+    )
 
 
 def _wait_idle(home: Path, session_id: str, *, timeout: float = 120) -> dict[str, Any]:

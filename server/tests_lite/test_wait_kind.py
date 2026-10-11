@@ -17,6 +17,7 @@ import pytest
 
 from zerg.qa import claude_helm_lifecycle
 from zerg.qa import claude_live_session_support
+from zerg.qa import codex_helm_launch_visibility
 from zerg.qa import codex_native_resume
 from zerg.qa import codex_provider_release_canary
 from zerg.qa import cursor_coordination_producer
@@ -196,11 +197,27 @@ def test_the_claude_wait_helper_declares_what_its_caller_says_and_nothing_otherw
         claude_live_session_support.wait_until(lambda: None, timeout=0.2, description="channel readiness")
     assert waited_on(undeclared.value) is None
 
-    # The marker in Claude's own transcript, after a turn the caller typed itself.
+    # The marker in Claude's own transcript, after a turn the caller typed itself:
+    # the model's turn only while that transcript holds the prompt and its turn is open.
     monkeypatch.setattr(claude_live_session_support, "assistant_transcript_contains", lambda *_a, **_k: (False, None, None, None))
-    with pytest.raises(claude_live_session_support.ScenarioError) as no_marker:
-        claude_live_session_support.await_assistant_marker(session_id="s", marker=MARKER, timeout=0.2)
-    assert waited_on(no_marker.value) == PROVIDER_TURN
+    prompt = _claude_user(f"Reply with exactly {MARKER}")
+    ended = {"type": "system", "subtype": "turn_duration"}
+    for rows, expected in (([prompt], PROVIDER_TURN), ([], None), ([prompt, ended], None)):
+        monkeypatch.setattr(claude_live_session_support, "transcript_rows", lambda *_a, rows=rows: rows)
+        with pytest.raises(claude_live_session_support.ScenarioError) as no_marker:
+            claude_live_session_support.await_assistant_marker(session_id="s", marker=MARKER, timeout=0.2)
+        assert waited_on(no_marker.value) == expected
+
+
+def test_a_claude_turn_wait_is_on_the_model_only_while_claude_holds_the_prompt_and_the_turn_is_open() -> None:
+    prompt = _claude_user("Run lh_claude_step_abc_1 then the others")
+    ended = {"type": "system", "subtype": "turn_duration"}
+
+    assert claude_helm_lifecycle.open_turn_waited_on([prompt], "lh_claude_step_abc") == PROVIDER_TURN
+    # The prompt never reached Claude: the same silence, and not a stalled turn.
+    assert claude_helm_lifecycle.open_turn_waited_on([], "lh_claude_step_abc") is None
+    # The turn ended without doing what was awaited: a result.
+    assert claude_helm_lifecycle.open_turn_waited_on([prompt, ended], "lh_claude_step_abc") is None
 
 
 # --- Cursor: its own hooks ------------------------------------------------------
@@ -317,6 +334,19 @@ def test_the_cursor_hook_sequence_wait_reads_the_hooks_to_say_what_it_waited_on(
     assert waited_on(sequence(before, after, typed=False, claim_status="pending")) == LONGHOUSE_ENGINE
 
 
+def test_a_cursor_turn_wait_is_on_the_model_only_once_cursor_took_the_prompt() -> None:
+    step = "LONGHOUSE_CURSOR_STEP_abc"
+    taken = {"event": "beforeSubmitPrompt", "prompt": f"Run `sleep 6; echo {step}_1` then two more", "generation_id": "g1"}
+    stopped = {"event": "stop", "status": "error", "generation_id": "g1"}
+    other = {"event": "beforeSubmitPrompt", "prompt": "an earlier prompt", "generation_id": "g0"}
+
+    assert cursor_helm_product_e2e.open_turn_waited_on([other, taken], step) == PROVIDER_TURN
+    # Longhouse sent the prompt and Cursor's hooks never show it taken.
+    assert cursor_helm_product_e2e.open_turn_waited_on([other], step) is None
+    # Cursor ended the turn itself before the step ran.
+    assert cursor_helm_product_e2e.open_turn_waited_on([taken, stopped], step) is None
+
+
 # --- Codex: the bridge's turn state beside Codex's own rollout -------------------
 
 
@@ -350,6 +380,32 @@ def test_the_codex_marker_wait_declares_an_open_turn_and_not_a_failed_one(monkey
     with pytest.raises(RuntimeError, match="Codex turn did not retain the expected assistant marker") as failed:
         codex_native_resume._wait_for_marker(state_file, MARKER, timeout=1)
     assert waited_on(failed.value) is None
+
+
+def test_the_codex_seed_turn_says_whether_codex_took_the_typed_prompt(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(codex_helm_launch_visibility, "_answer_startup_dialogs", lambda _tui: [])
+
+    class _Tui:
+        def submit_line(self, _text: str) -> None:
+            return None
+
+        def alive(self) -> bool:
+            return True
+
+    def seed(codex_home: Path) -> BaseException:
+        with pytest.raises(RuntimeError, match="Codex TUI did not persist the seed turn") as raised:
+            codex_helm_launch_visibility._seed_codex_rollout(_Tui(), codex_home=codex_home, marker=MARKER, timeout=0.3)
+        return raised.value
+
+    # The rollout holds the prompt and no reply: the model's turn.
+    prompted = tmp_path / "prompted"
+    (prompted / "sessions" / "2026").mkdir(parents=True)
+    (prompted / "sessions" / "2026" / "rollout.jsonl").write_text(
+        json.dumps({"type": "response_item", "payload": {"role": "user", "content": f"Reply with exactly {MARKER}"}}) + "\n"
+    )
+    assert waited_on(seed(prompted)) == PROVIDER_TURN
+    # No rollout names the prompt: Codex never took what was typed into it.
+    assert waited_on(seed(tmp_path / "never-prompted")) == PROVIDER_PROCESS
 
 
 # --- Console: the adapter's claim, then the served reply --------------------------

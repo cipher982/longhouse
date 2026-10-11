@@ -48,6 +48,7 @@ from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
 from zerg.qa.pi_family_turn_oracle import fault_name
 from zerg.qa.pi_family_turn_oracle import negative_control_verdict
 from zerg.qa.pi_family_turn_oracle import pi_family_steer_noncompliance
+from zerg.qa.pi_family_turn_oracle import provider_holds_prompt
 from zerg.qa.pi_family_turn_oracle import read_fault_receipts
 from zerg.qa.pi_family_turn_oracle import read_session_entries
 from zerg.qa.pi_family_turn_oracle import steer_turn_verdict
@@ -112,7 +113,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
     producer_revision=10,
     scenario_id=SCENARIO_ID,
-    scenario_revision=19,
+    scenario_revision=20,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -1242,10 +1243,16 @@ def _wait_native_marker(
         timeout=timeout,
         description=f"OMP native marker {marker}",
         on_timeout=lambda prefix: RuntimeError(f"{prefix}: {last or None}"),
-        # An assistant row is the model's own reply in OMP's own transcript.
-        # A user row is the prompt arriving there, which also needs Longhouse
-        # to have delivered it, so that wait declares nothing.
-        waited_on=PROVIDER_TURN if role == "assistant" else None,
+        # An assistant row is the model's own reply in OMP's own transcript,
+        # and the wait was on the model only if OMP holds the prompt it would
+        # answer: a prompt Longhouse never delivered leaves the same silence.
+        # A user row is the prompt arriving there, and a recalled phrase is
+        # read from a turn that has already replied; neither is a stalled turn.
+        waited_on=(
+            (lambda: PROVIDER_TURN if provider_holds_prompt(session_file, marker) else None)
+            if role == "assistant" and not recalled
+            else None
+        ),
     )
 
 
@@ -2081,7 +2088,13 @@ def _wait_task_tool_boundary(session_file: Path, task_marker: str, *, timeout: f
         boundary = task_tool_boundary(read_session_entries(session_file), task_marker)
         return {"tool_result_id": boundary} if boundary else None
 
-    return _wait(observe, timeout=timeout, description=f"tool boundary in task {task_marker}", waited_on=PROVIDER_TURN)
+    return _wait(
+        observe,
+        timeout=timeout,
+        description=f"tool boundary in task {task_marker}",
+        # The model's first tool call in a turn OMP holds the prompt for.
+        waited_on=lambda: PROVIDER_TURN if provider_holds_prompt(session_file, task_marker) else None,
+    )
 
 
 def _wait_idle_quietly(home: Path, session_id: str, *, timeout: float = 120) -> dict[str, Any]:

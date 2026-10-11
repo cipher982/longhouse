@@ -342,14 +342,45 @@ def test_a_pi_stalled_turn_and_an_unserved_reply_declare_different_waits(monkeyp
     from zerg.qa.wait_kind import failure_fields
     from zerg.qa.wait_kind import waited_on
 
-    # The turn stalled: Pi's own transcript never holds the reply.
+    # The turn stalled: Pi's own transcript holds the prompt and never the reply.
     session_file = tmp_path / "session.jsonl"
     header = json.dumps({"type": "session", "id": "native-1", "version": 3, "cwd": "/workspace"})
-    narration = _pi_native_row("narration", _PI_NARRATION, stop="toolUse", parent=None, tool_call=True)
-    session_file.write_text(f"{header}\n{narration}\n", encoding="utf-8")
+    prompt = json.dumps(
+        {
+            "type": "message",
+            "id": "prompt",
+            "parentId": None,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": [{"type": "text", "text": f"Reply with exactly {_PI_MARKER}."}]},
+        }
+    )
+    narration = _pi_native_row("narration", _PI_NARRATION, stop="toolUse", parent="prompt", tool_call=True)
+    session_file.write_text(f"{header}\n{prompt}\n{narration}\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="timed out waiting for native Pi marker") as stalled:
         helm._wait_native_marker(session_file, _PI_MARKER, timeout=0.3)
     assert waited_on(stalled.value) == "provider_turn"
+
+    # The same silence without the prompt: Longhouse never delivered it, which is not a stalled turn.
+    unprompted = tmp_path / "unprompted.jsonl"
+    unprompted.write_text(
+        f"{header}\n{_pi_native_row('narration', _PI_NARRATION, stop='toolUse', parent=None, tool_call=True)}\n", encoding="utf-8"
+    )
+    with pytest.raises(RuntimeError, match="timed out waiting for native Pi marker") as never_prompted:
+        helm._wait_native_marker(unprompted, _PI_MARKER, timeout=0.3)
+    assert waited_on(never_prompted.value) is None
+
+    # A phrase the model should bring back is read from a turn that already replied.
+    with pytest.raises(RuntimeError, match="timed out waiting for native Pi marker") as not_recalled:
+        helm._wait_native_marker(session_file, "A_PHRASE_NOT_RECALLED", recalled=True, timeout=0.3)
+    assert waited_on(not_recalled.value) is None
+
+    # The first tool call of a task turn, with and without the task's prompt in the transcript.
+    with pytest.raises(RuntimeError, match="timed out waiting for tool boundary in task") as task_stalled:
+        helm._wait_task_tool_boundary(session_file, _PI_MARKER, timeout=0.3)
+    assert waited_on(task_stalled.value) == "provider_turn"
+    with pytest.raises(RuntimeError, match="timed out waiting for tool boundary in task") as task_never_sent:
+        helm._wait_task_tool_boundary(unprompted, _PI_MARKER, timeout=0.3)
+    assert waited_on(task_never_sent.value) is None
 
     # Pi answered (the caller holds the native reply entry) and the Runtime Host never serves it.
     waiting = [{"id": "other", "role": "assistant", "content_text": "Waiting."}]

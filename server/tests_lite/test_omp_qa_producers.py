@@ -2400,12 +2400,37 @@ def test_omp_wait_native_marker_timeout_says_what_the_transcript_held(tmp_path) 
 def test_an_omp_stalled_turn_and_an_unserved_reply_declare_different_waits(monkeypatch, tmp_path) -> None:
     from zerg.qa.wait_kind import waited_on
 
-    # The turn stalled: OMP's own transcript never holds the reply.
+    # The turn stalled: OMP's own transcript holds the prompt and never the reply.
     session_file = tmp_path / "session.jsonl"
-    session_file.write_text(_native_message("narration", _NARRATION, stop="toolUse", tool_call=True) + "\n", encoding="utf-8")
+    prompt = json.dumps({"type": "message", "id": "prompt", "message": {"role": "user", "content": f"Reply with exactly {_REPLY_MARKER}."}})
+    narration = _native_message("narration", _NARRATION, stop="toolUse", tool_call=True)
+    session_file.write_text(f"{prompt}\n{narration}\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="timed out waiting for OMP native marker") as stalled:
         _wait_native_marker(session_file, _REPLY_MARKER, timeout=0.3)
     assert waited_on(stalled.value) == "provider_turn"
+
+    # The same silence without the prompt: nothing reached OMP, which is not a stalled turn.
+    unprompted = tmp_path / "unprompted.jsonl"
+    unprompted.write_text(narration + "\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="timed out waiting for OMP native marker") as never_prompted:
+        _wait_native_marker(unprompted, _REPLY_MARKER, timeout=0.3)
+    assert waited_on(never_prompted.value) is None
+
+    # A phrase the model should bring back is read from a turn that already replied.
+    with pytest.raises(RuntimeError, match="timed out waiting for OMP native marker") as not_recalled:
+        _wait_native_marker(session_file, "A_PHRASE_NOT_RECALLED", recalled=True, timeout=0.3)
+    assert waited_on(not_recalled.value) is None
+
+    # The first tool call of a task turn, with and without the task's prompt in the transcript.
+    task = json.dumps({"type": "message", "id": "task", "message": {"role": "user", "content": "Run OMP_TASK_1 step by step."}})
+    session_file.write_text(f"{task}\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="timed out waiting for tool boundary in task OMP_TASK_1") as task_stalled:
+        omp_helm_lifecycle._wait_task_tool_boundary(session_file, "OMP_TASK_1", timeout=0.3)
+    assert waited_on(task_stalled.value) == "provider_turn"
+    with pytest.raises(RuntimeError, match="timed out waiting for tool boundary in task OMP_TASK_2") as task_never_sent:
+        omp_helm_lifecycle._wait_task_tool_boundary(session_file, "OMP_TASK_2", timeout=0.3)
+    assert waited_on(task_never_sent.value) is None
+    session_file.write_text(f"{prompt}\n{narration}\n", encoding="utf-8")
 
     # OMP answered (the caller holds the native reply row) and the Runtime Host never serves it.
     waiting = [{"id": "other", "role": "assistant", "content_text": "Waiting for the worker."}]

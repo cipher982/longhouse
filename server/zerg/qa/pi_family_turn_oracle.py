@@ -110,6 +110,21 @@ def _single_user(entries: list[Mapping[str, Any]], marker: str) -> tuple[Mapping
     return (matches[0] if len(matches) == 1 else None), len(matches)
 
 
+def provider_holds_prompt(session_file: Path, marker: str) -> bool:
+    """Whether the provider's own session file holds a prompt naming ``marker``.
+
+    A wait for the reply to a prompt is a wait on the model only once the
+    provider has the prompt. A prompt that never reached it leaves the same
+    silence in the transcript, and that silence is not a stalled turn.
+    """
+
+    try:
+        entries = read_session_entries(session_file)
+    except OSError:
+        return False
+    return any(_role(entry) == "user" and marker in _text(entry) for entry in entries)
+
+
 def step_task_prompt(task_marker: str, done_marker: str) -> str:
     """A turn that stays busy across several tool boundaries.
 

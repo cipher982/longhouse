@@ -43,8 +43,12 @@ from zerg.qa.claude_live_session_support import failed_session_close_receipt
 from zerg.qa.claude_live_session_support import isolation_paths
 from zerg.qa.claude_live_session_support import launch_claude_session
 from zerg.qa.claude_live_session_support import now_iso
+from zerg.qa.claude_live_session_support import open_turn_waited_on
 from zerg.qa.claude_live_session_support import scanner_visible_claude_binary
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
+from zerg.qa.claude_live_session_support import transcript_rows as _transcript_rows
+from zerg.qa.claude_live_session_support import turn_bounds as _turn_bounds
+from zerg.qa.claude_live_session_support import user_prompt_contains as _user_prompt_contains
 from zerg.qa.claude_live_session_support import wait_until
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
@@ -58,7 +62,6 @@ from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import secret_scan
 from zerg.qa.live_session_toolkit import wait_pid_dead
 from zerg.qa.managed_claude_live import transcript_lookup_id
-from zerg.qa.managed_claude_live import transcript_paths
 from zerg.qa.model_compliance import attach
 from zerg.qa.model_compliance import noncompliance_entry
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
@@ -96,7 +99,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=9,
+    scenario_revision=10,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     # Claude on macOS keeps credentials in the desktop Keychain; a relocated
@@ -160,14 +163,6 @@ def _bash_commands(rows: list[dict[str, Any]]) -> list[str]:
     return commands
 
 
-def _user_prompt_contains(row: dict[str, Any], marker: str) -> bool:
-    if row.get("type") == "user":
-        content = (row.get("message") or {}).get("content") if isinstance(row.get("message"), dict) else None
-        return isinstance(content, str) and marker in content
-    attachment = row.get("attachment") if isinstance(row.get("attachment"), dict) else {}
-    return row.get("type") == "attachment" and attachment.get("type") == "queued_command" and marker in str(attachment.get("prompt") or "")
-
-
 _STEER_HOOK_ATTACHMENTS = frozenset({"hook_additional_context", "hook_blocking_error", "hook_stopped_continuation"})
 
 
@@ -187,18 +182,6 @@ def _steer_delivered(row: dict[str, Any], marker: str) -> bool:
     if row.get("type") == "user" and row.get("isMeta") is True:
         return marker in json.dumps((row.get("message") or {}).get("content"), ensure_ascii=False)
     return False
-
-
-def _turn_end(row: dict[str, Any]) -> bool:
-    return row.get("type") == "system" and row.get("subtype") == "turn_duration"
-
-
-def _turn_bounds(rows: list[dict[str, Any]], prompt_marker: str) -> tuple[int, int | None] | None:
-    start = next((index for index, row in enumerate(rows) if _user_prompt_contains(row, prompt_marker)), None)
-    if start is None:
-        return None
-    end = next((index for index in range(start + 1, len(rows)) if _turn_end(rows[index])), None)
-    return start, end
 
 
 def _first_index(rows: list[dict[str, Any]], predicate: Callable[[dict[str, Any]], bool], offset: int = 0) -> int | None:
@@ -485,19 +468,6 @@ def negative_control_verdict(lifecycle: dict[str, Any], *, fault: str, fault_rec
 # --- Live scenario ------------------------------------------------------------
 
 
-def _transcript_rows(lookup_id: str, home: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for path in transcript_paths(lookup_id, home=home):
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(row, dict):
-                rows.append(row)
-    return rows
-
-
 def _channel_state(home: Path, session_id: str) -> dict[str, Any]:
     path = home / ".claude" / "channels" / "longhouse" / "sessions" / f"{session_id}.json"
     try:
@@ -780,12 +750,13 @@ def _drive_lifecycle(
 
     def wait_turn_end(prompt_marker: str, description: str, timeout: float) -> None:
         # The end of a turn in Claude's own transcript, whatever the caller's
-        # description says about the archive.
+        # description says about the archive: the model's turn when that
+        # transcript holds the prompt and the turn is still open.
         wait_until(
             lambda: (bounds := _turn_bounds(rows(), prompt_marker)) is not None and bounds[1] is not None,
             timeout=timeout,
             description=description,
-            waited_on=PROVIDER_TURN,
+            waited_on=lambda: open_turn_waited_on(rows(), prompt_marker),
         )
 
     def wait_can_send() -> None:
@@ -880,7 +851,7 @@ def _drive_lifecycle(
             lambda: any(f"{step}_1" in command for command in _bash_commands(rows())),
             timeout=args.response_timeout_secs,
             description="first slow Claude Bash step",
-            waited_on=PROVIDER_TURN,
+            waited_on=lambda: open_turn_waited_on(rows(), step),
         )
     except ScenarioError:
         # A provider refusal ends this turn without starting a tool. Keep the
@@ -915,7 +886,7 @@ def _drive_lifecycle(
                 lambda: any(steered in text for text in _assistant_texts(rows())),
                 timeout=delay + args.response_timeout_secs,
                 description="delayed Claude follow-up answer",
-                waited_on=PROVIDER_TURN,
+                waited_on=lambda: open_turn_waited_on(rows(), steered),
             )
         else:
             time.sleep(5.0)
@@ -949,7 +920,7 @@ def _drive_lifecycle(
             lambda: any(abort_prompt in command for command in _bash_commands(rows())),
             timeout=args.response_timeout_secs,
             description="active Claude tool turn to abort",
-            waited_on=PROVIDER_TURN,
+            waited_on=lambda: open_turn_waited_on(rows(), abort_prompt),
         )
     except ScenarioError:
         # A provider refusal ends the request without an active tool. Preserve

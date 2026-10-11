@@ -49,6 +49,7 @@ from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.runtime_host_canary_isolation import hide_and_verify_canary_isolation
 from zerg.qa.runtime_host_canary_isolation import runtime_host_request
 from zerg.qa.wait_kind import LONGHOUSE_ENGINE
+from zerg.qa.wait_kind import PROVIDER_PROCESS
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
@@ -66,7 +67,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="codex.helm_launch_visibility.v1",
     producer_revision=11,
     scenario_id=SCENARIO_ID,
-    scenario_revision=8,
+    scenario_revision=9,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("codex",),
     platforms=("linux",),
@@ -679,8 +680,14 @@ def _seed_codex_rollout(
                     "startup_dialogs": startup_dialogs,
                 }
         time.sleep(0.25)
-    # The prompt was typed into Codex itself and its own rollout is what is read.
-    raise expired(RuntimeError("Codex TUI did not persist the seed turn before cold Resume"), PROVIDER_TURN)
+    # The prompt was typed into Codex itself and its own rollout is what is
+    # read. A rollout that holds the prompt and no reply is the model's turn;
+    # one that never got the prompt is Codex not taking what was typed.
+    prompted = any(marker in path.read_text(encoding="utf-8", errors="replace") for path in codex_home.glob("sessions/**/*.jsonl"))
+    raise expired(
+        RuntimeError("Codex TUI did not persist the seed turn before cold Resume"),
+        PROVIDER_TURN if prompted else PROVIDER_PROCESS,
+    )
 
 
 def _human_launch_sequence(

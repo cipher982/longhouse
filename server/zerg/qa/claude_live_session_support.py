@@ -551,6 +551,52 @@ def send_and_await_marker(
     )
 
 
+def user_prompt_contains(row: dict[str, Any], marker: str) -> bool:
+    if row.get("type") == "user":
+        content = (row.get("message") or {}).get("content") if isinstance(row.get("message"), dict) else None
+        return isinstance(content, str) and marker in content
+    attachment = row.get("attachment") if isinstance(row.get("attachment"), dict) else {}
+    return row.get("type") == "attachment" and attachment.get("type") == "queued_command" and marker in str(attachment.get("prompt") or "")
+
+
+def turn_end(row: dict[str, Any]) -> bool:
+    return row.get("type") == "system" and row.get("subtype") == "turn_duration"
+
+
+def turn_bounds(rows: list[dict[str, Any]], prompt_marker: str) -> tuple[int, int | None] | None:
+    start = next((index for index, row in enumerate(rows) if user_prompt_contains(row, prompt_marker)), None)
+    if start is None:
+        return None
+    end = next((index for index in range(start + 1, len(rows)) if turn_end(rows[index])), None)
+    return start, end
+
+
+def transcript_rows(lookup_id: str, home: Path | None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path in transcript_paths(lookup_id, home=home):
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+    return rows
+
+
+def open_turn_waited_on(rows: list[dict[str, Any]], prompt_marker: str) -> str | None:
+    """What a wait on a turn of Claude's was waiting on, from Claude's own transcript.
+
+    The model's turn, when the transcript holds the prompt and the turn it
+    opened has not ended. A prompt that never reached Claude leaves the same
+    silence and is not a stalled turn; neither is a turn that ended without
+    doing what was awaited, which is a result. Both declare nothing.
+    """
+
+    bounds = turn_bounds(rows, prompt_marker)
+    return PROVIDER_TURN if bounds is not None and bounds[1] is None else None
+
+
 def await_assistant_marker(
     *,
     session_id: str,
@@ -573,9 +619,14 @@ def await_assistant_marker(
         result = assistant_transcript_contains(lookup_id, marker, home=home)
         return result if result[0] else None
 
-    # Claude's own transcript, after a turn the caller submitted itself.
+    # Claude's own transcript, after a turn the caller submitted itself: the
+    # model's turn only when that transcript holds the prompt and its turn is
+    # still open.
     _observed, transcript_path, transcript_line, transcript_timestamp = wait_until(
-        observed, timeout=timeout, description=f"Claude assistant marker {marker!r}", waited_on=PROVIDER_TURN
+        observed,
+        timeout=timeout,
+        description=f"Claude assistant marker {marker!r}",
+        waited_on=lambda: open_turn_waited_on(transcript_rows(lookup_id, home), marker),
     )
     return str(transcript_path), int(transcript_line or 0), transcript_timestamp
 

@@ -86,7 +86,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_awareness_post_compaction.v1",
     producer_revision=5,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=5,
+    scenario_revision=6,
     assertion_cells=(
         (_ASSERTION_VISIBLE, None),
         (_ASSERTION_NO_DUP_BOOTSTRAP, None),

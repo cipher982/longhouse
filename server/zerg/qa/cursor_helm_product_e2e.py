@@ -137,8 +137,25 @@ def hosted_reply_waited_on(rows: list[dict[str, Any]], marker: str) -> str | Non
 
     if any(row.get("event") == "afterAgentResponse" and marker in str(row.get("text") or "") for row in rows):
         return LONGHOUSE_INGEST
+    return open_turn_waited_on(rows, marker)
+
+
+def open_turn_waited_on(rows: list[dict[str, Any]], prompt_marker: str) -> str | None:
+    """What a wait on a turn of Cursor's was waiting on, from Cursor's own hooks.
+
+    The model's turn, when Cursor took a prompt naming ``prompt_marker``
+    (``beforeSubmitPrompt``) and that turn has not stopped. A prompt Cursor
+    never took, and a turn that stopped without doing what was awaited,
+    declare nothing: the first cannot be attributed from this record and the
+    second is a result.
+    """
+
     prompt_index = next(
-        (index for index, row in enumerate(rows) if row.get("event") == "beforeSubmitPrompt" and marker in str(row.get("prompt") or "")),
+        (
+            index
+            for index, row in enumerate(rows)
+            if row.get("event") == "beforeSubmitPrompt" and prompt_marker in str(row.get("prompt") or "")
+        ),
         None,
     )
     if prompt_index is None:
@@ -689,7 +706,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 timeout=args.timeout,
                 description="first slow Cursor shell step",
-                waited_on=PROVIDER_TURN,
+                waited_on=lambda: open_turn_waited_on(_hook_rows(root, session_id)[steer_hook_start:], step),
             )
             steer_generation = str(first_step.get("generation_id") or "")
             time.sleep(1.0)
@@ -752,7 +769,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 timeout=args.timeout,
                 description="active Cursor shell generation to abort",
-                waited_on=PROVIDER_TURN,
+                waited_on=lambda: open_turn_waited_on(_hook_rows(root, session_id)[abort_hook_start:], forbidden),
             )
             abort_generation = str(shell.get("generation_id") or "")
             time.sleep(0.5)
@@ -988,7 +1005,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             ),
             timeout=args.timeout,
             description="active Cursor shell generation",
-            waited_on=PROVIDER_TURN,
+            waited_on=lambda: open_turn_waited_on(_hook_rows(root, session_id)[hook_start:], forbidden),
         )
         cancel_pause = _wait_until(pending_pause, timeout=args.timeout, description="hosted Cursor cancel-test permission request")
         answer_pause(cancel_pause, "answer")

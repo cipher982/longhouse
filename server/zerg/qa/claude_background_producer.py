@@ -56,7 +56,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.background_jobs.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     platforms=("linux",),
@@ -368,7 +368,7 @@ def _capture_background(
             lambda: (bounds := helm._turn_bounds(rows(), parent_marker)) is not None and bounds[1] is not None,
             timeout=args.response_timeout_secs,
             description="Claude background parent turn completing",
-            waited_on=PROVIDER_TURN,
+            waited_on=lambda: helm.open_turn_waited_on(rows(), parent_marker),
         )
         bounds = helm._turn_bounds(rows(), parent_marker)
         if bounds is None or bounds[1] is None:
