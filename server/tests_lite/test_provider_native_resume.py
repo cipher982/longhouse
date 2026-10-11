@@ -1922,7 +1922,20 @@ def _delivery_snapshot(
         "provider_session_id": "conversation-1",
         "files": [
             {"kind": "agent_transcript", "path": _TRANSCRIPT_PATH, "size": transcript_bytes, "marker_count": marker_count},
-            {"kind": "store_db", "path": "/home/.cursor/chats/x/store.db", "size": 61440, "latest_root_blob_id": store_root},
+            # Another conversation's store in the same home: never this turn's root.
+            {
+                "kind": "store_db",
+                "path": "/home/.cursor/chats/y/store.db",
+                "conversation_uuid": "conversation-0",
+                "latest_root_blob_id": "root-9",
+            },
+            {
+                "kind": "store_db",
+                "path": "/home/.cursor/chats/x/store.db",
+                "size": 61440,
+                "conversation_uuid": "conversation-1",
+                "latest_root_blob_id": store_root,
+            },
         ],
         "engine_db": {
             "present": True,
@@ -2000,6 +2013,9 @@ def test_cursor_turn_delivery_never_compares_records_with_bytes() -> None:
     # And a transcript shipped in full says nothing about records the store epoch has not shipped.
     lagging_store = delivery(_delivery_snapshot(records_captured=40, records_shipped=34))
     assert lagging_store["delivered"] is False
+    # The root another conversation's store stands at is not this one's: the engine
+    # having recorded "root-9" for this conversation would be a root this store never had.
+    assert delivery(_delivery_snapshot(engine_root="root-9"))["store_root_captured"] is False
 
     # A snapshot that does not hold what the judgement needs says nothing either way:
     # one that could not be taken, and one from before the store's root was recorded.
@@ -2042,14 +2058,15 @@ def test_the_projection_snapshot_records_the_roots_delivery_is_judged_by(tmp_pat
 
     assert payload["schema"] == "cursor_projection_diagnostics.v3"
     (observed,) = [item for item in payload["files"] if item["kind"] == "store_db"]
-    assert observed["latest_root_blob_id"] == "root-2"
+    assert (observed["conversation_uuid"], observed["latest_root_blob_id"]) == ("conversation-1", "root-2")
     assert payload["engine_db"]["table_rows"]["cursor_store_root_state"] == [
         {"conversation_uuid": "conversation-1", "root_blob_id": "root-2", "updated_at": "2026-01-01T00:00:00+00:00"}
     ]
     # A value that is not the hex JSON Cursor writes yields no root, not an error.
-    assert live_session_toolkit._cursor_latest_root_blob_id("not hex") is None
-    assert live_session_toolkit._cursor_latest_root_blob_id(None) is None
-    assert live_session_toolkit._cursor_latest_root_blob_id(metadata.encode()) == "root-2"
+    unread = {"conversation_uuid": None, "latest_root_blob_id": None}
+    assert live_session_toolkit._cursor_store_root("not hex") == unread
+    assert live_session_toolkit._cursor_store_root(None) == unread
+    assert live_session_toolkit._cursor_store_root(metadata.encode())["latest_root_blob_id"] == "root-2"
 
 
 def test_codex_resume_intent_uses_the_actual_isolated_workspace(tmp_path: Path) -> None:

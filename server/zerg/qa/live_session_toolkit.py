@@ -2391,13 +2391,13 @@ def _cursor_sqlite_observation(path: Path, *, marker: str) -> dict[str, Any]:
         **observation,
         "sqlite_tables": sorted(tables),
         "sqlite_counts": table_counts,
-        # The root Cursor's conversation stands at: an id, never content.
-        "latest_root_blob_id": _cursor_latest_root_blob_id(root_meta[0] if root_meta else None),
+        # Whose conversation this store is and the root it stands at: ids, never content.
+        **_cursor_store_root(root_meta[0] if root_meta else None),
     }
 
 
-def _cursor_latest_root_blob_id(meta_value: object) -> str | None:
-    """Cursor's ``latestRootBlobId`` from its store's ``meta['0']``, as the engine reads it (hex-encoded JSON)."""
+def _cursor_store_root(meta_value: object) -> dict[str, str | None]:
+    """A Cursor store's conversation and latest root, from its ``meta['0']`` as the engine reads it (hex-encoded JSON)."""
 
     try:
         text = meta_value.decode("utf-8") if isinstance(meta_value, bytes) else str(meta_value or "")
@@ -2406,9 +2406,13 @@ def _cursor_latest_root_blob_id(meta_value: object) -> str | None:
         except ValueError:
             metadata = json.loads(text)
     except (UnicodeDecodeError, ValueError):
-        return None
-    value = metadata.get("latestRootBlobId") if isinstance(metadata, dict) else None
-    return value if isinstance(value, str) and value else None
+        metadata = None
+
+    def named(key: str) -> str | None:
+        value = metadata.get(key) if isinstance(metadata, dict) else None
+        return value if isinstance(value, str) and value else None
+
+    return {"conversation_uuid": named("agentId"), "latest_root_blob_id": named("latestRootBlobId")}
 
 
 def cursor_turn_delivery(snapshot: Mapping[str, Any]) -> dict[str, Any]:
@@ -2486,7 +2490,13 @@ def cursor_turn_delivery(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     store = open_epoch(f"cursor-store-v1:{conversation}") if conversation else None
     captured_records = store.get("max_observed_len") if store and type(store.get("max_observed_len")) is int else None
     shipped_records = shipped.get(store.get("source_epoch")) if store else None
-    store_roots = [item.get("latest_root_blob_id") for item in files if item.get("kind") == "store_db"]
+    # This conversation's store, by the conversation its own metadata names: a
+    # snapshot can hold the stores of other conversations of the same home.
+    store_roots = [
+        item.get("latest_root_blob_id")
+        for item in files
+        if item.get("kind") == "store_db" and conversation and item.get("conversation_uuid") == conversation
+    ]
     store_root = next((value for value in store_roots if isinstance(value, str) and value), None)
     engine_root = next(
         (row.get("root_blob_id") for row in rows("cursor_store_root_state") if row.get("conversation_uuid") == conversation),
