@@ -267,12 +267,18 @@ def event_text(event: Mapping[str, object]) -> str:
     return text if isinstance(text, str) else ""
 
 
-def event_time(event: Mapping[str, object]) -> float | None:
-    """When the provider's record says the event happened, or None when the served timestamp cannot be read."""
+def event_time(event: Mapping[str, object]) -> datetime | None:
+    """When the provider's record says the event happened, or None when the served timestamp does not say.
+
+    A timestamp that cannot be parsed says nothing, and neither does one
+    without a zone: read as local time it would order two events by where
+    this process runs. Every time returned names its zone, so any two compare.
+    """
     try:
-        return datetime.fromisoformat(str(event.get("timestamp")).replace("Z", "+00:00")).timestamp()
+        at = datetime.fromisoformat(str(event.get("timestamp")).replace("Z", "+00:00"))
     except ValueError:
         return None
+    return at if at.tzinfo is not None and at.utcoffset() is not None else None
 
 
 def _durable_assistant_text(event: object, default_origin: str | None) -> bool:

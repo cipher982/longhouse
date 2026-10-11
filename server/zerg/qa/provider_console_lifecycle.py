@@ -2867,7 +2867,8 @@ def _steer_delivery(events: Iterable[object], steer_marker: str) -> dict[str, ob
     ``delivered_before_final_reply`` is True only when that row is served
     ahead of the last assistant reply and is not timed after it. Otherwise
     ``missing`` says what was not found: a steer the provider never recorded,
-    or one it recorded only once it had finished replying.
+    one it recorded only once it had finished replying, or two rows whose
+    served times cannot be set against each other (`event_time`).
     """
 
     rows = [event for event in events if isinstance(event, dict)]
@@ -2883,8 +2884,10 @@ def _steer_delivery(events: Iterable[object], steer_marker: str) -> dict[str, ob
         missing = "no served assistant reply follows the steer"
     else:
         steer_at, reply_at = event_time(steer), event_time(reply)
-        timed = steer_at is not None and reply_at is not None and steer_at <= reply_at
-        missing = None if timed else "the steer is not timed before the final reply"
+        if steer_at is None or reply_at is None:
+            missing = "the served times do not order the steer and the final reply"
+        else:
+            missing = None if steer_at <= reply_at else "the steer is timed after the final reply"
     return {
         "source": "served_events",
         "steer_event_id": steer.get("id") if steer else None,

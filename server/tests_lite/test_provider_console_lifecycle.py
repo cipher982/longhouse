@@ -1984,6 +1984,27 @@ def test_a_counted_adapters_wait_is_cut_short_only_by_a_finished_turn_whose_repl
 
 _TAG = "0123456789abcdef0123456789abcdef"
 
+# Each steer provider's own record of a steered turn: one entry per row the archive serves, in the
+# record's order, with the seconds into the turn at which the provider timed the row.
+#
+# Codex, Pi and OMP are the rows, order and timing of a recorded run of each, with the text replaced.
+# Codex records the steer between the command's first output and its result. Pi records it after the
+# tool's result, which is when the steer enters the turn. OMP moves the command to a background job
+# when the steer lands, so its served tool row holds no result, and it answers twice.
+#
+# Claude's and OpenCode's order and timing are a recorded turn's too, but the stream that was kept
+# of those holds no steer. Their steer row is the one the engine's parser tests show it serves:
+# Claude's hook-context attachment, written once the tool has returned, and OpenCode's user message
+# part, timed when OpenCode took it (here before the model's first reply).
+_STEERED_TURN = {
+    "codex": (("prompt", 0.2), ("call", 1.6), ("output", 6.0), ("steer", 6.0), ("call", 7.0), ("result", 16.7), ("reply", 17.5)),
+    "pi": (("prompt", 0.0), ("call", 0.6), ("result", 15.6), ("steer", 15.6), ("reply", 15.9)),
+    "omp": (("prompt", 0.0), ("call", 0.9), ("output", 6.0), ("steer", 6.1), ("reply", 7.3), ("reply", 21.6)),
+    "claude": (("prompt", 0.0), ("call", 1.1), ("result", 16.2), ("steer", 16.3), ("reply", 18.2)),
+    "opencode": (("prompt", 0.0), ("steer", 0.6), ("said", 2.4), ("call", 5.5), ("result", 20.6), ("said", 22.2), ("reply", 23.1)),
+}
+_SAID = ("Running the command.", "The command has finished.")
+
 
 def _steer_markers(provider: str) -> tuple[str, str, str]:
     """The first, steered and tool markers the steer step mints for ``provider`` under `_TAG`."""
@@ -1992,47 +2013,79 @@ def _steer_markers(provider: str) -> tuple[str, str, str]:
     return f"{stem}STEER_FIRST_{_TAG}", f"{stem}STEERED_{_TAG}", f"{stem}STEER_TOOL_42_{_TAG}"
 
 
-def _steer_page(provider: str, final_reply: str, *, steer_at: str | None = "2026-01-01T00:00:27+00:00") -> list[dict[str, object]]:
-    """What the archive serves of a steered turn; ``steer_at`` is when the provider recorded the steer, None when it never did."""
+def _steer_page(provider: str, final_reply: str, *, steer: str = "recorded") -> list[dict[str, object]]:
+    """What the archive serves of `_STEERED_TURN`: each row's role, text and the provider's time for it.
+
+    ``steer`` is ``recorded`` (where the provider's record holds it), ``late``
+    (recorded only after the last reply) or ``never``. Assistant replies are
+    ``reply-<n>``, the ids the provider's own rows have in `_run_steer`.
+    """
+
+    from datetime import UTC
+    from datetime import datetime
+    from datetime import timedelta
 
     first, steered, tool = _steer_markers(provider)
-    page: list[dict[str, object]] = [
-        {"id": "prompt", "role": "user", "content_text": _ask(first), "timestamp": "2026-01-01T00:00:20+00:00"},
-        {"id": "call", "role": "assistant", "tool_name": "bash", "content_text": None, "timestamp": "2026-01-01T00:00:31+00:00"},
-        {"id": "result", "role": "tool", "tool_output_text": tool, "timestamp": "2026-01-01T00:00:46+00:00"},
-        {"id": "reply-1", "role": "assistant", "content_text": final_reply, "timestamp": "2026-01-01T00:00:49+00:00"},
-    ]
-    if steer_at is not None:
-        page.append({"id": "steer", "role": "user", "content_text": f"Change of plan: {_ask(steered)}", "timestamp": steer_at})
-    return sorted(page, key=lambda event: str(event["timestamp"]))
+    rows = [row for row in _STEERED_TURN[provider] if steer == "recorded" or row[0] != "steer"]
+    if steer == "late":
+        rows.append(("steer", rows[-1][1] + 1))
+    page: list[dict[str, object]] = []
+    said = 0
+    for index, (kind, seconds) in enumerate(rows):
+        event: dict[str, object] = {
+            "id": f"row-{index}",
+            "timestamp": (datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=seconds)).isoformat(),
+        }
+        if kind in {"prompt", "steer"}:
+            event |= {"role": "user", "content_text": _ask(first) if kind == "prompt" else f"Change of plan: {_ask(steered)}"}
+        elif kind == "call":
+            event |= {"role": "assistant", "tool_name": "bash", "content_text": None}
+        elif kind in {"output", "result"}:
+            event |= {"role": "tool", "tool_output_text": tool if kind == "result" else "Still running."}
+        else:
+            text = final_reply if kind == "reply" else _SAID[said]
+            event |= {"id": f"reply-{said}", "role": "assistant", "content_text": text}
+            said += 1
+        page.append(event)
+    return page
 
 
-def _run_steer(monkeypatch, tmp_path: Path, provider: str, final_reply: str, page: list[dict[str, object]]) -> tuple[dict, _Clock]:
-    """The steer step over a finished turn: the provider's own stream for it, and the page the archive serves."""
+def _replies(page: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [event for event in page if event["role"] == "assistant" and event.get("content_text")]
+
+
+def _run_steer(monkeypatch, tmp_path: Path, provider: str, page: list[dict[str, object]]) -> tuple[dict, _Clock]:
+    """The steer step over a finished turn: the page the archive serves, and the provider's own stream and rows behind it."""
 
     from uuid import UUID
 
     first, _steered, tool = _steer_markers(provider)
-    replies = ["Running the command.", final_reply]
+    replies = [str(event["content_text"]) for event in _replies(page)]
     claim = _turn_claim(tmp_path, provider, _ask(first), replies)
+    stream = Path(str(claim[lifecycle._TURN_STREAM_IN_CLAIM[provider]]))
     if provider == "opencode":
         # As OpenCode writes a turn steered mid-tool: each text part again as it grows, the
         # hand-off to the tool, the reply in a part of its own, and no prompt at all.
-        def part(part_id: str, text: str) -> dict[str, object]:
-            return {"type": "text", "part": {"id": part_id, "type": "text", "text": text}}
+        def part(part_id: str, text: str, cuts: tuple[int, ...]) -> list[dict[str, object]]:
+            return [{"type": "text", "part": {"id": part_id, "type": "text", "text": text[:cut]}} for cut in (*cuts, len(text))]
 
         def finish(reason: str) -> dict[str, object]:
             return {"type": "step_finish", "part": {"type": "step-finish", "reason": reason}}
 
-        stream = [
-            *(part("p1", replies[0][:cut]) for cut in (3, len(replies[0]))),
+        written = [
+            *part("p0", replies[0], (3,)),
             {"type": "tool_use", "part": {"type": "tool", "tool": "bash", "state": {"status": "completed", "output": tool}}},
             finish("tool-calls"),
-            *(part("p2", "The command has finished."[:cut]) for cut in (3, 25)),
-            *(part("p3", final_reply[:cut]) for cut in (0, 14, len(final_reply))),
+            *(event for n, text in enumerate(replies[1:-1], 1) for event in part(f"p{n}", text, (3,))),
+            *part("final", replies[-1], (0, 14)),
             finish("stop"),
         ]
-        Path(str(claim["stdout_path"])).write_text("".join(json.dumps(event) + "\n" for event in stream), encoding="utf-8")
+        stream.write_text("".join(json.dumps(event) + "\n" for event in written), encoding="utf-8")
+    if provider == "omp":
+        # The background job's result reaches OMP's model as a notice in its own stream, not as a served tool row.
+        notice = {"role": "custom", "customType": "async-result", "content": f"<system-notice>\n{tool}\n</system-notice>"}
+        with stream.open("a", encoding="utf-8") as appended:
+            appended.write(json.dumps({"type": "message_end", "message": notice}) + "\n")
     if provider in {"pi", "omp"}:
         # Their served replies are held to the session file's rows, by id.
         record = tmp_path / f"{provider}-session.jsonl"
@@ -2073,20 +2126,22 @@ def _steer_observation(receipt: dict) -> dict:
 def test_a_wrong_reply_to_a_steer_the_provider_recorded_is_the_models(monkeypatch, tmp_path, provider):
     first, steered, _tool = _steer_markers(provider)
     miscopied = steered.replace("STEERED", "STEER")
+    page = _steer_page(provider, miscopied)
 
-    receipt, clock = _run_steer(monkeypatch, tmp_path, provider, miscopied, _steer_page(provider, miscopied))
+    receipt, clock = _run_steer(monkeypatch, tmp_path, provider, page)
 
     assert receipt["status"] == "fail" and receipt["steer_accepted"] is True and receipt["steer_marker_answered"] is False
     assert receipt["steer_marker_error"].startswith(
         f"reply_carried_another_marker: the steer turn completed and its final reply carries LH_{provider.upper()}_STEER and not"
     )
-    # What was found, where, and its time against the final reply's.
+    # What was found, where, and its time against the final reply's: the last reply, where the provider gave two.
+    recorded = next(event for event in page if event["role"] == "user" and steered in str(event["content_text"]))
     assert receipt["steer_delivery"] == {
         "source": "served_events",
-        "steer_event_id": "steer",
-        "steer_event_at": "2026-01-01T00:00:27+00:00",
-        "final_reply_event_id": "reply-1",
-        "final_reply_at": "2026-01-01T00:00:49+00:00",
+        "steer_event_id": recorded["id"],
+        "steer_event_at": recorded["timestamp"],
+        "final_reply_event_id": _replies(page)[-1]["id"],
+        "final_reply_at": _replies(page)[-1]["timestamp"],
         "delivered_before_final_reply": True,
         "missing": None,
     }
@@ -2104,17 +2159,17 @@ def test_a_wrong_reply_to_a_steer_the_provider_recorded_is_the_models(monkeypatc
     assert clock.now < 6 + 5
 
     # The first marker, with the steer on record ahead of it: delivery is shown, so not following it was the model's.
-    ignored, _clock = _run_steer(monkeypatch, tmp_path, provider, first, _steer_page(provider, first))
+    ignored, _clock = _run_steer(monkeypatch, tmp_path, provider, _steer_page(provider, first))
     assert ignored["model_noncompliance"]["reason"] == "reply_carried_another_marker"
     assert ignored["steer_delivery"]["delivered_before_final_reply"] is True
 
 
 @pytest.mark.parametrize("provider", sorted(lifecycle.STEER_PROVIDERS))
 def test_an_accepted_steer_the_provider_never_recorded_stays_a_finding(monkeypatch, tmp_path, provider):
-    first, _steered, _tool = _steer_markers(provider)
+    first, steered, _tool = _steer_markers(provider)
 
     # Acknowledged and dropped: the model answers the first marker, which reads exactly like a reply that carried another.
-    receipt, clock = _run_steer(monkeypatch, tmp_path, provider, first, _steer_page(provider, first, steer_at=None))
+    receipt, clock = _run_steer(monkeypatch, tmp_path, provider, _steer_page(provider, first, steer="never"))
 
     assert receipt["status"] == "fail" and receipt["steer_accepted"] is True and receipt["steer_marker_answered"] is False
     assert receipt["steer_marker_error"].startswith("reply_carried_another_marker: ")
@@ -2123,22 +2178,54 @@ def test_an_accepted_steer_the_provider_never_recorded_stays_a_finding(monkeypat
     assert "model_noncompliance" not in receipt and "model_noncompliance" not in _steer_observation(receipt)
     assert clock.now < 6 + 5
 
-    # Recorded only once the provider had finished replying, or timed after the reply it is served ahead of: not delivered.
-    late, _clock = _run_steer(monkeypatch, tmp_path, provider, first, _steer_page(provider, first, steer_at="2026-01-01T00:00:50+00:00"))
+    # Recorded only once the provider had finished replying: not delivered.
+    late, _clock = _run_steer(monkeypatch, tmp_path, provider, _steer_page(provider, first, steer="late"))
     assert late["steer_delivery"]["missing"] == "no served assistant reply follows the steer" and "model_noncompliance" not in late
-    mistimed = _steer_page(provider, first)
-    mistimed[1]["timestamp"] = "2026-01-01T00:00:55+00:00"
-    assert lifecycle._steer_delivery(mistimed, _steer_markers(provider)[1])["missing"] == "the steer is not timed before the final reply"
+
+    # Served ahead of the reply and timed after it, or timed in a way that orders nothing (no time, a time that
+    # cannot be read, one that names no zone): the fact is not established, and the failure stays a finding.
+    unordered = "the served times do not order the steer and the final reply"
+    for stamp, missing in (
+        ("2026-01-01T00:01:00+00:00", "the steer is timed after the final reply"),
+        ("2026-01-01T00:00:01", unordered),
+        ("yesterday", unordered),
+        (None, unordered),
+    ):
+        page = _steer_page(provider, first)
+        next(event for event in page if steered in str(event.get("content_text")))["timestamp"] = stamp
+        mistimed, _clock = _run_steer(monkeypatch, tmp_path, provider, page)
+        assert mistimed["steer_delivery"]["missing"] == missing and "model_noncompliance" not in mistimed, stamp
+    # Neither does a reply whose own time names no zone, whatever this process's zone is.
+    page = _steer_page(provider, first)
+    _replies(page)[-1]["timestamp"] = "2026-01-01T23:59:59"
+    assert lifecycle._steer_delivery(page, steered)["missing"] == unordered
+
+
+def test_a_served_time_orders_events_only_when_it_names_its_zone():
+    from datetime import UTC
+    from datetime import datetime
+
+    from zerg.qa.console_served_state_core import event_time
+
+    noon = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    assert event_time({"timestamp": "2026-01-01T12:00:00+00:00"}) == noon == event_time({"timestamp": "2026-01-01T12:00:00Z"})
+    assert event_time({"timestamp": "2026-01-01T14:00:00+02:00"}) == noon
+    for unread in ("2026-01-01T12:00:00", "2026-01-01", "noon", "", None, 1767268800):
+        assert event_time({"timestamp": unread}) is None, unread
+    assert event_time({}) is None
 
 
 @pytest.mark.parametrize("provider", sorted(lifecycle.STEER_PROVIDERS))
 def test_a_steer_the_model_followed_passes_and_keeps_its_delivery_on_the_receipt(monkeypatch, tmp_path, provider):
     _first, steered, _tool = _steer_markers(provider)
+    page = _steer_page(provider, steered)
 
-    receipt, _clock = _run_steer(monkeypatch, tmp_path, provider, steered, _steer_page(provider, steered))
+    receipt, _clock = _run_steer(monkeypatch, tmp_path, provider, page)
 
     assert receipt["status"] == "pass" and lifecycle.console_steer_assertion(receipt) is True
-    assert receipt["steer_answer_event_ids"] == ["reply-1"] and "steer_marker_error" not in receipt
+    answered = [event["id"] for event in _replies(page) if event["content_text"] == steered]
+    assert receipt["steer_answer_event_ids"] == answered and "steer_marker_error" not in receipt
+    assert receipt["tool_result_source"] == ("provider_stream" if provider == "omp" else "served_events")
     assert receipt["steer_delivery"]["delivered_before_final_reply"] is True
     assert "model_noncompliance" not in receipt and "model_noncompliance" not in _steer_observation(receipt)
 
