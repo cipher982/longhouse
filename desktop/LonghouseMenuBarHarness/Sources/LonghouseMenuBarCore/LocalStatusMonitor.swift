@@ -80,7 +80,9 @@ final class LocalStatusMonitor: @unchecked Sendable {
                 spoolDeadCount: payload.spoolDeadCount,
                 archiveBacklog: payload.archiveBacklog,
                 storageV2Outbox: payload.storageV2Outbox,
-                parseErrorCount1H: nil,
+                // An error counter drives transport health and only moves
+                // when something fails; it is not clock churn.
+                parseErrorCount1H: payload.parseErrorCount1H,
                 diskFreeBytes: nil,
                 isOffline: payload.isOffline,
                 localProjection: localProjection,
@@ -285,6 +287,7 @@ private struct LocalStatusFileSnapshot: Decodable {
             (.lastShipErrorMessage, "last_ship_error_message"),
             (.lastShipHttpStatus, "last_ship_http_status"),
             (.runtimeEventOutbox, "runtime_event_outbox"),
+            (.parseErrorCount1H, "parse_error_count_1h"),
             (.shipAttempts1H, "ship_attempts_1h"),
             (.shipSuccesses1H, "ship_successes_1h"),
             (.shipRateLimited1H, "ship_rate_limited_1h"),
@@ -348,6 +351,7 @@ private struct LocalStatusFileSnapshot: Decodable {
         case lastShipErrorMessage
         case lastShipHttpStatus
         case runtimeEventOutbox
+        case parseErrorCount1H
         case shipAttempts1H
         case shipSuccesses1H
         case shipRateLimited1H
@@ -358,12 +362,14 @@ private struct LocalStatusFileSnapshot: Decodable {
         case shipConnectErrors1H
         case shipLatencyP50Ms1H
         case shipLatencyP95Ms1H
-        case shipAttempts10m
-        case shipSuccesses10m
-        case shipRateLimited10m
-        case shipServerErrors10m
-        case shipRetryableClientErrors10m
-        case shipConnectErrors10m
+        // `convertFromSnakeCase` turns `_10m` into `10M`; the default `10m`
+        // raw values never matched, so these counters were silently absent.
+        case shipAttempts10m = "shipAttempts10M"
+        case shipSuccesses10m = "shipSuccesses10M"
+        case shipRateLimited10m = "shipRateLimited10M"
+        case shipServerErrors10m = "shipServerErrors10M"
+        case shipRetryableClientErrors10m = "shipRetryableClientErrors10M"
+        case shipConnectErrors10m = "shipConnectErrors10M"
         case shipLanes
         case shipScheduler
         case adaptiveBacklogLimiter
@@ -483,6 +489,10 @@ private indirect enum StatusJSONValue: Decodable, Equatable {
         let lowercased = key.lowercased()
         let compact = lowercased.filter { $0 != "_" }
         let parentCompact = parentKey?.lowercased().filter { $0 != "_" }
+        let rollingWindow = lowercased.hasSuffix("_1h")
+            || lowercased.hasSuffix("_10m")
+            || compact.hasSuffix("1h")
+            || compact.hasSuffix("10m")
         return key.hasSuffix("_at")
             || key.hasSuffix("At")
             || lowercased == "valid_until"
@@ -491,11 +501,8 @@ private indirect enum StatusJSONValue: Decodable, Equatable {
             || compact == "sendmetrics"
             || lowercased.contains("_ewma_")
             || key.contains("Ewma")
-            || lowercased.hasSuffix("_1h")
-            || lowercased.hasSuffix("_10m")
+            || (rollingWindow && !isErrorCounterKey(compact))
             || lowercased.hasSuffix("_ms")
-            || compact.hasSuffix("1h")
-            || compact.hasSuffix("10m")
             || key.hasSuffix("Ms")
             || lowercased.hasPrefix("seconds_")
             || compact.hasPrefix("seconds")
@@ -503,5 +510,16 @@ private indirect enum StatusJSONValue: Decodable, Equatable {
             || compact == "sequence"
             || compact == "sessionssequence"
             || (parentCompact == "localprojection" && compact == "version")
+    }
+
+    /// Rolling-window counters of failures (parse errors, rejections,
+    /// oversized payloads, rate limits, server/connect/client errors) feed
+    /// transport health, so they stay in the key; attempts, successes and
+    /// latencies are churn. Mirrors `heartbeat::is_error_counter_key`.
+    static func isErrorCounterKey(_ compact: String) -> Bool {
+        compact.contains("error")
+            || compact.contains("rejection")
+            || compact.contains("toolarge")
+            || compact.contains("ratelimited")
     }
 }

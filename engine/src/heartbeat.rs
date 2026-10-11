@@ -4575,23 +4575,33 @@ impl StatusFileWriter {
 }
 
 /// Keys whose values move on their own with time rather than with machine
-/// state: timestamps, validity deadlines, rates, rolling-window counters,
-/// elapsed-time counters, free disk space, projection sequence numbers and
-/// heartbeat send telemetry. A change confined to these is published on the
-/// pulse, not immediately.
+/// state: timestamps, validity deadlines, rates, rolling-window counters of
+/// attempts and successes, elapsed-time counters, free disk space, projection
+/// sequence numbers and heartbeat send telemetry. A change confined to these
+/// is published on the pulse, not immediately.
 fn is_volatile_status_key(key: &str) -> bool {
+    let rolling_window = key.ends_with("_1h") || key.ends_with("_10m");
     key.ends_with("_at")
         || key == "last_updated"
         || key == "valid_until"
         || key == "send_metrics"
         || key.contains("_ewma_")
-        || key.ends_with("_1h")
-        || key.ends_with("_10m")
+        || (rolling_window && !is_error_counter_key(key))
         || key.ends_with("_ms")
         || key.starts_with("seconds_")
         || key == "disk_free_bytes"
         || key == "sequence"
         || key == "sessions_sequence"
+}
+
+/// Rolling-window failure counters feed transport health (a payload
+/// rejection is `broken`, a parse error `degraded`), so a change in one is
+/// published at once. Mirrored by the Desktop App's presentation key.
+fn is_error_counter_key(key: &str) -> bool {
+    key.contains("error")
+        || key.contains("rejection")
+        || key.contains("too_large")
+        || key.contains("rate_limited")
 }
 
 fn status_semantic_digest(status: &serde_json::Value) -> u64 {
@@ -5293,7 +5303,15 @@ mod tests {
         resequenced["managed_sessions"][0]["sequence"] = serde_json::json!(8);
         resequenced["local_projection"]["version"] = serde_json::json!(8);
         assert!(!writer.publish(&resequenced, quiet));
+        let mut more_attempts = status("t1", 1, 0.5);
+        more_attempts["ship_attempts_1h"] = serde_json::json!(40);
+        assert!(!writer.publish(&more_attempts, quiet));
         assert_eq!(std::fs::read(&path).unwrap(), written);
+
+        // A failure counter moves transport health, so it is a state change.
+        let mut rejected = more_attempts.clone();
+        rejected["ship_payload_rejections_1h"] = serde_json::json!(1);
+        assert!(writer.publish(&rejected, quiet));
 
         // A state change is published at once.
         assert!(writer.publish(&status("t2", 2, 0.5), quiet));

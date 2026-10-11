@@ -1705,6 +1705,24 @@ struct LonghouseMenuBarCoreTests {
         }
         #expect(await changed.refreshRequirements.allSatisfy { $0 == false })
         #expect(await changed.presentationChanges.dropFirst().allSatisfy { $0 == false })
+
+        // A failure counter is health, not churn: crossing into errors asks
+        // for a producer refresh.
+        var refreshRequested = false
+        for attempt in 0..<20 where !refreshRequested {
+            let payload: [String: Any] = [
+                "managed_sessions": [],
+                "parse_error_count_1h": attempt + 1,
+                "heartbeat_transport": [
+                    "state": "connected",
+                    "send_metrics": ["last_send_wire_bytes": 57_005, "post_latency_sample_count": 5],
+                ],
+            ]
+            try JSONSerialization.data(withJSONObject: payload).write(to: statusURL, options: .atomic)
+            try await Task.sleep(for: .milliseconds(100))
+            refreshRequested = await changed.refreshRequirements.contains(true)
+        }
+        #expect(refreshRequested)
     }
 
     @Test
