@@ -1078,7 +1078,13 @@ def _drive_lifecycle(
         time.sleep(3.0)
         interrupted_at = time.time()
         _post(api, token, f"sessions/{session_id}/interrupt-live")
-        wait_turn_end(abort_prompt, "interrupted Claude turn ending", tool_seconds + args.response_timeout_secs)
+        try:
+            wait_turn_end(abort_prompt, "interrupted Claude turn ending", tool_seconds + args.response_timeout_secs)
+        except ScenarioError:
+            # The wait outlasts the tool itself, so a turn still open here is
+            # the abort failing, not the provider stalling: the verdict below
+            # records abort_did_not_stop_turn instead of a retried wait.
+            pass
         time.sleep(2.0)
         abort_verdict = abort_stopped_turn(
             rows(),
