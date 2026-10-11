@@ -87,7 +87,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="cursor.turn_boundary.v1",
     producer_revision=2,
     scenario_id="cursor_turn_boundary_quiescent",
-    scenario_revision=2,
+    scenario_revision=3,
     # This assertion has no authored `variant:` in schemas/managed_providers.yml,
     # so its cell's variant is None -- not an empty string -- matching how
     # provider_capability_schema.py parses an absent `variant:` field and how
@@ -190,7 +190,7 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
         try:
             report = cursor_helm_product_e2e.run_product_e2e(e2e_args)
         except Exception as exc:  # noqa: BLE001 - report carries partial state even on raise
-            report = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+            report = cursor_helm_product_e2e.failed_report(exc)
             raise
         finally:
             if isinstance(report, dict):

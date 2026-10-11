@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests_lite._factory_envelope import assert_result_conforms
+from zerg.qa import wait_kind
 
 
 class _FakeProcess:
@@ -260,7 +261,8 @@ def test_cursor_entrypoint_retains_product_report_before_runtime_failure(monkeyp
     def fake_post(url, **kwargs):
         posts["count"] += 1
         if "/send-live" in url and posts["count"] == 2:
-            raise RuntimeError("late Cursor runtime steer failure")
+            # A wait that expired, with what it was waiting on.
+            raise wait_kind.expired(RuntimeError("late Cursor runtime steer failure"), wait_kind.PROVIDER_TURN)
         return _Response({"accepted": True})
 
     def fake_wait(predicate, *, description, **kwargs):
@@ -318,6 +320,11 @@ def test_cursor_entrypoint_retains_product_report_before_runtime_failure(monkeyp
 
     assert result["status"] == "fail"
     assert report["status"] == "failed"
+    # One statement of the failure, in every artifact of the run: the report the run
+    # wrote itself, the one the producer keeps, and the result.
+    failure = {"status": "failed", "error": "RuntimeError: late Cursor runtime steer failure", "waited_on": "provider_turn"}
+    assert {key: product.get(key) for key in failure} == failure == {key: report.get(key) for key in failure}
+    assert (result["observation"]["error"], result["waited_on"]) == (failure["error"], failure["waited_on"])
     assert report["lifecycle"]["launch_registration"]["native_binding_claimed"] is True
     assert report["lifecycle"]["send_idle"]["remote_reply_archived"] is True
     assert product["lifecycle"]["send_idle"]["remote_reply_archived"] is True

@@ -30,6 +30,7 @@ from zerg.qa.wait_kind import LONGHOUSE_INGEST
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import failure_fields
 from zerg.services.longhouse_paths import get_managed_local_dir
 
 
@@ -490,6 +491,18 @@ def _session_locked(response: httpx.Response) -> bool:
     except (ValueError, AttributeError):
         return False
     return isinstance(detail, dict) and detail.get("code") == "SESSION_LOCKED"
+
+
+def failed_report(exc: BaseException) -> dict[str, Any]:
+    """What every artifact of a failed run says of the failure.
+
+    Its status, its error and, when the failure is a wait that expired, what
+    the wait was on (``zerg.qa.wait_kind``). Built here and nowhere else, so
+    the report this run writes, the standalone output and the reports the
+    registered producers keep cannot differ on it.
+    """
+
+    return {"status": "failed", "error": f"{type(exc).__name__}: {exc}", **failure_fields(exc)}
 
 
 def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
@@ -1098,7 +1111,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         )
         return report
     except Exception as exc:
-        report.update({"status": "failed", "finished_at": _now(), "error": str(exc)})
+        report.update({**failed_report(exc), "finished_at": _now()})
         raise
     finally:
         try:
@@ -1159,7 +1172,7 @@ def main() -> int:
         require_disposable_runtime(args.api_url)
         report = run_product_e2e(args)
     except Exception as exc:
-        print(json.dumps({"status": "failed", "error": str(exc)}, indent=2))
+        print(json.dumps(failed_report(exc), indent=2))
         return 1
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0

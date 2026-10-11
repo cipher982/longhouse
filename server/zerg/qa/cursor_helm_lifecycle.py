@@ -70,7 +70,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="cursor.helm_lifecycle.v1",
     producer_revision=1,
     scenario_id="cursor_helm_lifecycle",
-    scenario_revision=6,
+    scenario_revision=7,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("cursor",),
     platforms=("linux", "darwin"),
@@ -122,7 +122,7 @@ def failed_run_report(artifact_root: Path, exc: BaseException) -> dict[str, Any]
     verdict. Each assertion is still judged only by its own oracle.
     """
 
-    failure = {"status": "failed", "error": f"{type(exc).__name__}: {exc}", **failure_fields(exc)}
+    failure = cursor_helm_product_e2e.failed_report(exc)
     try:
         persisted = json.loads((artifact_root / "product-e2e.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
