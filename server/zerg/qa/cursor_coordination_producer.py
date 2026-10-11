@@ -49,6 +49,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -60,7 +61,9 @@ import httpx
 from zerg.qa.cursor_helm_product_e2e import _activity_state
 from zerg.qa.cursor_helm_product_e2e import _assistant_texts
 from zerg.qa.cursor_helm_product_e2e import _canonical_state_from_diagnostics
+from zerg.qa.cursor_helm_product_e2e import _hook_rows
 from zerg.qa.cursor_helm_product_e2e import _wait_until
+from zerg.qa.cursor_helm_product_e2e import hosted_reply_waited_on
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import PtyProcess
@@ -89,6 +92,8 @@ from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import RUNTIME_HOST
+from zerg.qa.wait_kind import failure_fields
 
 _SPEC = SPECS["cursor"]
 
@@ -106,7 +111,7 @@ REGISTRATION = ProducerRegistration(
     # moves and proofs from revision 6 do not satisfy it.
     producer_revision=12,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
-    scenario_revision=10,
+    scenario_revision=11,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
     # No `variant:` is authored for any of these three assertions in
     # schemas/managed_providers.yml, so every cell's variant is None -- not
@@ -539,10 +544,25 @@ def _wait_first_turn_settled(api_url: str, token: str, session_id: str, *, timeo
         lambda: True if _session_activity_state(api_url, token, session_id) == "quiescent" else None,
         timeout=timeout,
         description=f"Cursor session {session_id} settling to quiescent after its first turn",
+        waited_on=RUNTIME_HOST,
     )
 
 
-def _wait_marker_reply(api_url: str, token: str, session_id: str, marker: str, *, timeout: float) -> str:
+def _cursor_hook_root(environment: Mapping[str, str]) -> Path | None:
+    """Where the engine keeps Cursor's own hook events for this machine's sessions."""
+
+    longhouse_home = str(environment.get("LONGHOUSE_HOME") or "").strip()
+    return Path(longhouse_home) / "managed-local" / "cursor-helm" if longhouse_home else None
+
+
+def _wait_marker_reply(api_url: str, token: str, session_id: str, marker: str, *, timeout: float, hook_root: Path | None = None) -> str:
+    """Wait for the reply that names ``marker`` in the hosted archive.
+
+    That covers Cursor's turn and then Longhouse shipping it. ``hook_root``
+    lets an expired wait say which half stopped, from Cursor's own hooks
+    (``hosted_reply_waited_on``); without it nothing is declared.
+    """
+
     def probe() -> str | None:
         payload = _hosted_events(api_url, token, session_id)
         if payload is None:
@@ -552,7 +572,12 @@ def _wait_marker_reply(api_url: str, token: str, session_id: str, marker: str, *
                 return text
         return None
 
-    return _wait_until(probe, timeout=timeout, description=f"Cursor session {session_id} reply containing marker {marker}")
+    return _wait_until(
+        probe,
+        timeout=timeout,
+        description=f"Cursor session {session_id} reply containing marker {marker}",
+        waited_on=lambda: hosted_reply_waited_on(_hook_rows(hook_root, session_id), marker) if hook_root is not None else None,
+    )
 
 
 def _mint_coordination_token(api_url: str, device_token: str, session_id: str, *, timeout: float) -> str:
@@ -571,7 +596,12 @@ def _mint_coordination_token(api_url: str, device_token: str, session_id: str, *
         token = str(payload.get("coordination_token") or "").strip()
         return token or None
 
-    return _wait_until(attempt, timeout=timeout, description=f"session-scoped coordination authority for {session_id}")
+    return _wait_until(
+        attempt,
+        timeout=timeout,
+        description=f"session-scoped coordination authority for {session_id}",
+        waited_on=RUNTIME_HOST,
+    )
 
 
 def _create_directed_input(
@@ -705,6 +735,7 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
                 session.session_id,
                 marker,
                 timeout=args.live_timeout_secs,
+                hook_root=_cursor_hook_root(session.environment),
             )
         except RuntimeError as exc:
             if not str(exc).startswith("timed out waiting for Cursor session"):
@@ -787,6 +818,7 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
             source.session_id,
             source_ready_marker,
             timeout=args.live_timeout_secs,
+            hook_root=_cursor_hook_root(source.environment),
         )
         _wait_first_turn_settled(args.api_url, args.agents_token, source.session_id, timeout=args.live_timeout_secs)
         try:
@@ -801,6 +833,7 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                     target.session_id,
                     target_ready_marker,
                     timeout=args.live_timeout_secs,
+                    hook_root=_cursor_hook_root(target.environment),
                 )
                 _wait_first_turn_settled(args.api_url, args.agents_token, target.session_id, timeout=args.live_timeout_secs)
                 prior_target_tail = wait_session_tail(
@@ -997,6 +1030,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "observation_scope": "scenario",
             "failure_code": "direct_coordination_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "redacted_secret_files": redacted_secret_files,
             "artifact_manifest": artifact_manifest(root),
         }

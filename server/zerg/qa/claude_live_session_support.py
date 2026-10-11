@@ -51,6 +51,8 @@ from zerg.qa.managed_claude_live import transcript_lookup_id
 from zerg.qa.managed_claude_live import transcript_paths
 from zerg.qa.managed_claude_live import wait_for_channel_ready
 from zerg.qa.pty_session import ProviderPtySession
+from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import expired
 
 _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 
@@ -148,14 +150,29 @@ def failed_session_close_receipt(session: ProviderPtySession, error: BaseExcepti
     return receipt
 
 
-def wait_until(predicate: Callable[[], Any], *, timeout: float, description: str) -> Any:
+def wait_until(
+    predicate: Callable[[], Any],
+    *,
+    timeout: float,
+    description: str,
+    waited_on: str | Callable[[], str | None] | None = None,
+) -> Any:
+    """Poll ``predicate`` until it is truthy.
+
+    ``waited_on`` is what the wait was waiting on (``zerg.qa.wait_kind``), or a
+    callable that decides it when the wait expires. A wait that cannot tell
+    passes nothing and declares nothing.
+    """
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
         if value:
             return value
         time.sleep(0.5)
-    raise ScenarioError(f"timed out waiting for {description}")
+    error = ScenarioError(f"timed out waiting for {description}")
+    kind = waited_on() if callable(waited_on) else waited_on
+    raise expired(error, kind) if kind else error
 
 
 def terminal_text(path: Path) -> str:
@@ -556,8 +573,9 @@ def await_assistant_marker(
         result = assistant_transcript_contains(lookup_id, marker, home=home)
         return result if result[0] else None
 
+    # Claude's own transcript, after a turn the caller submitted itself.
     _observed, transcript_path, transcript_line, transcript_timestamp = wait_until(
-        observed, timeout=timeout, description=f"Claude assistant marker {marker!r}"
+        observed, timeout=timeout, description=f"Claude assistant marker {marker!r}", waited_on=PROVIDER_TURN
     )
     return str(transcript_path), int(transcript_line or 0), transcript_timestamp
 

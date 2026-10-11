@@ -19,6 +19,7 @@ from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import failure_fields
 
 SCENARIO_ID = "omp_background_jobs"
 PROFILE = "omp_background_v1"
@@ -53,7 +54,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.background_jobs.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=6,
+    scenario_revision=7,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -547,6 +548,7 @@ def main(argv: list[str] | None = None) -> int:
             "failure_code": "omp_background_failed",
             "partial_observation": observation,
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
         }
         if args.negative_control:
             result["negative_control"] = {"fault": args.negative_control, "status": "inconclusive"}

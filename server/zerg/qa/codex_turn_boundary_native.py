@@ -49,6 +49,7 @@ from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import failure_fields
 
 _SCENARIO_ID = "codex_turn_boundary_quiescent"
 _ASSERTION_ID = "activity_returns_to_quiescent_at_turn_boundary"
@@ -70,7 +71,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="codex.turn_boundary_quiescent.v1",
     producer_revision=1,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=((_ASSERTION_ID, None),),
     providers=("codex",),
     platforms=("linux",),
@@ -296,6 +297,14 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "evidence_class": "live_token",
             "generated_at": now(),
             "status": "pass" if assertions[_ASSERTION_ID] else "fail",
+            # A turn still open at the deadline never reached its boundary: the
+            # assertion is False because nothing was observed, not because the
+            # boundary was wrong.
+            **(
+                {}
+                if assertions[_ASSERTION_ID]
+                else bridge_canary.expired_turn_wait(post_turn_state, provider_answered=marker_in_assistant_transcript)
+            ),
             "observation": observation,
             "assertions": assertions,
             "session_id": session_id,
@@ -320,6 +329,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "codex_turn_boundary_quiescent_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "artifact_manifest": artifact_manifest(root),
         }
         settle_failed_result(failure, observation=observation, assertions=assertions)

@@ -58,6 +58,8 @@ from zerg.qa.provider_coordination_oracles import directed_input_assertions
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import LONGHOUSE_ENGINE
+from zerg.qa.wait_kind import failure_fields
 
 _SCENARIO_ID = "claude_coordination_directed_input"
 _ASSERTION_SEND = "provider_input_receipt_linked"
@@ -77,7 +79,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_directed_input.v1",
     producer_revision=5,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=5,
+    scenario_revision=6,
     assertion_cells=(
         (_ASSERTION_SEND, None),
         (_ASSERTION_RECEIVE, None),
@@ -211,6 +213,8 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             lambda: local_managed_control_fact(longhouse_home, receiver_session_id),
             timeout=args.receipt_timeout_secs,
             description="receiver attached local live-control fact",
+            # A fact the engine writes on the machine once its channel is attached.
+            waited_on=LONGHOUSE_ENGINE,
         )
         write_json(root / "receiver-live-control-receipt.json", receiver_control)
 
@@ -435,6 +439,7 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 else "claude_coordination_directed_input_failed"
             ),
             "error": error_detail,
+            **failure_fields(exc),
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "artifact_manifest": artifact_manifest(root),
         }

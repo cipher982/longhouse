@@ -60,6 +60,7 @@ from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
+from zerg.qa.wait_kind import failure_fields
 
 # The default Cursor model baked into cursor_helm_product_e2e.py itself.
 # Prefer the factory's configured CURSOR_MODEL (matching how
@@ -86,7 +87,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="cursor.turn_boundary.v1",
     producer_revision=2,
     scenario_id="cursor_turn_boundary_quiescent",
-    scenario_revision=1,
+    scenario_revision=2,
     # This assertion has no authored `variant:` in schemas/managed_providers.yml,
     # so its cell's variant is None -- not an empty string -- matching how
     # provider_capability_schema.py parses an absent `variant:` field and how
@@ -296,6 +297,7 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "direct_turn_boundary_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "redacted_secret_files": redacted_secret_files,
             "artifact_manifest": artifact_manifest(root),
         }

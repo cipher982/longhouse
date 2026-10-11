@@ -63,6 +63,13 @@ from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import LONGHOUSE_ENGINE
+from zerg.qa.wait_kind import LONGHOUSE_INGEST
+from zerg.qa.wait_kind import PROVIDER_PROCESS
+from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import RUNTIME_HOST
+from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 
@@ -96,7 +103,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=13,
+    scenario_revision=14,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -174,12 +181,16 @@ def _read_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def _wait(predicate, *, timeout: float, description: str, on_timeout=None):
+def _wait(predicate, *, timeout: float, description: str, on_timeout=None, waited_on=None):
     """Poll ``predicate`` until it is truthy.
 
     ``on_timeout`` builds the error from the standard message prefix, for a
     wait that can say what it last saw; without it the message ends in the
     last return value, which is always falsy.
+
+    ``waited_on`` is what the wait was waiting on (``zerg.qa.wait_kind``), or a
+    callable that decides it when the wait expires, from what the wait last
+    saw. A wait that cannot tell passes nothing and declares nothing.
     """
 
     deadline = time.monotonic() + timeout
@@ -190,9 +201,9 @@ def _wait(predicate, *, timeout: float, description: str, on_timeout=None):
             return last
         time.sleep(0.2)
     prefix = f"timed out waiting for {description}"
-    if on_timeout is not None:
-        raise on_timeout(prefix)
-    raise RuntimeError(f"{prefix}: {last}")
+    error = on_timeout(prefix) if on_timeout is not None else RuntimeError(f"{prefix}: {last}")
+    kind = waited_on() if callable(waited_on) else waited_on
+    raise expired(error, kind) if kind else error
 
 
 def _state_paths(home: Path) -> list[Path]:
@@ -621,7 +632,7 @@ def _wait_runtime_control_identity(url: str, token: str, session_id: str, state:
             return diagnostic
         return None
 
-    return _wait(observe, timeout=30, description=f"served Pi control identity {expected}")
+    return _wait(observe, timeout=30, description=f"served Pi control identity {expected}", waited_on=RUNTIME_HOST)
 
 
 def _wait_runtime_convergence(
@@ -726,6 +737,22 @@ def _wait_runtime_convergence(
             }
         return None
 
+    def stopped_on() -> str | None:
+        # The caller found the reply in Pi's own transcript before asking, so
+        # the provider's turn is not what is awaited. Without that entry this
+        # wait cannot say which side stopped.
+        if reply_event_id is None:
+            return None
+        seen = last_runtime_observation or {}
+        if "http_status" in seen:
+            return RUNTIME_HOST
+        answers = seen.get("answer_correspondence") if isinstance(seen.get("answer_correspondence"), dict) else {}
+        # Without Pi's transcript there is nothing to hold the page to.
+        if answers.get("native_transcript_readable") is False:
+            return None
+        # Pi's answers are served and the control state beside them is not yet held.
+        return RUNTIME_HOST if answers.get("converged") is True else LONGHOUSE_INGEST
+
     try:
         return _wait(
             observe,
@@ -733,6 +760,7 @@ def _wait_runtime_convergence(
             description=f"Runtime Host convergence for Pi marker {marker}",
             # A fault still on the page is why this never converged: say that.
             on_timeout=lambda prefix: refusal.at_deadline() or RuntimeError(f"{prefix}: {last_runtime_observation}"),
+            waited_on=stopped_on,
         )
     except _RuntimeHostHTTPError:
         raise
@@ -847,6 +875,8 @@ def _wait_native_marker(
         timeout=timeout,
         description=f"native Pi marker {marker}",
         on_timeout=lambda prefix: RuntimeError(f"{prefix}: {last or None}"),
+        # The assistant row that replies, in Pi's own transcript.
+        waited_on=PROVIDER_TURN,
     )
 
 
@@ -983,7 +1013,7 @@ def _wait_task_tool_boundary(session_file: Path, task_marker: str, *, timeout: f
         boundary = task_tool_boundary(read_session_entries(session_file), task_marker)
         return {"tool_result_id": boundary} if boundary else None
 
-    return _wait(observe, timeout=timeout, description=f"tool boundary in task {task_marker}")
+    return _wait(observe, timeout=timeout, description=f"tool boundary in task {task_marker}", waited_on=PROVIDER_TURN)
 
 
 def _wait_idle(home: Path, session_id: str, *, timeout: float = 120) -> dict[str, Any]:
@@ -1124,7 +1154,7 @@ def _wait_recorded_execution_owners_dead(
         ):
             return {"status": "pass", **last}
         time.sleep(0.2)
-    raise RuntimeError(f"timed out waiting for terminated Pi Helm execution owners: {last}")
+    raise expired(RuntimeError(f"timed out waiting for terminated Pi Helm execution owners: {last}"), LONGHOUSE_ENGINE)
 
 
 def _cleanup_receipt(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1442,6 +1472,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 timeout=45,
                 description="Pi native session file",
+                waited_on=PROVIDER_PROCESS,
             )
         native = _wait_native_marker(session_file, marker)
         observations["native_taxonomy"] = native["taxonomy"]
@@ -2563,6 +2594,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     if failure is not None:
         result["failure_code"] = "pi_helm_lifecycle_failed"
         result["error"] = f"{type(failure).__name__}: {failure}"
+        result.update(failure_fields(failure))
         # An errored run vouches for nothing, model compliance included.
         result["observation"].pop("model_noncompliance", None)
         result["diagnostic_observation"] = result.pop("observation")
@@ -2668,6 +2700,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": "fail",
             "failure_code": "pi_helm_lifecycle_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
         }
         if args.evidence_root:
             args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)

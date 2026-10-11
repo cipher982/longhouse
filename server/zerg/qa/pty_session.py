@@ -15,6 +15,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from zerg.qa.wait_kind import PROVIDER_PROCESS
+from zerg.qa.wait_kind import expired
+
 
 @dataclass
 class ProviderPtySession:
@@ -228,4 +231,4 @@ def wait_for_terminal_quiescence(
         elif size >= minimum_bytes and now - unchanged_since >= stable_seconds:
             return
         time.sleep(0.2)
-    raise RuntimeError("provider TUI did not reach terminal quiescence")
+    raise expired(RuntimeError("provider TUI did not reach terminal quiescence"), PROVIDER_PROCESS)

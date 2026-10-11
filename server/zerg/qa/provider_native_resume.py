@@ -32,6 +32,13 @@ from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.provider_resume_oracles import native_resume_assertions
 from zerg.qa.resume_assurance import ProducerRegistration
+from zerg.qa.wait_kind import LONGHOUSE_ENGINE
+from zerg.qa.wait_kind import LONGHOUSE_INGEST
+from zerg.qa.wait_kind import PROVIDER_PROCESS
+from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import RUNTIME_HOST
+from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import failure_fields
 
 _DEFAULT_RESUME_INTENT_TIMEOUT_SECS = 45.0
 _PROCESS_LOSS_RESUME_INTENT_TIMEOUT_SECS = 180.0
@@ -88,7 +95,7 @@ def registration_for(provider: str) -> ProducerRegistration:
         producer_id=spec.producer_id,
         producer_revision=6 if provider == "cursor" else 5 if provider == "opencode" else 4,
         scenario_id="helm_cold_resume",
-        scenario_revision=5 if provider in {"cursor", "opencode"} else 4,
+        scenario_revision=6 if provider in {"cursor", "opencode"} else 5,
         assertion_cells=(
             ("native_provider_resume_proven", "clean_exit"),
             ("native_provider_resume_proven", "process_loss"),
@@ -297,7 +304,7 @@ def _wait_claude_tui_ready(process: live_session_toolkit.PtyProcess, recording: 
             process.settle()
             return
         time.sleep(0.1)
-    raise RuntimeError("Claude TUI did not publish its input prompt")
+    raise expired(RuntimeError("Claude TUI did not publish its input prompt"), PROVIDER_PROCESS)
 
 
 def _claude_input_prompt_visible(terminal: str) -> bool:
@@ -346,7 +353,7 @@ def _wait_resume_intent(
             return intent
         last_reason = str(intent.get("reason") or "resume intent unavailable")
         time.sleep(0.5)
-    raise RuntimeError(f"provider-neutral Resume intent remained unavailable: {last_reason}")
+    raise expired(RuntimeError(f"provider-neutral Resume intent remained unavailable: {last_reason}"), RUNTIME_HOST)
 
 
 def _resume_intent_timeout(*, variant: str) -> float:
@@ -450,6 +457,80 @@ def _wait_assistant_marker(api_url: str, token: str, session_id: str, marker: st
     raise RuntimeError(f"provider transcript did not retain assistant marker {marker}")
 
 
+def _hosted_correlation_waited_on(
+    spec: live_session_toolkit.ProviderSpec,
+    state: Mapping[str, Any],
+    *,
+    marker: str,
+    home: Path | None,
+    environment: Mapping[str, str],
+) -> str | None:
+    """Which side stopped when the hosted transcript never correlated ``marker``.
+
+    That wait covers two things: the provider answers the prompt that carries
+    the marker, then Longhouse ships and serves the answer. The provider's own
+    record says which half is missing. For Cursor that is its hook stream, for
+    Claude its transcript, for OpenCode its message store. A prompt the
+    provider holds with no finished turn after it is the provider's turn; a
+    finished turn is Longhouse's ingest. A prompt the provider never took, or
+    a record that cannot be read, declares nothing: this is a best-effort look
+    after a failure and must never replace it.
+    """
+
+    try:
+        if spec.provider == "cursor":
+            from zerg.qa import cursor_helm_product_e2e
+
+            longhouse_home = str(environment.get("LONGHOUSE_HOME") or "").strip()
+            if not longhouse_home:
+                return None
+            hook_root = Path(longhouse_home) / "managed-local" / "cursor-helm"
+            return cursor_helm_product_e2e.hosted_reply_waited_on(
+                cursor_helm_product_e2e._hook_rows(hook_root, str(state["session_id"])), marker
+            )
+        if spec.provider == "claude":
+            from zerg.qa import claude_helm_lifecycle
+
+            if home is None or not state.get("provider_session_id"):
+                return None
+            rows = claude_helm_lifecycle._transcript_rows(str(state["provider_session_id"]), home)
+            bounds = claude_helm_lifecycle._turn_bounds(rows, marker)
+            if bounds is None:
+                return None
+            return LONGHOUSE_INGEST if bounds[1] is not None else PROVIDER_TURN
+        if spec.provider == "opencode":
+            from zerg.qa import opencode_helm_lifecycle
+
+            rows = opencode_helm_lifecycle._summarize(opencode_helm_lifecycle._messages(dict(state)))
+            prompt_id = opencode_helm_lifecycle._user_message_id(rows, marker)
+            if prompt_id is None:
+                return None
+            chain = opencode_helm_lifecycle._chain(rows, prompt_id)
+            if any(row["finish"] == "stop" for row in chain):
+                return LONGHOUSE_INGEST
+            # A turn that ended in an error of the provider's own is a result, not a stall.
+            return None if any(row["error"] for row in chain) else PROVIDER_TURN
+    except Exception:  # noqa: BLE001 - evidence about a failure, never a second failure
+        return None
+    return None
+
+
+def _uncorrelated(
+    message: str,
+    spec: live_session_toolkit.ProviderSpec,
+    state: Mapping[str, Any],
+    *,
+    marker: str,
+    home: Path | None,
+    environment: Mapping[str, str],
+) -> RuntimeError:
+    """The "did not correlate" failure, marked with the side that stopped when that is known."""
+
+    error = RuntimeError(message)
+    kind = _hosted_correlation_waited_on(spec, state, marker=marker, home=home, environment=environment)
+    return expired(error, kind) if kind else error
+
+
 def _post_resume_response_correlated(provider: str, correlation: dict[str, Any]) -> bool:
     """Require the Runtime Host transcript to prove the resumed provider turn."""
 
@@ -545,6 +626,7 @@ def _cursor_initial_send_then_flush(
         minimum_hook_event_bytes=minimum_hook_event_bytes,
         label="initial-seed",
         timeout=timeout,
+        typed_into_provider=True,
     )
     # Persist the provider-owned causal observation before waiting on the
     # separate idle/projection boundary. If settlement fails, the valid hook
@@ -656,6 +738,7 @@ def _wait_cursor_hook_sequence(
     minimum_hook_event_bytes: int,
     label: str,
     timeout: float = 45.0,
+    typed_into_provider: bool = False,
 ) -> dict[str, Any]:
     """Require one submitted Cursor turn to produce ordered native hook events.
 
@@ -665,6 +748,10 @@ def _wait_cursor_hook_sequence(
     ``afterAgentResponse`` for this session and retained conversation.  The
     prompt, response text, and generation identity are part of the predicate;
     an unrelated hook response must never authorize the transcript fallback.
+
+    ``typed_into_provider`` says the prompt was written to Cursor's own
+    terminal rather than sent through Longhouse. It decides what an expired
+    wait was waiting on when Cursor never took the prompt at all.
     """
 
     longhouse_home = str(environment.get("LONGHOUSE_HOME") or "").strip()
@@ -797,10 +884,22 @@ def _wait_cursor_hook_sequence(
                 "timed_out": False,
             }
         time.sleep(0.25)
-    raise RuntimeError(
+    error = RuntimeError(
         f"Cursor {label} did not publish an ordered beforeSubmitPrompt/afterAgentResponse hook sequence "
         f"(start_bytes={minimum_hook_event_bytes}, events={observed_events[-20:]!r})"
     )
+    if matching_befores and matching_afters:
+        # Cursor took the prompt and answered it; the engine's binding claim
+        # for the launch never reached `observed`.
+        raise expired(error, LONGHOUSE_ENGINE)
+    if matching_befores:
+        raise expired(error, PROVIDER_TURN)
+    if typed_into_provider:
+        # Typed into Cursor's own terminal and never submitted by it.
+        raise expired(error, PROVIDER_PROCESS)
+    # Sent through Longhouse and never seen by Cursor: this record cannot say
+    # which of the two dropped it.
+    raise error
 
 
 def _wait_cursor_bootstrap_hook_sequence(
@@ -821,6 +920,7 @@ def _wait_cursor_bootstrap_hook_sequence(
         minimum_hook_event_bytes=minimum_hook_event_bytes,
         label="bootstrap",
         timeout=timeout,
+        typed_into_provider=True,
     )
 
 
@@ -1310,7 +1410,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             and initial_response_correlation["new_assistant_events"] > 0
             and (spec.provider == "claude" or initial_response_correlation["marker_observed_in_assistant"])
         ):
-            raise RuntimeError(f"provider transcript did not correlate initial {provider} marker {seed_marker}")
+            raise _uncorrelated(
+                f"provider transcript did not correlate initial {provider} marker {seed_marker}",
+                spec,
+                initial_state,
+                marker=seed_marker,
+                home=home,
+                environment=environment,
+            )
         # The correlated assistant response is the completed-turn oracle for
         # the initial marker. Cursor's hook may publish its next idle phase
         # late (or omit that redundant transition while the TUI is redrawing),
@@ -1460,7 +1567,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             )
             live_session_toolkit.write_json(root / "resume-bootstrap-response-correlation.json", bootstrap_response_correlation)
             if not bootstrap_response_correlation["bootstrap_correlated"]:
-                raise RuntimeError(f"provider transcript did not correlate resumed Cursor bootstrap marker {bootstrap_marker}")
+                raise _uncorrelated(
+                    f"provider transcript did not correlate resumed Cursor bootstrap marker {bootstrap_marker}",
+                    spec,
+                    resumed_state,
+                    marker=bootstrap_marker,
+                    home=home,
+                    environment=environment,
+                )
             live_session_toolkit.write_json(root / "resume-bootstrap-transcript.jsonl", bootstrap_tail)
             # Cursor publishes its afterAgentResponse hook before the TUI has
             # necessarily finished redrawing the restored input surface. The
@@ -1550,7 +1664,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             )
             if not _post_resume_response_correlated(provider, response_correlation):
                 live_session_toolkit.write_json(root / "post-resume-response-correlation.json", response_correlation)
-                raise RuntimeError(f"provider transcript did not correlate post-resume {provider} marker {post_marker}")
+                raise _uncorrelated(
+                    f"provider transcript did not correlate post-resume {provider} marker {post_marker}",
+                    spec,
+                    resumed_state,
+                    marker=post_marker,
+                    home=home,
+                    environment=environment,
+                )
             if not hook_fallback:
                 shipper.capture_cursor_projection_diagnostics(
                     resumed_state,
@@ -1586,7 +1707,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         post_resume_response_correlated = _post_resume_response_correlated(provider, response_correlation)
         post_resume_provider_activity = response_correlation["new_assistant_events"] > 0
         if not post_resume_response_correlated:
-            raise RuntimeError(f"provider transcript did not correlate post-resume {provider} marker {post_marker}")
+            raise _uncorrelated(
+                f"provider transcript did not correlate post-resume {provider} marker {post_marker}",
+                spec,
+                resumed_state,
+                marker=post_marker,
+                home=home,
+                environment=environment,
+            )
         live_session_toolkit.write_json(root / "resumed-transcript.jsonl", resumed_tail)
         post_resume_marker_observed = response_correlation["marker_observed_in_assistant"]
         stale_generation_dispatched = live_session_toolkit._assistant_contains(resumed_tail, stale_marker)
@@ -1779,6 +1907,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             "status": "fail",
             "failure_code": failure_code,
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "redacted_secret_files": redacted,
             "artifact_manifest": artifact_manifest(root),
         }

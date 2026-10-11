@@ -104,6 +104,7 @@ from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
+from zerg.qa.wait_kind import failure_fields
 
 _ASSERTION_ID = "activity_returns_to_quiescent_at_turn_boundary"
 # The session must read idle, continuously, for this long to count as quiescent, and
@@ -117,7 +118,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="opencode.turn_boundary_quiescent.v1",
     producer_revision=4,
     scenario_id="opencode_turn_boundary_quiescent",
-    scenario_revision=2,
+    scenario_revision=3,
     # The schema declares no "variant" key for this assertion cell, so the
     # authored variant is None (zerg.qa.resume_assurance.execution_variant_key
     # only treats a non-empty *string* as an authored variant; cell.get(
@@ -541,6 +542,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "direct_turn_boundary_quiescent_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "serve_log": serve_log,
             "redacted_secret_files": redacted_secret_files,
             "artifact_manifest": artifact_manifest(root),

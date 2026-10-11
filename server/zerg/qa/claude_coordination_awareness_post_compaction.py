@@ -62,6 +62,8 @@ from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.pty_session import wait_for_terminal_quiescence
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import failure_fields
 
 _SCENARIO_ID = "claude_coordination_awareness_post_compaction"
 _ASSERTION_VISIBLE = "coordination_instructions_model_visible_after_compaction"
@@ -84,7 +86,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_awareness_post_compaction.v1",
     producer_revision=5,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=4,
+    scenario_revision=5,
     assertion_cells=(
         (_ASSERTION_VISIBLE, None),
         (_ASSERTION_NO_DUP_BOOTSTRAP, None),
@@ -220,6 +222,8 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
             ),
             timeout=args.compaction_timeout_secs,
             description="Claude transcript compaction boundary",
+            # Claude's own transcript after `/compact`, which is a model call.
+            waited_on=PROVIDER_TURN,
         )
         write_json(root / "compaction-boundary-receipt.json", compaction_boundary)
 
@@ -356,6 +360,7 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
                 else "claude_coordination_awareness_post_compaction_failed"
             ),
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "artifact_manifest": artifact_manifest(root),
         }

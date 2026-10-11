@@ -50,6 +50,12 @@ from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import LONGHOUSE_ENGINE
+from zerg.qa.wait_kind import LONGHOUSE_INGEST
+from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import RUNTIME_HOST
+from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 PROVIDERS = ("codex", "claude", "opencode", "cursor")
@@ -131,7 +137,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=7,
+    scenario_revision=8,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -405,7 +411,7 @@ def _wait_turn_terminal(
         if state not in {"starting", "active"}:
             raise RuntimeError(f"Console turn lost its execution owner before terminal: {result}")
         time.sleep(0.25)
-    raise RuntimeError(f"Runtime Host never observed Console turn terminal: {last_result}")
+    raise expired(RuntimeError(f"Runtime Host never observed Console turn terminal: {last_result}"), RUNTIME_HOST)
 
 
 def _claim_path(longhouse_home: Path, run_id: str) -> Path:
@@ -433,7 +439,29 @@ def _wait_claim(
         if last is not None and last.get("state") in states:
             return last
         time.sleep(0.1)
-    raise RuntimeError(f"Console claim did not reach {sorted(states)}: {last}")
+    error = RuntimeError(f"Console claim did not reach {sorted(states)}: {last}")
+    kind = _claim_wait_kind(last)
+    raise expired(error, kind) if kind else error
+
+
+def _claim_wait_kind(claim: Mapping[str, Any] | None) -> str | None:
+    """What a wait on an adapter claim was waiting on, from the claim it last read.
+
+    The claim is the engine's record of one Console turn: it appears when the
+    engine takes the run, reads ``spawned`` once the provider process is
+    running, and ``terminal`` or ``failed`` when that process is done. A turn
+    stuck at ``spawned`` with the provider still alive is the provider's own
+    turn; with the provider gone, the engine never recorded the exit. A claim
+    that has not reached ``spawned`` is the engine not yet running the
+    provider. No claim at all says nothing: the Runtime Host may never have
+    dispatched the run, or the engine never took it.
+    """
+
+    if not isinstance(claim, Mapping):
+        return None
+    if claim.get("state") != "spawned":
+        return LONGHOUSE_ENGINE
+    return LONGHOUSE_ENGINE if _pid_dead(claim.get("pid")) else PROVIDER_TURN
 
 
 def _archive_events(api_url: str, token: str, session_id: str) -> list[object]:
@@ -458,6 +486,7 @@ def _wait_exact_assistant_marker(
     alongside: tuple[str, ...] = (),
     timeout: float = 180,
     may_repeat: bool = False,
+    provider_answered: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Wait for the one served assistant event that answers with ``marker``.
 
@@ -465,6 +494,12 @@ def _wait_exact_assistant_marker(
     names the other markers the reply was asked to carry. An event that only
     mentions the marker (narration ahead of a tool call) is not a reply and is
     reported beside the count when the wait fails.
+
+    The provider's turn is over before this is called, so what it waits on is
+    Longhouse serving the reply. ``provider_answered`` reads the provider's own
+    output for the marker: when it is there and no served event ever answered,
+    the expired wait says it was waiting on ingest. When the provider never
+    wrote the marker there was nothing to serve, and nothing is declared.
     """
 
     deadline = time.monotonic() + timeout
@@ -498,7 +533,12 @@ def _wait_exact_assistant_marker(
         else:
             stable_since = None
         time.sleep(0.5)
-    raise RuntimeError(f"assistant marker did not converge exactly once (count={last_count}, events that only mention it={last_mentions})")
+    error = RuntimeError(
+        f"assistant marker did not converge exactly once (count={last_count}, events that only mention it={last_mentions})"
+    )
+    if last_count == 0 and provider_answered is not None and provider_answered():
+        raise expired(error, LONGHOUSE_INGEST)
+    raise error
 
 
 def _bounded_marker_excerpt(value: str, marker: str, radius: int = 160) -> str:
@@ -595,6 +635,13 @@ def _claim_output_evidence(provider: str, claim: Mapping[str, object], marker: s
             }
         )
     return max(candidates, key=lambda item: int(item["provider_response_marker_count"])) if candidates else None
+
+
+def _provider_output_names(provider: str, claim: Mapping[str, object], marker: str) -> bool:
+    """Whether the provider's own output for this turn names ``marker``."""
+
+    evidence = _claim_output_evidence(provider, claim, marker)
+    return evidence is not None and int(evidence["provider_response_marker_count"]) >= 1
 
 
 def _pi_tool_evidence(claim: Mapping[str, object], marker: str) -> dict[str, object] | None:
@@ -2115,7 +2162,13 @@ def _run_steer_step(
     flush_for_projection("console-steer-turn")
     try:
         answers = _wait_exact_assistant_marker(
-            api_url, token, session_id, steer_marker, timeout=120, may_repeat=provider in _STEER_ANSWER_MAY_REPEAT
+            api_url,
+            token,
+            session_id,
+            steer_marker,
+            timeout=120,
+            may_repeat=provider in _STEER_ANSWER_MAY_REPEAT,
+            provider_answered=lambda: _provider_output_names(provider, terminal, steer_marker),
         )
         receipt["steer_marker_answered"] = bool(answers)
         receipt["steer_answer_events"] = len(answers)
@@ -2518,7 +2571,15 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             raise RuntimeError("stock provider output source was unavailable")
         if not isinstance(marker_count, int) or isinstance(marker_count, bool) or marker_count < 1:
             raise RuntimeError("stock provider assistant output did not contain the qualification marker")
-        first_events = _wait_exact_assistant_marker(api_url, token, session_id, marker, alongside=reply_alongside)
+        first_events = _wait_exact_assistant_marker(
+            api_url,
+            token,
+            session_id,
+            marker,
+            alongside=reply_alongside,
+            # Checked just above: the provider's output holds the marker.
+            provider_answered=lambda: True,
+        )
         bound_assistant_event = {
             **first_events[0],
             "tool_name_present": bool(first_events[0].get("tool_name")),
@@ -2577,7 +2638,14 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(resume["run_id"]),
             )
             flush_for_projection("console-resume-turn")
-            resume_events = _wait_exact_assistant_marker(api_url, token, session_id, resume_marker, alongside=reply_alongside)
+            resume_events = _wait_exact_assistant_marker(
+                api_url,
+                token,
+                session_id,
+                resume_marker,
+                alongside=reply_alongside,
+                provider_answered=lambda: _provider_output_names(provider, resume_claim, resume_marker),
+            )
             resume_native_response: dict[str, object] | None = None
             if provider in {"pi", "omp"}:
                 raw_resume_source = resume_claim.get("source_path") or resume_claim.get("stdout_path")
@@ -2767,7 +2835,13 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(post["run_id"]),
             )
             flush_for_projection("console-post-interrupt-turn")
-            post_events = _wait_exact_assistant_marker(api_url, token, session_id, post_marker)
+            post_events = _wait_exact_assistant_marker(
+                api_url,
+                token,
+                session_id,
+                post_marker,
+                provider_answered=lambda: _provider_output_names(provider, post_claim, post_marker),
+            )
             post_completed = (post_claim.get("result") or {}).get("terminal_state") == "run_completed"
             interrupt_receipt = {
                 "status": "pass"
@@ -2870,7 +2944,14 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(interrupt_turn["run_id"]),
             )
             flush_for_projection("console-unsupported-interrupt-turn")
-            _wait_exact_assistant_marker(api_url, token, session_id, interrupt_marker, timeout=60)
+            _wait_exact_assistant_marker(
+                api_url,
+                token,
+                session_id,
+                interrupt_marker,
+                timeout=60,
+                provider_answered=lambda: _provider_output_names(provider, terminal, interrupt_marker),
+            )
             post_marker = f"LH_{provider.upper()}_AFTER_UNSUPPORTED_{uuid4().hex}"
             post_message = f"Reply with exactly {post_marker} and nothing else."
             post_request_id = f"console-after-unsupported-{uuid4()}"
@@ -2896,7 +2977,13 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(post["run_id"]),
             )
             flush_for_projection("console-after-unsupported-post-turn")
-            _wait_exact_assistant_marker(api_url, token, session_id, post_marker)
+            _wait_exact_assistant_marker(
+                api_url,
+                token,
+                session_id,
+                post_marker,
+                provider_answered=lambda: _provider_output_names(provider, post_claim, post_marker),
+            )
             normal_completed = (terminal.get("result") or {}).get("terminal_state") == "run_completed" and (
                 post_claim.get("result") or {}
             ).get("terminal_state") == "run_completed"
@@ -3206,6 +3293,7 @@ def _execute(args: argparse.Namespace, root: Path, steer: bool) -> dict[str, Any
             "status": "fail",
             "failure_code": "provider_console_lifecycle_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "artifact_manifest": artifact_manifest(root),
         }
 

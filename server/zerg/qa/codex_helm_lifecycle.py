@@ -51,6 +51,7 @@ from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import failure_fields
 
 SCENARIO_ID = "codex_helm_lifecycle"
 SEND_IDLE = "codex_helm_send_idle"
@@ -563,6 +564,7 @@ def run_codex_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     if failure is not None:
         result["failure_code"] = "codex_helm_lifecycle_failed"
         result["error"] = f"{type(failure).__name__}: {failure}"
+        result.update(failure_fields(failure))
         if not negative:
             # Verdicts only for the phases this run reached: a reached failing
             # phase is a finding; if every reached phase held, a typed harness

@@ -49,6 +49,7 @@ from zerg.qa.provider_console_lifecycle import _terminate_live_qualification_ses
 from zerg.qa.provider_console_lifecycle import turn_identity_mismatches
 from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
+from zerg.qa.wait_kind import failure_fields
 
 SCENARIO_ID = "console_served_state"
 ASSERTION_LIVE = "live_frames_reach_the_viewer_during_the_turn"
@@ -150,6 +151,7 @@ def _failure_result(
         "failure_code": "console_served_state_failed",
         "failure_context": {"vehicle_device_id": device_id, "session_id": session_id},
         "error": f"{type(failure).__name__}: {failure}",
+        **failure_fields(failure),
     }
     # Keep a failing verdict the run reached; otherwise (infrastructure failed
     # first, or only cleanup failed after every assertion held) no failing

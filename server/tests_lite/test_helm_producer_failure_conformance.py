@@ -860,3 +860,55 @@ def test_a_scenario_producers_failed_result_is_scenario_scoped(monkeypatch, tmp_
     assert payload["observation_scope"] == "scenario"
     assert payload["status"] == "fail"
     assert_result_conforms(producer, payload, variant=variant)
+
+
+@pytest.mark.parametrize("module", ["omp_background_producer", "claude_background_producer"])
+def test_a_producer_stopped_by_an_expired_wait_says_what_it_waited_on(monkeypatch, tmp_path, module) -> None:
+    """The failure artifact carries the wait's kind beside the code and the error, wrapped or not."""
+
+    import importlib
+
+    from zerg.qa.wait_kind import PROVIDER_TURN
+    from zerg.qa.wait_kind import expired
+
+    producer = importlib.import_module(f"zerg.qa.{module}")
+
+    def stalled(*_a, **_k):
+        try:
+            raise expired(RuntimeError("timed out waiting for the reply"), PROVIDER_TURN)
+        except RuntimeError as exc:
+            # A producer that adds what it last saw re-raises from the wait.
+            raise RuntimeError(f"{exc}; last_observation={{}}") from exc
+
+    if module == "omp_background_producer":
+        monkeypatch.setattr(producer, "run_omp_background", stalled)
+    else:
+        monkeypatch.setattr(producer, "require_disposable_runtime", lambda _url: None)
+        monkeypatch.setattr(producer, "_run_direct", stalled)
+    binary = _binary(tmp_path, "provider")
+    engine = _binary(tmp_path, "longhouse-engine")
+    variant = producer._VARIANTS[0]
+    argv = [
+        "--variant",
+        variant,
+        "--evidence-root",
+        str(tmp_path / "evidence"),
+        "--repo-root",
+        str(tmp_path),
+        "--engine",
+        str(engine),
+        "--provider-bin",
+        str(binary),
+        "--api-url",
+        "http://127.0.0.1:1",
+        "--agents-token",
+        "token",
+    ]
+    if module == "omp_background_producer":
+        argv += ["--longhouse-cli", str(engine), "--provider-version", "omp/1.2.3", "--model", "m"]
+    assert producer.main(argv) == 1
+    payload = _json(tmp_path / "evidence" / "result.json")
+    assert payload["status"] == "fail"
+    assert payload["waited_on"] == "provider_turn"
+    assert payload["error"].startswith("RuntimeError: timed out waiting for the reply")
+    assert_result_conforms(producer, payload, variant=variant)

@@ -48,6 +48,7 @@ from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import failure_fields
 
 _SCENARIO_ID = "claude_turn_boundary_quiescent"
 _ASSERTION_ID = "activity_returns_to_quiescent_at_turn_boundary"
@@ -69,7 +70,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.turn_boundary_quiescent.v1",
     producer_revision=4,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=((_ASSERTION_ID, None),),
     providers=("claude",),
     platforms=("linux",),
@@ -274,6 +275,7 @@ def run_turn_boundary_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "claude_turn_boundary_scenario_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "artifact_manifest": artifact_manifest(root),
         }

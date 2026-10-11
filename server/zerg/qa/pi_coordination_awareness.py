@@ -48,6 +48,8 @@ from zerg.qa.provider_release_identity import now
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import PROVIDER_PROCESS
+from zerg.qa.wait_kind import failure_fields
 
 SCENARIO_ID = "pi_coordination_awareness_create"
 ASSERTION_ID = "coordination_instructions_model_visible"
@@ -58,7 +60,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.coordination_awareness_create.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=2,
+    scenario_revision=3,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -136,6 +138,7 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
     owner_records: list[dict[str, Any]] = []
     invocation: dict[str, Any] | None = None
     failure: str | None = None
+    failure_wait: dict[str, str] = {}
     try:
         shipper = start_transcript_shipper(
             "pi", args, home=provider_home, environment=env, evidence_root=root / "shipper", longhouse_home=home
@@ -175,11 +178,13 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 timeout=45,
                 description="Pi native session file",
+                waited_on=PROVIDER_PROCESS,
             )
         _wait_native_marker(session_file, marker, timeout=float(args.response_timeout_secs))
         invocation = peers_invocation_evidence(read_session_entries(session_file))
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         failure = f"{type(exc).__name__}: {exc}"
+        failure_wait = failure_fields(exc)
     finally:
         session_id = str(state.get("session_id") or "")
         if session_id:
@@ -248,7 +253,7 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
         "status": "pass" if failure is None and assertions[ASSERTION_ID] else "fail",
         "observation": observation,
         "assertions": assertions,
-        **({"failure_code": "pi_coordination_awareness_failed", "error": failure} if failure else {}),
+        **({"failure_code": "pi_coordination_awareness_failed", "error": failure, **failure_wait} if failure else {}),
         "artifact_manifest": artifact_manifest(root),
     }
     if failure:
@@ -307,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": "fail",
             "failure_code": "pi_coordination_awareness_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
         }
         # A precondition failure ran no session, so it reached no verdict.
         settle_failed_result(result, observation=None, assertions={})

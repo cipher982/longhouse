@@ -35,7 +35,7 @@ def test_registration_matches_the_schema_declared_cell_exactly() -> None:
     assert m.REGISTRATION.executable is True
     assert m.REGISTRATION.executable_module == "zerg.qa.opencode_turn_boundary_quiescent"
     assert m.REGISTRATION.producer_revision == 4
-    assert m.REGISTRATION.scenario_revision == 2
+    assert m.REGISTRATION.scenario_revision == 3
     assert "opencode_model_profile_receipt" in m.REGISTRATION.required_artifacts
     # The schema-declared oracle_source is intentionally reproduced verbatim
     # even though (per the module docstring) it does not contain this

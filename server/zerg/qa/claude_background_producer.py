@@ -35,6 +35,8 @@ from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import failure_fields
 
 SCENARIO_ID = "claude_background_jobs"
 PROFILE = "claude_background_v1"
@@ -54,7 +56,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.background_jobs.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=2,
+    scenario_revision=3,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     platforms=("linux",),
@@ -366,6 +368,7 @@ def _capture_background(
             lambda: (bounds := helm._turn_bounds(rows(), parent_marker)) is not None and bounds[1] is not None,
             timeout=args.response_timeout_secs,
             description="Claude background parent turn completing",
+            waited_on=PROVIDER_TURN,
         )
         bounds = helm._turn_bounds(rows(), parent_marker)
         if bounds is None or bounds[1] is None:
@@ -385,6 +388,8 @@ def _capture_background(
             lambda: source_snapshot()[1].get("active_registry_observed") is True or None,
             timeout=args.response_timeout_secs,
             description="Claude native background registry capture",
+            # Claude's own hook payloads, captured as Claude emits them.
+            waited_on=PROVIDER_TURN,
         )
         source_records, source = source_snapshot()
         observation["source"] = source
@@ -414,6 +419,7 @@ def _capture_background(
             lambda: source_snapshot()[1].get("explicit_empty_observed") is True or None,
             timeout=args.response_timeout_secs,
             description="Claude native background empty registry capture",
+            waited_on=PROVIDER_TURN,
         )
         source_records, source = source_snapshot()
         observation["source"] = {**observation["source"], **source}
@@ -479,6 +485,7 @@ def _capture_background(
         source_records, source = source_snapshot()
         observation["source"] = {**observation.get("source", {}), **source}
         observation["error"] = f"{type(exc).__name__}: {exc}"
+        observation.update(failure_fields(exc))
         observation["status"] = "fail"
         observation["failure_code"] = "claude_background_scenario_incomplete"
     helm.write_json(root / "claude-background-receipt.json", observation)
@@ -701,6 +708,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": "fail",
             "failure_code": "claude_background_setup_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
         }
         if args.negative_control:
             result["negative_control"] = {"fault": args.negative_control, "status": "inconclusive"}

@@ -43,6 +43,9 @@ from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
+from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD
+from zerg.qa.wait_kind import WAIT_KINDS
+from zerg.qa.wait_kind import failure_fields
 
 _DEFAULT_CURSOR_MODEL = "gpt-5.3-codex-low"
 NEGATIVE_CONTROLS = ("cursor_steer_queue_only", "cursor_abort_noop")
@@ -67,7 +70,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="cursor.helm_lifecycle.v1",
     producer_revision=1,
     scenario_id="cursor_helm_lifecycle",
-    scenario_revision=4,
+    scenario_revision=5,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("cursor",),
     platforms=("linux", "darwin"),
@@ -119,7 +122,7 @@ def failed_run_report(artifact_root: Path, exc: BaseException) -> dict[str, Any]
     verdict. Each assertion is still judged only by its own oracle.
     """
 
-    failure = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+    failure = {"status": "failed", "error": f"{type(exc).__name__}: {exc}", **failure_fields(exc)}
     try:
         persisted = json.loads((artifact_root / "product-e2e.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -328,6 +331,9 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             result.update({"status": "pass" if all(assertions.values()) else "fail", "assertions": assertions})
             if result["status"] == "fail":
                 result["failure_code"] = "cursor_helm_lifecycle_failed"
+                # What the run was waiting on when it stopped, if it stopped on a wait.
+                if report.get(WAITED_ON_FIELD) in WAIT_KINDS:
+                    result[WAITED_ON_FIELD] = report[WAITED_ON_FIELD]
         result["artifact_manifest"] = artifact_manifest(root)
         write_json(root / "result.json", result)
         return result
@@ -346,6 +352,7 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             "status": "inconclusive" if args.negative_control else "fail",
             "failure_code": "cursor_helm_lifecycle_harness_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "redacted_secret_files": secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token))),
             "artifact_manifest": artifact_manifest(root),
         }

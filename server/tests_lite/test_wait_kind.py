@@ -1,9 +1,28 @@
-"""A wait that expires says what it was waiting on."""
+"""A wait that expires says what it was waiting on.
+
+For each producer family the same pair of fakes: one in which the provider's
+turn stalls, one in which the provider answers and Longhouse never serves the
+answer. The two must declare different kinds, read from what the provider
+itself recorded, never from the wording of the timeout.
+"""
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+
 import pytest
 
+from zerg.qa import claude_helm_lifecycle
+from zerg.qa import claude_live_session_support
+from zerg.qa import codex_native_resume
+from zerg.qa import codex_provider_release_canary
+from zerg.qa import cursor_coordination_producer
+from zerg.qa import cursor_helm_product_e2e
+from zerg.qa import opencode_helm_lifecycle
+from zerg.qa import provider_console_lifecycle
+from zerg.qa import provider_native_resume
 from zerg.qa import wait_kind
 from zerg.qa.wait_kind import LONGHOUSE_ENGINE
 from zerg.qa.wait_kind import LONGHOUSE_INGEST
@@ -13,6 +32,9 @@ from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
 from zerg.qa.wait_kind import failure_fields
 from zerg.qa.wait_kind import waited_on
+
+MARKER = "LH_FIXTURE_REPLY_abc"
+
 
 # --- the declaration itself ---------------------------------------------------
 
@@ -60,3 +82,364 @@ def test_the_kind_follows_an_explicit_cause_and_never_an_incidental_context() ->
     except RuntimeError as unrelated:
         assert unrelated.__context__ is stall
         assert waited_on(unrelated) is None
+
+
+# --- OpenCode: the provider's own message store -------------------------------
+
+
+def _opencode_rows(*rows: dict[str, object]) -> list[dict[str, object]]:
+    return [{"tool_commands": [], "finish": None, "error": None, "parent_id": None, "text": "", **row} for row in rows]
+
+
+def test_opencode_waits_on_the_providers_turn_once_the_provider_holds_the_prompt(monkeypatch) -> None:
+    prompt = f"Reply with exactly {MARKER} and nothing else."
+    held = _opencode_rows({"id": "u1", "role": "user", "text": prompt}, {"id": "a1", "role": "assistant", "parent_id": "u1"})
+    monkeypatch.setattr(opencode_helm_lifecycle, "_messages", lambda _state: [])
+    monkeypatch.setattr(opencode_helm_lifecycle, "_session_busy", lambda _state: True)
+
+    # OpenCode took the prompt and its turn never finished.
+    monkeypatch.setattr(opencode_helm_lifecycle, "_summarize", lambda _messages: held)
+    with pytest.raises(TimeoutError, match="timed out waiting for assistant answer") as stalled:
+        opencode_helm_lifecycle._wait_marker_answer({}, prompt, MARKER, timeout=0.6)
+    assert waited_on(stalled.value) == PROVIDER_TURN
+    with pytest.raises(TimeoutError, match="first tool call while the turn is busy") as no_tool:
+        opencode_helm_lifecycle._wait_first_tool_completed({}, prompt, timeout=0.6)
+    assert waited_on(no_tool.value) == PROVIDER_TURN
+
+    # The prompt never reached OpenCode: Longhouse or OpenCode dropped it, and
+    # the message store cannot say which.
+    monkeypatch.setattr(opencode_helm_lifecycle, "_summarize", lambda _messages: _opencode_rows())
+    with pytest.raises(TimeoutError) as undelivered:
+        opencode_helm_lifecycle._wait_marker_answer({}, prompt, MARKER, timeout=0.6)
+    assert waited_on(undelivered.value) is None
+
+    # The turn ended without what was asked, or in the provider's own error: a result, not a stall.
+    monkeypatch.setattr(opencode_helm_lifecycle, "_session_busy", lambda _state: False)
+    for ending in ({"finish": "stop", "text": "I would rather not."}, {"error": "ProviderAuthError"}):
+        ended = _opencode_rows({"id": "u1", "role": "user", "text": prompt}, {"id": "a1", "role": "assistant", "parent_id": "u1", **ending})
+        monkeypatch.setattr(opencode_helm_lifecycle, "_summarize", lambda _messages, ended=ended: ended)
+        with pytest.raises(TimeoutError) as over:
+            opencode_helm_lifecycle._wait_marker_answer({}, prompt, MARKER, timeout=0.6)
+        assert waited_on(over.value) is None
+        with pytest.raises(TimeoutError) as no_tool_turn:
+            opencode_helm_lifecycle._wait_first_tool_completed({}, prompt, timeout=0.6)
+        assert waited_on(no_tool_turn.value) is None
+
+
+# --- Claude: its own transcript ------------------------------------------------
+
+
+def _claude_user(text: str) -> dict[str, object]:
+    return {"type": "user", "message": {"role": "user", "content": text}}
+
+
+def _claude_assistant(text: str) -> dict[str, object]:
+    return {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
+
+
+_CLAUDE_TURN_END = {"type": "system", "subtype": "turn_duration"}
+
+
+def test_a_claude_send_never_archived_says_which_side_stopped() -> None:
+    prompt = f"Reply with exactly {MARKER}"
+
+    # Claude took the prompt and its turn is still open at the deadline.
+    stalled = [_claude_user(prompt)]
+    assert claude_helm_lifecycle.unanswered_send_waited_on(stalled, marker=MARKER, prompt=prompt, outcome="pending") == PROVIDER_TURN
+
+    # Claude answered in its own transcript; the hosted archive never showed it.
+    answered = [_claude_user(prompt), _claude_assistant(MARKER), _CLAUDE_TURN_END]
+    assert claude_helm_lifecycle.unanswered_send_waited_on(answered, marker=MARKER, prompt=prompt, outcome="declined") == LONGHOUSE_INGEST
+
+    # A turn that ended without the marker is a decline, not a wait.
+    declined = [_claude_user(prompt), _claude_assistant("I will not repeat that token."), _CLAUDE_TURN_END]
+    assert claude_helm_lifecycle.unanswered_send_waited_on(declined, marker=MARKER, prompt=prompt, outcome="declined") is None
+
+    # The prompt never reached Claude's transcript: not attributable from here.
+    assert claude_helm_lifecycle.unanswered_send_waited_on([], marker=MARKER, prompt=prompt, outcome="pending") is None
+
+
+def test_the_claude_wait_helper_declares_what_its_caller_says_and_nothing_otherwise(monkeypatch) -> None:
+    with pytest.raises(claude_live_session_support.ScenarioError, match="timed out waiting for the end of the turn") as stalled:
+        claude_live_session_support.wait_until(lambda: None, timeout=0.2, description="the end of the turn", waited_on=PROVIDER_TURN)
+    assert waited_on(stalled.value) == PROVIDER_TURN
+
+    with pytest.raises(claude_live_session_support.ScenarioError) as decided_late:
+        claude_live_session_support.wait_until(lambda: None, timeout=0.2, description="a reply", waited_on=lambda: LONGHOUSE_INGEST)
+    assert waited_on(decided_late.value) == LONGHOUSE_INGEST
+
+    with pytest.raises(claude_live_session_support.ScenarioError) as undeclared:
+        claude_live_session_support.wait_until(lambda: None, timeout=0.2, description="channel readiness")
+    assert waited_on(undeclared.value) is None
+
+    # The marker in Claude's own transcript, after a turn the caller typed itself.
+    monkeypatch.setattr(claude_live_session_support, "assistant_transcript_contains", lambda *_a, **_k: (False, None, None, None))
+    with pytest.raises(claude_live_session_support.ScenarioError) as no_marker:
+        claude_live_session_support.await_assistant_marker(session_id="s", marker=MARKER, timeout=0.2)
+    assert waited_on(no_marker.value) == PROVIDER_TURN
+
+
+# --- Cursor: its own hooks ------------------------------------------------------
+
+
+def _write_cursor_hooks(root: Path, session_id: str, *events: tuple[str, dict[str, object]]) -> None:
+    path = root / "hook-events" / f"{session_id}.ndjson"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps({"event": name, "payload": payload}) + "\n" for name, payload in events), encoding="utf-8")
+
+
+def test_a_cursor_reply_missing_from_the_archive_says_which_side_stopped(monkeypatch, tmp_path) -> None:
+    prompt = ("beforeSubmitPrompt", {"prompt": f"Reply with exactly {MARKER}", "generation_id": "g1"})
+    response = ("afterAgentResponse", {"text": MARKER, "generation_id": "g1"})
+    monkeypatch.setattr(cursor_coordination_producer, "_hosted_events", lambda *_a: {"events": []})
+
+    def reply_wait(hook_root: Path | None) -> BaseException:
+        with pytest.raises(RuntimeError, match="timed out waiting for Cursor session s1 reply containing marker") as raised:
+            cursor_coordination_producer._wait_marker_reply(
+                "https://runtime.invalid", "token", "s1", MARKER, timeout=0.4, hook_root=hook_root
+            )
+        return raised.value
+
+    # Cursor took the prompt and never answered.
+    _write_cursor_hooks(tmp_path, "s1", prompt)
+    assert waited_on(reply_wait(tmp_path)) == PROVIDER_TURN
+    # Cursor answered; Longhouse never served the answer.
+    _write_cursor_hooks(tmp_path, "s1", prompt, response)
+    assert waited_on(reply_wait(tmp_path)) == LONGHOUSE_INGEST
+    # Cursor took the prompt and its turn stopped without a reply (its usage
+    # limit, in the retained runs): the provider's own failure, not a stall.
+    _write_cursor_hooks(tmp_path, "s1", prompt, ("stop", {"status": "error", "generation_id": "g1"}))
+    assert waited_on(reply_wait(tmp_path)) is None
+    # A stop that belongs to an earlier generation leaves this turn open.
+    _write_cursor_hooks(tmp_path, "s1", ("stop", {"status": "completed", "generation_id": "g0"}), prompt)
+    assert waited_on(reply_wait(tmp_path)) == PROVIDER_TURN
+    _write_cursor_hooks(tmp_path, "s1", prompt, ("stop", {"status": "completed", "generation_id": "g0"}))
+    assert waited_on(reply_wait(tmp_path)) == PROVIDER_TURN
+    # Cursor never took the prompt, or its hooks are not at hand: nothing to declare.
+    _write_cursor_hooks(tmp_path, "s1")
+    assert waited_on(reply_wait(tmp_path)) is None
+    assert waited_on(reply_wait(None)) is None
+
+    rows = cursor_helm_product_e2e._hook_rows(tmp_path, "s1")
+    assert cursor_helm_product_e2e.hosted_reply_waited_on(rows, MARKER) is None
+    assert cursor_helm_product_e2e.hosted_reply_waited_on([{"event": "afterAgentResponse", "text": "another reply"}], MARKER) is None
+
+
+def _cursor_resume_fixture(tmp_path: Path, *events: tuple[str, dict[str, object]], claim_status: str = "observed") -> tuple[dict, dict]:
+    state = {"session_id": "s1", "provider_session_id": "conversation-1", "run_id": "run-1"}
+    root = tmp_path / "managed-local" / "cursor-helm"
+    (root / "binding-probes").mkdir(parents=True, exist_ok=True)
+    (root / "binding-probes" / "s1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": claim_status,
+                "session_id": "s1",
+                "conversation_uuid": "conversation-1",
+                "run_id": "run-1",
+                "launch_id": "launch-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "hook-events").mkdir(exist_ok=True)
+    (root / "hook-events" / "s1.ndjson").write_text(
+        "".join(
+            json.dumps(
+                {
+                    "session_id": "s1",
+                    "conversation_id": "conversation-1",
+                    "launch_id": "launch-1",
+                    "event": name,
+                    "payload": {"session_id": "conversation-1", "conversation_id": "conversation-1", "generation_id": "g1", **payload},
+                }
+            )
+            + "\n"
+            for name, payload in events
+        ),
+        encoding="utf-8",
+    )
+    return state, {"LONGHOUSE_HOME": str(tmp_path)}
+
+
+def test_the_cursor_hook_sequence_wait_reads_the_hooks_to_say_what_it_waited_on(tmp_path) -> None:
+    prompt = f"Reply with exactly {MARKER}"
+
+    def sequence(*events: tuple[str, dict[str, object]], typed: bool, claim_status: str = "observed") -> BaseException:
+        state, environment = _cursor_resume_fixture(tmp_path, *events, claim_status=claim_status)
+        with pytest.raises(RuntimeError, match="did not publish an ordered beforeSubmitPrompt/afterAgentResponse hook sequence") as raised:
+            provider_native_resume._wait_cursor_hook_sequence(
+                state,
+                environment,
+                marker=MARKER,
+                expected_prompt=prompt,
+                minimum_hook_event_bytes=0,
+                label="fixture",
+                timeout=0.6,
+                typed_into_provider=typed,
+            )
+        return raised.value
+
+    before = ("beforeSubmitPrompt", {"prompt": prompt})
+    after = ("afterAgentResponse", {"text": MARKER})
+    # Cursor took the prompt and never responded.
+    assert waited_on(sequence(before, typed=False)) == PROVIDER_TURN
+    # Typed into Cursor's terminal and never submitted by it.
+    assert waited_on(sequence(typed=True)) == PROVIDER_PROCESS
+    # Sent through Longhouse and never seen by Cursor: either side may have dropped it.
+    assert waited_on(sequence(typed=False)) is None
+    # Cursor did all of its part; the engine's binding claim never reached `observed`.
+    assert waited_on(sequence(before, after, typed=False, claim_status="pending")) == LONGHOUSE_ENGINE
+
+
+# --- Codex: the bridge's turn state beside Codex's own rollout -------------------
+
+
+def test_a_codex_turn_wait_reads_the_bridge_and_the_rollout() -> None:
+    kind = codex_provider_release_canary.expired_turn_wait
+    open_turn = {"last_turn_status": "inProgress", "active_turn_id": "turn-1"}
+
+    # The turn is still open and Codex's rollout has no reply: Codex's turn.
+    assert kind(open_turn, provider_answered=False) == {"waited_on": PROVIDER_TURN}
+    # Codex wrote the reply and the bridge never recorded the turn's end.
+    assert kind(open_turn, provider_answered=True) == {"waited_on": LONGHOUSE_ENGINE}
+    # A turn that ended, in any status, is not an expired wait.
+    assert kind({"last_turn_status": "failed", "active_turn_id": None}, provider_answered=False) == {}
+    assert kind({"last_turn_status": "completed", "active_turn_id": None}, provider_answered=False) == {}
+    # A turn the bridge never opened declares nothing.
+    assert kind({}, provider_answered=False) == {}
+
+
+def test_the_codex_marker_wait_declares_an_open_turn_and_not_a_failed_one(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "state.json"
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text("", encoding="utf-8")
+    monkeypatch.setattr(codex_provider_release_canary, "_assistant_transcript_contains", lambda _path, _marker: False)
+
+    state_file.write_text(json.dumps({"last_turn_status": "inProgress", "active_turn_id": "t1", "thread_path": str(rollout)}))
+    with pytest.raises(RuntimeError, match="Codex turn did not retain the expected assistant marker") as stalled:
+        codex_native_resume._wait_for_marker(state_file, MARKER, timeout=1)
+    assert waited_on(stalled.value) == PROVIDER_TURN
+
+    state_file.write_text(json.dumps({"last_turn_status": "failed", "active_turn_id": None, "thread_path": str(rollout)}))
+    with pytest.raises(RuntimeError, match="Codex turn did not retain the expected assistant marker") as failed:
+        codex_native_resume._wait_for_marker(state_file, MARKER, timeout=1)
+    assert waited_on(failed.value) is None
+
+
+# --- Console: the adapter's claim, then the served reply --------------------------
+
+
+def test_a_console_claim_wait_reads_the_claim_to_say_what_it_waited_on(tmp_path) -> None:
+    path = tmp_path / "claim.json"
+    terminal = frozenset({"terminal", "failed"})
+
+    def claim_wait() -> BaseException:
+        with pytest.raises(RuntimeError, match=r"Console claim did not reach \['failed', 'terminal'\]") as raised:
+            provider_console_lifecycle._wait_claim(path, states=terminal, timeout=0.3)
+        return raised.value
+
+    # No claim: the run was never dispatched or never taken. Not attributable.
+    assert waited_on(claim_wait()) is None
+    # The engine holds the run and has not started the provider.
+    path.write_text(json.dumps({"state": "acquired"}))
+    assert waited_on(claim_wait()) == LONGHOUSE_ENGINE
+    # The provider process is running and has not finished its turn.
+    path.write_text(json.dumps({"state": "spawned", "pid": os.getpid()}))
+    assert waited_on(claim_wait()) == PROVIDER_TURN
+    # The provider process is gone and the engine never recorded the exit.
+    child = os.fork()
+    if child == 0:
+        os._exit(0)
+    os.waitpid(child, 0)
+    path.write_text(json.dumps({"state": "spawned", "pid": child}))
+    assert waited_on(claim_wait()) == LONGHOUSE_ENGINE
+
+
+def test_a_console_reply_never_served_is_ingest_only_when_the_provider_wrote_it(monkeypatch) -> None:
+    monkeypatch.setattr(provider_console_lifecycle, "_request", lambda *_args: {"events": []})
+
+    def served_wait(provider_answered) -> BaseException:
+        with pytest.raises(RuntimeError, match=r"assistant marker did not converge exactly once \(count=0") as raised:
+            provider_console_lifecycle._wait_exact_assistant_marker(
+                "https://runtime.invalid", "token", "session-1", MARKER, timeout=0.6, provider_answered=provider_answered
+            )
+        return raised.value
+
+    # The provider's output holds the marker; Longhouse never served it.
+    assert waited_on(served_wait(lambda: True)) == LONGHOUSE_INGEST
+    # The provider's turn ended without the marker: there was nothing to serve.
+    assert waited_on(served_wait(lambda: False)) is None
+    assert waited_on(served_wait(None)) is None
+
+
+def test_the_console_turn_terminal_wait_is_on_the_runtime_host(monkeypatch) -> None:
+    monkeypatch.setattr(provider_console_lifecycle, "_request", lambda *_args: {"turn_id": "turn-1", "run_id": "run-1", "state": "active"})
+    with pytest.raises(RuntimeError, match="Runtime Host never observed Console turn terminal") as raised:
+        provider_console_lifecycle._wait_turn_terminal(
+            api_url="https://runtime.invalid",
+            token="token",
+            session_id="session-1",
+            message="m",
+            request_id="r",
+            turn_id="turn-1",
+            run_id="run-1",
+            timeout=0.4,
+        )
+    assert waited_on(raised.value) == RUNTIME_HOST
+
+
+# --- direct native Resume: the hosted transcript against the provider's own record -
+
+
+def test_an_uncorrelated_hosted_transcript_says_which_side_stopped_for_each_provider(monkeypatch, tmp_path) -> None:
+    prompt = f"Reply exactly {MARKER} and nothing else."
+
+    def kind(provider: str, state: dict[str, object], environment: dict[str, str] | None = None) -> str | None:
+        return provider_native_resume._hosted_correlation_waited_on(
+            provider_native_resume.SPECS[provider], state, marker=MARKER, home=tmp_path, environment=environment or {}
+        )
+
+    # Claude: its transcript holds the prompt; the turn is open, then finished.
+    claude_state = {"session_id": "s1", "provider_session_id": "native-1"}
+    monkeypatch.setattr(claude_helm_lifecycle, "_transcript_rows", lambda *_a: [_claude_user(prompt)])
+    assert kind("claude", claude_state) == PROVIDER_TURN
+    monkeypatch.setattr(
+        claude_helm_lifecycle, "_transcript_rows", lambda *_a: [_claude_user(prompt), _claude_assistant("ok"), _CLAUDE_TURN_END]
+    )
+    assert kind("claude", claude_state) == LONGHOUSE_INGEST
+    monkeypatch.setattr(claude_helm_lifecycle, "_transcript_rows", lambda *_a: [])
+    assert kind("claude", claude_state) is None
+
+    # OpenCode: its message store.
+    monkeypatch.setattr(opencode_helm_lifecycle, "_messages", lambda _state: [])
+    open_turn = _opencode_rows({"id": "u1", "role": "user", "text": prompt}, {"id": "a1", "role": "assistant", "parent_id": "u1"})
+    monkeypatch.setattr(opencode_helm_lifecycle, "_summarize", lambda _messages: open_turn)
+    assert kind("opencode", {"provider_session_id": "p1"}) == PROVIDER_TURN
+    finished = _opencode_rows(
+        {"id": "u1", "role": "user", "text": prompt}, {"id": "a1", "role": "assistant", "parent_id": "u1", "finish": "stop"}
+    )
+    monkeypatch.setattr(opencode_helm_lifecycle, "_summarize", lambda _messages: finished)
+    assert kind("opencode", {"provider_session_id": "p1"}) == LONGHOUSE_INGEST
+    errored = _opencode_rows(
+        {"id": "u1", "role": "user", "text": prompt}, {"id": "a1", "role": "assistant", "parent_id": "u1", "error": "ProviderAuthError"}
+    )
+    monkeypatch.setattr(opencode_helm_lifecycle, "_summarize", lambda _messages: errored)
+    assert kind("opencode", {"provider_session_id": "p1"}) is None
+
+    # Cursor: its hooks.
+    hook_root = tmp_path / "managed-local" / "cursor-helm"
+    environment = {"LONGHOUSE_HOME": str(tmp_path)}
+    _write_cursor_hooks(hook_root, "s1", ("beforeSubmitPrompt", {"prompt": prompt}))
+    assert kind("cursor", {"session_id": "s1"}, environment) == PROVIDER_TURN
+    _write_cursor_hooks(hook_root, "s1", ("beforeSubmitPrompt", {"prompt": prompt}), ("afterAgentResponse", {"text": MARKER}))
+    assert kind("cursor", {"session_id": "s1"}, environment) == LONGHOUSE_INGEST
+
+    # A record that cannot be read declares nothing and never raises.
+    def unreadable(*_a):
+        raise OSError("transcript unavailable")
+
+    monkeypatch.setattr(claude_helm_lifecycle, "_transcript_rows", unreadable)
+    assert kind("claude", claude_state) is None
+    assert kind("cursor", {"session_id": "s1"}) is None

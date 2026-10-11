@@ -34,6 +34,11 @@ from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.provider_resume_oracles import native_resume_assertions
 from zerg.qa.resume_assurance import ProducerRegistration
+from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD
+from zerg.qa.wait_kind import LONGHOUSE_ENGINE
+from zerg.qa.wait_kind import RUNTIME_HOST
+from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import failure_fields
 
 _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 _CODEX_REMOTE_TOKEN_ENV = "CODEX_REMOTE_AUTH_TOKEN"
@@ -42,7 +47,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="codex.native_resume.v1",
     producer_revision=3,
     scenario_id="helm_cold_resume",
-    scenario_revision=5,
+    scenario_revision=6,
     assertion_cells=(
         ("native_provider_resume_proven", "clean_exit"),
         ("native_provider_resume_proven", "process_loss"),
@@ -242,7 +247,7 @@ def _wait_resume_intent(args: argparse.Namespace, session_id: str, *, timeout: f
             return intent
         last_reason = str(intent.get("reason") or "resume intent unavailable")
         time.sleep(0.5)
-    raise RuntimeError(f"provider-neutral Resume intent remained unavailable: {last_reason}")
+    raise expired(RuntimeError(f"provider-neutral Resume intent remained unavailable: {last_reason}"), RUNTIME_HOST)
 
 
 def _validate_resume_intent(
@@ -496,12 +501,11 @@ def _wait_for_marker(state_file: Path, marker: str, *, timeout: int) -> tuple[di
         time.sleep(0.25)
         state = bridge_canary._read_json(state_file)
     thread_path = Path(str(state.get("thread_path") or ""))
-    if (
-        state.get("last_turn_status") != "completed"
-        or not thread_path.is_file()
-        or not bridge_canary._assistant_transcript_contains(thread_path, marker)
-    ):
-        raise RuntimeError("Codex turn did not retain the expected assistant marker")
+    answered = thread_path.is_file() and bridge_canary._assistant_transcript_contains(thread_path, marker)
+    if state.get("last_turn_status") != "completed" or not answered:
+        error = RuntimeError("Codex turn did not retain the expected assistant marker")
+        kind = bridge_canary.expired_turn_wait(state, provider_answered=answered).get(WAITED_ON_FIELD)
+        raise expired(error, kind) if kind else error
     return state, thread_path
 
 
@@ -630,7 +634,8 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         if args.variant == "clean_exit":
             process_transition = bridge_canary._stop_bridge(args, session_id, isolation_root)
             if not (process_transition.get("verification") or {}).get("verified"):
-                raise RuntimeError("clean-exit transition did not stop the initial bridge")
+                # The bridge is Longhouse's own process: stopping it is the engine's work.
+                raise expired(RuntimeError("clean-exit transition did not stop the initial bridge"), LONGHOUSE_ENGINE)
         else:
             process_transition = _force_process_loss(initial_state, args.codex_bin, initial_state_file)
         contract_state = bridge_canary._read_json(initial_state_file)
@@ -849,6 +854,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "direct_native_resume_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "redacted_secret_files": redacted_secret_files,
             "artifact_manifest": artifact_manifest(root),
         }

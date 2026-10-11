@@ -48,6 +48,7 @@ from zerg.qa.provider_coordination_oracles import awareness_create_assertions
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import failure_fields
 
 _SCENARIO_ID = "claude_coordination_awareness_create"
 _ASSERTION_ID = "coordination_instructions_model_visible"
@@ -68,7 +69,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_awareness_create.v1",
     producer_revision=5,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=4,
+    scenario_revision=5,
     assertion_cells=((_ASSERTION_ID, None),),
     providers=("claude",),
     platforms=("linux",),
@@ -260,6 +261,7 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 else "claude_coordination_awareness_create_failed"
             ),
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "artifact_manifest": artifact_manifest(root),
         }

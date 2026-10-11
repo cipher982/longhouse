@@ -53,6 +53,7 @@ from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
+from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_capability_proof import AssertionOutcome
 
 SCENARIO_ID = "antigravity_hook_inbox"
@@ -223,6 +224,7 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
             **_base_result(status="fail", execution_variant=getattr(args, "variant", None)),
             "failure_code": "antigravity_launch_hook_inbox_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "artifact_manifest": artifact_manifest(root),
         }
         # Keeps the verdict only if the run reached a failing one; otherwise a

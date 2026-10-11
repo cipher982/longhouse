@@ -48,6 +48,11 @@ from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.runtime_host_canary_isolation import hide_and_verify_canary_isolation
 from zerg.qa.runtime_host_canary_isolation import runtime_host_request
+from zerg.qa.wait_kind import LONGHOUSE_ENGINE
+from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import RUNTIME_HOST
+from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import failure_fields
 from zerg.services.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 
 _EXECUTION_VARIANT = execution_variant_key(
@@ -61,7 +66,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="codex.helm_launch_visibility.v1",
     producer_revision=11,
     scenario_id=SCENARIO_ID,
-    scenario_revision=7,
+    scenario_revision=8,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("codex",),
     platforms=("linux",),
@@ -243,7 +248,8 @@ class RuntimeHostRecordingProxy:
                     raise RuntimeError(f"managed launch wrapper exited before registration (exit={process.returncode})")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise RuntimeError("timed out waiting for managed launch registration")
+                    # Longhouse's own launch wrapper registering the session.
+                    raise expired(RuntimeError("timed out waiting for managed launch registration"), LONGHOUSE_ENGINE)
                 self._condition.wait(timeout=min(remaining, 0.1 if process is not None else remaining))
             return copy.deepcopy(self._registrations[after])
 
@@ -425,7 +431,10 @@ def _wait_canonical_launch(
         if ready:
             return last
         time.sleep(0.25)
-    raise RuntimeError(f"Codex launch did not reach canonical visibility: {json.dumps(last, sort_keys=True, default=str)}")
+    raise expired(
+        RuntimeError(f"Codex launch did not reach canonical visibility: {json.dumps(last, sort_keys=True, default=str)}"),
+        RUNTIME_HOST,
+    )
 
 
 def _safe_registration(record: dict[str, Any]) -> dict[str, Any]:
@@ -537,7 +546,10 @@ def _wait_terminal_event_delivered(
                 "wait_seconds": round(time.monotonic() - started, 3),
             }
         if time.monotonic() - started >= timeout:
-            raise RuntimeError(f"Codex terminal event {dedupe_key} was still queued in the runtime-events outbox after {timeout:.0f}s")
+            raise expired(
+                RuntimeError(f"Codex terminal event {dedupe_key} was still queued in the runtime-events outbox after {timeout:.0f}s"),
+                LONGHOUSE_ENGINE,
+            )
         time.sleep(0.25)
 
 
@@ -667,7 +679,8 @@ def _seed_codex_rollout(
                     "startup_dialogs": startup_dialogs,
                 }
         time.sleep(0.25)
-    raise RuntimeError("Codex TUI did not persist the seed turn before cold Resume")
+    # The prompt was typed into Codex itself and its own rollout is what is read.
+    raise expired(RuntimeError("Codex TUI did not persist the seed turn before cold Resume"), PROVIDER_TURN)
 
 
 def _human_launch_sequence(
@@ -1066,6 +1079,7 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "codex_helm_launch_visibility_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "artifact_manifest": artifact_manifest(root),
         }
         write_json(root / "result.json", failure)

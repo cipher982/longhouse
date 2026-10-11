@@ -36,6 +36,7 @@ from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_live_canary import run_provider_live_canary
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import failure_fields
 
 _SCENARIO_ID = "claude_real_print"
 _ASSERTION_ID = "claude_cli_channel_contract_preserved"
@@ -183,6 +184,7 @@ def run_launch_helm_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "claude_launch_helm_real_print_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "artifact_manifest": artifact_manifest(root),
         }

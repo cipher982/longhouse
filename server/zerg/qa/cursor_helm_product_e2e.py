@@ -25,6 +25,11 @@ import httpx
 from zerg.qa.answer_markers import any_marker_answered
 from zerg.qa.answer_markers import marker_answered
 from zerg.qa.live_session_toolkit import require_disposable_runtime
+from zerg.qa.wait_kind import LONGHOUSE_ENGINE
+from zerg.qa.wait_kind import LONGHOUSE_INGEST
+from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import RUNTIME_HOST
+from zerg.qa.wait_kind import expired
 from zerg.services.longhouse_paths import get_managed_local_dir
 
 
@@ -48,14 +53,23 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _wait_until(predicate, *, timeout: float, description: str):
+def _wait_until(predicate, *, timeout: float, description: str, waited_on=None):
+    """Poll ``predicate`` until it is truthy.
+
+    ``waited_on`` is what the wait was waiting on (``zerg.qa.wait_kind``), or a
+    callable that decides it when the wait expires. A wait that cannot tell
+    passes nothing and declares nothing.
+    """
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
         if value:
             return value
         time.sleep(0.25)
-    raise RuntimeError(f"timed out waiting for {description}")
+    error = RuntimeError(f"timed out waiting for {description}")
+    kind = waited_on() if callable(waited_on) else waited_on
+    raise expired(error, kind) if kind else error
 
 
 def _state_ids(root: Path) -> set[str]:
@@ -101,6 +115,40 @@ def _answered_in(payload: dict[str, Any] | None, marker: str) -> dict[str, Any] 
     """
 
     return payload if payload and any_marker_answered(_assistant_texts(payload), marker) else None
+
+
+def hosted_reply_waited_on(rows: list[dict[str, Any]], marker: str) -> str | None:
+    """Which side of "the reply in the hosted archive" stopped, from Cursor's own hooks.
+
+    That wait covers Cursor's turn and then Longhouse shipping the reply.
+    Cursor fires ``beforeSubmitPrompt`` when it takes a prompt,
+    ``afterAgentResponse`` with the reply text when its turn answers, and
+    ``stop`` when a turn ends, so its hook record says which half never
+    happened. A response that names the marker means the turn is done and the
+    archive is what is awaited. A prompt that names it, with no response and no
+    ``stop`` after it, is a turn still open: Cursor's turn is what is awaited.
+
+    Nothing is declared in the other two cases. A turn that stopped without
+    the reply is over: Cursor answered with a failure of its own (its usage
+    limit, in every retained run of this shape), which is a result and not a
+    stall. And a prompt Cursor never took was dropped by Longhouse or by
+    Cursor, which this record cannot tell apart.
+    """
+
+    if any(row.get("event") == "afterAgentResponse" and marker in str(row.get("text") or "") for row in rows):
+        return LONGHOUSE_INGEST
+    prompt_index = next(
+        (index for index, row in enumerate(rows) if row.get("event") == "beforeSubmitPrompt" and marker in str(row.get("prompt") or "")),
+        None,
+    )
+    if prompt_index is None:
+        return None
+    generation = rows[prompt_index].get("generation_id")
+    stopped = any(
+        row.get("event") == "stop" and (not generation or not row.get("generation_id") or row.get("generation_id") == generation)
+        for row in rows[prompt_index + 1 :]
+    )
+    return None if stopped else PROVIDER_TURN
 
 
 def _pending_pause(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -370,7 +418,9 @@ def _restart_machine_agent(status_path: Path, *, timeout: float) -> dict[str, An
             return current
         return None
 
-    current = _wait_until(reconnected, timeout=timeout, description="Machine Agent restart and control reconnect")
+    current = _wait_until(
+        reconnected, timeout=timeout, description="Machine Agent restart and control reconnect", waited_on=LONGHOUSE_ENGINE
+    )
     return {
         "old_pid": old_pid,
         "new_pid": int(current["daemon_pid"]),
@@ -488,6 +538,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             lambda: json.loads(claim_path.read_text()) if claim_path.exists() else None,
             timeout=args.timeout,
             description="native Cursor binding claim",
+            waited_on=LONGHOUSE_ENGINE,
         )
         url = str(args.api_url or "").rstrip("/")
         token = str(args.agents_token or "")
@@ -578,12 +629,14 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 lambda: (state if _activity_state(state) == "quiescent" else None) if (state := session_state()) else None,
                 timeout=deadline,
                 description="served Cursor activity settling to quiescent after the turn",
+                waited_on=RUNTIME_HOST,
             )
 
         first = _wait_until(
             lambda: _answered_in(hosted_events(), marker_one),
             timeout=args.timeout,
             description="first Cursor reply in hosted archive",
+            waited_on=lambda: hosted_reply_waited_on(_hook_rows(root, session_id), marker_one),
         )
         first_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_one)).total_seconds()
         first_settled = settled(args.timeout)
@@ -592,12 +645,14 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             lambda: (state if _can_send_canonical(state) else None) if (state := session_state()) else None,
             timeout=args.timeout,
             description="Cursor live-control lease on Runtime Host",
+            waited_on=RUNTIME_HOST,
         )
         send_live(f"Reply with exactly {marker_two}")
         second = _wait_until(
             lambda: _answered_in(hosted_events(), marker_two),
             timeout=args.timeout,
             description="remote Cursor reply in hosted archive",
+            waited_on=lambda: hosted_reply_waited_on(_hook_rows(root, session_id), marker_two),
         )
         second_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_two)).total_seconds()
         settled(args.timeout)
@@ -634,6 +689,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 timeout=args.timeout,
                 description="first slow Cursor shell step",
+                waited_on=PROVIDER_TURN,
             )
             steer_generation = str(first_step.get("generation_id") or "")
             time.sleep(1.0)
@@ -654,6 +710,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 lambda: _generation_completed(_hook_rows(root, session_id)[steer_hook_start:], steer_generation),
                 timeout=args.timeout,
                 description="steered Cursor generation completing",
+                waited_on=PROVIDER_TURN,
             )
             # A shell running when the steer lands is backgrounded, and its
             # completion can start one more generation. Let that settle, and let
@@ -695,6 +752,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 timeout=args.timeout,
                 description="active Cursor shell generation to abort",
+                waited_on=PROVIDER_TURN,
             )
             abort_generation = str(shell.get("generation_id") or "")
             time.sleep(0.5)
@@ -712,6 +770,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 timeout=args.timeout,
                 description="aborted Cursor generation stop",
+                waited_on=PROVIDER_TURN,
             )
             time.sleep(0.5)
             abort_verdict = abort_stopped_generation(
@@ -744,6 +803,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 lambda: _answered_in(hosted_events(), recovery),
                 timeout=args.timeout,
                 description="post-abort Cursor turn in hosted archive",
+                waited_on=lambda: hosted_reply_waited_on(_hook_rows(root, session_id), recovery),
             )
             _wait_until(
                 lambda: any(
@@ -752,6 +812,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 timeout=args.timeout,
                 description="post-abort Cursor generation completing",
+                waited_on=PROVIDER_TURN,
             )
             tui_alive = abort_verdict["tui_alive_after_abort"]
             abort_verdict = abort_stopped_generation(
@@ -777,6 +838,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 lambda: (current if _run_lifecycle(current) == "ended" else None) if (current := session_state()) else None,
                 timeout=args.timeout,
                 description="Cursor run reaching ended after remote terminate",
+                waited_on=RUNTIME_HOST,
             )
 
             def provider_gone() -> bool:
@@ -825,6 +887,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 lambda: (current if _run_lifecycle(current) == "ended" else None) if (current := session_state()) else None,
                 timeout=args.timeout,
                 description="Cursor run reaching ended after session teardown",
+                waited_on=RUNTIME_HOST,
             )
             if bound_run_id is not None and _run_id(ended) != bound_run_id:
                 raise RuntimeError(f"Cursor session changed runs across its life: started on {bound_run_id}, ended on {_run_id(ended)}")
@@ -862,6 +925,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 lambda: (state if _can_send_canonical(state) else None) if (state := session_state()) else None,
                 timeout=args.timeout,
                 description="Cursor live-control lease after Machine Agent restart",
+                waited_on=RUNTIME_HOST,
             )
             machine_agent_restart["server_control_status"] = "connected"
             send_live(f"Reply with exactly {restart_marker}")
@@ -869,6 +933,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 lambda: _answered_in(hosted_events(), restart_marker),
                 timeout=args.timeout,
                 description="post-Machine-Agent-restart Cursor reply in hosted archive",
+                waited_on=lambda: hosted_reply_waited_on(_hook_rows(root, session_id), restart_marker),
             )
             restart_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), restart_marker)).total_seconds()
 
@@ -884,6 +949,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             lambda: _answered_in(hosted_events(), permission_allow),
             timeout=args.timeout,
             description="approved Cursor response in hosted archive",
+            waited_on=lambda: hosted_reply_waited_on(_hook_rows(root, session_id), permission_allow),
         )
 
         deny_hook_start = len(_hook_rows(root, session_id))
@@ -922,6 +988,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             ),
             timeout=args.timeout,
             description="active Cursor shell generation",
+            waited_on=PROVIDER_TURN,
         )
         cancel_pause = _wait_until(pending_pause, timeout=args.timeout, description="hosted Cursor cancel-test permission request")
         answer_pause(cancel_pause, "answer")
@@ -941,6 +1008,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             ),
             timeout=args.timeout,
             description="cancelled Cursor generation",
+            waited_on=PROVIDER_TURN,
         )
         time.sleep(0.5)
         if any(
@@ -956,6 +1024,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             lambda: _answered_in(hosted_events(), recovery),
             timeout=args.timeout,
             description="post-cancel Cursor recovery in hosted archive",
+            waited_on=lambda: hosted_reply_waited_on(_hook_rows(root, session_id), recovery),
         )
         recovery_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), recovery)).total_seconds()
         settled(args.timeout)
@@ -977,6 +1046,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             lambda: (state if _run_lifecycle(state) == "ended" else None) if (state := session_state()) else None,
             timeout=args.timeout,
             description="Cursor run reaching ended after session teardown",
+            waited_on=RUNTIME_HOST,
         )
         if bound_run_id is not None and _run_id(ended) != bound_run_id:
             raise RuntimeError(f"Cursor session changed runs across its life: started on {bound_run_id}, ended on {_run_id(ended)}")

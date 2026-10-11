@@ -337,6 +337,40 @@ def _pi_native_row(entry_id: str, text: str, *, stop: str, parent: str | None, t
     return json.dumps({"type": "message", "id": entry_id, "parentId": parent, "timestamp": "2026-01-01T00:00:01Z", "message": message})
 
 
+def test_a_pi_stalled_turn_and_an_unserved_reply_declare_different_waits(monkeypatch, tmp_path) -> None:
+    from zerg.qa import pi_helm_lifecycle as helm
+    from zerg.qa.wait_kind import failure_fields
+    from zerg.qa.wait_kind import waited_on
+
+    # The turn stalled: Pi's own transcript never holds the reply.
+    session_file = tmp_path / "session.jsonl"
+    header = json.dumps({"type": "session", "id": "native-1", "version": 3, "cwd": "/workspace"})
+    narration = _pi_native_row("narration", _PI_NARRATION, stop="toolUse", parent=None, tool_call=True)
+    session_file.write_text(f"{header}\n{narration}\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="timed out waiting for native Pi marker") as stalled:
+        helm._wait_native_marker(session_file, _PI_MARKER, timeout=0.3)
+    assert waited_on(stalled.value) == "provider_turn"
+
+    # Pi answered (the caller holds the native reply entry) and the Runtime Host never serves it.
+    waiting = [{"id": "other", "role": "assistant", "content_text": "Waiting."}]
+    with pytest.raises(helm._RuntimeConvergenceError) as unserved:
+        _pi_converge(monkeypatch, waiting, timeout=0.5)
+    # The producer wraps the wait in its own error; the failure artifact still carries the kind.
+    assert failure_fields(unserved.value) == {"waited_on": "longhouse_ingest"}
+
+    # The reply is served and the control state beside it never held.
+    served = [{"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY}]
+    monkeypatch.setattr(helm, "_served_controls", lambda _snapshot: False)
+    with pytest.raises(helm._RuntimeConvergenceError) as controls:
+        _pi_converge(monkeypatch, served, timeout=0.5)
+    assert waited_on(controls.value) == "runtime_host"
+
+    # Without the native reply entry the convergence wait cannot say which side stopped.
+    with pytest.raises(helm._RuntimeConvergenceError) as unknown:
+        _pi_converge(monkeypatch, waiting, timeout=0.5, reply_event_id=None)
+    assert waited_on(unknown.value) is None
+
+
 def test_pi_wait_native_marker_returns_on_the_answer_and_counts_the_narration_apart(monkeypatch, tmp_path) -> None:
     from zerg.qa import pi_helm_lifecycle as helm
 
@@ -679,7 +713,7 @@ def test_pi_console_contract_revision_advances_with_native_receipt() -> None:
     registration = PI_CONSOLE_REGISTRATION.to_dict()
 
     assert registration["producer_revision"] == 5
-    assert registration["scenario_revision"] == 7
+    assert registration["scenario_revision"] == 8
     assert "native_tool_receipt" in registration["required_artifacts"]
 
 

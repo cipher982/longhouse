@@ -64,6 +64,13 @@ from zerg.qa.model_compliance import noncompliance_entry
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD
+from zerg.qa.wait_kind import LONGHOUSE_ENGINE
+from zerg.qa.wait_kind import LONGHOUSE_INGEST
+from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import RUNTIME_HOST
+from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import failure_fields
 
 _SCENARIO_ID = "claude_helm_lifecycle"
 _ARTIFACT_KIND = "claude_helm_lifecycle_result"
@@ -88,7 +95,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=8,
+    scenario_revision=9,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     # Claude on macOS keeps credentials in the desktop Keychain; a relocated
@@ -560,6 +567,26 @@ def send_outcome(
     return "pending"
 
 
+def unanswered_send_waited_on(rows: list[dict[str, Any]], *, marker: str, prompt: str, outcome: str) -> str | None:
+    """What a Longhouse send that was never answered in the archive was waiting on.
+
+    The wait covers two things: Claude's turn, then Longhouse shipping the
+    reply to the hosted archive. Claude's own transcript says which one
+    stopped. A reply that answers with the marker there means Claude did its
+    part and the archive never showed it. A prompt still open at the deadline
+    (``outcome`` is ``pending``) is Claude's turn. A turn that ended without
+    the marker is a decline, which is no wait at all, and a prompt Claude never
+    received is not something this transcript can attribute: both declare
+    nothing.
+    """
+
+    if any_marker_answered(_assistant_texts(rows), marker):
+        return LONGHOUSE_INGEST
+    if outcome == "pending" and _turn_bounds(rows, prompt) is not None:
+        return PROVIDER_TURN
+    return None
+
+
 def _post(api_url: str, token: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     deadline = time.monotonic() + 20
     while True:
@@ -751,10 +778,13 @@ def _drive_lifecycle(
         return _transcript_rows(lookup_id, home)
 
     def wait_turn_end(prompt_marker: str, description: str, timeout: float) -> None:
+        # The end of a turn in Claude's own transcript, whatever the caller's
+        # description says about the archive.
         wait_until(
             lambda: (bounds := _turn_bounds(rows(), prompt_marker)) is not None and bounds[1] is not None,
             timeout=timeout,
             description=description,
+            waited_on=PROVIDER_TURN,
         )
 
     def wait_can_send() -> None:
@@ -762,6 +792,7 @@ def _drive_lifecycle(
             lambda: _action_available(_served_state(api, token, session_id), "send_input"),
             timeout=args.response_timeout_secs,
             description="Claude live-control lease on Runtime Host",
+            waited_on=RUNTIME_HOST,
         )
 
     def send_marker_prompt(marker: str, description: str) -> list[str]:
@@ -780,6 +811,7 @@ def _drive_lifecycle(
         """
 
         declines: list[str] = []
+        outcome = "pending"
         for attempt in range(2):
             prompt = (
                 f"Reply with exactly {marker}"
@@ -791,6 +823,7 @@ def _drive_lifecycle(
             _post(api, token, f"sessions/{session_id}/send-live", {"message": prompt})
             deadline = time.monotonic() + args.response_timeout_secs
             answered = False
+            outcome = "pending"
             while time.monotonic() < deadline:
                 outcome = send_outcome(
                     _hosted_assistant_texts(api, token, session_id),
@@ -818,7 +851,9 @@ def _drive_lifecycle(
                 return declines
             texts = _assistant_texts(rows())
             declines.append(texts[-1][:400] if texts else "")
-        raise ScenarioError(f"Claude declined the Longhouse send twice for {description}: {declines}")
+        failure = ScenarioError(f"Claude declined the Longhouse send twice for {description}: {declines}")
+        kind = unanswered_send_waited_on(rows(), marker=marker, prompt=prompt, outcome=outcome)
+        raise expired(failure, kind) if kind else failure
 
     token_hex = uuid.uuid4().hex[:10]
     reply = f"LONGHOUSE_CLAUDE_SEND_{token_hex}"
@@ -844,6 +879,7 @@ def _drive_lifecycle(
             lambda: any(f"{step}_1" in command for command in _bash_commands(rows())),
             timeout=args.response_timeout_secs,
             description="first slow Claude Bash step",
+            waited_on=PROVIDER_TURN,
         )
     except ScenarioError:
         # A provider refusal ends this turn without starting a tool. Keep the
@@ -878,6 +914,7 @@ def _drive_lifecycle(
                 lambda: any(steered in text for text in _assistant_texts(rows())),
                 timeout=delay + args.response_timeout_secs,
                 description="delayed Claude follow-up answer",
+                waited_on=PROVIDER_TURN,
             )
         else:
             time.sleep(5.0)
@@ -911,6 +948,7 @@ def _drive_lifecycle(
             lambda: any(abort_prompt in command for command in _bash_commands(rows())),
             timeout=args.response_timeout_secs,
             description="active Claude tool turn to abort",
+            waited_on=PROVIDER_TURN,
         )
     except ScenarioError:
         # A provider refusal ends the request without an active tool. Preserve
@@ -980,11 +1018,20 @@ def _drive_lifecycle(
     claude_pid = int(_channel_state(home, session_id).get("claude_pid") or 0)
     _post(api, token, f"sessions/{session_id}/terminate-live")
     provider_dead = claude_pid > 1 and wait_pid_dead(claude_pid, timeout=20)
-    launcher_exited = wait_until(lambda: not session.alive() or None, timeout=20, description="longhouse claude launcher exit") is not None
+    launcher_exited = (
+        wait_until(
+            lambda: not session.alive() or None,
+            timeout=20,
+            description="longhouse claude launcher exit",
+            waited_on=LONGHOUSE_ENGINE,
+        )
+        is not None
+    )
     ended = wait_until(
         lambda: ((_served_state(api, token, session_id).get("run") or {}).get("lifecycle") == "ended") or None,
         timeout=args.response_timeout_secs,
         description="Claude run reaching ended after remote terminate",
+        waited_on=RUNTIME_HOST,
     )
     lifecycle["terminate_owned"] = {
         "passed": bool(provider_dead and launcher_exited and ended),
@@ -1024,6 +1071,7 @@ def run_lifecycle(
     session_id: str | None = None
     lifecycle: dict[str, Any] = {}
     error: str | None = None
+    error_wait: dict[str, str] = {}
     close_receipt: dict[str, Any] = {"not_started": True, "alive_after_close": False}
     hook_capture_dir: Path | None = None
     artifact_kind = artifact_kind or ("negative_control_result" if fault else _ARTIFACT_KIND)
@@ -1077,6 +1125,7 @@ def run_lifecycle(
                 lambda: _action_available(_served_state(args.api_url, args.agents_token, session_id), "send_input"),
                 timeout=args.response_timeout_secs,
                 description="Claude live-control lease on Runtime Host",
+                waited_on=RUNTIME_HOST,
             )
             served = api_json_tolerant(args.api_url, args.agents_token, f"sessions/{session_id}") or {}
             state = _channel_state(home, session_id)
@@ -1124,11 +1173,13 @@ def run_lifecycle(
                 lifecycle["scenario"] = scenario_result
         except Exception as exc:  # noqa: BLE001 - the report keeps partial observations
             error = f"{type(exc).__name__}: {exc}"
+            error_wait = failure_fields(exc)
         finally:
             write_json(root / "lifecycle-report.json", {"lifecycle": lifecycle, "error": error, "negative_control": fault})
             rows_path = root / "claude-transcript-rows.json"
             write_json(rows_path, _transcript_rows(transcript_lookup_id(session_id, provider_session_id), home))
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+        error_wait = error_wait if error else failure_fields(exc)
         error = error or f"{type(exc).__name__}: {exc}"
     finally:
         if session is not None:
@@ -1195,6 +1246,10 @@ def run_lifecycle(
         result["status"] = "pass" if error is None and cleanup_ok and bool(assertions) and all(assertions.values()) else "fail"
         if result["status"] == "fail":
             result["failure_code"] = str(scenario.get("failure_code") or "claude_background_scenario_failed")
+            # The scenario reports an expired wait in its own record; one
+            # outside it (launch, the lease) is the lifecycle's.
+            scenario_wait = scenario.get(WAITED_ON_FIELD)
+            result.update({WAITED_ON_FIELD: scenario_wait} if isinstance(scenario_wait, str) else error_wait)
     elif fault:
         target, _codes = NEGATIVE_CONTROLS[fault]
         observed = lifecycle.get("steer_active" if target == "claude_helm_steer_active" else "abort_native") or {}
@@ -1206,7 +1261,7 @@ def run_lifecycle(
         # findings for steps that never ran. Judge each reached phase on its own
         # record; a reached failure stays a verdict, and if every reached phase
         # held the run is a typed harness failure with the observation kept.
-        result.update({"status": "fail", "failure_code": "claude_helm_lifecycle_failed", "error": str(error)})
+        result.update({"status": "fail", "failure_code": "claude_helm_lifecycle_failed", "error": str(error), **error_wait})
         judged = lifecycle_assertions(lifecycle, completed=True, cleanup_ok=cleanup_ok)
         settle_failed_result(result, observation=observation, assertions=reached_only(judged, observation, REACHED_MARKERS))
     else:

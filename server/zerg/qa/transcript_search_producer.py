@@ -40,6 +40,7 @@ from zerg.qa.live_session_toolkit import write_json
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
+from zerg.qa.wait_kind import failure_fields
 
 PROVIDERS = ("codex", "claude", "opencode", "cursor", "pi", "omp")
 ASSERTION_ID = "transcript_ingested_searchable"
@@ -54,7 +55,7 @@ REGISTRATION = ProducerRegistration(
     producer_revision=1,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=((ASSERTION_ID, None),),
     providers=PROVIDERS,
     platforms=("linux", "darwin"),
@@ -375,6 +376,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": "inconclusive" if args.negative_control else "fail",
             "failure_code": "transcript_search_harness_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "artifact_manifest": artifact_manifest(root),
         }
     write_json(root / "result.json", result)

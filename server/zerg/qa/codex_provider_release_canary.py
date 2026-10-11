@@ -35,6 +35,9 @@ from typing import Mapping
 from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.repo_root import default_repo_root
+from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD
+from zerg.qa.wait_kind import LONGHOUSE_ENGINE
+from zerg.qa.wait_kind import PROVIDER_TURN
 
 ACTIVE_THREAD_ERROR = "No active thread is available."
 PROVIDER_STATUS_SCHEMA_VERSION = 1
@@ -1705,6 +1708,22 @@ def _terminal_turn_state(state: dict[str, Any]) -> bool:
         "cancelled",
     }
     return terminal_status and not state.get("active_turn_id")
+
+
+def expired_turn_wait(state: dict[str, Any], *, provider_answered: bool) -> dict[str, str]:
+    """What a wait for a Codex turn to end was waiting on, when it expired on an open turn.
+
+    The bridge state is Longhouse's record of the turn; Codex's own rollout is
+    the provider's. A turn the bridge still shows open at the deadline is
+    Codex's turn still running, unless the rollout already holds the reply:
+    then Codex answered and the bridge never recorded it. A turn that ended,
+    in any status, is no expired wait and declares nothing, and neither does
+    one the bridge never opened.
+    """
+
+    if _terminal_turn_state(state) or not state.get("active_turn_id"):
+        return {}
+    return {WAITED_ON_FIELD: LONGHOUSE_ENGINE if provider_answered else PROVIDER_TURN}
 
 
 def _assistant_text_from_rollout_event(value: dict[str, Any]) -> str | None:

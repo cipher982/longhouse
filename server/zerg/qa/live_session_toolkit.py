@@ -44,6 +44,9 @@ from typing import Any
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.provider_sqlite import open_readonly
+from zerg.qa.wait_kind import PROVIDER_PROCESS
+from zerg.qa.wait_kind import RUNTIME_HOST
+from zerg.qa.wait_kind import expired
 
 QUALIFICATION_SANDBOX_ENV = "LONGHOUSE_QUALIFICATION_SANDBOX"
 
@@ -1414,8 +1417,9 @@ def wait_cursor_tui_ready(process: PtyProcess, recording: Path, *, timeout: floa
             ready_since = None
         time.sleep(0.1)
 
-    raise RuntimeError(
-        f"Cursor TUI did not publish a stable post-restore input prompt (tail={_terminal_text(process.recording)[-1200:]!r})"
+    raise expired(
+        RuntimeError(f"Cursor TUI did not publish a stable post-restore input prompt (tail={_terminal_text(process.recording)[-1200:]!r})"),
+        PROVIDER_PROCESS,
     )
 
 
@@ -1492,7 +1496,7 @@ def wait_opencode_tui_ready(process: PtyProcess, recording: Path, *, timeout: fl
         if _opencode_tui_is_connected(_terminal_text(recording)):
             return
         time.sleep(0.1)
-    raise RuntimeError("opencode TUI did not publish its connected state")
+    raise expired(RuntimeError("opencode TUI did not publish its connected state"), PROVIDER_PROCESS)
 
 
 def _opencode_tui_is_connected(terminal: str) -> bool:
@@ -1895,7 +1899,10 @@ def wait_session_tail(
         # for that bootstrap message; the post-send assertion still requires a
         # real projected assistant response.
         return {}
-    raise RuntimeError(f"Runtime Host did not project session {session_id} before the initial control send: {last_error}")
+    raise expired(
+        RuntimeError(f"Runtime Host did not project session {session_id} before the initial control send: {last_error}"),
+        RUNTIME_HOST,
+    )
 
 
 def _assistant_contains(value: Any, marker: str) -> bool:

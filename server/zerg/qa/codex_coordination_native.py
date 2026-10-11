@@ -60,6 +60,9 @@ from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD
+from zerg.qa.wait_kind import WAIT_KINDS
+from zerg.qa.wait_kind import failure_fields
 
 _SCENARIO_CREATE = "codex_coordination_awareness_create"
 _SCENARIO_POST_COMPACTION = "codex_coordination_awareness_post_compaction"
@@ -96,7 +99,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="codex.coordination_awareness.v1",
     producer_revision=9,
     scenario_id=_SCENARIO_CREATE,
-    scenario_revision=6,
+    scenario_revision=7,
     scenario_ids=(_SCENARIO_CREATE, _SCENARIO_POST_COMPACTION, _SCENARIO_DIRECTED_INPUT),
     assertion_cells=tuple((assertion_id, None) for assertion_id, _scenario_id in _CELLS),
     providers=("codex",),
@@ -571,7 +574,9 @@ def _run_awareness_create(args: argparse.Namespace, root: Path) -> tuple[dict[st
         )
         if noncompliance is not None:
             attach(observation, "coordination_instructions_model_visible", noncompliance)
-        return observation, awareness_create_assertions(observation)
+        assertions = awareness_create_assertions(observation)
+        observation.update(bridge_canary.expired_turn_wait(state, provider_answered=marker in assistant_text))
+        return observation, assertions
     finally:
         receipts: dict[str, dict[str, Any]] = {}
         if session_id:
@@ -657,6 +662,7 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
         turn_completed = state.get("last_turn_status") == "completed"
         marker_echoed = marker in assistant_text
         answered_after_compact_attempt = turn_completed and inbox_invoked and marker_echoed
+        expired_wait = bridge_canary.expired_turn_wait(state, provider_answered=marker_echoed)
     finally:
         receipts: dict[str, dict[str, Any]] = {}
         if session_id:
@@ -681,7 +687,9 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
     )
     if noncompliance is not None:
         attach(observation, "coordination_instructions_model_visible_after_compaction", noncompliance)
-    return observation, awareness_post_compaction_assertions(observation)
+    assertions = awareness_post_compaction_assertions(observation)
+    observation.update(expired_wait)
+    return observation, assertions
 
 
 def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str, Any], dict[str, bool]]:
@@ -845,6 +853,9 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             observation, assertions = _run_awareness_post_compaction(args, root)
         else:
             observation, assertions = _run_directed_input(args, root)
+        # A scenario whose turn was still open at its deadline says so beside
+        # its observation; the result carries it, the observation does not.
+        expired_wait = observation.pop(WAITED_ON_FIELD, None)
         write_json(root / "coordination-observation.json", observation)
         result = {
             "schema_version": 1,
@@ -857,6 +868,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "evidence_class": "live_token",
             "generated_at": now(),
             "status": "pass" if all(assertions.values()) else "fail",
+            **({WAITED_ON_FIELD: expired_wait} if expired_wait in WAIT_KINDS and not all(assertions.values()) else {}),
             "observation_scope": "scenario",
             "observation": observation,
             "assertions": assertions,
@@ -890,6 +902,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "observation_scope": "scenario",
             "failure_code": "codex_coordination_scenario_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "artifact_manifest": artifact_manifest(root),
         }
         settle_failed_result(

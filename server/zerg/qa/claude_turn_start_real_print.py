@@ -46,6 +46,7 @@ from zerg.qa.provider_semantic_qualification import _scrub_tree as scrub_semanti
 from zerg.qa.provider_semantic_qualification import temporary_environment
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_capability_proof import AssertionOutcome
 
 _SCENARIO_ID = "claude_real_print"
@@ -221,6 +222,7 @@ def run_turn_start_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "claude_turn_start_real_print_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "artifact_manifest": artifact_manifest(root),
         }

@@ -2397,6 +2397,33 @@ def test_omp_wait_native_marker_timeout_says_what_the_transcript_held(tmp_path) 
     assert "'last_stop_reason': 'toolUse'" in message
 
 
+def test_an_omp_stalled_turn_and_an_unserved_reply_declare_different_waits(monkeypatch, tmp_path) -> None:
+    from zerg.qa.wait_kind import waited_on
+
+    # The turn stalled: OMP's own transcript never holds the reply.
+    session_file = tmp_path / "session.jsonl"
+    session_file.write_text(_native_message("narration", _NARRATION, stop="toolUse", tool_call=True) + "\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="timed out waiting for OMP native marker") as stalled:
+        _wait_native_marker(session_file, _REPLY_MARKER, timeout=0.3)
+    assert waited_on(stalled.value) == "provider_turn"
+
+    # OMP answered (the caller holds the native reply row) and the Runtime Host never serves it.
+    waiting = [{"id": "other", "role": "assistant", "content_text": "Waiting for the worker."}]
+    with pytest.raises(RuntimeConvergenceTimeout, match="timed out waiting for Runtime Host convergence") as unserved:
+        _converge(monkeypatch, waiting, timeout=0.5)
+    assert waited_on(unserved.value) == "longhouse_ingest"
+
+    # Without the native reply row the convergence wait cannot say which side stopped.
+    with pytest.raises(RuntimeConvergenceTimeout) as unknown:
+        _converge(monkeypatch, waiting, timeout=0.5, native_reply_id=None)
+    assert waited_on(unknown.value) is None
+
+    # The prompt arriving in OMP's transcript also needs Longhouse to deliver it.
+    with pytest.raises(RuntimeError, match="timed out waiting for OMP native marker") as prompt_row:
+        _wait_native_marker(session_file, "A_PROMPT_NEVER_DELIVERED", role="user", timeout=0.3)
+    assert waited_on(prompt_row.value) is None
+
+
 def test_omp_wait_native_marker_reads_text_blocks_as_lines_and_recall_by_presence(monkeypatch, tmp_path) -> None:
     resume, phrase = "OMP_HELM_RESUME_0123456789abcdef", "OMP_HELM_CONTEXT_fedcba9876543210"
     session_file = tmp_path / "session.jsonl"

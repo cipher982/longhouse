@@ -60,6 +60,12 @@ from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import LONGHOUSE_ENGINE
+from zerg.qa.wait_kind import LONGHOUSE_INGEST
+from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import RUNTIME_HOST
+from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
@@ -106,7 +112,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
     producer_revision=10,
     scenario_id=SCENARIO_ID,
-    scenario_revision=18,
+    scenario_revision=19,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -365,12 +371,17 @@ def _wait(
     timeout: float,
     description: str,
     on_timeout: Any = None,
+    waited_on: Any = None,
 ) -> Any:
     """Poll ``observe`` until it returns a value.
 
     ``on_timeout`` builds the error from the standard message prefix, for a
     wait that can say what it last saw; without it the message ends in the
     last return value, which is always ``None``.
+
+    ``waited_on`` is what the wait was waiting on (``zerg.qa.wait_kind``), or a
+    callable that decides it when the wait expires, from what the wait last
+    saw. A wait that cannot tell passes nothing and declares nothing.
     """
 
     deadline = time.monotonic() + timeout
@@ -381,9 +392,9 @@ def _wait(
             return last
         time.sleep(0.2)
     prefix = f"timed out waiting for {description}"
-    if on_timeout is not None:
-        raise on_timeout(prefix)
-    raise RuntimeError(f"{prefix}: {last!r}")
+    error = on_timeout(prefix) if on_timeout is not None else RuntimeError(f"{prefix}: {last!r}")
+    kind = waited_on() if callable(waited_on) else waited_on
+    raise expired(error, kind) if kind else error
 
 
 _RUNTIME_HOST_RETRY_STATUSES = frozenset({404, 429, 500, 502, 503, 504})
@@ -780,11 +791,23 @@ def _runtime_convergence(
         summary = {key: value for key, value in last.items() if key != "served_projection"}
         return RuntimeConvergenceTimeout(f"{prefix}: {summary}", observation=dict(last))
 
+    def stopped_on() -> str | None:
+        # Without the native row, or without OMP's transcript to hold the page
+        # to, this wait cannot say which side stopped.
+        if native_reply_id is None or last.get("native_transcript_readable") is False:
+            return None
+        # No page was ever read: the Runtime Host did not answer at all.
+        return RUNTIME_HOST if "runtime_read_error" in last and "answer_event_count" not in last else LONGHOUSE_INGEST
+
     return _wait(
         observe,
         timeout=timeout,
         description=f"Runtime Host convergence for OMP marker {marker}",
         on_timeout=timed_out,
+        # The caller found the reply in OMP's own transcript before asking, so
+        # what never arrived is Longhouse serving it. Without that row this
+        # wait cannot say which side stopped.
+        waited_on=stopped_on,
     )
 
 
@@ -1056,11 +1079,19 @@ def _wait_runtime_control_identity(
             "transient_errors": list(transient_errors),
         }
 
+    def stopped_on() -> str:
+        # The engine's own state file is read first on every pass. While it is
+        # missing the engine is what is awaited; once it is there, the Runtime
+        # Host binding the lease it names is.
+        reason = str(last_observation.get("reason") or "")
+        return LONGHOUSE_ENGINE if reason.startswith("local_state_unavailable") else RUNTIME_HOST
+
     try:
         return _wait(
             observe,
             timeout=timeout,
             description=f"Runtime Host managed control identity for {session_id}",
+            waited_on=stopped_on,
         )
     except RuntimeError as exc:
         evidence = json.dumps(last_observation, sort_keys=True, separators=(",", ":"))
@@ -1211,6 +1242,10 @@ def _wait_native_marker(
         timeout=timeout,
         description=f"OMP native marker {marker}",
         on_timeout=lambda prefix: RuntimeError(f"{prefix}: {last or None}"),
+        # An assistant row is the model's own reply in OMP's own transcript.
+        # A user row is the prompt arriving there, which also needs Longhouse
+        # to have delivered it, so that wait declares nothing.
+        waited_on=PROVIDER_TURN if role == "assistant" else None,
     )
 
 
@@ -1447,7 +1482,7 @@ def _record_retirement_claim_terminal(
             claim["state"] = "terminal"
             return dict(evidence)
         time.sleep(0.2)
-    raise RuntimeError(f"OMP run {run_id} did not reach canonical terminal evidence: {evidence}")
+    raise expired(RuntimeError(f"OMP run {run_id} did not reach canonical terminal evidence: {evidence}"), RUNTIME_HOST)
 
 
 def _wait_served_run_retirement(
@@ -1808,7 +1843,7 @@ def _wait_stopped(
             return state
         return None
 
-    return _wait(observe, timeout=timeout, description="OMP Helm remote termination")
+    return _wait(observe, timeout=timeout, description="OMP Helm remote termination", waited_on=LONGHOUSE_ENGINE)
 
 
 def _read_source_size(path: Path) -> int:
@@ -1881,7 +1916,7 @@ def _wait_native_agent_end(
                 return row
         return None
 
-    return _wait(observe, timeout=timeout, description="OMP native agent_end")
+    return _wait(observe, timeout=timeout, description="OMP native agent_end", waited_on=PROVIDER_TURN)
 
 
 def _process_record(pid: object, expected_birth: object, label: str, *, owner: str) -> dict[str, Any]:
@@ -2046,7 +2081,7 @@ def _wait_task_tool_boundary(session_file: Path, task_marker: str, *, timeout: f
         boundary = task_tool_boundary(read_session_entries(session_file), task_marker)
         return {"tool_result_id": boundary} if boundary else None
 
-    return _wait(observe, timeout=timeout, description=f"tool boundary in task {task_marker}")
+    return _wait(observe, timeout=timeout, description=f"tool boundary in task {task_marker}", waited_on=PROVIDER_TURN)
 
 
 def _wait_idle_quietly(home: Path, session_id: str, *, timeout: float = 120) -> dict[str, Any]:
@@ -3612,6 +3647,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": "fail",
             "failure_code": "omp_helm_lifecycle_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
         }
         # A verdict only over the steps this run reached: a reached failing step
         # is a finding; if every reached step held, the run is a typed harness

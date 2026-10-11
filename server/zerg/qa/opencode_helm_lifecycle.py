@@ -58,6 +58,9 @@ from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import failure_fields
 
 SCENARIO_ID = "opencode_helm_lifecycle"
 ASSERTIONS = (
@@ -105,7 +108,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="opencode.helm_lifecycle.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=2,
+    scenario_revision=3,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),  # type: ignore[arg-type]
     providers=("opencode",),
     platforms=("linux", "darwin"),
@@ -177,14 +180,23 @@ def _marker(label: str) -> str:
     return f"LH_OPENCODE_{label}_{uuid.uuid4().hex[:10].upper()}"
 
 
-def _wait(predicate, *, timeout: float, description: str, interval: float = 0.5):
+def _wait(predicate, *, timeout: float, description: str, interval: float = 0.5, waited_on=None):
+    """Poll ``predicate`` until it is truthy.
+
+    ``waited_on`` is what the wait was waiting on (``zerg.qa.wait_kind``), or a
+    callable that decides it when the wait expires. A wait that cannot tell
+    passes nothing and declares nothing.
+    """
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
         if value:
             return value
         time.sleep(interval)
-    raise TimeoutError(f"timed out waiting for {description}")
+    error = TimeoutError(f"timed out waiting for {description}")
+    kind = waited_on() if callable(waited_on) else waited_on
+    raise expired(error, kind) if kind else error
 
 
 # --- Runtime Host (the product control path) --------------------------------
@@ -355,23 +367,63 @@ def _watch_until_idle(state: dict[str, Any], *, timeout: float) -> list[dict[str
     return samples
 
 
+def _provider_turn_if_open(seen: dict[str, bool]):
+    """What a wait on OpenCode's answer was waiting on, from OpenCode's own message store.
+
+    The prompt reaches OpenCode through Longhouse. Once OpenCode holds the
+    user message and the turn it opened is still running, the tool call or
+    answer that follows is the model's turn and nothing of Longhouse stands in
+    between. Nothing is declared otherwise: a prompt OpenCode does not hold
+    was dropped by Longhouse or by OpenCode, and a turn that already ended
+    (finished without what was asked, or in an error of the provider's own) is
+    a result, not a stall.
+    """
+
+    return lambda: PROVIDER_TURN if seen.get("prompt") and seen.get("open") else None
+
+
+def _turn_open(busy: bool, chain: list[dict[str, Any]]) -> bool:
+    """Whether the turn behind ``chain`` is still running: the session is busy, or no reply has ended yet."""
+
+    return busy or not any(row["finish"] or row["error"] for row in chain)
+
+
 def _wait_first_tool_completed(state: dict[str, Any], user_text: str, *, timeout: float) -> list[dict[str, Any]]:
+    seen: dict[str, bool] = {}
+
     def observe():
         rows = _summarize(_messages(state))
         user_id = _user_message_id(rows, user_text)
         chain = _chain(rows, user_id)
-        return rows if any(row["tool_commands"] for row in chain) and _session_busy(state) else None
+        busy = _session_busy(state)
+        seen.update(prompt=user_id is not None, open=_turn_open(busy, chain))
+        return rows if any(row["tool_commands"] for row in chain) and busy else None
 
-    return _wait(observe, timeout=timeout, description="the task's first tool call while the turn is busy")
+    return _wait(
+        observe,
+        timeout=timeout,
+        description="the task's first tool call while the turn is busy",
+        waited_on=_provider_turn_if_open(seen),
+    )
 
 
 def _wait_marker_answer(state: dict[str, Any], user_text: str, marker: str, *, timeout: float) -> list[dict[str, Any]]:
+    seen: dict[str, bool] = {}
+
     def observe():
         rows = _summarize(_messages(state))
-        chain = _chain(rows, _user_message_id(rows, user_text))
-        return rows if any(marker in row["text"] and row["finish"] == "stop" for row in chain) and not _session_busy(state) else None
+        user_id = _user_message_id(rows, user_text)
+        chain = _chain(rows, user_id)
+        busy = _session_busy(state)
+        seen.update(prompt=user_id is not None, open=_turn_open(busy, chain))
+        return rows if any(marker in row["text"] and row["finish"] == "stop" for row in chain) and not busy else None
 
-    return _wait(observe, timeout=timeout, description=f"assistant answer {marker}")
+    return _wait(
+        observe,
+        timeout=timeout,
+        description=f"assistant answer {marker}",
+        waited_on=_provider_turn_if_open(seen),
+    )
 
 
 def _write_stall_snapshot(root: Path, state: dict[str, Any]) -> dict[str, Any]:
@@ -933,6 +985,7 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     if failure is not None:
         result["failure_code"] = "opencode_helm_lifecycle_failed"
         result["error"] = f"{type(failure).__name__}: {failure}"
+        result.update(failure_fields(failure))
         if not args.negative_control:
             # Verdicts only for the steps this run reached: a reached failing step
             # is a finding; if every reached step held, a typed harness failure
@@ -986,6 +1039,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": "fail",
             "failure_code": "opencode_helm_lifecycle_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            **failure_fields(exc),
             "generated_at": now(),
         }
     print(
