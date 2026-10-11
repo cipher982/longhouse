@@ -716,6 +716,16 @@ def _written_with(provider: str) -> dict[str, list[str]]:
     return {shape: others for shape, others in expected.items() if others}
 
 
+def cli_versions(observed: dict[str, dict[str, Any]]) -> list[str]:
+    """Every CLI version the lines a census read state, oldest first."""
+    versions = {
+        version
+        for record in observed.values()
+        for version in record.get("versions") or []
+    }
+    return sorted(versions, key=_version_key)
+
+
 def census(files: list[Path], provider: str) -> dict[str, dict[str, Any]]:
     shaper = SHAPERS[provider]
     written_with = _written_with(provider)
@@ -768,6 +778,7 @@ def census(files: list[Path], provider: str) -> dict[str, dict[str, Any]]:
             "files": len(record["files"]),
             "first_seen_version": versions[0] if versions else None,
             "last_seen_version": versions[-1] if versions else None,
+            "versions": versions,
             "entrypoints": sorted(record["entrypoints"]),
             # Every key the shape carried on any line, and on how many lines:
             # the identity a renamed or dropped field shows up in.

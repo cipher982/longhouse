@@ -155,6 +155,23 @@ def test_a_codex_turn_that_completes_without_token_count_is_reported(tmp_path: P
     assert shapes["event_msg/token_count"]["classification"] == "signal:turn.usage"
 
 
+def test_a_census_states_every_cli_version_it_read_oldest_first(tmp_path: Path):
+    """Not only the first and last per shape, and in release order, which is not the order text sorts in."""
+    from tests_lite.test_transcript_census_families import _tool
+
+    tool = _tool()
+    files = [
+        _codex_rollout(tmp_path / f"rollout-2026-10-11T00-00-0{index}-v.jsonl", token_count=True, version=version)
+        for index, version in enumerate(["0.10.0", "0.9.0", "0.9.5", "0.10.0-alpha.2"])
+    ]
+    observed = tool.census(files, "codex")
+
+    assert observed["session_meta"]["versions"] == ["0.9.0", "0.9.5", "0.10.0-alpha.2", "0.10.0"]
+    assert (observed["session_meta"]["first_seen_version"], observed["session_meta"]["last_seen_version"]) == ("0.9.0", "0.10.0")
+    assert tool.cli_versions(observed) == ["0.9.0", "0.9.5", "0.10.0-alpha.2", "0.10.0"]
+    assert tool.cli_versions({}) == []
+
+
 def test_unclassified_shape_fails_the_check(tmp_path: Path):
     novel = tmp_path / "novel.jsonl"
     novel.write_text('{"type":"system","subtype":"brand_new_thing","timestamp":"2026-09-03T00:00:00Z","version":"9.9.9"}\n')
