@@ -213,6 +213,24 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         .clone()
         .or_else(|| crate::config::get_agent_db_path().ok());
     let registry = crate::turn_claims::default_registry()?;
+    // No live invocation holds this native session (those joined above), but a
+    // provider started for it can still run: a turn a restarted Machine Agent
+    // follows from its claim, or one whose stop was never verified. OMP moves
+    // a second process on the session to a forked file, so none is started.
+    if let Some(provider_thread_id) = expected_provider_thread_id.as_deref() {
+        let inventory = crate::process_identity::try_collect_process_facts_by_pid();
+        if let Some(holder) = registry.list_all_shared()?.iter().find(|claim| {
+            claim.adapter.as_deref() == Some(OMP_PRINT_ADAPTER)
+                && claim.provider_thread_id.as_deref() == Some(provider_thread_id)
+                && crate::console_adapter::claim_liveness(claim, inventory.as_ref())
+                    == ClaimLiveness::Live
+        }) {
+            anyhow::bail!(
+                "the OMP process of an earlier turn in this session (run {}) is still running",
+                holder.run_id
+            );
+        }
+    }
     // A cold resume already has an exact retained path to reserve. A fresh
     // session has no path until OMP creates its native source, so its turn
     // claim holds this private directory Pending before the child can start.
@@ -4297,6 +4315,8 @@ header = {
     "timestamp": "2026-09-09T22:43:51.533Z",
     "cwd": os.getcwd(),
 }
+with open(source + ".starts", "a", encoding="utf-8") as stream:
+    stream.write(str(os.getpid()) + "\n")
 write_lock = threading.Lock()
 pending_jobs = set()
 if session_header.get("longhouse_test_pending"):
@@ -6020,6 +6040,30 @@ for line in sys.stdin:
             claim.terminal_event.unwrap()["payload"]["terminal_reason"],
             "provider_session_moved"
         );
+        restore_test_longhouse_home(previous);
+    }
+
+    #[tokio::test]
+    async fn a_resume_does_not_start_a_second_omp_while_the_first_still_runs() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = set_test_longhouse_home(temp.path().join("longhouse"));
+        let (first, _) = start_fake_turn(temp.path(), "scenario=responding", None).await;
+        let first = first.unwrap();
+        wait_for_active_response(&first).await;
+        // A restarted Machine Agent follows this turn from its claim alone: no
+        // invocation is registered for the next message to join.
+        crate::console_lifecycle::unregister(&first.launch_id);
+
+        let (second, _) = start_fake_turn(temp.path(), "again", Some(&first)).await;
+
+        let starts = std::fs::read_to_string(format!("{}.starts", first.session_file)).unwrap();
+        for started in [Some(&first), second.as_ref().ok()].into_iter().flatten() {
+            stop_if_running(started.process_group_id.unwrap());
+        }
+        let error = second.expect_err("a second OMP was started on a session still in use");
+        assert!(error.to_string().contains("is still running"), "{error:#}");
+        assert_eq!(starts.lines().count(), 1, "{starts}");
         restore_test_longhouse_home(previous);
     }
 
