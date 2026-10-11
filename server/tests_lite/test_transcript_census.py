@@ -155,6 +155,63 @@ def test_a_codex_turn_that_completes_without_token_count_is_reported(tmp_path: P
     assert shapes["event_msg/token_count"]["classification"] == "signal:turn.usage"
 
 
+CLAUDE_ASSISTANT_BLOCKS = {
+    "text": {"type": "text", "text": "x"},
+    "thinking": {"type": "thinking", "thinking": "x", "signature": "s"},
+    "tool_use": {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}},
+    "fallback": {"type": "fallback"},
+}
+
+
+def _claude_assistant_line(blocks: tuple[str, ...], **extra) -> dict:
+    return {
+        "type": "assistant",
+        "uuid": "u",
+        "timestamp": "2026-10-11T00:00:00.000Z",
+        "version": "2.1.296",
+        "entrypoint": "sdk-cli",
+        "requestedModel": "claude-fixture",
+        "advisorModel": "claude-fixture",
+        "message": {
+            "content": [CLAUDE_ASSISTANT_BLOCKS[name] for name in blocks],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "fallback_credit": None},
+        },
+        **extra,
+    }
+
+
+def test_a_key_on_the_claude_assistant_line_is_known_whatever_blocks_the_line_carries(tmp_path: Path):
+    """The line's keys are stated once, so a key added to it cannot be missed on a sibling row."""
+    import itertools
+
+    from tests_lite.test_transcript_census_families import _tool
+
+    tool = _tool()
+    catalog = json.loads((REPO_ROOT / "schemas" / "transcript_shapes" / "claude.json").read_text())
+    combos = [combo for size in (1, 2, 3, 4) for combo in itertools.combinations(sorted(CLAUDE_ASSISTANT_BLOCKS), size)]
+    rows = {f"assistant/{'+'.join(combo)}": tool.catalog_row(catalog, f"assistant/{'+'.join(combo)}") for combo in combos}
+    # Every row that has its own entry is among them, and all fifteen know the same keys.
+    assert {shape for shape in catalog["shapes"] if shape.startswith("assistant/")} <= set(rows)
+    assert len({tuple(row["keys"]) for row in rows.values()}) == 1
+    assert {"advisorModel", "requestedModel", "usage.fallback_credit"} <= set(rows["assistant/text+thinking+tool_use"]["keys"])
+
+    session = tmp_path / "session.jsonl"
+    session.write_text("".join(json.dumps(_claude_assistant_line(combo)) + "\n" for combo in combos))
+    result = _check("claude", session)
+    assert result.returncode == 0, result.stdout
+
+    # A key nobody has seen is new on each of them, and a block with no row is still a finding.
+    session.write_text(
+        "".join(json.dumps(_claude_assistant_line(combo, brandNewLineKey=True)) + "\n" for combo in combos[:3])
+        + json.dumps({**_claude_assistant_line(("text",)), "message": {"content": [{"type": "server_tool_use"}], "usage": {}}})
+        + "\n"
+    )
+    result = _check("claude", session)
+    assert result.returncode == 1
+    assert result.stdout.count("+brandNewLineKey") == 3
+    assert "assistant/server_tool_use" in result.stdout and "1 unclassified shape(s)" in result.stdout
+
+
 def test_a_census_states_every_cli_version_it_read_oldest_first(tmp_path: Path):
     """Not only the first and last per shape, and in release order, which is not the order text sorts in."""
     from tests_lite.test_transcript_census_families import _tool

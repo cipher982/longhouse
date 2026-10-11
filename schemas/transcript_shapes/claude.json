@@ -1821,5 +1821,79 @@
     "worktreeSession"
    ]
   }
- }
+ },
+ "families": [
+  {
+   "parser": "engine/src/pipeline/parser.rs extract_assistant_events and the turn.usage fact: one assistant line, whatever blocks it carries",
+   "segments": [
+    "assistant",
+    {
+     "fallback": {
+      "classification": "transcript",
+      "keys": []
+     },
+     "text": {
+      "classification": "transcript",
+      "keys": []
+     },
+     "thinking": {
+      "classification": "signal:turn.thinking",
+      "keys": []
+     },
+     "tool_use": {
+      "classification": "transcript",
+      "keys": []
+     }
+    }
+   ],
+   "keys": [
+    "advisorModel",
+    "agentId",
+    "apiBlockIndex",
+    "apiErrorStatus",
+    "attributionAgent",
+    "attributionMcpServer",
+    "attributionMcpTool",
+    "attributionPlugin",
+    "attributionSkill",
+    "cwd",
+    "effort",
+    "entrypoint",
+    "error",
+    "errorDetails",
+    "gitBranch",
+    "isApiErrorMessage",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "perTurnEffort",
+    "quotaLimits",
+    "requestId",
+    "requestedModel",
+    "sessionId",
+    "sessionKind",
+    "session_id",
+    "slug",
+    "thinkingDurationMs",
+    "timestamp",
+    "type",
+    "usage.cache_creation",
+    "usage.cache_creation_input_tokens",
+    "usage.cache_read_input_tokens",
+    "usage.fallback_credit",
+    "usage.inference_geo",
+    "usage.input_tokens",
+    "usage.iterations",
+    "usage.output_tokens",
+    "usage.output_tokens_details",
+    "usage.server_tool_use",
+    "usage.service_tier",
+    "usage.speed",
+    "userType",
+    "uuid",
+    "version"
+   ],
+   "required_keys": ["usage.input_tokens", "usage.output_tokens"]
+  }
+ ]
 }
