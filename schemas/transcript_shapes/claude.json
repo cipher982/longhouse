@@ -105,7 +105,7 @@
   "assistant/text": {
    "classification": "transcript",
    "first_seen_version": "2.0.76",
-   "last_seen_version": "2.1.259",
+   "last_seen_version": "2.1.284",
    "entrypoints": [
     "claude-desktop",
     "cli",
@@ -130,6 +130,7 @@
     "isSidechain",
     "message",
     "parentUuid",
+    "perTurnEffort",
     "quotaLimits",
     "requestId",
     "sessionId",
@@ -485,6 +486,30 @@
     "type"
    ]
   },
+  "attachment/credential_org": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.284",
+   "last_seen_version": "2.1.284",
+   "entrypoints": [
+    "sdk-cli"
+   ],
+   "keys": [
+    "organizationUuid",
+    "type"
+   ]
+  },
+  "attachment/date": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.284",
+   "last_seen_version": "2.1.284",
+   "entrypoints": [
+    "sdk-cli"
+   ],
+   "keys": [
+    "date",
+    "type"
+   ]
+  },
   "attachment/date_change": {
    "classification": "chrome:attachment",
    "first_seen_version": "2.1.128",
@@ -501,7 +526,7 @@
   "attachment/deferred_tools_delta": {
    "classification": "chrome:attachment",
    "first_seen_version": "2.1.121",
-   "last_seen_version": "2.1.259",
+   "last_seen_version": "2.1.284",
    "entrypoints": [
     "claude-desktop",
     "cli",
@@ -515,8 +540,22 @@
     "pendingMcpServers",
     "readdedNames",
     "removedNames",
+    "surfacedNames",
     "type",
     "wireHiddenNames"
+   ]
+  },
+  "attachment/deferred_tools_record": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.284",
+   "last_seen_version": "2.1.284",
+   "entrypoints": [
+    "sdk-cli"
+   ],
+   "keys": [
+    "entries",
+    "nameOnlyAnnouncements",
+    "type"
    ]
   },
   "attachment/diagnostics": {
@@ -557,6 +596,18 @@
     "displayPath",
     "filename",
     "snippet",
+    "type"
+   ]
+  },
+  "attachment/environment": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.284",
+   "last_seen_version": "2.1.284",
+   "entrypoints": [
+    "sdk-cli"
+   ],
+   "keys": [
+    "snapshot",
     "type"
    ]
   },
@@ -683,6 +734,18 @@
     "type"
    ]
   },
+  "attachment/instructions": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.284",
+   "last_seen_version": "2.1.284",
+   "entrypoints": [
+    "sdk-cli"
+   ],
+   "keys": [
+    "files",
+    "type"
+   ]
+  },
   "attachment/invoked_skills": {
    "classification": "chrome:attachment",
    "first_seen_version": "2.1.152",
@@ -708,6 +771,19 @@
     "addedBlocks",
     "addedNames",
     "removedNames",
+    "type"
+   ]
+  },
+  "attachment/model": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.284",
+   "last_seen_version": "2.1.284",
+   "entrypoints": [
+    "sdk-cli"
+   ],
+   "keys": [
+    "identity",
+    "text",
     "type"
    ]
   },
@@ -753,6 +829,25 @@
     "type"
    ]
   },
+  "attachment/prompt_snapshot": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.284",
+   "last_seen_version": "2.1.284",
+   "entrypoints": [
+    "sdk-cli"
+   ],
+   "keys": [
+    "cliPrefix",
+    "contextRendering",
+    "echoWireToolInputs",
+    "keptReminders",
+    "reminderFold",
+    "systemPrompt",
+    "systemTurns",
+    "tools",
+    "type"
+   ]
+  },
   "attachment/queued_command": {
    "classification": "chrome:attachment",
    "first_seen_version": "2.1.150",
@@ -787,16 +882,31 @@
   "attachment/remote_session_change": {
    "classification": "chrome:attachment",
    "first_seen_version": "2.1.258",
-   "last_seen_version": "2.1.258",
+   "last_seen_version": "2.1.284",
    "entrypoints": [
-    "cli"
+    "cli",
+    "sdk-cli"
    ],
    "keys": [
     "commit",
+    "managedCommit",
+    "managedPr",
     "pr",
     "sendUserFileHint",
     "type",
     "url"
+   ]
+  },
+  "attachment/session_context": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.284",
+   "last_seen_version": "2.1.284",
+   "entrypoints": [
+    "sdk-cli"
+   ],
+   "keys": [
+    "context",
+    "type"
    ]
   },
   "attachment/silent_turn_reminder": {
@@ -1565,7 +1675,7 @@
   "user/string": {
    "classification": "transcript",
    "first_seen_version": "2.0.76",
-   "last_seen_version": "2.1.259",
+   "last_seen_version": "2.1.284",
    "entrypoints": [
     "claude-desktop",
     "cli",
@@ -1591,6 +1701,8 @@
     "session_id",
     "slug",
     "timestamp",
+    "turnOrigin",
+    "turnPosition",
     "type",
     "userType",
     "uuid",
