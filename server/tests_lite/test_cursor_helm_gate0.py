@@ -790,6 +790,62 @@ def test_active_steer_passes_when_the_stop_row_precedes_the_steered_response(mon
 
     assert result["status"] == "passed"
     assert result["response_was_steered"] is True
+    assert result["stop_status"] == "completed"
+
+
+@pytest.mark.parametrize("answer", ["STEERED", "ORIGINAL"])
+def test_active_steer_refuses_a_response_from_a_turn_that_then_errored(monkeypatch, tmp_path: Path, answer: str) -> None:
+    replay = _HookReplay.install(monkeypatch)
+    answered_then_errored = [
+        _hook(0.5, "beforeSubmitPrompt", "gen-2"),
+        _hook(1.0, "afterShellExecution"),
+        _hook(2.2, "afterAgentResponse", text_sha256=gate._marker_digest(answer)),
+        _hook(2.4, "stop", status="error"),
+    ]
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, _STEER_LAUNCH, answered_then_errored))
+
+    with pytest.raises(gate.Gate0Failure) as failure:
+        gate._active_steer_scenario(provider_id="conversation-1", **_scenario_paths(tmp_path))
+
+    assert failure.value.failure_code == "cursor_turn_ended_in_error"
+    assert failure.value.facts["stop_status"] == "error"
+    assert failure.value.facts["turn"] == "steered"
+    assert failure.value.facts["generation_id"] == "gen-1"
+
+
+def test_active_steer_reads_an_unsteered_answer_as_unsupported_once_the_turn_completes(monkeypatch, tmp_path: Path) -> None:
+    replay = _HookReplay.install(monkeypatch)
+    unsteered = [
+        _hook(0.5, "beforeSubmitPrompt", "gen-2"),
+        _hook(8.0, "afterShellExecution"),
+        _hook(9.1, "afterAgentResponse", text_sha256=gate._marker_digest("ORIGINAL")),
+        _hook(9.2, "stop", status="completed"),
+    ]
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, _STEER_LAUNCH, unsteered))
+
+    result = gate._active_steer_scenario(provider_id="conversation-1", **_scenario_paths(tmp_path))
+
+    assert result["status"] == "unsupported"
+    assert result["response_was_steered"] is False
+    assert result["stop_status"] == "completed"
+
+
+def test_active_steer_does_not_take_the_steer_prompts_own_stop_for_the_turns(monkeypatch, tmp_path: Path) -> None:
+    replay = _HookReplay.install(monkeypatch)
+    steered = [
+        _hook(0.5, "beforeSubmitPrompt", "gen-2"),
+        _hook(0.6, "stop", "gen-2", status="completed"),
+        _hook(1.0, "afterShellExecution"),
+        _hook(2.2, "afterAgentResponse", text_sha256=gate._marker_digest("STEERED")),
+        _hook(2.4, "stop", status="error"),
+    ]
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, _STEER_LAUNCH, steered))
+
+    with pytest.raises(gate.Gate0Failure) as failure:
+        gate._active_steer_scenario(provider_id="conversation-1", **_scenario_paths(tmp_path))
+
+    assert failure.value.failure_code == "cursor_turn_ended_in_error"
+    assert failure.value.facts["generation_id"] == "gen-1"
 
 
 _CANCEL_LAUNCH = [_hook(0.0, "beforeSubmitPrompt"), _hook(2.6, "beforeShellExecution")]

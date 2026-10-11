@@ -1586,6 +1586,14 @@ def _permission_scenario(
                 raise RuntimeError(f"Cursor reported shell execution after permission={decision}")
             if not session.alive():
                 raise RuntimeError(f"Cursor session died before permission={decision} could be observed")
+        # No permission scenario waits for its turn's stop. Each claim is
+        # settled inside the turn: the command ran (allow), or was proposed
+        # and did not run (deny, ask), and the session is closed on that. An
+        # `ask` turn is parked at the approval prompt and cannot end
+        # unattended, and how the model wraps up after a command that ran or
+        # was denied is not what these scenarios assert. A turn that ends
+        # before the command is proposed or executed is named by the waits
+        # above.
         return {
             "status": "passed",
             "decision": decision,
@@ -1643,6 +1651,21 @@ def _active_steer_scenario(
             timeout=timeout,
             turn="steered",
         )
+        # A steer is taken only if the turn that absorbed it also finished: a
+        # response followed by a provider error is the answer of a turn that
+        # broke. The stop row can be written a few milliseconds before the
+        # response row, so it is looked for across the whole turn, by
+        # generation, not only after the response.
+        stop = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="stop",
+            conversation_id=provider_id,
+            generation_id=generation_id,
+            after_count=before,
+            timeout=timeout,
+        )
+        _require_completed_turn(stop, turn="steered")
         steered = response.get("text_sha256") == _marker_digest("STEERED")
         return {
             "status": "passed" if steered else "unsupported",
@@ -1650,6 +1673,7 @@ def _active_steer_scenario(
             "generation_id": generation_id,
             "same_generation_response": True,
             "response_was_steered": steered,
+            "stop_status": stop.get("status"),
             "process_alive": session.alive(),
         }
     finally:
