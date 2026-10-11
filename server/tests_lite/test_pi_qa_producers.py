@@ -126,7 +126,7 @@ def _pi_converge(
     monkeypatch.setattr("zerg.qa.console_served_state_core.SERVED_ANSWER_SETTLE_SECONDS", kwargs.pop("settle", 0.0))
     if "session_file" not in kwargs:
         answers = {"reply": 1} if native_answers is None else native_answers
-        monkeypatch.setattr(helm, "_native_answer_rows", lambda *_a, **_k: (dict(answers), "read"))
+        monkeypatch.setattr("zerg.qa.provider_console_lifecycle._native_answer_rows", lambda *_a, **_k: (dict(answers), "read"))
     arguments = {"reply_event_id": "reply", "session_file": Path("/native/session.jsonl"), "timeout": 30, **kwargs}
     marker = str(arguments.pop("marker", _PI_MARKER))
     return helm._wait_runtime_convergence("https://runtime.invalid", "fixture", "session-1", "native-1", marker, **arguments)

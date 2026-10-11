@@ -1078,7 +1078,7 @@ def test_omp_helm_zero_delta_flush_is_accepted_only_before_independent_marker_pr
     )
 
     # OMP's own transcript answers in the row the page serves.
-    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._native_answer_rows", lambda *_a, **_k: ({"event-1": 1}, "read"))
+    monkeypatch.setattr("zerg.qa.provider_console_lifecycle._native_answer_rows", lambda *_a, **_k: ({"event-1": 1}, "read"))
     convergence = _runtime_convergence(
         "https://runtime.example",
         "token",
@@ -2069,7 +2069,7 @@ def _converge(
     monkeypatch.setattr("zerg.qa.console_served_state_core.SERVED_ANSWER_SETTLE_SECONDS", kwargs.pop("settle", 0.0))
     if "native_source_path" not in kwargs:
         answers = {"reply": 1} if native_answers is None else native_answers
-        monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._native_answer_rows", lambda *_a, **_k: (dict(answers), "read"))
+        monkeypatch.setattr("zerg.qa.provider_console_lifecycle._native_answer_rows", lambda *_a, **_k: (dict(answers), "read"))
     arguments = {
         "session_id": "session-1",
         "native_session_id": "native-1",

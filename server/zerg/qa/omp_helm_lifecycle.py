@@ -23,15 +23,12 @@ from urllib.parse import quote
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
-from zerg.qa.answer_markers import marker_answer_count
 from zerg.qa.answer_markers import marker_answered
-from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_READ
 from zerg.qa.console_served_state_core import MarkerAnswerCountError
 from zerg.qa.console_served_state_core import StandingServedAnswerFault
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import assistant_marker_mentions
 from zerg.qa.console_served_state_core import event_text
-from zerg.qa.console_served_state_core import native_transcript_state
 from zerg.qa.console_served_state_core import served_answer_correspondence
 from zerg.qa.console_served_state_core import served_answer_fault
 from zerg.qa.failed_results import reached_only
@@ -600,42 +597,6 @@ def _served_projection_evidence(
     }
 
 
-def _native_answer_rows(session_file: Path, marker: str, *, alongside: tuple[str, ...] = ()) -> tuple[dict[str, int] | None, str]:
-    """The assistant rows of OMP's own transcript that answer ``marker``, and what the read found.
-
-    The second value is `native_transcript_state` of the bytes read here, in
-    one read. The first is None unless that state is ``read``: a transcript
-    that could not be read, is empty or ends inside a row is not a transcript
-    without answers, it is one whose answers are not known yet.
-    """
-
-    try:
-        content: bytes | None = session_file.read_bytes()
-    except OSError:
-        content = None
-    state = native_transcript_state(content)
-    if content is None or state != NATIVE_TRANSCRIPT_READ:
-        return None, state
-    answers: dict[str, int] = {}
-    for raw in content.splitlines():
-        try:
-            row = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        message = row.get("message") if isinstance(row, Mapping) else None
-        if not isinstance(message, Mapping) or row.get("type") != "message" or message.get("role") != "assistant":
-            continue
-        row_id = row.get("id")
-        if not isinstance(row_id, str) or not row_id:
-            continue
-        count = marker_answer_count(_native_message_text(message), marker, alongside=alongside)
-        if count:
-            # OMP can retain a message more than once while it reconciles its
-            # stream; the record that answers most is the row as it stands.
-            answers[row_id] = max(answers.get(row_id, 0), count)
-    return answers, state
-
-
 def _runtime_convergence(
     api_url: str,
     token: str,
@@ -705,7 +666,7 @@ def _runtime_convergence(
                 "served_projection": served_projection,
             }
         # Read after the page, so nothing served is newer than what is read here.
-        native_answers, native_state = _native_answer_rows(Path(native_source_path), marker, alongside=alongside)
+        native_answers, native_state = lifecycle._native_answer_rows("omp", Path(native_source_path), marker, alongside=alongside)
         native_readable = native_answers is not None
         native_answers = native_answers or {}
         # Without OMP's transcript read to the end there is nothing to hold the
@@ -1223,7 +1184,7 @@ def _wait_native_marker(
             message = row.get("message")
             if not isinstance(message, Mapping) or message.get("role") != role:
                 continue
-            text = _native_message_text(message)
+            text = lifecycle._native_message_text(message)
             if role != "assistant" or recalled:
                 if marker in text:
                     return row
@@ -1260,26 +1221,6 @@ def _wait_native_marker(
     )
 
 
-def _native_message_text(message: Mapping[str, Any]) -> str:
-    """Text of a native message, one line group per text block.
-
-    Blocks are joined with a newline: the Runtime Host serves each text block
-    as its own event, and a marker that ends one block must not run into the
-    first word of the next.
-    """
-
-    content = message.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "\n".join(
-            str(block.get("text"))
-            for block in content
-            if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
-        )
-    return ""
-
-
 def _is_terminal_agent_end(event: Mapping[str, Any]) -> bool:
     return omp_agent_end_is_terminal(event)
 
@@ -1294,7 +1235,7 @@ def _native_marker_evidence(
     role: str = "assistant",
 ) -> dict[str, Any]:
     message = row.get("message")
-    text = _native_message_text(message) if isinstance(message, Mapping) else ""
+    text = lifecycle._native_message_text(message) if isinstance(message, Mapping) else ""
     offset = row.get("_source_offset")
     return {
         "native_source_bound": (

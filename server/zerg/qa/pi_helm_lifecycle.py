@@ -26,12 +26,7 @@ from urllib.request import urlopen
 from zerg.qa import provider_console_lifecycle as console_lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
-from zerg.qa.answer_markers import marker_answer_count
 from zerg.qa.answer_markers import marker_answered
-from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_EMPTY
-from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_MID_WRITE
-from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_READ
-from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_UNREADABLE
 from zerg.qa.console_served_state_core import StandingServedAnswerFault
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import assistant_marker_mentions
@@ -695,7 +690,9 @@ def _wait_runtime_convergence(
             recalled=recalled,
         )
         # Read after the page, so nothing served is newer than what is read here.
-        native_answers, native_state = _native_answer_rows(session_file, marker, alongside=alongside, recalled=recalled)
+        native_answers, native_state = console_lifecycle._native_answer_rows(
+            "pi", session_file, marker, alongside=alongside, recalled=recalled
+        )
         native_readable = native_answers is not None
         native_answers = native_answers or {}
         correspondence = served_answer_correspondence(
@@ -771,38 +768,6 @@ def _wait_runtime_convergence(
         raise
     except Exception as exc:
         raise _RuntimeConvergenceError(marker, exc, last_runtime_observation) from exc
-
-
-def _native_answer_rows(
-    session_file: Path, marker: str, *, alongside: tuple[str, ...] = (), recalled: bool = False
-) -> tuple[dict[str, int] | None, str]:
-    """The assistant entries of Pi's own transcript that answer ``marker``, and what the read found.
-
-    The second value says whether the transcript was read, from what the
-    reader itself reports of its one read (`pi_transcript_rows`: an ``error``
-    when the file could not be read, the bytes it read, and whether the last
-    line was complete). The first is None unless that is ``read``: a transcript
-    that could not be read, is empty or ends inside a row is not a transcript
-    without answers, it is one whose answers are not known yet.
-    """
-
-    rows, _provider_session_id, metadata = pi_transcript_rows(session_file)
-    if metadata.get("error"):
-        return None, NATIVE_TRANSCRIPT_UNREADABLE
-    if not metadata.get("source_end_offset") or not metadata.get("lines"):
-        return None, NATIVE_TRANSCRIPT_EMPTY
-    if metadata.get("complete_last_line") is not True:
-        return None, NATIVE_TRANSCRIPT_MID_WRITE
-    answers: dict[str, int] = {}
-    for row in rows:
-        entry_id = row.get("entry_id")
-        if row.get("role") != "assistant" or not isinstance(entry_id, str) or not entry_id:
-            continue
-        text = str(row.get("text") or "")
-        count = text.count(marker) if recalled else marker_answer_count(text, marker, alongside=alongside)
-        if count:
-            answers[entry_id] = max(answers.get(entry_id, 0), count)
-    return answers, NATIVE_TRANSCRIPT_READ
 
 
 def _native_snapshot(session_file: Path) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:

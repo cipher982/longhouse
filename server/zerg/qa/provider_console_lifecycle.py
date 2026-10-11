@@ -608,45 +608,53 @@ def _native_assistant_rows(provider: str, path: Path) -> tuple[list[dict[str, ob
     return rows, state, sessions
 
 
+def _native_answer_rows(
+    provider: str, path: Path, marker: str, *, alongside: tuple[str, ...] = (), recalled: bool = False
+) -> tuple[dict[str, int] | None, str]:
+    """The provider's own rows at ``path`` that answer ``marker``, by id, and what the read found.
+
+    The one reader a served page is held to, for a Console turn and for a Helm
+    session alike. Each answering row's id maps to how often it answers
+    (``zerg.qa.answer_markers``; for ``recalled``, how often it holds the
+    phrase). The rows are None unless the record was read to the end: one that
+    could not be read, is empty or ends inside a row is not a record without
+    answers, it is one whose answers are not known yet. They are None too when
+    a row that answers has no id: a reply that cannot be named cannot be held
+    to anything by id, and that is not the same as the provider not replying.
+    """
+
+    rows, state, _sessions = _native_assistant_rows(provider, path)
+    if rows is None or state != NATIVE_TRANSCRIPT_READ:
+        return None, state
+    answers: dict[str, int] = {}
+    for row in rows:
+        text = str(row["text"])
+        count = text.count(marker) if recalled else marker_answer_count(text, marker, alongside=alongside)
+        if not count:
+            continue
+        if not isinstance(row["id"], str) or not row["id"]:
+            return None, NATIVE_TRANSCRIPT_UNREADABLE
+        # OMP can retain a message more than once while it reconciles its
+        # stream; the record that answers most is the row as it stands.
+        answers[row["id"]] = max(answers.get(row["id"], 0), count)
+    return answers, state
+
+
 def _claim_native_answers(
     provider: str, claim: Mapping[str, object], marker: str, *, alongside: tuple[str, ...] = ()
 ) -> Callable[[], tuple[dict[str, int] | None, str]] | None:
-    """A read of the provider's own rows that answer ``marker`` in one Console turn, or None.
+    """A read of the answering rows (`_native_answer_rows`) of the record one Console turn's claim names, or None.
 
-    None is an adapter in `_SERVED_IDS_NOT_NATIVE`. Otherwise the read returns
-    the id of each answering row with how often it answers
-    (``zerg.qa.answer_markers``) and what the read found. The rows are None
-    when the record the turn's claim names could not be read, and also when a
-    row that answers has no id: a reply that cannot be named cannot be held
-    to anything by id, and that is not the same as the provider not replying.
+    None is an adapter in `_SERVED_IDS_NOT_NATIVE`.
     """
 
     field = _NATIVE_ROWS_IN_CLAIM.get(provider)
     if field is None:
         return None
-
-    def read() -> tuple[dict[str, int] | None, str]:
-        raw = claim.get(field)
-        if not isinstance(raw, str) or not raw:
-            return None, NATIVE_TRANSCRIPT_UNREADABLE
-        rows, state, _sessions = _native_assistant_rows(provider, Path(raw))
-        # A served page is held to every answering row, so only a record read
-        # to the end will do: one still being written may yet hold another.
-        if rows is None or state != NATIVE_TRANSCRIPT_READ:
-            return None, state
-        answers: dict[str, int] = {}
-        for row in rows:
-            count = marker_answer_count(str(row["text"]), marker, alongside=alongside)
-            if not count:
-                continue
-            if not isinstance(row["id"], str) or not row["id"]:
-                return None, NATIVE_TRANSCRIPT_UNREADABLE
-            # OMP can retain a message more than once while it reconciles its
-            # stream; the record that answers most is the row as it stands.
-            answers[row["id"]] = max(answers.get(row["id"], 0), count)
-        return answers, state
-
-    return read
+    raw = claim.get(field)
+    if not isinstance(raw, str) or not raw:
+        return lambda: (None, NATIVE_TRANSCRIPT_UNREADABLE)
+    return lambda: _native_answer_rows(provider, Path(raw), marker, alongside=alongside)
 
 
 def _wait_served_answers(
