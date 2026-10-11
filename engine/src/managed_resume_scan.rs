@@ -331,8 +331,16 @@ fn validate_omp(
 /// `AT_REST_AFTER` is never reused). Only successes are kept: a failure is
 /// re-checked every scan, exactly as before.
 static VERIFIED_OMP_SESSION_FILES: std::sync::LazyLock<
-    std::sync::Mutex<HashMap<(PathBuf, String, String), String>>,
+    std::sync::Mutex<HashMap<(PathBuf, String, String), VerifiedOmpSessionFile>>,
 > = std::sync::LazyLock::new(Default::default);
+
+struct VerifiedOmpSessionFile {
+    stamp: String,
+    /// The workspace the transcript header names, and where it resolved
+    /// when verified: an alias can be retargeted with no file changing.
+    header_cwd: String,
+    header_cwd_resolved: Option<PathBuf>,
+}
 
 /// Entries kept at once: well above any machine's retained OMP contracts; the
 /// bound only stops unbounded growth from path churn.
@@ -347,7 +355,7 @@ fn verify_omp_session_file_cached(
     // stamp the next scan compares against. The stamp also carries what the
     // verdict depends on besides content: the path's own file type (a
     // symlink swapped in or out), the target's identity, and where the
-    // workspace resolves to now.
+    // transcript and the expected workspace resolve to now.
     let link = fs::symlink_metadata(session_file)
         .ok()
         .map(|metadata| metadata.file_type().is_symlink());
@@ -374,18 +382,27 @@ fn verify_omp_session_file_cached(
     if let (Some(stamp), Ok(cache)) = (stamp.as_deref(), VERIFIED_OMP_SESSION_FILES.lock()) {
         // Readability is not in any stamp (a chmod moves neither identity,
         // length nor mtime), so a cached success also needs the file to open.
-        if cache.get(&key).is_some_and(|verified| verified == stamp)
-            && fs::File::open(session_file).is_ok()
+        if cache.get(&key).is_some_and(|verified| {
+            verified.stamp == stamp
+                && fs::canonicalize(&verified.header_cwd).ok() == verified.header_cwd_resolved
+        }) && fs::File::open(session_file).is_ok()
         {
             return Ok(());
         }
     }
-    crate::omp_session::verify_exact_session_file(session_file, native_id, Some(cwd))?;
+    let header = crate::omp_session::verify_exact_session_file(session_file, native_id, Some(cwd))?;
     if let (Some(stamp), Ok(mut cache)) = (stamp, VERIFIED_OMP_SESSION_FILES.lock()) {
         if cache.len() >= MAX_VERIFIED_OMP_SESSION_FILES && !cache.contains_key(&key) {
             cache.clear();
         }
-        cache.insert(key, stamp);
+        cache.insert(
+            key,
+            VerifiedOmpSessionFile {
+                stamp,
+                header_cwd_resolved: fs::canonicalize(&header.cwd).ok(),
+                header_cwd: header.cwd,
+            },
+        );
     }
     Ok(())
 }
@@ -790,6 +807,50 @@ mod tests {
         if unsafe { libc::geteuid() } != 0 {
             assert!(unreadable.is_err());
         }
+    }
+
+    #[test]
+    fn omp_session_verification_follows_a_retargeted_workspace_alias() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let elsewhere = root.path().join("elsewhere");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&elsewhere).unwrap();
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(&workspace, &alias).unwrap();
+        let session_file = root.path().join("session.jsonl");
+        fs::write(
+            &session_file,
+            format!(
+                "{{\"type\":\"session\",\"id\":\"native-omp\",\"cwd\":\"{}\"}}\n",
+                alias.display()
+            ),
+        )
+        .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&session_file)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+            .unwrap();
+        let cwd = workspace.to_str().unwrap();
+        let before =
+            crate::omp_session::verify_exact_session_file(&session_file, "native-omp", Some(cwd))
+                .is_ok();
+        assert_eq!(
+            verify_omp_session_file_cached(&session_file, "native-omp", cwd).is_ok(),
+            before
+        );
+
+        fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &alias).unwrap();
+        let after =
+            crate::omp_session::verify_exact_session_file(&session_file, "native-omp", Some(cwd))
+                .is_ok();
+        assert_eq!(
+            verify_omp_session_file_cached(&session_file, "native-omp", cwd).is_ok(),
+            after
+        );
     }
 
     #[test]
