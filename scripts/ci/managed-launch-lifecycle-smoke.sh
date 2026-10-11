@@ -1109,8 +1109,9 @@ launch_claude_control() {
     >>"$TEST_ROOT/claude-control-launch.out" 2>&1 &
   pid=$!
   for _ in $(seq 1 100); do
-    # Top level only: each session's owner-input queue sits beside its state.
-    state="$(find "$HOME_DIR/.claude/channels/longhouse/sessions" -maxdepth 1 -name '*.json' -type f 2>/dev/null \
+    # Top level only, and only <session>.json: the owner-input queue and
+    # sidecars such as <session>.turn-active.json sit beside the state.
+    state="$(find "$HOME_DIR/.claude/channels/longhouse/sessions" -maxdepth 1 -name '*.json' ! -name '*.*.json' -type f 2>/dev/null \
       | grep -vxF "${earlier:-/none}" | head -1 || true)"
     if [[ -n "$state" ]] && [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("ready", False))' "$state")" == "True" ]]; then
       break
@@ -1209,7 +1210,10 @@ claude_turn_origin() {
 import json, pathlib, sys
 for path in pathlib.Path(sys.argv[1]).glob("*.jsonl"):
     for line in path.read_text().splitlines():
-        row = json.loads(line)
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # a line the writer is still appending
         content = row["message"]["content"]
         if sys.argv[2] in content:
             origin = row.get("origin") or {}
