@@ -177,7 +177,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "84eee30ef65001830e25d1f8ae8ac4ca91902230abeb7d336a035e50089d21a3"
+              "oracle_digest": "b6ced799a7cd6c0d977d944d0fc047a85b394aa42a790f03cd93628caabf2cda"
             }
           ]
         },
@@ -1269,7 +1269,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "25319fd74780e65ee12734d788ffa176e455b2fda22e04752f01c4dfed06ce0a"
+              "oracle_digest": "5da72b105c05ccdcf3e4af535c0da9d6bcbe7ab2e1a496e0c5812dc8dceab499"
             },
             {
               "id": "claude_helm_send_idle",
@@ -1280,7 +1280,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "25319fd74780e65ee12734d788ffa176e455b2fda22e04752f01c4dfed06ce0a"
+              "oracle_digest": "5da72b105c05ccdcf3e4af535c0da9d6bcbe7ab2e1a496e0c5812dc8dceab499"
             },
             {
               "id": "claude_helm_steer_active",
@@ -1291,7 +1291,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "25319fd74780e65ee12734d788ffa176e455b2fda22e04752f01c4dfed06ce0a"
+              "oracle_digest": "5da72b105c05ccdcf3e4af535c0da9d6bcbe7ab2e1a496e0c5812dc8dceab499"
             },
             {
               "id": "claude_helm_abort_native",
@@ -1302,7 +1302,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "25319fd74780e65ee12734d788ffa176e455b2fda22e04752f01c4dfed06ce0a"
+              "oracle_digest": "5da72b105c05ccdcf3e4af535c0da9d6bcbe7ab2e1a496e0c5812dc8dceab499"
             },
             {
               "id": "claude_helm_terminate_owned",
@@ -1313,7 +1313,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "25319fd74780e65ee12734d788ffa176e455b2fda22e04752f01c4dfed06ce0a"
+              "oracle_digest": "5da72b105c05ccdcf3e4af535c0da9d6bcbe7ab2e1a496e0c5812dc8dceab499"
             }
           ]
         },
@@ -1603,7 +1603,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "25319fd74780e65ee12734d788ffa176e455b2fda22e04752f01c4dfed06ce0a"
+              "oracle_digest": "5da72b105c05ccdcf3e4af535c0da9d6bcbe7ab2e1a496e0c5812dc8dceab499"
             }
           ],
           "level": "live_token",
@@ -1634,7 +1634,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "25319fd74780e65ee12734d788ffa176e455b2fda22e04752f01c4dfed06ce0a"
+              "oracle_digest": "5da72b105c05ccdcf3e4af535c0da9d6bcbe7ab2e1a496e0c5812dc8dceab499"
             }
           ],
           "level": "live_token",
@@ -1652,7 +1652,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "25319fd74780e65ee12734d788ffa176e455b2fda22e04752f01c4dfed06ce0a"
+              "oracle_digest": "5da72b105c05ccdcf3e4af535c0da9d6bcbe7ab2e1a496e0c5812dc8dceab499"
             }
           ],
           "level": "live_token",
@@ -1670,7 +1670,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "25319fd74780e65ee12734d788ffa176e455b2fda22e04752f01c4dfed06ce0a"
+              "oracle_digest": "5da72b105c05ccdcf3e4af535c0da9d6bcbe7ab2e1a496e0c5812dc8dceab499"
             }
           ],
           "level": "live_token",
@@ -1695,7 +1695,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "25319fd74780e65ee12734d788ffa176e455b2fda22e04752f01c4dfed06ce0a"
+              "oracle_digest": "5da72b105c05ccdcf3e4af535c0da9d6bcbe7ab2e1a496e0c5812dc8dceab499"
             }
           ],
           "level": "live_token",

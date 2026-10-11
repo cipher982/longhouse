@@ -35,9 +35,9 @@ from typing import Mapping
 from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.repo_root import default_repo_root
-from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD
 from zerg.qa.wait_kind import LONGHOUSE_ENGINE
 from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import declared as declared_wait
 
 ACTIVE_THREAD_ERROR = "No active thread is available."
 PROVIDER_STATUS_SCHEMA_VERSION = 1
@@ -1723,7 +1723,7 @@ def expired_turn_wait(state: dict[str, Any], *, provider_answered: bool) -> dict
 
     if _terminal_turn_state(state) or not state.get("active_turn_id"):
         return {}
-    return {WAITED_ON_FIELD: LONGHOUSE_ENGINE if provider_answered else PROVIDER_TURN}
+    return declared_wait(LONGHOUSE_ENGINE if provider_answered else PROVIDER_TURN)
 
 
 def _assistant_text_from_rollout_event(value: dict[str, Any]) -> str | None:

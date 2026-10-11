@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,29 @@ def test_a_kind_outside_the_vocabulary_cannot_be_declared() -> None:
     assert waited_on(stray) is None
     assert failure_fields(RuntimeError("not a wait")) == {}
     assert failure_fields(None) == {}
+
+
+def test_one_writer_puts_a_declaration_in_an_artifact_and_refuses_anything_else() -> None:
+    assert wait_kind.declared(None) == {}
+    assert wait_kind.declared(PROVIDER_TURN) == {"waited_on": "provider_turn"}
+    for stray in ("", "somewhere_else", "Provider_Turn", 1, True, ["provider_turn"], {"waited_on": "provider_turn"}):
+        with pytest.raises(ValueError, match="unknown wait kind"):
+            wait_kind.declared(stray)
+
+
+def test_no_producer_writes_the_field_except_through_that_writer() -> None:
+    """A kind read from another artifact, or built by hand, is validated where it is handed on."""
+
+    qa = Path(wait_kind.__file__).parent
+    hand_written = re.compile(
+        r"""["']waited_on["']\s*:|\{\s*(?:WAITED_ON_)?FIELD\s*:|\[(?:WAITED_ON_)?FIELD\]\s*=|\[["']waited_on["']\]\s*="""
+    )
+    offenders = {
+        path.name: [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if hand_written.search(line)]
+        for path in sorted(qa.rglob("*.py"))
+        if path.name != "wait_kind.py"
+    }
+    assert {name: lines for name, lines in offenders.items() if lines} == {}
 
 
 def test_the_kind_follows_an_explicit_cause_and_never_an_incidental_context() -> None:

@@ -61,7 +61,7 @@ from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD
-from zerg.qa.wait_kind import WAIT_KINDS
+from zerg.qa.wait_kind import declared as declared_wait
 from zerg.qa.wait_kind import failure_fields
 
 _SCENARIO_CREATE = "codex_coordination_awareness_create"
@@ -868,7 +868,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "evidence_class": "live_token",
             "generated_at": now(),
             "status": "pass" if all(assertions.values()) else "fail",
-            **({WAITED_ON_FIELD: expired_wait} if expired_wait in WAIT_KINDS and not all(assertions.values()) else {}),
+            **(declared_wait(expired_wait) if not all(assertions.values()) else {}),
             "observation_scope": "scenario",
             "observation": observation,
             "assertions": assertions,

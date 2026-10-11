@@ -44,7 +44,7 @@ from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD
-from zerg.qa.wait_kind import WAIT_KINDS
+from zerg.qa.wait_kind import declared as declared_wait
 from zerg.qa.wait_kind import failure_fields
 
 _DEFAULT_CURSOR_MODEL = "gpt-5.3-codex-low"
@@ -332,8 +332,7 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             if result["status"] == "fail":
                 result["failure_code"] = "cursor_helm_lifecycle_failed"
                 # What the run was waiting on when it stopped, if it stopped on a wait.
-                if report.get(WAITED_ON_FIELD) in WAIT_KINDS:
-                    result[WAITED_ON_FIELD] = report[WAITED_ON_FIELD]
+                result.update(declared_wait(report.get(WAITED_ON_FIELD)))
         result["artifact_manifest"] = artifact_manifest(root)
         write_json(root / "result.json", result)
         return result

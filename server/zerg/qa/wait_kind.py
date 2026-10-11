@@ -35,9 +35,9 @@ whether the model answered. A wait that cannot tell declares nothing, and its
 failure is then read as it was before there were declarations.
 
 The producer's failure artifact carries the kind as ``waited_on`` beside
-``failure_code`` and ``error`` (``failure_fields``). The provider factory reads
-it there: it retries a wait on the provider and no other, and it classes the
-failure without reading the message.
+``failure_code`` and ``error`` (``failure_fields``, or ``declared`` for a kind
+that did not travel on an exception). Whoever reads the artifact can tell a
+wait on the provider from a wait on Longhouse without reading the message.
 """
 
 from __future__ import annotations
@@ -88,8 +88,24 @@ def waited_on(error: BaseException | None) -> str | None:
     return None
 
 
+def declared(kind: object) -> dict[str, str]:
+    """The artifact field for ``kind``, and the one place a producer's declaration is written.
+
+    ``None`` declares nothing. Any other value must be one of ``WAIT_KINDS``:
+    a producer that hands on a kind it read from another artifact, or built
+    itself, passes it through here, so a stray string is a programming error
+    that raises where it is made and never a ``waited_on`` the factory has to
+    discard.
+    """
+
+    if kind is None:
+        return {}
+    if not isinstance(kind, str) or kind not in WAIT_KINDS:
+        raise ValueError(f"unknown wait kind: {kind!r}")
+    return {FIELD: kind}
+
+
 def failure_fields(error: BaseException | None) -> dict[str, str]:
     """What a failure artifact adds for ``error``: its kind, when it has one."""
 
-    kind = waited_on(error)
-    return {FIELD: kind} if kind is not None else {}
+    return declared(waited_on(error))

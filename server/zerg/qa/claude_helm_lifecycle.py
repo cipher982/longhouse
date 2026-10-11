@@ -69,6 +69,7 @@ from zerg.qa.wait_kind import LONGHOUSE_ENGINE
 from zerg.qa.wait_kind import LONGHOUSE_INGEST
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
+from zerg.qa.wait_kind import declared as declared_wait
 from zerg.qa.wait_kind import expired
 from zerg.qa.wait_kind import failure_fields
 
@@ -1249,7 +1250,7 @@ def run_lifecycle(
             # The scenario reports an expired wait in its own record; one
             # outside it (launch, the lease) is the lifecycle's.
             scenario_wait = scenario.get(WAITED_ON_FIELD)
-            result.update({WAITED_ON_FIELD: scenario_wait} if isinstance(scenario_wait, str) else error_wait)
+            result.update(declared_wait(scenario_wait) or error_wait)
     elif fault:
         target, _codes = NEGATIVE_CONTROLS[fault]
         observed = lifecycle.get("steer_active" if target == "claude_helm_steer_active" else "abort_native") or {}
