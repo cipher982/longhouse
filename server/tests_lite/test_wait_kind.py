@@ -436,6 +436,10 @@ def test_a_console_claim_wait_reads_the_claim_to_say_what_it_waited_on(tmp_path)
     # A state this producer has not been taught says nothing about who was awaited.
     path.write_text(json.dumps({"state": "parked", "pid": os.getpid()}))
     assert waited_on(claim_wait()) is None
+    # A spawned claim that records no process says nothing: there is no pid to find alive or gone.
+    for unrecorded in ({"state": "spawned"}, {"state": "spawned", "pid": 0}, {"state": "spawned", "pid": None}):
+        path.write_text(json.dumps(unrecorded))
+        assert waited_on(claim_wait()) is None
     # The provider process is running and has not finished its turn.
     path.write_text(json.dumps({"state": "spawned", "pid": os.getpid()}))
     assert waited_on(claim_wait()) == PROVIDER_TURN

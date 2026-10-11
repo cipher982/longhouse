@@ -150,7 +150,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=18,
+    scenario_revision=19,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -470,14 +470,18 @@ def _claim_wait_kind(claim: Mapping[str, Any] | None) -> str | None:
     states are read here. No claim at all says nothing (the Runtime Host may
     never have dispatched the run, or the engine never took it), and neither
     does any other state: one this producer has not been taught is not
-    evidence about who was being waited on.
+    evidence about who was being waited on. Nor does a ``spawned`` claim that
+    records no process: with no pid there is nothing to find alive or gone.
     """
 
     state = claim.get("state") if isinstance(claim, Mapping) else None
     if state == "claimed":
         return LONGHOUSE_ENGINE
     if state == "spawned":
-        return LONGHOUSE_ENGINE if _pid_dead(claim.get("pid")) else PROVIDER_TURN
+        pid = claim.get("pid")
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return None
+        return LONGHOUSE_ENGINE if _pid_dead(pid) else PROVIDER_TURN
     return None
 
 
