@@ -117,8 +117,10 @@ def test_claude_assistant_family_names_every_block_the_parser_has_an_arm_for():
     assert arms <= set(names), f"the Claude assistant family does not name {sorted(arms - set(names))}"
     assert {names[arm]["classification"] for arm in arms} == {"transcript"}
 
-    # Every other name is a block the catch-all passes over, and this test lists them: a block that gains
-    # an arm leaves that list, and a name added to the catalog joins it or gets an arm.
+    # Every other name is a block the catch-all passes over, and this test lists them. A name added to the
+    # catalog joins that list or gets an arm. A listed block that gains an arm leaves the list, and by the
+    # assertion above its catalog entry must then read `transcript`: an arm for a block the catalog calls a
+    # signal fails until the catalog says the parser makes a transcript event from it.
     assert re.search(r"^\s*_ => \{$", _rust_function(PARSER, "extract_assistant_events"), re.MULTILINE)
     assert set(names) - arms == CLAUDE_BLOCKS_WITHOUT_AN_ARM
 
