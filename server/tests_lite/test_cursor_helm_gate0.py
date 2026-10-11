@@ -1142,3 +1142,79 @@ def test_conversation_reset_fails_typed_when_the_post_reset_turn_ends_in_error(m
     assert failure.value.facts["turn"] == "post-reset"
     assert failure.value.facts["stop_status"] == "error"
     assert failure.value.facts["provider_conversation_id"] == "conversation-2"
+
+
+def _identity_turns_without_generation(turn: str) -> tuple[list[tuple[float, dict[str, Any]]], list[tuple[float, dict[str, Any]]]]:
+    """Identity-scenario turns that complete, with one turn's prompt hook carrying no generation id.
+
+    The hook script records a missing id as "", and the provider still stamps the stop.
+    """
+
+    launch = [
+        _hook(0.0, "beforeSubmitPrompt", "" if turn == "launch" else "gen-0"),
+        _hook(1.4, "afterAgentResponse", "gen-0"),
+        _hook(1.4, "stop", "gen-0", status="completed"),
+    ]
+    probe = [
+        _hook(0.6, "beforeSubmitPrompt", "" if turn == "probe" else "gen-1", prompt_sha256=gate._marker_digest(_PROBE_PROMPT)),
+        _hook(5.0, "afterAgentResponse", text_sha256="digest"),
+        _hook(5.0, "stop", status="completed"),
+    ]
+    return launch, probe
+
+
+@pytest.mark.parametrize("turn", ["launch", "probe"])
+def test_identity_scenario_names_a_prompt_hook_that_carried_no_generation(monkeypatch, tmp_path: Path, turn: str) -> None:
+    """A missing generation id is never used as a filter value.
+
+    Filtering on the empty string matched nothing the provider stamped, so a
+    turn that completed ran out the clock and read as a timeout.
+    """
+
+    replay = _HookReplay.install(monkeypatch)
+    _stub_native_store(monkeypatch, tmp_path)
+    launch, probe = _identity_turns_without_generation(turn)
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, launch, probe))
+
+    with pytest.raises(gate.Gate0Failure) as failure:
+        gate._identity_scenario(
+            name="create_chat_resume",
+            provider_id="conversation-1",
+            launch_args=["--resume", "conversation-1"],
+            probe_prompt=_PROBE_PROMPT,
+            **_scenario_paths(tmp_path),
+        )
+
+    assert failure.value.failure_code == "cursor_hook_generation_missing"
+    assert failure.value.facts == {"turn": turn, "hook_event": "beforeSubmitPrompt", "provider_conversation_id": "conversation-1"}
+    assert replay.now < 30.0
+
+
+def test_active_steer_names_a_shell_hook_that_carried_no_generation(monkeypatch, tmp_path: Path) -> None:
+    replay = _HookReplay.install(monkeypatch)
+    launch = [_hook(0.0, "beforeSubmitPrompt"), _hook(1.7, "beforeShellExecution", "")]
+    steered = [_hook(1.0, "afterShellExecution"), _hook(2.2, "afterAgentResponse"), _hook(2.2, "stop", status="completed")]
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, launch, steered))
+
+    with pytest.raises(gate.Gate0Failure) as failure:
+        gate._active_steer_scenario(provider_id="conversation-1", **_scenario_paths(tmp_path))
+
+    assert failure.value.failure_code == "cursor_hook_generation_missing"
+    assert failure.value.facts["turn"] == "steered"
+    assert failure.value.facts["hook_event"] == "beforeShellExecution"
+
+
+def test_ctrl_c_cancel_names_a_shell_hook_that_carried_no_generation(monkeypatch, tmp_path: Path) -> None:
+    """Two rows that both lack an id are not the same generation."""
+
+    replay = _HookReplay.install(monkeypatch)
+    monkeypatch.setattr(gate, "_wait_cursor_post_interrupt_ready", lambda *_args, **_kwargs: None)
+    launch = [_hook(0.0, "beforeSubmitPrompt"), _hook(2.6, "beforeShellExecution", "")]
+    stops = [_hook(0.3, "stop", "", status="aborted")]
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, launch, stops))
+
+    with pytest.raises(gate.Gate0Failure) as failure:
+        gate._cancel_scenario(provider_id="conversation-1", **_scenario_paths(tmp_path))
+
+    assert failure.value.failure_code == "cursor_hook_generation_missing"
+    assert failure.value.facts["turn"] == "cancelled"

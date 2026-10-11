@@ -504,6 +504,29 @@ def _require_completed_turn(stop: dict[str, Any], *, turn: str) -> None:
         )
 
 
+def _turn_generation(row: dict[str, Any], *, turn: str) -> str:
+    """The generation id that ties a turn's hook rows together, read from one of them.
+
+    Every wait scoped to a turn filters on it. A hook row without one (the
+    hook script records a missing id as "") cannot scope anything: filtering
+    on the empty string would match only other rows that also lack an id, so a
+    turn the provider completed would read as a timeout, and waiting unscoped
+    would let another turn's rows answer for this one. Neither says what
+    happened, so the scenario stops here and names it.
+    """
+
+    generation_id = str(row.get("generation_id") or "")
+    if not generation_id:
+        raise Gate0Failure(
+            "cursor_hook_generation_missing",
+            f"Cursor's {row.get('event')} hook for the {turn} turn carried no generation id",
+            turn=turn,
+            hook_event=row.get("event"),
+            provider_conversation_id=row.get("conversation_id"),
+        )
+    return generation_id
+
+
 def wait_for_hook_match(
     path: Path,
     *,
@@ -651,7 +674,7 @@ def _identity_scenario(
             longhouse_session_id=longhouse_session_id,
             event="stop",
             conversation_id=provider_id,
-            generation_id=str(launch_prompt.get("generation_id") or ""),
+            generation_id=_turn_generation(launch_prompt, turn="launch"),
             timeout=timeout,
         )
         probe_text = probe_prompt or f"Reply with exactly LONGHOUSE_CURSOR_GATE0_{name.upper()}_{uuid4().hex[:10]} and nothing else."
@@ -665,7 +688,7 @@ def _identity_scenario(
             after_count=before,
             timeout=timeout,
         )
-        probe_generation_id = str(prompt.get("generation_id") or "")
+        probe_generation_id = _turn_generation(prompt, turn="probe")
         response = wait_for_hook(
             events_path,
             longhouse_session_id=longhouse_session_id,
@@ -766,7 +789,7 @@ def _cancel_scenario(
             timeout=timeout,
             turn="cancelled",
         )
-        generation_id = str(shell.get("generation_id") or "")
+        generation_id = _turn_generation(shell, turn="cancelled")
         try:
             terminal_offset = terminal_path.stat().st_size
         except OSError as exc:
@@ -826,7 +849,7 @@ def _cancel_scenario(
             longhouse_session_id=longhouse_session_id,
             event="stop",
             conversation_id=provider_id,
-            generation_id=str(prompt.get("generation_id") or ""),
+            generation_id=_turn_generation(prompt, turn="post-cancel"),
             after_count=turn_start,
             timeout=timeout,
         )
@@ -947,7 +970,7 @@ def _resume_scenario(
             longhouse_session_id=longhouse_session_id,
             event="stop",
             conversation_id=provider_id,
-            generation_id=str(prompt.get("generation_id") or ""),
+            generation_id=_turn_generation(prompt, turn="resumed"),
             after_count=before,
             timeout=timeout,
         )
@@ -1269,7 +1292,7 @@ def _managed_conversation_reset_scenario(
             longhouse_session_id=longhouse_session_id,
             event="afterAgentResponse",
             conversation_id=provider_id,
-            generation_id=str(prompt_a_event.get("generation_id") or ""),
+            generation_id=_turn_generation(prompt_a_event, turn="pre-reset"),
             after_count=before,
             timeout=timeout,
             turn="pre-reset",
@@ -1279,7 +1302,7 @@ def _managed_conversation_reset_scenario(
             longhouse_session_id=longhouse_session_id,
             event="stop",
             conversation_id=provider_id,
-            generation_id=str(prompt_a_event.get("generation_id") or ""),
+            generation_id=_turn_generation(prompt_a_event, turn="pre-reset"),
             after_count=before,
             timeout=timeout,
         )
@@ -1322,7 +1345,7 @@ def _managed_conversation_reset_scenario(
             longhouse_session_id=longhouse_session_id,
             event="afterAgentResponse",
             conversation_id=new_provider_id,
-            generation_id=str(prompt_b_event.get("generation_id") or ""),
+            generation_id=_turn_generation(prompt_b_event, turn="post-reset"),
             after_count=marker_b_start,
             timeout=timeout,
             turn="post-reset",
@@ -1332,7 +1355,7 @@ def _managed_conversation_reset_scenario(
             longhouse_session_id=longhouse_session_id,
             event="stop",
             conversation_id=new_provider_id,
-            generation_id=str(prompt_b_event.get("generation_id") or ""),
+            generation_id=_turn_generation(prompt_b_event, turn="post-reset"),
             after_count=marker_b_start,
             timeout=timeout,
         )
@@ -1608,7 +1631,7 @@ def _active_steer_scenario(
             timeout=timeout,
             turn="steered",
         )
-        generation_id = str(shell.get("generation_id") or "")
+        generation_id = _turn_generation(shell, turn="steered")
         session.submit_active("Instead, reply with exactly STEERED and nothing else.")
         response = wait_for_hook(
             events_path,
