@@ -454,26 +454,40 @@ def test_harness_turn_keeps_its_rollout_in_the_qualification_sandbox_codex_home(
     assert [path.relative_to(exported).parts[0] for path in _rollouts(tmp_path)] == ["sessions"]
 
 
-@pytest.mark.parametrize("ambient", ["developer-home", "outside-the-sandbox-home"])
-def test_harness_turn_never_writes_a_codex_home_the_sandbox_did_not_export(tmp_path: Path, monkeypatch, ambient: str) -> None:
+@pytest.mark.parametrize(
+    "ambient",
+    ["developer-home", "outside-the-sandbox-home", "dot-dot-out-of-the-sandbox-home", "symlink-out-of-the-sandbox-home"],
+)
+def test_harness_turn_never_writes_a_codex_home_outside_the_sandbox_home(tmp_path: Path, monkeypatch, ambient: str) -> None:
     binary, _identity, calls = _fake_codex(tmp_path)
-    ambient_home = tmp_path / ambient / ".codex"
-    monkeypatch.setenv(profile.CODEX_HOME_ENV, str(ambient_home))
+    sandbox_home = tmp_path / "sandbox-home"
+    sandbox_home.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
     if ambient == "developer-home":
         # No sandbox at all: a person's own CODEX_HOME is in the environment.
+        exported = outside / ".codex"
         monkeypatch.delenv(profile.QUALIFICATION_SANDBOX_ENV, raising=False)
         monkeypatch.delenv(profile.QUALIFICATION_HOME_ENV, raising=False)
     else:
-        # A sandbox whose CODEX_HOME points outside its own home is not trusted.
         monkeypatch.setenv(profile.QUALIFICATION_SANDBOX_ENV, profile.QUALIFICATION_SANDBOX_PROFILE)
-        monkeypatch.setenv(profile.QUALIFICATION_HOME_ENV, str(tmp_path / "sandbox-home"))
+        monkeypatch.setenv(profile.QUALIFICATION_HOME_ENV, str(sandbox_home))
+        if ambient == "outside-the-sandbox-home":
+            exported = outside / ".codex"
+        elif ambient == "dot-dot-out-of-the-sandbox-home":
+            # Reads as a path under the sandbox home and names a directory beside it.
+            exported = sandbox_home / ".." / "outside" / ".codex"
+        else:
+            (sandbox_home / "link").symlink_to(outside, target_is_directory=True)
+            exported = sandbox_home / "link" / ".codex"
+    monkeypatch.setenv(profile.CODEX_HOME_ENV, str(exported))
 
     observed = profile.run_codex_real_tool_command(binary, api_key="seeded-test-api-key-not-a-real-secret")
 
     assert observed["returncode"] == 0
     assert "--ephemeral" not in json.loads(calls.read_text().splitlines()[-1])["argv"]
     # The rollout went to the run's scratch home, which is gone with the run.
-    assert not ambient_home.exists()
+    assert list(outside.iterdir()) == []
     assert _rollouts(tmp_path) == []
 
 

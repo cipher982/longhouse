@@ -98,13 +98,18 @@ def _codex_session_home(scratch: Path) -> Path:
     read and reaches no other run. Anywhere else it is a directory in the run's
     scratch that goes when the run ends; an ambient CODEX_HOME outside the
     sandbox is never written.
+
+    Both paths are resolved before they are compared, so an exported path that
+    leaves the sandbox home through `..` or a symlink is not taken for one
+    inside it.
     """
     exported = os.environ.get(CODEX_HOME_ENV, "").strip()
     qualification_home = os.environ.get(QUALIFICATION_HOME_ENV, "").strip()
     if os.environ.get(QUALIFICATION_SANDBOX_ENV) == QUALIFICATION_SANDBOX_PROFILE and exported and qualification_home:
-        home, root = Path(exported), Path(qualification_home)
-        if home.is_absolute() and home != root and home.is_relative_to(root):
-            return home
+        if Path(exported).is_absolute() and Path(qualification_home).is_absolute():
+            home, root = Path(exported).resolve(), Path(qualification_home).resolve()
+            if home != root and home.is_relative_to(root):
+                return home
     return scratch / "codex-home"
 
 
