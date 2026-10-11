@@ -115,6 +115,58 @@ def test_answers_are_counted_and_mentions_are_not(text: str, count: int) -> None
     assert marker_answer_count(text, MARKER) == count
 
 
+# What may stand around an answer, one case per character the rule allows and
+# per shape a companion takes. Each entry: the reply, the companions the caller
+# names, how many times the reply answers.
+_VARIANTS: dict[str, tuple[str, tuple[str, ...], int]] = {
+    # Line endings and indentation.
+    "crlf_line_ending": (f"{MARKER}\r\n", (), 1),
+    "space_indented": (f"  {MARKER}", (), 1),
+    "tab_indented": (f"\t{MARKER}", (), 1),
+    # Wrapping.
+    "double_quoted": (f'"{MARKER}"', (), 1),
+    "single_quoted": (f"'{MARKER}'", (), 1),
+    "curly_double_quoted": (f"“{MARKER}”", (), 1),
+    "curly_single_quoted": (f"‘{MARKER}’", (), 1),
+    "closing_double_quotes_both_sides": (f"”{MARKER}”", (), 1),
+    "closing_single_quotes_both_sides": (f"’{MARKER}’", (), 1),
+    # Trailing punctuation, alone and around wrapping.
+    "trailing_exclamation": (f"{MARKER}!", (), 1),
+    "trailing_comma": (f"{MARKER},", (), 1),
+    "trailing_semicolon": (f"{MARKER};", (), 1),
+    "trailing_colon": (f"{MARKER}:", (), 1),
+    "emphasis_then_period": (f"**{MARKER}**.", (), 1),
+    "period_inside_backticks": (f"`{MARKER}.`", (), 1),
+    # Not punctuation the rule allows, and nothing may lead the marker.
+    "trailing_question": (f"{MARKER}?", (), 0),
+    "leading_punctuation": (f". {MARKER}", (), 0),
+    # List items, however they are marked or indented.
+    "indented_star_list_item": (f"  * {MARKER}", (), 0),
+    "plus_list_item": (f"+ {MARKER}", (), 0),
+    # A companion beside the marker, wrapped and separated as models do.
+    "companion_each_in_emphasis": (f"**{CONTEXT}** **{MARKER}**", (CONTEXT,), 1),
+    "companion_each_double_quoted": (f'"{CONTEXT}" "{MARKER}"', (CONTEXT,), 1),
+    "companion_each_single_quoted": (f"'{CONTEXT}' '{MARKER}'", (CONTEXT,), 1),
+    "companion_each_curly_double_quoted": (f"“{CONTEXT}” “{MARKER}”", (CONTEXT,), 1),
+    "companion_each_curly_single_quoted": (f"‘{CONTEXT}’ ‘{MARKER}’", (CONTEXT,), 1),
+    "companion_tab_separated": (f"{CONTEXT}\t{MARKER}", (CONTEXT,), 1),
+    "companion_after_the_marker": (f"{MARKER} {CONTEXT}", (CONTEXT,), 1),
+    "companion_then_a_colon": (f"{CONTEXT}: {MARKER}", (CONTEXT,), 1),
+    "companion_then_a_dash": (f"{CONTEXT} - {MARKER}", (CONTEXT,), 0),
+    # The companion on a line of its own does not make a sentence an answer.
+    "companion_alone_marker_in_prose": (f"{CONTEXT}\nI then sent {MARKER} as asked", (CONTEXT,), 0),
+    "empty_companion_is_ignored": (MARKER, ("",), 1),
+    # A companion that contains the marker is taken whole, and the marker after it still answers.
+    "companion_contains_the_marker_and_the_marker_follows": (f"{MARKER}_DONE {MARKER}", (f"{MARKER}_DONE",), 1),
+}
+
+
+@pytest.mark.parametrize(("text", "alongside", "count"), _VARIANTS.values(), ids=_VARIANTS.keys())
+def test_wrapping_punctuation_and_companion_variants(text: str, alongside: tuple[str, ...], count: int) -> None:
+    assert marker_answer_count(text, MARKER, alongside=alongside) == count
+    assert marker_answered(text, MARKER, alongside=alongside) is (count > 0)
+
+
 def _fixture(name: str) -> tuple[list[dict], str]:
     document = json.loads((FIXTURES / f"{name}.json").read_text())
     return document["rows"], document["token"]
