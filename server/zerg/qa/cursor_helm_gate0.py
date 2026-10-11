@@ -1336,6 +1336,10 @@ def _managed_conversation_reset_scenario(
             after_count=marker_b_start,
             timeout=timeout,
         )
+        # The reset is judged on a turn the new conversation carried. A turn
+        # the provider ended in error is its own failure, not a reset that
+        # was not accepted.
+        _require_completed_turn(stop_b, turn="post-reset")
         new_store = wait_for_store(new_provider_id, timeout=timeout)
         # Finish both provider turns before running the real Machine Agent
         # source ship path.  Shipping is still ordered old -> new below so the
@@ -1404,9 +1408,7 @@ def _managed_conversation_reset_scenario(
             "provider_conversation_id": new_provider_id,
             "longhouse_session_id": longhouse_session_id,
             "reset_command": "/clear",
-            "reset_command_accepted": reset_boundary
-            and response_b.get("conversation_id") == new_provider_id
-            and stop_b.get("status") == "completed",
+            "reset_command_accepted": reset_boundary and response_b.get("conversation_id") == new_provider_id,
             "identity_transition": classify_identity_transition(provider_id, new_provider_id),
             "identity_allocation": "eager" if eager_event is not None else "lazy",
             "before": {

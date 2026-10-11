@@ -1055,3 +1055,90 @@ def test_ctrl_c_cancel_fails_typed_when_the_recovery_turn_ends_in_error(monkeypa
 
     assert failure.value.failure_code == "cursor_turn_ended_in_error"
     assert failure.value.facts["turn"] == "post-cancel"
+
+
+class _ManagedResetCursor:
+    """A managed Cursor Helm session for the reset scenario, scripted.
+
+    Launch marks the session ready in the Helm state directory and emits the
+    pre-reset turn. `/clear` emits nothing; the next prompt emits the
+    post-reset turn on a new conversation, stamped with that prompt's digest.
+    """
+
+    def __init__(self, replay: _HookReplay, events_path: Path, post_reset_turn: list[tuple[float, dict[str, Any]]]) -> None:
+        self._replay = replay
+        self._events_path = events_path
+        self._post_reset_turn = post_reset_turn
+        self.process = SimpleNamespace(pid=4242, returncode=None)
+
+    @classmethod
+    def launcher(cls, replay: _HookReplay, post_reset_turn: list[tuple[float, dict[str, Any]]]):
+        def start(*, argv, cwd, env, terminal_path):  # noqa: ANN001 - test double
+            state_root = Path(os.environ["HOME"]) / ".longhouse" / "managed-local" / "cursor-helm"
+            state_root.mkdir(parents=True)
+            (state_root / "session-1.json").write_text(
+                json.dumps({"ready": True, "cwd": str(cwd), "session_id": "session-1", "provider_session_id": "conversation-1"}),
+                encoding="utf-8",
+            )
+            session = cls(replay, Path(env["LONGHOUSE_CURSOR_GATE0_EVENTS"]), post_reset_turn)
+            session._emit(
+                [
+                    _hook(0.0, "beforeSubmitPrompt", "gen-a"),
+                    _hook(1.2, "afterAgentResponse", "gen-a"),
+                    _hook(1.2, "stop", "gen-a", status="completed"),
+                ],
+                "conversation-1",
+            )
+            return session
+
+        return start
+
+    def _emit(self, rows: list[tuple[float, dict[str, Any]]], conversation_id: str) -> None:
+        self._replay.emit(self._events_path, rows, longhouse_session_id="session-1", conversation_id=conversation_id)
+
+    def submit_idle(self, text: str) -> None:
+        if text in {"/clear", "/exit"}:
+            return
+        digest = gate._marker_digest(text)
+        self._emit(
+            [
+                (offset, {**row, "prompt_sha256": digest} if row["event"] == "beforeSubmitPrompt" else row)
+                for offset, row in self._post_reset_turn
+            ],
+            "conversation-2",
+        )
+
+    def alive(self) -> bool:
+        return True
+
+    def close(self) -> None:
+        return None
+
+
+def test_conversation_reset_fails_typed_when_the_post_reset_turn_ends_in_error(monkeypatch, tmp_path: Path) -> None:
+    """A post-reset turn the provider ended in error says nothing about the reset.
+
+    The turn answered and then stopped with status=error. Carrying on would
+    report the reset itself as not accepted; the failure is the provider's turn.
+    """
+
+    replay = _HookReplay.install(monkeypatch)
+    workspace = tmp_path.resolve()
+    monkeypatch.setenv("HOME", str(workspace / "home"))
+    monkeypatch.setattr(gate.shutil, "which", lambda _name: "/fixture/longhouse-engine")
+    monkeypatch.setattr(gate.subprocess, "run", lambda *_args, **_kwargs: CompletedProcess([], 0, "", ""))
+    _stub_native_store(monkeypatch, tmp_path)
+    post_reset_turn = [
+        _hook(0.4, "beforeSubmitPrompt", "gen-b"),
+        _hook(3.1, "afterAgentResponse", "gen-b", text_sha256="digest"),
+        _hook(3.2, "stop", "gen-b", status="error"),
+    ]
+    monkeypatch.setattr(gate.CursorPtySession, "start", _ManagedResetCursor.launcher(replay, post_reset_turn))
+
+    with pytest.raises(gate.Gate0Failure) as failure:
+        gate._managed_conversation_reset_scenario(**{**_scenario_paths(workspace), "terminal_path": workspace / "reset.terminal.raw"})
+
+    assert failure.value.failure_code == "cursor_turn_ended_in_error"
+    assert failure.value.facts["turn"] == "post-reset"
+    assert failure.value.facts["stop_status"] == "error"
+    assert failure.value.facts["provider_conversation_id"] == "conversation-2"
