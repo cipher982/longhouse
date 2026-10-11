@@ -1329,14 +1329,17 @@ pub async fn recover_omp_print_turns(
         .filter_map(|claim| claim.launch_id.clone())
         .collect::<std::collections::HashSet<_>>();
     for claim in claims {
-        if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER) || claim.state != "terminal" {
+        if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER)
+            || !matches!(claim.state.as_str(), "terminal" | "failed")
+        {
             continue;
         }
         let liveness = crate::console_adapter::claim_liveness(&claim, inventory.as_ref());
         // A parked invocation is recovered whatever became of its provider. Any
-        // other terminal claim matters only while its provider still runs with
-        // no turn in it: the Machine Agent that owned it stopped before it
-        // stopped the provider, which would hold the session's lease for good.
+        // other settled claim (terminal, or failed with its stop unverified)
+        // matters only while its provider still runs with no turn in it: the
+        // Machine Agent that owned it stopped before it stopped the provider,
+        // which would hold the session's lease for good.
         if claim.invocation_state.as_deref() != Some("parked")
             && !(liveness == ClaimLiveness::Live
                 && claim.process_group_is_from_this_boot()
@@ -1449,7 +1452,10 @@ pub async fn recover_omp_print_turns(
         if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER) || claim.state != "spawned" {
             continue;
         }
+        // A turn nothing can follow is settled below with its provider stopped:
+        // one left running would only be found at the start after this one.
         let Some(stdout_path) = claim.stdout_path.as_deref().map(PathBuf::from) else {
+            cleanup_recovered_process_group(&claim.run_id, &claim, claim.process_group_id).await;
             let _ = registry.mark_terminal(
                 &claim.run_id,
                 "run_failed",
@@ -1470,6 +1476,7 @@ pub async fn recover_omp_print_turns(
             .map(PathBuf::from)
             .or_else(|| claim.source_path.as_deref().map(PathBuf::from));
         let Some(session_file) = session_file else {
+            cleanup_recovered_process_group(&claim.run_id, &claim, claim.process_group_id).await;
             let _ = registry.mark_terminal(
                 &claim.run_id,
                 "run_failed",
@@ -6081,6 +6088,56 @@ for line in sys.stdin:
                 Some("Session persistence failed: disk full.".to_string())
             )
         );
+    }
+
+    #[test]
+    fn recovery_stops_a_provider_left_running_behind_a_failed_or_unfollowable_claim() {
+        use std::os::unix::process::CommandExt;
+        for failed in [true, false] {
+            let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+            let temp = tempfile::tempdir().unwrap();
+            let previous = set_test_longhouse_home(temp.path().join("longhouse"));
+            let registry = crate::turn_claims::default_registry().unwrap();
+            let new_id = || Uuid::new_v4().to_string();
+            let run_id = new_id();
+            registry
+                .claim(&run_id, &new_id(), &new_id(), None, None, "omp")
+                .unwrap();
+            let mut provider = std::process::Command::new("sleep")
+                .arg("30")
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let process_group_id = i32::try_from(provider.id()).unwrap();
+            // Spawned, and the Machine Agent died before the provider named its
+            // session file: nothing can follow this turn.
+            registry
+                .mark_spawned_invocation(
+                    &run_id,
+                    provider.id(),
+                    process_group_id,
+                    crate::turn_claims::process_start_time_for_pid(Some(provider.id())),
+                    OMP_PRINT_ADAPTER,
+                    "launch",
+                    None,
+                    "/gone/stdout.log",
+                    "/gone/stderr.log",
+                    json!({}),
+                )
+                .unwrap();
+            if failed {
+                // Or the launch failed and its provider's stop was never verified.
+                registry.mark_failed(&run_id, "launch failed").unwrap();
+            }
+
+            machine_agent_runtime()
+                .block_on(recover_omp_print_turns("omp-recovery-test", None))
+                .unwrap();
+
+            assert!(!stop_if_running(process_group_id), "failed={failed}");
+            let _ = provider.wait();
+            restore_test_longhouse_home(previous);
+        }
     }
 
     #[tokio::test]
