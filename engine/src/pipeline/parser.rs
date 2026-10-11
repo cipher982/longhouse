@@ -7878,6 +7878,84 @@ mod tests {
         assert_eq!(result.events[0].raw_type, CODEX_TURN_INTERRUPTED_RAW_TYPE);
     }
 
+    /// Codex 0.162 writes a `token_usage_record` for each completed response
+    /// beside the `token_count` event. A turn's usage fact is made when the
+    /// turn closes, from the last `token_count`; the record has no arm. A
+    /// rollout that carries the record and no `token_count` therefore closes
+    /// its turn with a duration and no usage, which is what this pins: if
+    /// Codex ever drops the event, that is the day usage stops.
+    #[test]
+    fn codex_turn_usage_is_read_from_token_count_and_not_from_the_usage_record() {
+        let usage = r#"{"input_tokens":120,"cached_input_tokens":100,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":10,"total_tokens":150}"#;
+        let session_meta = r#"{"timestamp":"2026-10-11T00:00:00.000Z","type":"session_meta","payload":{"id":"019c638d-ea04-7983-a845-d0b68a77fa62","cwd":"/tmp","originator":"codex_exec","cli_version":"0.163.0-alpha.5"}}"#.to_string();
+        let task_started = r#"{"timestamp":"2026-10-11T00:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","model_context_window":258400}}"#.to_string();
+        let turn_context = r#"{"timestamp":"2026-10-11T00:00:02.000Z","type":"turn_context","payload":{"turn_id":"turn-1","cwd":"/tmp","model":"gpt-fixture","effort":"high"}}"#.to_string();
+        let usage_record = format!(
+            r#"{{"timestamp":"2026-10-11T00:00:03.000Z","type":"token_usage_record","payload":{{"thread_id":"thread-1","turn_id":"turn-1","session_id":"session-1","root_turn_id":"turn-1","response_id":"resp-1","usage":{usage},"turn_token_usage":{usage},"thread_token_usage":{usage}}}}}"#
+        );
+        let token_count = format!(
+            r#"{{"timestamp":"2026-10-11T00:00:03.100Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{usage},"last_token_usage":{usage},"model_context_window":258400}}}}}}"#
+        );
+        let task_complete = r#"{"timestamp":"2026-10-11T00:00:04.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"ok","duration_ms":3000}}"#.to_string();
+
+        let facts_of = |name: &str, lines: &[&String]| {
+            let dir = tempfile::tempdir().unwrap();
+            let lines: Vec<&str> = lines.iter().map(|line| line.as_str()).collect();
+            let path = make_jsonl_file(dir.path(), name, &lines);
+            let result = parse_session_file(&path, 0).unwrap();
+            assert!(
+                result.events.iter().all(|event| !event
+                    .raw_line
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("token_usage_record")),
+                "the usage record is not a transcript row"
+            );
+            result.provider_facts
+        };
+
+        let written = facts_of(
+            "rollout-2026-10-11T00-00-00-019c638d-ea04-7983-a845-d0b68a77fa62.jsonl",
+            &[
+                &session_meta,
+                &task_started,
+                &turn_context,
+                &usage_record,
+                &token_count,
+                &task_complete,
+            ],
+        );
+        let usage_facts: Vec<_> = written
+            .iter()
+            .filter(|fact| fact.kind == "turn.usage")
+            .collect();
+        assert_eq!(usage_facts.len(), 1);
+        assert_eq!(usage_facts[0].payload["model"], "gpt-fixture");
+        assert_eq!(usage_facts[0].payload["output_tokens"], 30);
+        assert_eq!(usage_facts[0].payload["thinking_tokens"], 10);
+        assert_eq!(usage_facts[0].payload["context_tokens"], 150);
+        assert_eq!(usage_facts[0].payload["context_window"], 258400);
+
+        let dropped = facts_of(
+            "rollout-2026-10-11T00-00-01-019c638d-ea04-7983-a845-d0b68a77fa63.jsonl",
+            &[
+                &session_meta,
+                &task_started,
+                &turn_context,
+                &usage_record,
+                &task_complete,
+            ],
+        );
+        assert!(
+            dropped.iter().any(|fact| fact.kind == "turn.duration"),
+            "the turn still closes"
+        );
+        assert!(
+            dropped.iter().all(|fact| fact.kind != "turn.usage"),
+            "without token_count the turn has no usage, whatever the usage record says"
+        );
+    }
+
     #[test]
     fn test_codex_git_info_from_session_meta() {
         let dir = tempfile::tempdir().unwrap();
