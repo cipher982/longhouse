@@ -1153,14 +1153,16 @@ def _cursor_requirement_failures(
         # than the scenario's verdict code: its own reason when it ran but was
         # not observed (a model identity mismatch, a missing hook receipt),
         # else the code it was blocked with before it produced anything.
-        not_passed = [row for row in verdict_rows or () if isinstance(row, Mapping) and row.get("status") != "pass"]
+        # "Did not pass" is the verdict's own definition: a probe that is not
+        # applicable is not a cause.
+        not_passed = interaction_semantics.non_passing_rows(verdict_rows or ())
         for row in not_passed:
             failures.append(
                 (
                     outcome,
                     _outcome_reason(
                         "interaction_semantics",
-                        row.get("probe_failure_code") or row.get("failure_code") or f"interaction_semantics_{row.get('status')}",
+                        row.get("probe_failure_code") or row.get("failure_code") or f"interaction_semantics_{row.get('status') or 'fail'}",
                         failed_scenario=row.get("probe_id"),
                         message=row.get("probe_message") or row.get("message"),
                     ),

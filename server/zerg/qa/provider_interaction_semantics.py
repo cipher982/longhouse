@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Iterable
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -521,6 +522,20 @@ def _event_role(event: Mapping[str, Any]) -> str:
     return str(event.get("role") or event.get("type") or "").strip().lower()
 
 
+def non_passing_rows(assertion_rows: Iterable[Any]) -> list[Mapping[str, Any]]:
+    """The verdict rows that make an interaction verdict fail or block.
+
+    A row that is not applicable (a probe the provider's contract marks
+    policy-disabled or upstream-absent) is neither a failure nor a block, and a
+    row without a status counts as a failure. The verdict below and every
+    reader that explains it use this one definition.
+    """
+
+    return [
+        row for row in assertion_rows if isinstance(row, Mapping) and str(row.get("status") or STATUS_FAIL) in {STATUS_FAIL, STATUS_BLOCKED}
+    ]
+
+
 def evaluate_observation(
     provider: str,
     observation: Mapping[str, Any],
@@ -892,10 +907,10 @@ def evaluate_observation(
                         "failure_code": "interaction_title_boundary_observation_missing",
                     }
                 )
-    statuses = [str(row.get("status") or STATUS_FAIL) for row in assertion_rows]
-    if any(status == STATUS_FAIL for status in statuses):
+    statuses = {str(row.get("status") or STATUS_FAIL) for row in non_passing_rows(assertion_rows)}
+    if STATUS_FAIL in statuses:
         status = STATUS_FAIL
-    elif any(status == STATUS_BLOCKED for status in statuses):
+    elif STATUS_BLOCKED in statuses:
         status = STATUS_BLOCKED
     elif all_probes_inapplicable and live_evidence:
         status = STATUS_NOT_APPLICABLE

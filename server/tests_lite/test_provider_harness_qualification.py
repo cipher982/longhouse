@@ -983,6 +983,42 @@ def test_cursor_interaction_reports_every_probe_that_did_not_pass_in_order(tmp_p
     )
 
 
+def test_cursor_interaction_does_not_report_a_probe_that_is_not_applicable(tmp_path: Path, monkeypatch) -> None:
+    """A probe the contract marks not applicable is not a cause; a row without a status is a failure."""
+
+    request, binary = _cursor_request(tmp_path)
+    _cursor_gate0(tmp_path, monkeypatch, status="passed")
+    _cursor_harness(
+        monkeypatch,
+        live={"status": "pass"},
+        interaction={
+            "status": "blocked",
+            "failure_code": "interaction_semantics_assertion_failed",
+            "data": {
+                "assertions": [
+                    {"probe_id": "fixture_disabled_probe", "status": "not_applicable", "disposition": "policy_disabled"},
+                    {"probe_id": "fixture_statusless_probe", "failure_code": "fixture_row_invalid"},
+                    *_PROBE_MISMATCH["data"]["assertions"],
+                ]
+            },
+        },
+    )
+
+    _observation, assertions, _secrets = bridge._cursor_observed_install_executor(  # noqa: SLF001
+        binary,
+        tmp_path / "output" / "evidence",
+        request=json.loads(request.read_text(encoding="utf-8")),
+    )
+
+    assert assertions[0].reasons == (
+        {"stage": "interaction_semantics", "failure_code": "fixture_row_invalid", "failed_scenario": "fixture_statusless_probe"},
+        _PROBE_REASON,
+    )
+    # The same rows decide the scenario's own verdict.
+    rows = [{"status": "not_applicable"}, {"status": "pass"}, {"status": "blocked"}, {}]
+    assert interaction_semantics.non_passing_rows(rows) == [{"status": "blocked"}, {}]
+
+
 def test_cursor_live_canary_is_its_own_cause_only_when_gate0_passed(tmp_path: Path, monkeypatch) -> None:
     request, binary = _cursor_request(tmp_path)
     _cursor_gate0(tmp_path, monkeypatch, status="passed")
