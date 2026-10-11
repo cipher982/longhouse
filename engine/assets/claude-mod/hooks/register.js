@@ -23,6 +23,8 @@ let engine
 let sessionId
 // The main loop's running turn, from turn.start to turn.complete.
 let turnId
+// The turn the owner aborted from Longhouse, until its turn.complete.
+let abortedByOwner
 // Inputs an earlier copy of this module submitted whose turn has not started:
 // this copy records the delivery when it does.
 const awaitingTurn = new Map()
@@ -99,13 +101,37 @@ async function abort($, input) {
     await ack($, input.id, 'no_turn')
     return
   }
+  // Set before the call: turn.complete can fire before it returns.
+  abortedByOwner = running
   try {
     await $.turn.abort({ turnId: running })
     await ack($, input.id, 'aborted', { turnId: running })
   } catch (error) {
+    abortedByOwner = undefined
     // The turn ended between the check and the call.
     if (turnId === undefined) await ack($, input.id, 'no_turn')
     else await ack($, input.id, 'failed', { detail: String(error) })
+  }
+}
+
+// What Esc leaves behind, which `$.turn.abort` does not (Claude Code 2.1.296):
+// the user row that tells the model its turn was interrupted.
+const INTERRUPTED = '[Request interrupted by user]'
+
+// An interrupted turn runs no Stop hook, so Longhouse would keep showing the
+// session as working. Report the turn's end through Longhouse's own lifecycle
+// hook, as Stop reports an answered one.
+async function reportTurnEnd($) {
+  const payload = {
+    hook_event_name: 'Stop',
+    session_id: await $.session.id(),
+    cwd: await $.session.cwd(),
+    stop_hook_active: false,
+  }
+  try {
+    await $.process.run([engine, 'claude-lifecycle-hook'], { stdin: JSON.stringify(payload) })
+  } catch (error) {
+    $.ui.log('longhouse: turn end not reported: ' + String(error), { to: 'debug' })
   }
 }
 
@@ -181,7 +207,20 @@ export function register(on) {
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined && e.turnId === turnId) turnId = undefined
-    return next(e)
+    const completed = await next(e)
+    if (e.agentId !== undefined) return completed
+    if (e.turnId === turnId) turnId = undefined
+    if (e.reason === 'aborted' && engine) {
+      if (e.turnId === abortedByOwner) {
+        abortedByOwner = undefined
+        try {
+          await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: INTERRUPTED }] } })
+        } catch (error) {
+          $.ui.log('longhouse: interrupted row not recorded: ' + String(error), { to: 'debug' })
+        }
+      }
+      await reportTurnEnd($)
+    }
+    return completed
   })
 }

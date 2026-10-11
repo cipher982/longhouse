@@ -16,6 +16,7 @@ async function loadMod(lines: string[], options: { claimExit?: number; refuse?: 
   const runs: string[][] = [];
   const submits: Array<{ text: string; asUser: boolean }> = [];
   const aborts: string[] = [];
+  const appended: unknown[] = [];
   let resolveTurn: () => void = () => undefined;
   let streamEnded: () => void = () => undefined;
   const streamDone = new Promise<void>((resolve) => {
@@ -46,8 +47,8 @@ async function loadMod(lines: string[], options: { claimExit?: number; refuse?: 
           streamEnded();
         })();
       },
-      run: async (argv: string[]) => {
-        runs.push(argv);
+      run: async (argv: string[], init?: { stdin?: string }) => {
+        runs.push(init?.stdin ? [...argv, `stdin=${init.stdin}`] : argv);
         const exitCode = argv[2] === "claim" ? (options.claimExit ?? 0) : 0;
         return { exitCode, stdout: "", stderr: "" };
       },
@@ -66,6 +67,14 @@ async function loadMod(lines: string[], options: { claimExit?: number; refuse?: 
         aborts.push(turnId);
       },
     },
+    session: {
+      id: async () => "provider-1",
+      cwd: async () => "/work",
+      append: async (row: unknown) => {
+        appended.push(row);
+        return { uuid: "row-1", message: row };
+      },
+    },
     ui: { log: () => undefined, status: () => undefined },
   };
   const fire = (event: string, e: Record<string, unknown> = {}) =>
@@ -78,7 +87,7 @@ async function loadMod(lines: string[], options: { claimExit?: number; refuse?: 
     runs
       .filter((argv) => argv[1] === "claude-owner-input" && argv[2] !== "watch")
       .map((argv) => argv.slice(2).join(" "));
-  return { fire, settle, runs, submits, aborts, acks, resolveTurn: () => resolveTurn() };
+  return { fire, settle, runs, submits, aborts, appended, acks, resolveTurn: () => resolveTurn() };
 }
 
 const line = (value: object) => JSON.stringify(value) + "\n";
@@ -175,6 +184,42 @@ describe("Longhouse Claude mod", () => {
       "claim --id a-2 --session session-1",
       "ack --id a-2 --state no_turn --session session-1",
     ]);
+  });
+
+  it("ends an owner-aborted turn as Esc does and reports it to Longhouse", async () => {
+    const mod = await loadMod([line({ id: "a-1", kind: "abort", state: "pending" })]);
+    await mod.fire("turn.start", { turnId: "turn-3", text: "long job" });
+    await mod.fire("session.start");
+    await mod.settle();
+    await mod.fire("turn.complete", { turnId: "turn-3", reason: "aborted" });
+    expect(mod.appended).toEqual([
+      { message: { type: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } },
+    ]);
+    const stop = mod.runs.find((argv) => argv[1] === "claude-lifecycle-hook");
+    expect(stop?.[0]).toBe("/opt/longhouse-engine");
+    expect(JSON.parse(stop![2].slice("stdin=".length))).toEqual({
+      hook_event_name: "Stop",
+      session_id: "provider-1",
+      cwd: "/work",
+      stop_hook_active: false,
+    });
+  });
+
+  it("reports a turn the user ended with Esc, without a second interrupted row", async () => {
+    const mod = await loadMod([]);
+    await mod.fire("session.start");
+    await mod.settle();
+    await mod.fire("turn.start", { turnId: "turn-8", text: "x" });
+    await mod.fire("turn.complete", { turnId: "turn-8", reason: "aborted" });
+    expect(mod.appended).toEqual([]);
+    expect(mod.runs.some((argv) => argv[1] === "claude-lifecycle-hook")).toBe(true);
+
+    const answered = await loadMod([]);
+    await answered.fire("session.start");
+    await answered.settle();
+    await answered.fire("turn.start", { turnId: "turn-9", text: "y" });
+    await answered.fire("turn.complete", { turnId: "turn-9", reason: "answer" });
+    expect(answered.runs.some((argv) => argv[1] === "claude-lifecycle-hook")).toBe(false);
   });
 
   it("forgets the turn when it completes, but not on a subagent's", async () => {

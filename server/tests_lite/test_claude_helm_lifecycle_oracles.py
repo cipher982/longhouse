@@ -41,6 +41,12 @@ def _bash(command: str, timestamp: str | None = None) -> dict:
     return row
 
 
+def _ts(stamp: str) -> float:
+    from datetime import datetime
+
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+
+
 def _text(text: str) -> dict:
     return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
 
@@ -657,3 +663,41 @@ def test_the_scenario_result_reports_the_authored_variant_axis_not_the_execution
     ]
     assert len(variants) == 1
     assert isinstance(variants[0], ast.Constant) and variants[0].value is None
+
+
+def test_an_owner_abort_ends_its_turn_with_the_interrupted_row() -> None:
+    """`$.turn.abort` writes no turn_duration; the mod records Claude's own Esc marker.
+
+    Factory 2026-10-11T20:03Z, Claude Code 2.1.296: the killed tool's result
+    was the turn's last row, and the producer waited for a turn_duration that
+    an interrupted turn never writes.
+    """
+
+    marker = "lh_claude_progress_x"
+    interrupted = {
+        "type": "user",
+        "isMeta": True,
+        "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]},
+        "timestamp": "2026-09-16T19:40:03Z",
+    }
+    rows = [
+        {"type": "user", "message": {"role": "user", "content": f"start {marker}"}, "timestamp": "2026-09-16T19:40:00Z"},
+        _bash(f"python3 -c ... {marker}", "2026-09-16T19:40:01Z"),
+        {
+            "type": "user",
+            "message": {"content": [{"type": "tool_result", "content": "Exit code 144", "is_error": True}]},
+            "timestamp": "2026-09-16T19:40:03Z",
+        },
+        interrupted,
+    ]
+    verdict = abort_stopped_turn(
+        rows, prompt_marker=marker, forbidden_marker="NEVER", interrupted_at=_ts("2026-09-16T19:40:02Z"), tool_seconds=45.0
+    )
+    assert verdict["passed"] is True
+    assert verdict["turn_stop_latency_seconds"] == 1.0
+    assert (
+        abort_stopped_turn(
+            rows[:-1], prompt_marker=marker, forbidden_marker="NEVER", interrupted_at=_ts("2026-09-16T19:40:02Z"), tool_seconds=45.0
+        )["failure_code"]
+        == "abort_did_not_stop_turn"
+    )

@@ -558,8 +558,28 @@ def user_prompt_contains(row: dict[str, Any], marker: str) -> bool:
     return row.get("type") == "attachment" and attachment.get("type") == "queued_command" and marker in str(attachment.get("prompt") or "")
 
 
+# The user row Claude Code leaves when a turn is interrupted (Esc), and that
+# Longhouse's mod leaves when the owner aborts a turn with `$.turn.abort`: an
+# interrupted turn writes no ``system/turn_duration``.
+CLAUDE_INTERRUPTED_MARKER = "[Request interrupted by user"
+
+
+def _interrupted(row: dict[str, Any]) -> bool:
+    if row.get("type") != "user":
+        return False
+    content = (row.get("message") or {}).get("content") if isinstance(row.get("message"), dict) else None
+    if isinstance(content, str):
+        return content.startswith(CLAUDE_INTERRUPTED_MARKER)
+    return isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "text" and str(block.get("text") or "").startswith(CLAUDE_INTERRUPTED_MARKER)
+        for block in content
+    )
+
+
 def turn_end(row: dict[str, Any]) -> bool:
-    return row.get("type") == "system" and row.get("subtype") == "turn_duration"
+    """A turn ends with ``system/turn_duration``, or interrupted, with Claude's marker row."""
+
+    return (row.get("type") == "system" and row.get("subtype") == "turn_duration") or _interrupted(row)
 
 
 def turn_bounds(rows: list[dict[str, Any]], prompt_marker: str) -> tuple[int, int | None] | None:
