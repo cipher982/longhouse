@@ -509,5 +509,11 @@ if [[ "$REMOTE_RELEASE" != "1" ]]; then
   python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- test \
     --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine \
     opencode_control -- --nocapture
+  # OMP Console stops, reaps and recovers its providers through `ps`, process
+  # groups and the boot identity, all of which differ by platform. Its
+  # fake-provider tests run here because this lane also runs on macOS.
+  python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- test \
+    --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine \
+    omp_print -- --nocapture
 fi
 echo "native installer smoke passed"
