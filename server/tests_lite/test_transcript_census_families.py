@@ -101,7 +101,7 @@ def _assert_all_classified(provider: str, records: list[dict]) -> int:
 
 # Pi and OMP share `extract_pi_message_events`: role -> the content it has a path for.
 PI_MESSAGE_ARMS = {
-    "user": [STRING, "text", "image"],
+    "user": [EMPTY, STRING, "text", "image"],
     "assistant": [STRING, "text", "thinking", "image", "toolCall"],
     "toolResult": [EMPTY, STRING, "text", "image"],
     "custom": [EMPTY, STRING, "text"],
@@ -124,18 +124,25 @@ def test_pi_and_omp_catalogs_hold_every_shape_the_parser_has_a_path_for(provider
     blocks = {name for names in PI_MESSAGE_ARMS.values() for name in names} - {STRING, EMPTY}
     assert _arms(PARSER, "extract_pi_message_events") == set(PI_MESSAGE_ARMS) | blocks
 
+    # A user message with no content yields no event. Pi leaves it at that; for OMP a line that yields
+    # nothing is recorded as an unknown record (`extract_omp_events`), so there it stays a finding.
+    assert "push_omp_record_event(obj, session_id, line_offset, raw_line, true, events)" in _rust_function(PARSER, "extract_omp_events")
+    user_without_content = [] if provider == "pi" else [EMPTY]
     records = [{"type": line_type} for line_type in _record_rows(catalog)]
     for role, names in PI_MESSAGE_ARMS.items():
+        names = [name for name in names if not (role == "user" and name in user_without_content)]
         records += [{"type": "message", "message": {"role": role, "content": _content(combo)}} for combo in _subsets(names)]
     records.append({"type": "message", "message": {"role": "bashExecution", "command": "pwd"}})
     # An assistant message with no content is how a failed request is written.
     records.append({"type": "message", "message": {"role": "assistant", "content": [], "stopReason": "error"}})
-    # user 4, assistant 16, toolResult 5, the five other roles 3 each, and the empty assistant message.
-    assert _assert_all_classified(provider, records) == len(_record_rows(catalog)) + 4 + 16 + 5 + 15 + 1
+    # user 4 (and its empty message for Pi), assistant 16, toolResult 5, the five other roles 3 each,
+    # and the empty assistant message.
+    assert _assert_all_classified(provider, records) == len(_record_rows(catalog)) + 4 + (provider == "pi") + 16 + 5 + 15 + 1
 
     # What the parser has no arm for stays a finding.
     tool = _tool()
     for record in (
+        *({"type": "message", "message": {"role": "user", "content": content}} for content in ([],) if provider == "omp"),
         {"type": "message", "message": {"role": "system", "content": "prompt sections"}},
         {"type": "message", "message": {"role": "assistant", "content": [{"type": "text"}, {"type": "video"}]}},
         {"type": "message", "message": {"role": "user", "content": [{"type": "thinking"}]}},
@@ -190,8 +197,13 @@ def test_cursor_projection_catalog_holds_every_block_spelling_the_parser_has_a_p
         for combo in _subsets([STRING, *sorted(blocks)]):
             for text in texts.values() if role == "user" else ["hello"]:
                 records.append({"role": role, "message": {"content": _content(combo, text)}})
-    # 511 block combinations and a string, for each role; three ways to wrap a user's text.
-    assert _assert_all_classified("cursor", records) == 4 * 512 + 2 * 512
+    # A line with a role and no message, or a message with no content, yields no event.
+    cursor_events = _rust_function(PARSER, "extract_cursor_events")
+    assert "let Some(message) = obj.message.as_ref() else {\n        return;" in cursor_events
+    for role in roles:
+        records += [{"role": role}, {"role": role, "message": {"content": []}}, {"role": role, "message": {}}]
+    # 511 block combinations and a string, for each role; three ways to wrap a user's text; the empty line.
+    assert _assert_all_classified("cursor", records) == 4 * 512 + 2 * 512 + 4
 
     tool = _tool()
     catalog = _catalog("cursor")
@@ -269,12 +281,18 @@ def test_cursor_store_catalog_holds_every_block_combination_both_readers_have_a_
     assert roles == {"system", "user", "assistant", "tool"}
     assert set(family["segments"][2]) == engine_arms | {STRING}
 
+    # A message with no content has no blocks, and both readers then render nothing.
+    assert "_ => Vec::new()," in _rust_function("storage_v2_shipper/cursor_store_source.rs", "cursor_message_blocks")
+    assert set(_catalog("cursor")["families"][2]["segments"][1]) == roles
+
     messages = []
     for role in sorted(roles):
         for combo in _subsets([STRING, *CURSOR_STORE_BLOCKS]):
             content = "prose" if combo == (STRING,) else [CURSOR_STORE_BLOCKS[name] for name in combo]
             messages.append({"role": role, "id": f"{role}-{len(messages)}", "content": content})
-    assert len(messages) == 4 * 16
+        messages.append({"role": role, "id": f"{role}-{len(messages)}", "content": []})
+        messages.append({"role": role, "id": f"{role}-{len(messages)}"})
+    assert len(messages) == 4 * 18
     store = _write_store(tmp_path / "every-combination", agent_id="agent-1", created_at_ms=1, updated_at_ms=2, messages=messages)
 
     decoded = decode_store_db(store)
@@ -283,7 +301,7 @@ def test_cursor_store_catalog_holds_every_block_combination_both_readers_have_a_
 
     tool = _tool()
     observed = tool.census([store], "cursor")
-    assert len([shape for shape in observed if shape.startswith("store/") and shape not in ("store/meta/0", "store/root")]) == 4 * 16
+    assert len([shape for shape in observed if shape.startswith("store/") and shape not in ("store/meta/0", "store/root")]) == 4 * 17
     assert tool.main(["check", "--provider", "cursor", str(store)]) == 0
 
     # A block only one reader has an arm for, and one neither has, are findings.
@@ -295,11 +313,17 @@ def test_cursor_store_catalog_holds_every_block_combination_both_readers_have_a_
         messages=[
             {"role": "assistant", "id": "1", "content": [{"type": "redacted-reasoning", "data": "opaque"}]},
             {"role": "assistant", "id": "2", "content": [{"type": "text", "text": "x"}, {"type": "image", "image": "opaque"}]},
+            # A block with no type is not an empty message: neither reader has an arm for it.
+            {"role": "assistant", "id": "3", "content": [{"text": "untyped"}]},
         ],
     )
-    assert decode_store_db(odd).diagnostics.unknown_block_types == {"image": 1}
+    assert decode_store_db(odd).diagnostics.unknown_block_types == {"image": 1, "None": 1}
     catalog = _catalog("cursor")
-    assert tool.unclassified(catalog, tool.census([odd], "cursor")) == ["store/assistant/image+text", "store/assistant/redacted-reasoning"]
+    assert tool.unclassified(catalog, tool.census([odd], "cursor")) == [
+        "store/assistant/image+text",
+        "store/assistant/redacted-reasoning",
+        "store/assistant/untyped",
+    ]
 
 
 # ---------------------------------------------------------------------------

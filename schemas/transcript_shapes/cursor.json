@@ -316,6 +316,41 @@
    ],
    "keys": ["message", "message.content", "role", "version"],
    "required_keys": ["role", "message.content"]
+  },
+  {
+   "parser": "engine/src/storage_v2_shipper/cursor_store_source.rs cursor_message_blocks; server/zerg/services/cursor_transcript.py _map_message: no content, no rows",
+   "segments": [
+    "store",
+    {
+     "assistant": {},
+     "system": {},
+     "tool": {},
+     "user": {}
+    },
+    {
+     "?": {
+      "classification": "state:empty message"
+     }
+    }
+   ],
+   "required_keys": ["role"]
+  },
+  {
+   "parser": "engine/src/pipeline/parser.rs extract_cursor_events: no message or no content, no events",
+   "segments": [
+    {
+     "assistant": {},
+     "system": {},
+     "tool": {},
+     "user": {}
+    },
+    {
+     "?": {
+      "classification": "state:empty message"
+     }
+    }
+   ],
+   "required_keys": ["role"]
   }
  ]
 }

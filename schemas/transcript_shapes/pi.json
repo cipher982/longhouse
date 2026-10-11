@@ -261,6 +261,10 @@
     "message",
     "user",
     {
+     "?": {
+      "classification": "state:empty message",
+      "keys": []
+     },
      "image": {
       "classification": "transcript:user_image",
       "keys": ["message.content[].data", "message.content[].mimeType", "message.content[].type"],

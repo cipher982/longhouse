@@ -273,8 +273,13 @@ def _cursor_store_shape(
     block_types: set[str] = set()
     keys = [key for key in _sorted_keys(entry) if not key.startswith("_census_")]
     if isinstance(content, list):
+        # `?` is a message with no blocks, which the readers render as nothing.
+        # A block with no type is something else: neither reader has an arm
+        # for it.
         block_types.update(
-            str(block.get("type", "?")) for block in content if isinstance(block, dict)
+            str(block.get("type", "untyped"))
+            for block in content
+            if isinstance(block, dict)
         )
         keys += [
             f"content[].{key}"
