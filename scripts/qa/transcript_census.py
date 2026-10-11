@@ -39,7 +39,15 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CATALOG_DIR = REPO_ROOT / "schemas" / "transcript_shapes"
-SUPPORTED_PROVIDERS = ("claude", "codex", "cursor", "antigravity", "opencode", "pi")
+SUPPORTED_PROVIDERS = (
+    "claude",
+    "codex",
+    "cursor",
+    "antigravity",
+    "opencode",
+    "pi",
+    "omp",
+)
 _CURSOR_CONTEXT_MARKERS = (
     "<user_info>",
     "<agent_transcripts>",
@@ -227,7 +235,47 @@ def codex_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
     return kind, _sorted_keys(payload) or _sorted_keys(entry), version, entrypoint
 
 
+def _cursor_store_shape(
+    entry: dict, kind: str
+) -> tuple[str, list[str], str | None, str | None]:
+    """A row of Cursor's `store.db`: the root metadata, the root blob, or a message."""
+    if kind == "meta":
+        keys = [key for key in _sorted_keys(entry) if not key.startswith("_census_")]
+        return f"store/meta/{entry.get('_census_meta_key', '?')}", keys, None, None
+    if kind == "root":
+        return "store/root", list(entry.get("_census_fields") or []), None, None
+    content = entry.get("content")
+    block_types: set[str] = set()
+    keys = [key for key in _sorted_keys(entry) if not key.startswith("_census_")]
+    if isinstance(content, list):
+        block_types.update(
+            str(block.get("type", "?")) for block in content if isinstance(block, dict)
+        )
+        keys += [
+            f"content[].{key}"
+            for block in content
+            if isinstance(block, dict)
+            for key in _sorted_keys(block)
+        ]
+    elif isinstance(content, str):
+        block_types.add("string")
+    return (
+        f"store/{entry.get('role') or '?'}/" + "+".join(sorted(block_types) or ["?"]),
+        keys,
+        None,
+        None,
+    )
+
+
 def cursor_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
+    store_kind = entry.get("_census_store")
+    if isinstance(store_kind, str):
+        return _cursor_store_shape(entry, store_kind)
+    if "role" not in entry and isinstance(entry.get("type"), str):
+        # A projection line that is not a message: a lifecycle record such as
+        # `turn_ended`, discriminated by its own `type`.
+        keys = [key for key in _sorted_keys(entry) if not key.startswith("_census_")]
+        return f"event/{entry['type']}", keys, None, None
     role = str(entry.get("role") or "?")
     message = entry.get("message") or {}
     content = message.get("content") if isinstance(message, dict) else None
@@ -331,6 +379,11 @@ def pi_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
     )
 
 
+def omp_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
+    """OMP writes Pi's session format with more line types; its catalog is its own."""
+    return pi_shape(entry)
+
+
 SHAPERS = {
     "claude": claude_shape,
     "codex": codex_shape,
@@ -338,6 +391,7 @@ SHAPERS = {
     "antigravity": antigravity_shape,
     "opencode": opencode_shape,
     "pi": pi_shape,
+    "omp": omp_shape,
 }
 
 
@@ -353,12 +407,114 @@ def iter_files(paths: list[str], provider: str) -> list[Path]:
                 files.extend(sorted(path.rglob("*.jsonl")))
                 if provider == "antigravity":
                     files.extend(sorted(path.rglob("logs.json")))
+                if provider == "cursor":
+                    files.extend(sorted(path.rglob("store.db")))
         elif path.is_file():
             files.append(path)
     return files
 
 
+def _protobuf_fields(data: bytes) -> list[str] | None:
+    """Field numbers and wire types of one protobuf message, without its values.
+
+    Cursor's root blob lists the conversation's message blobs as field 1, each
+    a 32-byte id, so the length of every field-1 value is part of the shape.
+    """
+    index = 0
+    fields: set[str] = set()
+
+    def varint() -> int:
+        nonlocal index
+        value = shift = 0
+        while True:
+            byte = data[index]
+            index += 1
+            value |= (byte & 0x7F) << shift
+            if not byte & 0x80:
+                return value
+            shift += 7
+            if shift > 63:
+                raise ValueError("varint is too long")
+
+    try:
+        while index < len(data):
+            key = varint()
+            number, wire = key >> 3, key & 0x07
+            if wire == 0:
+                varint()
+            elif wire == 1:
+                index += 8
+            elif wire == 2:
+                length = varint()
+                if number == 1:
+                    fields.add(f"field1.len{length}")
+                index += length
+            elif wire == 5:
+                index += 4
+            else:
+                return None
+            fields.add(f"field{number}.wire{wire}")
+    except (IndexError, ValueError):
+        return None
+    return sorted(fields) if index == len(data) else None
+
+
+def _cursor_store_records(path: Path) -> Iterator[dict[str, Any] | None]:
+    """The rows of a Cursor `store.db` that carry a shape, as census records.
+
+    The root metadata row, the root blob it names (protobuf; fields only) and
+    every message blob (JSON). That is a superset of what a reader of the
+    current conversation opens: messages of abandoned branches stay in the
+    store and are fingerprinted too. Other binary blobs are superseded roots
+    and tree nodes; they are not records.
+    """
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        yield None
+        return
+    try:
+        root_id = None
+        for key, value in connection.execute(
+            "SELECT key, value FROM meta ORDER BY key"
+        ):
+            try:
+                raw = value if isinstance(value, bytes) else str(value).encode()
+                decoded = json.loads(bytes.fromhex(raw.decode("ascii")))
+            except (TypeError, ValueError):
+                yield None
+                continue
+            if not isinstance(decoded, dict):
+                yield None
+                continue
+            if str(key) == "0":
+                root_id = decoded.get("latestRootBlobId")
+            yield {**decoded, "_census_store": "meta", "_census_meta_key": str(key)}
+        for blob_id, data in connection.execute("SELECT id, data FROM blobs"):
+            raw = data if isinstance(data, bytes) else str(data).encode()
+            try:
+                message = json.loads(raw)
+            except ValueError:
+                message = None
+            if isinstance(message, dict):
+                yield {**message, "_census_store": "message"}
+            elif blob_id == root_id:
+                fields = _protobuf_fields(raw)
+                if fields is None:
+                    yield None
+                else:
+                    yield {"_census_store": "root", "_census_fields": fields}
+    except sqlite3.Error:
+        yield None
+    finally:
+        connection.close()
+
+
 def _iter_records(path: Path, provider: str) -> Iterator[dict[str, Any] | None]:
+    if provider == "cursor" and path.suffix == ".db":
+        yield from _cursor_store_records(path)
+        return
+
     if provider == "opencode" and path.suffix == ".db":
         try:
             connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)

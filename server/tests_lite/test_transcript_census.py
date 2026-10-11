@@ -169,3 +169,98 @@ def test_every_launch_provider_has_boundary_and_drift_catalog_rows():
         catalog = json.loads((REPO_ROOT / "schemas" / "transcript_shapes" / f"{provider}.json").read_text())
         assert catalog["shapes"][shape]["classification"] == classification
         assert catalog["shapes"][shape]["required_keys"]
+
+
+def _census(provider: str, *paths: Path) -> dict:
+    result = subprocess.run(
+        [sys.executable, str(TOOL), "census", "--json", "--provider", provider, *map(str, paths)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)["shapes"]
+
+
+def _cursor_store(path: Path, *, message_id_bytes: int = 32) -> Path:
+    """A Cursor conversation store: hex-encoded root metadata, a protobuf root and JSON message blobs."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    messages = {
+        "a" * 64: {"role": "user", "content": [{"type": "text", "text": "private prompt"}], "providerOptions": {}},
+        "b" * 64: {"role": "assistant", "id": "m1", "content": [{"type": "text", "text": "private reply"}], "providerOptions": {}},
+    }
+    root = b"".join(b"\x0a" + bytes([message_id_bytes]) + bytes.fromhex(blob_id)[:message_id_bytes] for blob_id in messages)
+    root += b"\x50\x01"  # field 10, a varint the reader skips
+    meta = {"agentId": "agent-1", "latestRootBlobId": "root-1", "createdAt": 1, "name": "private title"}
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);"
+        )
+        connection.execute("INSERT INTO meta VALUES ('0', ?)", (json.dumps(meta).encode().hex(),))
+        connection.execute("INSERT INTO blobs VALUES ('root-1', ?)", (root,))
+        connection.execute("INSERT INTO blobs VALUES ('superseded-root', ?)", (b"\x0a\x20" + b"\x00" * 32,))
+        for blob_id, message in messages.items():
+            connection.execute("INSERT INTO blobs VALUES (?, ?)", (blob_id, json.dumps(message).encode()))
+    connection.close()
+    return path
+
+
+def test_cursor_store_census_names_the_meta_row_the_root_blob_and_each_message(tmp_path: Path):
+    store = _cursor_store(tmp_path / "chats" / "workspace" / "agent-1" / "store.db")
+    shapes = _census("cursor", tmp_path)
+
+    assert sorted(shapes) == ["store/assistant/text", "store/meta/0", "store/root", "store/user/text"]
+    assert shapes["store/meta/0"]["keys"] == ["agentId", "createdAt", "latestRootBlobId", "name"]
+    # The root is named by its protobuf fields and the length of the ids it lists; a superseded root is not a record.
+    assert shapes["store/root"]["count"] == 1
+    assert shapes["store/root"]["keys"] == ["field1.len32", "field1.wire2", "field10.wire0"]
+    assert shapes["store/assistant/text"]["keys"] == ["content", "content[].text", "content[].type", "id", "providerOptions", "role"]
+    assert "private" not in json.dumps(shapes)
+
+    # Every shape but the root metadata row is classified; that row stays a finding.
+    result = _check("cursor", store)
+    assert result.returncode == 1
+    assert "1 unclassified shape(s)" in result.stdout and "store/meta/0" in result.stdout
+    assert "missing a key" not in result.stdout and "never seen" not in result.stdout
+
+
+def test_cursor_root_blob_whose_message_ids_change_length_is_drift(tmp_path: Path):
+    """The reader takes field 1 as 32-byte blob ids; another length keeps the field and loses the conversation."""
+    store = _cursor_store(tmp_path / "store.db", message_id_bytes=16)
+    result = _check("cursor", store)
+    assert result.returncode == 1
+    assert "store/root  field1.len32 absent in 1 of 1 lines" in result.stdout
+    assert "store/root  +field1.len16" in result.stdout
+
+
+def test_cursor_projection_lifecycle_line_is_named_by_its_type(tmp_path: Path):
+    projection = tmp_path / "agent.jsonl"
+    projection.write_text(
+        '{"role":"assistant","message":{"content":[{"type":"text","text":"hi"},{"type":"tool_use","name":"Shell","input":{}}]}}\n'
+        '{"type":"turn_ended","status":"success"}\n'
+    )
+    assert sorted(_census("cursor", projection)) == ["assistant/text+tool_use", "event/turn_ended"]
+    assert _check("cursor", projection).returncode == 0
+
+
+def test_omp_sessions_are_shaped_like_pi_and_checked_against_their_own_catalog(tmp_path: Path):
+    session = tmp_path / "session.jsonl"
+    lines = [
+        {"type": "title", "v": 1, "title": "t", "source": "auto", "updatedAt": "2026-10-11T00:00:00.000Z", "pad": ""},
+        {"type": "session", "version": 3, "id": "s", "timestamp": "2026-10-11T00:00:00.000Z", "cwd": "/tmp"},
+        {"type": "service_tier_change", "id": "a", "parentId": None, "timestamp": "2026-10-11T00:00:00.000Z", "serviceTier": None},
+        {
+            "type": "message",
+            "id": "b",
+            "parentId": "a",
+            "timestamp": "2026-10-11T00:00:00.000Z",
+            "message": {"role": "user", "content": [{"type": "text", "text": "hi"}], "timestamp": 1},
+        },
+    ]
+    session.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    assert sorted(_census("omp", session)) == ["message/user/text", "service_tier_change", "session", "title"]
+    assert _check("omp", session).returncode == 0, "every line type above is one the OMP catalog classifies"
+
+    # A line type nobody has classified is reported under OMP's own catalog, not Pi's.
+    session.write_text(json.dumps({"type": "ttsr_injection", "id": "c", "parentId": "b", "timestamp": "2026-10-11T00:00:00.000Z"}) + "\n")
+    result = _check("omp", session)
+    assert result.returncode == 1 and "ttsr_injection" in result.stdout

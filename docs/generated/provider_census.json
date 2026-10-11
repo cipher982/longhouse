@@ -802,6 +802,7 @@
         "claude",
         "codex",
         "cursor",
+        "omp",
         "opencode",
         "pi"
       ]
@@ -2082,6 +2083,7 @@
         "claude",
         "codex",
         "cursor",
+        "omp",
         "opencode",
         "pi"
       ]
