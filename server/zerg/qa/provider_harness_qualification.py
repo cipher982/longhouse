@@ -1085,6 +1085,86 @@ def run_antigravity_hook_inbox(request_path: Path, output_root: Path) -> dict[st
     )
 
 
+_REASON_MESSAGE_LIMIT = 400
+
+
+def _outcome_reason(stage: str, failure_code: object, *, failed_scenario: object = None, message: object = None) -> dict[str, str]:
+    reason = {"stage": stage, "failure_code": str(failure_code)}
+    if isinstance(failed_scenario, str) and failed_scenario:
+        reason["failed_scenario"] = failed_scenario
+    if isinstance(message, str) and message.strip():
+        reason["message"] = message.strip()[:_REASON_MESSAGE_LIMIT]
+    return reason
+
+
+def _cursor_requirement_failures(
+    gate0: Mapping[str, Any] | None,
+    live_result: Mapping[str, Any],
+    interaction_result: Mapping[str, Any],
+) -> list[tuple[AssertionOutcome, dict[str, str]]]:
+    """Each requirement of the Cursor profile that did not pass, with its own cause.
+
+    A requirement the provider or the harness could not complete is an
+    infrastructure error; one a scenario declined to attempt or to accept is
+    blocked. The causes are independent, so a failed Gate 0 is reported as
+    itself whatever the live probe did.
+    """
+
+    failures: list[tuple[AssertionOutcome, dict[str, str]]] = []
+    gate0_passed = gate0 is not None and gate0.get("status") == "passed"
+    if gate0 is None:
+        failures.append((AssertionOutcome.INFRASTRUCTURE_ERROR, _outcome_reason("cursor_gate0", "cursor_gate0_artifact_missing")))
+    elif not gate0_passed:
+        failures.append(
+            (
+                AssertionOutcome.INFRASTRUCTURE_ERROR,
+                _outcome_reason(
+                    "cursor_gate0",
+                    gate0.get("failure_code") or "cursor_gate0_failed",
+                    failed_scenario=gate0.get("failed_scenario"),
+                    message=gate0.get("error"),
+                ),
+            )
+        )
+    # The live canary reads the Gate 0 artifact, so a failed Gate 0 is already
+    # its cause; it is a cause of its own only when Gate 0 passed.
+    live_status = live_result.get("status")
+    if gate0_passed and live_status != "pass":
+        failures.append(
+            (
+                AssertionOutcome.BLOCKED if live_status == "blocked" else AssertionOutcome.INFRASTRUCTURE_ERROR,
+                _outcome_reason(
+                    LIVE_TOKEN_HARNESS_SCENARIO,
+                    live_result.get("failure_code") or f"{LIVE_TOKEN_HARNESS_SCENARIO}_{live_status}",
+                    message=live_result.get("message"),
+                ),
+            )
+        )
+    interaction_status = interaction_result.get("status")
+    if interaction_status != "pass":
+        data = interaction_result.get("data")
+        verdict_rows = data.get("assertions") if isinstance(data, Mapping) else None
+        # The probe's own reason (a model identity mismatch, a missing hook
+        # receipt) is more specific than the scenario's verdict code.
+        probe = next(
+            (row for row in verdict_rows or () if isinstance(row, Mapping) and row.get("probe_failure_code")),
+            {},
+        )
+        failures.append(
+            (
+                AssertionOutcome.BLOCKED if interaction_status == "blocked" else AssertionOutcome.INFRASTRUCTURE_ERROR,
+                _outcome_reason(
+                    "interaction_semantics",
+                    probe.get("probe_failure_code")
+                    or interaction_result.get("failure_code")
+                    or f"interaction_semantics_{interaction_status}",
+                    message=probe.get("probe_message") or interaction_result.get("message"),
+                ),
+            )
+        )
+    return failures
+
+
 def _cursor_observed_install_executor(
     binary: Path,
     evidence_root: Path,
@@ -1117,6 +1197,8 @@ def _cursor_observed_install_executor(
             "artifact_sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
             "status": gate0_payload.get("status"),
             "failure_code": gate0_payload.get("failure_code"),
+            "failed_scenario": gate0_payload.get("failed_scenario"),
+            "error": gate0_payload.get("error"),
             "native_evidence": gate0_payload.get("native_evidence"),
         }
     build_ref = _build_provider_build_ref(request, binary, output_root=evidence_root)
@@ -1146,21 +1228,21 @@ def _cursor_observed_install_executor(
         provider="cursor",
         scenario="interaction_semantics",
     )
-    gate0_passed = gate0 is not None and gate0.get("status") == "passed"
-    # Gate 0 and the bounded live canary are this profile's requirements.
-    # The universal full-column result remains observable evidence but does
-    # not change this profile's verdict.
-    interaction_status = interaction_result.get("status")
-    if not gate0_passed or live_result.get("status") != "pass" or interaction_status != "pass":
-        assertion_outcome = (
-            AssertionOutcome.BLOCKED
-            if live_result.get("status") == "blocked" or interaction_status == "blocked"
-            else AssertionOutcome.INFRASTRUCTURE_ERROR
-        )
-        status = "blocked" if assertion_outcome == AssertionOutcome.BLOCKED else "infrastructure_error"
+    # Gate 0, the bounded live canary and the live interaction probe are this
+    # profile's requirements. The universal full-column result remains
+    # observable evidence but does not change this profile's verdict.
+    failures = _cursor_requirement_failures(gate0, live_result, interaction_result)
+    failed_outcomes = {outcome for outcome, _reason in failures}
+    if AssertionOutcome.INFRASTRUCTURE_ERROR in failed_outcomes:
+        assertion_outcome = AssertionOutcome.INFRASTRUCTURE_ERROR
+        status = "infrastructure_error"
+    elif failed_outcomes:
+        assertion_outcome = AssertionOutcome.BLOCKED
+        status = "blocked"
     else:
         assertion_outcome = AssertionOutcome.PASS
         status = "pass"
+    reasons = tuple(reason for _outcome, reason in failures)
     interaction_evidence_class = str((request.get("scenario_evidence") or {}).get("interaction_semantics") or "live_token")
     evidence_class = {
         "hermetic": EvidenceClass.HERMETIC,
@@ -1171,9 +1253,11 @@ def _cursor_observed_install_executor(
         "cursor_observed_install_contract_preserved",
         assertion_outcome,
         evidence_class,
+        reasons,
     )
     observation = {
         "status": status,
+        "requirement_failures": list(reasons),
         "provider_bin": str(binary),
         "provider_build": build_ref.to_evidence(),
         "full_column_gate": full_column_gate,

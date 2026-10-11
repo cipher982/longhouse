@@ -716,32 +716,51 @@ def test_cursor_full_column_gate_accepts_live_gate0_limits() -> None:
     assert gate["status"] == "pass"
 
 
-def test_cursor_observed_install_executor_keeps_profile_verdict_separate_from_full_column(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
+def _cursor_install(tmp_path: Path) -> tuple[Path, Path, str]:
     root = tmp_path / "cursor-install"
     root.mkdir()
     binary = root / "cursor-agent"
-    binary.write_text("cursor fixture\n", encoding="utf-8")
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        'if sys.argv[1:] == ["--version"]:\n'
+        '    print("2026.07.23-test")\n'
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
     binary.chmod(0o700)
-    build_identity = f"sha256:{_closure_digest(root)}"
+    return root, binary, f"sha256:{hashlib.sha256(binary.read_bytes()).hexdigest()}"
+
+
+def _cursor_request(
+    tmp_path: Path,
+    *,
+    profile: str = cursor_release_identity.OBSERVED_INSTALL_PROFILE,
+    **changes: object,
+) -> tuple[Path, Path]:
+    root, binary, identity = _cursor_install(tmp_path)
     request = _request(
         tmp_path,
-        profile=cursor_release_identity.OBSERVED_INSTALL_PROFILE,
+        profile=profile,
         binary=binary,
-        identity=f"sha256:{hashlib.sha256(binary.read_bytes()).hexdigest()}",
-        build_identity=build_identity,
+        identity=identity,
+        build_identity=f"sha256:{_closure_digest(root)}",
         provider="cursor",
         version="2026.07.23-test",
         granularity="full_installed_tree",
-        scenario_evidence={"interaction_semantics": "live_token"},
+        **changes,
     )
-    evidence_root = tmp_path / "output" / "evidence"
+    return request, binary
+
+
+def _cursor_gate0(tmp_path: Path, monkeypatch, **report: object) -> None:
     gate0 = tmp_path / "gate0.json"
-    gate0.write_text(json.dumps({"status": "passed", "provider": "cursor"}), encoding="utf-8")
+    gate0.write_text(json.dumps({"provider": "cursor", **report}), encoding="utf-8")
     monkeypatch.setenv("LONGHOUSE_CURSOR_GATE0_ARTIFACT", str(gate0))
 
+
+def _cursor_harness(monkeypatch, *, live: dict[str, object], interaction: dict[str, object]) -> None:
     results = []
     for scenario in DEFAULT_HARNESS_SCENARIOS:
         status, failure_code = bridge._EXPECTED_CURSOR_FULL_COLUMN_LIMITS.get(  # noqa: SLF001
@@ -751,15 +770,10 @@ def test_cursor_observed_install_executor_keeps_profile_verdict_separate_from_fu
         if failure_code is not None:
             row["failure_code"] = failure_code
         results.append(row)
-    interaction = next(row for row in results if row["scenario"] == "interaction_semantics")
-    interaction.update(status="blocked", failure_code="interaction_native_raw_evidence_missing")
-    results.append(
-        {
-            "provider": "cursor",
-            "scenario": LIVE_TOKEN_HARNESS_SCENARIO,
-            "status": "pass",
-        }
-    )
+    interaction_row = next(row for row in results if row["scenario"] == "interaction_semantics")
+    interaction_row.pop("failure_code", None)
+    interaction_row.update(interaction)
+    results.append({"provider": "cursor", "scenario": LIVE_TOKEN_HARNESS_SCENARIO, **live})
     monkeypatch.setattr(
         bridge,
         "run_harness",
@@ -772,15 +786,181 @@ def test_cursor_observed_install_executor_keeps_profile_verdict_separate_from_fu
         },
     )
 
+
+_CURSOR_ASSERTION = "cursor_observed_install_contract_preserved"
+_CURSOR_PROFILES = [cursor_release_identity.OBSERVED_INSTALL_PROFILE]
+_GATE0_ERRORED = {
+    "status": "failed",
+    "failure_code": "cursor_turn_ended_in_error",
+    "failed_scenario": "active_steer",
+    "error": "Cursor ended the steered turn with stop status 'error' before producing afterAgentResponse",
+}
+_GATE0_REASON = {
+    "stage": "cursor_gate0",
+    "failure_code": "cursor_turn_ended_in_error",
+    "failed_scenario": "active_steer",
+    "message": "Cursor ended the steered turn with stop status 'error' before producing afterAgentResponse",
+}
+# The live canary reads the Gate 0 artifact, so it fails with Gate 0's code.
+_LIVE_FAILED_WITH_GATE0 = {"status": "fail", "failure_code": "cursor_turn_ended_in_error"}
+_PROBE_MISMATCH = {
+    "status": "blocked",
+    "failure_code": "interaction_semantics_assertion_failed",
+    "data": {
+        "assertions": [
+            {
+                "status": "blocked",
+                "failure_code": "interaction_post_state_evidence_missing",
+                "probe_failure_code": "cursor_model_identity_mismatch",
+                "probe_message": "Cursor's sessionStart hook receipt names model 'other'; the probe requested 'requested'.",
+            }
+        ]
+    },
+}
+_PROBE_REASON = {
+    "stage": "interaction_semantics",
+    "failure_code": "cursor_model_identity_mismatch",
+    "message": "Cursor's sessionStart hook receipt names model 'other'; the probe requested 'requested'.",
+}
+
+
+def test_cursor_observed_install_executor_keeps_profile_verdict_separate_from_full_column(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    request, binary = _cursor_request(tmp_path, scenario_evidence={"interaction_semantics": "live_token"})
+    _cursor_gate0(tmp_path, monkeypatch, status="passed")
+    _cursor_harness(
+        monkeypatch,
+        live={"status": "pass"},
+        interaction={"status": "blocked", "failure_code": "interaction_native_raw_evidence_missing"},
+    )
+
     observation, assertions, _secrets = bridge._cursor_observed_install_executor(  # noqa: SLF001
         binary,
-        evidence_root,
+        tmp_path / "output" / "evidence",
         request=json.loads(request.read_text(encoding="utf-8")),
     )
 
     assert observation["status"] == "blocked"
     assert observation["full_column_gate"]["provider_status"] == "blocked"
     assert assertions[0].outcome.value == "blocked"
+    assert assertions[0].reasons == ({"stage": "interaction_semantics", "failure_code": "interaction_native_raw_evidence_missing"},)
+
+
+@pytest.mark.parametrize("profile", _CURSOR_PROFILES)
+def test_cursor_observed_install_reports_a_failed_gate0_with_its_code_and_scenario(
+    tmp_path: Path,
+    monkeypatch,
+    profile: str,
+) -> None:
+    """A failed Gate 0 is the reported cause, with its code and the scenario it failed in."""
+
+    request, _binary = _cursor_request(tmp_path, profile=profile)
+    _cursor_gate0(tmp_path, monkeypatch, **_GATE0_ERRORED)
+    _cursor_harness(monkeypatch, live=_LIVE_FAILED_WITH_GATE0, interaction={"status": "pass"})
+
+    result = bridge.run(request, tmp_path / "output")
+
+    assert result["semantic_status"] == "infrastructure_error"
+    bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
+    coverage = bundle["coverage_manifest"]
+    assert coverage["profile"] == profile
+    assert coverage["complete"] is True
+    assert coverage["outcomes"][_CURSOR_ASSERTION] == "infrastructure_error"
+    assert coverage["outcome_reasons"] == {_CURSOR_ASSERTION: [_GATE0_REASON]}
+    observation = json.loads((tmp_path / "output" / "semantic-evidence" / "semantic-observation.json").read_text(encoding="utf-8"))
+    assert observation["requirement_failures"] == [_GATE0_REASON]
+    assert observation["cursor_gate0"]["failed_scenario"] == "active_steer"
+
+
+def test_cursor_gate0_failure_is_not_hidden_by_a_blocked_probe(tmp_path: Path, monkeypatch) -> None:
+    """A failed Gate 0 reads the same whatever the live probe did, and both causes are named."""
+
+    request, binary = _cursor_request(tmp_path)
+    _cursor_gate0(tmp_path, monkeypatch, **_GATE0_ERRORED)
+    _cursor_harness(monkeypatch, live=_LIVE_FAILED_WITH_GATE0, interaction=_PROBE_MISMATCH)
+
+    observation, assertions, _secrets = bridge._cursor_observed_install_executor(  # noqa: SLF001
+        binary,
+        tmp_path / "output" / "evidence",
+        request=json.loads(request.read_text(encoding="utf-8")),
+    )
+
+    assert observation["status"] == "infrastructure_error"
+    assert assertions[0].outcome.value == "infrastructure_error"
+    assert assertions[0].reasons == (_GATE0_REASON, _PROBE_REASON)
+
+
+def test_cursor_blocked_probe_carries_the_probes_own_reason(tmp_path: Path, monkeypatch) -> None:
+    request, binary = _cursor_request(tmp_path)
+    _cursor_gate0(tmp_path, monkeypatch, status="passed")
+    _cursor_harness(monkeypatch, live={"status": "pass"}, interaction=_PROBE_MISMATCH)
+
+    observation, assertions, _secrets = bridge._cursor_observed_install_executor(  # noqa: SLF001
+        binary,
+        tmp_path / "output" / "evidence",
+        request=json.loads(request.read_text(encoding="utf-8")),
+    )
+
+    assert observation["status"] == "blocked"
+    assert assertions[0].outcome.value == "blocked"
+    assert assertions[0].reasons == (_PROBE_REASON,)
+
+
+def test_cursor_live_canary_is_its_own_cause_only_when_gate0_passed(tmp_path: Path, monkeypatch) -> None:
+    request, binary = _cursor_request(tmp_path)
+    _cursor_gate0(tmp_path, monkeypatch, status="passed")
+    _cursor_harness(
+        monkeypatch,
+        live={"status": "fail", "failure_code": "cursor_gate0_input_binding_failed", "message": "prompt not bound"},
+        interaction={"status": "pass"},
+    )
+
+    _observation, assertions, _secrets = bridge._cursor_observed_install_executor(  # noqa: SLF001
+        binary,
+        tmp_path / "output" / "evidence",
+        request=json.loads(request.read_text(encoding="utf-8")),
+    )
+
+    assert assertions[0].outcome.value == "infrastructure_error"
+    assert assertions[0].reasons == (
+        {"stage": LIVE_TOKEN_HARNESS_SCENARIO, "failure_code": "cursor_gate0_input_binding_failed", "message": "prompt not bound"},
+    )
+
+
+def test_cursor_without_a_gate0_artifact_says_so(tmp_path: Path, monkeypatch) -> None:
+    request, binary = _cursor_request(tmp_path)
+    monkeypatch.delenv("LONGHOUSE_CURSOR_GATE0_ARTIFACT", raising=False)
+    _cursor_harness(monkeypatch, live={"status": "pass"}, interaction={"status": "pass"})
+
+    _observation, assertions, _secrets = bridge._cursor_observed_install_executor(  # noqa: SLF001
+        binary,
+        tmp_path / "output" / "evidence",
+        request=json.loads(request.read_text(encoding="utf-8")),
+    )
+
+    assert assertions[0].outcome.value == "infrastructure_error"
+    assert assertions[0].reasons == ({"stage": "cursor_gate0", "failure_code": "cursor_gate0_artifact_missing"},)
+
+
+@pytest.mark.parametrize("profile", _CURSOR_PROFILES)
+def test_cursor_observed_install_passes_without_reasons_when_every_requirement_passed(
+    tmp_path: Path,
+    monkeypatch,
+    profile: str,
+) -> None:
+    request, _binary = _cursor_request(tmp_path, profile=profile)
+    _cursor_gate0(tmp_path, monkeypatch, status="passed")
+    _cursor_harness(monkeypatch, live={"status": "pass"}, interaction={"status": "pass"})
+
+    result = bridge.run(request, tmp_path / "output")
+
+    assert result["semantic_status"] == "pass"
+    coverage = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))["coverage_manifest"]
+    assert coverage["profile"] == profile
+    assert coverage["outcomes"][_CURSOR_ASSERTION] == "pass"
+    assert "outcome_reasons" not in coverage
 
 
 def test_claude_profile_runs_one_full_column_and_reuses_live_print_result(

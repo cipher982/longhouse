@@ -7,8 +7,10 @@ import importlib.util
 import json
 import os
 import platform
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -30,6 +32,11 @@ class SemanticAssertion:
     assertion_id: str
     outcome: AssertionOutcome
     evidence_class: EvidenceClass
+    # Why the assertion did not pass, one entry per independent cause: `stage`
+    # (what was being proven), `failure_code`, and optionally `failed_scenario`
+    # and `message`. Published as the bundle's `outcome_reasons` so the cause
+    # travels with the outcome instead of staying in the evidence tree.
+    reasons: tuple[Mapping[str, Any], ...] = ()
 
 
 SemanticExecutor = Callable[[Path, Path], tuple[dict[str, Any], tuple[SemanticAssertion, ...], tuple[str, ...]]]
@@ -303,7 +310,8 @@ def _blocked_from_identity(
 ) -> tuple[SemanticAssertion, ...]:
     infrastructure = "infrastructure_error" in set(identity_outcomes.values())
     outcome = AssertionOutcome.INFRASTRUCTURE_ERROR if infrastructure else AssertionOutcome.BLOCKED
-    return tuple(SemanticAssertion(assertion_id, outcome, EvidenceClass.LIVE_NO_TOKEN) for assertion_id in assertion_ids)
+    reason = {"stage": "release_identity", "failure_code": "exact_executable_identity_unconfirmed"}
+    return tuple(SemanticAssertion(assertion_id, outcome, EvidenceClass.LIVE_NO_TOKEN, (reason,)) for assertion_id in assertion_ids)
 
 
 def run_semantic_profile(
@@ -345,11 +353,13 @@ def run_semantic_profile(
                 "failure_code": "semantic_canary_exception",
                 "error": f"{type(exc).__name__}: {exc}",
             }
+            reason = {"stage": "semantic_canary", "failure_code": "semantic_canary_exception", "message": observation["error"]}
             semantic_assertions = tuple(
                 SemanticAssertion(
                     assertion_id,
                     AssertionOutcome.INFRASTRUCTURE_ERROR,
                     EvidenceClass.LIVE_NO_TOKEN,
+                    (reason,),
                 )
                 for assertion_id in assertion_ids
             )
@@ -374,16 +384,16 @@ def run_semantic_profile(
             "failure_code": "provider_executable_changed_during_semantic_canary",
             "post_semantic_identity": post_semantic_identity,
         }
+        reason = {"stage": "semantic_canary", "failure_code": "provider_executable_changed_during_semantic_canary"}
         semantic_assertions = tuple(
-            SemanticAssertion(
-                item.assertion_id,
-                AssertionOutcome.INFRASTRUCTURE_ERROR,
-                item.evidence_class,
-            )
-            for item in semantic_assertions
+            replace(item, outcome=AssertionOutcome.INFRASTRUCTURE_ERROR, reasons=(reason,)) for item in semantic_assertions
         )
 
     observation = _redact_value(observation, secrets)
+    outcome_reasons = _redact_value(
+        {item.assertion_id: [dict(reason) for reason in item.reasons] for item in semantic_assertions if item.reasons},
+        secrets,
+    )
     evidence_root = output_root / "semantic-evidence"
     evidence_root.mkdir(parents=True, exist_ok=True)
     _scrub_tree(evidence_root, secrets)
@@ -446,6 +456,8 @@ def run_semantic_profile(
         "outcomes": outcomes,
         "complete": set(outcomes) == set(identity.ASSERTIONS) | set(assertion_ids),
     }
+    if outcome_reasons:
+        coverage["outcome_reasons"] = outcome_reasons
     execution = json.loads((output_root / "execution-summary.json").read_text(encoding="utf-8"))
     execution["semantic_status"] = observation.get("status")
     execution["semantic_evidence_digest"] = raw_digest

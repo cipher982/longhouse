@@ -469,6 +469,8 @@ def test_opencode_publishes_serve_and_restart_semantics_from_existing_canary(tmp
         assert records[assertion]["provider_executable_identity"] == executable_identity
         assert records[assertion]["producer_class"] == "release_factory"
         assert records[assertion]["run_reference"] == "github-actions:run/123/job/456"
+    # A reason is published only for an outcome that did not pass.
+    assert "outcome_reasons" not in json.loads((output / "proof-bundle.json").read_text())["coverage_manifest"]
 
 
 def test_semantic_failure_is_published_instead_of_rejected(tmp_path: Path, monkeypatch) -> None:
@@ -619,6 +621,37 @@ def test_binary_mutation_during_canary_invalidates_semantic_records(tmp_path: Pa
     assert {records[assertion]["outcome"] for assertion in opencode.ASSERTIONS} == {"infrastructure_error"}
     observation = json.loads((output / "semantic-evidence" / "semantic-observation.json").read_text())
     assert observation["failure_code"] == "provider_executable_changed_during_semantic_canary"
+    # The cause travels with the outcome, not only in the evidence tree.
+    coverage = json.loads((output / "proof-bundle.json").read_text())["coverage_manifest"]
+    assert coverage["outcome_reasons"] == {
+        assertion: [{"stage": "semantic_canary", "failure_code": "provider_executable_changed_during_semantic_canary"}]
+        for assertion in opencode.ASSERTIONS
+    }
+
+
+def test_an_executor_exception_is_named_beside_the_outcome_it_caused(tmp_path: Path, monkeypatch) -> None:
+    binary, executable_identity = _fake_binary(tmp_path, "opencode")
+
+    def failing_canary(_args):
+        raise RuntimeError("canary could not start")
+
+    monkeypatch.setattr(opencode, "run_provider_live_canary", failing_canary)
+    output = tmp_path / "output"
+
+    provider_qualification.run(_request(tmp_path, "opencode", binary, executable_identity), output)
+
+    coverage = json.loads((output / "proof-bundle.json").read_text())["coverage_manifest"]
+    assert {coverage["outcomes"][assertion] for assertion in opencode.ASSERTIONS} == {"infrastructure_error"}
+    assert coverage["outcome_reasons"] == {
+        assertion: [
+            {
+                "stage": "semantic_canary",
+                "failure_code": "semantic_canary_exception",
+                "message": "RuntimeError: canary could not start",
+            }
+        ]
+        for assertion in opencode.ASSERTIONS
+    }
 
 
 def test_every_semantic_release_assertion_is_consumed_by_a_declared_capability() -> None:
