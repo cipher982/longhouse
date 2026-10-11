@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from zerg.qa.answer_markers import marker_answer_count
 from zerg.qa.answer_markers import marker_answered
 from zerg.qa.claude_helm_lifecycle import steer_landed_in_turn
 from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
@@ -50,6 +51,68 @@ def test_a_marker_alone_on_a_line_is_the_answer(text: str) -> None:
 )
 def test_a_marker_mentioned_in_prose_is_not_the_answer(text: str) -> None:
     assert not marker_answered(text, MARKER)
+
+
+# A turn that works through tools narrates before it answers. The narration
+# names the marker inside a sentence ahead of a tool call; the final reply puts a
+# line or two about the work first and the marker alone on its last line.
+NARRATION = (
+    "[INFERENCE] The shell job is terminal. The worker has not reported yet.\n\n"
+    f"**Status: not complete.** Both jobs must finish before I may reply with `{MARKER}`.\n\n"
+    "- shell job: done\n- worker: waiting for its terminal output"
+)
+FINAL_REPLY = f"Both terminal events observed:\n\n- worker: done\n- shell job: done\n\n{MARKER}"
+CONTEXT = "LH_FIXTURE_CONTEXT_0123456789abcdef"
+
+
+def test_narration_that_quotes_the_marker_is_a_mention_and_the_final_reply_is_the_answer() -> None:
+    assert not marker_answered(NARRATION, MARKER)
+    assert marker_answer_count(NARRATION, MARKER) == 0
+    assert marker_answered(FINAL_REPLY, MARKER)
+    assert marker_answer_count(FINAL_REPLY, MARKER) == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"{CONTEXT} {MARKER}",
+        f"{CONTEXT}\n{MARKER}",
+        # A model told to reply with "that value followed by exactly <MARKER>"
+        # sometimes puts nothing between the two.
+        f"{CONTEXT}{MARKER}",
+        f"`{CONTEXT}`, `{MARKER}`.",
+        f"The stored value is {CONTEXT}.\n\n{MARKER}",
+    ],
+)
+def test_a_reply_asked_to_carry_two_markers_answers_with_each(text: str) -> None:
+    assert marker_answered(text, MARKER, alongside=(CONTEXT,))
+    assert marker_answer_count(text, MARKER, alongside=(CONTEXT,)) == 1
+
+
+def test_a_second_marker_on_the_line_is_only_allowed_when_the_reply_was_asked_for_it() -> None:
+    assert not marker_answered(f"{CONTEXT} {MARKER}", MARKER)
+    assert not marker_answered(f"{CONTEXT}{MARKER}", MARKER)
+    # Any other word on the line is still a mention, companions or not.
+    assert not marker_answered(f"The value is {CONTEXT} and then {MARKER}", MARKER, alongside=(CONTEXT,))
+    assert not marker_answered(f"I will not send {CONTEXT} {MARKER}", MARKER, alongside=(CONTEXT,))
+    assert not marker_answered(f"- {CONTEXT} {MARKER}", MARKER, alongside=(CONTEXT,))
+    # A longer token that contains the marker is not the marker.
+    assert not marker_answered(f"{MARKER}_DONE", MARKER, alongside=(f"{MARKER}_DONE",))
+
+
+@pytest.mark.parametrize(
+    ("text", "count"),
+    [
+        (f"{MARKER}\n{MARKER}", 2),
+        (f"{MARKER} {MARKER}", 2),
+        (f"{MARKER}{MARKER}", 2),
+        (f"Done.\n{MARKER}\n\nAgain: {MARKER}", 1),
+        (f"I may not reply with {MARKER} yet.", 0),
+        ("", 0),
+    ],
+)
+def test_answers_are_counted_and_mentions_are_not(text: str, count: int) -> None:
+    assert marker_answer_count(text, MARKER) == count
 
 
 def _fixture(name: str) -> tuple[list[dict], str]:
