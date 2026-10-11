@@ -1884,6 +1884,8 @@ struct LonghouseMenuBarCoreTests {
         #expect(!SnapshotStore.classificationChanged(from: idle, to: pulseOnly))
         #expect(SnapshotStore.classificationChanged(from: idle, to: failedRetry))
         #expect(SnapshotStore.classificationChanged(from: failedRetry, to: completed))
+        // Another clean pass only moves the clock; the file shows it locally.
+        #expect(!SnapshotStore.classificationChanged(from: idle, to: completed))
     }
 
     @Test

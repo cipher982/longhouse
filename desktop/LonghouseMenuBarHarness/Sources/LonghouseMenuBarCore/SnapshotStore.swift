@@ -601,7 +601,9 @@ public final class SnapshotStore: ObservableObject {
             || current?.shippingProgress?.stalled != next.shippingProgress?.stalled
             || currentReconciliation?.state != nextReconciliation?.state
             || currentReconciliation?.failureReason != nextReconciliation?.failureReason
-            || currentProjection?.lastReconciledAt != nextProjection?.lastReconciledAt
+        // `lastReconciledAt` is a clock: the local projection shows it
+        // without a producer refresh, and the state/failure transitions
+        // above carry every classification change a reconciliation makes.
     }
 
     private func connectRealtimeIfNeeded(
