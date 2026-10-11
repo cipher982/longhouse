@@ -1498,6 +1498,63 @@ struct LonghouseMenuBarCoreTests {
 
     @Test
     @MainActor
+    func statusFileDisappearingAfterObservationIsNotPaperedOver() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-status-vanish-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let statusURL = directory.appendingPathComponent("engine-status.json")
+        let now = ISO8601DateFormatter().string(from: Date())
+        let payload: [String: Any] = [
+            "managed_sessions": [],
+            "last_updated": now,
+            "local_projection": ["version": 1, "generated_at": now, "engine_pulse_at": now],
+        ]
+        try JSONSerialization.data(withJSONObject: payload).write(to: statusURL, options: .atomic)
+        func snapshot(exists: Bool) -> HealthSnapshot {
+            HealthSnapshot(
+                schemaVersion: 1,
+                collectedAt: now,
+                healthState: exists ? "healthy" : "degraded",
+                severity: exists ? "green" : "yellow",
+                headline: exists ? "healthy" : "Engine status file is missing",
+                reasons: [],
+                suggestedActions: [],
+                service: nil,
+                engineStatus: EngineStatusSnapshot(
+                    path: statusURL.path,
+                    exists: exists,
+                    fresh: exists,
+                    ageSeconds: nil,
+                    payload: nil,
+                    error: exists ? nil : "No such file"
+                ),
+                outbox: nil,
+                activitySummary: nil,
+                launchReadiness: nil
+            )
+        }
+        let source = CountingHealthSnapshotSource(snapshots: [snapshot(exists: true), snapshot(exists: false)])
+        let store = SnapshotStore(source: source, cacheURL: nil)
+        store.refresh()
+        let clock = ContinuousClock()
+        var deadline = clock.now.advanced(by: .seconds(3))
+        while store.snapshot?.engineStatus?.payload == nil, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(store.snapshot?.engineStatus?.payload != nil, "the file observation was applied")
+
+        try FileManager.default.removeItem(at: statusURL)
+        deadline = clock.now.advanced(by: .seconds(3))
+        while store.snapshot?.engineStatus?.exists != false, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(store.snapshot?.engineStatus?.exists == false)
+        #expect(store.snapshot?.engineStatus?.error == "No such file")
+    }
+
+    @Test
+    @MainActor
     func localClockUpdatesDoNotPublishButSemanticChangesDo() throws {
         let now = Date()
         let firstPulse = ISO8601DateFormatters.fractionalTimestamp(for: now.addingTimeInterval(-8))

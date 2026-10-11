@@ -797,13 +797,11 @@ fn same_process(left: &KinfoProc, right: &KinfoProc) -> bool {
         && left.kp_proc.p_starttime.tv_usec == right.kp_proc.p_starttime.tv_usec
 }
 
+/// Whole seconds, exactly what parsing `ps -o lstart=` produced: the value is
+/// emitted as `process_start_time` evidence and compared with earlier
+/// observations, so sub-second precision would read as a different process.
 fn start_time(info: &KinfoProc) -> Option<DateTime<Utc>> {
-    let usec = u32::try_from(info.kp_proc.p_starttime.tv_usec).ok()?;
-    if usec >= 1_000_000 {
-        return None;
-    }
-    Utc.timestamp_opt(info.kp_proc.p_starttime.tv_sec, usec * 1_000)
-        .single()
+    Utc.timestamp_opt(info.kp_proc.p_starttime.tv_sec, 0).single()
 }
 
 fn error_from_errno() -> ProbeError {

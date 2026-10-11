@@ -431,6 +431,13 @@ public final class SnapshotStore: ObservableObject {
                 if case .lastKnown = self.projectionTrust() {
                     snapshot = snapshot.markingRuntimeHostProjectionUnavailable()
                 }
+                // A producer result that found the status file missing or
+                // unreadable supersedes the last file observation; the next
+                // readable write re-establishes it.
+                if loadedSnapshot.engineStatus?.exists == false
+                    || loadedSnapshot.engineStatus?.error != nil {
+                    self.latestLocalProjection = nil
+                }
                 if let latestLocalProjection = self.latestLocalProjection {
                     snapshot = snapshot.applyingLocalProjection(latestLocalProjection)
                 }
@@ -525,6 +532,13 @@ public final class SnapshotStore: ObservableObject {
             onWatchLost: { [weak self] in
                 // The next refresh re-arms the watch, or polls until it can.
                 Task { @MainActor [weak self] in self?.refresh(reason: .background) }
+            },
+            onUnreadable: { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.latestLocalProjection = nil
+                    self.refresh(reason: .background)
+                }
             }
         ) { [weak self] projection in
             Task { @MainActor [weak self] in

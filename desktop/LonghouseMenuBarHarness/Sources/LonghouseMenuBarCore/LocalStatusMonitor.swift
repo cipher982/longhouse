@@ -97,6 +97,9 @@ final class LocalStatusMonitor: @unchecked Sendable {
     private let queue = DispatchQueue(label: "ai.longhouse.menu-bar.local-status", qos: .userInitiated)
     private let onChange: @Sendable (Projection) -> Void
     private let onWatchLost: @Sendable () -> Void
+    /// The status file was readable and now is not (deleted, unreadable,
+    /// undecodable). The evidence it carried is superseded, not current.
+    private let onUnreadable: @Sendable () -> Void
     private let decoder = JSONDecoder()
     private var source: DispatchSourceFileSystemObject?
     private var directoryHandle: CInt = -1
@@ -111,10 +114,12 @@ final class LocalStatusMonitor: @unchecked Sendable {
     init(
         statusPath: String,
         onWatchLost: @escaping @Sendable () -> Void = {},
+        onUnreadable: @escaping @Sendable () -> Void = {},
         onChange: @escaping @Sendable (Projection) -> Void
     ) {
         statusURL = URL(fileURLWithPath: statusPath)
         self.onWatchLost = onWatchLost
+        self.onUnreadable = onUnreadable
         self.onChange = onChange
         decoder.keyDecodingStrategy = .convertFromSnakeCase
     }
@@ -200,7 +205,17 @@ final class LocalStatusMonitor: @unchecked Sendable {
     }
 
     private func readIfChanged() {
-        guard let next = readStatusFile() else { return }
+        guard let next = readStatusFile() else {
+            // Forget what the file said, so its return is a change again.
+            if lastPayload != nil || lastSessionIds != nil {
+                presentationFingerprint = nil
+                lastPayload = nil
+                lastSessionIds = nil
+                lastEvidenceObservedAt = nil
+                onUnreadable()
+            }
+            return
+        }
         let key = next.presentationKey
         let presentationChanged = key != presentationFingerprint
         let requiresSnapshotRefresh = key.requiresSnapshotRefresh(comparedTo: presentationFingerprint)
