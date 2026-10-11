@@ -28,10 +28,14 @@
   "part/text/user": {
    "classification": "transcript:user",
    "first_seen_version": "1.17.20",
-   "last_seen_version": "1.17.20",
+   "last_seen_version": "1.19.0",
    "entrypoints": [],
    "keys": [
+    "message.agent",
+    "message.model",
     "message.role",
+    "message.summary",
+    "message.time",
     "text",
     "type"
    ],
