@@ -596,37 +596,166 @@ def test_archive_convergence_rejects_duplicate_markers_within_one_reply(monkeypa
     )
 
     with pytest.raises(RuntimeError, match="exactly one occurrence"):
-        lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker)
+        lifecycle._wait_served_answers("https://runtime.example", "token", "session-1", marker)
 
 
-def test_a_provider_that_answers_a_steer_twice_passes_only_when_it_is_known_to(monkeypatch):
+def _served(monkeypatch, events: list[dict[str, object]]) -> None:
+    monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": events})
+    # A refusal has to stand; these tests wait for the second read, not for the window.
+    monkeypatch.setattr("zerg.qa.console_served_state_core.SERVED_ANSWER_SETTLE_SECONDS", 0.0)
+
+
+def _wait(marker: str, native: dict[str, int] | None, **kwargs: object):
+    """The served wait against a fixed archive page; ``native`` is the provider's own answering rows."""
+
+    return lifecycle._wait_served_answers(
+        "https://runtime.example",
+        "token",
+        "session-1",
+        marker,
+        native_answers=None if native is None else (lambda: (dict(native), "read")),
+        **kwargs,
+    )
+
+
+def test_a_steer_answered_twice_converges_when_both_served_replies_are_the_providers_rows(monkeypatch):
+    """OMP answers a steer once as it lands and again when the background job's notice arrives."""
+
     marker = "LH_OMP_STEERED_abc"
     twice = [
         {"id": "first", "role": "assistant", "content_text": marker},
         {"id": "after-job", "role": "assistant", "content_text": marker},
     ]
-    monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": twice})
+    _served(monkeypatch, twice)
 
-    answers = lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, may_repeat=True)
+    answers, account = _wait(marker, {"first": 1, "after-job": 1}, one_reply=False)
     assert [event["id"] for event in answers] == ["first", "after-job"]
-    assert "omp" in lifecycle._STEER_ANSWER_MAY_REPEAT
-    assert "claude" not in lifecycle._STEER_ANSWER_MAY_REPEAT
+    assert account["converged"] is True and account["served_answer_rows"] == {"first": 1, "after-job": 1}
+    # However often: a third reply the provider wrote is its own business too.
+    thrice = [*twice, {"id": "again", "role": "assistant", "content_text": marker}]
+    _served(monkeypatch, thrice)
+    answers, _account = _wait(marker, {"first": 1, "after-job": 1, "again": 1}, one_reply=False)
+    assert len(answers) == 3
+
+    # A reply the provider did not write is a finding about Longhouse, not a count.
+    with pytest.raises(MarkerAnswerCountError, match="^served_answer_without_native_row: ") as stray:
+        _wait(marker, {"first": 1, "after-job": 1}, one_reply=False)
+    assert stray.value.about == ("again",)
+    assert stray.value.observation["answer_correspondence"]["unbound_served_event_ids"] == ["again"]
+
+
+def test_a_turn_that_binds_one_reply_tells_a_provider_that_answered_twice_from_a_reply_served_twice(monkeypatch):
+    marker = "LH_PI_CONSOLE_abc"
+    reply = {"id": "reply", "role": "assistant", "content_text": marker}
+
+    # One native row, served once: the reply.
+    _served(monkeypatch, [reply])
+    answers, account = _wait(marker, {"reply": 1})
+    assert [event["id"] for event in answers] == ["reply"] and account["converged"] is True
+    # A later text block of the row is served under the row's id plus a suffix.
+    _served(monkeypatch, [{"id": "reply-text-1", "role": "assistant", "content_text": marker}])
+    assert _wait(marker, {"reply": 1})[1]["converged"] is True
+
+    # The provider wrote one reply and the archive serves it twice: Longhouse's fault, typed as such.
+    _served(monkeypatch, [reply, dict(reply)])
+    with pytest.raises(MarkerAnswerCountError, match="^native_answer_served_more_than_once: "):
+        _wait(marker, {"reply": 1})
+    _served(monkeypatch, [reply, {"id": "other", "role": "assistant", "content_text": marker}])
+    with pytest.raises(MarkerAnswerCountError, match="^served_answer_without_native_row: "):
+        _wait(marker, {"reply": 1})
+
+    # The provider itself answered in two rows. The receipts of this turn bind one
+    # reply, so that is said of the provider's rows, whatever was served.
+    for served in ([reply], [reply, {"id": "second", "role": "assistant", "content_text": marker}], []):
+        _served(monkeypatch, served)
+        with pytest.raises(MarkerAnswerCountError, match="^marker_answered_more_than_once: .* 2 answering native assistant row") as twice:
+            _wait(marker, {"reply": 1, "second": 1})
+        assert twice.value.answer_event_ids == ["reply", "second"]
+
+
+def test_a_reply_not_served_yet_is_lag_and_the_expired_wait_says_what_the_provider_wrote(monkeypatch):
+    marker = "LH_CLAUDE_CONSOLE_abc"
+    _served(monkeypatch, [{"id": "prompt", "role": "user", "content_text": f"Reply with exactly {marker}."}])
+
+    with pytest.raises(RuntimeError, match=r"count=0, .*native answering rows=\{'reply': 1\}, not yet served=\['reply'\]") as raised:
+        _wait(marker, {"reply": 1}, timeout=0.6, provider_answered=lambda: True)
+    assert not isinstance(raised.value, MarkerAnswerCountError)
+
+    # The provider's record could not be read as rows: nothing is refused and nothing converges.
+    _served(monkeypatch, [{"id": "reply", "role": "assistant", "content_text": marker}])
+    with pytest.raises(RuntimeError, match=r"count=1, .*native record unreadable"):
+        lifecycle._wait_served_answers(
+            "https://runtime.example", "token", "session-1", marker, native_answers=lambda: (None, "unreadable"), timeout=0.6
+        )
+
+
+def test_an_adapter_whose_served_ids_are_not_the_providers_is_counted_to_one(monkeypatch):
+    marker = "LH_CODEX_CONSOLE_abc"
+    twice = [
+        {"id": "5a2f", "role": "assistant", "content_text": marker},
+        {"id": "9c1d", "role": "assistant", "content_text": marker},
+    ]
+    _served(monkeypatch, twice[:1])
+    answers, account = _wait(marker, None)
+    assert [event["id"] for event in answers] == ["5a2f"] and account is None
+    _served(monkeypatch, twice)
     with pytest.raises(MarkerAnswerCountError, match="marker_answered_more_than_once: .* has 2 answering .* expected exactly 1"):
-        lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker)
+        _wait(marker, None, one_reply=False)
 
-    # One answer as the steer lands and one at the job notice: a third is a runaway.
-    thrice = [*twice, {"id": "runaway", "role": "assistant", "content_text": marker}]
-    monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": thrice})
-    with pytest.raises(MarkerAnswerCountError, match="marker_answered_more_than_once: .* has 3 answering .* expected at most 2") as raised:
-        lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, may_repeat=True)
-    assert raised.value.answer_event_ids == ["first", "after-job", "runaway"]
+    # Every Console adapter is on one side or the other, and each counted one says why.
+    adapters = {*lifecycle.PROVIDERS, *lifecycle.CAN_RESUME}
+    assert set(lifecycle._NATIVE_ROWS_IN_CLAIM) | set(lifecycle._SERVED_IDS_NOT_NATIVE) == adapters
+    assert not set(lifecycle._NATIVE_ROWS_IN_CLAIM) & set(lifecycle._SERVED_IDS_NOT_NATIVE)
+    assert all(len(reason) > 40 for reason in lifecycle._SERVED_IDS_NOT_NATIVE.values())
+    for provider in lifecycle._SERVED_IDS_NOT_NATIVE:
+        assert lifecycle._claim_native_answers(provider, {"stdout_path": "/unused", "source_path": "/unused"}, marker) is None
 
-    # A marker repeated inside one reply is never a second answer.
-    monkeypatch.setattr(
-        lifecycle, "_request", lambda *_args: {"events": [{"id": "x", "role": "assistant", "content_text": f"{marker}{marker}"}]}
-    )
-    with pytest.raises(RuntimeError, match="exactly one occurrence"):
-        lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, may_repeat=True)
+
+def _jsonl(path: Path, rows: list[dict[str, object]], *, complete: bool = True) -> str:
+    path.write_text("\n".join(json.dumps(row) for row in rows) + ("\n" if complete else ""), encoding="utf-8")
+    return str(path)
+
+
+def test_the_providers_own_answering_rows_are_read_from_the_record_its_claim_names(tmp_path):
+    marker = "LH_CONSOLE_abc"
+    narration = f"I will run the command, then reply with `{marker}`."
+
+    def text(value: str) -> dict[str, object]:
+        return {"role": "assistant", "content": [{"type": "text", "text": value}]}
+
+    # Pi and OMP: the session file's assistant entries, by entry id.
+    session = [
+        {"type": "session", "id": "native-1", "version": 3, "cwd": "/workspace"},
+        {"type": "message", "id": "a1", "message": {"role": "user", "content": f"Reply with exactly {marker}."}},
+        {"type": "message", "id": "a2", "message": text(narration)},
+        {"type": "message", "id": "a3", "message": text(f"The command finished.\n\n{marker}")},
+    ]
+    for provider in ("pi", "omp"):
+        claim = {"source_path": _jsonl(tmp_path / f"{provider}.jsonl", session), "stdout_path": "/not/the/rows"}
+        assert lifecycle._claim_native_answers(provider, claim, marker)() == ({"a3": 1}, "read")
+        # A record that ends inside a row is one whose answers are not known yet.
+        claim = {"source_path": _jsonl(tmp_path / f"{provider}-writing.jsonl", session, complete=False)}
+        assert lifecycle._claim_native_answers(provider, claim, marker)() == (None, "mid_write")
+        assert lifecycle._claim_native_answers(provider, {}, marker)() == (None, "unreadable")
+        assert lifecycle._claim_native_answers(provider, {"source_path": str(tmp_path / "absent.jsonl")}, marker)()[0] is None
+
+    # Claude: the print stream's assistant events, by uuid.
+    stream = [
+        {"type": "system", "subtype": "init", "session_id": "s-1"},
+        {"type": "assistant", "uuid": "u-1", "message": text(narration)},
+        {"type": "assistant", "uuid": "u-2", "message": text(marker)},
+        {"type": "result", "subtype": "success", "result": marker},
+    ]
+    claim = {"stdout_path": _jsonl(tmp_path / "claude.stdout", stream), "source_path": "/not/the/rows"}
+    assert lifecycle._claim_native_answers("claude", claim, marker)() == ({"u-2": 1}, "read")
+    # A reply the stream does not name cannot be held to anything by id.
+    unnamed = [stream[0], {"type": "assistant", "message": text(marker)}]
+    claim = {"stdout_path": _jsonl(tmp_path / "claude-unnamed.stdout", unnamed)}
+    assert lifecycle._claim_native_answers("claude", claim, marker)() == (None, "unreadable")
+    # A row without an id that does not answer is nobody's reply and hides nothing.
+    mixed = [{"type": "assistant", "message": text("Working.")}, stream[2]]
+    claim = {"stdout_path": _jsonl(tmp_path / "claude-mixed.stdout", mixed)}
+    assert lifecycle._claim_native_answers("claude", claim, marker)() == ({"u-2": 1}, "read")
 
 
 def test_archive_convergence_counts_the_answer_not_the_narration_that_quotes_it(monkeypatch):
@@ -639,13 +768,13 @@ def test_archive_convergence_counts_the_answer_not_the_narration_that_quotes_it(
     ]
     monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": events})
 
-    answers = lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker)
+    answers, _account = lifecycle._wait_served_answers("https://runtime.example", "token", "session-1", marker)
     assert [event["id"] for event in answers] == ["reply"]
 
     # Marker only in narration: never an answer, and the failure says a mention was seen.
     monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": events[:2]})
     with pytest.raises(RuntimeError, match=r"count=0, events that only mention it=1"):
-        lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, timeout=0.6)
+        lifecycle._wait_served_answers("https://runtime.example", "token", "session-1", marker, timeout=0.6)
 
 
 def test_archive_convergence_reads_a_reply_asked_to_carry_the_stored_context(monkeypatch):
@@ -660,10 +789,10 @@ def test_archive_convergence_reads_a_reply_asked_to_carry_the_stored_context(mon
         assert [event["id"] for event in answers] == ["reply"]
 
     # The wait takes the same companions; without them the run-together reply is not an answer.
-    answers = lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, alongside=(context,))
+    answers, _account = lifecycle._wait_served_answers("https://runtime.example", "token", "session-1", marker, alongside=(context,))
     assert [event["id"] for event in answers] == ["reply"]
     with pytest.raises(RuntimeError, match=r"count=0, events that only mention it=1"):
-        lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, timeout=0.6)
+        lifecycle._wait_served_answers("https://runtime.example", "token", "session-1", marker, timeout=0.6)
 
 
 def test_omp_job_notice_completes_the_steered_tool_and_a_miss_says_what_was_served() -> None:
@@ -895,10 +1024,16 @@ def test_served_run_inventory_rejects_wrong_session_or_run_identity(monkeypatch,
 
 
 @pytest.mark.parametrize(
-    "projected_id",
-    ["longhouse-event-9", pytest.param("pi-message-42", id="equal-native-and-projected")],
+    ("projected_id", "bound"),
+    [
+        pytest.param("pi-message-42", True, id="the-native-row"),
+        pytest.param("pi-message-42-text-1", True, id="a-later-text-block-of-the-row"),
+        # A served event that is not the native row is not its projection, whatever it says.
+        pytest.param("longhouse-event-9", False, id="another-event"),
+        pytest.param("pi-message-421", False, id="another-row-with-a-longer-id"),
+    ],
 )
-def test_pi_continuation_linkage_accepts_native_projection_identity_relationships(tmp_path, projected_id):
+def test_pi_continuation_linkage_binds_the_projected_reply_to_the_native_row_by_id(tmp_path, projected_id, bound):
     marker = "PI_RESUME_MARKER"
     native = tmp_path / "pi-session.jsonl"
     native.write_text(
@@ -918,7 +1053,7 @@ def test_pi_continuation_linkage_accepts_native_projection_identity_relationship
         encoding="utf-8",
     )
 
-    native_evidence = lifecycle._pi_native_marker_evidence(native, marker)
+    native_evidence = lifecycle._native_marker_evidence("pi", native, marker)
     linkage = lifecycle._pi_continuation_linkage(
         native_evidence,
         projected_id,
@@ -932,8 +1067,8 @@ def test_pi_continuation_linkage_accepts_native_projection_identity_relationship
     assert native_evidence["native_message_id"] == "pi-message-42"
     assert linkage["native_message_id_present"] is True
     assert linkage["projected_assistant_event_id_present"] is True
-    assert linkage["native_and_projected_ids_bound"] is True
-    assert linkage["proven"] is True
+    assert linkage["native_and_projected_ids_bound"] is bound
+    assert linkage["proven"] is bound
 
 
 def test_pi_native_marker_evidence_stops_at_the_pre_interrupt_boundary(tmp_path):
@@ -953,7 +1088,7 @@ def test_pi_native_marker_evidence_stops_at_the_pre_interrupt_boundary(tmp_path)
     lines = native.read_bytes().splitlines(keepends=True)
     boundary = len(lines[0]) + len(lines[1])
 
-    evidence = lifecycle._pi_native_marker_evidence(native, marker, maximum_source_offset=boundary)
+    evidence = lifecycle._native_marker_evidence("pi", native, marker, maximum_source_offset=boundary)
     assert evidence is not None
     assert evidence["native_message_id"] == "resume-before-interrupt"
 
@@ -978,8 +1113,9 @@ def test_omp_native_marker_evidence_respects_turn_boundaries(tmp_path):
     lines = native.read_bytes().splitlines(keepends=True)
     first_boundary = sum(len(line) for line in lines[:2])
 
-    first = lifecycle._omp_native_marker_evidence(native, marker, maximum_source_offset=first_boundary)
-    second = lifecycle._omp_native_marker_evidence(
+    first = lifecycle._native_marker_evidence("omp", native, marker, maximum_source_offset=first_boundary)
+    second = lifecycle._native_marker_evidence(
+        "omp",
         native,
         marker,
         minimum_source_offset=first_boundary,

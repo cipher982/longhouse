@@ -445,7 +445,7 @@ def test_a_console_reply_never_served_is_ingest_only_when_the_provider_wrote_it(
 
     def served_wait(provider_answered) -> BaseException:
         with pytest.raises(RuntimeError, match=r"assistant marker did not converge exactly once \(count=0") as raised:
-            provider_console_lifecycle._wait_exact_assistant_marker(
+            provider_console_lifecycle._wait_served_answers(
                 "https://runtime.invalid", "token", "session-1", MARKER, timeout=0.6, provider_answered=provider_answered
             )
         return raised.value

@@ -336,10 +336,14 @@ def assistant_marker_mentions(
 
 
 # A count of replies that no later event can bring back to what was expected.
-# Kept for the surfaces that count one finished turn of a Console run (the
-# provider's own rows, a finished run's output stream, the archive of a turn
-# with a known ceiling). A served page of a Helm session is not judged by a
-# count at all: see `served_answer_fault`.
+# What Longhouse serves is not judged by a count wherever the served events
+# carry the provider's own row ids: a Helm session's page and a Console turn
+# of Pi, OMP or Claude are held to the provider's rows by id
+# (`served_answer_fault`). The count is kept in two places, both in
+# `provider_console_lifecycle`: the provider's own replies to a Console turn
+# whose receipts bind one reply (`_one_marker_reply`), and the served replies
+# of an adapter whose served ids are not the provider's
+# (`_SERVED_IDS_NOT_NATIVE`), where a count is all there is.
 MARKER_ANSWERED_MORE_THAN_ONCE = "marker_answered_more_than_once"
 MARKER_REPLY_SERVED_WITHOUT_ANSWER = "marker_reply_served_without_answer"
 # The Runtime Host serves an answer the provider's own transcript does not
@@ -616,6 +620,15 @@ class StandingServedAnswerFault:
 
 
 def assistant_marker_evidence(workspace: dict, session_id: str, marker: str) -> dict:
+    """The served events that answer ``marker``, and whether there is exactly one.
+
+    A count, and deliberately one: the producer that reads this
+    (`console_served_state`) drives stock Codex as its vehicle, and a Codex
+    rollout line carries no id of its own, so a served event cannot be held
+    to the provider's row by id (`provider_console_lifecycle._SERVED_IDS_NOT_NATIVE`).
+    The turn asks for one reply, and one served reply is what settles it.
+    """
+
     projection = workspace.get("projection") or {}
     matches = assistant_marker_events(
         (

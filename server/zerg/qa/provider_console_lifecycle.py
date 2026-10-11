@@ -29,13 +29,22 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from zerg.qa.answer_markers import marker_answer_count
 from zerg.qa.answer_markers import marker_answered
 from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.console_served_state_core import MARKER_ANSWERED_MORE_THAN_ONCE
+from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_EMPTY
+from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_MID_WRITE
+from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_READ
+from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_UNREADABLE
 from zerg.qa.console_served_state_core import MarkerAnswerCountError
+from zerg.qa.console_served_state_core import StandingServedAnswerFault
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import assistant_marker_mentions
 from zerg.qa.console_served_state_core import event_text
+from zerg.qa.console_served_state_core import native_transcript_state
+from zerg.qa.console_served_state_core import served_answer_correspondence
+from zerg.qa.console_served_state_core import served_answer_fault
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
@@ -137,7 +146,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=9,
+    scenario_revision=10,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -481,7 +490,151 @@ def _assistant_marker_events(
     return assistant_marker_events(_archive_events(api_url, token, session_id), marker, default_origin="durable", alongside=alongside)
 
 
-def _wait_exact_assistant_marker(
+# Console adapters whose served events carry the id of the provider's own row
+# that wrote them, and the field of a turn's claim that names the record those
+# rows are in. Pi and OMP write a session file whose assistant entries have an
+# id; the Runtime Host serves an entry's first block under that id and its
+# later text blocks under ``<id>-text-<n>``. Claude's print stream gives every
+# assistant event a uuid and its text is served as ``<uuid>-text-<n>``. For
+# these a served reply is held to the provider's own answering rows, by id.
+_NATIVE_ROWS_IN_CLAIM = {"pi": "source_path", "omp": "source_path", "claude": "stdout_path"}
+
+# Console adapters whose served events cannot be held to the provider's own
+# rows by id, and why. Their served replies are counted instead: one finished
+# turn that was asked for one reply serves exactly one answering event, and a
+# second is ``marker_answered_more_than_once`` because this producer cannot
+# tell a reply the provider wrote twice from one Longhouse served twice.
+_SERVED_IDS_NOT_NATIVE = {
+    "codex": (
+        "a rollout line carries no id of its own, so the engine gives each one a fresh uuid as it parses it "
+        "(engine/src/pipeline/parser.rs) and a served event names no row of the rollout"
+    ),
+    "cursor": (
+        "Cursor writes no id per record: the engine names a transcript record by its byte offset, "
+        "and the print stream this producer reads has no ids at all"
+    ),
+    "opencode": (
+        "the print stream names messages and parts (msg_..., prt_...) and the served id is the engine's own "
+        "derivation from them; reproducing that derivation here would compare the engine with itself"
+    ),
+}
+
+
+def _native_assistant_rows(provider: str, path: Path) -> tuple[list[dict[str, object]] | None, str, list[str]]:
+    """The assistant rows of the provider's own record at ``path``, what the read found, and the sessions it names.
+
+    Each row has the ``id`` the provider gave it (None when it gave none), its
+    ``source_offset`` and, where the reader knows it, ``source_end`` in the
+    record, and a ``text`` that keeps one line group per text block. The rows
+    are None unless the record was read to the end of a complete line
+    (`native_transcript_state`): a record that could not be read, is empty or
+    ends inside a row is not a record without answers.
+    """
+
+    if provider == "pi":
+        parsed, provider_session_id, metadata = pi_transcript_rows(path)
+        if metadata.get("error"):
+            return None, NATIVE_TRANSCRIPT_UNREADABLE, []
+        if not metadata.get("source_end_offset") or not metadata.get("lines"):
+            return None, NATIVE_TRANSCRIPT_EMPTY, []
+        if metadata.get("complete_last_line") is not True:
+            return None, NATIVE_TRANSCRIPT_MID_WRITE, []
+        rows = [
+            {
+                "id": row.get("entry_id"),
+                "source_offset": int(row.get("source_offset") or 0),
+                "source_end": None,
+                "text": str(row.get("text") or ""),
+            }
+            for row in parsed
+            if row.get("type") == "assistant"
+        ]
+        sessions = [provider_session_id] if isinstance(provider_session_id, str) and provider_session_id else []
+    else:
+        try:
+            content: bytes | None = path.read_bytes()
+        except OSError:
+            content = None
+        state = native_transcript_state(content)
+        if content is None or state != NATIVE_TRANSCRIPT_READ:
+            return None, state, []
+        rows = []
+        sessions = []
+        source_offset = 0
+        for raw_line in content.splitlines(keepends=True):
+            line_end = source_offset + len(raw_line)
+            try:
+                event = json.loads(raw_line) if raw_line.strip() else None
+            except json.JSONDecodeError:
+                event = None
+            if isinstance(event, Mapping):
+                message = event.get("message")
+                assistant = isinstance(message, Mapping) and message.get("role") == "assistant"
+                if provider == "omp":
+                    if event.get("type") == "session" and isinstance(event.get("id"), str) and event["id"]:
+                        sessions.append(event["id"])
+                    if assistant and event.get("type") in {"message", "message_end"}:
+                        rows.append(
+                            {
+                                "id": event.get("id"),
+                                "source_offset": source_offset,
+                                "source_end": line_end,
+                                "text": _native_message_text(message),
+                            }
+                        )
+                elif provider == "claude" and assistant and event.get("type") == "assistant":
+                    rows.append(
+                        {
+                            "id": event.get("uuid"),
+                            "source_offset": source_offset,
+                            "source_end": line_end,
+                            "text": _native_message_text(message),
+                        }
+                    )
+            source_offset = line_end
+    return rows, NATIVE_TRANSCRIPT_READ, sessions
+
+
+def _claim_native_answers(
+    provider: str, claim: Mapping[str, object], marker: str, *, alongside: tuple[str, ...] = ()
+) -> Callable[[], tuple[dict[str, int] | None, str]] | None:
+    """A read of the provider's own rows that answer ``marker`` in one Console turn, or None.
+
+    None is an adapter in `_SERVED_IDS_NOT_NATIVE`. Otherwise the read returns
+    the id of each answering row with how often it answers
+    (``zerg.qa.answer_markers``) and what the read found. The rows are None
+    when the record the turn's claim names could not be read, and also when a
+    row that answers has no id: a reply that cannot be named cannot be held
+    to anything by id, and that is not the same as the provider not replying.
+    """
+
+    field = _NATIVE_ROWS_IN_CLAIM.get(provider)
+    if field is None:
+        return None
+
+    def read() -> tuple[dict[str, int] | None, str]:
+        raw = claim.get(field)
+        if not isinstance(raw, str) or not raw:
+            return None, NATIVE_TRANSCRIPT_UNREADABLE
+        rows, state, _sessions = _native_assistant_rows(provider, Path(raw))
+        if rows is None:
+            return None, state
+        answers: dict[str, int] = {}
+        for row in rows:
+            count = marker_answer_count(str(row["text"]), marker, alongside=alongside)
+            if not count:
+                continue
+            if not isinstance(row["id"], str) or not row["id"]:
+                return None, NATIVE_TRANSCRIPT_UNREADABLE
+            # OMP can retain a message more than once while it reconciles its
+            # stream; the record that answers most is the row as it stands.
+            answers[row["id"]] = max(answers.get(row["id"], 0), count)
+        return answers, state
+
+    return read
+
+
+def _wait_served_answers(
     api_url: str,
     token: str,
     session_id: str,
@@ -489,15 +642,36 @@ def _wait_exact_assistant_marker(
     *,
     alongside: tuple[str, ...] = (),
     timeout: float = 180,
-    may_repeat: bool = False,
+    native_answers: Callable[[], tuple[dict[str, int] | None, str]] | None = None,
+    one_reply: bool = True,
     provider_answered: Callable[[], bool] | None = None,
-) -> list[dict[str, Any]]:
-    """Wait for the one served assistant event that answers with ``marker``.
+) -> tuple[list[dict[str, Any]], dict[str, object] | None]:
+    """Wait until the archive serves what the provider answered ``marker`` with.
 
     An event answers under the rule in ``zerg.qa.answer_markers``; ``alongside``
     names the other markers the reply was asked to carry. An event that only
     mentions the marker (narration ahead of a tool call) is not a reply and is
     reported beside the count when the wait fails.
+
+    ``native_answers`` reads the provider's own rows that answer
+    (`_claim_native_answers`). With it the served events that answer must be
+    those rows, by id (`served_answer_correspondence`): the wait returns them
+    with that account once every answering row is served as often as it
+    answers, and a served answer the provider's record does not hold, or one
+    of its answers served more often than it was written, fails with the typed
+    reason of `served_answer_fault`, which is a finding about Longhouse.
+    Without it (an adapter in `_SERVED_IDS_NOT_NATIVE`) the served replies are
+    counted to one and the account is None.
+
+    ``one_reply`` is a turn whose receipts bind one reply: the first turn, the
+    continuation and the turns around an interrupt each ask for one reply of a
+    finished print-mode run, and the receipts and the factory's validators of
+    them name one native row and one served event. There a provider that
+    answered in more than one row is ``marker_answered_more_than_once``, said
+    of the provider's rows and not of what was served. The steer step binds no
+    such receipt and passes False: OMP moves a running command to a background
+    job when a steer arrives, answers as the steer lands and again when the
+    job's notice arrives, and both replies are its own.
 
     The provider's turn is over before this is called, so what it waits on is
     Longhouse serving the reply. ``provider_answered`` reads the provider's own
@@ -510,35 +684,63 @@ def _wait_exact_assistant_marker(
     stable_since: float | None = None
     last_count = 0
     last_mentions = 0
+    correspondence: dict[str, object] | None = None
+    refusal = StandingServedAnswerFault()
     while time.monotonic() < deadline:
         events = _archive_events(api_url, token, session_id)
         matches = assistant_marker_events(events, marker, default_origin="durable", alongside=alongside)
         mentions = assistant_marker_mentions(events, marker, default_origin="durable", alongside=alongside)
         last_count = len(matches)
         last_mentions = len(mentions)
-        # A provider known to answer twice may reply once as the steer lands and
-        # once when the job notice arrives; a third reply never is. More replies
-        # cannot bring the count back down, so this fails now, not at the deadline.
-        if last_count > (2 if may_repeat else 1):
-            raise MarkerAnswerCountError(
-                MARKER_ANSWERED_MORE_THAN_ONCE,
-                marker=marker,
-                answers=matches,
-                mentions=mentions,
-                expected="at most 2" if may_repeat else "exactly 1",
-            )
-        # A marker repeated inside one reply never is either.
-        if any(event_text(event).count(marker) != 1 for event in matches):
+        if native_answers is None:
+            # Counted, for the reason `_SERVED_IDS_NOT_NATIVE` gives. More
+            # replies cannot bring the count back down, so this fails now.
+            if last_count > 1:
+                raise MarkerAnswerCountError(MARKER_ANSWERED_MORE_THAN_ONCE, marker=marker, answers=matches, mentions=mentions)
+            converged = last_count == 1
+        else:
+            # Read after the page, so nothing served is newer than what is read here.
+            native, native_state = native_answers()
+            native_readable = native is not None
+            native = native or {}
+            if one_reply and len(native) > 1:
+                raise MarkerAnswerCountError(
+                    MARKER_ANSWERED_MORE_THAN_ONCE,
+                    marker=marker,
+                    answers=[{"id": row_id} for row_id in native],
+                    mentions=[],
+                    surface="native assistant row",
+                )
+            correspondence = served_answer_correspondence(events, marker, native, default_origin="durable", alongside=alongside)
+            correspondence["native_transcript_readable"] = native_readable
+            correspondence["native_transcript_state"] = native_state
+            found = served_answer_fault(events, marker, native, default_origin="durable", alongside=alongside) if native_readable else None
+            if found is not None:
+                found.observation = {"session_id": session_id, "answer_correspondence": correspondence}
+            fault = refusal.standing(found)
+            if fault is not None:
+                raise fault
+            converged = correspondence["converged"] is True
+        # One reply says its marker once; a reply that repeats it is not one.
+        if one_reply and any(event_text(event).count(marker) != 1 for event in matches):
             raise RuntimeError("assistant marker did not converge to one event with exactly one occurrence")
-        if last_count >= 1:
+        if converged:
             stable_since = stable_since or time.monotonic()
             if time.monotonic() - stable_since >= 2:
-                return matches
+                return matches, correspondence
         else:
             stable_since = None
         time.sleep(0.5)
-    error = RuntimeError(
-        f"assistant marker did not converge exactly once (count={last_count}, events that only mention it={last_mentions})"
+    account = ""
+    if correspondence is not None:
+        account = (
+            f", native answering rows={correspondence['native_answer_rows']}, "
+            f"not yet served={correspondence['unserved_native_row_ids']}, "
+            f"native record {correspondence['native_transcript_state']}"
+        )
+    # A fault still on the page is why this never converged: say that.
+    error: RuntimeError = refusal.at_deadline() or RuntimeError(
+        f"assistant marker did not converge exactly once (count={last_count}, events that only mention it={last_mentions}{account})"
     )
     if last_count == 0 and provider_answered is not None and provider_answered():
         raise expired(error, LONGHOUSE_INGEST)
@@ -739,9 +941,18 @@ def _one_marker_reply(
 
     Returns the reply with ``marker_count`` (occurrences inside it) and
     ``mention_ids``; None when no row answers, because only the caller knows
-    which boundary the reply was expected inside. Two answering rows can never
-    become one, so that raises the typed reason the served proofs use and a
-    counting fault is never reported as a verdict about the subject.
+    which boundary the reply was expected inside.
+
+    This counts the provider's own replies, not what Longhouse served, and it
+    counts them to one because every caller binds a receipt to one reply: the
+    native row of a first turn or a continuation, the row a Pi tool pair
+    answers into, the output message a terminal event must follow. The
+    factory's validators of those receipts name one row against the retained
+    bytes. A provider that answered such a turn in two rows therefore raises
+    ``marker_answered_more_than_once`` here: said of the provider's rows, and
+    never reported as a verdict about the subject. Whether what was served is
+    what the provider wrote is a different question, settled by id in
+    `_wait_served_answers`.
     """
 
     answers: list[Mapping[str, object]] = []
@@ -767,37 +978,6 @@ def _one_marker_reply(
     }
 
 
-def _pi_native_marker_evidence(
-    path: Path,
-    marker: str,
-    *,
-    alongside: tuple[str, ...] = (),
-    minimum_source_offset: int = 0,
-    maximum_source_offset: int | None = None,
-) -> dict[str, object] | None:
-    """Return the native JSONL message id of the row that replies with the marker."""
-    rows, provider_session_id, _metadata = pi_transcript_rows(path)
-    reply = _one_marker_reply(
-        [
-            {"id": row.get("entry_id"), "source_offset": row.get("source_offset"), "text": str(row.get("text") or "")}
-            for row in rows
-            if row.get("type") == "assistant"
-            and int(row.get("source_offset") or 0) >= minimum_source_offset
-            and (maximum_source_offset is None or int(row.get("source_offset") or 0) < maximum_source_offset)
-        ],
-        marker,
-        alongside=alongside,
-    )
-    if reply is None or reply["marker_count"] != 1 or not isinstance(reply.get("id"), str) or not reply["id"]:
-        return None
-    return {
-        "native_message_id": reply["id"],
-        "provider_session_id": provider_session_id,
-        "source_offset": reply.get("source_offset"),
-        "marker_count": reply["marker_count"],
-    }
-
-
 def _native_message_text(message: Mapping[str, object]) -> str:
     """Text of a native message, one line group per text block.
 
@@ -818,56 +998,6 @@ def _native_message_text(message: Mapping[str, object]) -> str:
     )
 
 
-def _omp_native_marker_evidence(
-    path: Path,
-    marker: str,
-    *,
-    alongside: tuple[str, ...] = (),
-    minimum_source_offset: int = 0,
-    maximum_source_offset: int | None = None,
-) -> dict[str, object] | None:
-    """Return OMP's native assistant message id of the row that replies with the marker."""
-    try:
-        payload = path.read_bytes()
-    except OSError:
-        return None
-
-    headers: list[str] = []
-    rows: list[dict[str, object]] = []
-    source_offset = 0
-    for raw_line in payload.splitlines(keepends=True):
-        line_end = source_offset + len(raw_line)
-        if raw_line.strip():
-            try:
-                event = json.loads(raw_line)
-            except json.JSONDecodeError:
-                event = None
-            if isinstance(event, Mapping):
-                if event.get("type") == "session" and isinstance(event.get("id"), str) and event["id"]:
-                    headers.append(event["id"])
-                if (
-                    event.get("type") in {"message", "message_end"}
-                    and isinstance(event.get("id"), str)
-                    and event["id"]
-                    and isinstance(event.get("message"), Mapping)
-                    and event["message"].get("role") == "assistant"
-                    and source_offset >= minimum_source_offset
-                    and (maximum_source_offset is None or line_end <= maximum_source_offset)
-                ):
-                    rows.append({"id": event["id"], "source_offset": source_offset, "text": _native_message_text(event["message"])})
-        source_offset = line_end
-
-    reply = _one_marker_reply(rows, marker, alongside=alongside)
-    if len(headers) != 1 or reply is None or reply["marker_count"] != 1:
-        return None
-    return {
-        "native_message_id": reply["id"],
-        "provider_session_id": headers[0],
-        "source_offset": reply["source_offset"],
-        "marker_count": reply["marker_count"],
-    }
-
-
 def _native_marker_evidence(
     provider: str,
     path: Path,
@@ -877,23 +1007,47 @@ def _native_marker_evidence(
     minimum_source_offset: int = 0,
     maximum_source_offset: int | None = None,
 ) -> dict[str, object] | None:
-    if provider == "pi":
-        return _pi_native_marker_evidence(
-            path,
-            marker,
-            alongside=alongside,
-            minimum_source_offset=minimum_source_offset,
-            maximum_source_offset=maximum_source_offset,
-        )
-    if provider == "omp":
-        return _omp_native_marker_evidence(
-            path,
-            marker,
-            alongside=alongside,
-            minimum_source_offset=minimum_source_offset,
-            maximum_source_offset=maximum_source_offset,
-        )
-    return None
+    """The native row of Pi's or OMP's session file, inside a turn's bounds, that replies with the marker.
+
+    None when no row inside the bounds replies with the marker exactly once,
+    when that row has no id, or when OMP's file does not name exactly one
+    session. Two rows that reply raise (`_one_marker_reply`).
+    """
+
+    if provider not in {"pi", "omp"}:
+        return None
+    rows, _state, sessions = _native_assistant_rows(provider, path)
+    if rows is None:
+        return None
+    reply = _one_marker_reply(
+        [
+            row
+            for row in rows
+            if int(row["source_offset"]) >= minimum_source_offset
+            and (
+                maximum_source_offset is None
+                # A row is inside the bound when it ends there; a reader that
+                # knows only where rows start asks that it starts before it.
+                or (
+                    int(row["source_end"]) <= maximum_source_offset
+                    if row["source_end"] is not None
+                    else int(row["source_offset"]) < maximum_source_offset
+                )
+            )
+        ],
+        marker,
+        alongside=alongside,
+    )
+    if reply is None or reply["marker_count"] != 1 or not isinstance(reply.get("id"), str) or not reply["id"]:
+        return None
+    if provider == "omp" and len(sessions) != 1:
+        return None
+    return {
+        "native_message_id": reply["id"],
+        "provider_session_id": sessions[0] if sessions else None,
+        "source_offset": reply["source_offset"],
+        "marker_count": reply["marker_count"],
+    }
 
 
 def _pi_continuation_linkage(
@@ -910,19 +1064,20 @@ def _pi_continuation_linkage(
     native_marker_count = native.get("marker_count") if isinstance(native, Mapping) else None
     native_provider_session_id = native.get("provider_session_id") if isinstance(native, Mapping) else None
     native_session_matches_provider_thread = native_provider_session_id == native_provider_thread_id
+    # The served reply is the native row: the Runtime Host serves a row's first
+    # block under the row's id and its later text blocks under ``<id>-text-<n>``.
     native_and_projected_ids_equal = (
         isinstance(native_message_id, str)
         and bool(native_message_id)
         and projected_assistant_event_id is not None
-        and native_message_id == projected_assistant_event_id
+        and str(projected_assistant_event_id) == native_message_id
     )
-    native_and_projected_ids_distinct = (
+    native_and_projected_ids_bound = native_and_projected_ids_equal or (
         isinstance(native_message_id, str)
         and bool(native_message_id)
         and projected_assistant_event_id is not None
-        and native_message_id != projected_assistant_event_id
+        and str(projected_assistant_event_id).startswith(f"{native_message_id}-")
     )
-    native_and_projected_ids_bound = native_and_projected_ids_equal or native_and_projected_ids_distinct
     return {
         "native_message_id_present": isinstance(native_message_id, str) and bool(native_message_id),
         "projected_assistant_event_id_present": projected_assistant_event_id is not None,
@@ -933,7 +1088,6 @@ def _pi_continuation_linkage(
         "same_provider_thread": native_provider_thread_id == projected_provider_thread_id,
         "native_session_matches_provider_thread": native_session_matches_provider_thread,
         "native_and_projected_ids_equal": native_and_projected_ids_equal,
-        "native_and_projected_ids_distinct": native_and_projected_ids_distinct,
         "native_and_projected_ids_bound": native_and_projected_ids_bound,
         "proven": (
             isinstance(native_message_id, str)
@@ -2083,12 +2237,10 @@ def _post_steer(
 
 
 # OMP moves a running shell command to a background job when a steer arrives and
-# reports the result in a later notice. Told to reply "when the command finishes",
-# its model answers once as the steer lands and again when that notice arrives.
-_STEER_ANSWER_MAY_REPEAT = frozenset({"omp"})
-# The same background job's result reaches OMP as a `custom` message in its own
-# stream, and the served transcript does not carry that system row. For these
-# providers the stream the Machine Agent captured is the completion evidence.
+# reports the result in a later notice. That result reaches OMP as a `custom`
+# message in its own stream, and the served transcript does not carry that
+# system row. For these providers the stream the Machine Agent captured is the
+# completion evidence.
 _STEER_TOOL_RESULT_IN_PROVIDER_STREAM = frozenset({"omp"})
 
 
@@ -2165,17 +2317,24 @@ def _run_steer_step(
     ) == str(turn["run_id"])
     flush_for_projection("console-steer-turn")
     try:
-        answers = _wait_exact_assistant_marker(
+        # How often the model answers the steer is the provider's business:
+        # told to reply "when the command finishes", OMP's model answers once as
+        # the steer lands and again when the background job's notice arrives.
+        # What is held is that the served replies are the provider's own rows.
+        answers, answer_correspondence = _wait_served_answers(
             api_url,
             token,
             session_id,
             steer_marker,
             timeout=120,
-            may_repeat=provider in _STEER_ANSWER_MAY_REPEAT,
+            native_answers=_claim_native_answers(provider, terminal, steer_marker),
+            one_reply=False,
             provider_answered=lambda: _provider_output_names(provider, terminal, steer_marker),
         )
         receipt["steer_marker_answered"] = bool(answers)
         receipt["steer_answer_events"] = len(answers)
+        receipt["steer_answer_event_ids"] = [event.get("id") for event in answers]
+        receipt["steer_answer_correspondence"] = answer_correspondence
     except RuntimeError as exc:
         receipt["steer_marker_answered"] = False
         receipt["steer_marker_error"] = str(exc)[:300]
@@ -2575,12 +2734,13 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             raise RuntimeError("stock provider output source was unavailable")
         if not isinstance(marker_count, int) or isinstance(marker_count, bool) or marker_count < 1:
             raise RuntimeError("stock provider assistant output did not contain the qualification marker")
-        first_events = _wait_exact_assistant_marker(
+        first_events, first_correspondence = _wait_served_answers(
             api_url,
             token,
             session_id,
             marker,
             alongside=reply_alongside,
+            native_answers=_claim_native_answers(provider, first_claim, marker, alongside=reply_alongside),
             # Checked just above: the provider's output holds the marker.
             provider_answered=lambda: True,
         )
@@ -2609,6 +2769,10 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             "marker_in_bound_assistant_event": True,
             "assistant_event_count": len(first_events),
             "transcript_converged_exactly_once": len(first_events) == 1,
+            # The provider's own rows that answered and the served events that
+            # carry them, by id; None for an adapter whose served ids are not
+            # the provider's (`_SERVED_IDS_NOT_NATIVE`), where the reply was counted.
+            "answer_correspondence": first_correspondence,
         }
         if pi_tool_evidence is not None:
             binding["native_tool_evidence"] = pi_tool_evidence
@@ -2642,12 +2806,13 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(resume["run_id"]),
             )
             flush_for_projection("console-resume-turn")
-            resume_events = _wait_exact_assistant_marker(
+            resume_events, resume_correspondence = _wait_served_answers(
                 api_url,
                 token,
                 session_id,
                 resume_marker,
                 alongside=reply_alongside,
+                native_answers=_claim_native_answers(provider, resume_claim, resume_marker, alongside=reply_alongside),
                 provider_answered=lambda: _provider_output_names(provider, resume_claim, resume_marker),
             )
             resume_native_response: dict[str, object] | None = None
@@ -2737,6 +2902,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                     "context_marker_count": resume_context_marker_count,
                     "context_marker_exactly_once": resume_context_marker_count == 1,
                     "event_count": len(resume_events),
+                    "answer_correspondence": resume_correspondence,
                     "linkage": continuation_linkage,
                     "native_source_end_offset_before_interrupt": second_native_source_size,
                     "native_source_start_offset_before_resume": first_native_source_size,
@@ -2839,11 +3005,12 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(post["run_id"]),
             )
             flush_for_projection("console-post-interrupt-turn")
-            post_events = _wait_exact_assistant_marker(
+            post_events, _post_correspondence = _wait_served_answers(
                 api_url,
                 token,
                 session_id,
                 post_marker,
+                native_answers=_claim_native_answers(provider, post_claim, post_marker),
                 provider_answered=lambda: _provider_output_names(provider, post_claim, post_marker),
             )
             post_completed = (post_claim.get("result") or {}).get("terminal_state") == "run_completed"
@@ -2948,12 +3115,13 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(interrupt_turn["run_id"]),
             )
             flush_for_projection("console-unsupported-interrupt-turn")
-            _wait_exact_assistant_marker(
+            _wait_served_answers(
                 api_url,
                 token,
                 session_id,
                 interrupt_marker,
                 timeout=60,
+                native_answers=_claim_native_answers(provider, terminal, interrupt_marker),
                 provider_answered=lambda: _provider_output_names(provider, terminal, interrupt_marker),
             )
             post_marker = f"LH_{provider.upper()}_AFTER_UNSUPPORTED_{uuid4().hex}"
@@ -2981,11 +3149,12 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(post["run_id"]),
             )
             flush_for_projection("console-after-unsupported-post-turn")
-            _wait_exact_assistant_marker(
+            _wait_served_answers(
                 api_url,
                 token,
                 session_id,
                 post_marker,
+                native_answers=_claim_native_answers(provider, post_claim, post_marker),
                 provider_answered=lambda: _provider_output_names(provider, post_claim, post_marker),
             )
             normal_completed = (terminal.get("result") or {}).get("terminal_state") == "run_completed" and (
