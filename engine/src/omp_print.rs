@@ -1301,14 +1301,33 @@ pub async fn recover_omp_print_turns(
     let inventory = crate::process_identity::try_collect_process_facts_by_pid();
     let mut recovered = 0;
     let mut closed_launch_ids = std::collections::HashSet::new();
-    for claim in registry.list_all()? {
-        if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER)
-            || claim.state != "terminal"
-            || claim.invocation_state.as_deref() != Some("parked")
+    let claims = registry.list_all()?;
+    // A launch a spawned turn still runs in is reattached below, not stopped.
+    let running_launches = claims
+        .iter()
+        .filter(|claim| claim.state == "spawned")
+        .filter_map(|claim| claim.launch_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    for claim in claims {
+        if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER) || claim.state != "terminal" {
+            continue;
+        }
+        let liveness = crate::console_adapter::claim_liveness(&claim, inventory.as_ref());
+        // A parked invocation is recovered whatever became of its provider. Any
+        // other terminal claim matters only while its provider still runs with
+        // no turn in it: the Machine Agent that owned it stopped before it
+        // stopped the provider, which would hold the session's lease for good.
+        if claim.invocation_state.as_deref() != Some("parked")
+            && !(liveness == ClaimLiveness::Live
+                && claim.process_group_is_from_this_boot()
+                && claim
+                    .launch_id
+                    .as_ref()
+                    .is_none_or(|launch_id| !running_launches.contains(launch_id)))
         {
             continue;
         }
-        match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
+        match liveness {
             ClaimLiveness::Live if claim.process_group_is_from_this_boot() => {
                 if cleanup_recovered_process_group(&claim.run_id, &claim, claim.process_group_id)
                     .await
@@ -1330,7 +1349,7 @@ pub async fn recover_omp_print_turns(
                 } else {
                     tracing::error!(
                         run_id = %claim.run_id,
-                        "Could not verify cleanup of orphaned parked OMP invocation"
+                        "Could not verify cleanup of orphaned OMP invocation"
                     );
                 }
             }
@@ -5869,6 +5888,87 @@ for line in sys.stdin:
         assert!(
             !stop_if_running(process_group_id),
             "the provider outlived the Machine Agent that reported its turn terminal"
+        );
+        restore_test_longhouse_home(previous);
+    }
+
+    #[test]
+    fn recovery_stops_a_provider_left_running_behind_a_closed_terminal_claim() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = set_test_longhouse_home(temp.path().join("longhouse"));
+        let registry = crate::turn_claims::default_registry().unwrap();
+        // The first Machine Agent is killed with its provider mid-response.
+        let killed = machine_agent_runtime();
+        let (started, run_id) = killed.block_on(async {
+            let (started, run_id) = start_fake_turn(temp.path(), "scenario=responding", None).await;
+            let started = started.unwrap();
+            wait_for_active_response(&started).await;
+            (started, run_id)
+        });
+        drop(killed);
+        crate::console_lifecycle::unregister(&started.launch_id);
+        let process_group_id = started.process_group_id.unwrap();
+        let claim = registry.read(&run_id).unwrap();
+        // An earlier turn of the same invocation is terminal, and this one still
+        // runs in the provider: recovery reattaches to it and stops nothing.
+        let earlier_run_id = Uuid::new_v4().to_string();
+        registry
+            .claim(
+                &earlier_run_id,
+                &claim.session_id,
+                &claim.thread_id,
+                None,
+                None,
+                "omp",
+            )
+            .unwrap();
+        registry
+            .mark_spawned_invocation(
+                &earlier_run_id,
+                claim.pid.unwrap(),
+                process_group_id,
+                claim.process_start_time.clone(),
+                OMP_PRINT_ADAPTER,
+                &started.launch_id,
+                claim.provider_thread_id.as_deref(),
+                &started.stdout_path,
+                &started.stderr_path,
+                claim.result.clone().unwrap(),
+            )
+            .unwrap();
+        registry
+            .mark_terminal(&earlier_run_id, "run_completed", None)
+            .unwrap();
+
+        let restarted = machine_agent_runtime();
+        restarted.block_on(async {
+            assert_eq!(
+                recover_omp_print_turns("omp-recovery-test", None)
+                    .await
+                    .unwrap(),
+                1
+            );
+            assert!(crate::process_group::group_has_running_member(
+                process_group_id
+            ));
+
+            // A terminal, closed claim whose provider still runs: left by a
+            // Machine Agent that died between recording one and stopping the other.
+            registry
+                .mark_terminal(&run_id, "run_completed", None)
+                .unwrap();
+            registry
+                .record_invocation_state(&run_id, "closed", 0)
+                .unwrap();
+            recover_omp_print_turns("omp-recovery-test", None)
+                .await
+                .unwrap();
+        });
+
+        assert!(
+            !stop_if_running(process_group_id),
+            "the next Machine Agent start left the orphaned provider running"
         );
         restore_test_longhouse_home(previous);
     }
