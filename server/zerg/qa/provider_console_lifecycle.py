@@ -146,7 +146,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=12,
+    scenario_revision=13,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -793,67 +793,60 @@ def _bounded_marker_excerpt(value: str, marker: str, radius: int = 160) -> str:
     return value[start:end]
 
 
-def _assistant_output_texts(provider: str, content: str) -> list[str]:
-    texts: list[str] = []
+def _stream_event(provider: str, event: Mapping[str, object]) -> tuple[str, str] | None:
+    """What one line of a Console adapter's stream is to its turn, or None.
+
+    ``("assistant", text)`` and ``("user", text)`` are a message of the model
+    and a prompt the stream echoes (OpenCode's echoes none). ``("end", "")`` is
+    the provider's own end of the turn; ``("open", "")`` says the turn goes on:
+    OpenCode's hand-off to a tool, an OMP ``agent_end`` that is not terminal,
+    the start of a Codex task.
+    """
+
+    kind, message = event.get("type"), event.get("message")
+    if provider in {"claude", "cursor"}:
+        if kind in {"assistant", "user"} and isinstance(message, Mapping):
+            return str(kind), _native_message_text(message)
+        return ("end", "") if kind == "result" else None
+    if provider == "opencode":
+        part = event.get("part")
+        part = part if isinstance(part, Mapping) else {}
+        if kind == "text" and part.get("type") == "text" and isinstance(part.get("text"), str):
+            return "assistant", str(part["text"])
+        return ("open" if part.get("reason") == "tool-calls" else "end", "") if kind == "step_finish" else None
+    if provider == "codex":
+        payload = event.get("payload")
+        payload = payload if isinstance(payload, Mapping) else {}
+        if kind == "response_item" and payload.get("role") in {"assistant", "user"}:
+            text = payload.get("text") if not isinstance(payload.get("content"), list) else _native_message_text(payload, _CODEX_TEXT)
+            return str(payload["role"]), text if isinstance(text, str) else ""
+        if kind == "event_msg" and payload.get("type") in {"task_started", "task_complete"}:
+            return ("open" if payload["type"] == "task_started" else "end"), ""
+        return None
+    if provider not in {"pi", "omp"}:
+        return None
+    if kind == "message_end" and isinstance(message, Mapping) and message.get("role") in {"assistant", "user"}:
+        return str(message["role"]), _native_message_text(message)
+    if kind == "agent_end":
+        return ("end" if provider == "pi" or omp_agent_end_is_terminal(event) else "open"), ""
+    return None
+
+
+def _stream_events(provider: str, content: str) -> list[tuple[str, str]]:
+    read: list[tuple[str, str]] = []
     for line in content.splitlines():
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not isinstance(event, Mapping):
-            continue
-        if provider in {"claude", "cursor"} and event.get("type") == "assistant":
-            message = event.get("message")
-            blocks = message.get("content") if isinstance(message, Mapping) else None
-            if isinstance(blocks, list):
-                texts.extend(
-                    str(block["text"])
-                    for block in blocks
-                    if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
-                )
-        elif provider == "opencode" and event.get("type") == "text":
-            part = event.get("part")
-            if isinstance(part, Mapping) and part.get("type") == "text" and isinstance(part.get("text"), str):
-                texts.append(str(part["text"]))
-        elif provider == "codex" and event.get("type") == "response_item":
-            payload = event.get("payload")
-            if not isinstance(payload, Mapping) or payload.get("role") != "assistant":
-                continue
-            blocks = payload.get("content")
-            if isinstance(blocks, list):
-                texts.extend(
-                    str(block["text"])
-                    for block in blocks
-                    if isinstance(block, Mapping) and block.get("type") in {"output_text", "text"} and isinstance(block.get("text"), str)
-                )
-            elif isinstance(payload.get("text"), str):
-                texts.append(str(payload["text"]))
-        elif provider == "pi" and event.get("type") == "message_end":
-            message = event.get("message")
-            if not isinstance(message, Mapping) or message.get("role") != "assistant":
-                continue
-            blocks = message.get("content")
-            if isinstance(blocks, list):
-                texts.extend(
-                    str(block["text"])
-                    for block in blocks
-                    if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
-                )
-            elif isinstance(blocks, str):
-                texts.append(blocks)
-        elif provider == "omp" and event.get("type") == "message_end":
-            message = event.get("message")
-            if isinstance(message, Mapping) and message.get("role") == "assistant":
-                blocks = message.get("content")
-                if isinstance(blocks, list):
-                    texts.extend(
-                        str(block["text"])
-                        for block in blocks
-                        if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
-                    )
-                elif isinstance(blocks, str):
-                    texts.append(blocks)
-    return texts
+        found = _stream_event(provider, event) if isinstance(event, Mapping) else None
+        if found is not None:
+            read.append(found)
+    return read
+
+
+def _assistant_output_texts(provider: str, content: str) -> list[str]:
+    return [text for kind, text in _stream_events(provider, content) if kind == "assistant"]
 
 
 def _claim_output_evidence(provider: str, claim: Mapping[str, object], marker: str) -> dict[str, object] | None:
@@ -885,6 +878,130 @@ def _provider_output_names(provider: str, claim: Mapping[str, object], marker: s
 
     evidence = _claim_output_evidence(provider, claim, marker)
     return evidence is not None and int(evidence["provider_response_marker_count"]) >= 1
+
+
+# The typed reason a Console turn fails with when the engine ended a run that
+# had to complete as anything but ``run_completed``. It opens the failure's
+# message, as the reasons of `MarkerAnswerCountError` do, so the factory names
+# the failure from the producer's own word and never from wording.
+CONSOLE_RUN_NOT_COMPLETED = "console_run_not_completed"
+
+
+class ConsoleTurnFailure(RuntimeError):
+    """A Console turn failed for a reason this producer can name.
+
+    The message opens with the reason and carries states, counts and marker
+    names, never model text.
+    """
+
+    def __init__(self, reason: str, detail: str) -> None:
+        self.reason = reason
+        super().__init__(f"{reason}: {detail}")
+
+
+# Where each Console adapter keeps one turn's stream, as a field of the turn's
+# claim. Every adapter but Codex runs one provider process per turn and keeps
+# its output; Codex's app-server writes the thread's rollout, which holds
+# every turn of the session.
+_TURN_STREAM_IN_CLAIM = {
+    "claude": "stdout_path",
+    "cursor": "stdout_path",
+    "opencode": "stdout_path",
+    "pi": "stdout_path",
+    "omp": "stdout_path",
+    "codex": "source_path",
+}
+
+# A qualification marker as a producer mints it: a name and a uuid's hex.
+_MARKER_SHAPED = re.compile(r"\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*)_[0-9a-f]{32}\b")
+
+
+def _marker_name(marker: str) -> str:
+    """A marker without its random part, which is all a failure message says of one."""
+
+    found = _MARKER_SHAPED.fullmatch(marker)
+    return found.group(1) if found else "the marker"
+
+
+def _turn_account(provider: str, claim: Mapping[str, object], marker: str, *, alongside: tuple[str, ...] = ()) -> dict[str, object] | None:
+    """What the provider's own stream says of one turn's reply to ``marker``, with none of the model's text.
+
+    None when the stream cannot be read. ``answering_replies`` counts the
+    assistant messages that answer under ``zerg.qa.answer_markers``. Of the
+    final one it keeps whether it names the marker at all and the names of the
+    other markers it carries: what the model sent in place of the reply it was
+    asked for. ``prompt_named_marker`` is None where the stream echoes no
+    prompt, which is nothing known either way.
+    """
+
+    raw = claim.get(_TURN_STREAM_IN_CLAIM.get(provider, ""))
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        content = Path(raw).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    replies: list[str] = []
+    prompts: list[str] = []
+    ended = False
+    for kind, text in _stream_events(provider, content):
+        if kind in {"end", "open"}:
+            ended = kind == "end"
+            if kind == "open" and provider == "codex":
+                # The rollout holds the session: the task that starts last is the turn.
+                replies, prompts = [], []
+        elif not text.strip():
+            continue
+        elif kind == "user":
+            prompts.append(text)
+        elif provider == "opencode" and replies and text.startswith(replies[-1]):
+            # OpenCode writes a text part again as it grows; the last write is the part.
+            replies[-1] = text
+        else:
+            replies.append(text)
+    final = replies[-1] if replies else ""
+    return {
+        "stream": _TURN_STREAM_IN_CLAIM[provider],
+        "turn_ended": ended,
+        "prompt_named_marker": any(marker in text for text in prompts) if prompts else None,
+        "assistant_replies": len(replies),
+        "answering_replies": sum(1 for text in replies if marker_answered(text, marker, alongside=alongside)),
+        "final_reply_names_marker": marker in final,
+        "final_reply_other_markers": sorted({found.group(1) for found in _MARKER_SHAPED.finditer(final) if found.group(0) != marker}),
+    }
+
+
+def _run_completed(claim: Mapping[str, object]) -> bool:
+    result = claim.get("result")
+    return claim.get("state") == "terminal" and isinstance(result, Mapping) and result.get("terminal_state") == "run_completed"
+
+
+def _require_run_completed(provider: str, claim: Mapping[str, object], *, turn: str, marker: str, alongside: tuple[str, ...] = ()) -> None:
+    """Fail a turn that had to complete, at once and in the engine's own words.
+
+    The claim is the engine's statement of how the run ended. A run it ended
+    as failed or cancelled will never be followed by a served reply worth
+    waiting for, so this is raised as soon as the claim is read. The message
+    carries the engine's error and, beside it, what the provider's own stream
+    holds for the turn: whether the provider answered is a separate fact from
+    how the engine ended the run.
+    """
+
+    if _run_completed(claim):
+        return
+    result = claim.get("result") if isinstance(claim.get("result"), Mapping) else {}
+    account = _turn_account(provider, claim, marker, alongside=alongside)
+    if account is None:
+        answered = "could not be read"
+    elif account["answering_replies"]:
+        answered = f"holds the reply that answers {_marker_name(marker)}"
+    else:
+        answered = f"holds {account['assistant_replies']} assistant reply(ies) and none answers {_marker_name(marker)}"
+    raise ConsoleTurnFailure(
+        CONSOLE_RUN_NOT_COMPLETED,
+        f"the engine ended the {turn} turn as state={claim.get('state')} terminal_state={result.get('terminal_state')} "
+        f"with error {str(result.get('error') or claim.get('error'))[:500]!r}; the provider's own stream for the turn {answered}",
+    )
 
 
 def _pi_tool_evidence(claim: Mapping[str, object], marker: str) -> dict[str, object] | None:
@@ -1016,7 +1133,11 @@ def _one_marker_reply(
     }
 
 
-def _native_message_text(message: Mapping[str, object]) -> str:
+# The block types that hold text in a Codex rollout message.
+_CODEX_TEXT = frozenset({"output_text", "input_text", "text"})
+
+
+def _native_message_text(message: Mapping[str, object], kinds: frozenset[str] = frozenset({"text"})) -> str:
     """Text of a native message, one line group per text block.
 
     Blocks are joined with a newline: the Runtime Host serves each text block
@@ -1032,7 +1153,7 @@ def _native_message_text(message: Mapping[str, object]) -> str:
     return "\n".join(
         str(block["text"])
         for block in content
-        if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
+        if isinstance(block, Mapping) and block.get("type") in kinds and isinstance(block.get("text"), str)
     )
 
 
@@ -1599,7 +1720,8 @@ def _retained_post_interrupt_output_evidence(
         output_messages: list[dict[str, object]] = []
         terminal_indices: list[int] = []
         for index, event in enumerate(events):
-            output_text = "\n".join(_assistant_output_texts(provider, json.dumps(event, sort_keys=True)))
+            found = _stream_event(provider, event)
+            output_text = found[1] if found is not None and found[0] == "assistant" else ""
             if marker in output_text:
                 output_messages.append({"id": index, "text": output_text})
             if event.get("type") == "agent_end":
@@ -2354,11 +2476,12 @@ def _run_steer_step(
         run_id=str(turn["run_id"]),
         timeout=180,
     )
-    receipt["same_run_completed"] = (terminal.get("result") or {}).get("terminal_state") == "run_completed" and str(
-        terminal.get("run_id")
-    ) == str(turn["run_id"])
+    receipt["same_run_completed"] = _run_completed(terminal) and str(terminal.get("run_id")) == str(turn["run_id"])
     flush_for_projection("console-steer-turn")
     try:
+        # A run the engine ended as failed or cancelled has no reply to wait
+        # for: the assertion already fails on it, and why is kept as the error.
+        _require_run_completed(provider, terminal, turn="steer", marker=steer_marker)
         # How often the model answers the steer is the provider's business:
         # told to reply "when the command finishes", OMP's model answers once as
         # the steer lands and again when the background job's notice arrives.
@@ -2653,8 +2776,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             states=frozenset({"terminal", "failed"}),
         )
         claims.append(first_claim)
-        if first_claim.get("state") != "terminal" or (first_claim.get("result") or {}).get("terminal_state") != "run_completed":
-            raise RuntimeError(f"first Console turn did not complete: {first_claim}")
+        _require_run_completed(provider, first_claim, turn="first", marker=marker, alongside=reply_alongside)
         mismatches = turn_identity_mismatches(
             first_claim,
             provider=provider,
@@ -2838,6 +2960,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 states=frozenset({"terminal", "failed"}),
             )
             claims.append(resume_claim)
+            _require_run_completed(provider, resume_claim, turn="resume", marker=resume_marker, alongside=reply_alongside)
             _wait_turn_terminal(
                 api_url=api_url,
                 token=token,
@@ -3037,6 +3160,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 states=frozenset({"terminal", "failed"}),
             )
             claims.append(post_claim)
+            _require_run_completed(provider, post_claim, turn="post-interrupt", marker=post_marker)
             _wait_turn_terminal(
                 api_url=api_url,
                 token=token,
@@ -3055,16 +3179,13 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 native_answers=_claim_native_answers(provider, post_claim, post_marker),
                 provider_answered=lambda: _provider_output_names(provider, post_claim, post_marker),
             )
-            post_completed = (post_claim.get("result") or {}).get("terminal_state") == "run_completed"
             interrupt_receipt = {
-                "status": "pass"
-                if interrupted.get("interrupt_dispatched") is True and cancelled and process_dead and post_completed
-                else "fail",
+                "status": "pass" if interrupted.get("interrupt_dispatched") is True and cancelled and process_dead else "fail",
                 "expectation": "supported",
                 "interrupt_dispatched": interrupted.get("interrupt_dispatched") is True,
                 "active_run_cancelled": cancelled,
                 "provider_process_dead": process_dead,
-                "post_interrupt_turn_completed": post_completed,
+                "post_interrupt_turn_completed": _run_completed(post_claim),
                 "interrupt_request_id": interrupt_request_id,
                 "active_run": {
                     "provider": provider,
@@ -3147,6 +3268,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 refused = "adapter_unavailable" in str(exc) or "not supported" in str(exc) or "unsupported" in str(exc)
             terminal = _wait_claim(interrupt_claim_path, states=frozenset({"terminal", "failed"}), timeout=60)
             claims[-1] = terminal
+            # An adapter that cannot interrupt runs the turn to its end.
+            _require_run_completed(provider, terminal, turn="unsupported-interrupt", marker=interrupt_marker)
             _wait_turn_terminal(
                 api_url=api_url,
                 token=token,
@@ -3181,6 +3304,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 states=frozenset({"terminal", "failed"}),
             )
             claims.append(post_claim)
+            _require_run_completed(provider, post_claim, turn="after-unsupported", marker=post_marker)
             _wait_turn_terminal(
                 api_url=api_url,
                 token=token,
@@ -3199,15 +3323,12 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 native_answers=_claim_native_answers(provider, post_claim, post_marker),
                 provider_answered=lambda: _provider_output_names(provider, post_claim, post_marker),
             )
-            normal_completed = (terminal.get("result") or {}).get("terminal_state") == "run_completed" and (
-                post_claim.get("result") or {}
-            ).get("terminal_state") == "run_completed"
             interrupt_receipt = {
-                "status": "pass" if refused and normal_completed else "fail",
+                "status": "pass" if refused else "fail",
                 "expectation": "unsupported",
                 "interrupt_dispatched": False,
                 "reason": "unsupported" if refused else "unexpected_dispatch",
-                "normal_turn_completed": normal_completed,
+                "normal_turn_completed": _run_completed(terminal) and _run_completed(post_claim),
             }
         write_json(root / "interrupt-contract-receipt.json", interrupt_receipt)
 

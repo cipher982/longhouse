@@ -744,7 +744,7 @@ def test_pi_console_contract_revision_advances_with_native_receipt() -> None:
     registration = PI_CONSOLE_REGISTRATION.to_dict()
 
     assert registration["producer_revision"] == 5
-    assert registration["scenario_revision"] == 12
+    assert registration["scenario_revision"] == 13
     assert "native_tool_receipt" in registration["required_artifacts"]
 
 

@@ -1624,3 +1624,85 @@ def test_turn_identity_mismatches_names_each_differing_field() -> None:
     assert "argv" not in summary and "result" not in summary
     unknown = console.turn_identity_mismatches({**good, "provider": "nope", "adapter": None}, **{**expected, "provider": "nope"})
     assert "adapter" in unknown
+
+
+# --- A Console turn's failure is decided from the engine's claim and the provider's own stream ---
+
+_ASKED = "LH_OMP_POST_INTERRUPT_" + "a" * 32
+_EARLIER = "LH_OMP_INTERRUPT_" + "b" * 32
+
+
+def _ask(marker: str = _ASKED) -> str:
+    return f"Reply with exactly {marker} and nothing else."
+
+
+def _turn_claim(
+    tmp_path: Path, provider: str, prompt: str, replies: list[str], *, ended: bool = True, **result: object
+) -> dict[str, object]:
+    """A terminal claim over one turn's stream, in the shape that adapter's provider writes it."""
+
+    def message(role: str, text: str, block: str = "text") -> dict[str, object]:
+        return {"role": role, "content": [{"type": block, "text": text}]}
+
+    if provider in {"pi", "omp"}:
+        events: list[dict[str, object]] = [{"type": "message_end", "message": message("user", prompt)}]
+        events += [{"type": "message_end", "message": message("assistant", text)} for text in replies]
+        end: dict[str, object] = {"type": "agent_end", "isTerminal": True}
+    elif provider in {"claude", "cursor"}:
+        events = [{"type": "user", "message": message("user", prompt)}]
+        events += [{"type": "assistant", "message": message("assistant", text)} for text in replies]
+        end = {"type": "result", "subtype": "success"}
+    elif provider == "opencode":
+        # OpenCode echoes no prompt, and writes a text part again as it grows.
+        events = [{"type": "text", "part": {"type": "text", "text": text[:cut]}} for text in replies for cut in (len(text) // 2, len(text))]
+        end = {"type": "step_finish", "part": {"type": "step-finish", "reason": "stop"}}
+    else:
+        # Codex's rollout holds the session: an earlier, finished task comes first.
+        events = [
+            {"type": "response_item", "payload": {"type": "message", **message("assistant", _EARLIER, "output_text")}},
+            {"type": "event_msg", "payload": {"type": "task_complete"}},
+            {"type": "event_msg", "payload": {"type": "task_started"}},
+            {"type": "response_item", "payload": {"type": "message", **message("user", prompt, "input_text")}},
+        ]
+        events += [
+            {"type": "response_item", "payload": {"type": "message", **message("assistant", text, "output_text")}} for text in replies
+        ]
+        end = {"type": "event_msg", "payload": {"type": "task_complete"}}
+    stream = tmp_path / f"{provider}-turn.jsonl"
+    stream.write_text("".join(json.dumps(event) + "\n" for event in [*events, *([end] if ended else [])]), encoding="utf-8")
+    return {
+        "run_id": "run-1",
+        "state": "terminal",
+        "result": {"terminal_state": "run_completed", **result},
+        lifecycle._TURN_STREAM_IN_CLAIM[provider]: str(stream),
+    }
+
+
+@pytest.mark.parametrize("provider", ["pi", "omp", "claude", "cursor", "opencode", "codex"])
+def test_every_adapters_stream_gives_the_turns_replies_its_prompt_and_its_end(tmp_path, provider):
+    account = lifecycle._turn_account(provider, _turn_claim(tmp_path, provider, _ask(), ["Reading first.", _ASKED]), _ASKED)
+    assert account["assistant_replies"] == 2 and account["answering_replies"] == 1 and account["turn_ended"] is True
+    # OpenCode's stream echoes no prompt, so nothing is known of it either way.
+    assert account["prompt_named_marker"] is (None if provider == "opencode" else True)
+
+    other = lifecycle._turn_account(provider, _turn_claim(tmp_path, provider, _ask(), [_EARLIER], ended=False), _ASKED)
+    assert other["answering_replies"] == 0 and other["turn_ended"] is False
+    assert other["final_reply_names_marker"] is False and other["final_reply_other_markers"] == ["LH_OMP_INTERRUPT"]
+
+
+def test_a_turn_that_had_to_complete_fails_at_once_on_the_engines_claim(tmp_path):
+    failed = _turn_claim(tmp_path, "omp", _ask(), [_ASKED], terminal_state="run_failed", error="native session source did not drain")
+    with pytest.raises(lifecycle.ConsoleTurnFailure) as raised:
+        lifecycle._require_run_completed("omp", failed, turn="post-interrupt", marker=_ASKED)
+    # The engine's own error, and beside it what the provider wrote; no model text and no marker's random part.
+    assert str(raised.value) == (
+        "console_run_not_completed: the engine ended the post-interrupt turn as state=terminal terminal_state=run_failed "
+        "with error 'native session source did not drain'; the provider's own stream for the turn holds the reply that "
+        "answers LH_OMP_POST_INTERRUPT"
+    )
+    # A claim the engine wrote as failed without a result is the same failure; a completed one is none.
+    with pytest.raises(
+        lifecycle.ConsoleTurnFailure, match="state=failed terminal_state=None with error 'spawn failed'; .* could not be read"
+    ):
+        lifecycle._require_run_completed("omp", {"state": "failed", "error": "spawn failed"}, turn="first", marker=_ASKED)
+    lifecycle._require_run_completed("omp", _turn_claim(tmp_path, "omp", _ask(), []), turn="first", marker=_ASKED)
