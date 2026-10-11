@@ -43,6 +43,7 @@ import urllib.request
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -264,6 +265,14 @@ def event_text(event: Mapping[str, object]) -> str:
     if text is None:
         text = event.get("content")
     return text if isinstance(text, str) else ""
+
+
+def event_time(event: Mapping[str, object]) -> float | None:
+    """When the provider's record says the event happened, or None when the served timestamp cannot be read."""
+    try:
+        return datetime.fromisoformat(str(event.get("timestamp")).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def _durable_assistant_text(event: object, default_origin: str | None) -> bool:

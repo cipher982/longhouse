@@ -43,6 +43,7 @@ from zerg.qa.console_served_state_core import StandingServedAnswerFault
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import assistant_marker_mentions
 from zerg.qa.console_served_state_core import event_text
+from zerg.qa.console_served_state_core import event_time
 from zerg.qa.console_served_state_core import native_transcript_state
 from zerg.qa.console_served_state_core import served_answer_correspondence
 from zerg.qa.console_served_state_core import served_answer_fault
@@ -55,6 +56,7 @@ from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import write_json
 from zerg.qa.model_compliance import ModelDeviation
+from zerg.qa.model_compliance import attach
 from zerg.qa.model_compliance import failure_claim
 from zerg.qa.openrouter_routing import prepare_pi_openrouter_routing
 from zerg.qa.pi_native import pi_transcript_rows
@@ -150,7 +152,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=20,
+    scenario_revision=21,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -834,6 +836,7 @@ def _wait_turn_served(
     turn: str,
     alongside: tuple[str, ...] = (),
     context_marker: str | None = None,
+    steered: bool = False,
     **wait: Any,
 ) -> tuple[list[dict[str, Any]], dict[str, object] | None]:
     """`_wait_served_answers` for one Console turn: held to the rows its claim names, and given up from what its stream holds."""
@@ -850,7 +853,7 @@ def _wait_turn_served(
         alongside=alongside,
         native_answers=_claim_native_answers(provider, claim, marker, alongside=alongside),
         unanswered=lambda served: _unanswered_turn_error(
-            provider, claim, marker, turn=turn, alongside=alongside, served=served, context_marker=context_marker
+            provider, claim, marker, turn=turn, alongside=alongside, served=served, context_marker=context_marker, steered=steered
         ),
         stream_answers=stream_answers,
         **wait,
@@ -1135,6 +1138,7 @@ def _unanswered_turn_error(
     alongside: tuple[str, ...] = (),
     served: str = "",
     context_marker: str | None = None,
+    steered: bool = False,
 ) -> RuntimeError:
     """Why a turn the engine completed has no served answer to ``marker``, decided from the provider's own stream.
 
@@ -1153,6 +1157,14 @@ def _unanswered_turn_error(
       message that stored it. A resumed session without that chain is
       ``console_resume_context_missing``, a finding and never a deviation.
     - Anything that leaves it unknown is ``provider_reply_not_judged``.
+
+    ``steered`` is a turn whose marker a mid-turn steer asked for and not its
+    prompt. What the stream echoes of its prompts then says nothing about the
+    marker (Claude takes a steer as hook context and OpenCode echoes nothing),
+    so a stream without it is not read as a prompt that never named it, and
+    the deviation claims only what the stream shows. That the steer reached
+    the provider is not shown here: the caller holds it (`_steer_delivery`)
+    before it calls the reply the model's.
     """
 
     account = _turn_account(provider, claim, marker, alongside=alongside)
@@ -1170,7 +1182,7 @@ def _unanswered_turn_error(
         return expired(ConsoleTurnFailure(PROVIDER_TURN_NOT_ENDED, detail + tail), PROVIDER_TURN)
     held = {"run_completed": True, "provider_turn_ended": True, "provider_replied": True}
     unjudged: str | None = None
-    if account["prompt_named_marker"] is False:
+    if account["prompt_named_marker"] is False and not steered:
         unjudged = f"{where} echoes its prompts and none names {name}"
     elif not account["assistant_replies"]:
         unjudged = f"the provider completed the {turn} turn without producing an assistant reply"
@@ -2595,7 +2607,9 @@ def console_steer_assertion(steer: Mapping[str, object] | None) -> bool:
 def run_with_console_steer_fault(execute: Callable[[], dict[str, Any]], root: Path) -> dict[str, Any]:
     """Run one steer invocation against a Machine Agent that acknowledges and
     drops the steer. It passes only when the fault fired and the steer
-    assertion failed; anything else is inconclusive or undetected."""
+    assertion failed as Longhouse's; anything else is inconclusive or
+    undetected. A drop the producer puts down to the model is undetected: the
+    factory would retry it and keep it off the findings."""
 
     receipt_path = root / "qa-fault-receipt.jsonl"
     os.environ["LONGHOUSE_QA_FAULT"] = CONSOLE_STEER_FAULT
@@ -2617,18 +2631,17 @@ def run_with_console_steer_fault(execute: Callable[[], dict[str, Any]], root: Pa
     preconditions_held = all(
         steer.get(fact) is True for fact in ("steer_accepted", "no_new_turn", "same_run_completed", "tool_ran_to_completion")
     )
+    outcome = "pass" if target is not False else "model_deviation" if steer.get("model_noncompliance") else "semantic_fail"
     if result.get("failure_code") or not fired or not preconditions_held:
         verdict = "inconclusive"
-    elif target is not False:
-        verdict = "undetected"
     else:
-        verdict = "rejected"
+        verdict = "rejected" if outcome == "semantic_fail" else "undetected"
     result["negative_control"] = {
         "fault": CONSOLE_STEER_FAULT,
         "target_assertion": STEER_ASSERTION_ID,
         "fault_fired": fired,
         "preconditions_held": preconditions_held,
-        "target_outcome": "semantic_fail" if target is False else "pass",
+        "target_outcome": outcome,
         "verdict": verdict,
     }
     result["status"] = "pass" if verdict == "rejected" else "fail"
@@ -2761,6 +2774,7 @@ def _run_steer_step(
     )
     receipt["same_run_completed"] = _run_completed(terminal) and str(terminal.get("run_id")) == str(turn["run_id"])
     flush_for_projection("console-steer-turn", terminal)
+    deviation: ModelDeviation | None = None
     try:
         # A run the engine ended as failed or cancelled has no reply to wait
         # for: the assertion already fails on it, and why is kept as the error.
@@ -2770,7 +2784,7 @@ def _run_steer_step(
         # the steer lands and again when the background job's notice arrives.
         # What is held is that the served replies are the provider's own rows.
         answers, answer_correspondence = _wait_turn_served(
-            api_url, token, session_id, provider, terminal, steer_marker, turn="steer", timeout=120, one_reply=False
+            api_url, token, session_id, provider, terminal, steer_marker, turn="steer", steered=True, timeout=120, one_reply=False
         )
         receipt["steer_marker_answered"] = bool(answers)
         receipt["steer_answer_events"] = len(answers)
@@ -2779,6 +2793,7 @@ def _run_steer_step(
     except RuntimeError as exc:
         receipt["steer_marker_answered"] = False
         receipt["steer_marker_error"] = str(exc)[:300]
+        deviation = exc if isinstance(exc, ModelDeviation) else None
     # A steer delivered as a follow-up starts its own Console run, and the
     # Machine Agent writes a claim for every run it starts.
     new_runs = sorted({path.stem for path in claim_path.parent.glob("*.json")} - claims_before)
@@ -2799,8 +2814,59 @@ def _run_steer_step(
         # Say what was served, so a failure is explained by the receipt alone.
         receipt["tool_marker_events"] = _tool_marker_rows(events, tool_marker)
         receipt["served_event_roles"] = sorted({str(event.get("role")) for event in events if isinstance(event, dict)})
+    receipt["steer_delivery"] = _steer_delivery(events, steer_marker)
+    # A reply that carries something else is the model's only once the provider is
+    # shown to have had the steer. An accepted steer that was dropped is answered with
+    # the first marker too, and that is the fault this cell exists to find.
+    if deviation is not None and receipt["steer_delivery"]["delivered_before_final_reply"]:
+        held = {**deviation.entry["contract_evidence"], "steer_delivered_before_final_reply": True}
+        receipt["model_noncompliance"] = {**deviation.entry, "contract_evidence": held}
     receipt["status"] = "pass" if console_steer_assertion(receipt) else "fail"
     return receipt
+
+
+def _steer_delivery(events: Iterable[object], steer_marker: str) -> dict[str, object]:
+    """Whether the provider's own record holds the steer ahead of its final reply.
+
+    The Runtime Host's ``accepted`` says that Longhouse took the steer, not
+    that the provider got it. That is read from the session's served events,
+    which the Machine Agent ships from the provider's own record of the
+    conversation: a user row that carries the steer's marker is the provider
+    recording the steer as input. Every steer provider keeps one (Codex in
+    its rollout, Claude in its session file as the hook context that carried
+    it, Pi and OMP in their session files, OpenCode in its database), where
+    the turn's stream echoes a steer for only some of them.
+
+    ``delivered_before_final_reply`` is True only when that row is served
+    ahead of the last assistant reply and is not timed after it. Otherwise
+    ``missing`` says what was not found: a steer the provider never recorded,
+    or one it recorded only once it had finished replying.
+    """
+
+    rows = [event for event in events if isinstance(event, dict)]
+    steers = [index for index, row in enumerate(rows) if row.get("role") == "user" and steer_marker in event_text(row)]
+    replies = [
+        index for index, row in enumerate(rows) if row.get("role") == "assistant" and not row.get("tool_name") and event_text(row).strip()
+    ]
+    steer = rows[steers[0]] if steers else None
+    reply = rows[replies[-1]] if replies else None
+    if steer is None:
+        missing: str | None = "no served user event carries the steer"
+    elif reply is None or replies[-1] < steers[0]:
+        missing = "no served assistant reply follows the steer"
+    else:
+        steer_at, reply_at = event_time(steer), event_time(reply)
+        timed = steer_at is not None and reply_at is not None and steer_at <= reply_at
+        missing = None if timed else "the steer is not timed before the final reply"
+    return {
+        "source": "served_events",
+        "steer_event_id": steer.get("id") if steer else None,
+        "steer_event_at": steer.get("timestamp") if steer else None,
+        "final_reply_event_id": reply.get("id") if reply else None,
+        "final_reply_at": reply.get("timestamp") if reply else None,
+        "delivered_before_final_reply": missing is None,
+        "missing": missing,
+    }
 
 
 def _tool_ran_to_completion(events: Iterable[object], *, tool_marker: str, first_marker: str) -> bool:
@@ -2870,7 +2936,8 @@ def _observation_from_receipts(
     binding: Mapping[str, object],
     interrupt: Mapping[str, object],
     cleanup: Mapping[str, object],
-) -> dict[str, bool]:
+    steer: Mapping[str, object] | None = None,
+) -> dict[str, Any]:
     marker = binding.get("marker")
     provider_excerpt = binding.get("provider_response_excerpt")
     assistant_excerpt = binding.get("bound_assistant_event_excerpt")
@@ -2891,7 +2958,7 @@ def _observation_from_receipts(
     exact_identity = all(
         binding.get(key) == dispatch.get(key) for key in ("provider", "session_id", "thread_id", "run_id", "prompt_digest")
     )
-    return {
+    observation: dict[str, Any] = {
         "adapter_dispatch_started": dispatch.get("status") == "pass",
         "qualification_model_bound": dispatch.get("qualification_model_bound") is True,
         "stock_provider_response_bound": (
@@ -2916,6 +2983,9 @@ def _observation_from_receipts(
             and cleanup.get("process_stop_verified") is True
         ),
     }
+    if steer and steer.get("model_noncompliance"):
+        attach(observation, STEER_ASSERTION_ID, dict(steer["model_noncompliance"]))
+    return observation
 
 
 def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path, *, steer: bool = False) -> dict[str, Any]:
@@ -3657,6 +3727,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             binding=binding,
             interrupt=interrupt_receipt,
             cleanup=cleanup,
+            steer=steer_receipt,
         )
         observation["continuation_context_recalled"] = continuation_context_recalled
         if provider == "pi":

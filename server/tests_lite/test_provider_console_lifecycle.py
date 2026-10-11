@@ -1661,7 +1661,7 @@ def _turn_claim(
         end: dict[str, object] = {"type": "agent_end", "isTerminal": True}
     elif provider in {"claude", "cursor"}:
         events = [{"type": "user", "message": message("user", prompt)}]
-        events += [{"type": "assistant", "message": message("assistant", text)} for text in replies]
+        events += [{"type": "assistant", "uuid": f"reply-{n}", "message": message("assistant", text)} for n, text in enumerate(replies)]
         end = {"type": "result", "subtype": "success"}
     elif provider == "opencode":
         # OpenCode echoes no prompt, and writes a text part again as it grows.
@@ -1937,3 +1937,184 @@ def test_a_served_wait_ends_once_the_providers_stream_holds_no_reply_to_serve(mo
             turn="resume",
         )
     assert clock.now < 5
+
+
+# --- The steer cell: whose doing a reply without the steered marker is ---
+
+_TAG = "0123456789abcdef0123456789abcdef"
+
+
+def _steer_markers(provider: str) -> tuple[str, str, str]:
+    """The first, steered and tool markers the steer step mints for ``provider`` under `_TAG`."""
+
+    stem = f"LH_{provider.upper()}_"
+    return f"{stem}STEER_FIRST_{_TAG}", f"{stem}STEERED_{_TAG}", f"{stem}STEER_TOOL_42_{_TAG}"
+
+
+def _steer_page(provider: str, final_reply: str, *, steer_at: str | None = "2026-01-01T00:00:27+00:00") -> list[dict[str, object]]:
+    """What the archive serves of a steered turn; ``steer_at`` is when the provider recorded the steer, None when it never did."""
+
+    first, steered, tool = _steer_markers(provider)
+    page: list[dict[str, object]] = [
+        {"id": "prompt", "role": "user", "content_text": _ask(first), "timestamp": "2026-01-01T00:00:20+00:00"},
+        {"id": "call", "role": "assistant", "tool_name": "bash", "content_text": None, "timestamp": "2026-01-01T00:00:31+00:00"},
+        {"id": "result", "role": "tool", "tool_output_text": tool, "timestamp": "2026-01-01T00:00:46+00:00"},
+        {"id": "reply-1", "role": "assistant", "content_text": final_reply, "timestamp": "2026-01-01T00:00:49+00:00"},
+    ]
+    if steer_at is not None:
+        page.append({"id": "steer", "role": "user", "content_text": f"Change of plan: {_ask(steered)}", "timestamp": steer_at})
+    return sorted(page, key=lambda event: str(event["timestamp"]))
+
+
+def _run_steer(monkeypatch, tmp_path: Path, provider: str, final_reply: str, page: list[dict[str, object]]) -> tuple[dict, _Clock]:
+    """The steer step over a finished turn: the provider's own stream for it, and the page the archive serves."""
+
+    from uuid import UUID
+
+    first, _steered, tool = _steer_markers(provider)
+    replies = ["Running the command.", final_reply]
+    claim = _turn_claim(tmp_path, provider, _ask(first), replies)
+    if provider == "opencode":
+        # As OpenCode writes a turn steered mid-tool: each text part again as it grows, the
+        # hand-off to the tool, the reply in a part of its own, and no prompt at all.
+        def part(part_id: str, text: str) -> dict[str, object]:
+            return {"type": "text", "part": {"id": part_id, "type": "text", "text": text}}
+
+        def finish(reason: str) -> dict[str, object]:
+            return {"type": "step_finish", "part": {"type": "step-finish", "reason": reason}}
+
+        stream = [
+            *(part("p1", replies[0][:cut]) for cut in (3, len(replies[0]))),
+            {"type": "tool_use", "part": {"type": "tool", "tool": "bash", "state": {"status": "completed", "output": tool}}},
+            finish("tool-calls"),
+            *(part("p2", "The command has finished."[:cut]) for cut in (3, 25)),
+            *(part("p3", final_reply[:cut]) for cut in (0, 14, len(final_reply))),
+            finish("stop"),
+        ]
+        Path(str(claim["stdout_path"])).write_text("".join(json.dumps(event) + "\n" for event in stream), encoding="utf-8")
+    if provider in {"pi", "omp"}:
+        # Their served replies are held to the session file's rows, by id.
+        record = tmp_path / f"{provider}-session.jsonl"
+        rows = [{"type": "session", "id": "native-session"}]
+        rows += [
+            {"type": "message", "id": f"reply-{n}", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
+            for n, text in enumerate(replies)
+        ]
+        record.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        claim["source_path"] = str(record)
+    clock = _Clock()
+    claims = iter([{**claim, "state": "spawned"}, claim])
+    monkeypatch.setattr(lifecycle, "time", clock)
+    monkeypatch.setattr(lifecycle, "uuid4", lambda: UUID(hex=_TAG))
+    monkeypatch.setattr(lifecycle, "_start_turn", lambda **_kwargs: {"run_id": "run-1", "turn_id": "turn-1"})
+    monkeypatch.setattr(lifecycle, "_wait_claim", lambda *_args, **_kwargs: next(claims))
+    monkeypatch.setattr(lifecycle, "_post_steer", lambda *_args, **_kwargs: ({"outcome": "sent", "disposition": "accepted"}, 12))
+    monkeypatch.setattr(lifecycle, "_wait_turn_terminal", lambda **_kwargs: {})
+    monkeypatch.setattr(lifecycle, "_request", lambda *_args, **_kwargs: {"events": page})
+    receipt = lifecycle._run_steer_step(
+        api_url="https://runtime.example",
+        token="token",
+        session_id="session-1",
+        provider=provider,
+        longhouse_home=tmp_path,
+        claims=[],
+        flush_for_projection=lambda *_args: {},
+    )
+    return receipt, clock
+
+
+def _steer_observation(receipt: dict) -> dict:
+    dispatch, binding, interrupt, cleanup = _receipts()
+    return lifecycle._observation_from_receipts(dispatch=dispatch, binding=binding, interrupt=interrupt, cleanup=cleanup, steer=receipt)
+
+
+@pytest.mark.parametrize("provider", sorted(lifecycle.STEER_PROVIDERS))
+def test_a_wrong_reply_to_a_steer_the_provider_recorded_is_the_models(monkeypatch, tmp_path, provider):
+    first, steered, _tool = _steer_markers(provider)
+    miscopied = steered.replace("STEERED", "STEER")
+
+    receipt, clock = _run_steer(monkeypatch, tmp_path, provider, miscopied, _steer_page(provider, miscopied))
+
+    assert receipt["status"] == "fail" and receipt["steer_accepted"] is True and receipt["steer_marker_answered"] is False
+    assert receipt["steer_marker_error"].startswith(
+        f"reply_carried_another_marker: the steer turn completed and its final reply carries LH_{provider.upper()}_STEER and not"
+    )
+    # What was found, where, and its time against the final reply's.
+    assert receipt["steer_delivery"] == {
+        "source": "served_events",
+        "steer_event_id": "steer",
+        "steer_event_at": "2026-01-01T00:00:27+00:00",
+        "final_reply_event_id": "reply-1",
+        "final_reply_at": "2026-01-01T00:00:49+00:00",
+        "delivered_before_final_reply": True,
+        "missing": None,
+    }
+    # The same claim for every provider, whatever its stream echoes of a steer.
+    assert receipt["model_noncompliance"] == {
+        "reason": "reply_carried_another_marker",
+        "contract_evidence": dict.fromkeys(
+            ("run_completed", "provider_turn_ended", "provider_replied", "steer_delivered_before_final_reply"), True
+        ),
+    }
+    # Where the factory reads it: on the observation, under the assertion that is false.
+    assert _steer_observation(receipt)["model_noncompliance"] == {lifecycle.STEER_ASSERTION_ID: receipt["model_noncompliance"]}
+    # The stream had ended without the reply before the wait began: it stood for the
+    # settle time and not for its 120 seconds (6 of these are the pause before the steer).
+    assert clock.now < 6 + 5
+
+    # The first marker, with the steer on record ahead of it: delivery is shown, so not following it was the model's.
+    ignored, _clock = _run_steer(monkeypatch, tmp_path, provider, first, _steer_page(provider, first))
+    assert ignored["model_noncompliance"]["reason"] == "reply_carried_another_marker"
+    assert ignored["steer_delivery"]["delivered_before_final_reply"] is True
+
+
+@pytest.mark.parametrize("provider", sorted(lifecycle.STEER_PROVIDERS))
+def test_an_accepted_steer_the_provider_never_recorded_stays_a_finding(monkeypatch, tmp_path, provider):
+    first, _steered, _tool = _steer_markers(provider)
+
+    # Acknowledged and dropped: the model answers the first marker, which reads exactly like a reply that carried another.
+    receipt, clock = _run_steer(monkeypatch, tmp_path, provider, first, _steer_page(provider, first, steer_at=None))
+
+    assert receipt["status"] == "fail" and receipt["steer_accepted"] is True and receipt["steer_marker_answered"] is False
+    assert receipt["steer_marker_error"].startswith("reply_carried_another_marker: ")
+    assert receipt["steer_delivery"]["delivered_before_final_reply"] is False
+    assert receipt["steer_delivery"]["missing"] == "no served user event carries the steer"
+    assert "model_noncompliance" not in receipt and "model_noncompliance" not in _steer_observation(receipt)
+    assert clock.now < 6 + 5
+
+    # Recorded only once the provider had finished replying, or timed after the reply it is served ahead of: not delivered.
+    late, _clock = _run_steer(monkeypatch, tmp_path, provider, first, _steer_page(provider, first, steer_at="2026-01-01T00:00:50+00:00"))
+    assert late["steer_delivery"]["missing"] == "no served assistant reply follows the steer" and "model_noncompliance" not in late
+    mistimed = _steer_page(provider, first)
+    mistimed[1]["timestamp"] = "2026-01-01T00:00:55+00:00"
+    assert lifecycle._steer_delivery(mistimed, _steer_markers(provider)[1])["missing"] == "the steer is not timed before the final reply"
+
+
+@pytest.mark.parametrize("provider", sorted(lifecycle.STEER_PROVIDERS))
+def test_a_steer_the_model_followed_passes_and_keeps_its_delivery_on_the_receipt(monkeypatch, tmp_path, provider):
+    _first, steered, _tool = _steer_markers(provider)
+
+    receipt, _clock = _run_steer(monkeypatch, tmp_path, provider, steered, _steer_page(provider, steered))
+
+    assert receipt["status"] == "pass" and lifecycle.console_steer_assertion(receipt) is True
+    assert receipt["steer_answer_event_ids"] == ["reply-1"] and "steer_marker_error" not in receipt
+    assert receipt["steer_delivery"]["delivered_before_final_reply"] is True
+    assert "model_noncompliance" not in receipt and "model_noncompliance" not in _steer_observation(receipt)
+
+
+def test_a_dropped_steer_put_down_to_the_model_is_not_a_detected_drop(tmp_path, monkeypatch):
+    monkeypatch.delenv("LONGHOUSE_QA_FAULT", raising=False)
+    steer = dict.fromkeys(("steer_accepted", "no_new_turn", "same_run_completed", "tool_ran_to_completion"), True)
+
+    def execute():
+        Path(os.environ["LONGHOUSE_QA_FAULT_RECEIPT"]).write_text(
+            json.dumps({"fault": lifecycle.CONSOLE_STEER_FAULT}) + "\n", encoding="utf-8"
+        )
+        excused = {"reason": "reply_carried_another_marker", "contract_evidence": {"steer_delivered_before_final_reply": True}}
+        return {"assertions": {lifecycle.STEER_ASSERTION_ID: False}, "steer": steer | {"model_noncompliance": excused}}
+
+    result = lifecycle.run_with_console_steer_fault(execute, tmp_path)
+
+    # The assertion is false, and the factory would still have retried the run and kept it off the findings.
+    assert result["negative_control"]["verdict"] == "undetected" and result["negative_control"]["target_outcome"] == "model_deviation"
+    assert result["status"] == "fail"
