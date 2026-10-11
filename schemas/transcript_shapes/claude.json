@@ -105,13 +105,14 @@
   "assistant/text": {
    "classification": "transcript",
    "first_seen_version": "2.0.76",
-   "last_seen_version": "2.1.284",
+   "last_seen_version": "2.1.296",
    "entrypoints": [
     "claude-desktop",
     "cli",
     "sdk-cli"
    ],
    "keys": [
+    "advisorModel",
     "agentId",
     "apiBlockIndex",
     "apiErrorStatus",
@@ -133,6 +134,7 @@
     "perTurnEffort",
     "quotaLimits",
     "requestId",
+    "requestedModel",
     "sessionId",
     "sessionKind",
     "session_id",
@@ -142,6 +144,7 @@
     "usage.cache_creation",
     "usage.cache_creation_input_tokens",
     "usage.cache_read_input_tokens",
+    "usage.fallback_credit",
     "usage.inference_geo",
     "usage.input_tokens",
     "usage.iterations",
@@ -247,13 +250,14 @@
   "assistant/thinking": {
    "classification": "signal:turn.thinking",
    "first_seen_version": "2.1.121",
-   "last_seen_version": "2.1.258",
+   "last_seen_version": "2.1.295",
    "entrypoints": [
     "claude-desktop",
     "cli",
     "sdk-cli"
    ],
    "keys": [
+    "advisorModel",
     "agentId",
     "apiBlockIndex",
     "attributionAgent",
@@ -269,6 +273,7 @@
     "message",
     "parentUuid",
     "requestId",
+    "requestedModel",
     "sessionId",
     "sessionKind",
     "session_id",
@@ -278,6 +283,7 @@
     "usage.cache_creation",
     "usage.cache_creation_input_tokens",
     "usage.cache_read_input_tokens",
+    "usage.fallback_credit",
     "usage.inference_geo",
     "usage.input_tokens",
     "usage.iterations",
@@ -340,13 +346,14 @@
   "assistant/tool_use": {
    "classification": "transcript",
    "first_seen_version": "2.1.128",
-   "last_seen_version": "2.1.259",
+   "last_seen_version": "2.1.295",
    "entrypoints": [
     "claude-desktop",
     "cli",
     "sdk-cli"
    ],
    "keys": [
+    "advisorModel",
     "agentId",
     "apiBlockIndex",
     "attributionAgent",
@@ -362,6 +369,7 @@
     "message",
     "parentUuid",
     "requestId",
+    "requestedModel",
     "sessionId",
     "sessionKind",
     "session_id",
@@ -371,6 +379,7 @@
     "usage.cache_creation",
     "usage.cache_creation_input_tokens",
     "usage.cache_read_input_tokens",
+    "usage.fallback_credit",
     "usage.inference_geo",
     "usage.input_tokens",
     "usage.iterations",
@@ -405,7 +414,7 @@
   "attachment/agent_listing_delta": {
    "classification": "chrome:attachment",
    "first_seen_version": "2.1.161",
-   "last_seen_version": "2.1.259",
+   "last_seen_version": "2.1.296",
    "entrypoints": [
     "cli",
     "sdk-cli"
@@ -413,6 +422,7 @@
    "keys": [
     "addedLines",
     "addedTypes",
+    "builtInTypes",
     "isInitial",
     "removedTypes",
     "showConcurrencyNote",
@@ -832,7 +842,7 @@
   "attachment/prompt_snapshot": {
    "classification": "chrome:attachment",
    "first_seen_version": "2.1.284",
-   "last_seen_version": "2.1.284",
+   "last_seen_version": "2.1.296",
    "entrypoints": [
     "sdk-cli"
    ],
@@ -840,10 +850,12 @@
     "cliPrefix",
     "contextRendering",
     "echoWireToolInputs",
+    "inlineTools",
     "keptReminders",
     "reminderFold",
     "systemPrompt",
     "systemTurns",
+    "toolChangeHeader",
     "tools",
     "type"
    ]
