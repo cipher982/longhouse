@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 import yaml
 
+from zerg.qa import claude_helm_lifecycle
 from zerg.qa import factory_registration as factory
 from zerg.qa.provider_factory_model import load_capability_assertions
 
@@ -224,7 +225,8 @@ def test_a_result_reporting_the_execution_key_as_its_variant_is_refused_as_at_91
         ({"observation": None}, "observation is not an object"),
         ({"assertions": None}, "assertions is not an object"),
         ({"producer": {"producer_id": "other.v1"}}, "producer_id is 'other.v1', expected 'claude.helm_lifecycle.v1'"),
-        ({"scenario_revision": 1}, "scenario_revision is 1, expected 10"),
+        # The producer's own revision, so bumping it never breaks this test.
+        ({"scenario_revision": 1}, f"scenario_revision is 1, expected {claude_helm_lifecycle.REGISTRATION.scenario_revision}"),
         ({"evidence_class": "hermetic"}, "evidence_class is 'hermetic', expected 'live_token'"),
         ({"provider": "codex"}, "provider is 'codex', expected 'claude'"),
         ({"generated_at": "yesterday"}, "invalid generated_at"),

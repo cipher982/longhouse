@@ -37,6 +37,7 @@ SERVER_PID=""
 ENGINE_LOG="$TEST_ROOT/engine.log"
 ENGINE_PID=""
 CLAUDE_CONTROL_PID=""
+CLAUDE_CHANNEL_PID=""
 CURSOR_CONTROL_PID=""
 PORT="${LONGHOUSE_LIFECYCLE_SMOKE_PORT:-0}"
 
@@ -144,6 +145,7 @@ cleanup() {
   stop_child "$FAULT_PROXY_PID" "fault proxy"
   stop_child "$CURSOR_CONTROL_PID" "cursor control"
   stop_child "$CLAUDE_CONTROL_PID" "claude control"
+  stop_child "$CLAUDE_CHANNEL_PID" "claude channel control"
   stop_child "$ENGINE_PID" "machine agent"
   stop_child "$SERVER_PID" "runtime host"
   if [[ "${LONGHOUSE_KEEP_LIFECYCLE_SMOKE_ROOT:-0}" == "1" ]]; then
@@ -623,6 +625,10 @@ import uuid
 if sys.argv[1:2] == ["auth"]:
     print('{"loggedIn": true}')
     raise SystemExit(0)
+if sys.argv[1:2] == ["--version"]:
+    # 2.1.287 and later load Longhouse's mod; earlier ones keep the channel.
+    print(os.environ.get("LONGHOUSE_FAKE_CLAUDE_VERSION", "2.1.296 (Claude Code)"))
+    raise SystemExit(0)
 
 print("CLAUDE_LIFECYCLE_PTY_OK", flush=True)
 print("LONGHOUSE_FAKE_SESSION_ID=" + os.environ.get("LONGHOUSE_MANAGED_SESSION_ID", ""), flush=True)
@@ -694,7 +700,62 @@ def record_notifications():
             os.fsync(output.fileno())
 
 
+def record_user_turn(content, origin):
+    event = {
+        "parentUuid": None,
+        "isSidechain": False,
+        "userType": "external",
+        "cwd": os.getcwd(),
+        "sessionId": provider_session_id,
+        "version": "lifecycle-fake",
+        "type": "user",
+        "origin": origin,
+        "message": {"role": "user", "content": content},
+        "uuid": str(uuid.uuid4()),
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    with transcript.open("a") as output:
+        output.write(json.dumps(event) + "\n")
+        output.flush()
+        os.fsync(output.fileno())
+
+
+def run_mod(plugin_dir):
+    """Do what Longhouse's mod does inside Claude Code, against the real engine.
+
+    The launcher shipped the mod and set its environment; the mod runs the
+    engine's watcher, claims each owner input, submits it as the user's own
+    words (recorded as Claude Code records a mod's asUser prompt) and reports
+    each step. There is no running turn to abort.
+    """
+
+    assert (pathlib.Path(plugin_dir) / "hooks/register.js").is_file(), plugin_dir
+    engine = os.environ["LONGHOUSE_OWNER_INPUT_ENGINE"]
+    session = os.environ["LONGHOUSE_CHANNEL_SESSION_ID"]
+
+    def owner_input(*args):
+        return subprocess.run([engine, "claude-owner-input", *args, "--session", session], check=False)
+
+    watcher = subprocess.Popen(
+        [engine, "claude-owner-input", "watch", "--session", session],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    for line in watcher.stdout:
+        item = json.loads(line)
+        if item.get("state") != "pending" or owner_input("claim", "--id", item["id"]).returncode != 0:
+            continue
+        if item["kind"] == "send":
+            record_user_turn(item["text"], {"kind": "plugin", "name": "longhouse", "asUser": True})
+            owner_input("ack", "--id", item["id"], "--state", "submitted")
+            owner_input("ack", "--id", item["id"], "--state", "delivered", "--turn-id", str(uuid.uuid4()))
+        else:
+            owner_input("ack", "--id", item["id"], "--state", "no_turn")
+
+
 threading.Thread(target=record_notifications, daemon=True).start()
+if "--plugin-dir" in sys.argv:
+    threading.Thread(target=run_mod, args=(sys.argv[sys.argv.index("--plugin-dir") + 1],), daemon=True).start()
 signal.signal(signal.SIGINT, lambda *_: None)
 signal.signal(signal.SIGTERM, lambda *_: running.clear())
 while running.is_set():
@@ -1036,21 +1097,39 @@ codex_control_session_id="$(latest_launch_session_id)"
   || fail "OpenCode control-cycle launch failed"
 opencode_control_session_id="$(latest_launch_session_id)"
 
-LONGHOUSE_FAKE_CLAUDE_CONTROL=1 \
-  "$BIN_DIR/longhouse" claude --cwd "$HOME_DIR" --claude-bin "$BIN_DIR/claude" \
-  >"$TEST_ROOT/claude-control-launch.out" 2>&1 &
-CLAUDE_CONTROL_PID=$!
-claude_state=""
-for _ in $(seq 1 100); do
-  claude_state="$(find "$HOME_DIR/.claude/channels/longhouse/sessions" -name '*.json' -type f 2>/dev/null | head -1 || true)"
-  if [[ -n "$claude_state" ]] && [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("ready", False))' "$claude_state")" == "True" ]]; then
-    break
-  fi
-  kill -0 "$CLAUDE_CONTROL_PID" 2>/dev/null || fail "Claude control-cycle provider exited before its channel became ready"
-  sleep 0.2
-done
-[[ -n "$claude_state" ]] || fail "Claude control-cycle channel state never appeared"
+# Two Claude sessions: current Claude Code, whose owner input goes through
+# Longhouse's mod, and one that predates mods, which keeps the channel.
+# `$1` is the fake's version, `$2` the session state an earlier launch made;
+# sets LAUNCHED_PID and LAUNCHED_STATE (no subshell, so the facade stays this
+# shell's child and `fail` stops the script).
+launch_claude_control() {
+  local version="$1" earlier="$2" state="" pid
+  LONGHOUSE_FAKE_CLAUDE_CONTROL=1 LONGHOUSE_FAKE_CLAUDE_VERSION="$version" \
+    "$BIN_DIR/longhouse" claude --cwd "$HOME_DIR" --claude-bin "$BIN_DIR/claude" \
+    >>"$TEST_ROOT/claude-control-launch.out" 2>&1 &
+  pid=$!
+  for _ in $(seq 1 100); do
+    # Top level only: each session's owner-input queue sits beside its state.
+    state="$(find "$HOME_DIR/.claude/channels/longhouse/sessions" -maxdepth 1 -name '*.json' -type f 2>/dev/null \
+      | grep -vxF "${earlier:-/none}" | head -1 || true)"
+    if [[ -n "$state" ]] && [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("ready", False))' "$state")" == "True" ]]; then
+      break
+    fi
+    kill -0 "$pid" 2>/dev/null || fail "Claude control-cycle provider ($version) exited before its channel became ready"
+    sleep 0.2
+  done
+  [[ -n "$state" ]] || fail "Claude control-cycle channel state ($version) never appeared"
+  LAUNCHED_PID="$pid"
+  LAUNCHED_STATE="$state"
+}
+launch_claude_control "2.1.296 (Claude Code)" ""
+CLAUDE_CONTROL_PID="$LAUNCHED_PID"
+claude_state="$LAUNCHED_STATE"
 claude_control_session_id="$(basename "$claude_state" .json)"
+launch_claude_control "2.1.280 (Claude Code)" "$claude_state"
+CLAUDE_CHANNEL_PID="$LAUNCHED_PID"
+claude_channel_state="$LAUNCHED_STATE"
+claude_channel_session_id="$(basename "$claude_channel_state" .json)"
 
 LONGHOUSE_FAKE_CURSOR_CONTROL=1 \
   run_launch_bounded "$TEST_ROOT/cursor-control-launch.out" 120 \
@@ -1120,10 +1199,46 @@ wait_for_value "OpenCode canonical owned run" run_ended 20 \
   canonical_owned_run_state "$opencode_control_session_id"
 echo "ok: OpenCode send, interrupt, terminate, and canonical owned run reached terminal"
 
+# The route the launch recorded and the turn the send opened, per session.
+claude_owner_input_route() {
+  python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["path"], r.get("reason") or "-")' \
+    "$HOME_DIR/.claude/channels/longhouse/sessions/$1.owner-input/route.json"
+}
+claude_turn_origin() {
+  python3 - "$HOME_DIR/.claude/projects/lifecycle" "$1" <<'CHECK'
+import json, pathlib, sys
+for path in pathlib.Path(sys.argv[1]).glob("*.jsonl"):
+    for line in path.read_text().splitlines():
+        row = json.loads(line)
+        content = row["message"]["content"]
+        if sys.argv[2] in content:
+            origin = row.get("origin") or {}
+            print("channel" if content.startswith("<channel") else f'{origin.get("kind")}:{origin.get("name")}:{origin.get("asUser")}')
+            raise SystemExit(0)
+CHECK
+}
+
 claude_send="$(send_live "$claude_control_session_id" 'CLAUDE_LIFECYCLE_CONTROL')" \
-  || fail "Runtime Host failed to send through the Claude channel"
+  || fail "Runtime Host failed to send through the Claude mod"
 [[ "$(printf '%s' "$claude_send" | json_field accepted)" == "True" ]] \
   || fail "Runtime Host did not accept the Claude send: $claude_send"
+[[ "$(claude_owner_input_route "$claude_control_session_id")" == "claude_mod -" ]] \
+  || fail "current Claude Code did not get the mod route: $(claude_owner_input_route "$claude_control_session_id")"
+wait_for_value "Claude owner send through the mod" "plugin:longhouse:True" 20 \
+  claude_turn_origin CLAUDE_LIFECYCLE_CONTROL
+echo "ok: Claude 2.1.296 owner send arrived through the mod as the user's own words"
+
+claude_channel_send="$(send_live "$claude_channel_session_id" 'CLAUDE_LIFECYCLE_CHANNEL')" \
+  || fail "Runtime Host failed to send through the Claude channel"
+[[ "$(claude_owner_input_route "$claude_channel_session_id")" == "channel claude_code_predates_mods" ]] \
+  || fail "Claude Code before mods did not keep the channel: $(claude_owner_input_route "$claude_channel_session_id")"
+wait_for_value "Claude owner send through the channel" channel 20 \
+  claude_turn_origin CLAUDE_LIFECYCLE_CHANNEL
+claude_channel_pid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["claude_pid"])' "$claude_channel_state")"
+kill -TERM "$claude_channel_pid" || fail "could not stop the channel Claude control-cycle provider"
+wait "$CLAUDE_CHANNEL_PID" || fail "channel Claude control-cycle facade did not exit cleanly"
+CLAUDE_CHANNEL_PID=""
+echo "ok: Claude 2.1.280 owner send kept the channel and said why"
 claude_interrupt="$(post_live_action "$claude_control_session_id" interrupt)" \
   || fail "Runtime Host failed to interrupt Claude"
 [[ "$(printf '%s' "$claude_interrupt" | json_field interrupt_dispatched)" == "True" ]] \
