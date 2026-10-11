@@ -2093,6 +2093,7 @@
     {
       "path": "server/tests_lite/test_transcript_census_families.py",
       "providers": [
+        "claude",
         "cursor",
         "omp",
         "opencode",

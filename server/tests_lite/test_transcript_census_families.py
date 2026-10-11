@@ -99,6 +99,39 @@ def _assert_all_classified(provider: str, records: list[dict]) -> int:
     return len(shapes)
 
 
+# Claude's `extract_assistant_events` makes an event from each block it has an arm for and passes over
+# every other block in its catch-all arm. These are the blocks the catalog names that the parser passes
+# over: the catalog says what each is, and the parser makes no event from it.
+CLAUDE_BLOCKS_WITHOUT_AN_ARM = {"thinking", "fallback"}
+
+
+def test_claude_assistant_family_names_every_block_the_parser_has_an_arm_for():
+    tool = _tool()
+    catalog = _catalog("claude")
+    (family,) = [family for family in catalog["families"] if family["segments"][0] == "assistant"]
+    names = family["segments"][1]
+
+    # An arm makes a transcript event from its block, so the catalog names the block and calls it that.
+    arms = _arms(PARSER, "extract_assistant_events")
+    assert arms, "extract_assistant_events no longer dispatches on string arms; point this test at its new shape"
+    assert arms <= set(names), f"the Claude assistant family does not name {sorted(arms - set(names))}"
+    assert {names[arm]["classification"] for arm in arms} == {"transcript"}
+
+    # Every other name is a block the catch-all passes over, and this test lists them: a block that gains
+    # an arm leaves that list, and a name added to the catalog joins it or gets an arm.
+    assert re.search(r"^\s*_ => \{$", _rust_function(PARSER, "extract_assistant_events"), re.MULTILINE)
+    assert set(names) - arms == CLAUDE_BLOCKS_WITHOUT_AN_ARM
+
+    # Every combination of those blocks on one line is a shape the catalog classifies: fifteen from four.
+    records = [{"type": "assistant", "message": {"content": _content(combo)}} for combo in _subsets(sorted(names))]
+    assert _assert_all_classified("claude", records) == 2 ** len(names) - 1
+
+    # A block the catalog does not name makes its line a finding, alone or beside blocks it does name.
+    for content in ([{"type": "server_tool_use"}], [{"type": "text"}, {"type": "server_tool_use"}]):
+        shape = tool.SHAPERS["claude"]({"type": "assistant", "message": {"content": content}})[0]
+        assert tool.unclassified(catalog, {shape: {"count": 1, "keys": []}}) == [shape]
+
+
 # Pi and OMP share `extract_pi_message_events`: role -> the content it has a path for.
 PI_MESSAGE_ARMS = {
     "user": [EMPTY, STRING, "text", "image"],
