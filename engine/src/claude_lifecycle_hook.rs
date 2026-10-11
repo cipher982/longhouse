@@ -292,8 +292,6 @@ fn unmanaged_provider_identity() -> Option<(u32, String)> {
     (!start_time.is_empty()).then(|| (pid, start_time.to_string()))
 }
 
-
-
 /// Bounded registry from Claude's parent Stop hook.
 ///
 /// `background_tasks[]` is how Claude distinguishes "session is done" from
@@ -1222,7 +1220,6 @@ mod tests {
             "claude-hook:open-question:session-1:toolu_01abc"
         );
     }
-
 
     #[test]
     fn managed_presence_carries_provider_session_id() {

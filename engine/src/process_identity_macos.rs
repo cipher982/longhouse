@@ -801,7 +801,8 @@ fn same_process(left: &KinfoProc, right: &KinfoProc) -> bool {
 /// emitted as `process_start_time` evidence and compared with earlier
 /// observations, so sub-second precision would read as a different process.
 fn start_time(info: &KinfoProc) -> Option<DateTime<Utc>> {
-    Utc.timestamp_opt(info.kp_proc.p_starttime.tv_sec, 0).single()
+    Utc.timestamp_opt(info.kp_proc.p_starttime.tv_sec, 0)
+        .single()
 }
 
 fn error_from_errno() -> ProbeError {

@@ -30,8 +30,8 @@
 //! without shelling out.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::path::Path;
+use std::path::PathBuf;
 #[cfg(not(target_os = "macos"))]
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -318,8 +318,9 @@ impl ProcessScanner for SystemScanner {
 
 #[cfg(target_os = "macos")]
 fn run_lsof(pids: &[u32]) -> Result<HashMap<u32, Vec<PathBuf>>, String> {
-    crate::process_identity::try_collect_process_open_files(pids)
-        .ok_or_else(|| format!("libproc open-file inventory unavailable for unmanaged pids {pids:?}"))
+    crate::process_identity::try_collect_process_open_files(pids).ok_or_else(|| {
+        format!("libproc open-file inventory unavailable for unmanaged pids {pids:?}")
+    })
 }
 
 #[cfg(not(target_os = "macos"))]

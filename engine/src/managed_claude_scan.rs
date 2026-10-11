@@ -309,7 +309,6 @@ fn process_identity_matches(fact: &ProcessFact, recorded_start: Option<DateTime<
     started_before_or_near_recorded(fact, recorded_start)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,5 +612,4 @@ mod tests {
         assert_eq!(observations.len(), 1);
         assert!(!path.exists());
     }
-
 }
