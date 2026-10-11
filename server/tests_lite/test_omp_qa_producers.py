@@ -2043,22 +2043,26 @@ def _served_events_snapshot(events: list[dict[str, object]]) -> dict[str, object
 
 def _converge(
     monkeypatch,
-    events: list[dict[str, object]],
+    events: object,
     *,
     reads: list[int] | None = None,
     native_answers: dict[str, int] | None = None,
     **kwargs: object,
 ) -> dict[str, object]:
-    """Converge on a fixed served page. ``reads`` counts the Runtime Host reads:
+    """Converge on a served page: a fixed list of events, or a function of the read number
+    for a page that changes. ``reads`` counts the Runtime Host reads:
     one read means the verdict came from the first complete page, with no polling.
     ``native_answers`` is what OMP's own transcript answers with: row id to count,
     by default the one row ``reply``. A test that passes ``native_source_path``
     reads a real session file instead."""
 
+    polls = [0]
+
     def snapshot(*_args: object) -> dict[str, object]:
         if reads is not None:
             reads.append(1)
-        return _served_events_snapshot(events)
+        polls[0] += 1
+        return _served_events_snapshot(events(polls[0]) if callable(events) else events)
 
     monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_snapshot", snapshot)
     # A refusal has to stand; these tests do not wait for the window, only for the second read.
@@ -2281,6 +2285,31 @@ def test_omp_runtime_convergence_fails_at_once_when_the_served_reply_row_does_no
     assert raised.value.reason == "marker_reply_served_without_answer"
     assert raised.value.answer_event_ids == []
     assert raised.value.mention_event_ids == ["narration", "reply"]
+
+
+def test_omp_runtime_convergence_names_a_fault_that_stands_while_the_page_grows(monkeypatch) -> None:
+    reply = {"id": "reply", "role": "assistant", "content_text": _FINAL_REPLY}
+    stray = {"id": "again", "role": "assistant", "content_text": _REPLY_MARKER}
+
+    def other(number: int) -> dict[str, object]:
+        return {"id": f"later-{number}", "role": "assistant", "content_text": "Still working."}
+
+    # Events keep arriving beside the stray answer. They are not the fault, so it stands and is raised.
+    reads: list[int] = []
+    with pytest.raises(MarkerAnswerCountError) as raised:
+        _converge(monkeypatch, lambda poll: [reply, stray, *(other(number) for number in range(poll))], reads=reads)
+    assert reads == [1, 1]
+    assert raised.value.reason == "served_answer_without_native_row"
+
+    # A fault whose own ids change on every read never stands; the deadline still names it.
+    with pytest.raises(MarkerAnswerCountError) as raised:
+        _converge(
+            monkeypatch,
+            lambda poll: [reply, {"id": f"again-{poll}", "role": "assistant", "content_text": _REPLY_MARKER}],
+            timeout=0.5,
+        )
+    assert raised.value.reason == "served_answer_without_native_row"
+    assert "timed out" not in str(raised.value)
 
 
 @pytest.mark.parametrize(

@@ -106,7 +106,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
     producer_revision=10,
     scenario_id=SCENARIO_ID,
-    scenario_revision=16,
+    scenario_revision=17,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -648,7 +648,8 @@ def _runtime_convergence(
     native wait returned. A complete served page with an answer the transcript
     does not account for fails at once with a typed reason
     (`served_answer_fault`); a page that has not reached an answering row yet
-    is the lag this waits out.
+    is the lag this waits out. A wait that gives up with a fault still on the
+    page ends with that fault's reason, not as a timeout.
     """
 
     last: dict[str, Any] = {}
@@ -694,14 +695,14 @@ def _runtime_convergence(
         # page to: no verdict either way. And a refusal has to stand
         # (`StandingServedAnswerFault`), so a row OMP appended between the
         # engine shipping it and this read is seen on the next one.
-        fault = refusal.standing(
+        found = (
             served_answer_fault(events, marker, native_answers, default_origin="durable", alongside=alongside) if native_readable else None
         )
         correspondence = served_answer_correspondence(events, marker, native_answers, default_origin="durable", alongside=alongside)
         correspondence["native_transcript_readable"] = native_readable
         correspondence["native_transcript_state"] = native_state
-        if fault is not None:
-            fault.observation = {
+        if found is not None:
+            found.observation = {
                 "provider": "omp",
                 "session_id": session_id,
                 "native_session_id": native_session_id,
@@ -711,6 +712,8 @@ def _runtime_convergence(
                 "answer_correspondence": correspondence,
                 "served_projection": served_projection,
             }
+        fault = refusal.standing(found)
+        if fault is not None:
             raise fault
         diagnostic = snapshot.get("diagnostic") if isinstance(snapshot.get("diagnostic"), Mapping) else {}
         detail = served_projection.get("detail") if isinstance(served_projection.get("detail"), Mapping) else {}
@@ -768,7 +771,11 @@ def _runtime_convergence(
             "served_projection": served_projection,
         }
 
-    def timed_out(prefix: str) -> RuntimeConvergenceTimeout:
+    def timed_out(prefix: str) -> RuntimeError:
+        # A fault still on the page is why this never converged: say that.
+        fault = refusal.at_deadline()
+        if fault is not None:
+            return fault
         summary = {key: value for key, value in last.items() if key != "served_projection"}
         return RuntimeConvergenceTimeout(f"{prefix}: {summary}", observation=dict(last))
 

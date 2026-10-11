@@ -626,6 +626,8 @@ def test_a_served_answer_the_providers_transcript_does_not_account_for_is_a_type
     assert stray is not None and stray.reason == core.SERVED_ANSWER_WITHOUT_NATIVE_ROW
     assert stray.answer_event_ids == ["reply", "again"]
     assert "belong to none" in str(stray) and "The command finished" not in str(stray)
+    # Each fault says which ids it was decided from.
+    assert (twice.about, split.about, stray.about) == (("reply",), ("reply",), ("again",))
 
     # A row that answers in its second text block is served under the row's id plus a suffix.
     later_block = _served_event("reply-text-1", _MARKER)
@@ -643,6 +645,7 @@ def test_a_served_answer_the_providers_transcript_does_not_account_for_is_a_type
     unanswered = core.served_answer_fault([narration, _served_event("reply", "Done.")], _MARKER, {"reply": 1})
     assert unanswered is not None and unanswered.reason == core.MARKER_REPLY_SERVED_WITHOUT_ANSWER
     assert unanswered.answer_event_ids == [] and unanswered.mention_event_ids == ["narration"]
+    assert unanswered.about == ("reply",)
 
 
 def test_only_a_transcript_read_to_the_end_of_a_complete_line_is_a_transcript_that_was_read():
@@ -684,6 +687,69 @@ def test_a_served_answer_fault_is_raised_only_once_it_has_stood(monkeypatch):
     assert refusal.standing(twice) is None
     clock[0] += core.SERVED_ANSWER_SETTLE_SECONDS
     assert refusal.standing(twice) is twice
+
+
+def _clocked(monkeypatch) -> list[float]:
+    clock = [100.0]
+    monkeypatch.setattr(core.time, "monotonic", lambda: clock[0])
+    return clock
+
+
+def test_a_standing_fault_is_the_same_reason_about_the_same_ids(monkeypatch):
+    clock = _clocked(monkeypatch)
+    reply = _served_event("reply", _FINAL_REPLY)
+    stray = _served_event("again", _MARKER)
+
+    def fault(*events: dict) -> core.MarkerAnswerCountError:
+        found = core.served_answer_fault(list(events), _MARKER, {"reply": 1})
+        assert found is not None and found.reason == core.SERVED_ANSWER_WITHOUT_NATIVE_ROW
+        return found
+
+    # The page keeps growing beside the fault: other events, and even another
+    # event that only mentions the marker, are not the fault and do not restart the clock.
+    refusal = core.StandingServedAnswerFault()
+    assert refusal.standing(fault(reply, stray)) is None
+    clock[0] += core.SERVED_ANSWER_SETTLE_SECONDS / 2
+    assert refusal.standing(fault(reply, stray, _served_event("later", "Still working."))) is None
+    clock[0] += core.SERVED_ANSWER_SETTLE_SECONDS / 2
+    grown = fault(reply, stray, _served_event("later", "Still working."), _served_event("narration", _NARRATION))
+    assert refusal.standing(grown) is grown
+
+    # The same reason about another event is another fault: the first one stood
+    # for the settle time, this one has only just been seen.
+    refusal = core.StandingServedAnswerFault()
+    assert refusal.standing(fault(reply, stray)) is None
+    clock[0] += core.SERVED_ANSWER_SETTLE_SECONDS
+    other = fault(reply, _served_event("another", _MARKER))
+    assert other.about == ("another",)
+    assert refusal.standing(other) is None
+    clock[0] += core.SERVED_ANSWER_SETTLE_SECONDS
+    assert refusal.standing(fault(reply, _served_event("another", _MARKER))).about == ("another",)
+
+
+def test_a_fault_still_on_the_page_at_the_deadline_is_what_the_wait_reports(monkeypatch):
+    clock = _clocked(monkeypatch)
+    reply = _served_event("reply", _FINAL_REPLY)
+
+    # A fault whose ids change on every read never stands, and is still a fault of that reason.
+    refusal = core.StandingServedAnswerFault()
+    assert refusal.at_deadline() is None
+    for number in range(4):
+        stray = core.served_answer_fault([reply, _served_event(f"again-{number}", _MARKER)], _MARKER, {"reply": 1})
+        assert refusal.standing(stray) is None
+        clock[0] += core.SERVED_ANSWER_SETTLE_SECONDS / 2
+    assert refusal.at_deadline() is stray
+    assert refusal.at_deadline().reason == core.SERVED_ANSWER_WITHOUT_NATIVE_ROW
+
+    # One seen only on the last read has not settled: the wait timed out.
+    refusal = core.StandingServedAnswerFault()
+    assert refusal.standing(stray) is None
+    clock[0] += core.SERVED_ANSWER_SETTLE_SECONDS / 2
+    assert refusal.at_deadline() is None
+    # Nor is one that a later read no longer found.
+    clock[0] += core.SERVED_ANSWER_SETTLE_SECONDS
+    assert refusal.standing(None) is None
+    assert refusal.at_deadline() is None
 
 
 def test_a_recalled_phrase_is_a_reply_wherever_the_model_puts_it():

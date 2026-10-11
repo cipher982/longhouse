@@ -96,7 +96,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=11,
+    scenario_revision=12,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -648,7 +648,8 @@ def _wait_runtime_convergence(
     entry the native wait returned. A complete served page with an answer the
     transcript does not account for fails at once with a typed reason
     (`served_answer_fault`); a page that has not reached an answering entry yet
-    is the lag this waits out.
+    is the lag this waits out. A wait that gives up with a fault still on the
+    page ends with that fault's reason, not as a timeout.
     """
 
     last_runtime_observation: dict[str, Any] | None = None
@@ -693,13 +694,15 @@ def _wait_runtime_convergence(
         # page to: no verdict either way. And a refusal has to stand
         # (`StandingServedAnswerFault`), so an entry Pi appended between the
         # engine shipping it and this read is seen on the next one.
-        fault = refusal.standing(
+        found = (
             served_answer_fault(events, marker, native_answers, default_origin="durable", alongside=alongside, recalled=recalled)
             if native_readable and events_payload.get("has_more") is False
             else None
         )
+        if found is not None:
+            found.observation = dict(last_runtime_observation)
+        fault = refusal.standing(found)
         if fault is not None:
-            fault.observation = dict(last_runtime_observation)
             raise fault
         if (
             correspondence["converged"] is True
@@ -727,7 +730,8 @@ def _wait_runtime_convergence(
             observe,
             timeout=timeout,
             description=f"Runtime Host convergence for Pi marker {marker}",
-            on_timeout=lambda prefix: RuntimeError(f"{prefix}: {last_runtime_observation}"),
+            # A fault still on the page is why this never converged: say that.
+            on_timeout=lambda prefix: refusal.at_deadline() or RuntimeError(f"{prefix}: {last_runtime_observation}"),
         )
     except _RuntimeHostHTTPError:
         raise

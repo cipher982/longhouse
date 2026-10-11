@@ -372,10 +372,13 @@ class MarkerAnswerCountError(RuntimeError):
         mentions: list[dict],
         expected: str = "exactly 1",
         surface: str = "served assistant event",
+        about: Iterable[object] = (),
     ) -> None:
         self.reason = reason
         self.marker = marker
         self.surface = surface
+        # The ids the fault is about (`served_answer_fault`); with the reason, what tells one fault from another.
+        self.about = tuple(sorted({str(item) for item in about}))
         self.answer_event_ids = [event.get("id") for event in answers]
         self.mention_event_ids = [event.get("id") for event in mentions]
         self.observation: dict[str, object] = {}
@@ -479,6 +482,10 @@ def served_answer_fault(
     nothing served for it answers, which is the row served in a form that is
     not a reply. A row the page has not reached yet is none of these: that is
     the lag a convergence wait exists to wait out, and the caller keeps polling.
+
+    The fault's ``about`` holds the ids it was decided from: the served events
+    that belong to no row, or the rows served too often and the events served
+    twice, or the rows served without an answer.
     """
     events = list(events)
     alongside = tuple(alongside)
@@ -488,27 +495,36 @@ def served_answer_fault(
     native: dict[str, int] = found["native_answer_rows"]  # type: ignore[assignment]
     served: dict[str, int] = found["served_answer_rows"]  # type: ignore[assignment]
 
-    def fault(reason: str, expected: str) -> MarkerAnswerCountError:
+    def fault(reason: str, expected: str, about: Iterable[object]) -> MarkerAnswerCountError:
         return MarkerAnswerCountError(
             reason,
             marker=marker,
             answers=assistant_marker_events(events, marker, default_origin=default_origin, alongside=alongside, recalled=recalled),
             mentions=assistant_marker_mentions(events, marker, default_origin=default_origin, alongside=alongside, recalled=recalled),
             expected=expected,
+            about=about,
         )
 
     account = f"the provider's own answering rows {native}"
-    if found["unbound_served_event_ids"]:
-        return fault(SERVED_ANSWER_WITHOUT_NATIVE_ROW, f"only events of {account}; {found['unbound_served_event_ids']} belong to none")
-    if found["repeated_served_event_ids"] or found["overserved_native_row_ids"]:
+    unbound: list[object] = found["unbound_served_event_ids"]  # type: ignore[assignment]
+    repeated: list[str] = found["repeated_served_event_ids"]  # type: ignore[assignment]
+    overserved: list[str] = found["overserved_native_row_ids"]  # type: ignore[assignment]
+    if unbound:
+        return fault(SERVED_ANSWER_WITHOUT_NATIVE_ROW, f"only events of {account}; {unbound} belong to none", unbound)
+    if repeated or overserved:
         return fault(
             NATIVE_ANSWER_SERVED_MORE_THAN_ONCE,
-            f"each of {account} served as often as it answers; served {served}, event ids served twice {found['repeated_served_event_ids']}",
+            f"each of {account} served as often as it answers; served {served}, event ids served twice {repeated}",
+            [*overserved, *repeated],
         )
     served_ids = {str(event.get("id")) for event in events if isinstance(event, dict)}
     unanswered = [row for row in native if row in served_ids and not served.get(row)]
     if unanswered:
-        return fault(MARKER_REPLY_SERVED_WITHOUT_ANSWER, f"an answer from each served row of {account}; {unanswered} served without one")
+        return fault(
+            MARKER_REPLY_SERVED_WITHOUT_ANSWER,
+            f"an answer from each served row of {account}; {unanswered} served without one",
+            unanswered,
+        )
     return None
 
 
@@ -549,23 +565,44 @@ class StandingServedAnswerFault:
     answering row, the engine ships it and the Runtime Host may serve it
     before this process's next read of the file shows the row. So a fault is
     raised only when two observations at least ``SERVED_ANSWER_SETTLE_SECONDS``
-    apart produce the same one (same reason, same served ids), each from a
-    complete page and a transcript that was read to the end of a complete line
-    after that page. Anything else in between (a different fault, no fault, a
-    transcript that could not be read) starts the clock again.
+    apart produce the same one, each from a complete page and a transcript
+    that was read to the end of a complete line after that page.
+
+    The same fault is the same reason about the same ids (the fault's
+    ``about``). Events that arrive beside it change neither, so a page that
+    keeps growing does not start the clock again; a different fault, no fault
+    or a transcript that could not be read does.
+
+    ``at_deadline`` is for the wait that gives up. It returns the fault of the
+    last observation when that reason has been there, on every observation,
+    for the settle time, which is a fault whose ids changed too often to
+    stand. The wait then ends with that typed reason and not as a timeout that
+    hides it.
     """
 
     def __init__(self) -> None:
-        self._key: tuple[str, tuple[str, ...]] | None = None
+        self._fault: MarkerAnswerCountError | None = None
         self._since = 0.0
+        self._reason_since = 0.0
+        self._reason_stood = False
 
     def standing(self, fault: MarkerAnswerCountError | None) -> MarkerAnswerCountError | None:
-        key = None if fault is None else (fault.reason, tuple(str(event_id) for event_id in fault.answer_event_ids))
         now = time.monotonic()
-        if key is None or key != self._key:
-            self._key, self._since = key, now
+        previous, self._fault = self._fault, fault
+        if fault is None:
+            return None
+        if previous is None or previous.reason != fault.reason:
+            self._since = self._reason_since = now
+            self._reason_stood = False
+            return None
+        self._reason_stood = now - self._reason_since >= SERVED_ANSWER_SETTLE_SECONDS
+        if previous.about != fault.about:
+            self._since = now
             return None
         return fault if now - self._since >= SERVED_ANSWER_SETTLE_SECONDS else None
+
+    def at_deadline(self) -> MarkerAnswerCountError | None:
+        return self._fault if self._reason_stood else None
 
 
 def assistant_marker_evidence(workspace: dict, session_id: str, marker: str) -> dict:
