@@ -775,6 +775,25 @@
     "timestamp"
    ]
   },
+  "token_usage_record": {
+   "classification": "state:token usage record",
+   "first_seen_version": "0.162.1",
+   "last_seen_version": "0.163.0-alpha.5",
+   "entrypoints": [
+    "codex_exec",
+    "longhouse_console"
+   ],
+   "keys": [
+    "response_id",
+    "root_turn_id",
+    "session_id",
+    "thread_id",
+    "thread_token_usage",
+    "turn_id",
+    "turn_token_usage",
+    "usage"
+   ]
+  },
   "turn_context": {
    "classification": "state:turn settings",
    "first_seen_version": "0.142.2",
