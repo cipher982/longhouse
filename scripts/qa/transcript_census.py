@@ -16,9 +16,6 @@ discriminator is a finding, not a silently ignored line.
         Exit 1 if any observed shape is not classified in the catalog, if a
         shape lacks a key the parser requires (`required_keys`), or if a
         shape carries a key the catalog has never seen.
-        A row may also require `with:<shape>`: another shape in the same
-        transcript file, for a fact the parser makes from two lines. It is
-        counted per file, not per turn.
     transcript_census.py seed    --provider claude PATH [PATH ...]
         Add every unseen shape to the catalog as `unclassified`, widen each
         shape's key set and version range. Rows and keys are never removed;
@@ -691,37 +688,6 @@ def _iter_records(path: Path, provider: str) -> Iterator[dict[str, Any] | None]:
         yield None
 
 
-WRITTEN_WITH = "with:"
-
-
-def _written_with(provider: str) -> dict[str, list[str]]:
-    """Shapes the catalog says a provider writes in the same transcript as another.
-
-    A parser can depend on a second line: Codex's usage fact is made when a
-    turn completes, from the `token_count` event written before it. If the
-    provider stops writing that event, no line is left to carry a missing
-    key, and a census that looks only at lines present reads clean. So a row
-    may require `with:<shape>`: the other shape, in the same file. The census
-    counts it on the row's lines like any key, and `drift` reports its
-    absence the way it reports a dropped field.
-
-    The guarantee is per transcript file, not per turn: a file in which one
-    turn has the other shape and a later turn lacks it is not reported. The
-    marker is declared in `required_keys` alone; it is not a key the provider
-    writes, so it does not belong in `keys`, and `widened` knows it anyway.
-    """
-    rows = load_catalog(provider).get("shapes") or {}
-    expected = {
-        shape: [
-            key[len(WRITTEN_WITH) :]
-            for key in row.get("required_keys") or []
-            if isinstance(key, str) and key.startswith(WRITTEN_WITH)
-        ]
-        for shape, row in rows.items()
-    }
-    return {shape: others for shape, others in expected.items() if others}
-
-
 def cli_versions(observed: dict[str, dict[str, Any]]) -> list[str]:
     """Every CLI version the lines a census read state, oldest first."""
     versions = {
@@ -734,7 +700,6 @@ def cli_versions(observed: dict[str, dict[str, Any]]) -> list[str]:
 
 def census(files: list[Path], provider: str) -> dict[str, dict[str, Any]]:
     shaper = SHAPERS[provider]
-    written_with = _written_with(provider)
     shapes: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "count": 0,
@@ -747,7 +712,6 @@ def census(files: list[Path], provider: str) -> dict[str, dict[str, Any]]:
     for path in files:
         version = None
         entrypoint = None
-        in_file: dict[str, int] = defaultdict(int)
         try:
             for entry in _iter_records(path, provider):
                 if entry is None:
@@ -760,7 +724,6 @@ def census(files: list[Path], provider: str) -> dict[str, dict[str, Any]]:
                 entrypoint = seen_entrypoint or entrypoint
                 record = shapes[shape]
                 record["count"] += 1
-                in_file[shape] += 1
                 record["files"].add(str(path))
                 if version:
                     record["versions"].add(version)
@@ -771,11 +734,7 @@ def census(files: list[Path], provider: str) -> dict[str, dict[str, Any]]:
                 for key in dict.fromkeys(keys):
                     record["key_counts"][key] += 1
         except OSError:
-            pass
-        for shape, others in written_with.items():
-            for other in others:
-                if shape in in_file and other in in_file:
-                    shapes[shape]["key_counts"][WRITTEN_WITH + other] += in_file[shape]
+            continue
     out: dict[str, dict[str, Any]] = {}
     for shape, record in sorted(shapes.items()):
         versions = sorted(record["versions"], key=_version_key)
@@ -939,12 +898,7 @@ def widened(
         row = catalog_row(catalog, shape)
         if row is None or row.get("keys") is None:
             continue
-        known = set(row["keys"]) | {
-            key
-            for key in row.get("required_keys") or []
-            if isinstance(key, str) and key.startswith(WRITTEN_WITH)
-        }
-        new_keys = sorted(set(record.get("keys") or []) - known)
+        new_keys = sorted(set(record.get("keys") or []) - set(row["keys"]))
         if new_keys:
             found[shape] = new_keys
     return found

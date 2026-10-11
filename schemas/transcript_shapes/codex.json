@@ -334,8 +334,7 @@
    ],
    "required_keys": [
     "duration_ms",
-    "turn_id",
-    "with:event_msg/token_count"
+    "turn_id"
    ]
   },
   "event_msg/task_started": {
@@ -456,8 +455,7 @@
     "type"
    ],
    "required_keys": [
-    "reason",
-    "with:event_msg/token_count"
+    "reason"
    ]
   },
   "event_msg/user_message": {
