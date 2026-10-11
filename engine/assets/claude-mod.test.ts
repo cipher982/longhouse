@@ -213,6 +213,9 @@ describe("Longhouse Claude mod", () => {
     await mod.fire("turn.complete", { turnId: "turn-8", reason: "aborted" });
     expect(mod.appended).toEqual([]);
     expect(mod.runs.some((argv) => argv[1] === "claude-lifecycle-hook")).toBe(true);
+    // A second completion of the same turn reports nothing more.
+    await mod.fire("turn.complete", { turnId: "turn-8", reason: "aborted" });
+    expect(mod.runs.filter((argv) => argv[1] === "claude-lifecycle-hook").length).toBe(1);
 
     const answered = await loadMod([]);
     await answered.fire("session.start");

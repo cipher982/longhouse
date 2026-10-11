@@ -701,3 +701,30 @@ def test_an_owner_abort_ends_its_turn_with_the_interrupted_row() -> None:
         )["failure_code"]
         == "abort_did_not_stop_turn"
     )
+
+
+# The row Longhouse's mod appended after an owner abort, as Claude Code 2.1.295
+# recorded it (cube-bench, 2026-10-11T20:18:44Z): `$.session.append` files a
+# `{type: "user"}` message as a top-level user row, `isMeta`, `role` user.
+RECORDED_MOD_INTERRUPTED_ROW = {
+    "parentUuid": "88f515a0-4bf6-4e3a-956f-e36e7a7913c2",
+    "isSidechain": False,
+    "promptId": "f7e452a4-14ff-41dc-a90b-6e54685d208c",
+    "type": "user",
+    "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]},
+    "isMeta": True,
+    "uuid": "f31ade6b-18a4-4318-8772-dcf3d1da3a92",
+    "timestamp": "2026-10-11T20:18:44.874Z",
+    "origin": {"kind": "plugin", "name": "longhouse"},
+    "userType": "external",
+    "entrypoint": "cli",
+    "version": "2.1.295",
+}
+
+
+def test_the_row_the_mod_actually_records_ends_the_turn() -> None:
+    from zerg.qa.claude_live_session_support import turn_end
+
+    assert turn_end(RECORDED_MOD_INTERRUPTED_ROW) is True
+    # An ordinary prompt that mentions the marker mid-text does not end a turn.
+    assert turn_end({"type": "user", "message": {"role": "user", "content": "why [Request interrupted by user]?"}}) is False

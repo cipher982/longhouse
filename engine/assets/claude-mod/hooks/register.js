@@ -121,7 +121,12 @@ const INTERRUPTED = '[Request interrupted by user]'
 // An interrupted turn runs no Stop hook, so Longhouse would keep showing the
 // session as working. Report the turn's end through Longhouse's own lifecycle
 // hook, as Stop reports an answered one.
-async function reportTurnEnd($) {
+// Turns whose end was already reported: one Stop per turn, whatever fires twice.
+const reportedTurns = new Set()
+
+async function reportTurnEnd($, turn) {
+  if (reportedTurns.has(turn)) return
+  reportedTurns.add(turn)
   try {
     const payload = {
       hook_event_name: 'Stop',
@@ -220,7 +225,7 @@ export function register(on) {
           $.ui.log('longhouse: interrupted row not recorded: ' + String(error), { to: 'debug' })
         }
       }
-      await reportTurnEnd($)
+      await reportTurnEnd($, e.turnId)
     }
     return completed
   })
