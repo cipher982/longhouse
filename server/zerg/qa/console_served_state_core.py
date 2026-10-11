@@ -468,20 +468,27 @@ def served_answer_fault(
     alongside: Iterable[str] = (),
     recalled: bool = False,
 ) -> MarkerAnswerCountError | None:
-    """Why a complete served page can never be the provider's answers, or None.
+    """Why a complete served page is not the provider's answers, or None.
 
     Call it only with a complete page: every event the Runtime Host serves on
     the session's head branch, read to the end under one generation, and with
     ``native_answers`` read from the provider's transcript after that page, so
     that nothing served is newer than what was read.
 
-    Three things are final, because events still to arrive can add to a page
-    and never take from it. An answering event that belongs to no answering
-    row of the provider's transcript; a row served more often than it answers,
-    or one event served twice; and a row whose first event is on the page while
-    nothing served for it answers, which is the row served in a form that is
-    not a reply. A row the page has not reached yet is none of these: that is
-    the lag a convergence wait exists to wait out, and the caller keeps polling.
+    Two things are final, because events still to arrive can add to a page
+    and never take from it: an answering event that belongs to no answering
+    row of the provider's transcript, and a row served more often than it
+    answers or one event served twice.
+
+    The third is final only at the wait's deadline. A row is answered on the
+    page only by an event of that row that answers, and the Runtime Host
+    serves a row block by block: the row's first event can be on the page
+    before the block that answers is. So ``MARKER_REPLY_SERVED_WITHOUT_ANSWER``,
+    a row whose first event is served while nothing served for it answers, is
+    lag for as long as the wait runs (`StandingServedAnswerFault` never lets it
+    through) and, if it still stands when the wait gives up, what the wait
+    reports instead of a bare timeout. A row the page has not reached at all is
+    no fault: that is the lag a convergence wait exists to wait out.
 
     The fault's ``about`` holds the ids it was decided from: the served events
     that belong to no row, or the rows served too often and the events served
@@ -575,9 +582,10 @@ class StandingServedAnswerFault:
 
     ``at_deadline`` is for the wait that gives up. It returns the fault of the
     last observation when that reason has been there, on every observation,
-    for the settle time, which is a fault whose ids changed too often to
-    stand. The wait then ends with that typed reason and not as a timeout that
-    hides it.
+    for the settle time: the fault ``standing`` holds back as lag
+    (``MARKER_REPLY_SERVED_WITHOUT_ANSWER``), or one whose ids changed too
+    often to stand. The wait then ends with that typed reason and not as a
+    timeout that hides it.
     """
 
     def __init__(self) -> None:
@@ -598,6 +606,8 @@ class StandingServedAnswerFault:
         self._reason_stood = now - self._reason_since >= SERVED_ANSWER_SETTLE_SECONDS
         if previous.about != fault.about:
             self._since = now
+            return None
+        if fault.reason == MARKER_REPLY_SERVED_WITHOUT_ANSWER:
             return None
         return fault if now - self._since >= SERVED_ANSWER_SETTLE_SECONDS else None
 

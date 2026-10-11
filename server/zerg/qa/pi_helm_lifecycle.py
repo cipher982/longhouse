@@ -96,7 +96,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=12,
+    scenario_revision=13,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -647,9 +647,10 @@ def _wait_runtime_convergence(
     history, which it may put in a sentence. ``reply_event_id`` is the native
     entry the native wait returned. A complete served page with an answer the
     transcript does not account for fails at once with a typed reason
-    (`served_answer_fault`); a page that has not reached an answering entry yet
-    is the lag this waits out. A wait that gives up with a fault still on the
-    page ends with that fault's reason, not as a timeout.
+    (`served_answer_fault`); a page that has not reached an answering entry yet,
+    or has only its first block, is the lag this waits out. A wait that gives
+    up with a fault still on the page ends with that fault's reason, not as a
+    timeout.
     """
 
     last_runtime_observation: dict[str, Any] | None = None

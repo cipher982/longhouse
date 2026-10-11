@@ -2269,9 +2269,10 @@ def test_omp_runtime_convergence_refuses_an_answer_the_transcript_does_not_accou
     assert stray.value.answer_event_ids == ["reply", "again"]
 
 
-def test_omp_runtime_convergence_fails_at_once_when_the_served_reply_row_does_not_answer(monkeypatch) -> None:
-    # The page is complete and already carries the native row that answered, yet
-    # nothing on it answers: more waiting cannot change what was served.
+def test_omp_runtime_convergence_waits_for_the_answering_block_of_a_row_already_served(monkeypatch) -> None:
+    # The page carries the first event of the native row that answered and
+    # nothing on it answers yet. A row is served block by block, so this is a
+    # page still filling: the wait polls on, and at the deadline says what it saw.
     events = [
         {"id": "narration", "role": "assistant", "content_text": _NARRATION},
         {"id": "reply", "role": "assistant", "content_text": f"All done, so I can now send {_REPLY_MARKER} as asked."},
@@ -2279,12 +2280,20 @@ def test_omp_runtime_convergence_fails_at_once_when_the_served_reply_row_does_no
 
     reads: list[int] = []
     with pytest.raises(MarkerAnswerCountError) as raised:
-        _converge(monkeypatch, events, reads=reads)
+        _converge(monkeypatch, events, reads=reads, timeout=0.5)
 
-    assert reads == [1, 1]
+    assert len(reads) > 2
     assert raised.value.reason == "marker_reply_served_without_answer"
     assert raised.value.answer_event_ids == []
     assert raised.value.mention_event_ids == ["narration", "reply"]
+    assert raised.value.observation["answer_correspondence"]["native_answer_rows"] == {"reply": 1}
+
+    # The answering block arrives on the third read and the page converges.
+    block = {"id": "reply-text-1", "role": "assistant", "content_text": _REPLY_MARKER}
+    reads.clear()
+    convergence = _converge(monkeypatch, lambda poll: events + [block] if poll >= 3 else events, reads=reads)
+    assert reads == [1, 1, 1]
+    assert convergence["answer_correspondence"]["served_answer_event_ids"] == ["reply-text-1"]
 
 
 def test_omp_runtime_convergence_names_a_fault_that_stands_while_the_page_grows(monkeypatch) -> None:
@@ -2343,7 +2352,7 @@ def test_omp_runtime_convergence_reads_a_reply_asked_to_carry_the_recalled_phras
 
     # Without being told the reply carries both, the line is not an answer.
     with pytest.raises(MarkerAnswerCountError) as raised:
-        _converge(monkeypatch, events, marker=resume)
+        _converge(monkeypatch, events, marker=resume, timeout=0.5)
     assert raised.value.reason == "marker_reply_served_without_answer"
 
 

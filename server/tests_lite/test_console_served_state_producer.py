@@ -752,6 +752,35 @@ def test_a_fault_still_on_the_page_at_the_deadline_is_what_the_wait_reports(monk
     assert refusal.at_deadline() is None
 
 
+def test_a_row_served_before_its_answering_block_is_lag_until_the_deadline(monkeypatch):
+    """A row is served block by block: its first event carries the row's id, the block that answers
+    comes under ``<row id>-text-<n>``. The id on the page without that block is a page still filling."""
+
+    clock = _clocked(monkeypatch)
+    first_block = _served_event("reply", "The command finished.")
+    native = {"reply": 1}
+
+    refusal = core.StandingServedAnswerFault()
+    for _poll in range(5):
+        found = core.served_answer_fault([first_block], _MARKER, native)
+        assert found is not None and found.reason == core.MARKER_REPLY_SERVED_WITHOUT_ANSWER
+        assert refusal.standing(found) is None
+        clock[0] += core.SERVED_ANSWER_SETTLE_SECONDS
+    # The answering block arrives and the page converges: nothing was ever wrong.
+    page = [first_block, _served_event("reply-text-1", _MARKER)]
+    assert core.served_answer_fault(page, _MARKER, native) is None
+    assert core.served_answer_correspondence(page, _MARKER, native)["converged"] is True
+    assert refusal.standing(None) is None and refusal.at_deadline() is None
+
+    # It never arrives: the wait ends saying the row was served without its answer.
+    refusal = core.StandingServedAnswerFault()
+    for _poll in range(3):
+        found = core.served_answer_fault([first_block], _MARKER, native)
+        assert refusal.standing(found) is None
+        clock[0] += core.SERVED_ANSWER_SETTLE_SECONDS
+    assert refusal.at_deadline() is found
+
+
 def test_a_recalled_phrase_is_a_reply_wherever_the_model_puts_it():
     phrase = "LH_FIXTURE_CONTEXT_0123456789abcdef"
     events = [_served_event("reply", f"The phrase I was asked to remember is {phrase}.\n\n{_MARKER}")]

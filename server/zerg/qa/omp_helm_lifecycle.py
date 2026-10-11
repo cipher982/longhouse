@@ -106,7 +106,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
     producer_revision=10,
     scenario_id=SCENARIO_ID,
-    scenario_revision=17,
+    scenario_revision=18,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -647,9 +647,10 @@ def _runtime_convergence(
     markers the reply was asked to carry, and ``native_reply_id`` the row the
     native wait returned. A complete served page with an answer the transcript
     does not account for fails at once with a typed reason
-    (`served_answer_fault`); a page that has not reached an answering row yet
-    is the lag this waits out. A wait that gives up with a fault still on the
-    page ends with that fault's reason, not as a timeout.
+    (`served_answer_fault`); a page that has not reached an answering row yet,
+    or has only its first block, is the lag this waits out. A wait that gives
+    up with a fault still on the page ends with that fault's reason, not as a
+    timeout.
     """
 
     last: dict[str, Any] = {}

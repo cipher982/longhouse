@@ -186,13 +186,17 @@ def test_pi_runtime_convergence_fails_at_once_on_an_answer_the_transcript_does_n
         _pi_converge(monkeypatch, [reply, dict(reply)])
     assert "native_answer_served_more_than_once: " in str(raised.value)
 
-    # The page carries the native reply row, and it does not answer.
+    # The page carries the first event of the native reply row and nothing on
+    # it answers. The answering block may still be on its way, so the wait
+    # polls to its deadline and then says what it saw, not that it timed out.
     served_without_answer = [{"id": "reply", "role": "assistant", "content_text": _PI_NARRATION}]
     reads.clear()
     with pytest.raises(helm._RuntimeConvergenceError) as raised:
-        _pi_converge(monkeypatch, served_without_answer, reads=reads)
-    assert reads == [1, 1]
+        _pi_converge(monkeypatch, served_without_answer, reads=reads, timeout=0.5)
+    assert len(reads) > 2
+    assert raised.value.cause_type == "MarkerAnswerCountError"
     assert "marker_reply_served_without_answer: " in str(raised.value)
+    assert "timed out" not in str(raised.value)
     assert raised.value.last_runtime_observation["assistant_marker_mention_count"] == 1
 
 
