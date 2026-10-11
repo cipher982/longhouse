@@ -59,7 +59,7 @@ const PENDING_DIR: &str = "pending";
 const CLAIMED_DIR: &str = "claimed";
 
 /// Ledger states that end an input. A claimed file is removed once one lands.
-const TERMINAL_STATES: &[&str] = &["delivered", "failed", "aborted", "no_turn"];
+const TERMINAL_STATES: &[&str] = &["delivered", "failed", "aborted", "no_turn", "withdrawn"];
 /// States the mod may record with `ack`. `claimed` goes through [`claim`].
 pub const ACK_STATES: &[&str] = &["submitted", "delivered", "failed", "aborted", "no_turn"];
 
@@ -310,10 +310,14 @@ pub fn claim(dir: &Path, id: &str) -> io::Result<bool> {
     }
 }
 
-/// Take back an input the mod has not claimed; false once it was claimed.
-pub fn withdraw(pending: &Path) -> io::Result<bool> {
+/// Take back an input the mod has not claimed; false once it was claimed. The
+/// ledger records it, so a replay of the same command id is not offered again.
+pub fn withdraw(dir: &Path, id: &str, pending: &Path) -> io::Result<bool> {
     match fs::remove_file(pending) {
-        Ok(()) => Ok(true),
+        Ok(()) => {
+            append_ledger(dir, id, "withdrawn", None, None)?;
+            Ok(true)
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
     }
@@ -508,7 +512,7 @@ pub fn deliver_send(
     text: &str,
     budget: Duration,
 ) -> Result<SendReceipt, DeliveryError> {
-    let pending = enqueue(
+    let pending = enqueue_once(
         dir,
         &OwnerInputItem {
             id: id.to_string(),
@@ -552,7 +556,7 @@ pub fn deliver_abort(
     id: &str,
     budget: Duration,
 ) -> Result<AbortReceipt, DeliveryError> {
-    let pending = enqueue(
+    let pending = enqueue_once(
         dir,
         &OwnerInputItem {
             id: id.to_string(),
@@ -578,9 +582,31 @@ pub fn deliver_abort(
     Err(DeliveryError::Failed(detail))
 }
 
-/// Wait for one of `wanted` in the ledger. Until the mod claims the input it
+/// Enqueue an input once per id. The id is the Runtime Host's command id, so a
+/// replayed command finds its earlier input (pending, claimed or recorded in
+/// the ledger) and waits on that instead of offering the message again.
+fn enqueue_once(dir: &Path, item: &OwnerInputItem) -> Result<PathBuf, DeliveryError> {
+    if let Some(pending) = find_item(dir, PENDING_DIR, &item.id) {
+        return Ok(pending);
+    }
+    let earlier = states_for(dir, &item.id);
+    if earlier.iter().any(|entry| entry.state == "withdrawn") {
+        return Err(DeliveryError::NotPickedUp("withdrawn_earlier"));
+    }
+    if !earlier.is_empty() || find_item(dir, CLAIMED_DIR, &item.id).is_some() {
+        // Taken already: the path no longer exists, which await_states reads as claimed.
+        return Ok(dir
+            .join(PENDING_DIR)
+            .join(format!("replayed-{}.json", item.id)));
+    }
+    Ok(enqueue(dir, item)?)
+}
+
+/// Wait for one of `wanted` in the ledger. Until the mod takes the input it
 /// can be withdrawn, and is: when the watcher detaches or `budget` runs out.
-/// Once claimed it is the mod's, and the engine waits [`CLAIMED_GRACE`] more.
+/// Once taken (its pending file is gone, or the ledger says claimed) it is the
+/// mod's, and the engine waits [`CLAIMED_GRACE`] more before calling the
+/// outcome unknown. Nothing waits past `budget` plus that grace.
 fn await_states(
     dir: &Path,
     id: &str,
@@ -589,7 +615,13 @@ fn await_states(
     wanted: &[&str],
 ) -> Result<Vec<LedgerEntry>, DeliveryError> {
     let started = Instant::now();
-    let mut claimed_deadline: Option<Instant> = None;
+    let hard_deadline = started + budget + CLAIMED_GRACE;
+    let mut taken_deadline: Option<Instant> = None;
+    let unknown = || {
+        DeliveryError::Unknown(format!(
+            "the Longhouse mod took owner input {id} and did not report the outcome; it may still reach Claude"
+        ))
+    };
     loop {
         let entries = states_for(dir, id);
         if entries
@@ -598,19 +630,24 @@ fn await_states(
         {
             return Ok(entries);
         }
-        let claimed = entries.iter().any(|entry| entry.state == "claimed");
-        if claimed {
-            let deadline = *claimed_deadline.get_or_insert_with(|| Instant::now() + CLAIMED_GRACE);
+        if Instant::now() >= hard_deadline {
+            return Err(if withdraw(dir, id, pending)? {
+                DeliveryError::NotPickedUp("mod_did_not_take_it")
+            } else {
+                unknown()
+            });
+        }
+        let taken = entries.iter().any(|entry| entry.state == "claimed") || !pending.exists();
+        if taken {
+            let deadline = *taken_deadline.get_or_insert_with(|| Instant::now() + CLAIMED_GRACE);
             if Instant::now() >= deadline {
-                return Err(DeliveryError::Unknown(format!(
-                    "the Longhouse mod took owner input {id} and did not report submitting it; it may still reach Claude"
-                )));
+                return Err(unknown());
             }
         } else if !watcher_attached(dir) {
-            if withdraw(pending)? {
+            if withdraw(dir, id, pending)? {
                 return Err(DeliveryError::NotPickedUp("mod_not_attached"));
             }
-        } else if started.elapsed() >= budget && withdraw(pending)? {
+        } else if started.elapsed() >= budget && withdraw(dir, id, pending)? {
             return Err(DeliveryError::NotPickedUp("mod_did_not_take_it"));
         }
         std::thread::sleep(POLL_INTERVAL);
@@ -845,9 +882,9 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(withdraw(&second).unwrap());
+        assert!(withdraw(&dir, "cmd-2", &second).unwrap());
         assert!(!claim(&dir, "cmd-2").unwrap());
-        assert!(!withdraw(&second).unwrap());
+        assert!(!withdraw(&dir, "cmd-2", &second).unwrap());
     }
 
     #[test]
@@ -961,6 +998,72 @@ mod tests {
         let error = deliver_send(&dir, "cmd-1", "hello", Duration::from_millis(200)).unwrap_err();
         assert_eq!(error, DeliveryError::NotPickedUp("mod_did_not_take_it"));
         assert!(!claim(&dir, "cmd-1").unwrap());
+    }
+
+    /// The id is the Runtime Host's command id: a replayed command must not
+    /// offer the message to the mod a second time.
+    #[test]
+    fn a_replayed_command_waits_on_its_earlier_input_instead_of_enqueueing_again() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = spool_dir(root.path(), "s1");
+        let _lock = hold_watch_lock(&dir);
+        let item = OwnerInputItem {
+            id: "cmd-1".into(),
+            kind: "send".into(),
+            text: Some("hello".into()),
+            enqueued_at: "t".into(),
+        };
+        enqueue(&dir, &item).unwrap();
+        claim(&dir, "cmd-1").unwrap();
+        append_ledger(&dir, "cmd-1", "submitted", None, None).unwrap();
+
+        let receipt = deliver_send(&dir, "cmd-1", "hello", Duration::from_secs(1)).unwrap();
+        assert_eq!(receipt, SendReceipt { delivered: false });
+        assert!(items_in(&dir, PENDING_DIR).is_empty());
+
+        // Withdrawn once: the replay is not offered to the mod either.
+        let pending = enqueue(
+            &dir,
+            &OwnerInputItem {
+                id: "cmd-2".into(),
+                ..item
+            },
+        )
+        .unwrap();
+        withdraw(&dir, "cmd-2", &pending).unwrap();
+        assert_eq!(
+            deliver_send(&dir, "cmd-2", "hello", Duration::from_secs(1)).unwrap_err(),
+            DeliveryError::NotPickedUp("withdrawn_earlier")
+        );
+        assert!(items_in(&dir, PENDING_DIR).is_empty());
+    }
+
+    /// An input whose pending file vanished without a `claimed` record (a mod
+    /// that died between the rename and the ledger write) ends as unknown, not
+    /// a wait that never returns.
+    #[test]
+    fn a_taken_input_with_no_record_ends_as_unknown() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = spool_dir(root.path(), "s1");
+        let _lock = hold_watch_lock(&dir);
+        let taker = {
+            let dir = dir.clone();
+            std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < deadline {
+                    if let Some(pending) = find_item(&dir, PENDING_DIR, "cmd-1") {
+                        fs::remove_file(pending).unwrap();
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            })
+        };
+        let started = Instant::now();
+        let error = deliver_send(&dir, "cmd-1", "hello", Duration::from_millis(200)).unwrap_err();
+        taker.join().unwrap();
+        assert!(matches!(error, DeliveryError::Unknown(_)), "{error:?}");
+        assert!(started.elapsed() < CLAIMED_GRACE + Duration::from_secs(2));
     }
 
     #[test]
