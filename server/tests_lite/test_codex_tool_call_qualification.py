@@ -182,7 +182,7 @@ def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_pat
     live = invocations[2]["argv"]
     assert "--sandbox" in live and live[live.index("--sandbox") + 1] == "workspace-write"
     assert 'approval_policy="never"' in live
-    assert "--ephemeral" in live
+    assert "--ephemeral" not in live
     assert "--ignore-user-config" in live
     assert "--dangerously-bypass-approvals-and-sandbox" not in live
     raw_evidence = json.loads(raw)
@@ -435,8 +435,21 @@ def _rollouts(root: Path) -> list[Path]:
     return sorted(root.rglob("rollout-*.jsonl"))
 
 
-def test_harness_turn_keeps_its_rollout_in_the_qualification_sandbox_codex_home(tmp_path: Path, monkeypatch) -> None:
-    binary, _identity, calls = _fake_codex(tmp_path)
+def _launch(entry: str, tmp_path: Path, monkeypatch) -> list[str]:
+    """Run the tool-call turn through one of its two entry points and return the argv Codex was launched with."""
+    if entry == "harness":
+        binary, _identity, calls = _fake_codex(tmp_path)
+        observed = profile.run_codex_real_tool_command(binary, api_key="seeded-test-api-key-not-a-real-secret")
+        assert observed["returncode"] == 0
+    else:
+        result, _output, calls = _run(tmp_path, monkeypatch)
+        assert result["execution_status"] == "completed"
+    return json.loads(calls.read_text().splitlines()[-1])["argv"]
+
+
+@pytest.mark.parametrize("entry", ["harness", "run"])
+def test_the_turn_keeps_its_rollout_in_the_qualification_sandbox_codex_home(tmp_path: Path, monkeypatch, entry: str) -> None:
+    """Both entry points stamp one scenario revision, so both launch the turn the same way."""
     sandbox_home = tmp_path / "sandbox-home"
     sandbox_home.mkdir()
     exported = sandbox_home / ".codex"
@@ -444,22 +457,19 @@ def test_harness_turn_keeps_its_rollout_in_the_qualification_sandbox_codex_home(
     monkeypatch.setenv(profile.QUALIFICATION_HOME_ENV, str(sandbox_home))
     monkeypatch.setenv(profile.CODEX_HOME_ENV, str(exported))
 
-    observed = profile.run_codex_real_tool_command(binary, api_key="seeded-test-api-key-not-a-real-secret")
+    live = _launch(entry, tmp_path, monkeypatch)
 
-    assert observed["returncode"] == 0
-    live = json.loads(calls.read_text().splitlines()[-1])["argv"]
     assert "--ephemeral" not in live
     assert "--ignore-user-config" in live
     # The session is left where the sandbox put the provider's home, and nowhere else.
     assert [path.relative_to(exported).parts[0] for path in _rollouts(tmp_path)] == ["sessions"]
 
 
+@pytest.mark.parametrize("entry", ["harness", "run"])
 @pytest.mark.parametrize(
-    "ambient",
-    ["developer-home", "outside-the-sandbox-home", "dot-dot-out-of-the-sandbox-home", "symlink-out-of-the-sandbox-home"],
+    "ambient", ["developer-home", "outside-the-sandbox-home", "dot-dot-out-of-the-sandbox-home", "symlink-out-of-the-sandbox-home"]
 )
-def test_harness_turn_never_writes_a_codex_home_outside_the_sandbox_home(tmp_path: Path, monkeypatch, ambient: str) -> None:
-    binary, _identity, calls = _fake_codex(tmp_path)
+def test_the_turn_never_writes_a_codex_home_outside_the_sandbox_home(tmp_path: Path, monkeypatch, ambient: str, entry: str) -> None:
     sandbox_home = tmp_path / "sandbox-home"
     sandbox_home.mkdir()
     outside = tmp_path / "outside"
@@ -482,10 +492,9 @@ def test_harness_turn_never_writes_a_codex_home_outside_the_sandbox_home(tmp_pat
             exported = sandbox_home / "link" / ".codex"
     monkeypatch.setenv(profile.CODEX_HOME_ENV, str(exported))
 
-    observed = profile.run_codex_real_tool_command(binary, api_key="seeded-test-api-key-not-a-real-secret")
+    live = _launch(entry, tmp_path, monkeypatch)
 
-    assert observed["returncode"] == 0
-    assert "--ephemeral" not in json.loads(calls.read_text().splitlines()[-1])["argv"]
+    assert "--ephemeral" not in live
     # The rollout went to the run's scratch home, which is gone with the run.
     assert list(outside.iterdir()) == []
     assert _rollouts(tmp_path) == []

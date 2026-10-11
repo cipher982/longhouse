@@ -32,8 +32,9 @@ from zerg.services.provider_capability_proof_store import ProviderCapabilityProo
 
 PROFILE = "codex_tool_call_result_v1"
 SCENARIO_ID = "codex_tool_call_result"
-# Revision 2: the harness turn persists its session (no `--ephemeral`), in the
-# qualification sandbox's own CODEX_HOME when there is one.
+# Revision 2: the tool-call turn persists its session (no `--ephemeral`), in
+# the qualification sandbox's own CODEX_HOME when there is one. Both entry
+# points, `run` and `run_codex_real_tool_command`, launch it that way.
 SCENARIO_REVISION = 2
 TIMEOUT_SECONDS = 180
 API_KEY_ENV = "CODEX_API_KEY"
@@ -689,9 +690,9 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="longhouse-codex-qualification-") as raw_runtime:
             runtime_root = Path(raw_runtime)
             workspace = runtime_root / "workspace"
-            codex_home = runtime_root / "codex-home"
+            codex_home = _codex_session_home(runtime_root)
             workspace.mkdir()
-            codex_home.mkdir()
+            codex_home.mkdir(parents=True, exist_ok=True)
             helper_link: Path | None = None
             if managed_package_resources is not None:
                 _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
@@ -712,11 +713,12 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                         shim_target_identity=actual_identity,
                         shim_path=str(helper_link),
                     )
+            # As in run_codex_real_tool_command: no `--ephemeral`, and the
+            # session home `_codex_session_home` chooses.
             argv = [
                 str(binary),
                 "exec",
                 "--json",
-                "--ephemeral",
                 "--ignore-user-config",
                 "--ignore-rules",
                 "--skip-git-repo-check",
@@ -735,7 +737,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             tool_env = {
                 **version_env,
                 "HOME": str(runtime_root),
-                "CODEX_HOME": str(codex_home),
+                CODEX_HOME_ENV: str(codex_home),
             }
             if managed_package_root is not None:
                 tool_env[MANAGED_PACKAGE_ROOT_ENV] = managed_package_root
