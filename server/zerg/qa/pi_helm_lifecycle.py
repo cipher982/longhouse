@@ -26,8 +26,12 @@ from urllib.request import urlopen
 from zerg.qa import provider_console_lifecycle as console_lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
+from zerg.qa.answer_markers import marker_answer_count
+from zerg.qa.answer_markers import marker_answered
 from zerg.qa.console_served_state_core import assistant_marker_events
+from zerg.qa.console_served_state_core import assistant_marker_mentions
 from zerg.qa.console_served_state_core import event_text
+from zerg.qa.console_served_state_core import marker_answer_fault
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retire_qualification_session
@@ -86,7 +90,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=9,
+    scenario_revision=10,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -164,7 +168,14 @@ def _read_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def _wait(predicate, *, timeout: float, description: str):
+def _wait(predicate, *, timeout: float, description: str, on_timeout=None):
+    """Poll ``predicate`` until it is truthy.
+
+    ``on_timeout`` builds the error from the standard message prefix, for a
+    wait that can say what it last saw; without it the message ends in the
+    last return value, which is always falsy.
+    """
+
     deadline = time.monotonic() + timeout
     last = None
     while time.monotonic() < deadline:
@@ -172,7 +183,10 @@ def _wait(predicate, *, timeout: float, description: str):
         if last:
             return last
         time.sleep(0.2)
-    raise RuntimeError(f"timed out waiting for {description}: {last}")
+    prefix = f"timed out waiting for {description}"
+    if on_timeout is not None:
+        raise on_timeout(prefix)
+    raise RuntimeError(f"{prefix}: {last}")
 
 
 def _state_paths(home: Path) -> list[Path]:
@@ -324,10 +338,13 @@ def _runtime_observation_summary(
     session_id: str,
     provider_session_id: str,
     marker: str,
+    alongside: tuple[str, ...] = (),
+    recalled: bool = False,
 ) -> dict[str, Any]:
     events_payload = snapshot.get("events") if isinstance(snapshot.get("events"), dict) else {}
     events = events_payload.get("events") if isinstance(events_payload.get("events"), list) else []
-    matches = assistant_marker_events(events, marker, default_origin="durable")
+    matches = assistant_marker_events(events, marker, default_origin="durable", alongside=alongside, recalled=recalled)
+    mentions = assistant_marker_mentions(events, marker, default_origin="durable", alongside=alongside, recalled=recalled)
     binding = _runtime_binding(snapshot, session_id=session_id, provider_session_id=provider_session_id)
     diagnostic = snapshot.get("diagnostic") if isinstance(snapshot.get("diagnostic"), dict) else {}
     shadow = diagnostic.get("shadow") if isinstance(diagnostic.get("shadow"), dict) else {}
@@ -336,7 +353,12 @@ def _runtime_observation_summary(
         "provider_session_id": provider_session_id,
         "marker": marker,
         "event_count": len(events),
+        "events_page_complete": events_payload.get("has_more") is False,
+        # Events that reply with the marker; one that only mentions it
+        # (narration ahead of a tool call) is counted apart and is no reply.
         "assistant_marker_count": len(matches),
+        "assistant_marker_event_ids": [event.get("id") for event in matches],
+        "assistant_marker_mention_count": len(mentions),
         "assistant_marker_occurrences": sum(event_text(event).count(marker) for event in matches),
         "binding": binding,
         "served_controls": _served_controls(snapshot),
@@ -358,6 +380,8 @@ def _runtime_receipt(
         session_id=session_id,
         provider_session_id=provider_session_id,
         marker=marker,
+        alongside=tuple(runtime.get("alongside") or ()),
+        recalled=runtime.get("recalled") is True,
     )
 
 
@@ -431,6 +455,8 @@ def _native_receipt(
         "row_count": native.get("rows"),
         "invocation_row_count": len(invocation_rows),
         "assistant_marker_rows": native.get("assistant_marker_rows"),
+        "assistant_answer_rows": native.get("assistant_answer_rows"),
+        "assistant_reply_entry_id": native.get("assistant_reply_entry_id"),
         "user_marker_rows": native.get("user_marker_rows"),
         "user_marker_occurrences": native.get("user_marker_occurrences"),
         "follow_up_delivered": native.get("user_marker_rows") == 1,
@@ -599,8 +625,22 @@ def _wait_runtime_convergence(
     provider_session_id: str,
     marker: str,
     *,
+    alongside: tuple[str, ...] = (),
+    recalled: bool = False,
+    reply_event_id: object = None,
     timeout: float = 90,
 ) -> dict[str, Any]:
+    """Wait until the Runtime Host serves the turn's one reply to ``marker``.
+
+    ``alongside`` names the other markers the reply was asked to carry;
+    ``recalled`` is for a phrase the model brings back from restored history,
+    which it may put in a sentence. ``reply_event_id`` is the native entry that
+    replied. A complete served page that already holds two replies, or that
+    entry without a reply, fails at once with a typed reason
+    (`marker_answer_fault`); a page the reply has not reached yet is the lag
+    this waits out.
+    """
+
     last_runtime_observation: dict[str, Any] | None = None
 
     def observe() -> dict[str, Any] | None:
@@ -615,28 +655,56 @@ def _wait_runtime_convergence(
             raise
         events_payload = snapshot.get("events") if isinstance(snapshot.get("events"), dict) else {}
         events = events_payload.get("events") if isinstance(events_payload.get("events"), list) else []
-        matches = assistant_marker_events(events, marker, default_origin="durable")
+        matches = assistant_marker_events(events, marker, default_origin="durable", alongside=alongside, recalled=recalled)
         binding = _runtime_binding(snapshot, session_id=session_id, provider_session_id=provider_session_id)
         last_runtime_observation = _runtime_observation_summary(
             snapshot,
             session_id=session_id,
             provider_session_id=provider_session_id,
             marker=marker,
+            alongside=alongside,
+            recalled=recalled,
         )
+        if events_payload.get("has_more") is False:
+            fault = marker_answer_fault(
+                events,
+                marker,
+                default_origin="durable",
+                alongside=alongside,
+                recalled=recalled,
+                reply_event_id=reply_event_id,
+            )
+            if fault is not None:
+                fault.observation = dict(last_runtime_observation)
+                raise fault
+        once = event_text(matches[0]).count(marker) if recalled and matches else None
+        if not recalled and matches:
+            once = marker_answer_count(event_text(matches[0]), marker, alongside=alongside)
         if (
             len(matches) == 1
-            and event_text(matches[0]).count(marker) == 1
+            and once == 1
             and binding["one_session"]
             and binding["one_thread"]
             and binding["provider"] == "pi"
             and binding["provider_session_bound"]
             and _served_controls(snapshot)
         ):
-            return {"snapshot": snapshot, "binding": binding, "assistant_events": matches}
+            return {
+                "snapshot": snapshot,
+                "binding": binding,
+                "assistant_events": matches,
+                "alongside": list(alongside),
+                "recalled": recalled,
+            }
         return None
 
     try:
-        return _wait(observe, timeout=timeout, description=f"Runtime Host convergence for Pi marker {marker}")
+        return _wait(
+            observe,
+            timeout=timeout,
+            description=f"Runtime Host convergence for Pi marker {marker}",
+            on_timeout=lambda prefix: RuntimeError(f"{prefix}: {last_runtime_observation}"),
+        )
     except _RuntimeHostHTTPError:
         raise
     except Exception as exc:
@@ -655,8 +723,22 @@ def _wait_native_marker(
     marker: str,
     *,
     minimum_source_offset: int = 0,
+    alongside: tuple[str, ...] = (),
+    recalled: bool = False,
     timeout: float = 90.0,
 ) -> dict[str, Any]:
+    """Wait for the native assistant row that replies with ``marker``.
+
+    A row replies when it answers with the marker (``zerg.qa.answer_markers``);
+    narration that quotes the marker ahead of a tool call is not the reply, and
+    returning on it ended the wait before the turn did. ``recalled`` is for a
+    phrase the model brings back from restored history: no prompt of the turn
+    contains it, so a row that carries it recalls it, in a sentence or not.
+    User rows are prompts and are counted by presence.
+    """
+
+    last: dict[str, Any] = {}
+
     def observe() -> dict[str, Any] | None:
         if not session_file.is_file():
             return None
@@ -665,8 +747,19 @@ def _wait_native_marker(
         except OSError:
             return None
         invocation_rows = [row for row in rows if int(row.get("source_offset") or 0) >= minimum_source_offset]
-        assistant = [row for row in invocation_rows if row.get("role") == "assistant" and marker in str(row.get("text") or "")]
+        assistant_rows = [row for row in invocation_rows if row.get("role") == "assistant"]
+        naming = [row for row in assistant_rows if marker in str(row.get("text") or "")]
+        assistant = (
+            naming if recalled else [row for row in naming if marker_answered(str(row.get("text") or ""), marker, alongside=alongside)]
+        )
         user = [row for row in invocation_rows if row.get("role") == "user" and marker in str(row.get("text") or "")]
+        last.update(
+            {
+                "assistant_rows": len(assistant_rows),
+                "rows_mentioning_marker": len(naming) - len(assistant),
+                "last_stop_reason": (assistant_rows[-1].get("message") or {}).get("stop_reason") if assistant_rows else None,
+            }
+        )
         return (
             {
                 "rows": len(rows),
@@ -675,7 +768,12 @@ def _wait_native_marker(
                 "source_end_offset": metadata.get("source_end_offset"),
                 "metadata": metadata,
                 "taxonomy": taxonomy,
-                "assistant_marker_rows": len(assistant),
+                # Rows that name the marker: the factory recounts this from the
+                # retained bytes. Rows that reply with it are counted apart,
+                # and that is the count the verdicts below read.
+                "assistant_marker_rows": len(naming),
+                "assistant_answer_rows": len(assistant),
+                "assistant_reply_entry_id": assistant[0].get("entry_id"),
                 "user_marker_rows": len(user),
                 "user_marker_occurrences": sum(str(row.get("text") or "").count(marker) for row in user),
             }
@@ -683,7 +781,12 @@ def _wait_native_marker(
             else None
         )
 
-    return _wait(observe, timeout=timeout, description=f"native Pi marker {marker}")
+    return _wait(
+        observe,
+        timeout=timeout,
+        description=f"native Pi marker {marker}",
+        on_timeout=lambda prefix: RuntimeError(f"{prefix}: {last or None}"),
+    )
 
 
 def _stale_frame(state: dict[str, Any]) -> dict[str, Any]:
@@ -1076,7 +1179,7 @@ def pi_helm_lifecycle_assertions(observation: dict[str, Any]) -> dict[str, bool]
             and steer_receipt.get("accepted") is True
             and steer_runtime.get("active_turn_observed") is True
             and steer_active_state.get("phase") in {"running", "thinking"}
-            and steer_native.get("assistant_marker_rows") == 1
+            and steer_native.get("assistant_answer_rows") == 1
             and (observation.get("steer_turn_verdict") or {}).get("passed") is True
         ),
         "pi_helm_follow_up_native": (
@@ -1133,7 +1236,7 @@ def pi_helm_lifecycle_assertions(observation: dict[str, Any]) -> dict[str, bool]
             and context_pre.get("native_user_marker_rows") == 1
             and context_pre.get("native_user_marker_occurrences") == 1
             and context_native.get("marker") == context_phrase
-            and context_native.get("assistant_marker_rows") == 1
+            and context_native.get("assistant_answer_rows") == 1
             and context_native.get("user_marker_rows") == 0
             and context_native.get("user_marker_occurrences") == 0
             and context_evidence.get("resume_prompt")
@@ -1309,6 +1412,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             session_id,
             str(current_state.get("provider_session_id") or ""),
             marker,
+            reply_event_id=native.get("assistant_reply_entry_id"),
         )
         observations["runtime_launch"] = {
             "flush": launch_flush,
@@ -1376,6 +1480,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             session_id,
             str(current_state.get("provider_session_id") or ""),
             send_marker,
+            reply_event_id=send_native.get("assistant_reply_entry_id"),
         )
         observations["runtime_send"] = _runtime_receipt(
             runtime_send,
@@ -1386,7 +1491,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         observations["send_idle"] = (
             send["accepted"]
             and bool(send_native["invocation_rows"])
-            and send_native["assistant_marker_rows"] == 1
+            and send_native["assistant_answer_rows"] == 1
             and send_flush.get("status") == "pass"
             and runtime_send["binding"]["one_session"]
             and runtime_send["binding"]["one_thread"]
@@ -1425,6 +1530,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             session_id,
             str(current_state.get("provider_session_id") or ""),
             follow_marker,
+            reply_event_id=follow_native.get("assistant_reply_entry_id"),
         )
         steer_task_marker = f"PI_HELM_STEER_TASK_{os.urandom(8).hex()}"
         steer_done_marker = f"PI_HELM_STEER_TASK_DONE_{os.urandom(8).hex()}"
@@ -1471,6 +1577,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             session_id,
             str(current_state.get("provider_session_id") or ""),
             steer_marker,
+            reply_event_id=steer_native.get("assistant_reply_entry_id"),
         )
         observations["runtime_steer"] = _runtime_receipt(
             steer_runtime,
@@ -1495,14 +1602,14 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             and bool(steer_active_state)
             and steer["accepted"]
             and bool(steer_native["invocation_rows"])
-            and steer_native["assistant_marker_rows"] == 1
+            and steer_native["assistant_answer_rows"] == 1
             and observations["steer_turn_verdict"]["passed"] is True
         )
         observations["follow_up_native"] = (
             active["accepted"]
             and follow["accepted"]
             and bool(follow_native["invocation_rows"])
-            and follow_native["assistant_marker_rows"] == 1
+            and follow_native["assistant_answer_rows"] == 1
             and follow_native["user_marker_rows"] == 1
             and follow_native["user_marker_occurrences"] == 1
             and follow_submitted_while_active
@@ -1622,6 +1729,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             session_id,
             str(reloaded.get("provider_session_id") or ""),
             reload_marker,
+            reply_event_id=reload_native.get("assistant_reply_entry_id"),
         )["snapshot"]
         reload_binding = _runtime_binding(
             reload_snapshot,
@@ -1650,7 +1758,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             and bool(reloaded.get("lease_generation"))
             and reloaded.get("lease_generation") != old_connection.get("lease_generation")
             and reload_send["accepted"]
-            and reload_native["assistant_marker_rows"] == 1
+            and reload_native["assistant_answer_rows"] == 1
             and reload_binding["one_session"]
             and reload_binding["one_thread"]
             and reload_binding["provider"] == "pi"
@@ -1717,6 +1825,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             session_id,
             str(replaced.get("provider_session_id") or ""),
             replacement_marker,
+            reply_event_id=replacement_native.get("assistant_reply_entry_id"),
         )
         observations["replacement_runtime"] = {
             "send": replacement_send,
@@ -2020,11 +2129,20 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             )
         observations["resumed_owner_state"] = _state_identity(resumed_state)
         resumed_file = Path(str(resumed_state.get("session_file") or session_file))
-        resumed_native = _wait_native_marker(resumed_file, resume_marker, minimum_source_offset=resume_offset)
+        # The resume prompt asks for the recalled phrase and then the marker.
+        # The marker is the answer and may share its line with the phrase; the
+        # phrase is a recall, which the model may also put in a sentence.
+        resumed_native = _wait_native_marker(
+            resumed_file,
+            resume_marker,
+            minimum_source_offset=resume_offset,
+            alongside=(context_phrase,),
+        )
         resumed_context_native = _wait_native_marker(
             resumed_file,
             context_phrase,
             minimum_source_offset=resume_offset,
+            recalled=True,
         )
         resume_flush = shipper.flush("pi-helm-cold-resume")
         runtime_resume = _wait_runtime_convergence(
@@ -2033,6 +2151,8 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             session_id,
             str(resumed_state.get("provider_session_id") or ""),
             resume_marker,
+            alongside=(context_phrase,),
+            reply_event_id=resumed_native.get("assistant_reply_entry_id"),
         )
         runtime_resume_context = _wait_runtime_convergence(
             args.api_url,
@@ -2040,6 +2160,8 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             session_id,
             str(resumed_state.get("provider_session_id") or ""),
             context_phrase,
+            recalled=True,
+            reply_event_id=resumed_context_native.get("assistant_reply_entry_id"),
         )
         observations["runtime_resume"] = _runtime_receipt(
             runtime_resume,
@@ -2053,8 +2175,8 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             and resumed_file.resolve() == session_file.resolve()
             and resumed_native["metadata"].get("provider_session_id") == resumed_state.get("provider_session_id")
             and bool(resumed_native["invocation_rows"])
-            and resumed_native["assistant_marker_rows"] > 0
-            and resumed_context_native["assistant_marker_rows"] == 1
+            and resumed_native["assistant_answer_rows"] > 0
+            and resumed_context_native["assistant_answer_rows"] == 1
             and resumed_context_native["user_marker_rows"] == 0
             and resumed_context_native["user_marker_occurrences"] == 0
             and resume_flush.get("status") == "pass"

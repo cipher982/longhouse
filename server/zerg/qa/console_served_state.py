@@ -59,7 +59,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="longhouse.console_served_state.v1",
     producer_revision=6,
     scenario_id=SCENARIO_ID,
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=((ASSERTION_LIVE, None), (ASSERTION_SETTLED, None), (ASSERTION_CAPABILITY, None)),
     # The subject under test is Longhouse, not a provider release, so this
     # declares no provider subject. Stock Codex is an exact auxiliary vehicle:

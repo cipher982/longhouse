@@ -524,6 +524,8 @@ def test_pi_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp_
         "taxonomy": {"source": "fixture", "tool_pairs": [{"tool": "read"}], "tool_calls_without_results": []},
         "invocation_rows": [{"model": "fixture"}],
         "assistant_marker_rows": 1,
+        "assistant_answer_rows": 1,
+        "assistant_reply_entry_id": "reply",
         "user_marker_rows": 1,
         "user_marker_occurrences": 1,
         "rows": 3,

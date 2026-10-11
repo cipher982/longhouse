@@ -36,7 +36,7 @@ REGISTRATION = ProducerRegistration(
     producer_revision=5,
     scenario_id=SCENARIO_ID,
     # 5: the shared lifecycle adds a mid-turn steer step (its own cell).
-    scenario_revision=5,
+    scenario_revision=6,
     assertion_cells=((ASSERTION_ID, None), (lifecycle.STEER_ASSERTION_ID, None)),
     providers=("pi",),
     platforms=("linux", "darwin"),

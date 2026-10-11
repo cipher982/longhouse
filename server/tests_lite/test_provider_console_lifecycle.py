@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from zerg.qa import provider_console_lifecycle as lifecycle
+from zerg.qa.console_served_state_core import MarkerAnswerCountError
 from zerg.services.provider_capability_schema import load_capability_assertions
 
 
@@ -610,14 +611,15 @@ def test_a_provider_that_answers_a_steer_twice_passes_only_when_it_is_known_to(m
     assert [event["id"] for event in answers] == ["first", "after-job"]
     assert "omp" in lifecycle._STEER_ANSWER_MAY_REPEAT
     assert "claude" not in lifecycle._STEER_ANSWER_MAY_REPEAT
-    with pytest.raises(RuntimeError, match="exactly one occurrence"):
+    with pytest.raises(MarkerAnswerCountError, match="marker_answered_more_than_once: .* has 2 answering .* expected exactly 1"):
         lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker)
 
     # One answer as the steer lands and one at the job notice: a third is a runaway.
     thrice = [*twice, {"id": "runaway", "role": "assistant", "content_text": marker}]
     monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": thrice})
-    with pytest.raises(RuntimeError, match="exactly one occurrence"):
+    with pytest.raises(MarkerAnswerCountError, match="marker_answered_more_than_once: .* has 3 answering .* expected at most 2") as raised:
         lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, may_repeat=True)
+    assert raised.value.answer_event_ids == ["first", "after-job", "runaway"]
 
     # A marker repeated inside one reply is never a second answer.
     monkeypatch.setattr(
@@ -625,6 +627,43 @@ def test_a_provider_that_answers_a_steer_twice_passes_only_when_it_is_known_to(m
     )
     with pytest.raises(RuntimeError, match="exactly one occurrence"):
         lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, may_repeat=True)
+
+
+def test_archive_convergence_counts_the_answer_not_the_narration_that_quotes_it(monkeypatch):
+    marker = "LH_CLAUDE_CONSOLE_abc"
+    events = [
+        {"id": "prompt", "role": "user", "content_text": f"Reply with exactly {marker} and nothing else."},
+        # Narration ahead of a tool call names the marker inside a sentence.
+        {"id": "narration", "role": "assistant", "content_text": f"I will run the command, then reply with `{marker}`."},
+        {"id": "reply", "role": "assistant", "content_text": f"The command finished.\n\n{marker}"},
+    ]
+    monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": events})
+
+    answers = lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker)
+    assert [event["id"] for event in answers] == ["reply"]
+
+    # Marker only in narration: never an answer, and the failure says a mention was seen.
+    monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": events[:2]})
+    with pytest.raises(RuntimeError, match=r"count=0, events that only mention it=1"):
+        lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, timeout=0.6)
+
+
+def test_archive_convergence_reads_a_reply_asked_to_carry_the_stored_context(monkeypatch):
+    marker, context = "LH_OMP_CONSOLE_abc", "LH_OMP_CONTEXT_def"
+
+    # On one line, on two, or run together: all three are what models send.
+    for text in (f"{context} {marker}", f"{context}\n{marker}", f"{context}{marker}"):
+        monkeypatch.setattr(
+            lifecycle, "_request", lambda *_args, text=text: {"events": [{"id": "reply", "role": "assistant", "content_text": text}]}
+        )
+        answers = lifecycle._assistant_marker_events("https://runtime.example", "token", "session-1", marker, alongside=(context,))
+        assert [event["id"] for event in answers] == ["reply"]
+
+    # The wait takes the same companions; without them the run-together reply is not an answer.
+    answers = lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, alongside=(context,))
+    assert [event["id"] for event in answers] == ["reply"]
+    with pytest.raises(RuntimeError, match=r"count=0, events that only mention it=1"):
+        lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, timeout=0.6)
 
 
 def test_omp_job_notice_completes_the_steered_tool_and_a_miss_says_what_was_served() -> None:

@@ -46,6 +46,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
 
+from zerg.qa.answer_markers import marker_answer_count
+from zerg.qa.answer_markers import marker_answered
+
 ROOT = Path(__file__).resolve().parents[3]
 API_RETRY_ATTEMPTS = 3
 API_RETRY_DELAY_S = 2.0
@@ -263,23 +266,157 @@ def event_text(event: Mapping[str, object]) -> str:
     return text if isinstance(text, str) else ""
 
 
-def assistant_marker_events(events: Iterable[object], marker: str, *, default_origin: str | None = None) -> list[dict]:
-    """Share the durable assistant predicate between archive and served proofs.
-
-    Archive-only endpoints may supply an explicit durable default. A served
-    projection must carry its origin: provisional output is never final proof.
-    Keep all matches, including duplicates, so callers can reject multiplicity.
-    """
-    return [
-        event
-        for event in events
-        if isinstance(event, dict)
+def _durable_assistant_text(event: object, default_origin: str | None) -> bool:
+    return (
+        isinstance(event, dict)
         and event.get("role") == "assistant"
         and event.get("event_origin", default_origin) == "durable"
         and not event.get("tool_name")
+    )
+
+
+def _replies_with(text: str, marker: str, alongside: tuple[str, ...], recalled: bool) -> bool:
+    if not marker:
+        return False
+    return marker in text if recalled else marker_answered(text, marker, alongside=alongside)
+
+
+def assistant_marker_events(
+    events: Iterable[object],
+    marker: str,
+    *,
+    default_origin: str | None = None,
+    alongside: Iterable[str] = (),
+    recalled: bool = False,
+) -> list[dict]:
+    """Durable assistant events that reply with the marker.
+
+    Shares the predicate between archive and served proofs. Archive-only
+    endpoints may supply an explicit durable default. A served projection must
+    carry its origin: provisional output is never final proof. An event replies
+    when it answers under the one rule in ``zerg.qa.answer_markers``; one that
+    only mentions the marker, such as narration written ahead of a tool call,
+    is not a reply. Keep all replies, including duplicates, so callers can
+    reject multiplicity.
+
+    ``recalled`` is for a value the model must bring back from restored
+    history. No prompt of that turn contains it, so any event that carries it
+    recalls it, and a model is free to put it in a sentence.
+    """
+    alongside = tuple(alongside)
+    return [
+        event
+        for event in events
+        if _durable_assistant_text(event, default_origin) and _replies_with(event_text(event), marker, alongside, recalled)
+    ]
+
+
+def assistant_marker_mentions(
+    events: Iterable[object],
+    marker: str,
+    *,
+    default_origin: str | None = None,
+    alongside: Iterable[str] = (),
+    recalled: bool = False,
+) -> list[dict]:
+    """Durable assistant events that name the marker without replying with it.
+
+    Evidence only: what a reader needs beside a wrong reply count to see that
+    the model narrated the marker, or never gave it a line of its own.
+    """
+    alongside = tuple(alongside)
+    return [
+        event
+        for event in events
+        if _durable_assistant_text(event, default_origin)
         and bool(marker)
         and marker in event_text(event)
+        and not _replies_with(event_text(event), marker, alongside, recalled)
     ]
+
+
+MARKER_ANSWERED_MORE_THAN_ONCE = "marker_answered_more_than_once"
+MARKER_REPLY_SERVED_WITHOUT_ANSWER = "marker_reply_served_without_answer"
+
+
+class MarkerAnswerCountError(RuntimeError):
+    """A served transcript that can no longer change did not answer a marker exactly once.
+
+    Raised as soon as that is certain, instead of polling to a deadline: nothing
+    was slow, so waiting cannot help and a timeout would misreport the cause.
+    The message opens with the reason and carries only counts and event ids,
+    never model text, so a classifier reading it cannot be steered by what the
+    model wrote. ``observation`` keeps what the Runtime Host served.
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        marker: str,
+        answers: list[dict],
+        mentions: list[dict],
+        expected: str = "exactly 1",
+    ) -> None:
+        self.reason = reason
+        self.marker = marker
+        self.answer_event_ids = [event.get("id") for event in answers]
+        self.mention_event_ids = [event.get("id") for event in mentions]
+        self.observation: dict[str, object] = {}
+        super().__init__(
+            f"{reason}: marker {marker} has {len(answers)} answering served assistant event(s), expected {expected} "
+            f"(answering event ids {self.answer_event_ids}; {len(mentions)} other event(s) only mention it: {self.mention_event_ids})"
+        )
+
+    def evidence(self) -> dict[str, object]:
+        return {
+            "reason": self.reason,
+            "marker": self.marker,
+            "answer_event_count": len(self.answer_event_ids),
+            "answer_event_ids": self.answer_event_ids,
+            "mention_event_count": len(self.mention_event_ids),
+            "mention_event_ids": self.mention_event_ids,
+            "observation": self.observation,
+        }
+
+
+def marker_answer_fault(
+    events: Iterable[object],
+    marker: str,
+    *,
+    default_origin: str | None = None,
+    alongside: Iterable[str] = (),
+    recalled: bool = False,
+    reply_event_id: object = None,
+) -> MarkerAnswerCountError | None:
+    """Why a complete served page can never hold exactly one reply, or None.
+
+    Call it only with a complete page: every event the Runtime Host serves on
+    the session's head branch, read to the end under one generation.
+
+    Two or more replies are final. Events still to arrive can add a reply but
+    never take one back, so the count cannot return to one.
+
+    No reply is final only once the page has caught up with the turn.
+    ``reply_event_id`` is the id of the provider's own transcript row that
+    replied; the Runtime Host serves the first event of a row under the row's
+    id. While that id is absent the reply has not been ingested yet, which is
+    the lag this proof exists to wait out, and the caller keeps polling. Once
+    it is present and still nothing replies, the host served the row in a form
+    that is not a reply, and more waiting cannot change that.
+    """
+    events = list(events)
+    alongside = tuple(alongside)
+    answers = assistant_marker_events(events, marker, default_origin=default_origin, alongside=alongside, recalled=recalled)
+    if len(answers) == 1:
+        return None
+    mentions = assistant_marker_mentions(events, marker, default_origin=default_origin, alongside=alongside, recalled=recalled)
+    if len(answers) > 1:
+        return MarkerAnswerCountError(MARKER_ANSWERED_MORE_THAN_ONCE, marker=marker, answers=answers, mentions=mentions)
+    reply_served = reply_event_id is not None and any(isinstance(event, dict) and event.get("id") == reply_event_id for event in events)
+    if reply_served:
+        return MarkerAnswerCountError(MARKER_REPLY_SERVED_WITHOUT_ANSWER, marker=marker, answers=answers, mentions=mentions)
+    return None
 
 
 def assistant_marker_evidence(workspace: dict, session_id: str, marker: str) -> dict:
@@ -292,7 +429,7 @@ def assistant_marker_evidence(workspace: dict, session_id: str, marker: str) -> 
         ),
         marker,
     )
-    counts = [event_text(event).count(marker) for event in matches]
+    counts = [marker_answer_count(event_text(event), marker) for event in matches]
     event_ids = [event.get("id") for event in matches]
     # The proof asks for an explicit start-anchored complete window. Runtime/provider
     # records may count toward total without becoming visible items, so a default

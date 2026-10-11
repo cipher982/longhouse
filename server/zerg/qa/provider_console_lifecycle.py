@@ -30,7 +30,10 @@ from typing import Any
 from uuid import uuid4
 
 from zerg.qa.codex_auth import login_with_api_key
+from zerg.qa.console_served_state_core import MARKER_ANSWERED_MORE_THAN_ONCE
+from zerg.qa.console_served_state_core import MarkerAnswerCountError
 from zerg.qa.console_served_state_core import assistant_marker_events
+from zerg.qa.console_served_state_core import assistant_marker_mentions
 from zerg.qa.console_served_state_core import event_text
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
@@ -127,7 +130,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=6,
+    scenario_revision=7,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -432,12 +435,17 @@ def _wait_claim(
     raise RuntimeError(f"Console claim did not reach {sorted(states)}: {last}")
 
 
-def _assistant_marker_events(api_url: str, token: str, session_id: str, marker: str) -> list[dict[str, Any]]:
-    result = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?limit=200")
-    events = result.get("events") if isinstance(result.get("events"), list) else []
+def _archive_events(api_url: str, token: str, session_id: str) -> list[object]:
     # This archive endpoint contains only durable records and omits origin.
     # Served projections use the same predicate without that archive default.
-    return assistant_marker_events(events, marker, default_origin="durable")
+    result = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?limit=200")
+    return result.get("events") if isinstance(result.get("events"), list) else []
+
+
+def _assistant_marker_events(
+    api_url: str, token: str, session_id: str, marker: str, *, alongside: tuple[str, ...] = ()
+) -> list[dict[str, Any]]:
+    return assistant_marker_events(_archive_events(api_url, token, session_id), marker, default_origin="durable", alongside=alongside)
 
 
 def _wait_exact_assistant_marker(
@@ -446,19 +454,41 @@ def _wait_exact_assistant_marker(
     session_id: str,
     marker: str,
     *,
+    alongside: tuple[str, ...] = (),
     timeout: float = 180,
     may_repeat: bool = False,
 ) -> list[dict[str, Any]]:
+    """Wait for the one served assistant event that answers with ``marker``.
+
+    An event answers under the rule in ``zerg.qa.answer_markers``; ``alongside``
+    names the other markers the reply was asked to carry. An event that only
+    mentions the marker (narration ahead of a tool call) is not a reply and is
+    reported beside the count when the wait fails.
+    """
+
     deadline = time.monotonic() + timeout
     stable_since: float | None = None
     last_count = 0
+    last_mentions = 0
     while time.monotonic() < deadline:
-        matches = _assistant_marker_events(api_url, token, session_id, marker)
+        events = _archive_events(api_url, token, session_id)
+        matches = assistant_marker_events(events, marker, default_origin="durable", alongside=alongside)
+        mentions = assistant_marker_mentions(events, marker, default_origin="durable", alongside=alongside)
         last_count = len(matches)
+        last_mentions = len(mentions)
         # A provider known to answer twice may reply once as the steer lands and
-        # once when the job notice arrives; a marker repeated inside one reply,
-        # or a third reply, never is.
-        if last_count > (2 if may_repeat else 1) or any(event_text(event).count(marker) != 1 for event in matches):
+        # once when the job notice arrives; a third reply never is. More replies
+        # cannot bring the count back down, so this fails now, not at the deadline.
+        if last_count > (2 if may_repeat else 1):
+            raise MarkerAnswerCountError(
+                MARKER_ANSWERED_MORE_THAN_ONCE,
+                marker=marker,
+                answers=matches,
+                mentions=mentions,
+                expected="at most 2" if may_repeat else "exactly 1",
+            )
+        # A marker repeated inside one reply never is either.
+        if any(event_text(event).count(marker) != 1 for event in matches):
             raise RuntimeError("assistant marker did not converge to one event with exactly one occurrence")
         if last_count >= 1:
             stable_since = stable_since or time.monotonic()
@@ -467,7 +497,7 @@ def _wait_exact_assistant_marker(
         else:
             stable_since = None
         time.sleep(0.5)
-    raise RuntimeError(f"assistant marker did not converge exactly once (count={last_count})")
+    raise RuntimeError(f"assistant marker did not converge exactly once (count={last_count}, events that only mention it={last_mentions})")
 
 
 def _bounded_marker_excerpt(value: str, marker: str, radius: int = 160) -> str:
@@ -2234,6 +2264,9 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             # model to transcribe one from the prompt makes the canary flaky.
             proof_path.write_text(f"{tool_marker}\n{marker}\n", encoding="utf-8")
         message = f"Reply with exactly {marker} and nothing else."
+        # Pi and OMP are asked for the stored context value and then the marker,
+        # so their replies carry both: on one line, on two, or run together.
+        reply_alongside: tuple[str, ...] = (context_marker,) if provider in {"pi", "omp"} else ()
         if provider in {"pi", "omp"}:
             message = (
                 f"New machine-check request. Store the exact value {context_marker!r} "
@@ -2386,7 +2419,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             raise RuntimeError("stock provider output source was unavailable")
         if not isinstance(marker_count, int) or isinstance(marker_count, bool) or marker_count < 1:
             raise RuntimeError("stock provider assistant output did not contain the qualification marker")
-        first_events = _wait_exact_assistant_marker(api_url, token, session_id, marker)
+        first_events = _wait_exact_assistant_marker(api_url, token, session_id, marker, alongside=reply_alongside)
         bound_assistant_event = {
             **first_events[0],
             "tool_name_present": bool(first_events[0].get("tool_name")),
@@ -2445,7 +2478,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(resume["run_id"]),
             )
             flush_for_projection("console-resume-turn")
-            resume_events = _wait_exact_assistant_marker(api_url, token, session_id, resume_marker)
+            resume_events = _wait_exact_assistant_marker(api_url, token, session_id, resume_marker, alongside=reply_alongside)
             resume_native_response: dict[str, object] | None = None
             if provider in {"pi", "omp"}:
                 raw_resume_source = resume_claim.get("source_path") or resume_claim.get("stdout_path")

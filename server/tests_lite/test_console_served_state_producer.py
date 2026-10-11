@@ -536,3 +536,72 @@ def test_cancellation_retires_the_created_session_and_started_run(monkeypatch, t
     with pytest.raises(KeyboardInterrupt):
         core.run(args)
     assert active == {}
+
+
+_MARKER = "LH_SERVED_alpha_bravo_charlie"
+# Narration ahead of a tool call names the marker inside a sentence; the final
+# reply puts a line about the work first and the marker alone on its last line.
+_NARRATION = f"The sleep has not returned yet, so I may not reply with `{_MARKER}`."
+_FINAL_REPLY = f"The command finished.\n\n{_MARKER}"
+
+
+def _served_event(event_id: str, text: object, **fields: object) -> dict:
+    return {"id": event_id, "role": "assistant", "event_origin": "durable", "content_text": text, **fields}
+
+
+def test_served_marker_events_are_the_answers_and_mentions_are_kept_apart():
+    events = [
+        {"id": "prompt", "role": "user", "event_origin": "durable", "content_text": f"Reply with only {_MARKER}."},
+        _served_event("narration", _NARRATION),
+        # A tool call is served as its own assistant event; its text is not a reply.
+        _served_event("narration-tool-call-1", _MARKER, tool_name="shell"),
+        _served_event("streaming", _MARKER, event_origin="live_provisional"),
+        _served_event("structured", {"marker": _MARKER}),
+        _served_event("reply", _FINAL_REPLY),
+    ]
+
+    assert [event["id"] for event in core.assistant_marker_events(events, _MARKER)] == ["reply"]
+    assert [event["id"] for event in core.assistant_marker_mentions(events, _MARKER)] == ["narration"]
+    assert core.marker_answer_fault(events, _MARKER, reply_event_id="reply") is None
+
+    workspace = {
+        "projection": {
+            "has_more": False,
+            "page_offset": 0,
+            "items": [{"kind": "event", "session_id": "session-1", "event": event} for event in events],
+        }
+    }
+    evidence = core.assistant_marker_evidence(workspace, "session-1", _MARKER)
+    assert evidence["exactly_once"] is True
+    assert evidence["event_ids"] == ["reply"]
+    assert evidence["marker_counts"] == [1]
+
+
+def test_a_complete_page_with_a_wrong_number_of_answers_is_a_typed_fault():
+    narration = _served_event("narration", _NARRATION)
+    reply = _served_event("reply", _FINAL_REPLY)
+    again = _served_event("again", _MARKER)
+
+    twice = core.marker_answer_fault([narration, reply, again], _MARKER, reply_event_id="reply")
+    assert twice is not None and twice.reason == core.MARKER_ANSWERED_MORE_THAN_ONCE
+    assert twice.answer_event_ids == ["reply", "again"] and twice.mention_event_ids == ["narration"]
+    assert str(twice).startswith("marker_answered_more_than_once: ")
+
+    # Marker only in narration. Until the page carries the row that answered,
+    # the reply may simply not be ingested yet: no fault, the caller keeps waiting.
+    assert core.marker_answer_fault([narration], _MARKER, reply_event_id="reply") is None
+    assert core.marker_answer_fault([narration], _MARKER) is None
+    # Marker never answered, and the page already carries the reply row.
+    unanswered = core.marker_answer_fault([narration, _served_event("reply", "Done.")], _MARKER, reply_event_id="reply")
+    assert unanswered is not None and unanswered.reason == core.MARKER_REPLY_SERVED_WITHOUT_ANSWER
+    assert unanswered.answer_event_ids == [] and unanswered.mention_event_ids == ["narration"]
+
+
+def test_a_recalled_phrase_is_a_reply_wherever_the_model_puts_it():
+    phrase = "LH_FIXTURE_CONTEXT_0123456789abcdef"
+    events = [_served_event("reply", f"The phrase I was asked to remember is {phrase}.\n\n{_MARKER}")]
+
+    assert core.assistant_marker_events(events, phrase) == []
+    assert [event["id"] for event in core.assistant_marker_events(events, phrase, recalled=True)] == ["reply"]
+    assert core.assistant_marker_mentions(events, phrase, recalled=True) == []
+    assert [event["id"] for event in core.assistant_marker_events(events, _MARKER, alongside=(phrase,))] == ["reply"]

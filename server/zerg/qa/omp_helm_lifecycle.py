@@ -23,8 +23,13 @@ from urllib.parse import quote
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
+from zerg.qa.answer_markers import marker_answer_count
+from zerg.qa.answer_markers import marker_answered
+from zerg.qa.console_served_state_core import MarkerAnswerCountError
 from zerg.qa.console_served_state_core import assistant_marker_events
+from zerg.qa.console_served_state_core import assistant_marker_mentions
 from zerg.qa.console_served_state_core import event_text
+from zerg.qa.console_served_state_core import marker_answer_fault
 from zerg.qa.failed_results import reached_only
 from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
@@ -97,7 +102,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
     producer_revision=10,
     scenario_id=SCENARIO_ID,
-    scenario_revision=14,
+    scenario_revision=15,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -338,12 +343,32 @@ def _read_state(path: Path) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+class RuntimeConvergenceTimeout(RuntimeError):
+    """The Runtime Host never served the reply inside the deadline.
+
+    ``observation`` is the last complete read, so a reader sees what was served
+    rather than a bare ``None``.
+    """
+
+    def __init__(self, message: str, *, observation: dict[str, Any]) -> None:
+        self.observation = observation
+        super().__init__(message)
+
+
 def _wait(
     observe: Any,
     *,
     timeout: float,
     description: str,
+    on_timeout: Any = None,
 ) -> Any:
+    """Poll ``observe`` until it returns a value.
+
+    ``on_timeout`` builds the error from the standard message prefix, for a
+    wait that can say what it last saw; without it the message ends in the
+    last return value, which is always ``None``.
+    """
+
     deadline = time.monotonic() + timeout
     last: object = None
     while time.monotonic() < deadline:
@@ -351,7 +376,10 @@ def _wait(
         if last is not None:
             return last
         time.sleep(0.2)
-    raise RuntimeError(f"timed out waiting for {description}: {last!r}")
+    prefix = f"timed out waiting for {description}"
+    if on_timeout is not None:
+        raise on_timeout(prefix)
+    raise RuntimeError(f"{prefix}: {last!r}")
 
 
 _RUNTIME_HOST_RETRY_STATUSES = frozenset({404, 429, 500, 502, 503, 504})
@@ -497,6 +525,7 @@ def _served_projection_evidence(
     session_id: str,
     native_session_id: str,
     marker: str,
+    alongside: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Keep only structural fields from the served Runtime Host responses."""
 
@@ -506,7 +535,8 @@ def _served_projection_evidence(
     events = events_payload.get("events") if isinstance(events_payload.get("events"), list) else []
     events_page = _events_page_metadata(events_payload)
     members = thread.get("sessions") if isinstance(thread.get("sessions"), list) else []
-    marker_matches = assistant_marker_events(events, marker, default_origin="durable")
+    marker_matches = assistant_marker_events(events, marker, default_origin="durable", alongside=alongside)
+    marker_mentions = assistant_marker_mentions(events, marker, default_origin="durable", alongside=alongside)
     marker_event_id = marker_matches[0].get("id") if len(marker_matches) == 1 else None
     diagnostic = snapshot.get("diagnostic") if isinstance(snapshot.get("diagnostic"), Mapping) else {}
     return {
@@ -534,7 +564,11 @@ def _served_projection_evidence(
         ],
         # Retain the marker-bearing served records themselves. Counts and
         # identities are useful indexes, not independent proof of content.
+        # `marker_events` answered with the marker; `marker_mention_events`
+        # name it without answering (narration ahead of a tool call) and are
+        # never counted as replies.
         "marker_events": [dict(event) for event in marker_matches],
+        "marker_mention_events": [dict(event) for event in marker_mentions],
         "marker_event_id": marker_event_id,
         "marker_event_durable": (len(marker_matches) == 1 and marker_matches[0].get("event_origin", "durable") == "durable"),
         "marker_event_identity_bound": len(marker_matches) == 1 and _stable_event_id(marker_event_id),
@@ -555,23 +589,38 @@ def _runtime_convergence(
     marker: str,
     flush: Mapping[str, Any],
     native_source_path: str,
+    alongside: tuple[str, ...] = (),
+    native_reply_id: object = None,
     timeout: float = 90,
 ) -> dict[str, Any]:
+    """Wait until the Runtime Host serves the turn's one reply to ``marker``.
+
+    ``alongside`` names the other markers the reply was asked to carry, and
+    ``native_reply_id`` the id of the native row that answered. A complete
+    served page that already holds two answers, or the reply row without an
+    answer, fails at once with a typed reason (`marker_answer_fault`); a page
+    the reply has not reached yet is the lag this waits out.
+    """
+
+    last: dict[str, Any] = {}
+
     def observe() -> dict[str, Any] | None:
         try:
             snapshot = _runtime_snapshot(api_url, token, session_id)
         except RuntimeError as exc:
             if str(exc).startswith("Runtime Host HTTP"):
+                last.update({"runtime_read_error": str(exc)})
                 return None
             raise
         events_payload = snapshot.get("events") if isinstance(snapshot.get("events"), Mapping) else {}
         events = events_payload.get("events") if isinstance(events_payload.get("events"), list) else []
-        matches = assistant_marker_events(events, marker, default_origin="durable")
+        matches = assistant_marker_events(events, marker, default_origin="durable", alongside=alongside)
         served_projection = _served_projection_evidence(
             snapshot,
             session_id=session_id,
             native_session_id=native_session_id,
             marker=marker,
+            alongside=alongside,
         )
         events_page = served_projection["events_page"]
         if not isinstance(events_page, Mapping) or events_page.get("complete") is not True:
@@ -587,6 +636,24 @@ def _runtime_convergence(
                 "events_page": dict(events_page) if isinstance(events_page, Mapping) else {},
                 "served_projection": served_projection,
             }
+        fault = marker_answer_fault(
+            events,
+            marker,
+            default_origin="durable",
+            alongside=alongside,
+            reply_event_id=native_reply_id,
+        )
+        if fault is not None:
+            fault.observation = {
+                "provider": "omp",
+                "session_id": session_id,
+                "native_session_id": native_session_id,
+                "native_source_path": native_source_path,
+                "native_reply_id": native_reply_id,
+                "flush": dict(flush),
+                "served_projection": served_projection,
+            }
+            raise fault
         diagnostic = snapshot.get("diagnostic") if isinstance(snapshot.get("diagnostic"), Mapping) else {}
         detail = served_projection.get("detail") if isinstance(served_projection.get("detail"), Mapping) else {}
         thread = served_projection.get("thread") if isinstance(served_projection.get("thread"), Mapping) else {}
@@ -602,14 +669,29 @@ def _runtime_convergence(
         )
         marker_bound_durable_event = (
             len(matches) == 1
-            and event_text(matches[0]).count(marker) == 1
+            and marker_answer_count(event_text(matches[0]), marker, alongside=alongside) == 1
             and matches[0].get("event_origin", "durable") == "durable"
             and _stable_event_id(served_projection.get("marker_event_id"))
             and served_projection.get("marker_event_id") in served_event_ids
             and served_projection.get("marker_event_durable") is True
             and served_projection.get("marker_event_identity_bound") is True
         )
-        if not exact_served_identity or not marker_bound_durable_event or diagnostic.get("served_path") != "canonical_session_detail":
+        served_path = diagnostic.get("served_path")
+        # What the deadline reports when this never converges: structure only.
+        last.clear()
+        last.update(
+            {
+                "answer_event_count": len(matches),
+                "mention_event_count": len(served_projection["marker_mention_events"]),
+                "served_event_count": len(served_event_ids),
+                "native_reply_served": native_reply_id is not None and native_reply_id in served_event_ids,
+                "exact_served_identity": exact_served_identity,
+                "marker_bound_durable_event": marker_bound_durable_event,
+                "served_path": served_path,
+                "served_projection": served_projection,
+            }
+        )
+        if not exact_served_identity or not marker_bound_durable_event or served_path != "canonical_session_detail":
             return None
         return {
             "status": "pass",
@@ -622,7 +704,16 @@ def _runtime_convergence(
             "served_projection": served_projection,
         }
 
-    return _wait(observe, timeout=timeout, description=f"Runtime Host convergence for OMP marker {marker}")
+    def timed_out(prefix: str) -> RuntimeConvergenceTimeout:
+        summary = {key: value for key, value in last.items() if key != "served_projection"}
+        return RuntimeConvergenceTimeout(f"{prefix}: {summary}", observation=dict(last))
+
+    return _wait(
+        observe,
+        timeout=timeout,
+        description=f"Runtime Host convergence for OMP marker {marker}",
+        on_timeout=timed_out,
+    )
 
 
 def _served_control_identity(
@@ -991,28 +1082,79 @@ def _wait_native_marker(
     *,
     minimum_offset: int = 0,
     role: str = "assistant",
+    alongside: tuple[str, ...] = (),
+    recalled: bool = False,
     timeout: float = 90,
 ) -> dict[str, Any]:
+    """Wait for the native row that carries ``marker``.
+
+    An assistant row is the reply only when it answers with the marker
+    (``zerg.qa.answer_markers``). A turn that works through tools narrates the
+    marker first ("both jobs must finish before I may reply with ..."), and
+    returning that row ended the wait before the turn did and bound the
+    evidence to the wrong message. A user row is the prompt, which names the
+    marker inside a sentence, so it is matched by presence; so is a phrase the
+    model brings back from restored history (``recalled``), which no prompt of
+    the turn contains and the model may put in a sentence.
+
+    The wait cannot end early on a turn that stopped without answering: OMP
+    ends a reply while a background job runs and is woken when it finishes, so
+    a ``stop`` row does not prove the model is done. The timeout says what the
+    transcript held instead.
+    """
+
+    last: dict[str, Any] = {}
+
     def observe() -> dict[str, Any] | None:
+        candidates = 0
+        mentions = 0
+        stop_reason: object = None
         for row in _native_rows(session_file, minimum_offset):
             if row.get("type") != "message":
                 continue
             message = row.get("message")
             if not isinstance(message, Mapping) or message.get("role") != role:
                 continue
-            if marker in _native_message_text(message):
+            text = _native_message_text(message)
+            if role != "assistant" or recalled:
+                if marker in text:
+                    return row
+                continue
+            if marker_answered(text, marker, alongside=alongside):
                 return row
+            candidates += 1
+            mentions += marker in text
+            stop_reason = message.get("stopReason")
+        last.update(
+            {
+                f"{role}_rows": candidates,
+                "rows_mentioning_marker": mentions,
+                "last_stop_reason": stop_reason,
+            }
+        )
         return None
 
-    return _wait(observe, timeout=timeout, description=f"OMP native marker {marker}")
+    return _wait(
+        observe,
+        timeout=timeout,
+        description=f"OMP native marker {marker}",
+        on_timeout=lambda prefix: RuntimeError(f"{prefix}: {last or None}"),
+    )
 
 
 def _native_message_text(message: Mapping[str, Any]) -> str:
+    """Text of a native message, one line group per text block.
+
+    Blocks are joined with a newline: the Runtime Host serves each text block
+    as its own event, and a marker that ends one block must not run into the
+    first word of the next.
+    """
+
     content = message.get("content")
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "".join(
+        return "\n".join(
             str(block.get("text"))
             for block in content
             if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
@@ -1054,6 +1196,8 @@ def _native_marker_evidence(
         "message_role": role,
         "event_id": row.get("id"),
         "marker": marker,
+        # Occurrences inside the one row the wait returned: the reply must say
+        # the marker once. Which row is the reply is decided by the wait.
         "marker_count": text.count(marker),
     }
 
@@ -1993,6 +2137,18 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             native_session_id=current_state.get("native_session_id"),
         )
         initial_session_file = current_session_file
+        # The default 90 s covers the whole first turn. For the background
+        # scenario that is the longest turn any wait here spans: four to six
+        # model calls in the parent, a child agent, and two 2 s jobs. Measured
+        # on the factory over the twelve answered turns of 2026-10-10/11 with
+        # the current prompt: median 17.8 s, slowest 26.4 s, longest gap between
+        # two messages 7.9 s. The slowest model call recorded that week without
+        # a stall took about 21.6 s, so 90 s is 3.4 times the slowest turn and
+        # holds it with two more calls that slow (26.4 + 2 x 21.6 = 69.6 s), or
+        # the median turn with three (82.6 s). A stream that stalls is silent
+        # for longer than any margin worth waiting (54 s and 75 s on
+        # 2026-10-11): the factory's same-tick retry answers a stall, not a
+        # longer deadline.
         initial_row = _wait_native_marker(current_session_file, initial_marker)
         initial_channel_state = _wait_state(
             longhouse_home,
@@ -2018,6 +2174,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             marker=initial_marker,
             flush=initial_flush,
             native_source_path=str(current_session_file),
+            native_reply_id=initial_row.get("id"),
         )
         initial_control_identity = _wait_runtime_control_identity(
             str(args.api_url),
@@ -2679,10 +2836,15 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                     "controls": ["cold_resume"],
                 }
             )
+            # The resume prompt asks for the recalled phrase and then the
+            # marker. The marker is the answer and may share its line with the
+            # phrase; the phrase is a recall, which the model may also put in a
+            # sentence, so its row is matched by presence.
             resume_row = _wait_native_marker(
                 resume_file,
                 resume_marker,
                 minimum_offset=resume_offset,
+                alongside=(context_phrase,),
                 timeout=180,
             )
             resume_input_row = _wait_native_marker(
@@ -2697,6 +2859,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 context_phrase,
                 minimum_offset=resume_offset,
                 role="assistant",
+                recalled=True,
                 timeout=300,
             )
             resume_terminal, resume_channel_state = _wait_channel_terminal(
@@ -2814,6 +2977,8 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 marker=resume_marker,
                 flush=final_flush,
                 native_source_path=str(resume_file),
+                alongside=(context_phrase,),
+                native_reply_id=resume_row.get("id"),
             )
             final_control_state = _wait_state(
                 longhouse_home,
@@ -2889,6 +3054,10 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 "control_identity": final_control_receipt,
             }
     except BaseException as exc:
+        if isinstance(exc, MarkerAnswerCountError):
+            observation["runtime_convergence_failure"] = exc.evidence()
+        elif isinstance(exc, RuntimeConvergenceTimeout):
+            observation["runtime_convergence_failure"] = {"reason": "runtime_convergence_timed_out", "observation": exc.observation}
         partial_observation = {
             "schema_version": 1,
             "status": "fail",

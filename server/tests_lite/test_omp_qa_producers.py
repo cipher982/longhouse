@@ -11,6 +11,7 @@ import pytest
 
 from zerg.qa import omp_helm_lifecycle
 from zerg.qa import provider_console_lifecycle as lifecycle
+from zerg.qa.console_served_state_core import MarkerAnswerCountError
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.omp_console_producer import _PROFILE as CONSOLE_PROFILE
 from zerg.qa.omp_console_producer import _VARIANT as CONSOLE_VARIANT
@@ -22,6 +23,7 @@ from zerg.qa.omp_console_producer import omp_native_model_evidence
 from zerg.qa.omp_helm_lifecycle import _PROFILE as HELM_PROFILE
 from zerg.qa.omp_helm_lifecycle import _VARIANTS
 from zerg.qa.omp_helm_lifecycle import ASSERTIONS as HELM_ASSERTIONS
+from zerg.qa.omp_helm_lifecycle import RuntimeConvergenceTimeout
 from zerg.qa.omp_helm_lifecycle import _append_retirement_claim
 from zerg.qa.omp_helm_lifecycle import _assertion_result_status
 from zerg.qa.omp_helm_lifecycle import _channel_command_evidence
@@ -1918,6 +1920,213 @@ def test_omp_runtime_convergence_rejects_wrong_served_provider(monkeypatch) -> N
             native_source_path="/native/session.jsonl",
             timeout=0.01,
         )
+
+
+_REPLY_MARKER = "OMP_HELM_INITIAL_0123456789abcdef"
+# A turn that works through tools narrates before it answers: the narration names
+# the marker inside a sentence ahead of a tool call, the final reply puts the
+# marker alone on its last line.
+_NARRATION = (
+    "[INFERENCE] The shell job is terminal; the worker has not reported yet.\n\n"
+    f"**Status: not complete.** Both jobs must finish before I may reply with `{_REPLY_MARKER}`.\n\n"
+    "- shell job: done\n- worker: waiting for its terminal output"
+)
+_FINAL_REPLY = f"Both terminal events observed:\n\n- worker: done\n- shell job: done\n\n{_REPLY_MARKER}"
+
+
+def _served_events_snapshot(events: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "detail": {"id": "session-1", "provider": "omp", "provider_session_id": "native-1"},
+        "thread": {"root_session_id": "session-1", "head_session_id": "session-1", "sessions": [{"id": "session-1"}]},
+        "events": {
+            "events": events,
+            "total": len(events),
+            "generation_id": "generation-1",
+            "branch_mode": "head",
+            "next_cursor": None,
+            "has_more": False,
+        },
+        "diagnostic": {"session_id": "session-1", "served_path": "canonical_session_detail"},
+    }
+
+
+def _converge(monkeypatch, events: list[dict[str, object]], *, reads: list[int] | None = None, **kwargs: object) -> dict[str, object]:
+    """Converge on a fixed served page. ``reads`` counts the Runtime Host reads:
+    one read means the verdict came from the first complete page, with no polling."""
+
+    def snapshot(*_args: object) -> dict[str, object]:
+        if reads is not None:
+            reads.append(1)
+        return _served_events_snapshot(events)
+
+    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_snapshot", snapshot)
+    arguments = {
+        "session_id": "session-1",
+        "native_session_id": "native-1",
+        "marker": _REPLY_MARKER,
+        "flush": {"status": "pass"},
+        "native_source_path": "/native/session.jsonl",
+        "native_reply_id": "reply",
+        "timeout": 30,
+        **kwargs,
+    }
+    return _runtime_convergence("https://runtime.example", "token", **arguments)
+
+
+def test_omp_runtime_convergence_counts_the_answer_not_the_narration_that_quotes_it(monkeypatch) -> None:
+    events = [
+        {"id": "prompt", "role": "user", "content_text": f"Reply with exactly {_REPLY_MARKER} and no other text."},
+        # The engine serves a row's text block and its tool call as two events.
+        {"id": "narration", "role": "assistant", "content_text": _NARRATION},
+        {"id": "narration-tool-call-1", "role": "assistant", "tool_name": "job", "content_text": _REPLY_MARKER},
+        {"id": "streaming", "role": "assistant", "event_origin": "live_provisional", "content_text": _REPLY_MARKER},
+        {"id": "reply", "role": "assistant", "content_text": _FINAL_REPLY},
+    ]
+
+    reads: list[int] = []
+    convergence = _converge(monkeypatch, events, reads=reads)
+
+    assert convergence["status"] == "pass"
+    projection = convergence["served_projection"]
+    assert projection["marker_event_id"] == "reply"
+    assert [event["id"] for event in projection["marker_events"]] == ["reply"]
+    assert [event["id"] for event in projection["marker_mention_events"]] == ["narration"]
+    assert reads == [1]
+
+
+def test_omp_runtime_convergence_fails_at_once_when_the_marker_is_answered_twice(monkeypatch) -> None:
+    events = [
+        {"id": "narration", "role": "assistant", "content_text": _NARRATION},
+        {"id": "reply", "role": "assistant", "content_text": _FINAL_REPLY},
+        {"id": "again", "role": "assistant", "content_text": _REPLY_MARKER},
+    ]
+
+    reads: list[int] = []
+    with pytest.raises(MarkerAnswerCountError) as raised:
+        _converge(monkeypatch, events, reads=reads)
+
+    error = raised.value
+    assert reads == [1]
+    assert error.reason == "marker_answered_more_than_once"
+    assert str(error).startswith("marker_answered_more_than_once: ")
+    assert "has 2 answering served assistant event(s), expected exactly 1" in str(error)
+    assert error.answer_event_ids == ["reply", "again"]
+    assert error.mention_event_ids == ["narration"]
+    # The message is structure only: a classifier must not read the model's words.
+    assert "INFERENCE" not in str(error) and "timed out" not in str(error)
+    # What the Runtime Host served stays with the error.
+    served = error.evidence()["observation"]["served_projection"]
+    assert [event["id"] for event in served["marker_events"]] == ["reply", "again"]
+    assert served["events_page"]["complete"] is True
+
+
+def test_omp_runtime_convergence_fails_at_once_when_the_served_reply_row_does_not_answer(monkeypatch) -> None:
+    # The page is complete and already carries the native row that answered, yet
+    # nothing on it answers: more waiting cannot change what was served.
+    events = [
+        {"id": "narration", "role": "assistant", "content_text": _NARRATION},
+        {"id": "reply", "role": "assistant", "content_text": f"All done, so I can now send {_REPLY_MARKER} as asked."},
+    ]
+
+    reads: list[int] = []
+    with pytest.raises(MarkerAnswerCountError) as raised:
+        _converge(monkeypatch, events, reads=reads)
+
+    assert reads == [1]
+    assert raised.value.reason == "marker_reply_served_without_answer"
+    assert raised.value.answer_event_ids == []
+    assert raised.value.mention_event_ids == ["narration", "reply"]
+
+
+@pytest.mark.parametrize(
+    ("events", "mentions"),
+    [
+        # Marker only in narration: the reply row has not been ingested yet.
+        ([{"id": "narration", "role": "assistant", "content_text": _NARRATION}], 1),
+        # Marker never answered and never mentioned.
+        ([{"id": "other", "role": "assistant", "content_text": "Waiting for the worker."}], 0),
+    ],
+)
+def test_omp_runtime_convergence_keeps_waiting_while_the_reply_row_is_not_served(monkeypatch, events, mentions) -> None:
+    reads: list[int] = []
+    with pytest.raises(RuntimeConvergenceTimeout, match="timed out waiting for Runtime Host convergence for OMP marker") as raised:
+        _converge(monkeypatch, events, reads=reads, timeout=0.5)
+
+    # It polled, and the deadline reports the last read instead of None.
+    assert len(reads) > 1
+    assert "'answer_event_count': 0" in str(raised.value)
+    assert f"'mention_event_count': {mentions}" in str(raised.value)
+    assert "'native_reply_served': False" in str(raised.value)
+    assert raised.value.observation["served_projection"]["events_page"]["complete"] is True
+
+
+def test_omp_runtime_convergence_reads_a_reply_asked_to_carry_the_recalled_phrase(monkeypatch) -> None:
+    resume, phrase = "OMP_HELM_RESUME_0123456789abcdef", "OMP_HELM_CONTEXT_fedcba9876543210"
+    events = [{"id": "reply", "role": "assistant", "content_text": f"{phrase} {resume}"}]
+
+    convergence = _converge(monkeypatch, events, marker=resume, alongside=(phrase,))
+    assert convergence["served_projection"]["marker_event_id"] == "reply"
+
+    # Without being told the reply carries both, the line is not an answer.
+    with pytest.raises(MarkerAnswerCountError) as raised:
+        _converge(monkeypatch, events, marker=resume)
+    assert raised.value.reason == "marker_reply_served_without_answer"
+
+
+def _native_message(row_id: str, text: str, *, stop: str, tool_call: bool = False) -> str:
+    content: list[dict[str, object]] = [{"type": "text", "text": text}]
+    if tool_call:
+        content.append({"type": "toolCall", "id": "call-1", "name": "job", "arguments": {"list": True}})
+    return json.dumps({"type": "message", "id": row_id, "message": {"role": "assistant", "stopReason": stop, "content": content}})
+
+
+def test_omp_wait_native_marker_returns_the_answer_row_not_the_narration(monkeypatch, tmp_path) -> None:
+    session_file = tmp_path / "session.jsonl"
+    narration = _native_message("narration", _NARRATION, stop="toolUse", tool_call=True)
+    session_file.write_text(narration + "\n", encoding="utf-8")
+    monkeypatch.setattr(omp_helm_lifecycle, "_wait", lambda observe, **_kwargs: observe())
+
+    # Marker only in narration: the turn has not answered yet.
+    assert _wait_native_marker(session_file, _REPLY_MARKER) is None
+
+    session_file.write_text(narration + "\n" + _native_message("reply", _FINAL_REPLY, stop="stop") + "\n", encoding="utf-8")
+    assert _wait_native_marker(session_file, _REPLY_MARKER)["id"] == "reply"
+
+
+def test_omp_wait_native_marker_timeout_says_what_the_transcript_held(tmp_path) -> None:
+    session_file = tmp_path / "session.jsonl"
+    session_file.write_text(_native_message("narration", _NARRATION, stop="toolUse", tool_call=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError) as raised:
+        _wait_native_marker(session_file, _REPLY_MARKER, timeout=0.3)
+
+    message = str(raised.value)
+    assert message.startswith(f"timed out waiting for OMP native marker {_REPLY_MARKER}: ")
+    assert "'assistant_rows': 1" in message
+    assert "'rows_mentioning_marker': 1" in message
+    assert "'last_stop_reason': 'toolUse'" in message
+
+
+def test_omp_wait_native_marker_reads_text_blocks_as_lines_and_recall_by_presence(monkeypatch, tmp_path) -> None:
+    resume, phrase = "OMP_HELM_RESUME_0123456789abcdef", "OMP_HELM_CONTEXT_fedcba9876543210"
+    session_file = tmp_path / "session.jsonl"
+    row = {
+        "type": "message",
+        "id": "reply",
+        "message": {
+            "role": "assistant",
+            "stopReason": "stop",
+            # Two text blocks: the marker ends up on its own line.
+            "content": [{"type": "text", "text": f"The phrase I was given is {phrase}."}, {"type": "text", "text": resume}],
+        },
+    }
+    session_file.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    monkeypatch.setattr(omp_helm_lifecycle, "_wait", lambda observe, **_kwargs: observe())
+
+    assert _wait_native_marker(session_file, resume, alongside=(phrase,))["id"] == "reply"
+    # A recalled phrase may sit in a sentence; an answer may not.
+    assert _wait_native_marker(session_file, phrase, recalled=True)["id"] == "reply"
+    assert _wait_native_marker(session_file, phrase) is None
 
 
 def test_omp_manifest_stability_detects_post_manifest_mutation(tmp_path) -> None:

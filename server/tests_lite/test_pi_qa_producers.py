@@ -82,6 +82,134 @@ def test_helm_auth_failure_is_not_hidden_as_a_convergence_timeout(monkeypatch) -
     assert error.value.status == 403
 
 
+_PI_MARKER = "PI_HELM_SEND_0123456789abcdef"
+# A turn that works through tools narrates before it answers: the narration names
+# the marker inside a sentence, the final reply puts it alone on its last line.
+_PI_NARRATION = f"The read has not returned yet, so I may not reply with `{_PI_MARKER}`.\n\n- read: running"
+_PI_FINAL_REPLY = f"The read returned.\n\n{_PI_MARKER}"
+
+
+def _pi_snapshot(events: list[dict[str, object]]) -> dict[str, object]:
+    actions = {"send_input": {"state": "available"}, "terminate": {"state": "available"}}
+    return {
+        "detail": {"id": "session-1", "provider": "pi", "provider_session_id": "native-1"},
+        "thread": {"root_session_id": "session-1", "head_session_id": "session-1", "sessions": [{"id": "session-1"}]},
+        "events": {"events": events, "has_more": False},
+        "diagnostic": {"served_path": "canonical_session_detail", "shadow": {"control": {"actions": actions}}},
+    }
+
+
+def _pi_converge(monkeypatch, events: list[dict[str, object]], *, reads: list[int] | None = None, **kwargs: object):
+    from zerg.qa import pi_helm_lifecycle as helm
+
+    def snapshot(*_args: object) -> dict[str, object]:
+        if reads is not None:
+            reads.append(1)
+        return _pi_snapshot(events)
+
+    monkeypatch.setattr(helm, "_runtime_snapshot", snapshot)
+    arguments = {"reply_event_id": "reply", "timeout": 30, **kwargs}
+    marker = str(arguments.pop("marker", _PI_MARKER))
+    return helm._wait_runtime_convergence("https://runtime.invalid", "fixture", "session-1", "native-1", marker, **arguments)
+
+
+def test_pi_runtime_convergence_counts_the_answer_not_the_narration_that_quotes_it(monkeypatch) -> None:
+    events = [
+        {"id": "prompt", "role": "user", "content_text": f"Reply with exactly {_PI_MARKER} and no other text."},
+        {"id": "narration", "role": "assistant", "content_text": _PI_NARRATION},
+        {"id": "narration-tool-call-1", "role": "assistant", "tool_name": "read", "content_text": _PI_MARKER},
+        {"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY},
+    ]
+    reads: list[int] = []
+
+    runtime = _pi_converge(monkeypatch, events, reads=reads)
+
+    assert [event["id"] for event in runtime["assistant_events"]] == ["reply"]
+    assert reads == [1]
+
+
+def test_pi_runtime_convergence_fails_at_once_on_a_wrong_number_of_answers(monkeypatch) -> None:
+    from zerg.qa import pi_helm_lifecycle as helm
+
+    twice = [
+        {"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY},
+        {"id": "again", "role": "assistant", "content_text": _PI_MARKER},
+    ]
+    reads: list[int] = []
+    with pytest.raises(helm._RuntimeConvergenceError) as raised:
+        _pi_converge(monkeypatch, twice, reads=reads)
+    assert reads == [1]
+    assert raised.value.cause_type == "MarkerAnswerCountError"
+    assert "marker_answered_more_than_once: " in str(raised.value)
+    assert "has 2 answering served assistant event(s)" in str(raised.value)
+    assert "timed out" not in str(raised.value)
+    assert raised.value.last_runtime_observation["assistant_marker_event_ids"] == ["reply", "again"]
+
+    # The page carries the native reply row, and it does not answer.
+    served_without_answer = [{"id": "reply", "role": "assistant", "content_text": _PI_NARRATION}]
+    reads.clear()
+    with pytest.raises(helm._RuntimeConvergenceError) as raised:
+        _pi_converge(monkeypatch, served_without_answer, reads=reads)
+    assert reads == [1]
+    assert "marker_reply_served_without_answer: " in str(raised.value)
+    assert raised.value.last_runtime_observation["assistant_marker_mention_count"] == 1
+
+
+def test_pi_runtime_convergence_keeps_waiting_until_the_reply_row_is_served(monkeypatch) -> None:
+    from zerg.qa import pi_helm_lifecycle as helm
+
+    only_narration = [{"id": "narration", "role": "assistant", "content_text": _PI_NARRATION}]
+    reads: list[int] = []
+    with pytest.raises(helm._RuntimeConvergenceError) as raised:
+        _pi_converge(monkeypatch, only_narration, reads=reads, timeout=0.5)
+
+    assert len(reads) > 1
+    assert "timed out waiting for Runtime Host convergence for Pi marker" in str(raised.value)
+    # The deadline reports the last read, not None.
+    assert "'assistant_marker_count': 0" in str(raised.value)
+    assert "'assistant_marker_mention_count': 1" in str(raised.value)
+
+
+def test_pi_runtime_convergence_reads_a_recalled_phrase_by_presence(monkeypatch) -> None:
+    resume, phrase = "PI_HELM_RESUME_0123456789abcdef", "PI_HELM_CONTEXT_fedcba9876543210"
+    events = [{"id": "reply", "role": "assistant", "content_text": f"The context phrase I was asked to remember is: {phrase}\n\n{resume}"}]
+
+    # The marker is the answer; it may share a line with the phrase.
+    assert _pi_converge(monkeypatch, events, marker=resume, alongside=(phrase,))["alongside"] == [phrase]
+    # The phrase is a recall, which a model may put in a sentence.
+    assert _pi_converge(monkeypatch, events, marker=phrase, recalled=True)["recalled"] is True
+
+
+def _pi_native_row(entry_id: str, text: str, *, stop: str, parent: str | None, tool_call: bool = False) -> str:
+    content: list[dict[str, object]] = [{"type": "text", "text": text}]
+    if tool_call:
+        content.append({"type": "toolCall", "id": "call-1", "name": "read", "arguments": {"path": "a.txt"}})
+    message = {"role": "assistant", "stopReason": stop, "content": content, "model": "fixture"}
+    return json.dumps({"type": "message", "id": entry_id, "parentId": parent, "timestamp": "2026-01-01T00:00:01Z", "message": message})
+
+
+def test_pi_wait_native_marker_returns_on_the_answer_and_counts_the_narration_apart(monkeypatch, tmp_path) -> None:
+    from zerg.qa import pi_helm_lifecycle as helm
+
+    session_file = tmp_path / "session.jsonl"
+    header = json.dumps({"type": "session", "id": "native-1", "version": 3, "cwd": "/workspace"})
+    narration = _pi_native_row("narration", _PI_NARRATION, stop="toolUse", parent=None, tool_call=True)
+    session_file.write_text(f"{header}\n{narration}\n", encoding="utf-8")
+    monkeypatch.setattr(helm, "_wait", lambda predicate, **_kwargs: predicate())
+
+    # Marker only in narration: the turn has not answered yet.
+    assert helm._wait_native_marker(session_file, _PI_MARKER) is None
+
+    reply = _pi_native_row("reply", _PI_FINAL_REPLY, stop="stop", parent="narration")
+    session_file.write_text(f"{header}\n{narration}\n{reply}\n", encoding="utf-8")
+    native = helm._wait_native_marker(session_file, _PI_MARKER)
+
+    assert native["assistant_answer_rows"] == 1
+    assert native["assistant_reply_entry_id"] == "reply"
+    # Rows that name the marker, which the factory recounts from the retained bytes.
+    assert native["assistant_marker_rows"] == 2
+
+
 def test_pi_console_main_failure_retains_partial_artifact_manifest(monkeypatch, tmp_path, capsys) -> None:
     def fail(args):
         args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -356,7 +484,7 @@ def test_pi_console_contract_revision_advances_with_native_receipt() -> None:
     registration = PI_CONSOLE_REGISTRATION.to_dict()
 
     assert registration["producer_revision"] == 5
-    assert registration["scenario_revision"] == 5
+    assert registration["scenario_revision"] == 6
     assert "native_tool_receipt" in registration["required_artifacts"]
 
 
@@ -559,7 +687,7 @@ def test_pi_helm_steer_oracle_requires_active_state_before_native_control() -> N
         "control_receipts": {
             "steer": {
                 "accepted": True,
-                "native": {"assistant_marker_rows": 1},
+                "native": {"assistant_marker_rows": 1, "assistant_answer_rows": 1},
                 "runtime": {
                     "active_turn_observed": False,
                     "active_state": {"phase": "idle"},
@@ -664,6 +792,7 @@ def test_pi_helm_cold_resume_oracle_requires_remembered_context_evidence() -> No
                 "post_resume_native": {
                     "marker": "PI_HELM_CONTEXT_fixture",
                     "assistant_marker_rows": 1,
+                    "assistant_answer_rows": 1,
                     "user_marker_rows": 0,
                     "user_marker_occurrences": 0,
                 },
