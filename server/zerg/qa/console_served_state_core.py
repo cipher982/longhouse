@@ -346,6 +346,9 @@ def assistant_marker_mentions(
 # (`_SERVED_IDS_NOT_NATIVE`), where a count is all there is.
 MARKER_ANSWERED_MORE_THAN_ONCE = "marker_answered_more_than_once"
 MARKER_REPLY_SERVED_WITHOUT_ANSWER = "marker_reply_served_without_answer"
+# One served reply of a turn that asked for its marker once says it more than
+# once. Not a count of replies: there is one, and it is not the one asked for.
+MARKER_REPEATED_IN_ONE_REPLY = "marker_repeated_in_one_reply"
 # The Runtime Host serves an answer the provider's own transcript does not
 # hold, or serves one of its answers more often than the provider wrote it.
 SERVED_ANSWER_WITHOUT_NATIVE_ROW = "served_answer_without_native_row"

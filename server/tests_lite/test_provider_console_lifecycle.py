@@ -595,7 +595,8 @@ def test_archive_convergence_rejects_duplicate_markers_within_one_reply(monkeypa
         lambda *_args: {"events": [{"id": "reply", "role": "assistant", "content_text": f"{marker} {marker}"}]},
     )
 
-    with pytest.raises(RuntimeError, match="exactly one occurrence"):
+    # Typed, and raised on sight: nothing served later makes this reply say its marker once.
+    with pytest.raises(MarkerAnswerCountError, match="^marker_repeated_in_one_reply: .*expected each to say its marker once"):
         lifecycle._wait_served_answers("https://runtime.example", "token", "session-1", marker)
 
 
@@ -680,13 +681,16 @@ def test_a_reply_not_served_yet_is_lag_and_the_expired_wait_says_what_the_provid
     marker = "LH_CLAUDE_CONSOLE_abc"
     _served(monkeypatch, [{"id": "prompt", "role": "user", "content_text": f"Reply with exactly {marker}."}])
 
-    with pytest.raises(RuntimeError, match=r"count=0, .*native answering rows=\{'reply': 1\}, not yet served=\['reply'\]") as raised:
-        _wait(marker, {"reply": 1}, timeout=0.6, provider_answered=lambda: True)
-    assert not isinstance(raised.value, MarkerAnswerCountError)
+    # The wait that gives up hands its last count to the caller's read of the provider's stream.
+    with pytest.raises(
+        RuntimeError, match=r"^from the stream \(count=0, .*native answering rows=\{'reply': 1\}, not yet served=\['reply'\]"
+    ):
+        _wait(marker, {"reply": 1}, timeout=0.6, unanswered=lambda served: RuntimeError(f"from the stream ({served})"))
 
-    # The provider's record could not be read as rows: nothing is refused and nothing converges.
+    # The provider's record could not be read as rows: nothing is refused, nothing
+    # converges, and the stream is not asked about a reply that was served.
     _served(monkeypatch, [{"id": "reply", "role": "assistant", "content_text": marker}])
-    with pytest.raises(RuntimeError, match=r"count=1, .*native record unreadable"):
+    with pytest.raises(lifecycle.ConsoleTurnFailure, match=r"^provider_reply_not_judged: .*count=1, .*native record unreadable"):
         lifecycle._wait_served_answers(
             "https://runtime.example", "token", "session-1", marker, native_answers=lambda: (None, "unreadable"), timeout=0.6
         )
@@ -1706,3 +1710,101 @@ def test_a_turn_that_had_to_complete_fails_at_once_on_the_engines_claim(tmp_path
     ):
         lifecycle._require_run_completed("omp", {"state": "failed", "error": "spawn failed"}, turn="first", marker=_ASKED)
     lifecycle._require_run_completed("omp", _turn_claim(tmp_path, "omp", _ask(), []), turn="first", marker=_ASKED)
+
+
+_CONTEXT = "LH_OMP_CONTEXT_" + "c" * 32
+
+
+def _session_record(tmp_path: Path, resumed_parent: str | None) -> str:
+    """A Pi or OMP session file: a turn that stores the context, then the continuation prompt under ``resumed_parent``."""
+
+    entries = [
+        ("u1", None, "user", f"Store the exact value {_CONTEXT!r}."),
+        ("a1", "u1", "assistant", "Stored."),
+        ("u2", resumed_parent, "user", _ask()),
+    ]
+    path = tmp_path / "session.jsonl"
+    path.write_text(
+        "".join(
+            json.dumps({"type": "message", "id": i, "parentId": parent, "message": {"role": r, "content": t}}) + "\n"
+            for i, parent, r, t in entries
+        ),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+# What the provider wrote for a turn the engine completed, and what an unserved reply to it is therefore called.
+_UNANSWERED = {
+    # The model sent something else, and Longhouse's part is shown: the model's deviation, by what the reply carried.
+    "another marker": (dict(replies=[_EARLIER]), "ModelDeviation", "reply_carried_another_marker", None),
+    "no marker": (dict(replies=["I would rather not."]), "ModelDeviation", "reply_carried_no_marker", None),
+    "marker with other text": (
+        dict(replies=[f"Sure: {_ASKED}. Anything else?"]),
+        "ModelDeviation",
+        "reply_named_marker_with_other_text",
+        None,
+    ),
+    "context held": (dict(replies=["No value was stored."], resumed_parent="a1"), "ModelDeviation", "reply_carried_no_marker", None),
+    # The provider answered and Longhouse never served it.
+    "answered": (dict(replies=[_ASKED]), "ConsoleTurnFailure", "provider_reply_not_served", "longhouse_ingest"),
+    # The provider's own stream holds no end of turn.
+    "turn open": (dict(replies=["Working."], ended=False), "ConsoleTurnFailure", "provider_turn_not_ended", "provider_turn"),
+    # The resumed process started a chain of its own: the context was never loaded. A finding, never a deviation.
+    "context missing": (
+        dict(replies=["No value was stored."], resumed_parent=None),
+        "ConsoleTurnFailure",
+        "console_resume_context_missing",
+        None,
+    ),
+    # Whose doing it is cannot be read.
+    "other prompt": (dict(prompt=_ask(_EARLIER), replies=[_EARLIER]), "ConsoleTurnFailure", "provider_reply_not_judged", None),
+    "no reply": (dict(replies=[]), "ConsoleTurnFailure", "provider_reply_not_judged", None),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_UNANSWERED))
+def test_an_unserved_reply_is_named_from_what_the_provider_itself_wrote(tmp_path, case):
+    from zerg.qa.model_compliance import failure_claim
+    from zerg.qa.wait_kind import waited_on
+
+    turn, kind, reason, declared = _UNANSWERED[case]
+    claim = _turn_claim(tmp_path, "omp", turn.get("prompt", _ask()), turn["replies"], ended=turn.get("ended", True))
+    context = {}
+    if "resumed_parent" in turn:
+        claim["source_path"] = _session_record(tmp_path, turn["resumed_parent"])
+        context = {"context_marker": _CONTEXT}
+
+    error = lifecycle._unanswered_turn_error("omp", claim, _ASKED, turn="resume", served="count=0", **context)
+
+    assert (type(error).__name__, error.reason, waited_on(error)) == (kind, reason, declared)
+    assert str(error).startswith(f"{reason}: ") and str(error).endswith(" (served: count=0)")
+    # Marker names only: no marker's random part and none of the model's words.
+    assert "a" * 32 not in str(error) and "b" * 32 not in str(error) and "rather not" not in str(error)
+    held = failure_claim(error).get("model_noncompliance", {}).get("contract_evidence")
+    if kind != "ModelDeviation":
+        assert held is None
+    else:
+        proven = {"run_completed", "provider_turn_ended", "provider_replied", "prompt_named_marker"}
+        assert set(held) == proven | ({"resumed_session_holds_context"} if "resumed_parent" in turn else set())
+
+
+def test_a_stream_that_echoes_no_prompt_or_cannot_be_read_claims_only_what_it_shows(tmp_path):
+    from zerg.qa.model_compliance import failure_claim
+
+    # OpenCode echoes no prompt: the deviation is claimed on what is shown, and the prompt is not among it.
+    opencode = lifecycle._unanswered_turn_error("opencode", _turn_claim(tmp_path, "opencode", _ask(), [_EARLIER]), _ASKED, turn="resume")
+    assert set(failure_claim(opencode)["model_noncompliance"]["contract_evidence"]) == {
+        "run_completed",
+        "provider_turn_ended",
+        "provider_replied",
+    }
+    assert "carries LH_OMP_INTERRUPT and not the LH_OMP_POST_INTERRUPT it was asked for" in str(opencode)
+    # No stream, or a session record without the continuation prompt: nothing is said about the model.
+    absent = {"state": "terminal", "result": {"terminal_state": "run_completed"}, "stdout_path": str(tmp_path / "absent")}
+    assert lifecycle._unanswered_turn_error("omp", absent, _ASKED, turn="resume").reason == "provider_reply_not_judged"
+    unrecorded = _turn_claim(tmp_path, "omp", _ask(), ["No value was stored."])
+    assert (
+        lifecycle._unanswered_turn_error("omp", unrecorded, _ASKED, turn="resume", context_marker=_CONTEXT).reason
+        == "provider_reply_not_judged"
+    )

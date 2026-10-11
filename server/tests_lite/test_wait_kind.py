@@ -448,23 +448,6 @@ def test_a_console_claim_wait_reads_the_claim_to_say_what_it_waited_on(tmp_path)
     assert waited_on(claim_wait()) == LONGHOUSE_ENGINE
 
 
-def test_a_console_reply_never_served_is_ingest_only_when_the_provider_wrote_it(monkeypatch) -> None:
-    monkeypatch.setattr(provider_console_lifecycle, "_request", lambda *_args: {"events": []})
-
-    def served_wait(provider_answered) -> BaseException:
-        with pytest.raises(RuntimeError, match=r"assistant marker did not converge exactly once \(count=0") as raised:
-            provider_console_lifecycle._wait_served_answers(
-                "https://runtime.invalid", "token", "session-1", MARKER, timeout=0.6, provider_answered=provider_answered
-            )
-        return raised.value
-
-    # The provider's output holds the marker; Longhouse never served it.
-    assert waited_on(served_wait(lambda: True)) == LONGHOUSE_INGEST
-    # The provider's turn ended without the marker: there was nothing to serve.
-    assert waited_on(served_wait(lambda: False)) is None
-    assert waited_on(served_wait(None)) is None
-
-
 def test_the_console_turn_terminal_wait_is_on_the_runtime_host(monkeypatch) -> None:
     monkeypatch.setattr(provider_console_lifecycle, "_request", lambda *_args: {"turn_id": "turn-1", "run_id": "run-1", "state": "active"})
     with pytest.raises(RuntimeError, match="Runtime Host never observed Console turn terminal") as raised:

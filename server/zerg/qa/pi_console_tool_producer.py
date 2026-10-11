@@ -12,6 +12,7 @@ from pathlib import Path
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
+from zerg.qa.model_compliance import failure_claim
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
@@ -39,7 +40,7 @@ REGISTRATION = ProducerRegistration(
     # 5: the shared lifecycle adds a mid-turn steer step (its own cell).
     # 7: the native reply is the row that answers with the marker, not every
     # row that names it.
-    scenario_revision=13,
+    scenario_revision=14,
     assertion_cells=((ASSERTION_ID, None), (lifecycle.STEER_ASSERTION_ID, None)),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -223,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
                 "failure_code": "pi_console_tool_lifecycle_failed",
                 "error": f"{type(exc).__name__}: {exc}",
                 **failure_fields(exc),
+                **failure_claim(exc),
             }
             args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
             result["artifact_manifest"] = artifact_manifest(args.evidence_root)

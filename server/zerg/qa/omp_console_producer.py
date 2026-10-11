@@ -15,6 +15,7 @@ from typing import Any
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
+from zerg.qa.model_compliance import failure_claim
 from zerg.qa.provider_event_digest import raw_event_digest
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_release_identity import artifact_manifest
@@ -37,7 +38,7 @@ REGISTRATION = ProducerRegistration(
     # 9: the shared lifecycle adds a mid-turn steer step (its own cell).
     # 11: the native reply is the row that answers with the marker, not every
     # row that names it; the oracle reads `native_reply_count`.
-    scenario_revision=17,
+    scenario_revision=18,
     assertion_cells=((ASSERTION_ID, None), (lifecycle.STEER_ASSERTION_ID, None)),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -820,6 +821,7 @@ def main(argv: list[str] | None = None) -> int:
                 "failure_code": "omp_console_lifecycle_failed",
                 "error": f"{type(exc).__name__}: {exc}",
                 **failure_fields(exc),
+                **failure_claim(exc),
             }
             args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
             result["artifact_manifest"] = artifact_manifest(args.evidence_root)

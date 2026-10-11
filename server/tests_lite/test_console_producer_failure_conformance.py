@@ -333,6 +333,31 @@ def test_console_first_turn_that_never_answers_with_its_marker_is_a_producer_fai
     assert result["error"] == f"RuntimeError: first Console {provider} turn has no native assistant row that answers with its marker once"
 
 
+@pytest.mark.parametrize("producer", [provider_console_lifecycle, omp_console_producer, pi_console_tool_producer])
+def test_a_console_producer_stopped_by_the_models_reply_carries_the_claim_on_its_failure_artifact(monkeypatch, tmp_path, producer):
+    from zerg.qa.model_compliance import ModelDeviation
+
+    provider = {provider_console_lifecycle: "codex", omp_console_producer: "omp", pi_console_tool_producer: "pi"}[producer]
+    root = tmp_path / "evidence"
+    provider_bin, engine, cli = _late_provider_boundary(monkeypatch, provider_console_lifecycle, tmp_path, provider)
+    deviation = ModelDeviation(
+        "reply_carried_no_marker", "the resume turn completed without its marker", run_completed=True, provider_replied=True
+    )
+
+    def run_live(*_args, **_kwargs):
+        raise deviation
+
+    monkeypatch.setattr(provider_console_lifecycle, "_run_live", run_live)
+    args = _provider_args(root, provider_bin, engine, cli, provider)
+    if producer is not provider_console_lifecycle:
+        args = ["--variant", producer._VARIANT, *args[4:]]
+    assert producer.main(args) == 1
+    result = _json(root / "result.json")
+    assert result["error"] == "ModelDeviation: reply_carried_no_marker: the resume turn completed without its marker"
+    assert result["model_noncompliance"] == deviation.entry
+    assert "assertions" not in result and "observation" not in result and "waited_on" not in result
+
+
 def test_product_console_lifecycle_entrypoint_retains_prior_assertion_on_late_registry_failure(monkeypatch, tmp_path):
     root = tmp_path / "product"
     original_supports = product_console_lifecycle._ConsoleRegistry.supports

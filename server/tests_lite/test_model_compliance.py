@@ -55,3 +55,30 @@ def test_attach_refuses_a_hand_built_entry_that_breaks_the_contract() -> None:
         attach(observation, "assertion_a", {"reason": "tool_used", "contract_evidence": {}})
 
     assert "model_noncompliance" not in observation
+
+
+def test_a_producer_that_stops_on_the_models_reply_carries_its_claim_on_the_failure_artifact() -> None:
+    from zerg.qa.model_compliance import ModelDeviation
+    from zerg.qa.model_compliance import failure_claim
+
+    deviation = ModelDeviation(
+        "reply_carried_another_marker", "the turn completed and its reply carries another marker", run_completed=True, provider_replied=True
+    )
+
+    assert str(deviation) == "reply_carried_another_marker: the turn completed and its reply carries another marker"
+    claim = {
+        "model_noncompliance": {
+            "reason": "reply_carried_another_marker",
+            "contract_evidence": {"run_completed": True, "provider_replied": True},
+        }
+    }
+    assert failure_claim(deviation) == claim
+    # Raised from it explicitly, the claim travels; an unrelated error carries none.
+    try:
+        raise RuntimeError("producer stopped") from deviation
+    except RuntimeError as wrapped:
+        assert failure_claim(wrapped) == claim
+    assert failure_claim(RuntimeError("timed out")) == {} and failure_claim(None) == {}
+    # The same contract as an observation's entry: a deviation without a proven fact cannot be built.
+    with pytest.raises(ValueError):
+        ModelDeviation("reply_carried_another_marker", "no fact")

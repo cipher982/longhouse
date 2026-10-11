@@ -33,6 +33,7 @@ from zerg.qa.answer_markers import marker_answer_count
 from zerg.qa.answer_markers import marker_answered
 from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.console_served_state_core import MARKER_ANSWERED_MORE_THAN_ONCE
+from zerg.qa.console_served_state_core import MARKER_REPEATED_IN_ONE_REPLY
 from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_EMPTY
 from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_MID_WRITE
 from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_READ
@@ -53,6 +54,8 @@ from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import write_json
+from zerg.qa.model_compliance import ModelDeviation
+from zerg.qa.model_compliance import failure_claim
 from zerg.qa.openrouter_routing import prepare_pi_openrouter_routing
 from zerg.qa.pi_native import pi_transcript_rows
 from zerg.qa.provider_release_identity import artifact_manifest
@@ -65,6 +68,7 @@ from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
 from zerg.qa.wait_kind import failure_fields
+from zerg.qa.wait_kind import waited_on
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 PROVIDERS = ("codex", "claude", "opencode", "cursor")
@@ -146,7 +150,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=13,
+    scenario_revision=14,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -667,7 +671,7 @@ def _wait_served_answers(
     timeout: float = 180,
     native_answers: Callable[[], tuple[dict[str, int] | None, str]] | None = None,
     one_reply: bool = True,
-    provider_answered: Callable[[], bool] | None = None,
+    unanswered: Callable[[str], RuntimeError] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, object] | None]:
     """Wait until the archive serves what the provider answered ``marker`` with.
 
@@ -697,10 +701,12 @@ def _wait_served_answers(
     job's notice arrives, and both replies are its own.
 
     The provider's turn is over before this is called, so what it waits on is
-    Longhouse serving the reply. ``provider_answered`` reads the provider's own
-    output for the marker: when it is there and no served event ever answered,
-    the expired wait says it was waiting on ingest. When the provider never
-    wrote the marker there was nothing to serve, and nothing is declared.
+    Longhouse serving the reply. When the wait gives up, why is decided from
+    the provider's own stream for the turn and not from the count that never
+    came: ``unanswered`` takes the last served count and returns the failure
+    (`_unanswered_turn_error`). A served-answer fault still standing at the
+    deadline is reported as that fault. Only a caller with no turn to read,
+    which no live path is, gets the bare count.
     """
 
     deadline = time.monotonic() + timeout
@@ -758,9 +764,13 @@ def _wait_served_answers(
             if fault is not None:
                 raise fault
             converged = correspondence["converged"] is True
-        # One reply says its marker once; a reply that repeats it is not one.
-        if one_reply and any(event_text(event).count(marker) != 1 for event in matches):
-            raise RuntimeError("assistant marker did not converge to one event with exactly one occurrence")
+        # One reply says its marker once; a reply that repeats it is not one,
+        # and nothing served later changes what this one says.
+        repeated = [event for event in matches if event_text(event).count(marker) != 1] if one_reply else []
+        if repeated:
+            raise MarkerAnswerCountError(
+                MARKER_REPEATED_IN_ONE_REPLY, marker=marker, answers=repeated, mentions=mentions, expected="each to say its marker once"
+            )
         if converged:
             stable_since = stable_since or time.monotonic()
             if time.monotonic() - stable_since >= 2:
@@ -768,20 +778,54 @@ def _wait_served_answers(
         else:
             stable_since = None
         time.sleep(0.5)
-    account = ""
+    served = f"count={last_count}, events that only mention it={last_mentions}"
     if correspondence is not None:
-        account = (
+        served += (
             f", native answering rows={correspondence['native_answer_rows']}, "
             f"not yet served={correspondence['unserved_native_row_ids']}, "
             f"native record {correspondence['native_transcript_state']}"
         )
-    # A fault still on the page is why this never converged: say that.
-    error: RuntimeError = refusal.at_deadline() or RuntimeError(
-        f"assistant marker did not converge exactly once (count={last_count}, events that only mention it={last_mentions}{account})"
-    )
-    if last_count == 0 and provider_answered is not None and provider_answered():
-        raise expired(error, LONGHOUSE_INGEST)
+        if correspondence["native_transcript_readable"] is not True:
+            # The served page was held to nothing: that is not the provider's reply missing.
+            raise ConsoleTurnFailure(
+                PROVIDER_REPLY_NOT_JUDGED, f"the provider's own record of the turn could not be read as rows ({served})"
+            )
+    error = unanswered(served) if unanswered is not None else RuntimeError(f"assistant marker did not converge exactly once ({served})")
+    # A fault still on the page is why this never converged: say that, and
+    # that the wait was on ingest when the provider answered and nothing was served.
+    fault = refusal.at_deadline()
+    if fault is not None:
+        raise expired(fault, LONGHOUSE_INGEST) if last_count == 0 and waited_on(error) == LONGHOUSE_INGEST else fault
     raise error
+
+
+def _wait_turn_served(
+    api_url: str,
+    token: str,
+    session_id: str,
+    provider: str,
+    claim: Mapping[str, object],
+    marker: str,
+    *,
+    turn: str,
+    alongside: tuple[str, ...] = (),
+    context_marker: str | None = None,
+    **wait: Any,
+) -> tuple[list[dict[str, Any]], dict[str, object] | None]:
+    """`_wait_served_answers` for one Console turn: held to the rows its claim names, decided from its stream if it gives up."""
+
+    return _wait_served_answers(
+        api_url,
+        token,
+        session_id,
+        marker,
+        alongside=alongside,
+        native_answers=_claim_native_answers(provider, claim, marker, alongside=alongside),
+        unanswered=lambda served: _unanswered_turn_error(
+            provider, claim, marker, turn=turn, alongside=alongside, served=served, context_marker=context_marker
+        ),
+        **wait,
+    )
 
 
 def _bounded_marker_excerpt(value: str, marker: str, radius: int = 160) -> str:
@@ -873,18 +917,25 @@ def _claim_output_evidence(provider: str, claim: Mapping[str, object], marker: s
     return max(candidates, key=lambda item: int(item["provider_response_marker_count"])) if candidates else None
 
 
-def _provider_output_names(provider: str, claim: Mapping[str, object], marker: str) -> bool:
-    """Whether the provider's own output for this turn names ``marker``."""
-
-    evidence = _claim_output_evidence(provider, claim, marker)
-    return evidence is not None and int(evidence["provider_response_marker_count"]) >= 1
-
-
-# The typed reason a Console turn fails with when the engine ended a run that
-# had to complete as anything but ``run_completed``. It opens the failure's
-# message, as the reasons of `MarkerAnswerCountError` do, so the factory names
-# the failure from the producer's own word and never from wording.
+# The typed reasons a Console turn fails with before the producer can judge
+# anything. Each opens the failure's message, as the reasons of
+# `MarkerAnswerCountError` do, so the factory names the failure from the
+# producer's own word and never from wording.
+#
+# The engine ended a run that had to complete as anything but ``run_completed``.
 CONSOLE_RUN_NOT_COMPLETED = "console_run_not_completed"
+# The provider's own stream holds the reply that answers, the turn's flush
+# shipped what the engine had, and the archive never served the reply.
+PROVIDER_REPLY_NOT_SERVED = "provider_reply_not_served"
+# The engine completed the run and the provider's stream holds no end of turn.
+PROVIDER_TURN_NOT_ENDED = "provider_turn_not_ended"
+# The resumed provider's session record does not chain the continuation prompt
+# back to the message that stored the context it asks for.
+CONSOLE_RESUME_CONTEXT_MISSING = "console_resume_context_missing"
+# The turn has no answering reply and what would say whose doing that is
+# cannot be read: the stream, a prompt in it that names the marker, any reply
+# at all, or what a resumed session loaded. Nothing is said about the model.
+PROVIDER_REPLY_NOT_JUDGED = "provider_reply_not_judged"
 
 
 class ConsoleTurnFailure(RuntimeError):
@@ -1002,6 +1053,118 @@ def _require_run_completed(provider: str, claim: Mapping[str, object], *, turn: 
         f"the engine ended the {turn} turn as state={claim.get('state')} terminal_state={result.get('terminal_state')} "
         f"with error {str(result.get('error') or claim.get('error'))[:500]!r}; the provider's own stream for the turn {answered}",
     )
+
+
+def _resumed_session_holds_context(path: Path, *, prompt_marker: str, context_marker: str) -> bool | None:
+    """Whether a resumed Pi or OMP session chains its continuation prompt back to the stored context.
+
+    Both write each session entry with an ``id`` and the ``parentId`` it
+    follows, and build a turn's context by walking that chain. True when the
+    user entry that names ``prompt_marker`` has an ancestor that names
+    ``context_marker``; False when its chain ends without one, which is a
+    resumed process that did not load the earlier turn. None when the record
+    cannot be read, does not hold the prompt, or links no entry to another
+    (not the format this reads), so nothing is known.
+    """
+
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    entries: dict[str, tuple[object, str]] = {}
+    prompt: str | None = None
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, Mapping) or not isinstance(entry.get("id"), str):
+            continue
+        message = entry.get("message")
+        text = _native_message_text(message) if isinstance(message, Mapping) and message.get("role") == "user" else ""
+        entries[entry["id"]] = (entry.get("parentId"), text)
+        if prompt_marker in text:
+            prompt = entry["id"]
+    if prompt is None or not any(parent in entries for parent, _text in entries.values() if isinstance(parent, str)):
+        return None
+    parent = entries[prompt][0]
+    while isinstance(parent, str) and parent in entries:
+        parent, text = entries.pop(parent)
+        if context_marker in text:
+            return True
+    return False
+
+
+def _unanswered_turn_error(
+    provider: str,
+    claim: Mapping[str, object],
+    marker: str,
+    *,
+    turn: str,
+    alongside: tuple[str, ...] = (),
+    served: str = "",
+    context_marker: str | None = None,
+) -> RuntimeError:
+    """Why a turn the engine completed has no served answer to ``marker``, decided from the provider's own stream.
+
+    The served side has given up (``served`` is its last count) or was never
+    going to be asked. What the provider wrote for the turn says which of
+    these happened, and each has a different owner:
+
+    - The stream holds the reply that answers: Longhouse never served it
+      (``provider_reply_not_served``, a wait on ingest).
+    - The stream has no end of turn: the wait was on the provider's turn.
+    - The turn ended and its final reply does not answer. That is the model's
+      choice, a `ModelDeviation` whose reason says what the reply carried
+      instead, only when Longhouse's part is shown: the prompt the stream
+      echoes names the marker and, for a continuation that asks for stored
+      context (``context_marker``), the resumed session chains back to the
+      message that stored it. A resumed session without that chain is
+      ``console_resume_context_missing``, a finding and never a deviation.
+    - Anything that leaves it unknown is ``provider_reply_not_judged``.
+    """
+
+    account = _turn_account(provider, claim, marker, alongside=alongside)
+    name, tail = _marker_name(marker), f" (served: {served})" if served else ""
+    if account is None:
+        return ConsoleTurnFailure(PROVIDER_REPLY_NOT_JUDGED, f"the provider's stream for the {turn} turn could not be read{tail}")
+    where = f"the provider's {account['stream']} for the {turn} turn"
+    if account["answering_replies"]:
+        detail = (
+            f"{where} holds the reply that answers {name}, the turn's flush shipped what the engine had, and the archive did not serve it"
+        )
+        return expired(ConsoleTurnFailure(PROVIDER_REPLY_NOT_SERVED, detail + tail), LONGHOUSE_INGEST)
+    if not account["turn_ended"]:
+        detail = f"{where} holds no end of turn and no reply that answers {name}"
+        return expired(ConsoleTurnFailure(PROVIDER_TURN_NOT_ENDED, detail + tail), PROVIDER_TURN)
+    held = {"run_completed": True, "provider_turn_ended": True, "provider_replied": True}
+    unjudged: str | None = None
+    if account["prompt_named_marker"] is False:
+        unjudged = f"{where} echoes its prompts and none names {name}"
+    elif not account["assistant_replies"]:
+        unjudged = f"the provider completed the {turn} turn without producing an assistant reply"
+    elif account["prompt_named_marker"]:
+        held["prompt_named_marker"] = True
+    if unjudged is None and context_marker is not None:
+        record = Path(str(claim.get("source_path") or ""))
+        context = _resumed_session_holds_context(record, prompt_marker=marker, context_marker=context_marker)
+        if context is False:
+            detail = f"the resumed provider's session record does not chain the {turn} prompt back to the message that stored its context"
+            return ConsoleTurnFailure(CONSOLE_RESUME_CONTEXT_MISSING, detail + tail)
+        if context is None:
+            unjudged = f"the provider's session record does not show what the resumed {turn} turn loaded"
+        held["resumed_session_holds_context"] = True
+    if unjudged is not None:
+        return ConsoleTurnFailure(PROVIDER_REPLY_NOT_JUDGED, unjudged + tail)
+    others: list[str] = account["final_reply_other_markers"]  # type: ignore[assignment]
+    if account["final_reply_names_marker"]:
+        reason, carried = "reply_named_marker_with_other_text", f"names {name} with other text and does not answer with it"
+    elif others:
+        reason, carried = "reply_carried_another_marker", f"carries {', '.join(others)} and not the {name} it was asked for"
+    else:
+        reason, carried = "reply_carried_no_marker", f"carries no marker where {name} was asked for"
+    detail = f"the {turn} turn completed and its final reply {carried} ({account['assistant_replies']} assistant reply(ies) in {where}, none answers)"
+    return ModelDeviation(reason, detail + tail, **held)
 
 
 def _pi_tool_evidence(claim: Mapping[str, object], marker: str) -> dict[str, object] | None:
@@ -2486,15 +2649,8 @@ def _run_steer_step(
         # told to reply "when the command finishes", OMP's model answers once as
         # the steer lands and again when the background job's notice arrives.
         # What is held is that the served replies are the provider's own rows.
-        answers, answer_correspondence = _wait_served_answers(
-            api_url,
-            token,
-            session_id,
-            steer_marker,
-            timeout=120,
-            native_answers=_claim_native_answers(provider, terminal, steer_marker),
-            one_reply=False,
-            provider_answered=lambda: _provider_output_names(provider, terminal, steer_marker),
+        answers, answer_correspondence = _wait_turn_served(
+            api_url, token, session_id, provider, terminal, steer_marker, turn="steer", timeout=120, one_reply=False
         )
         receipt["steer_marker_answered"] = bool(answers)
         receipt["steer_answer_events"] = len(answers)
@@ -2897,16 +3053,9 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
         if provider_response_evidence is None:
             raise RuntimeError("stock provider output source was unavailable")
         if not isinstance(marker_count, int) or isinstance(marker_count, bool) or marker_count < 1:
-            raise RuntimeError("stock provider assistant output did not contain the qualification marker")
-        first_events, first_correspondence = _wait_served_answers(
-            api_url,
-            token,
-            session_id,
-            marker,
-            alongside=reply_alongside,
-            native_answers=_claim_native_answers(provider, first_claim, marker, alongside=reply_alongside),
-            # Checked just above: the provider's output holds the marker.
-            provider_answered=lambda: True,
+            raise _unanswered_turn_error(provider, first_claim, marker, turn="first", alongside=reply_alongside)
+        first_events, first_correspondence = _wait_turn_served(
+            api_url, token, session_id, provider, first_claim, marker, turn="first", alongside=reply_alongside
         )
         bound_assistant_event = {
             **first_events[0],
@@ -2971,14 +3120,18 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(resume["run_id"]),
             )
             flush_for_projection("console-resume-turn")
-            resume_events, resume_correspondence = _wait_served_answers(
+            resume_events, resume_correspondence = _wait_turn_served(
                 api_url,
                 token,
                 session_id,
+                provider,
+                resume_claim,
                 resume_marker,
+                turn="resume",
                 alongside=reply_alongside,
-                native_answers=_claim_native_answers(provider, resume_claim, resume_marker, alongside=reply_alongside),
-                provider_answered=lambda: _provider_output_names(provider, resume_claim, resume_marker),
+                # Pi's and OMP's continuation asks for a value an earlier turn stored, so a
+                # reply without it is the model's only when the resumed session held that turn.
+                context_marker=context_marker if provider in {"pi", "omp"} else None,
             )
             resume_native_response: dict[str, object] | None = None
             if provider in {"pi", "omp"}:
@@ -3171,13 +3324,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(post["run_id"]),
             )
             flush_for_projection("console-post-interrupt-turn")
-            post_events, _post_correspondence = _wait_served_answers(
-                api_url,
-                token,
-                session_id,
-                post_marker,
-                native_answers=_claim_native_answers(provider, post_claim, post_marker),
-                provider_answered=lambda: _provider_output_names(provider, post_claim, post_marker),
+            post_events, _post_correspondence = _wait_turn_served(
+                api_url, token, session_id, provider, post_claim, post_marker, turn="post-interrupt"
             )
             interrupt_receipt = {
                 "status": "pass" if interrupted.get("interrupt_dispatched") is True and cancelled and process_dead else "fail",
@@ -3280,15 +3428,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(interrupt_turn["run_id"]),
             )
             flush_for_projection("console-unsupported-interrupt-turn")
-            _wait_served_answers(
-                api_url,
-                token,
-                session_id,
-                interrupt_marker,
-                timeout=60,
-                native_answers=_claim_native_answers(provider, terminal, interrupt_marker),
-                provider_answered=lambda: _provider_output_names(provider, terminal, interrupt_marker),
-            )
+            _wait_turn_served(api_url, token, session_id, provider, terminal, interrupt_marker, turn="unsupported-interrupt", timeout=60)
             post_marker = f"LH_{provider.upper()}_AFTER_UNSUPPORTED_{uuid4().hex}"
             post_message = f"Reply with exactly {post_marker} and nothing else."
             post_request_id = f"console-after-unsupported-{uuid4()}"
@@ -3315,14 +3455,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 run_id=str(post["run_id"]),
             )
             flush_for_projection("console-after-unsupported-post-turn")
-            _wait_served_answers(
-                api_url,
-                token,
-                session_id,
-                post_marker,
-                native_answers=_claim_native_answers(provider, post_claim, post_marker),
-                provider_answered=lambda: _provider_output_names(provider, post_claim, post_marker),
-            )
+            _wait_turn_served(api_url, token, session_id, provider, post_claim, post_marker, turn="after-unsupported")
             interrupt_receipt = {
                 "status": "pass" if refused else "fail",
                 "expectation": "unsupported",
@@ -3630,6 +3763,7 @@ def _execute(args: argparse.Namespace, root: Path, steer: bool) -> dict[str, Any
             "failure_code": "provider_console_lifecycle_failed",
             "error": f"{type(exc).__name__}: {exc}",
             **failure_fields(exc),
+            **failure_claim(exc),
             "artifact_manifest": artifact_manifest(root),
         }
 
