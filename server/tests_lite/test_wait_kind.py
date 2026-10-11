@@ -526,3 +526,49 @@ def test_an_uncorrelated_hosted_transcript_says_which_side_stopped_for_each_prov
     monkeypatch.setattr(claude_helm_lifecycle, "_transcript_rows", unreadable)
     assert kind("claude", claude_state) is None
     assert kind("cursor", {"session_id": "s1"}) is None
+
+
+def test_a_cursor_correlation_failure_retains_where_the_reply_was_when_the_wait_gave_up(monkeypatch) -> None:
+    """The snapshots around the flush predate the hosted wait; this one is taken when it expires."""
+
+    captured: list[tuple[str, str]] = []
+
+    class _Shipper:
+        def capture_cursor_projection_diagnostics(self, state: dict, *, marker: str, label: str) -> str:
+            captured.append((marker, label))
+            return "unused"
+
+    monkeypatch.setattr(provider_native_resume, "_hosted_correlation_waited_on", lambda *_a, **_k: LONGHOUSE_INGEST)
+
+    def failure(provider: str, shipper: object | None) -> BaseException:
+        return provider_native_resume._uncorrelated(
+            f"provider transcript did not correlate post-resume {provider} marker {MARKER}",
+            provider_native_resume.SPECS[provider],
+            {"session_id": "s1"},
+            marker=MARKER,
+            home=None,
+            environment={},
+            shipper=shipper,
+            label="post-resume",
+        )
+
+    error = failure("cursor", _Shipper())
+    assert captured == [(MARKER, "post-resume-at-timeout")]
+    assert waited_on(error) == LONGHOUSE_INGEST and str(error).startswith("provider transcript did not correlate post-resume cursor")
+    # Only Cursor has a store to snapshot, and a run without a shipper has nothing to ask.
+    failure("claude", _Shipper())
+    failure("cursor", None)
+    assert len(captured) == 1
+
+
+def test_the_post_resume_receipt_says_what_the_providers_hooks_showed() -> None:
+    correlation = {"marker_observed_in_assistant": False, "new_assistant_events": 0, "timed_out": True}
+    hooks = {"hook_response_correlated": True, "generation_id": "g1"}
+
+    assert provider_native_resume._with_hook_sequence(correlation, hooks) == {**correlation, "hook_sequence": hooks}
+    # The hosted counts the verdict reads are untouched, and a provider without hooks adds nothing.
+    assert (
+        provider_native_resume._post_resume_response_correlated("cursor", provider_native_resume._with_hook_sequence(correlation, hooks))
+        is False
+    )
+    assert provider_native_resume._with_hook_sequence(correlation, None) == correlation

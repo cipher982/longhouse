@@ -95,7 +95,7 @@ def registration_for(provider: str) -> ProducerRegistration:
         producer_id=spec.producer_id,
         producer_revision=6 if provider == "cursor" else 5 if provider == "opencode" else 4,
         scenario_id="helm_cold_resume",
-        scenario_revision=6 if provider in {"cursor", "opencode"} else 5,
+        scenario_revision={"cursor": 7, "opencode": 6}.get(provider, 5),
         assertion_cells=(
             ("native_provider_resume_proven", "clean_exit"),
             ("native_provider_resume_proven", "process_loss"),
@@ -523,12 +523,36 @@ def _uncorrelated(
     marker: str,
     home: Path | None,
     environment: Mapping[str, str],
+    shipper: live_session_toolkit.TranscriptShipper | None = None,
+    label: str | None = None,
 ) -> RuntimeError:
-    """The "did not correlate" failure, marked with the side that stopped when that is known."""
+    """The "did not correlate" failure, marked with the side that stopped when that is known.
+
+    For Cursor it also retains where the reply was when the wait gave up: a
+    metadata-only snapshot of Cursor's own store and of the engine's capture
+    and delivery state (``cursor-projection-diagnostics-<label>-at-timeout``).
+    The snapshots taken around the flush predate the hosted wait, so until
+    this one a failure could say the reply had been in Cursor's store minutes
+    earlier, and nothing about the moment it was judged missing.
+    """
 
     error = RuntimeError(message)
+    if spec.provider == "cursor" and shipper is not None and label:
+        shipper.capture_cursor_projection_diagnostics(dict(state), marker=marker, label=f"{label}-at-timeout")
     kind = _hosted_correlation_waited_on(spec, state, marker=marker, home=home, environment=environment)
     return expired(error, kind) if kind else error
+
+
+def _with_hook_sequence(correlation: dict[str, Any], hook_sequence: Mapping[str, Any] | None) -> dict[str, Any]:
+    """A hosted-transcript correlation receipt that also says what the provider's own hooks showed.
+
+    The hosted transcript is the authority for the verdict. The hook result is
+    what tells a reply the provider never gave from one Longhouse never served,
+    and a receipt without it leaves that to a second file that a failure may
+    not have written.
+    """
+
+    return {**correlation, "hook_sequence": dict(hook_sequence)} if hook_sequence else correlation
 
 
 def _post_resume_response_correlated(provider: str, correlation: dict[str, Any]) -> bool:
@@ -1417,6 +1441,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 marker=seed_marker,
                 home=home,
                 environment=environment,
+                shipper=shipper,
+                label="initial",
             )
         # The correlated assistant response is the completed-turn oracle for
         # the initial marker. Cursor's hook may publish its next idle phase
@@ -1574,6 +1600,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                     marker=bootstrap_marker,
                     home=home,
                     environment=environment,
+                    shipper=shipper,
+                    label="resume-bootstrap",
                 )
             live_session_toolkit.write_json(root / "resume-bootstrap-transcript.jsonl", bootstrap_tail)
             # Cursor publishes its afterAgentResponse hook before the TUI has
@@ -1662,6 +1690,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 require_assistant_marker=True,
                 timeout=args.live_send_timeout_secs,
             )
+            response_correlation = _with_hook_sequence(response_correlation, post_resume_hook_sequence)
             if not _post_resume_response_correlated(provider, response_correlation):
                 live_session_toolkit.write_json(root / "post-resume-response-correlation.json", response_correlation)
                 raise _uncorrelated(
@@ -1671,6 +1700,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                     marker=post_marker,
                     home=home,
                     environment=environment,
+                    shipper=shipper,
+                    label="post-resume",
                 )
             if not hook_fallback:
                 shipper.capture_cursor_projection_diagnostics(
@@ -1703,6 +1734,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             require_assistant_marker=spec.provider != "claude",
             timeout=args.live_send_timeout_secs,
         )
+        if spec.provider == "cursor":
+            response_correlation = _with_hook_sequence(response_correlation, post_resume_hook_sequence)
         live_session_toolkit.write_json(root / "post-resume-response-correlation.json", response_correlation)
         post_resume_response_correlated = _post_resume_response_correlated(provider, response_correlation)
         post_resume_provider_activity = response_correlation["new_assistant_events"] > 0
@@ -1714,6 +1747,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 marker=post_marker,
                 home=home,
                 environment=environment,
+                shipper=shipper,
+                label="post-resume",
             )
         live_session_toolkit.write_json(root / "resumed-transcript.jsonl", resumed_tail)
         post_resume_marker_observed = response_correlation["marker_observed_in_assistant"]
