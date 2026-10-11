@@ -224,6 +224,8 @@ fn remove_expired_tombstone(path: &Path, now: DateTime<Utc>) {
     };
     if tombstone_expired(&state, now) {
         let _ = fs::remove_file(path);
+        // The owner-input queue (`claude_owner_input`) goes with its session.
+        let _ = fs::remove_dir_all(path.with_extension("owner-input"));
     }
 }
 
@@ -611,12 +613,17 @@ mod tests {
             Utc::now() - chrono::Duration::hours(25),
         );
 
+        let owner_input = tmp.path().join("session.owner-input");
+        fs::create_dir_all(owner_input.join("pending")).unwrap();
+        fs::write(owner_input.join("ledger.jsonl"), b"{}\n").unwrap();
+
         let observations = collect_observations_from_processes(tmp.path(), &HashMap::new());
 
         // Observed one last time (the run can still end), then collected.
         assert_eq!(observations.len(), 1);
         assert!(!observations[0].claude_alive);
         assert!(!path.exists());
+        assert!(!owner_input.exists());
     }
 
     #[test]

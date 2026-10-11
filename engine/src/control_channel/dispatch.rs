@@ -440,10 +440,17 @@ pub(super) async fn execute_command(
                     meta: Vec::new(),
                     state_root: None,
                     wait_timeout: None,
+                    input_id: durable_command_id.map(str::to_owned),
                 })
                 .await
                 .map_err(claude_channel_error_to_command_error)?;
-                return Ok(claude_channel_control_result(summary.provider_session_id));
+                let mut result = claude_channel_control_result(summary.provider_session_id);
+                if let Some(owner_input) = summary.owner_input {
+                    result["owner_input_path"] = json!(owner_input.path);
+                    result["owner_input_reason"] = json!(owner_input.reason);
+                    result["owner_input_turn_started"] = json!(owner_input.delivered);
+                }
+                return Ok(result);
             }
             if provider == "opencode" {
                 let summary = crate::opencode_control::send_text(&session_id, &text, &staged)
@@ -565,14 +572,17 @@ pub(super) async fn execute_command(
             let provider = payload_optional_string(&payload, "provider")
                 .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
             if provider == "claude" {
-                claude_channel_interrupt(ClaudeChannelInterruptConfig {
+                let summary = claude_channel_interrupt(ClaudeChannelInterruptConfig {
                     session_id,
                     state_root: None,
                     wait_timeout: None,
                 })
                 .await
                 .map_err(claude_channel_error_to_command_error)?;
-                return Ok(claude_channel_control_result(None));
+                let mut result = claude_channel_control_result(None);
+                result["abort_path"] = json!(summary.path);
+                result["tool_process_group"] = json!(summary.tool_process_group);
+                return Ok(result);
             }
             if provider == "opencode" {
                 let summary = crate::opencode_control::interrupt(&session_id)
@@ -798,6 +808,7 @@ pub(super) async fn execute_command(
                     meta: vec![("intent".to_string(), "steer".to_string())],
                     state_root: None,
                     wait_timeout: None,
+                    input_id: None,
                 })
                 .await
                 .map_err(claude_channel_error_to_command_error)?;
@@ -976,6 +987,7 @@ pub(super) async fn execute_command(
                     ],
                     state_root: None,
                     wait_timeout: None,
+                    input_id: None,
                 })
                 .await
                 .map_err(claude_channel_error_to_command_error)?;
@@ -1320,6 +1332,10 @@ pub(super) fn claude_channel_error_to_command_error(
             CommandError::command_failed(anyhow!(message))
         }
         ClaudeChannelControlError::TurnEnded(message) => CommandError::turn_ended(message),
+        ClaudeChannelControlError::Coded { code, message } => CommandError {
+            code: code.to_string(),
+            message,
+        },
     }
 }
 

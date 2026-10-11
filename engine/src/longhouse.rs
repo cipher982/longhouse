@@ -6,6 +6,11 @@
 
 #[path = "build_identity.rs"]
 mod build_identity;
+// Shared with longhouse-engine, which runs the queue; the launcher only decides
+// the route, so most of the module is unused here.
+#[allow(dead_code)]
+#[path = "claude_owner_input.rs"]
+mod claude_owner_input;
 #[path = "codex_config.rs"]
 mod codex_config;
 #[path = "import_scope.rs"]
@@ -1984,6 +1989,8 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         "--claude-bin",
     )?;
     ensure_claude_channel_prerequisite(&binary)?;
+    let mut owner_input_route =
+        decide_claude_owner_input_route(&binary, args.claude_dir.as_deref());
     let runtime = tokio::runtime::Runtime::new()?;
     let resume_target = args
         .resume
@@ -2191,6 +2198,33 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     if permission_mode == "bypass" {
         command.arg("--dangerously-skip-permissions");
     }
+    let engine_path = paired_engine_path()?.display().to_string();
+    if owner_input_route.uses_mod() {
+        match install_claude_mod() {
+            Ok(mod_dir) => {
+                command.arg("--plugin-dir").arg(mod_dir);
+            }
+            Err(error) => {
+                owner_input_route = claude_owner_input::OwnerInputRoute {
+                    path: claude_owner_input::PATH_CHANNEL.to_string(),
+                    reason: Some(format!("mod_install_failed: {error}")),
+                    ..owner_input_route
+                };
+            }
+        }
+    }
+    if let Err(error) = record_claude_owner_input_route(&session_id, &owner_input_route) {
+        eprintln!("Longhouse warning: could not record how owner input reaches Claude: {error}");
+    }
+    if let Some(reason) = owner_input_route
+        .reason
+        .as_deref()
+        .filter(|_| !owner_input_route.uses_mod())
+    {
+        eprintln!(
+            "Longhouse: messages you send this session from the Longhouse app arrive through its channel, which Claude Code labels as outside input ({reason})."
+        );
+    }
     if resume_target.is_some() {
         command.args(["--resume", &provider_session_id]);
     } else {
@@ -2225,6 +2259,9 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     if let Some(hook_token) = hook_token {
         identity_env.push(("LONGHOUSE_HOOK_TOKEN", hook_token));
     }
+    if owner_input_route.uses_mod() {
+        identity_env.push((claude_owner_input::ENGINE_ENV, &engine_path));
+    }
     ManagedIdentity::new(ManagedProvider::Claude, &session_id)
         .with_run_id(&run_id)
         .apply(&mut command, &identity_env);
@@ -2239,6 +2276,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         &binary,
         &provider_session_id,
         Some(permission_mode),
+        &owner_input_route,
     ) {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
@@ -2910,6 +2948,7 @@ fn record_claude_contract(
     claude_bin: &str,
     provider_session_id: &str,
     permission_mode: Option<&str>,
+    owner_input: &claude_owner_input::OwnerInputRoute,
 ) -> anyhow::Result<()> {
     let path = claude_contract_path(session_id)?;
     let payload = json!({
@@ -2925,7 +2964,7 @@ fn record_claude_contract(
         "longhouse_build": build_identity::BuildIdentity::current().qualified(),
         "provider_binary": {"path": claude_bin, "source": "path", "version": serde_json::Value::Null},
         "workspace": {"cwd": cwd, "canonical_cwd": std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()), "file_identity": serde_json::Value::Null},
-        "control": {"kind": "claude_channel_bridge"},
+        "control": {"kind": "claude_channel_bridge", "owner_input": owner_input},
     });
     let parent = path
         .parent()
@@ -3038,6 +3077,86 @@ fn resolve_provider_binary(
     anyhow::bail!(
         "{label} executable not found. Install stock `{default}` or set an explicit binary path."
     )
+}
+
+/// How the owner's messages from the Longhouse app will reach this Claude: the
+/// Longhouse mod (`engine/assets/claude-mod`), as the user's own words, when
+/// this Claude Code can submit as the user and no setting turns mods off;
+/// otherwise the channel, with the reason the launch states and records.
+fn decide_claude_owner_input_route(
+    binary: &str,
+    claude_dir: Option<&Path>,
+) -> claude_owner_input::OwnerInputRoute {
+    let version = Command::new(binary)
+        // no managed identity: prints the version and exits.
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
+    let user_settings = claude_dir
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
+        .map(|dir| dir.join("settings.json"));
+    let blocked = claude_owner_input::mod_blocking_setting(
+        &claude_owner_input::managed_settings_paths(),
+        user_settings.as_deref(),
+    );
+    claude_owner_input::decide_route(version.as_deref(), blocked.as_deref())
+}
+
+const CLAUDE_MOD_MANIFEST: &str = include_str!("../assets/claude-mod/.claude-plugin/plugin.json");
+const CLAUDE_MOD_HOOKS: &str = include_str!("../assets/claude-mod/hooks/hooks.json");
+const CLAUDE_MOD_MODULE: &str = include_str!("../assets/claude-mod/hooks/register.js");
+
+/// Write the mod once per content, so a running session's copy never changes
+/// under it: Claude Code reloads a `--plugin-dir` mod when its files change.
+fn install_claude_mod() -> anyhow::Result<PathBuf> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in [CLAUDE_MOD_MANIFEST, CLAUDE_MOD_HOOKS, CLAUDE_MOD_MODULE] {
+        hasher.update(part.as_bytes());
+        hasher.update([0]);
+    }
+    let digest = format!("{:x}", hasher.finalize());
+    let parent = longhouse_home()?.join("managed-local/claude-mod");
+    let dir = parent.join(&digest[..16]);
+    if dir.join("hooks/register.js").is_file() {
+        return Ok(dir);
+    }
+    let staging = parent.join(format!(".staging-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(staging.join(".claude-plugin"))?;
+    std::fs::create_dir_all(staging.join("hooks"))?;
+    std::fs::write(
+        staging.join(".claude-plugin/plugin.json"),
+        CLAUDE_MOD_MANIFEST,
+    )?;
+    std::fs::write(staging.join("hooks/hooks.json"), CLAUDE_MOD_HOOKS)?;
+    std::fs::write(staging.join("hooks/register.js"), CLAUDE_MOD_MODULE)?;
+    match std::fs::rename(&staging, &dir) {
+        Ok(()) => Ok(dir),
+        // Another launch installed the same content first.
+        Err(_) if dir.join("hooks/register.js").is_file() => {
+            let _ = std::fs::remove_dir_all(&staging);
+            Ok(dir)
+        }
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            Err(error.into())
+        }
+    }
+}
+
+/// Where the engine reads the route when the owner sends: beside the channel
+/// state, which the channel bridge keeps under `$HOME/.claude`.
+fn record_claude_owner_input_route(
+    session_id: &str,
+    route: &claude_owner_input::OwnerInputRoute,
+) -> anyhow::Result<()> {
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    let root = PathBuf::from(home).join(".claude/channels/longhouse");
+    claude_owner_input::write_route(&claude_owner_input::spool_dir(&root, session_id), route)?;
+    Ok(())
 }
 
 fn ensure_claude_channel_prerequisite(binary: &str) -> anyhow::Result<()> {
@@ -6587,6 +6706,38 @@ mod tests {
         });
     }
 
+    /// The mod Claude loads is written once per content, so a running session's
+    /// copy never changes under it (Claude Code reloads a changed mod).
+    #[test]
+    fn claude_mod_installs_once_per_content() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_vars(
+            [("LONGHOUSE_HOME", Some(temp.path().display().to_string()))],
+            || {
+                let first = install_claude_mod().unwrap();
+                let second = install_claude_mod().unwrap();
+                assert_eq!(first, second);
+                assert!(first.starts_with(temp.path().join("managed-local/claude-mod")));
+                let manifest: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(first.join(".claude-plugin/plugin.json")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(manifest["name"], claude_owner_input::MOD_NAME);
+                let hooks: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(first.join("hooks/hooks.json")).unwrap())
+                        .unwrap();
+                assert_eq!(hooks["modules"], json!(["./register.js"]));
+                assert!(std::fs::read_to_string(first.join("hooks/register.js"))
+                    .unwrap()
+                    .contains(claude_owner_input::ENGINE_ENV));
+                let entries = std::fs::read_dir(temp.path().join("managed-local/claude-mod"))
+                    .unwrap()
+                    .count();
+                assert_eq!(entries, 1, "no staging directory is left behind");
+            },
+        );
+    }
+
     /// A launch that lost its registration race gets the same tools; only the
     /// credential arrives later, through the file.
     #[test]
@@ -6690,6 +6841,7 @@ mod tests {
                     "/usr/bin/claude",
                     "22222222-2222-4222-8222-222222222222",
                     Some("bypass"),
+                    &claude_owner_input::decide_route(Some("2.1.296 (Claude Code)"), None),
                 )
                 .unwrap();
                 let path = claude_contract_path(session_id).unwrap();
@@ -6707,6 +6859,11 @@ mod tests {
                     "44444444-4444-4444-8444-444444444444"
                 );
                 assert_eq!(payload["control"]["kind"], "claude_channel_bridge");
+                assert_eq!(payload["control"]["owner_input"]["path"], "claude_mod");
+                assert_eq!(
+                    payload["control"]["owner_input"]["claude_code_version"],
+                    "2.1.296"
+                );
                 assert!(path.exists());
             },
         );

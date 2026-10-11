@@ -77,11 +77,27 @@ target's phase never decides whether a message survives, only when it lands.
   phase (`session.input.activity.read.v2`, the same projection the queue drain
   uses); idle channel injection is not steer, and the request is refused with
   `409 steer_requires_active_turn` and `retry_with_intent: queue`.
+- Owner sends reach Claude as the user's own words through Longhouse's Claude
+  Code mod (`engine/assets/claude-mod`, loaded with `--plugin-dir` on Claude
+  Code 2.1.287+): it submits with `$.prompt.submit({ asUser: true })`, which
+  Claude Code does not label "NOT from your user" as it does channel messages.
+  The mod runs `longhouse-engine claude-owner-input watch`; the engine owns the
+  queue and the delivery ledger under
+  `~/.claude/channels/longhouse/sessions/<session>.owner-input/` (`route.json`
+  says which path the launch chose and why; `ledger.jsonl` records claimed,
+  submitted, delivered). Peer envelopes, steers and pause answers never take
+  this path. Without the mod (older Claude Code, settings that turn mods off,
+  the mod not attached) the send uses the channel, and every send result names
+  the path (`owner_input_path`, `owner_input_reason`). A leading `/` is refused
+  (`owner_input_leading_slash`): Claude Code reads it as a command.
 - Never SIGINT a Claude Helm process: Claude Code treats SIGINT as shutdown and
-  the session ends. Interrupt records `<session>.interrupt.json` beside the
-  channel state, terminates the foreground Bash tool's process group, and the
-  lifecycle hook returns `continue: false` (plus a PreToolUse deny) until the
-  turn ends. Terminate is SIGTERM then SIGKILL on the recorded Claude pid.
+  the session ends. With the mod attached, interrupt ends the turn at once
+  through `$.turn.abort` and terminates the foreground Bash tool's process
+  group (Esc kills it; the mod's abort alone would leave it running in the
+  background). Otherwise interrupt records `<session>.interrupt.json` beside
+  the channel state, terminates that process group, and the lifecycle hook
+  returns `continue: false` (plus a PreToolUse deny) until the turn ends.
+  Terminate is SIGTERM then SIGKILL on the recorded Claude pid.
 - Live Claude Helm proofs run on Linux (`claude.helm_lifecycle.v1`); on macOS a
   relocated HOME risks Keychain prompts (see "Probing a provider CLI").
 - Helm creation is terminal-originated through `longhouse claude`; the Machine

@@ -6,6 +6,9 @@ mod build_identity;
 mod claude_channel_control;
 mod claude_channel_server;
 mod claude_lifecycle_hook;
+// Shared with the longhouse launcher, which uses the launch half (the route).
+#[allow(dead_code)]
+mod claude_owner_input;
 mod claude_permission_gate;
 mod claude_print;
 mod codex_app_server_canary;
@@ -174,6 +177,72 @@ fn parse_json_value_cli_arg(
     serde_json::from_str(trimmed)
         .map(Some)
         .map_err(|e| anyhow::anyhow!("{name} is not valid JSON: {e}"))
+}
+
+fn run_claude_owner_input(command: ClaudeOwnerInputCommands) -> anyhow::Result<()> {
+    let dir = |session: &str, state_root: Option<PathBuf>| -> anyhow::Result<PathBuf> {
+        let session = uuid::Uuid::parse_str(session)
+            .map_err(|_| anyhow::anyhow!("--session must be a session UUID"))?;
+        let root = match state_root {
+            Some(root) => root,
+            None => claude_channel_control::default_state_root().map_err(anyhow::Error::msg)?,
+        };
+        Ok(claude_owner_input::spool_dir(&root, &session.to_string()))
+    };
+    match command {
+        ClaudeOwnerInputCommands::Watch {
+            session,
+            state_root,
+        } => {
+            let dir = dir(&session, state_root)?;
+            // Claude Code ends the watcher with the mod; if Claude dies first the
+            // watcher is reparented, and stops rather than hold the lock.
+            #[cfg(unix)]
+            let parent = unsafe { libc::getppid() };
+            #[cfg(unix)]
+            let keep = move || unsafe { libc::getppid() } == parent;
+            #[cfg(not(unix))]
+            let keep = || true;
+            let mut out = std::io::stdout().lock();
+            match claude_owner_input::watch(&dir, &mut out, keep) {
+                Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+                other => other.map_err(Into::into),
+            }
+        }
+        ClaudeOwnerInputCommands::Claim {
+            session,
+            id,
+            state_root,
+        } => {
+            if !claude_owner_input::claim(&dir(&session, state_root)?, &id)? {
+                std::process::exit(3);
+            }
+            Ok(())
+        }
+        ClaudeOwnerInputCommands::Ack {
+            session,
+            id,
+            state,
+            detail,
+            turn_id,
+            state_root,
+        } => {
+            if !claude_owner_input::ACK_STATES.contains(&state.as_str()) {
+                anyhow::bail!(
+                    "--state must be one of {}",
+                    claude_owner_input::ACK_STATES.join(", ")
+                );
+            }
+            claude_owner_input::append_ledger(
+                &dir(&session, state_root)?,
+                &id,
+                &state,
+                detail.as_deref(),
+                turn_id.as_deref(),
+            )?;
+            Ok(())
+        }
+    }
 }
 
 fn parse_meta_entries(entries: Vec<String>) -> anyhow::Result<Vec<(String, String)>> {
@@ -673,6 +742,12 @@ enum Commands {
         command: ClaudeChannelCommands,
     },
 
+    /// The owner-input queue Longhouse's Claude Code mod reads (Claude Helm)
+    ClaudeOwnerInput {
+        #[command(subcommand)]
+        command: ClaudeOwnerInputCommands,
+    },
+
     /// Native Claude PreToolUse permission hook (installed by the device facade).
     ClaudePermissionGate,
 
@@ -988,6 +1063,51 @@ enum ClaudeChannelCommands {
 
         #[arg(long, default_value = "10.0")]
         wait_secs: f64,
+    },
+}
+
+#[derive(Subcommand)]
+enum ClaudeOwnerInputCommands {
+    /// Stream this session's owner inputs as JSON lines until stdout closes
+    Watch {
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+
+    /// Take a pending input before submitting it; exits 3 when it is gone
+    Claim {
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        id: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+
+    /// Record what happened to a claimed input
+    Ack {
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        id: String,
+
+        #[arg(long)]
+        state: String,
+
+        #[arg(long)]
+        detail: Option<String>,
+
+        #[arg(long)]
+        turn_id: Option<String>,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
     },
 }
 
@@ -2167,6 +2287,7 @@ fn main() -> anyhow::Result<()> {
                         meta: parse_meta_entries(meta)?,
                         state_root,
                         wait_timeout: Some(duration_from_secs(wait_secs)?),
+                        input_id: None,
                     },
                 ))?;
                 println!(
@@ -2174,6 +2295,8 @@ fn main() -> anyhow::Result<()> {
                     serde_json::to_string_pretty(&serde_json::json!({
                         "ok": true,
                         "provider_session_id": summary.provider_session_id,
+                        "owner_input_path": summary.owner_input.as_ref().map(|input| input.path),
+                        "owner_input_reason": summary.owner_input.as_ref().and_then(|input| input.reason.clone()),
                     }))?
                 );
             }
@@ -2195,6 +2318,7 @@ fn main() -> anyhow::Result<()> {
                     serde_json::to_string_pretty(&serde_json::json!({
                         "ok": true,
                         "pid": summary.pid,
+                        "abort_path": summary.path,
                     }))?
                 );
             }
@@ -2214,6 +2338,7 @@ fn main() -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&state)?);
             }
         },
+        Commands::ClaudeOwnerInput { command } => run_claude_owner_input(command)?,
         Commands::ClaudePermissionGate => {
             claude_permission_gate::run()?;
         }
