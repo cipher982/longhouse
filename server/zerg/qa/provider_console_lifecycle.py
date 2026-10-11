@@ -720,6 +720,17 @@ def _wait_served_answers(
             native, native_state = native_answers()
             native_readable = native is not None
             native = native or {}
+            # Raised on the first read, with no settle window. The window the
+            # served faults stand through exists because a record can change
+            # under the read; this one cannot. Every caller reads it after
+            # the turn's claim is terminal, so the process that wrote it has
+            # exited: Pi's and OMP's session files, where an entry is
+            # appended once (OMP may write one message's row again under the
+            # same id while its stream reconciles, which is one row here),
+            # and Claude's print stream, which is that process's captured
+            # output. A record still ending mid-row is not read as answers
+            # at all (`_claim_native_answers`), so a second row seen here is
+            # a complete row of a finished record and will not go away.
             if one_reply and len(native) > 1:
                 raise MarkerAnswerCountError(
                     MARKER_ANSWERED_MORE_THAN_ONCE,
