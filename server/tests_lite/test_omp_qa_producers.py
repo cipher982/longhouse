@@ -502,7 +502,7 @@ def test_omp_native_model_evidence_uses_bound_retained_native_source(tmp_path) -
     assert evidence["result_event"]["usage"]["output"] == 2
 
 
-def _write_omp_console_settlement_fixture(tmp_path, *, first_turn_events, later_events=(), malformed_suffix=b""):
+def _write_omp_console_settlement_fixture(tmp_path, *, first_turn_events, later_events=(), malformed_suffix=b"", seed_marker=None):
     native_source = tmp_path / "provider-sources" / "native.jsonl"
     native_source.parent.mkdir()
     first_turn_bytes = ("\n".join(json.dumps(event) for event in first_turn_events) + "\n").encode()
@@ -545,7 +545,9 @@ def _write_omp_console_settlement_fixture(tmp_path, *, first_turn_events, later_
                     "source_start_offset": 0,
                     "source_end_offset": len(first_turn_bytes),
                     "provider_thread_id": "native-1",
-                }
+                },
+                # The stored context value the first prompt asks the reply to carry.
+                **({"context": {"seed_marker": seed_marker}} if seed_marker else {}),
             }
         ),
         encoding="utf-8",
@@ -596,10 +598,90 @@ def test_omp_native_settlement_binds_native_evidence_to_first_turn_and_keeps_std
     assert settlement["provider_response_source_kind"] == "stdout_path"
     assert settlement["native_archive_bound"] is True
     assert settlement["native_marker_count"] == 1
+    assert settlement["native_reply_count"] == 1
     assert settlement["native_tool_call_ids"] == ["call-1"]
     assert settlement["native_tool_result_ids"] == ["call-1"]
     assert settlement["native_tool_evidence_complete"] is True
     assert settlement["malformed_source"] is False
+
+
+def _omp_console_first_turn(marker: str, tool_marker: str, *replies: tuple[str, object], narration: str | None = None) -> list[dict]:
+    return [
+        {"type": "session", "id": "native-1"},
+        {
+            "type": "message",
+            "id": "tool-call",
+            "message": {
+                "role": "assistant",
+                "content": [*([{"type": "text", "text": narration}] if narration else []), {"type": "toolCall", "id": "call-1"}],
+            },
+        },
+        {"type": "message", "id": "tool-result", "message": {"role": "toolResult", "toolCallId": "call-1", "content": tool_marker}},
+        *({"type": "message", "id": row_id, "message": {"role": "assistant", "content": content}} for row_id, content in replies),
+    ]
+
+
+def test_omp_native_settlement_binds_the_row_that_answers_when_the_tool_call_row_narrates(tmp_path) -> None:
+    marker, context = "OMP_FIRST_TURN_MARKER", "OMP_STORED_CONTEXT"
+    first_turn = _omp_console_first_turn(
+        marker,
+        "OMP_TOOL_OUTPUT",
+        # The reply carries the stored context value and the marker on one line.
+        ("reply", [{"type": "text", "text": f"The read returned.\n\n{context} {marker}"}]),
+        narration=f"I will read the file, then reply with `{marker}`.",
+    )
+    _write_omp_console_settlement_fixture(tmp_path, first_turn_events=first_turn, seed_marker=context)
+
+    settlement = omp_console_settlement(tmp_path)
+
+    assert settlement["status"] == "pass"
+    assert settlement["native_archive_bound"] is True
+    # Every occurrence in the turn's assistant rows, and the one row that replied.
+    assert settlement["native_marker_count"] == 2
+    assert settlement["native_reply_count"] == 1
+    assert settlement["native_reply_message_id"] == "reply"
+    observation = {
+        "runtime_host_turn_dispatch": True,
+        "exact_session_thread_run_binding": True,
+        "transcript_converged_exactly_once": True,
+        "omp_continuation_context_recalled": True,
+        "live_model_evidence": {"model": "openrouter/fixture-model", "source_artifacts": [{"path": "provider-sources/native.raw"}]},
+        "omp_settlement": settlement,
+        "no_orphan_provider_processes": True,
+        "served_run_retired": True,
+        "interrupt_contract_preserved": True,
+        "post_interrupt_sendable": True,
+        "canary_session_hidden": True,
+    }
+    assert omp_console_assertions(observation) == {CONSOLE_ASSERTION: True}
+
+
+def test_omp_native_settlement_without_a_row_that_answers_is_not_bound(tmp_path) -> None:
+    marker = "OMP_FIRST_TURN_MARKER"
+    first_turn = _omp_console_first_turn(marker, "OMP_TOOL_OUTPUT", ("reply", f"The marker is {marker}, as asked."))
+    _write_omp_console_settlement_fixture(tmp_path, first_turn_events=first_turn)
+
+    settlement = omp_console_settlement(tmp_path)
+
+    assert settlement["status"] == "fail"
+    assert settlement["native_archive_bound"] is False
+    assert settlement["native_marker_count"] == 1
+    assert settlement["native_reply_count"] == 0
+    assert settlement["native_reply_message_id"] is None
+
+
+def test_omp_native_settlement_refuses_a_marker_answered_in_two_rows_with_the_typed_reason(tmp_path) -> None:
+    marker = "OMP_FIRST_TURN_MARKER"
+    first_turn = _omp_console_first_turn(marker, "OMP_TOOL_OUTPUT", ("reply", marker), ("reply-again", marker))
+    _write_omp_console_settlement_fixture(tmp_path, first_turn_events=first_turn)
+
+    # Not a failed settlement: that would be a verdict about the subject.
+    with pytest.raises(MarkerAnswerCountError) as raised:
+        omp_console_settlement(tmp_path)
+
+    assert raised.value.reason == "marker_answered_more_than_once"
+    assert raised.value.answer_event_ids == ["reply", "reply-again"]
+    assert "has 2 answering native assistant row(s), expected exactly 1" in str(raised.value)
 
 
 @pytest.mark.parametrize("failure", ("missing", "mismatched", "duplicate", "bad", "mid-line", "past-eof"))
@@ -1655,6 +1737,7 @@ def test_omp_console_settlement_and_context_recall_are_required() -> None:
             "native_session_id_bound": True,
             "native_terminal_after_assistant": True,
             "native_marker_count": 1,
+            "native_reply_count": 1,
             "native_tool_evidence_complete": True,
             "malformed_source": False,
         },
@@ -1673,6 +1756,12 @@ def test_omp_console_settlement_and_context_recall_are_required() -> None:
     assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
     observation["omp_continuation_context_recalled"] = True
     observation["omp_settlement"]["agent_end_terminal"] = False
+    assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
+    observation["omp_settlement"]["agent_end_terminal"] = True
+    # The verdict reads the one native reply, not how often the marker occurs.
+    observation["omp_settlement"]["native_marker_count"] = 2
+    assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is True
+    observation["omp_settlement"]["native_reply_count"] = 0
     assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
 
 
@@ -2215,6 +2304,7 @@ def test_omp_console_oracle_requires_exact_native_settlement_and_retirement() ->
             "native_session_id_bound": False,
             "native_terminal_after_assistant": False,
             "native_marker_count": 0,
+            "native_reply_count": 0,
         },
         "no_orphan_provider_processes": True,
         "canary_session_hidden": False,

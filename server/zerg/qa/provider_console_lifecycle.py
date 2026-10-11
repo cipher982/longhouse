@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from zerg.qa.answer_markers import marker_answered
 from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.console_served_state_core import MARKER_ANSWERED_MORE_THAN_ONCE
 from zerg.qa.console_served_state_core import MarkerAnswerCountError
@@ -667,63 +668,122 @@ def _pi_tool_evidence(claim: Mapping[str, object], marker: str) -> dict[str, obj
     )
 
 
+def _one_marker_reply(
+    rows: Iterable[Mapping[str, object]],
+    marker: str,
+    *,
+    alongside: tuple[str, ...] = (),
+    surface: str = "native assistant row",
+) -> dict[str, object] | None:
+    """The one assistant row, among ``rows``, that replies with ``marker``.
+
+    ``rows`` are the assistant rows of a finished turn in the provider's own
+    transcript, or the assistant messages of a finished run's output stream,
+    each with an ``id`` and a ``text`` that keeps one line group per text
+    block. A row replies when it answers under ``zerg.qa.answer_markers``
+    (``alongside`` names the other markers the reply was asked to carry). A row
+    that only names the marker is a mention: a turn that works through a tool
+    says "I will read the file, then reply with <MARKER>" on the row that makes
+    the call, and counting that row made a correct turn look like two replies.
+
+    Returns the reply with ``marker_count`` (occurrences inside it) and
+    ``mention_ids``; None when no row answers, because only the caller knows
+    which boundary the reply was expected inside. Two answering rows can never
+    become one, so that raises the typed reason the served proofs use and a
+    counting fault is never reported as a verdict about the subject.
+    """
+
+    answers: list[Mapping[str, object]] = []
+    mentions: list[Mapping[str, object]] = []
+    for row in rows:
+        text = str(row.get("text") or "")
+        if marker and marker in text:
+            (answers if marker_answered(text, marker, alongside=alongside) else mentions).append(row)
+    if len(answers) > 1:
+        raise MarkerAnswerCountError(
+            MARKER_ANSWERED_MORE_THAN_ONCE,
+            marker=marker,
+            answers=[{"id": row.get("id")} for row in answers],
+            mentions=[{"id": row.get("id")} for row in mentions],
+            surface=surface,
+        )
+    if not answers:
+        return None
+    return {
+        **answers[0],
+        "marker_count": str(answers[0].get("text") or "").count(marker),
+        "mention_ids": [row.get("id") for row in mentions],
+    }
+
+
 def _pi_native_marker_evidence(
     path: Path,
     marker: str,
     *,
+    alongside: tuple[str, ...] = (),
     minimum_source_offset: int = 0,
     maximum_source_offset: int | None = None,
 ) -> dict[str, object] | None:
-    """Return the native JSONL message id for one assistant marker."""
+    """Return the native JSONL message id of the row that replies with the marker."""
     rows, provider_session_id, _metadata = pi_transcript_rows(path)
-    matches = [
-        row
-        for row in rows
-        if row.get("type") == "assistant"
-        and int(row.get("source_offset") or 0) >= minimum_source_offset
-        and (maximum_source_offset is None or int(row.get("source_offset") or 0) < maximum_source_offset)
-        and str(row.get("text") or "").count(marker) == 1
-    ]
-    if len(matches) != 1 or not isinstance(matches[0].get("entry_id"), str) or not matches[0]["entry_id"]:
+    reply = _one_marker_reply(
+        [
+            {"id": row.get("entry_id"), "source_offset": row.get("source_offset"), "text": str(row.get("text") or "")}
+            for row in rows
+            if row.get("type") == "assistant"
+            and int(row.get("source_offset") or 0) >= minimum_source_offset
+            and (maximum_source_offset is None or int(row.get("source_offset") or 0) < maximum_source_offset)
+        ],
+        marker,
+        alongside=alongside,
+    )
+    if reply is None or reply["marker_count"] != 1 or not isinstance(reply.get("id"), str) or not reply["id"]:
         return None
-    row = matches[0]
     return {
-        "native_message_id": row["entry_id"],
+        "native_message_id": reply["id"],
         "provider_session_id": provider_session_id,
-        "source_offset": row.get("source_offset"),
-        "marker_count": str(row.get("text") or "").count(marker),
+        "source_offset": reply.get("source_offset"),
+        "marker_count": reply["marker_count"],
     }
+
+
+def _native_message_text(message: Mapping[str, object]) -> str:
+    """Text of a native message, one line group per text block.
+
+    Blocks are joined with a newline: the Runtime Host serves each text block
+    as its own event, and a marker that ends one block must not run into the
+    first word of the next.
+    """
+
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        str(block["text"])
+        for block in content
+        if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
+    )
 
 
 def _omp_native_marker_evidence(
     path: Path,
     marker: str,
     *,
+    alongside: tuple[str, ...] = (),
     minimum_source_offset: int = 0,
     maximum_source_offset: int | None = None,
 ) -> dict[str, object] | None:
-    """Return OMP's native assistant message id for one bounded marker."""
+    """Return OMP's native assistant message id of the row that replies with the marker."""
     try:
         payload = path.read_bytes()
     except OSError:
         return None
 
     headers: list[str] = []
-    matches: list[dict[str, object]] = []
+    rows: list[dict[str, object]] = []
     source_offset = 0
-
-    def message_text(message: Mapping[str, object]) -> str:
-        content = message.get("content")
-        if isinstance(content, str):
-            return content
-        if not isinstance(content, list):
-            return ""
-        return "".join(
-            str(block["text"])
-            for block in content
-            if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
-        )
-
     for raw_line in payload.splitlines(keepends=True):
         line_end = source_offset + len(raw_line)
         if raw_line.strip():
@@ -743,21 +803,18 @@ def _omp_native_marker_evidence(
                     and source_offset >= minimum_source_offset
                     and (maximum_source_offset is None or line_end <= maximum_source_offset)
                 ):
-                    text = message_text(event["message"])
-                    if text.count(marker) == 1:
-                        matches.append(
-                            {
-                                "native_message_id": event["id"],
-                                "provider_session_id": headers[0] if len(headers) == 1 else None,
-                                "source_offset": source_offset,
-                                "marker_count": 1,
-                            }
-                        )
+                    rows.append({"id": event["id"], "source_offset": source_offset, "text": _native_message_text(event["message"])})
         source_offset = line_end
 
-    if len(headers) != 1 or len(matches) != 1:
+    reply = _one_marker_reply(rows, marker, alongside=alongside)
+    if len(headers) != 1 or reply is None or reply["marker_count"] != 1:
         return None
-    return matches[0]
+    return {
+        "native_message_id": reply["id"],
+        "provider_session_id": headers[0],
+        "source_offset": reply["source_offset"],
+        "marker_count": reply["marker_count"],
+    }
 
 
 def _native_marker_evidence(
@@ -765,6 +822,7 @@ def _native_marker_evidence(
     path: Path,
     marker: str,
     *,
+    alongside: tuple[str, ...] = (),
     minimum_source_offset: int = 0,
     maximum_source_offset: int | None = None,
 ) -> dict[str, object] | None:
@@ -772,6 +830,7 @@ def _native_marker_evidence(
         return _pi_native_marker_evidence(
             path,
             marker,
+            alongside=alongside,
             minimum_source_offset=minimum_source_offset,
             maximum_source_offset=maximum_source_offset,
         )
@@ -779,6 +838,7 @@ def _native_marker_evidence(
         return _omp_native_marker_evidence(
             path,
             marker,
+            alongside=alongside,
             minimum_source_offset=minimum_source_offset,
             maximum_source_offset=maximum_source_offset,
         )
@@ -839,8 +899,14 @@ def _pi_continuation_linkage(
     }
 
 
-def _pi_native_tool_observation(path: Path, marker: str) -> dict[str, object]:
-    """Extract one native Pi tool pair and its following marker response."""
+def _pi_native_tool_observation(path: Path, marker: str, *, alongside: tuple[str, ...] = ()) -> dict[str, object]:
+    """Extract one native Pi tool pair and the marker response that follows it.
+
+    ``marker_responses`` are the assistant rows that reply with the marker
+    (``zerg.qa.answer_markers``); a row that only names it, such as the
+    narration on the row that makes the tool call, is kept apart in
+    ``marker_mentions`` and is never the response a pair is bound to.
+    """
 
     rows, provider_session_id, metadata = pi_transcript_rows(path)
     raw_messages: dict[str, Mapping[str, object]] = {}
@@ -862,6 +928,7 @@ def _pi_native_tool_observation(path: Path, marker: str) -> dict[str, object]:
     calls: dict[str, dict[str, object]] = {}
     results: dict[str, dict[str, object]] = {}
     marker_responses: list[dict[str, object]] = []
+    marker_mentions: list[dict[str, object]] = []
     native_models: list[str] = []
     native_providers: list[str] = []
     for row in rows:
@@ -877,7 +944,7 @@ def _pi_native_tool_observation(path: Path, marker: str) -> dict[str, object]:
         if row.get("type") == "assistant":
             text = str(row.get("text") or "")
             if marker and marker in text:
-                marker_responses.append(
+                (marker_responses if marker_answered(text, marker, alongside=alongside) else marker_mentions).append(
                     {
                         "native_message_id": row.get("entry_id"),
                         "source_offset": row.get("source_offset"),
@@ -946,6 +1013,7 @@ def _pi_native_tool_observation(path: Path, marker: str) -> dict[str, object]:
         "calls": calls,
         "results": results,
         "marker_responses": marker_responses,
+        "marker_mentions": marker_mentions,
         "pair": pairs[0] if pairs else None,
     }
 
@@ -960,10 +1028,16 @@ def _pi_native_tool_receipt(
     binary_receipt: Mapping[str, object],
     cleanup: Mapping[str, object],
     marker: str,
+    reply_alongside: tuple[str, ...] = (),
     native_retained_path: str | None = None,
     provider_response_retained_path: str | None = None,
 ) -> dict[str, object]:
-    """Bind retained native call/result evidence to the live Console turn."""
+    """Bind retained native call/result evidence to the live Console turn.
+
+    The receipt's failures are verdicts about the subject. A marker answered by
+    more than one native row is not one: the count is this proof's contract
+    with the model's reply, so it raises the typed reason instead.
+    """
     receipt: dict[str, object] = {
         "schema_version": 1,
         "artifact_kind": "pi_native_tool_receipt",
@@ -999,10 +1073,21 @@ def _pi_native_tool_receipt(
                 "sha256": _sha256_file(native_source),
                 "kind": "provider_native_session_jsonl",
             }
-            native = _pi_native_tool_observation(native_source, marker)
+            native = _pi_native_tool_observation(native_source, marker, alongside=reply_alongside)
         except (OSError, ValueError, RuntimeError) as exc:
             native = {"error": f"{type(exc).__name__}: {exc}"}
             failures.append("retained_native_source_unreadable")
+    marker_responses = native.get("marker_responses")
+    marker_responses = marker_responses if isinstance(marker_responses, list) else []
+    if len(marker_responses) > 1:
+        marker_mentions = native.get("marker_mentions")
+        raise MarkerAnswerCountError(
+            MARKER_ANSWERED_MORE_THAN_ONCE,
+            marker=marker,
+            answers=[{"id": response.get("native_message_id")} for response in marker_responses],
+            mentions=[{"id": mention.get("native_message_id")} for mention in marker_mentions] if isinstance(marker_mentions, list) else [],
+            surface="native assistant row",
+        )
 
     pair = native.get("pair")
     if isinstance(pair, tuple) and len(pair) == 3:
@@ -1070,7 +1155,7 @@ def _pi_native_tool_receipt(
         and isinstance(pair, tuple)
         and len(pair) == 3
         and pair[2].get("marker_count") == 1
-        and len(native.get("marker_responses") or []) == 1
+        and len(marker_responses) == 1
     )
     if not provider_response_ok:
         failures.append("provider_response_not_bound_to_native_session")
@@ -1216,7 +1301,15 @@ def _retained_post_interrupt_output_evidence(
     retained_sources: list[dict[str, object]],
     root: Path,
 ) -> dict[str, object]:
-    """Bind the recovery marker and terminal event to retained provider output."""
+    """Bind the recovery marker and terminal event to retained provider output.
+
+    The recovery reply is the one output message that answers with the marker
+    (``zerg.qa.answer_markers``). ``assistant_marker_count`` stays every message
+    that names the marker; ``assistant_reply_count`` is how many of them reply,
+    and ``marker_event_index`` names the reply. A marker answered by more than
+    one message raises the typed reason: that is a counting fault of this
+    proof, not a verdict about the interrupt contract.
+    """
 
     if not _interrupt_output_contract_applies(provider):
         return {
@@ -1225,6 +1318,7 @@ def _retained_post_interrupt_output_evidence(
             "provider": provider,
             "marker": marker,
             "assistant_marker_count": 0,
+            "assistant_reply_count": 0,
             "terminal_event_count": 0,
         }
 
@@ -1255,12 +1349,12 @@ def _retained_post_interrupt_output_evidence(
                 continue
             if isinstance(value, Mapping):
                 events.append(value)
-        marker_indices: list[int] = []
+        output_messages: list[dict[str, object]] = []
         terminal_indices: list[int] = []
         for index, event in enumerate(events):
             output_text = "\n".join(_assistant_output_texts(provider, json.dumps(event, sort_keys=True)))
-            if output_text.count(marker) == 1:
-                marker_indices.append(index)
+            if marker in output_text:
+                output_messages.append({"id": index, "text": output_text})
             if event.get("type") == "agent_end":
                 is_terminal = (
                     omp_agent_end_is_terminal(event)
@@ -1273,20 +1367,24 @@ def _retained_post_interrupt_output_evidence(
                 is_terminal = False
             if is_terminal is True:
                 terminal_indices.append(index)
+        reply = _one_marker_reply(output_messages, marker, surface="provider output message")
+        # The reply must say the marker once; a reply that repeats it is not one.
+        marker_index = reply["id"] if reply is not None and reply["marker_count"] == 1 else None
         return {
-            "valid": len(marker_indices) == 1 and bool(terminal_indices) and any(index > marker_indices[0] for index in terminal_indices),
+            "valid": isinstance(marker_index, int) and any(index > marker_index for index in terminal_indices),
             "applicable": True,
             "provider": provider,
             "source_kind": field,
             "source_path": source_path,
             "retained_path": retained_path,
             "marker": marker,
-            "assistant_marker_count": len(marker_indices),
-            "marker_event_index": marker_indices[0] if len(marker_indices) == 1 else None,
-            "marker_event_type": events[marker_indices[0]].get("type") if len(marker_indices) == 1 else None,
+            "assistant_marker_count": len(output_messages),
+            "assistant_reply_count": 0 if reply is None else 1,
+            "marker_event_index": marker_index,
+            "marker_event_type": events[marker_index].get("type") if isinstance(marker_index, int) else None,
             "terminal_event_count": len(terminal_indices),
             "terminal_event_index": next(
-                (index for index in terminal_indices if marker_indices and index > marker_indices[0]),
+                (index for index in terminal_indices if isinstance(marker_index, int) and index > marker_index),
                 None,
             ),
             "terminal_event_type": "agent_end" if terminal_indices else None,
@@ -1297,6 +1395,7 @@ def _retained_post_interrupt_output_evidence(
         "provider": provider,
         "marker": marker,
         "assistant_marker_count": 0,
+        "assistant_reply_count": 0,
         "terminal_event_count": 0,
     }
 
@@ -2334,12 +2433,12 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             first_native_source_path = Path(raw_first_native_source)
             first_native_source_size = len(first_native_source_path.read_bytes())
         first_native_response = (
-            _native_marker_evidence(provider, first_native_source_path, marker)
+            _native_marker_evidence(provider, first_native_source_path, marker, alongside=reply_alongside)
             if provider in {"pi", "omp"} and first_native_source_path is not None
             else None
         )
         if provider in {"pi", "omp"} and first_native_response is None:
-            raise RuntimeError(f"first Console {provider} turn has no unique native assistant marker message")
+            raise RuntimeError(f"first Console {provider} turn has no native assistant row that answers with its marker once")
         dispatch = {
             "status": "pass",
             "provider": provider,
@@ -2491,11 +2590,15 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                     provider,
                     Path(raw_resume_source),
                     resume_marker,
+                    alongside=reply_alongside,
                     minimum_source_offset=first_native_source_size,
                     maximum_source_offset=second_native_source_size,
                 )
                 if resume_native_response is None:
-                    raise RuntimeError(f"second Console {provider} marker escaped its pre-interrupt native boundary")
+                    raise RuntimeError(
+                        f"second Console {provider} turn has no native assistant row that answers with its marker once "
+                        "inside its pre-interrupt boundary"
+                    )
             resume_context_marker_count = (
                 event_text(resume_events[0]).count(context_marker) if provider in {"pi", "omp"} and resume_events else None
             )
@@ -2866,6 +2969,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                     binary_receipt=binary_receipt,
                     cleanup=cleanup,
                     marker=marker,
+                    reply_alongside=reply_alongside,
                     native_retained_path=retained_path_by_source.get(raw_native_source) if isinstance(raw_native_source, str) else None,
                     provider_response_retained_path=retained_path_by_source.get(raw_response_source)
                     if isinstance(raw_response_source, str)

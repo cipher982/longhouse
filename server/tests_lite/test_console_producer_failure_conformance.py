@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import httpx
+import pytest
 
 from zerg.qa import console_served_state
 from zerg.qa import omp_console_producer
@@ -185,6 +187,147 @@ def test_omp_console_main_retains_boot_receipts_on_late_failure(monkeypatch, tmp
     assert result["failure_code"] == "omp_console_lifecycle_failed"
     assert _json(root / "provider-binary-receipt.json")["provider"] == "omp"
     assert _json(root / "cleanup-receipt.json")["shipper_stop_verified"] is True
+
+
+_PAST_THE_NATIVE_REPLY = "fixture stops the turn after its native reply was bound"
+
+
+def _console_first_turn_result(monkeypatch, tmp_path, provider: str, assistant_rows) -> dict[str, object]:
+    """Run a Pi or OMP Console entry point over one faked first turn and return its result.
+
+    Everything up to the provider's own transcript is faked; the transcript is
+    read by the producer's real native-evidence step. ``assistant_rows`` builds
+    the rows that follow the tool result from the turn's marker and stored
+    context value. A turn whose native reply is bound stops at the next
+    boundary (the transcript flush) with ``_PAST_THE_NATIVE_REPLY``.
+    """
+
+    lifecycle = provider_console_lifecycle
+    provider_bin, engine, cli = _late_provider_boundary(monkeypatch, lifecycle, tmp_path, provider)
+    native = tmp_path / "native-session.jsonl"
+    prompts: list[str] = []
+
+    class Shipper:
+        receipt = {"machine_name": "first-turn-machine"}
+
+        def flush(self, _label):
+            raise RuntimeError(_PAST_THE_NATIVE_REPLY)
+
+        def stop(self):
+            return {"stopped": True, "process_dead": True, "process_group_dead": True}
+
+    def start_turn(*, message, **_kwargs):
+        prompts.append(message)
+        return {"run_id": "run-1", "turn_id": "turn-1"}
+
+    def wait_claim(_path, **_kwargs):
+        marker = re.search(rf"LH_{provider.upper()}_CONSOLE_[0-9a-f]{{32}}", prompts[0]).group(0)
+        context = re.search(rf"LH_{provider.upper()}_CONTEXT_[0-9a-f]{{32}}", prompts[0]).group(0)
+        rows = [
+            {"type": "session", "id": "native-1"},
+            {"type": "message", "id": "prompt", "message": {"role": "user", "content": prompts[0]}},
+            {
+                "type": "message",
+                "id": "tool-call",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": f"I will read the file, then reply with `{marker}`."},
+                        {"type": "toolCall", "id": "call-1", "name": "read", "arguments": {}},
+                    ],
+                },
+            },
+            {
+                "type": "message",
+                "id": "tool-result",
+                "message": {"role": "toolResult", "toolCallId": "call-1", "toolName": "read", "content": marker},
+            },
+            *(
+                {"type": "message", "id": row_id, "message": {"role": "assistant", "content": text}}
+                for row_id, text in assistant_rows(marker, context)
+            ),
+        ]
+        native.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+        return {
+            "state": "terminal",
+            "result": {"terminal_state": "run_completed"},
+            "source_path": str(native),
+            "provider_thread_id": "native-1",
+        }
+
+    monkeypatch.setattr(lifecycle, "start_transcript_shipper", lambda *_args, **_kwargs: Shipper())
+    monkeypatch.setattr(lifecycle, "_create_session", lambda **_kwargs: {"session_id": "session-1", "thread_id": "thread-1"})
+    monkeypatch.setattr(lifecycle, "_start_turn", start_turn)
+    monkeypatch.setattr(lifecycle, "_wait_claim", wait_claim)
+    monkeypatch.setattr(lifecycle, "turn_identity_mismatches", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(lifecycle, "_claim_uses_provider_binary", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(lifecycle, "_claim_uses_selected_model", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(lifecycle, "_wait_turn_terminal", lambda **_kwargs: None)
+    monkeypatch.setattr(lifecycle, "_terminate_live_qualification_session", lambda *_args: {"status": "pass", "dispatched": True})
+    monkeypatch.setattr(lifecycle, "_force_cleanup", lambda _claims: None)
+    monkeypatch.setattr(lifecycle, "_wait_served_run_retirement", lambda *_args: {"retired": True, "active_run_count": 0})
+
+    producer = {"pi": pi_console_tool_producer, "omp": omp_console_producer}[provider]
+    root = tmp_path / provider
+    args = [
+        "--variant",
+        producer._VARIANT,
+        "--evidence-root",
+        str(root),
+        "--repo-root",
+        str(root.parent),
+        "--engine",
+        str(engine),
+        "--longhouse-cli",
+        str(cli),
+        "--provider-bin",
+        str(provider_bin),
+        "--provider-version",
+        "fixture-1",
+        "--model",
+        "fixture-model",
+    ]
+    assert producer.main(args) == 1
+    result = _json(root / "result.json")
+    assert result["status"] == "fail"
+    assert result["failure_code"] == f"{producer.SCENARIO_ID}_failed"
+    return result
+
+
+@pytest.mark.parametrize("provider", ["pi", "omp"])
+def test_console_first_turn_that_narrates_its_marker_gets_past_the_native_reply(monkeypatch, tmp_path, provider):
+    # The row that calls the tool names the marker, and one later row answers
+    # with the stored context value and the marker.
+    result = _console_first_turn_result(
+        monkeypatch, tmp_path, provider, lambda marker, context: [("reply", f"The read returned.\n\n{context} {marker}")]
+    )
+
+    assert result["error"] == f"RuntimeError: {_PAST_THE_NATIVE_REPLY}"
+
+
+@pytest.mark.parametrize("provider", ["pi", "omp"])
+def test_console_first_turn_answered_in_two_rows_is_refused_with_the_typed_reason(monkeypatch, tmp_path, provider):
+    result = _console_first_turn_result(
+        monkeypatch, tmp_path, provider, lambda marker, context: [("reply", f"{context} {marker}"), ("reply-again", marker)]
+    )
+
+    # A producer failure, never an assertion verdict; the reason opens the error.
+    assert "assertions" not in result
+    assert result["error"].startswith("MarkerAnswerCountError: marker_answered_more_than_once: ")
+    assert "has 2 answering native assistant row(s), expected exactly 1" in result["error"]
+    assert "answering event ids ['reply', 'reply-again']" in result["error"]
+    assert "only mention it: ['tool-call']" in result["error"]
+    assert "I will read the file" not in result["error"]
+
+
+@pytest.mark.parametrize("provider", ["pi", "omp"])
+def test_console_first_turn_that_never_answers_with_its_marker_is_a_producer_failure(monkeypatch, tmp_path, provider):
+    result = _console_first_turn_result(
+        monkeypatch, tmp_path, provider, lambda marker, context: [("reply", f"The stored value is {context} and the marker is {marker}.")]
+    )
+
+    assert "assertions" not in result
+    assert result["error"] == f"RuntimeError: first Console {provider} turn has no native assistant row that answers with its marker once"
 
 
 def test_product_console_lifecycle_entrypoint_retains_prior_assertion_on_late_registry_failure(monkeypatch, tmp_path):

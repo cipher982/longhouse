@@ -34,7 +34,9 @@ REGISTRATION = ProducerRegistration(
     producer_revision=9,
     scenario_id=SCENARIO_ID,
     # 9: the shared lifecycle adds a mid-turn steer step (its own cell).
-    scenario_revision=10,
+    # 11: the native reply is the row that answers with the marker, not every
+    # row that names it; the oracle reads `native_reply_count`.
+    scenario_revision=11,
     assertion_cells=((ASSERTION_ID, None), (lifecycle.STEER_ASSERTION_ID, None)),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -102,19 +104,6 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
-
-
-def _native_message_text(message: Mapping[str, Any]) -> str:
-    content = message.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            str(block.get("text"))
-            for block in content
-            if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
-        )
-    return ""
 
 
 def _numeric_usage(value: object, prefix: str = "") -> dict[str, int | float]:
@@ -563,21 +552,32 @@ def _native_settlement(root: Path) -> dict[str, object]:
             tool_call_id = message.get("toolCallId")
             if isinstance(tool_call_id, str) and tool_call_id:
                 tool_result_ids.add(tool_call_id)
-            text = _native_message_text(message)
+            text = lifecycle._native_message_text(message)
             tool_output_marker_count += text.count(tool_marker) if tool_marker else 0
 
     first_turn_headers = [event for event in first_turn_events if event.get("type") == "session" and event.get("id") == expected_native_id]
-    first_turn_marker_count = sum(
-        _native_message_text(event["message"]).count(marker)
+    first_turn_assistant_rows = [
+        {"id": event.get("id"), "text": lifecycle._native_message_text(event["message"])}
         for event in first_turn_events
         if event.get("type") in {"message", "message_end"}
         and isinstance(event.get("message"), Mapping)
         and event["message"].get("role") == "assistant"
-        and marker
+    ]
+    # Every occurrence in the turn's assistant rows, narration included. Which
+    # row replied is a separate fact: the first turn works through a tool and
+    # may say which marker it will reply with on the row that makes the call.
+    first_turn_marker_count = sum(str(row["text"]).count(marker) for row in first_turn_assistant_rows if marker)
+    continuation = _read_json(root / "console-continuation-receipt.json") or {}
+    context = continuation.get("context")
+    seed_marker = context.get("seed_marker") if isinstance(context, Mapping) else None
+    # The first prompt asks for the stored context value and then the marker.
+    native_reply = lifecycle._one_marker_reply(
+        first_turn_assistant_rows,
+        marker,
+        alongside=(seed_marker,) if isinstance(seed_marker, str) and seed_marker else (),
     )
-    native_archive_bound = (
-        first_turn_source_bound and len(first_turn_headers) == 1 and first_turn_marker_count == 1 and not malformed_source
-    )
+    native_reply_count = 1 if native_reply is not None and native_reply["marker_count"] == 1 else 0
+    native_archive_bound = first_turn_source_bound and len(first_turn_headers) == 1 and native_reply_count == 1 and not malformed_source
 
     boundary = _read_json(root / "console-boundary-receipt.json") or {}
     flush = _read_json(root / "transcript-flush-receipt.json") or {}
@@ -607,6 +607,8 @@ def _native_settlement(root: Path) -> dict[str, object]:
         "native_session_id_bound": native_session_id_bound,
         "native_terminal_after_assistant": False,
         "native_marker_count": first_turn_marker_count,
+        "native_reply_count": native_reply_count,
+        "native_reply_message_id": native_reply.get("id") if native_reply is not None and native_reply_count == 1 else None,
         "expected_native_session_id": expected_native_id,
         "native_tool_call_ids": sorted(tool_call_ids),
         "native_tool_result_ids": sorted(tool_result_ids),
@@ -642,7 +644,7 @@ def omp_console_assertions(observation: Mapping[str, object]) -> dict[str, bool]
                 settlement.get("stream_drained") is True,
                 settlement.get("native_archive_bound") is True,
                 settlement.get("native_session_id_bound") is True,
-                settlement.get("native_marker_count") == 1,
+                settlement.get("native_reply_count") == 1,
                 settlement.get("native_tool_evidence_complete") is True,
                 settlement.get("malformed_source") is False,
                 observation.get("omp_continuation_context_recalled") is True,

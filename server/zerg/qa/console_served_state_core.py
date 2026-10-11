@@ -340,13 +340,18 @@ MARKER_REPLY_SERVED_WITHOUT_ANSWER = "marker_reply_served_without_answer"
 
 
 class MarkerAnswerCountError(RuntimeError):
-    """A served transcript that can no longer change did not answer a marker exactly once.
+    """A transcript that can no longer change did not answer a marker exactly once.
 
     Raised as soon as that is certain, instead of polling to a deadline: nothing
     was slow, so waiting cannot help and a timeout would misreport the cause.
     The message opens with the reason and carries only counts and event ids,
     never model text, so a classifier reading it cannot be steered by what the
     model wrote. ``observation`` keeps what the Runtime Host served.
+
+    ``surface`` names what was counted. The default is a complete served page;
+    the Console producers also count the rows of a finished turn in the
+    provider's own transcript (``native assistant row``) and the messages of a
+    finished run's output stream.
     """
 
     def __init__(
@@ -357,14 +362,16 @@ class MarkerAnswerCountError(RuntimeError):
         answers: list[dict],
         mentions: list[dict],
         expected: str = "exactly 1",
+        surface: str = "served assistant event",
     ) -> None:
         self.reason = reason
         self.marker = marker
+        self.surface = surface
         self.answer_event_ids = [event.get("id") for event in answers]
         self.mention_event_ids = [event.get("id") for event in mentions]
         self.observation: dict[str, object] = {}
         super().__init__(
-            f"{reason}: marker {marker} has {len(answers)} answering served assistant event(s), expected {expected} "
+            f"{reason}: marker {marker} has {len(answers)} answering {surface}(s), expected {expected} "
             f"(answering event ids {self.answer_event_ids}; {len(mentions)} other event(s) only mention it: {self.mention_event_ids})"
         )
 

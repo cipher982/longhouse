@@ -993,6 +993,95 @@ def test_omp_native_marker_evidence_respects_turn_boundaries(tmp_path):
     assert second["native_message_id"] == "omp-second"
 
 
+_NATIVE_MARKER = "LH_FIXTURE_CONSOLE_abc"
+_NATIVE_CONTEXT = "LH_FIXTURE_CONTEXT_def"
+_NATIVE_NARRATION = f"I will read the file, then reply with `{_NATIVE_MARKER}`."
+
+
+def _write_native_turn(path: Path, *assistant_rows: tuple[str, object]) -> None:
+    """One native Pi or OMP tool turn: the row that calls the tool, its result, then ``assistant_rows`` (id, content)."""
+    rows = [
+        {"type": "session", "id": "native-session"},
+        {"type": "message", "id": "prompt", "message": {"role": "user", "content": f"Read the file, then reply with {_NATIVE_MARKER}."}},
+        {
+            "type": "message",
+            "id": "tool-call",
+            "message": {
+                "role": "assistant",
+                # A turn that works through a tool says what it will reply before it calls the tool.
+                "content": [{"type": "text", "text": _NATIVE_NARRATION}, {"type": "toolCall", "id": "call-1", "name": "read"}],
+                "stopReason": "toolUse",
+            },
+        },
+        # The proof file holds the marker, so the tool's output names it too.
+        {"type": "message", "id": "tool-result", "message": {"role": "toolResult", "toolCallId": "call-1", "content": _NATIVE_MARKER}},
+        *({"type": "message", "id": row_id, "message": {"role": "assistant", "content": content}} for row_id, content in assistant_rows),
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("provider", ["pi", "omp"])
+def test_native_marker_evidence_names_the_row_that_answers_not_the_narration(tmp_path, provider):
+    native = tmp_path / "session.jsonl"
+    _write_native_turn(native, ("reply", f"The read returned.\n\n{_NATIVE_CONTEXT} {_NATIVE_MARKER}"))
+
+    evidence = lifecycle._native_marker_evidence(provider, native, _NATIVE_MARKER, alongside=(_NATIVE_CONTEXT,))
+
+    assert evidence == {
+        "native_message_id": "reply",
+        "provider_session_id": "native-session",
+        "source_offset": evidence["source_offset"],
+        "marker_count": 1,
+    }
+    # The reply carries the stored context value on the marker's line, so it
+    # answers only for a caller that names that value.
+    assert lifecycle._native_marker_evidence(provider, native, _NATIVE_MARKER) is None
+
+
+@pytest.mark.parametrize("provider", ["pi", "omp"])
+def test_native_marker_evidence_reads_text_blocks_as_separate_lines(tmp_path, provider):
+    native = tmp_path / "session.jsonl"
+    # The marker ends one text block and the next begins with a word.
+    _write_native_turn(native, ("reply", [{"type": "text", "text": _NATIVE_MARKER}, {"type": "text", "text": "Done."}]))
+
+    evidence = lifecycle._native_marker_evidence(provider, native, _NATIVE_MARKER)
+
+    assert evidence is not None and evidence["native_message_id"] == "reply"
+
+
+@pytest.mark.parametrize("provider", ["pi", "omp"])
+def test_native_marker_answered_in_two_rows_is_refused_with_the_typed_reason(tmp_path, provider):
+    native = tmp_path / "session.jsonl"
+    _write_native_turn(native, ("reply", _NATIVE_MARKER), ("reply-again", f"`{_NATIVE_MARKER}`"))
+
+    with pytest.raises(MarkerAnswerCountError) as raised:
+        lifecycle._native_marker_evidence(provider, native, _NATIVE_MARKER)
+
+    assert raised.value.reason == "marker_answered_more_than_once"
+    assert raised.value.answer_event_ids == ["reply", "reply-again"]
+    assert raised.value.mention_event_ids == ["tool-call"]
+    message = str(raised.value)
+    assert message.startswith("marker_answered_more_than_once: ")
+    assert "has 2 answering native assistant row(s), expected exactly 1" in message
+    # Counts and ids only: nothing the model wrote reaches the classifier.
+    assert "I will read the file" not in message
+
+
+@pytest.mark.parametrize("provider", ["pi", "omp"])
+@pytest.mark.parametrize(
+    "reply",
+    [
+        pytest.param(f"The marker is {_NATIVE_MARKER}, as asked.", id="in-a-sentence"),
+        pytest.param(f"{_NATIVE_MARKER}\n\nThat was {_NATIVE_MARKER}.", id="answered-then-repeated"),
+    ],
+)
+def test_native_marker_evidence_needs_a_row_that_answers_once(tmp_path, provider, reply):
+    native = tmp_path / "session.jsonl"
+    _write_native_turn(native, ("reply", reply))
+
+    assert lifecycle._native_marker_evidence(provider, native, _NATIVE_MARKER) is None
+
+
 def test_pi_claim_output_evidence_ignores_non_assistant_message_end(tmp_path):
     marker = "PI_OUTPUT_MARKER"
     source = tmp_path / "pi-output.jsonl"
@@ -1080,7 +1169,54 @@ def test_omp_interrupt_recovery_is_bound_to_retained_marker_and_terminal_output(
 
     assert evidence["valid"] is True
     assert evidence["assistant_marker_count"] == 1
+    assert evidence["assistant_reply_count"] == 1
     assert evidence["terminal_event_index"] > evidence["marker_event_index"]
+
+
+def _post_interrupt_output(tmp_path: Path, *messages: object) -> dict[str, object]:
+    source = tmp_path / "post.jsonl"
+    events = [{"type": "message_end", "message": {"role": "assistant", "content": content}} for content in messages]
+    events.append({"type": "agent_end", "isTerminal": True, "willContinue": False})
+    source.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+    return lifecycle._retained_post_interrupt_output_evidence(
+        "omp",
+        {"stdout_path": str(source)},
+        "POST_MARKER",
+        [{"source": str(source), "kind": "stdout_path", "path": "post.jsonl", "retained": True}],
+        tmp_path,
+    )
+
+
+def test_omp_interrupt_recovery_binds_the_message_that_answers_not_the_one_that_narrates(tmp_path):
+    evidence = _post_interrupt_output(
+        tmp_path,
+        [{"type": "text", "text": "I will check the job first, then reply with `POST_MARKER`."}, {"type": "toolCall", "id": "call-1"}],
+        [{"type": "text", "text": "The job is gone.\n\nPOST_MARKER"}],
+    )
+
+    assert evidence["valid"] is True
+    # Every message that names the marker is counted; one of them replied.
+    assert evidence["assistant_marker_count"] == 2
+    assert evidence["assistant_reply_count"] == 1
+    assert evidence["marker_event_index"] == 1
+    assert evidence["terminal_event_index"] == 2
+
+
+def test_omp_interrupt_recovery_without_a_message_that_answers_is_not_valid(tmp_path):
+    evidence = _post_interrupt_output(tmp_path, "I would reply with POST_MARKER, but the job is still running.")
+
+    assert evidence["valid"] is False
+    assert evidence["assistant_marker_count"] == 1
+    assert evidence["assistant_reply_count"] == 0
+    assert evidence["marker_event_index"] is None
+
+
+def test_omp_interrupt_recovery_answered_in_two_messages_is_refused_with_the_typed_reason(tmp_path):
+    with pytest.raises(MarkerAnswerCountError) as raised:
+        _post_interrupt_output(tmp_path, "POST_MARKER", "POST_MARKER")
+
+    assert raised.value.reason == "marker_answered_more_than_once"
+    assert "has 2 answering provider output message(s), expected exactly 1" in str(raised.value)
 
 
 def test_source_retention_rejects_a_source_changed_during_copy(tmp_path, monkeypatch):

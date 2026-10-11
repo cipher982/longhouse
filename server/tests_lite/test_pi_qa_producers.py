@@ -9,6 +9,7 @@ import pytest
 
 from zerg.qa import pi_console_tool_producer as pi_console
 from zerg.qa import provider_console_lifecycle as lifecycle
+from zerg.qa.console_served_state_core import MarkerAnswerCountError
 from zerg.qa.pi_console_tool_producer import REGISTRATION as PI_CONSOLE_REGISTRATION
 from zerg.qa.pi_console_tool_producer import pi_console_tool_assertions
 from zerg.qa.pi_helm_lifecycle import _cleanup_receipt
@@ -339,7 +340,10 @@ def _write_native_tool_session(
     result_call_id: str | None = "call-1",
     include_result: bool = True,
     assistant_final_id: str = "assistant-final-1",
+    narration: str | None = None,
+    later_assistant_rows: tuple[tuple[str, str], ...] = (),
 ) -> None:
+    """``narration`` is what the row that calls the tool says first; ``later_assistant_rows`` follow the reply."""
     events = [
         {"type": "session", "id": "native-session-1"},
         {
@@ -348,7 +352,10 @@ def _write_native_tool_session(
             "message": {
                 "role": "assistant",
                 "model": "fixture-model",
-                "content": [{"type": "toolCall", "id": "call-1", "name": "read", "arguments": {"path": "proof.txt"}}],
+                "content": [
+                    *([{"type": "text", "text": narration}] if narration else []),
+                    {"type": "toolCall", "id": "call-1", "name": "read", "arguments": {"path": "proof.txt"}},
+                ],
                 "stopReason": "toolUse",
             },
         },
@@ -373,6 +380,10 @@ def _write_native_tool_session(
             "id": assistant_final_id,
             "message": {"role": "assistant", "content": [{"type": "text", "text": "LH_MARKER"}], "stopReason": "stop"},
         }
+    )
+    events.extend(
+        {"type": "message", "id": row_id, "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
+        for row_id, text in later_assistant_rows
     )
     path.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
 
@@ -469,6 +480,42 @@ def test_pi_native_tool_receipt_rejects_missing_or_mismatched_native_pair(tmp_pa
     assert "native_tool_call_result_pair_missing" in receipt["failure_reasons"]
 
 
+def test_pi_native_tool_receipt_binds_the_row_that_answers_when_the_tool_call_row_narrates(tmp_path) -> None:
+    native_source = tmp_path / "native.jsonl"
+    _write_native_tool_session(
+        native_source,
+        narration="I will read proof.txt, then reply with `LH_MARKER`.",
+        # A later row that names the marker in a sentence is a mention too.
+        later_assistant_rows=(("assistant-recap-1", "Earlier I replied with LH_MARKER as asked."),),
+    )
+    inputs = _native_tool_receipt_inputs(native_source)
+    # Every occurrence in the provider's output, the narration's included.
+    inputs["binding"]["provider_response_marker_count"] = 3
+
+    receipt = lifecycle._pi_native_tool_receipt(**inputs)
+
+    assert receipt["status"] == "pass"
+    assert receipt["failure_reasons"] == []
+    assert receipt["provider_response"]["native_message_id"] == "assistant-final-1"
+    assert receipt["provider_response"]["native_marker_count"] == 1
+    observation = lifecycle._pi_native_tool_observation(native_source, "LH_MARKER")
+    assert [row["native_message_id"] for row in observation["marker_responses"]] == ["assistant-final-1"]
+    assert [row["native_message_id"] for row in observation["marker_mentions"]] == ["assistant-tool-1", "assistant-recap-1"]
+
+
+def test_pi_native_tool_receipt_refuses_a_marker_answered_in_two_rows_with_the_typed_reason(tmp_path) -> None:
+    native_source = tmp_path / "native.jsonl"
+    _write_native_tool_session(native_source, later_assistant_rows=(("assistant-final-2", "LH_MARKER"),))
+
+    # Not a failed receipt: that would be a verdict about the subject.
+    with pytest.raises(MarkerAnswerCountError) as raised:
+        lifecycle._pi_native_tool_receipt(**_native_tool_receipt_inputs(native_source))
+
+    assert raised.value.reason == "marker_answered_more_than_once"
+    assert raised.value.answer_event_ids == ["assistant-final-1", "assistant-final-2"]
+    assert "has 2 answering native assistant row(s), expected exactly 1" in str(raised.value)
+
+
 def test_pi_native_tool_receipt_accepts_native_projected_id_equality(tmp_path) -> None:
     native_source = tmp_path / "native.jsonl"
     _write_native_tool_session(native_source, assistant_final_id="event-1")
@@ -484,7 +531,7 @@ def test_pi_console_contract_revision_advances_with_native_receipt() -> None:
     registration = PI_CONSOLE_REGISTRATION.to_dict()
 
     assert registration["producer_revision"] == 5
-    assert registration["scenario_revision"] == 6
+    assert registration["scenario_revision"] == 7
     assert "native_tool_receipt" in registration["required_artifacts"]
 
 
