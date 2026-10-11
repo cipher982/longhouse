@@ -593,6 +593,16 @@ impl DaemonState {
     }
 
     pub(super) async fn on_local_status_tick(&mut self) {
+        // A seal check that found lagging work waits out its cooldown; the
+        // tick is what retries it, so the last shipment landing inside the
+        // cooldown still seals within HISTORY_SEAL_RECHECK_INTERVAL.
+        super::discovery_scans::maybe_seal_history_reconciliation(
+            &mut self.conn,
+            &mut self.open_history_reconciliation,
+            &self.scheduler,
+            &self.deferred_retries,
+            self.discovery_tasks.is_empty(),
+        );
         if let Some(gap) = self
             .wake_gap_detector
             .observe(SystemTime::now(), Instant::now())
