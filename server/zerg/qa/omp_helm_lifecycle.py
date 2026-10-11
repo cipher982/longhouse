@@ -63,6 +63,7 @@ from zerg.qa.wait_kind import LONGHOUSE_INGEST
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import expired_wait
 from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
@@ -391,8 +392,7 @@ def _wait(
         time.sleep(0.2)
     prefix = f"timed out waiting for {description}"
     error = on_timeout(prefix) if on_timeout is not None else RuntimeError(f"{prefix}: {last!r}")
-    kind = waited_on() if callable(waited_on) else waited_on
-    raise expired(error, kind) if kind else error
+    raise expired_wait(error, waited_on)
 
 
 _RUNTIME_HOST_RETRY_STATUSES = frozenset({404, 429, 500, 502, 503, 504})

@@ -29,7 +29,7 @@ from zerg.qa.wait_kind import LONGHOUSE_ENGINE
 from zerg.qa.wait_kind import LONGHOUSE_INGEST
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
-from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import expired_wait
 from zerg.qa.wait_kind import failure_fields
 from zerg.services.longhouse_paths import get_managed_local_dir
 
@@ -69,8 +69,7 @@ def _wait_until(predicate, *, timeout: float, description: str, waited_on=None):
             return value
         time.sleep(0.25)
     error = RuntimeError(f"timed out waiting for {description}")
-    kind = waited_on() if callable(waited_on) else waited_on
-    raise expired(error, kind) if kind else error
+    raise expired_wait(error, waited_on)
 
 
 def _state_ids(root: Path) -> set[str]:

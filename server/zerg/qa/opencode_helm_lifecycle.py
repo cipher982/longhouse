@@ -59,7 +59,7 @@ from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.wait_kind import PROVIDER_TURN
-from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import expired_wait
 from zerg.qa.wait_kind import failure_fields
 
 SCENARIO_ID = "opencode_helm_lifecycle"
@@ -195,8 +195,7 @@ def _wait(predicate, *, timeout: float, description: str, interval: float = 0.5,
             return value
         time.sleep(interval)
     error = TimeoutError(f"timed out waiting for {description}")
-    kind = waited_on() if callable(waited_on) else waited_on
-    raise expired(error, kind) if kind else error
+    raise expired_wait(error, waited_on)
 
 
 # --- Runtime Host (the product control path) --------------------------------

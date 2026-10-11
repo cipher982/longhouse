@@ -70,6 +70,23 @@ def expired(error: _Error, waited_on: str) -> _Error:
     return error
 
 
+def expired_wait(error: _Error, waited_on: object) -> _Error:
+    """Mark ``error`` as an expired wait on what ``waited_on`` says, and return it.
+
+    ``waited_on`` is a kind, None, or a callable that decides the kind when the
+    wait expires, from what the wait last saw. A callable that raises has not
+    determined the kind: nothing is declared and ``error`` is returned as it
+    is, so a failure to read the provider's record never replaces the timeout
+    the wait was asked about.
+    """
+
+    try:
+        kind = waited_on() if callable(waited_on) else waited_on
+    except Exception:  # noqa: BLE001 - not knowing the kind is not a failure of the wait
+        kind = None
+    return expired(error, kind) if kind else error  # type: ignore[arg-type]
+
+
 def waited_on(error: BaseException | None) -> str | None:
     """The kind ``error`` was marked with, or the kind of the error it was raised from.
 

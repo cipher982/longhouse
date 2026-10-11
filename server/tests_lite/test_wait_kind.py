@@ -32,6 +32,7 @@ from zerg.qa.wait_kind import PROVIDER_PROCESS
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import expired_wait
 from zerg.qa.wait_kind import failure_fields
 from zerg.qa.wait_kind import waited_on
 
@@ -417,6 +418,22 @@ def test_the_codex_seed_turn_says_whether_codex_took_the_typed_prompt(monkeypatc
 
 
 # --- Console: the adapter's claim, then the served reply --------------------------
+
+
+def test_a_wait_that_cannot_determine_its_kind_declares_nothing_and_keeps_its_timeout() -> None:
+    def unreadable() -> str:
+        raise OSError("the provider's record could not be read")
+
+    timeout = RuntimeError("timed out waiting for the reply")
+    # The timeout is what is raised, undeclared; the reader's own error does not replace it.
+    assert expired_wait(timeout, unreadable) is timeout and waited_on(timeout) is None
+    assert waited_on(expired_wait(RuntimeError("timed out"), lambda: PROVIDER_TURN)) == PROVIDER_TURN
+    assert waited_on(expired_wait(RuntimeError("timed out"), LONGHOUSE_INGEST)) == LONGHOUSE_INGEST
+    assert waited_on(expired_wait(RuntimeError("timed out"), lambda: None)) is None
+    # Through a producer's own wait helper.
+    with pytest.raises(RuntimeError, match="^timed out waiting for the hosted reply$") as raised:
+        cursor_helm_product_e2e._wait_until(lambda: None, timeout=0.01, description="the hosted reply", waited_on=unreadable)
+    assert waited_on(raised.value) is None
 
 
 def test_a_console_claim_wait_reads_the_claim_to_say_what_it_waited_on(tmp_path) -> None:

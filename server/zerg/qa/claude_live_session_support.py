@@ -52,7 +52,7 @@ from zerg.qa.managed_claude_live import transcript_paths
 from zerg.qa.managed_claude_live import wait_for_channel_ready
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.wait_kind import PROVIDER_TURN
-from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import expired_wait
 
 _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 
@@ -171,8 +171,7 @@ def wait_until(
             return value
         time.sleep(0.5)
     error = ScenarioError(f"timed out waiting for {description}")
-    kind = waited_on() if callable(waited_on) else waited_on
-    raise expired(error, kind) if kind else error
+    raise expired_wait(error, waited_on)
 
 
 def terminal_text(path: Path) -> str:

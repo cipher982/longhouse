@@ -65,6 +65,7 @@ from zerg.qa.wait_kind import PROVIDER_PROCESS
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
+from zerg.qa.wait_kind import expired_wait
 from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
@@ -198,8 +199,7 @@ def _wait(predicate, *, timeout: float, description: str, on_timeout=None, waite
         time.sleep(0.2)
     prefix = f"timed out waiting for {description}"
     error = on_timeout(prefix) if on_timeout is not None else RuntimeError(f"{prefix}: {last}")
-    kind = waited_on() if callable(waited_on) else waited_on
-    raise expired(error, kind) if kind else error
+    raise expired_wait(error, waited_on)
 
 
 def _state_paths(home: Path) -> list[Path]:
