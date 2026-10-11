@@ -12,6 +12,7 @@ from typing import cast
 
 import pytest
 
+from zerg.qa import cursor_helm_gate0 as gate
 from zerg.qa.cursor_helm_gate0 import _auth_report
 from zerg.qa.cursor_helm_gate0 import _cursor_store_agent_id
 from zerg.qa.cursor_helm_gate0 import _cursor_terminal_text
@@ -523,3 +524,356 @@ def test_submit_active_steers_with_two_enters_not_one(tmp_path: Path) -> None:
     assert written == b"STEER\r\r"
     assert written.count(b"\r") == 2
     assert b"\x1b" not in written
+
+
+class _HookReplay:
+    """A clock that replays hook rows: sleeping advances it and appends the rows
+    that have come due, so a full-length wait costs no real time."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self._pending: list[tuple[float, Path, dict[str, Any]]] = []
+
+    @classmethod
+    def install(cls, monkeypatch) -> _HookReplay:
+        replay = cls()
+        monkeypatch.setattr(gate, "time", replay)
+        return replay
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+        self._flush()
+
+    def emit(self, path: Path, rows: list[tuple[float, dict[str, Any]]], **identity: str) -> None:
+        self._pending.extend((self.now + offset, path, {**row, **identity}) for offset, row in rows)
+        self._flush()
+
+    def _flush(self) -> None:
+        due = sorted((item for item in self._pending if item[0] <= self.now + 1e-9), key=lambda item: item[0])
+        self._pending = [item for item in self._pending if item[0] > self.now + 1e-9]
+        for _, path, row in due:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row) + "\n")
+
+
+def _hook(offset: float, event: str, generation_id: str = "gen-1", **fields: Any) -> tuple[float, dict[str, Any]]:
+    return offset, {"event": event, "generation_id": generation_id, **fields}
+
+
+class _FakeCursor:
+    """A Cursor PTY session that emits scripted hook rows instead of running.
+
+    The first batch is emitted at launch and the next one on each input the
+    harness sends (a prompt, a steer or Ctrl-C), stamped with the session and
+    conversation the harness launched it with.
+    """
+
+    def __init__(
+        self, replay: _HookReplay, batches: list[list[tuple[float, dict[str, Any]]]], env: dict[str, str], argv: list[str]
+    ) -> None:
+        self._replay = replay
+        self._batches = batches
+        self._events_path = Path(env["LONGHOUSE_CURSOR_GATE0_EVENTS"])
+        identity_flag = "--resume" if "--resume" in argv else "--new-session-id"
+        self._identity = {
+            "longhouse_session_id": env["LONGHOUSE_MANAGED_SESSION_ID"],
+            "conversation_id": argv[argv.index(identity_flag) + 1],
+        }
+        self.process = SimpleNamespace(pid=4242, returncode=None)
+
+    @classmethod
+    def launcher(cls, replay: _HookReplay, *batches: list[tuple[float, dict[str, Any]]]):
+        def start(*, argv, cwd, env, terminal_path):  # noqa: ANN001 - test double
+            terminal_path.touch()
+            session = cls(replay, list(batches), env, list(argv))
+            session._next_batch()
+            return session
+
+        return start
+
+    def _next_batch(self) -> None:
+        if self._batches:
+            self._replay.emit(self._events_path, self._batches.pop(0), **self._identity)
+
+    def submit_idle(self, _text: str) -> None:
+        self._next_batch()
+
+    def submit_active(self, _text: str) -> None:
+        self._next_batch()
+
+    def interrupt(self) -> None:
+        self._next_batch()
+
+    def alive(self) -> bool:
+        return True
+
+    def close(self) -> None:
+        return None
+
+
+def _wait_in_turn(replay: _HookReplay, events: Path, rows: list[tuple[float, dict[str, Any]]], **overrides: Any) -> dict[str, Any]:
+    replay.emit(events, rows, longhouse_session_id="session-1", conversation_id="conversation-1")
+    return gate.wait_for_hook(
+        events,
+        **{
+            "longhouse_session_id": "session-1",
+            "event": "afterAgentResponse",
+            "conversation_id": "conversation-1",
+            "generation_id": "gen-1",
+            "timeout": 90.0,
+            **overrides,
+        },
+    )
+
+
+def test_wait_for_hook_fails_typed_when_the_turn_errors_before_the_awaited_event(monkeypatch, tmp_path: Path) -> None:
+    """A turn the provider ended in error cannot still produce its response.
+
+    The steered turn's shell ends, the provider reports `stop status=error`
+    twenty seconds in, and no response follows. Waiting out the remaining
+    seventy seconds and calling it a timeout misreports a provider error.
+    """
+
+    replay = _HookReplay.install(monkeypatch)
+
+    with pytest.raises(gate.Gate0Failure) as failure:
+        _wait_in_turn(
+            replay,
+            tmp_path / "events.ndjson",
+            [
+                _hook(0.0, "beforeShellExecution"),
+                _hook(0.5, "beforeSubmitPrompt", "gen-2"),
+                _hook(1.0, "afterShellExecution"),
+                _hook(20.4, "stop", status="error"),
+            ],
+        )
+
+    assert failure.value.failure_code == "cursor_turn_ended_in_error"
+    assert failure.value.facts["awaited_event"] == "afterAgentResponse"
+    assert failure.value.facts["stop_status"] == "error"
+    assert failure.value.facts["generation_id"] == "gen-1"
+    assert 20.4 <= replay.now < 20.4 + gate._HOOK_TIMEOUT_SECONDS + 1
+
+
+def test_wait_for_hook_still_times_out_when_the_turn_never_ends(monkeypatch, tmp_path: Path) -> None:
+    replay = _HookReplay.install(monkeypatch)
+
+    with pytest.raises(TimeoutError, match="afterAgentResponse"):
+        _wait_in_turn(
+            replay,
+            tmp_path / "events.ndjson",
+            [_hook(0.0, "beforeShellExecution"), _hook(1.0, "afterShellExecution")],
+        )
+
+    assert replay.now >= 90.0
+
+
+def test_wait_for_hook_accepts_an_event_that_lands_after_its_turns_stop(monkeypatch, tmp_path: Path) -> None:
+    """Hooks are separate processes: a turn's stop row can precede its response row."""
+
+    replay = _HookReplay.install(monkeypatch)
+
+    row = _wait_in_turn(
+        replay,
+        tmp_path / "events.ndjson",
+        [_hook(2.0, "stop", status="completed"), _hook(2.3, "afterAgentResponse", text_sha256="digest")],
+    )
+
+    assert row["event"] == "afterAgentResponse"
+    assert replay.now < 3.0
+
+
+def test_wait_for_hook_names_a_completed_turn_that_never_produced_the_event(monkeypatch, tmp_path: Path) -> None:
+    replay = _HookReplay.install(monkeypatch)
+
+    with pytest.raises(gate.Gate0Failure) as failure:
+        _wait_in_turn(
+            replay,
+            tmp_path / "events.ndjson",
+            [_hook(3.0, "afterAgentResponse"), _hook(3.0, "stop", status="completed")],
+            event="beforeShellExecution",
+        )
+
+    assert failure.value.failure_code == "cursor_turn_ended_without_event"
+    assert failure.value.facts["stop_status"] == "completed"
+    assert replay.now < 3.0 + gate._HOOK_TIMEOUT_SECONDS + 1
+
+
+def test_wait_for_hook_only_ends_on_a_stop_of_the_awaited_turn(monkeypatch, tmp_path: Path) -> None:
+    """An earlier turn's stop neither ends the wait for a later turn nor fails it."""
+
+    replay = _HookReplay.install(monkeypatch)
+    events = tmp_path / "events.ndjson"
+    rows = [
+        _hook(0.2, "stop", "gen-0", status="error"),
+        _hook(9.0, "beforeSubmitPrompt"),
+        _hook(12.0, "afterAgentResponse"),
+        _hook(12.0, "stop", status="completed"),
+    ]
+
+    assert _wait_in_turn(replay, events, rows)["generation_id"] == "gen-1"
+    # A wait for the event that opens a turn has no turn of its own to end.
+    opened = gate.wait_for_hook(
+        events,
+        longhouse_session_id="session-1",
+        event="beforeSubmitPrompt",
+        conversation_id="conversation-1",
+        timeout=90.0,
+    )
+    assert opened["generation_id"] == "gen-1"
+    # A stop is returned whatever its status when it is the awaited event.
+    stopped = gate.wait_for_hook(
+        events,
+        longhouse_session_id="session-1",
+        event="stop",
+        conversation_id="conversation-1",
+        timeout=90.0,
+    )
+    assert stopped["status"] == "error"
+
+
+def _scenario_paths(tmp_path: Path) -> dict[str, Any]:
+    return {
+        "binary": "/fixture/cursor-agent",
+        "workspace": tmp_path,
+        "events_path": tmp_path / "events.ndjson",
+        "terminal_path": tmp_path / "terminal.raw",
+        "timeout": 90.0,
+        "model": None,
+    }
+
+
+_STEER_LAUNCH = [_hook(0.0, "beforeSubmitPrompt"), _hook(1.7, "beforeShellExecution")]
+_STEER_ERRORED = [
+    _hook(0.5, "beforeSubmitPrompt", "gen-2"),
+    _hook(1.0, "afterShellExecution"),
+    _hook(20.4, "stop", status="error"),
+]
+
+
+def test_active_steer_reports_the_provider_error_not_a_timeout(monkeypatch, tmp_path: Path) -> None:
+    replay = _HookReplay.install(monkeypatch)
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, _STEER_LAUNCH, _STEER_ERRORED))
+
+    with pytest.raises(gate.Gate0Failure) as failure:
+        gate._active_steer_scenario(provider_id="conversation-1", **_scenario_paths(tmp_path))
+
+    assert failure.value.failure_code == "cursor_turn_ended_in_error"
+    assert failure.value.facts["stop_status"] == "error"
+    assert replay.now < 30.0
+
+
+def test_active_steer_passes_when_the_stop_row_precedes_the_steered_response(monkeypatch, tmp_path: Path) -> None:
+    replay = _HookReplay.install(monkeypatch)
+    steered = [
+        _hook(0.5, "beforeSubmitPrompt", "gen-2"),
+        _hook(1.0, "afterShellExecution"),
+        _hook(2.2, "stop", status="completed"),
+        _hook(2.3, "afterAgentResponse", text_sha256=gate._marker_digest("STEERED")),
+    ]
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, _STEER_LAUNCH, steered))
+
+    result = gate._active_steer_scenario(provider_id="conversation-1", **_scenario_paths(tmp_path))
+
+    assert result["status"] == "passed"
+    assert result["response_was_steered"] is True
+
+
+_CANCEL_LAUNCH = [_hook(0.0, "beforeSubmitPrompt"), _hook(2.6, "beforeShellExecution")]
+# Cursor reports an interrupted generation twice: aborted, then error.
+_CANCEL_STOPS = [_hook(0.3, "stop", status="aborted"), _hook(0.31, "stop", status="error")]
+
+
+def _run_cancel_scenario(monkeypatch, tmp_path: Path, recovery_turn: list[tuple[float, dict[str, Any]]]) -> dict[str, Any]:
+    replay = _HookReplay.install(monkeypatch)
+    monkeypatch.setattr(gate, "_wait_cursor_post_interrupt_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, _CANCEL_LAUNCH, _CANCEL_STOPS, recovery_turn))
+    return gate._cancel_scenario(provider_id="conversation-1", **_scenario_paths(tmp_path))
+
+
+def test_ctrl_c_cancel_still_expects_a_stop_that_is_not_a_success(monkeypatch, tmp_path: Path) -> None:
+    result = _run_cancel_scenario(
+        monkeypatch,
+        tmp_path,
+        [
+            _hook(1.5, "beforeSubmitPrompt", "gen-2"),
+            _hook(2.8, "stop", "gen-2", status="completed"),
+            _hook(2.8, "afterAgentResponse", "gen-2"),
+        ],
+    )
+
+    assert result["status"] == "passed"
+    assert result["cancel_status"] == "aborted"
+    assert result["next_turn_completed"] is True
+
+
+def test_permission_deny_is_unaffected_by_how_the_denied_turn_ends(monkeypatch, tmp_path: Path) -> None:
+    replay = _HookReplay.install(monkeypatch)
+    denied = [
+        _hook(0.0, "beforeSubmitPrompt"),
+        _hook(2.1, "beforeShellExecution"),
+        _hook(2.2, "postToolUseFailure"),
+        _hook(2.6, "stop", status="error"),
+    ]
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, denied))
+
+    result = gate._permission_scenario(decision="deny", provider_id="conversation-1", **_scenario_paths(tmp_path))
+
+    assert result["status"] == "passed"
+    assert result["side_effect_present"] is False
+
+
+@pytest.mark.parametrize(
+    ("steered_turn", "failure_code", "stop_status"),
+    [
+        (_STEER_ERRORED, "cursor_turn_ended_in_error", "error"),
+        ([_hook(1.0, "afterShellExecution")], "TimeoutError", None),
+    ],
+)
+def test_gate0_report_names_the_failed_scenario_and_its_typed_code(
+    monkeypatch,
+    tmp_path: Path,
+    steered_turn: list[tuple[float, dict[str, Any]]],
+    failure_code: str,
+    stop_status: str | None,
+) -> None:
+    replay = _HookReplay.install(monkeypatch)
+    binary = tmp_path / "cursor-agent"
+    binary.write_bytes(b"fixture")
+
+    def passed(*_args, **_kwargs):
+        return {"status": "passed", "longhouse_session_id": "session-1"}
+
+    for name in (
+        "_trust_workspace",
+        "_identity_scenario",
+        "_resume_scenario",
+        "_managed_conversation_reset_scenario",
+        "_cancel_scenario",
+        "_permission_scenario",
+    ):
+        monkeypatch.setattr(gate, name, passed)
+    monkeypatch.setattr(gate, "_provider_version", lambda *_args: "0.0.0-fixture")
+    monkeypatch.setattr(gate, "_run_json", lambda *_args, **_kwargs: {"isAuthenticated": True})
+    monkeypatch.setattr(gate, "_create_chat", lambda *_args: "conversation-1")
+    monkeypatch.setattr(gate, "_git_commit", lambda: None)
+    monkeypatch.setattr(gate, "evaluate_reset_observation", lambda _observation: {"status": "pass", "failed_assertions": []})
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, _STEER_LAUNCH, steered_turn))
+
+    report = gate.run_gate0(gate.build_parser().parse_args(["--cursor-bin", str(binary), "--artifact-root", str(tmp_path / "artifacts")]))
+
+    assert report["status"] == "failed"
+    assert report["failure_code"] == failure_code
+    assert report["failed_scenario"] == "active_steer"
+    assert report["scenarios"]["permission_ask"]["status"] == "passed"
+    failed = report["scenarios"]["active_steer"]
+    assert failed["status"] == "failed"
+    assert failed["failure_code"] == failure_code
+    assert failed.get("stop_status") == stop_status
+    assert report == json.loads((Path(report["artifact_root"]) / "gate0.json").read_text(encoding="utf-8"))

@@ -50,6 +50,24 @@ _HOOK_EVENTS = (
     "afterShellExecution",
     "stop",
 )
+# Cursor runs every hook as its own process and gives each one this long, so
+# the rows of one turn are appended out of order: a turn's `stop` row has been
+# observed some 20 ms ahead of the same turn's `afterAgentResponse` row.
+_HOOK_TIMEOUT_SECONDS = 5
+# Hooks that fire only inside a turn. A turn's `stop` hook runs when its agent
+# loop ends, so once that row has been on disk for a full hook timeout none of
+# these can still arrive for the turn.
+_IN_TURN_HOOK_EVENTS = frozenset(
+    {
+        "afterAgentThought",
+        "afterAgentResponse",
+        "preToolUse",
+        "postToolUse",
+        "postToolUseFailure",
+        "beforeShellExecution",
+        "afterShellExecution",
+    }
+)
 
 _ARTIFACT_SECRET_PATTERNS = (
     re.compile(rb"sk-ant-api\d{2}-[A-Za-z0-9_-]+"),
@@ -58,6 +76,15 @@ _ARTIFACT_SECRET_PATTERNS = (
     re.compile(rb"sk-[A-Za-z0-9_-]{20,}"),
 )
 _ANSI_CONTROL_RE = re.compile(r"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-_]|.)")
+
+
+class Gate0Failure(RuntimeError):
+    """A Gate 0 failure with a stable code and the hook facts that explain it."""
+
+    def __init__(self, failure_code: str, message: str, **facts: Any) -> None:
+        super().__init__(message)
+        self.failure_code = failure_code
+        self.facts = facts
 
 
 def _artifact_secret_values() -> tuple[bytes, ...]:
@@ -361,7 +388,7 @@ def write_project_hooks(workspace: Path, events_path: Path) -> Path:
             event: [
                 {
                     "command": f"{script} {event}",
-                    "timeout": 5,
+                    "timeout": _HOOK_TIMEOUT_SECONDS,
                     "failClosed": event in {"beforeShellExecution", "beforeMCPExecution"},
                 }
             ]
@@ -400,21 +427,66 @@ def wait_for_hook(
     after_count: int = 0,
     timeout: float = _DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
+    """Wait for one hook row of a session, conversation and (optionally) generation.
+
+    Waiting for an in-turn event also ends when the turn does: a `stop` row
+    matching the same filters means the awaited event can no longer arrive, so
+    the wait fails with the stop's status instead of running out the clock.
+    Callers awaiting an in-turn event must therefore scope the wait (by
+    `generation_id`, or by an `after_count` window holding a single turn) so an
+    earlier turn's stop cannot match. A `stop` is returned whatever its status
+    when it is the awaited event; judging that status is the caller's job.
+    """
+
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        events = read_hook_events(path)
-        for row in events[after_count:]:
+    turn_end_deadline: float | None = None
+    while True:
+        turn_stop: dict[str, Any] | None = None
+        for row in read_hook_events(path)[after_count:]:
             if row.get("longhouse_session_id") != longhouse_session_id:
-                continue
-            if event is not None and row.get("event") != event:
                 continue
             if conversation_id is not None and row.get("conversation_id") != conversation_id:
                 continue
             if generation_id is not None and row.get("generation_id") != generation_id:
                 continue
-            return row
+            if event is None or row.get("event") == event:
+                return row
+            if turn_stop is None and event in _IN_TURN_HOOK_EVENTS and row.get("event") == "stop":
+                turn_stop = row
+        now = time.monotonic()
+        if turn_stop is not None:
+            if turn_end_deadline is None:
+                turn_end_deadline = min(deadline, now + _HOOK_TIMEOUT_SECONDS)
+            if now >= turn_end_deadline:
+                raise _turn_ended_before(str(event), turn_stop)
+        elif now >= deadline:
+            raise TimeoutError(f"Cursor hook did not produce event={event!r} conversation_id={conversation_id!r}")
         time.sleep(0.1)
-    raise TimeoutError(f"Cursor hook did not produce event={event!r} conversation_id={conversation_id!r}")
+
+
+def _stop_facts(stop: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "stop_status": str(stop.get("status") or ""),
+        "stop_is_interrupt": stop.get("is_interrupt"),
+        "stop_observed_at": stop.get("observed_at"),
+        "provider_conversation_id": stop.get("conversation_id"),
+        "generation_id": stop.get("generation_id"),
+    }
+
+
+def _turn_ended_before(awaited_event: str, stop: dict[str, Any]) -> Gate0Failure:
+    facts = {"awaited_event": awaited_event, **_stop_facts(stop)}
+    if facts["stop_status"] == "completed":
+        return Gate0Failure(
+            "cursor_turn_ended_without_event",
+            f"Cursor completed the turn without producing {awaited_event}",
+            **facts,
+        )
+    return Gate0Failure(
+        "cursor_turn_ended_in_error",
+        f"Cursor ended the turn with stop status {facts['stop_status']!r} before producing {awaited_event}",
+        **facts,
+    )
 
 
 def wait_for_hook_match(
@@ -569,11 +641,13 @@ def _identity_scenario(
             after_count=before,
             timeout=timeout,
         )
+        probe_generation_id = str(prompt.get("generation_id") or "")
         response = wait_for_hook(
             events_path,
             longhouse_session_id=longhouse_session_id,
             event="afterAgentResponse",
             conversation_id=provider_id,
+            generation_id=probe_generation_id,
             after_count=before,
             timeout=timeout,
         )
@@ -582,6 +656,7 @@ def _identity_scenario(
             longhouse_session_id=longhouse_session_id,
             event="stop",
             conversation_id=provider_id,
+            generation_id=probe_generation_id,
             after_count=before,
             timeout=timeout,
         )
@@ -1688,8 +1763,11 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             "is_authenticated": False,
         },
         "scenarios": {},
+        "failed_scenario": None,
     }
     output_path = artifact_root / "gate0.json"
+    # The scenario in flight, so a failure is recorded under its name.
+    scenario: str | None = None
 
     def write_report() -> dict[str, Any]:
         report["finished_at"] = _now()
@@ -1735,6 +1813,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
         report["auth"] = _auth_report(auth)
         if report["auth"]["is_authenticated"] is not True:
             raise RuntimeError("cursor-agent is not authenticated")
+        scenario = "workspace_trust"
         report["scenarios"]["workspace_trust"] = _trust_workspace(
             binary=binary,
             workspace=workspace,
@@ -1743,6 +1822,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
         )
         if args.conversation_reset_only:
+            scenario = "conversation_reset"
             report["scenarios"]["conversation_reset"] = record_reset_observation(
                 _managed_conversation_reset_scenario(
                     binary=binary,
@@ -1753,10 +1833,12 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
                     model=args.model,
                 )
             )
+            scenario = None
             report["selected_identity_path"] = "conversation_reset"
             report["status"] = "passed"
             report["failure_code"] = None
             return write_report()
+        scenario = "create_chat_resume"
         provider_id = _create_chat(binary, workspace)
         report["scenarios"]["create_chat_resume"] = _identity_scenario(
             name="create_chat_resume",
@@ -1771,6 +1853,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             probe_prompt=args.input_prompt,
         )
         first_identity = report["scenarios"]["create_chat_resume"]
+        scenario = "native_resume_continuity"
         report["scenarios"]["native_resume_continuity"] = _resume_scenario(
             binary=binary,
             workspace=workspace,
@@ -1781,6 +1864,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             model=args.model,
         )
+        scenario = "conversation_reset"
         report["scenarios"]["conversation_reset"] = record_reset_observation(
             _managed_conversation_reset_scenario(
                 binary=binary,
@@ -1791,6 +1875,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
                 model=args.model,
             )
         )
+        scenario = "new_session_id"
         requested_id = str(uuid4())
         report["scenarios"]["new_session_id"] = _identity_scenario(
             name="new_session_id",
@@ -1803,6 +1888,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             model=args.model,
         )
+        scenario = "ctrl_c_cancel"
         cancel_provider_id = _create_chat(binary, workspace)
         report["scenarios"]["ctrl_c_cancel"] = _cancel_scenario(
             binary=binary,
@@ -1814,8 +1900,9 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             model=args.model,
         )
         for decision in ("allow", "deny", "ask"):
+            scenario = f"permission_{decision}"
             permission_provider_id = _create_chat(binary, workspace)
-            report["scenarios"][f"permission_{decision}"] = _permission_scenario(
+            report["scenarios"][scenario] = _permission_scenario(
                 decision=decision,
                 binary=binary,
                 workspace=workspace,
@@ -1825,6 +1912,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
                 timeout=args.timeout,
                 model=args.model,
             )
+        scenario = "active_steer"
         steer_provider_id = _create_chat(binary, workspace)
         report["scenarios"]["active_steer"] = _active_steer_scenario(
             binary=binary,
@@ -1840,9 +1928,17 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
         report["failure_code"] = None
     except Exception as exc:
         report["status"] = "failed"
-        report["failure_code"] = type(exc).__name__
+        report["failure_code"] = getattr(exc, "failure_code", None) or type(exc).__name__
         report["error"] = str(exc)
         report["traceback"] = traceback.format_exc()
+        if scenario is not None:
+            report["failed_scenario"] = scenario
+            report["scenarios"][scenario] = {
+                **getattr(exc, "facts", {}),
+                "status": "failed",
+                "failure_code": report["failure_code"],
+                "error": report["error"],
+            }
     return write_report()
 
 
