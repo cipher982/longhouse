@@ -2692,6 +2692,8 @@ struct OmpStreamProjection {
     session_settled: bool,
     has_pending_async_work: Option<bool>,
     native_error: Option<String>,
+    /// What OMP's session store last reported short of moving the session.
+    persistence_notice: Option<String>,
     /// OMP refused the prompt before accepting it: no run will follow.
     rpc_rejected: bool,
     /// OMP accepted the prompt (its `response`, or the run it started). A
@@ -2833,19 +2835,22 @@ impl OmpStreamProjection {
                 }
             }
             Some("session_settled") => self.session_settled = true,
-            Some("notice") => {
-                // OMP left the bound file to another writer (the session is open
-                // in another omp process, or the file was replaced or contested)
-                // and continues as a fork: a new native id in a new file. The
-                // managed session is bound to the identity it started with, so
-                // the turn ends here, with OMP's own account of why. The notice
-                // carries no reason field; its three messages share these words.
+            Some("notice")
+                if event.get("source").and_then(Value::as_str) == Some("session-persistence") =>
+            {
+                // OMP's session store reports at two levels. A warning is always a
+                // move: OMP left the bound file to another writer (the session is
+                // open in another omp process, or the file was replaced or
+                // contested) and continues as a fork, a new native id in a new
+                // file. The managed session is bound to the identity it started
+                // with, so the turn ends here, with OMP's own account of why. Any
+                // other notice is kept for a source that then does not drain.
                 let message = event.get("message").and_then(Value::as_str);
-                if event.get("source").and_then(Value::as_str) == Some("session-persistence") {
-                    if let Some(message) = message.filter(|text| text.contains("now saves to")) {
-                        anyhow::bail!("{SESSION_MOVED}: {message}");
-                    }
+                let message = message.unwrap_or("OMP session-persistence notice");
+                if event.get("level").and_then(Value::as_str) == Some("warning") {
+                    anyhow::bail!("{SESSION_MOVED}: {message}");
                 }
+                self.persistence_notice = Some(message.to_string());
             }
             Some("agent_settled" | "session_stop" | "turn_end") => {}
             Some("agent_end") => {
@@ -3067,9 +3072,10 @@ fn terminal_state_for_projection(
         );
     }
     if !source_drained {
+        let reason = projection.persistence_notice.clone();
         return (
             "run_failed",
-            Some("OMP native session source did not drain completely".into()),
+            reason.or_else(|| Some("OMP native session source did not drain completely".into())),
         );
     }
     if !source_bound {
@@ -6041,6 +6047,40 @@ for line in sys.stdin:
             "provider_session_moved"
         );
         restore_test_longhouse_home(previous);
+    }
+
+    #[test]
+    fn a_session_persistence_notice_is_read_by_its_fields_not_its_wording() {
+        // Emitted by OMP 18.9.1 in rpc mode; only the two session paths are replaced.
+        let moved: Value = serde_json::from_str(
+            r#"{"type":"notice","level":"warning","message":"Session ~/.local/share/omp/sessions/<directory>/<bound>.jsonl is open for writing in another omp process, so this session now saves to ~/.local/share/omp/sessions/<directory>/<fork>.jsonl instead of mixing its entries into that file.","source":"session-persistence"}"#,
+        )
+        .unwrap();
+        let mut reworded = moved.clone();
+        reworded["message"] = json!("Session relocated.");
+        for (notice, message) in [
+            (&moved, moved["message"].as_str().unwrap()),
+            (&reworded, "Session relocated."),
+        ] {
+            let error = OmpStreamProjection::default()
+                .apply(None, notice)
+                .unwrap_err();
+            assert_eq!(error.to_string(), format!("{SESSION_MOVED}: {message}"));
+        }
+
+        // Any other notice of the session store is what a source that then
+        // does not drain fails with.
+        let mut projection = OmpStreamProjection::default();
+        projection
+            .apply(None, &json!({"type": "notice", "level": "error", "message": "Session persistence failed: disk full.", "source": "session-persistence"}))
+            .unwrap();
+        assert_eq!(
+            terminal_state_for_projection(&projection, Some(true), false, None, true, true, false),
+            (
+                "run_failed",
+                Some("Session persistence failed: disk full.".to_string())
+            )
+        );
     }
 
     #[tokio::test]
