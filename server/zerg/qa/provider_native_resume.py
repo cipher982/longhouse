@@ -95,7 +95,7 @@ def registration_for(provider: str) -> ProducerRegistration:
         producer_id=spec.producer_id,
         producer_revision=6 if provider == "cursor" else 5 if provider == "opencode" else 4,
         scenario_id="helm_cold_resume",
-        scenario_revision={"cursor": 8, "opencode": 6}.get(provider, 5),
+        scenario_revision={"cursor": 9, "opencode": 6}.get(provider, 5),
         assertion_cells=(
             ("native_provider_resume_proven", "clean_exit"),
             ("native_provider_resume_proven", "process_loss"),
@@ -821,6 +821,8 @@ def _wait_cursor_hook_sequence(
     observed_events: list[str] = []
     matching_befores: list[tuple[dict[str, Any], int]] = []
     matching_afters: list[tuple[dict[str, Any], int]] = []
+    matching_before: tuple[dict[str, Any], int] | None = None
+    matching_response: tuple[dict[str, Any], int] | None = None
     seen_events: set[str] = set()
     event_position = 0
     while time.monotonic() < deadline:
@@ -943,11 +945,15 @@ def _wait_cursor_hook_sequence(
         f"Cursor {label} did not publish an ordered beforeSubmitPrompt/afterAgentResponse hook sequence "
         f"(start_bytes={minimum_hook_event_bytes}, events={observed_events[-20:]!r})"
     )
-    if matching_befores and matching_afters:
-        # Cursor took the prompt and answered it; the engine's binding claim
-        # for the launch never reached `observed`.
+    if matching_before is not None and matching_response is not None:
+        # Cursor took the prompt and answered it, in the same generation and
+        # in that order; the engine's binding claim for the launch never
+        # reached `observed`.
         raise expired(error, LONGHOUSE_ENGINE)
     if matching_befores:
+        # Cursor took the prompt and this turn has no answer. A response that
+        # names the marker under another generation is another turn's, and is
+        # not what this one was waiting for.
         raise expired(error, PROVIDER_TURN)
     if typed_into_provider:
         # Typed into Cursor's own terminal and never submitted by it.

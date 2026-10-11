@@ -332,6 +332,14 @@ def test_the_cursor_hook_sequence_wait_reads_the_hooks_to_say_what_it_waited_on(
     assert waited_on(sequence(typed=False)) is None
     # Cursor did all of its part; the engine's binding claim never reached `observed`.
     assert waited_on(sequence(before, after, typed=False, claim_status="pending")) == LONGHOUSE_ENGINE
+    # A response that names the marker under another generation is another
+    # turn's: Cursor took this prompt and has not answered it, whatever the
+    # engine's claim says. Attributing it to the engine would withhold the retry.
+    other_turn = ("afterAgentResponse", {"text": MARKER, "generation_id": "g0"})
+    assert waited_on(sequence(before, other_turn, typed=False, claim_status="pending")) == PROVIDER_TURN
+    assert waited_on(sequence(before, other_turn, typed=False)) == PROVIDER_TURN
+    # So is one that came before the prompt was taken.
+    assert waited_on(sequence(after, before, typed=False, claim_status="pending")) == PROVIDER_TURN
 
 
 def test_a_cursor_turn_wait_is_on_the_model_only_once_cursor_took_the_prompt() -> None:
