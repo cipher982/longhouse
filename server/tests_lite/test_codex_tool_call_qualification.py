@@ -62,6 +62,11 @@ if sys.argv[1:] == ["login", "--with-api-key"]:
 prompt = sys.argv[-1]
 command = prompt.split("exactly this one command: ", 1)[1].split("\\nThen", 1)[0]
 behavior = {behavior!r}
+if "--ephemeral" not in sys.argv:
+    # Stock `codex exec` keeps a rollout of the session under CODEX_HOME.
+    rollout = Path(os.environ["CODEX_HOME"]) / "sessions" / "2026" / "01" / "01" / "rollout-2026-01-01T00-00-00-fake.jsonl"
+    rollout.parent.mkdir(parents=True, exist_ok=True)
+    rollout.write_text(json.dumps({{"type": "session_meta", "payload": {{"id": "fake", "originator": "codex_exec"}}}}) + "\\n", encoding="utf-8")
 if behavior == "timeout":
     subprocess.Popen([
         sys.executable,
@@ -155,7 +160,7 @@ def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_pat
     bundle = json.loads((output / "proof-bundle.json").read_text())
     assert bundle["coverage_manifest"] == json.loads((output / "coverage-manifest.json").read_text())
     assert bundle["coverage_manifest"]["scenario_id"] == "codex_tool_call_result"
-    assert bundle["coverage_manifest"]["scenario_revision"] == 1
+    assert bundle["coverage_manifest"]["scenario_revision"] == 2
     assert {record["outcome"] for record in bundle["records"]} == {"pass"}
     assert {record["evidence_class"] for record in bundle["records"]} == {"live_token"}
     assert {record["assertion_id"] for record in bundle["records"]} == set(profile.ASSERTIONS)
@@ -424,6 +429,52 @@ def test_managed_package_root_rejects_non_official_helper(tmp_path: Path, monkey
 
     assert not calls.exists()
     assert not output.exists()
+
+
+def _rollouts(root: Path) -> list[Path]:
+    return sorted(root.rglob("rollout-*.jsonl"))
+
+
+def test_harness_turn_keeps_its_rollout_in_the_qualification_sandbox_codex_home(tmp_path: Path, monkeypatch) -> None:
+    binary, _identity, calls = _fake_codex(tmp_path)
+    sandbox_home = tmp_path / "sandbox-home"
+    sandbox_home.mkdir()
+    exported = sandbox_home / ".codex"
+    monkeypatch.setenv(profile.QUALIFICATION_SANDBOX_ENV, profile.QUALIFICATION_SANDBOX_PROFILE)
+    monkeypatch.setenv(profile.QUALIFICATION_HOME_ENV, str(sandbox_home))
+    monkeypatch.setenv(profile.CODEX_HOME_ENV, str(exported))
+
+    observed = profile.run_codex_real_tool_command(binary, api_key="seeded-test-api-key-not-a-real-secret")
+
+    assert observed["returncode"] == 0
+    live = json.loads(calls.read_text().splitlines()[-1])["argv"]
+    assert "--ephemeral" not in live
+    assert "--ignore-user-config" in live
+    # The session is left where the sandbox put the provider's home, and nowhere else.
+    assert [path.relative_to(exported).parts[0] for path in _rollouts(tmp_path)] == ["sessions"]
+
+
+@pytest.mark.parametrize("ambient", ["developer-home", "outside-the-sandbox-home"])
+def test_harness_turn_never_writes_a_codex_home_the_sandbox_did_not_export(tmp_path: Path, monkeypatch, ambient: str) -> None:
+    binary, _identity, calls = _fake_codex(tmp_path)
+    ambient_home = tmp_path / ambient / ".codex"
+    monkeypatch.setenv(profile.CODEX_HOME_ENV, str(ambient_home))
+    if ambient == "developer-home":
+        # No sandbox at all: a person's own CODEX_HOME is in the environment.
+        monkeypatch.delenv(profile.QUALIFICATION_SANDBOX_ENV, raising=False)
+        monkeypatch.delenv(profile.QUALIFICATION_HOME_ENV, raising=False)
+    else:
+        # A sandbox whose CODEX_HOME points outside its own home is not trusted.
+        monkeypatch.setenv(profile.QUALIFICATION_SANDBOX_ENV, profile.QUALIFICATION_SANDBOX_PROFILE)
+        monkeypatch.setenv(profile.QUALIFICATION_HOME_ENV, str(tmp_path / "sandbox-home"))
+
+    observed = profile.run_codex_real_tool_command(binary, api_key="seeded-test-api-key-not-a-real-secret")
+
+    assert observed["returncode"] == 0
+    assert "--ephemeral" not in json.loads(calls.read_text().splitlines()[-1])["argv"]
+    # The rollout went to the run's scratch home, which is gone with the run.
+    assert not ambient_home.exists()
+    assert _rollouts(tmp_path) == []
 
 
 def test_router_and_profile_requests_are_strict(tmp_path: Path, monkeypatch) -> None:

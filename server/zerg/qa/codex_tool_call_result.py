@@ -32,12 +32,16 @@ from zerg.services.provider_capability_proof_store import ProviderCapabilityProo
 
 PROFILE = "codex_tool_call_result_v1"
 SCENARIO_ID = "codex_tool_call_result"
-SCENARIO_REVISION = 1
+# Revision 2: the harness turn persists its session (no `--ephemeral`), in the
+# qualification sandbox's own CODEX_HOME when there is one.
+SCENARIO_REVISION = 2
 TIMEOUT_SECONDS = 180
 API_KEY_ENV = "CODEX_API_KEY"
 MANAGED_PACKAGE_ROOT_ENV = "CODEX_MANAGED_PACKAGE_ROOT"
 QUALIFICATION_SANDBOX_ENV = "LONGHOUSE_QUALIFICATION_SANDBOX"
 QUALIFICATION_SANDBOX_PROFILE = "provider-qualification-bwrap-v3"
+QUALIFICATION_HOME_ENV = "LONGHOUSE_QUALIFICATION_HOME"
+CODEX_HOME_ENV = "CODEX_HOME"
 ASSERTIONS = (
     "exact_executable_identity_observed",
     "reported_version_matches_expected",
@@ -83,6 +87,25 @@ def _codex_sandbox_mode() -> tuple[str, str | None]:
     if outer_profile == QUALIFICATION_SANDBOX_PROFILE:
         return "danger-full-access", outer_profile
     return "workspace-write", None
+
+
+def _codex_session_home(scratch: Path) -> Path:
+    """Where this run's Codex keeps its session rollout.
+
+    Inside the qualification sandbox that is the CODEX_HOME the sandbox
+    exports: a directory under the sandbox's own home, made for one invocation
+    and removed with it, so the rollout is left for whoever runs the sandbox to
+    read and reaches no other run. Anywhere else it is a directory in the run's
+    scratch that goes when the run ends; an ambient CODEX_HOME outside the
+    sandbox is never written.
+    """
+    exported = os.environ.get(CODEX_HOME_ENV, "").strip()
+    qualification_home = os.environ.get(QUALIFICATION_HOME_ENV, "").strip()
+    if os.environ.get(QUALIFICATION_SANDBOX_ENV) == QUALIFICATION_SANDBOX_PROFILE and exported and qualification_home:
+        home, root = Path(exported), Path(qualification_home)
+        if home.is_absolute() and home != root and home.is_relative_to(root):
+            return home
+    return scratch / "codex-home"
 
 
 def _jsonl_events(stdout: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -446,9 +469,9 @@ def run_codex_real_tool_command(
     with tempfile.TemporaryDirectory(prefix="longhouse-codex-tool-call-result-") as raw_runtime:
         runtime_root = Path(raw_runtime)
         workspace = runtime_root / "workspace"
-        codex_home = runtime_root / "codex-home"
+        codex_home = _codex_session_home(runtime_root)
         workspace.mkdir()
-        codex_home.mkdir()
+        codex_home.mkdir(parents=True, exist_ok=True)
         helper_link: Path | None = None
         if managed_package_resources is not None:
             _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
@@ -468,11 +491,13 @@ def run_codex_real_tool_command(
                     shim_target_path=str(binary),
                     shim_path=str(helper_link),
                 )
+        # No `--ephemeral`: the session rollout is the provider's own record of
+        # this turn, and `_codex_session_home` already keeps it out of any home
+        # another run or a person uses.
         argv = [
             str(binary),
             "exec",
             "--json",
-            "--ephemeral",
             "--ignore-user-config",
             "--ignore-rules",
             "--skip-git-repo-check",
@@ -492,7 +517,7 @@ def run_codex_real_tool_command(
             "PATH": os.environ.get("PATH", ""),
             API_KEY_ENV: api_key,
             "HOME": str(runtime_root),
-            "CODEX_HOME": str(codex_home),
+            CODEX_HOME_ENV: str(codex_home),
         }
         if managed_package_root is not None:
             env[MANAGED_PACKAGE_ROOT_ENV] = managed_package_root
