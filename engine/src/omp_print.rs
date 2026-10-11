@@ -217,9 +217,11 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     // provider this managed session started for it can still run: a turn a
     // restarted Machine Agent follows from its claim, or one whose stop was
     // never verified. OMP moves a second process on the session to a forked
-    // file, so none is started. A live process is the recorded pid with its
-    // recorded start time, which no pid reused after a reboot can have. One
-    // that cannot be shown to have exited is not assumed gone.
+    // file, so none is started. The session's lease belongs to the OMP process
+    // itself, so only each claim's recorded leader is asked for (the recorded
+    // pid with its recorded start time, which no pid reused after a reboot can
+    // have); a surviving descendant holds nothing and is recovery's to stop.
+    // A leader that cannot be shown to have exited is not assumed gone.
     if let Some(provider_thread_id) = expected_provider_thread_id.as_deref() {
         let inventory = crate::process_identity::try_collect_process_facts_by_pid();
         for claim in registry.list_all_shared()?.iter().filter(|claim| {
@@ -228,7 +230,11 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
                 && claim.provider_thread_id.as_deref() == Some(provider_thread_id)
                 && claim.pid.is_some()
         }) {
-            match crate::console_adapter::claim_liveness(claim, inventory.as_ref()) {
+            let leader = crate::turn_claims::TurnClaim {
+                owned_processes: Vec::new(),
+                ..claim.clone()
+            };
+            match crate::console_adapter::claim_liveness(&leader, inventory.as_ref()) {
                 ClaimLiveness::Gone => {}
                 ClaimLiveness::Live => anyhow::bail!(
                     "the OMP process of an earlier turn in this session (run {}) is still running",
@@ -6237,6 +6243,27 @@ for line in sys.stdin:
         })
         .await
         .expect("another session's claim blocked the resume");
+    }
+
+    #[tokio::test]
+    async fn a_surviving_descendant_of_an_exited_omp_does_not_block_a_resume() {
+        resume_after(|first| {
+            let run_id = earlier_claim(first, &first.session_id, u32::MAX, Some("gone".into()));
+            let (pid, process_start_time) = live_process();
+            crate::turn_claims::default_registry()
+                .unwrap()
+                .record_owned_processes(
+                    &run_id,
+                    vec![crate::turn_claims::OwnedProcessIdentity {
+                        pid,
+                        process_group_id: i32::MAX,
+                        process_start_time,
+                    }],
+                )
+                .unwrap();
+        })
+        .await
+        .expect("a descendant of an OMP that has exited blocked the resume");
     }
 
     #[tokio::test]
