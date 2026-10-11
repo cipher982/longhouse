@@ -218,17 +218,22 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     // restarted Machine Agent follows from its claim, or one whose stop was
     // never verified. OMP moves a second process on the session to a forked
     // file, so none is started. The session's lease belongs to the OMP process
-    // itself, so only each claim's recorded leader is asked for (the recorded
-    // pid with its recorded start time, which no pid reused after a reboot can
-    // have); a surviving descendant holds nothing and is recovery's to stop.
-    // A leader that cannot be shown to have exited is not assumed gone.
+    // itself, so only each claim's recorded leader is asked for; a surviving
+    // descendant holds nothing and is recovery's to stop. A leader that cannot
+    // be shown to have exited is not assumed gone, except one recorded under
+    // another boot than this one: no process outlives a reboot.
     if let Some(provider_thread_id) = expected_provider_thread_id.as_deref() {
         let inventory = crate::process_identity::try_collect_process_facts_by_pid();
+        let boot_id = crate::heartbeat::machine_boot_id();
         for claim in registry.list_all_shared()?.iter().filter(|claim| {
             claim.adapter.as_deref() == Some(OMP_PRINT_ADAPTER)
                 && claim.session_id == config.session_id
                 && claim.provider_thread_id.as_deref() == Some(provider_thread_id)
                 && claim.pid.is_some()
+                && !matches!(
+                    (claim.boot_id.as_deref(), boot_id.as_deref()),
+                    (Some(recorded), Some(current)) if recorded != current
+                )
         }) {
             let leader = crate::turn_claims::TurnClaim {
                 owned_processes: Vec::new(),
@@ -6271,16 +6276,37 @@ for line in sys.stdin:
         .expect("a descendant of an OMP that has exited blocked the resume");
     }
 
+    /// A recorded pid that is in use, with no recorded start time: nothing says
+    /// whether it is still that OMP.
+    fn unprovable_earlier_claim(first: &OmpPrintRunSummary) -> String {
+        earlier_claim(first, &first.session_id, live_process().0, None)
+    }
+
     #[tokio::test]
     async fn a_resume_is_refused_while_an_earlier_omp_cannot_be_shown_to_have_exited() {
-        // The recorded pid is in use, and with no recorded start time nothing
-        // says whether it is still that OMP.
         let error = resume_after(|first| {
-            earlier_claim(first, &first.session_id, live_process().0, None);
+            unprovable_earlier_claim(first);
         })
         .await
         .expect_err("a second OMP was started beside one that may still run");
         assert!(error.to_string().contains("could not confirm"), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn a_claim_from_another_boot_does_not_block_a_resume() {
+        resume_after(|first| {
+            let claim = crate::config::get_agent_dir()
+                .unwrap()
+                .join("turn-claims")
+                .join(format!("{}.json", unprovable_earlier_claim(first)));
+            let mut recorded: Value =
+                serde_json::from_slice(&std::fs::read(&claim).unwrap()).unwrap();
+            assert!(recorded["boot_id"].is_string(), "{recorded}");
+            recorded["boot_id"] = json!("another-boot");
+            std::fs::write(&claim, recorded.to_string()).unwrap();
+        })
+        .await
+        .expect("a claim no process can have survived blocked the resume");
     }
 
     #[tokio::test]
