@@ -24,7 +24,11 @@ _PROFILE = identity.IdentityProfile(
     oracle_source=Path(__file__),
     version_grammar=identity.CALENDAR_BUILD,
 )
-_OBSERVED_INSTALL_PROFILE = identity.IdentityProfile(
+# The observed-install profiles are qualified only by the harness bridge
+# (provider_harness_qualification), which runs Gate 0's evidence, the universal
+# column and the live probes. There is no identity-only runner for them: a
+# bundle of two version passes says nothing about an installation.
+OBSERVED_INSTALL_IDENTITY = identity.IdentityProfile(
     provider="cursor",
     profile=OBSERVED_INSTALL_PROFILE,
     scenario_id=OBSERVED_INSTALL_SCENARIO_ID,
@@ -32,7 +36,7 @@ _OBSERVED_INSTALL_PROFILE = identity.IdentityProfile(
     oracle_source=Path(__file__),
     version_grammar=identity.CALENDAR_BUILD,
 )
-_OBSERVED_INSTALL_MODEL_LANE_PROFILE = identity.IdentityProfile(
+OBSERVED_INSTALL_MODEL_LANE_IDENTITY = identity.IdentityProfile(
     provider="cursor",
     profile=OBSERVED_INSTALL_MODEL_LANE_PROFILE,
     scenario_id=OBSERVED_INSTALL_SCENARIO_ID,
@@ -40,34 +44,6 @@ _OBSERVED_INSTALL_MODEL_LANE_PROFILE = identity.IdentityProfile(
     oracle_source=Path(__file__),
     version_grammar=identity.CALENDAR_BUILD,
 )
-
-
-def run_observed_install(request_path: Path, output_root: Path) -> dict[str, Any]:
-    return identity.run_identity_profile(
-        request_path,
-        output_root,
-        profile=_OBSERVED_INSTALL_PROFILE,
-        repo_root=Path(__file__).resolve().parents[3],
-        git_sha_fn=identity.git_sha,
-        git_dirty_fn=identity.git_dirty,
-    )
-
-
-run_observed_install.SCENARIO_ID = OBSERVED_INSTALL_SCENARIO_ID  # type: ignore[attr-defined]
-
-
-def run_observed_install_model_lane(request_path: Path, output_root: Path) -> dict[str, Any]:
-    return identity.run_identity_profile(
-        request_path,
-        output_root,
-        profile=_OBSERVED_INSTALL_MODEL_LANE_PROFILE,
-        repo_root=Path(__file__).resolve().parents[3],
-        git_sha_fn=identity.git_sha,
-        git_dirty_fn=identity.git_dirty,
-    )
-
-
-run_observed_install_model_lane.SCENARIO_ID = OBSERVED_INSTALL_SCENARIO_ID  # type: ignore[attr-defined]
 
 
 def run(request_path: Path, output_root: Path) -> dict[str, Any]:

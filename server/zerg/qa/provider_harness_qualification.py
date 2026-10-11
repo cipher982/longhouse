@@ -18,7 +18,9 @@ finalizers. Claude uses the existing semantic-profile finalizer around one
 harness execution, so the full column and real-print assertion share the same
 provider call instead of paying for a duplicate legacy canary. OpenCode uses
 that same envelope around its no-token server contract, real-tool projection,
-and live-token behavior.
+and live-token behavior. Cursor's observed-install profiles are dispatched
+only here: both run one executor over Gate 0's artifact, the universal column
+and the live probes, and differ in the model the request launches Cursor with.
 """
 
 from __future__ import annotations
@@ -1274,12 +1276,23 @@ def _cursor_observed_install_executor(
     return observation, (assertion,), secrets
 
 
-def run_cursor_observed_install(request_path: Path, output_root: Path) -> dict[str, Any]:
+def run_cursor_observed_install(
+    request_path: Path,
+    output_root: Path,
+    *,
+    profile: provider_release_identity.IdentityProfile = cursor_release_identity.OBSERVED_INSTALL_IDENTITY,
+) -> dict[str, Any]:
+    """Qualify one Cursor observed-install profile.
+
+    The profiles differ only in the model the factory launches Cursor with
+    (the request's environment); the requirements and the verdict are the same.
+    """
+
     request = provider_release_identity.load_request(
         request_path,
         provider="cursor",
-        profile=cursor_release_identity.OBSERVED_INSTALL_PROFILE,
-        version_grammar=cursor_release_identity._OBSERVED_INSTALL_PROFILE.version_grammar,  # noqa: SLF001
+        profile=profile.profile,
+        version_grammar=profile.version_grammar,
     )
 
     def execute(binary: Path, evidence_root: Path):
@@ -1288,11 +1301,23 @@ def run_cursor_observed_install(request_path: Path, output_root: Path) -> dict[s
     return semantic.run_semantic_profile(
         request_path,
         output_root,
-        profile=cursor_release_identity._OBSERVED_INSTALL_PROFILE,  # noqa: SLF001
+        profile=profile,
         assertion_ids=cursor_release_identity.OBSERVED_INSTALL_ASSERTIONS,
         executor=execute,
         oracle_source=Path(semantic_oracles.__file__),
     )
+
+
+def run_cursor_observed_install_model_lane(request_path: Path, output_root: Path) -> dict[str, Any]:
+    return run_cursor_observed_install(
+        request_path,
+        output_root,
+        profile=cursor_release_identity.OBSERVED_INSTALL_MODEL_LANE_IDENTITY,
+    )
+
+
+run_cursor_observed_install.SCENARIO_ID = cursor_release_identity.OBSERVED_INSTALL_SCENARIO_ID  # type: ignore[attr-defined]
+run_cursor_observed_install_model_lane.SCENARIO_ID = cursor_release_identity.OBSERVED_INSTALL_SCENARIO_ID  # type: ignore[attr-defined]
 
 
 # Deliberately only these provider/profile pairs. This is not a fallback for
@@ -1305,6 +1330,7 @@ _PROFILES = {
     ("opencode", opencode_server_qualification.PROFILE): run_opencode_server_contract,
     ("antigravity", antigravity_hook_qualification.PROFILE): run_antigravity_hook_inbox,
     ("cursor", cursor_release_identity.OBSERVED_INSTALL_PROFILE): run_cursor_observed_install,
+    ("cursor", cursor_release_identity.OBSERVED_INSTALL_MODEL_LANE_PROFILE): run_cursor_observed_install_model_lane,
     ("pi", pi_qualification.PROFILE): pi_qualification.run,
     ("pi", pi_console_tool_producer.PROFILE): pi_console_tool_producer.run,
     ("pi", pi_helm_lifecycle.PROFILE): pi_helm_lifecycle.run,

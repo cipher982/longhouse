@@ -380,6 +380,21 @@ def test_cursor_is_reachable_through_the_shared_qualification_dispatcher() -> No
     assert ("cursor", cursor_release_identity.PROFILE) in _PROFILES
 
 
+@pytest.mark.parametrize(
+    "profile",
+    [cursor_release_identity.OBSERVED_INSTALL_PROFILE, cursor_release_identity.OBSERVED_INSTALL_MODEL_LANE_PROFILE],
+)
+def test_cursor_observed_install_profiles_have_no_identity_only_runner(tmp_path: Path, profile: str) -> None:
+    """An observed installation is qualified by the harness bridge or not at all."""
+    from zerg.qa import provider_harness_qualification
+
+    assert ("cursor", profile) in provider_harness_qualification._PROFILES  # noqa: SLF001
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"provider": "cursor", "profile": profile}), encoding="utf-8")
+    with pytest.raises(provider_qualification.codex_release_identity.RequestError, match="unsupported provider/profile"):
+        provider_qualification.run(request, tmp_path / "output")
+
+
 def test_main_constructs_local_pi_semantic_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Make's profile path must reach Pi's native semantic producer."""
     binary = tmp_path / "pi"

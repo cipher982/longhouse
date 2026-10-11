@@ -7,8 +7,8 @@ derive "what runs" without re-deriving it by hand each time.
 
 Two-step contract, deliberately split: `load_facts()` does all I/O (parses
 the schema YAML, regex-parses the Makefile's push-CI scenario override, reads
-config/provider-release-schedule.yml's weekly provider set, imports
-provider_qualification._PROFILES). `plan_run(facts, provider, build_provenance,
+config/provider-release-schedule.yml's weekly provider set, imports the
+release dispatchers' _PROFILES). `plan_run(facts, provider, build_provenance,
 trigger)` then performs no I/O at all — it is a pure lookup over the
 `ProviderFactoryFacts` snapshot `load_facts()` produced, plus the
 hand-verified constant tables below. Call `load_facts()` once per process and
@@ -431,11 +431,14 @@ def _release_lane_scenario_id(provider: str, profile: str) -> str:
     e.g. codex_tool_call_result.py). This is an identity-proof scenario_id
     and, except for the three profiles where it happens to equal a schema
     scenario_id (see the spec's Phase 1 model), is not the same vocabulary as
-    capability_assertions().
+    capability_assertions(). A profile that only the harness bridge runs
+    (Cursor's observed-install profiles) is read from that dispatcher.
     """
+    from zerg.qa.provider_harness_qualification import _PROFILES as harness_bridge_profiles
     from zerg.qa.provider_qualification import _PROFILES as release_lane_profiles
 
-    run_fn = release_lane_profiles[(provider, profile)]
+    key = (provider, profile)
+    run_fn = release_lane_profiles[key] if key in release_lane_profiles else harness_bridge_profiles[key]
     scenario_id = getattr(run_fn, "SCENARIO_ID", None)
     if isinstance(scenario_id, str):
         return scenario_id
