@@ -330,11 +330,13 @@
     "started_at",
     "time_to_first_token_ms",
     "turn_id",
-    "type"
+    "type",
+    "with:event_msg/token_count"
    ],
    "required_keys": [
     "duration_ms",
-    "turn_id"
+    "turn_id",
+    "with:event_msg/token_count"
    ]
   },
   "event_msg/task_started": {
@@ -405,7 +407,7 @@
   "event_msg/token_count": {
    "classification": "signal:turn.usage",
    "first_seen_version": "0.133.0",
-   "last_seen_version": "0.151.0",
+   "last_seen_version": "0.163.0-alpha.5",
    "entrypoints": [
     "codex-tui",
     "codex_cli_rs",

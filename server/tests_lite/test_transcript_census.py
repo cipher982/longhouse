@@ -106,29 +106,13 @@ def test_every_implemented_codex_signal_has_a_classified_shape():
     assert "longhouse_console" in shapes["event_msg/task_complete"]["entrypoints"]
 
 
-def test_codex_usage_still_comes_from_token_count_beside_the_per_response_record(tmp_path: Path):
-    """Codex 0.162 writes a `token_usage_record` per completed response beside the `token_count` event.
-
-    The parser reads usage from `token_count` and has no arm for the record, so the record is state, and
-    `token_count` stays the signal whose keys are required.
-    """
+def _codex_rollout(path: Path, *, token_count: bool, version: str = "0.163.0-alpha.5") -> Path:
+    """One completed Codex turn as 0.162 and later write it, with or without the `token_count` event."""
     usage = {"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 2, "reasoning_output_tokens": 0, "total_tokens": 12}
-    rollout = tmp_path / "rollout-2026-10-11T00-00-00-usage.jsonl"
+    ids = {"thread_id": "t", "turn_id": "u", "session_id": "s", "root_turn_id": "u", "response_id": "r"}
     lines = [
-        {"type": "session_meta", "payload": {"id": "s", "cli_version": "0.162.1", "originator": "codex_exec", "cwd": "/tmp"}},
-        {
-            "type": "token_usage_record",
-            "payload": {
-                "thread_id": "t",
-                "turn_id": "u",
-                "session_id": "s",
-                "root_turn_id": "u",
-                "response_id": "r",
-                "usage": usage,
-                "turn_token_usage": usage,
-                "thread_token_usage": usage,
-            },
-        },
+        {"type": "session_meta", "payload": {"id": "s", "cli_version": version, "originator": "codex_exec", "cwd": "/tmp"}},
+        {"type": "token_usage_record", "payload": {**ids, "usage": usage, "turn_token_usage": usage, "thread_token_usage": usage}},
         {
             "type": "event_msg",
             "payload": {
@@ -136,19 +120,39 @@ def test_codex_usage_still_comes_from_token_count_beside_the_per_response_record
                 "info": {"last_token_usage": usage, "total_token_usage": usage, "model_context_window": 100},
             },
         },
+        {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "u", "last_agent_message": "ok", "duration_ms": 5}},
     ]
-    rollout.write_text("".join(json.dumps({"timestamp": "2026-10-11T00:00:00.000Z", **line}) + "\n" for line in lines))
+    if not token_count:
+        del lines[2]
+    path.write_text("".join(json.dumps({"timestamp": "2026-10-11T00:00:00.000Z", **line}) + "\n" for line in lines))
+    return path
 
-    assert _check("codex", rollout).returncode == 0, _check("codex", rollout).stdout
+
+def test_a_codex_turn_that_completes_without_token_count_is_reported(tmp_path: Path):
+    """The parser makes a turn's usage fact from `token_count`; the per-response usage record does not replace it.
+
+    A provider that stops writing a line leaves nothing to carry a missing key, so the catalog
+    requires the event beside the line that closes a turn (`with:event_msg/token_count`).
+    """
+    written = _codex_rollout(tmp_path / "rollout-2026-10-11T00-00-00-written.jsonl", token_count=True)
+    result = _check("codex", written)
+    assert result.returncode == 0, result.stdout
+    assert "with:event_msg/token_count" in _census("codex", written)["event_msg/task_complete"]["keys"]
+
+    dropped = _codex_rollout(tmp_path / "rollout-2026-10-11T00-00-01-dropped.jsonl", token_count=False)
+    assert sorted(_census("codex", dropped)) == ["event_msg/task_complete", "session_meta", "token_usage_record"]
+    result = _check("codex", dropped)
+    assert result.returncode == 1
+    assert "event_msg/task_complete  with:event_msg/token_count absent in 1 of 1 lines" in result.stdout
+    assert "unclassified" not in result.stdout
+
+    # It is counted per transcript: one that has the event does not cover one that lacks it.
+    result = _check("codex", written, dropped)
+    assert "event_msg/task_complete  with:event_msg/token_count absent in 1 of 2 lines" in result.stdout
+
     shapes = json.loads((REPO_ROOT / "schemas" / "transcript_shapes" / "codex.json").read_text())["shapes"]
     assert shapes["token_usage_record"]["classification"] == "state:token usage record"
-    assert "required_keys" not in shapes["token_usage_record"]
     assert shapes["event_msg/token_count"]["classification"] == "signal:turn.usage"
-
-    # Without the event the parser reads, the record alone does not make a usage fact; the census
-    # cannot see a line that is not there, so this is only what the catalog says is read.
-    rollout.write_text("".join(json.dumps({"timestamp": "2026-10-11T00:00:00.000Z", **line}) + "\n" for line in lines[:2]))
-    assert sorted(_census("codex", rollout)) == ["session_meta", "token_usage_record"]
 
 
 def test_unclassified_shape_fails_the_check(tmp_path: Path):
@@ -190,7 +194,7 @@ def test_required_keys_name_what_the_parser_reads():
     for provider, expected in {
         "claude": {"system/turn_duration": ["durationMs"], "ai-title": ["aiTitle"], "system/away_summary": ["content"]},
         "codex": {
-            "event_msg/task_complete": ["duration_ms", "turn_id"],
+            "event_msg/task_complete": ["duration_ms", "turn_id", "with:event_msg/token_count"],
             "event_msg/token_count": [
                 "info",
                 "info.last_token_usage",
