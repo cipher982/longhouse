@@ -2093,6 +2093,13 @@ def test_omp_wait_native_marker_returns_the_answer_row_not_the_narration(monkeyp
     assert _wait_native_marker(session_file, _REPLY_MARKER)["id"] == "reply"
 
 
+def test_omp_background_first_turn_gets_the_budget_of_a_tool_turn() -> None:
+    # A launch turn is one model call; the background turn runs a child agent
+    # and two jobs before it answers, and healthy ones have taken over 80 s.
+    assert omp_helm_lifecycle._first_turn_timeout(background=False) == 90
+    assert omp_helm_lifecycle._first_turn_timeout(background=True) == 150
+
+
 def test_omp_wait_native_marker_timeout_says_what_the_transcript_held(tmp_path) -> None:
     session_file = tmp_path / "session.jsonl"
     session_file.write_text(_native_message("narration", _NARRATION, stop="toolUse", tool_call=True) + "\n", encoding="utf-8")

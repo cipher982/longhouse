@@ -1984,6 +1984,27 @@ def _wait_idle_quietly(home: Path, session_id: str, *, timeout: float = 120) -> 
         return {}
 
 
+# How long the first turn may take to answer. A plain launch turn is one model
+# call. The background turn is a whole job: four to six model calls in the
+# parent, a child agent with calls of its own, and two 2 s commands, so most of
+# its time is spent inside a tool call waiting for the child. Measured on the
+# factory over the 56 background turns that answered between 2026-10-01 and
+# 2026-10-11: median 19.7 s, 95th percentile 58.5 s, slowest 82.6 s (sixteen
+# messages, no gap over 4.9 s between two of them, so slow and not stalled);
+# under the current prompt, fourteen turns, slowest 59.8 s. The 90 s every other
+# wait here uses left 7.4 s above a healthy turn, and a wait that expires reads
+# as an external stall. 150 s is 1.8 times the slowest healthy turn and what the
+# steer and abort turns below already get. A stream that really stalls is
+# silent for longer than any margin worth waiting (54 s and 75 s on
+# 2026-10-11): the factory's same-tick retry answers a stall, not this number.
+_FIRST_TURN_TIMEOUT_SECS = 90.0
+_BACKGROUND_FIRST_TURN_TIMEOUT_SECS = 150.0
+
+
+def _first_turn_timeout(*, background: bool) -> float:
+    return _BACKGROUND_FIRST_TURN_TIMEOUT_SECS if background else _FIRST_TURN_TIMEOUT_SECS
+
+
 def _exact_marker_prompt(marker: str) -> str:
     """Make sequential marker probes distinguish a fresh request."""
 
@@ -2137,19 +2158,11 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             native_session_id=current_state.get("native_session_id"),
         )
         initial_session_file = current_session_file
-        # The default 90 s covers the whole first turn. For the background
-        # scenario that is the longest turn any wait here spans: four to six
-        # model calls in the parent, a child agent, and two 2 s jobs. Measured
-        # on the factory over the twelve answered turns of 2026-10-10/11 with
-        # the current prompt: median 17.8 s, slowest 26.4 s, longest gap between
-        # two messages 7.9 s. The slowest model call recorded that week without
-        # a stall took about 21.6 s, so 90 s is 3.4 times the slowest turn and
-        # holds it with two more calls that slow (26.4 + 2 x 21.6 = 69.6 s), or
-        # the median turn with three (82.6 s). A stream that stalls is silent
-        # for longer than any margin worth waiting (54 s and 75 s on
-        # 2026-10-11): the factory's same-tick retry answers a stall, not a
-        # longer deadline.
-        initial_row = _wait_native_marker(current_session_file, initial_marker)
+        initial_row = _wait_native_marker(
+            current_session_file,
+            initial_marker,
+            timeout=_first_turn_timeout(background=bool(getattr(args, "background_prompt", None))),
+        )
         initial_channel_state = _wait_state(
             longhouse_home,
             session_id=current_session_id,
