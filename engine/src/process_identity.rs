@@ -761,7 +761,7 @@ mod tests {
         // Unmanaged discovery drops a fact without a start time, and it
         // recognizes bare `pi`/`omp` launches (unmanaged_bindings).
         for command in ["pi --continue", "/opt/homebrew/bin/omp", "codex resume"] {
-            let line = format!("  4242 ttys000  S+   Mon May  5 11:58:00 2026 {command}");
+            let line = format!("  4242 ttys000  S+   Tue May  5 11:58:00 2026 {command}");
             let (_, fact) = parse_process_fact_for_inventory(&line).unwrap();
             assert!(fact.start_time.is_some(), "{command}");
         }
