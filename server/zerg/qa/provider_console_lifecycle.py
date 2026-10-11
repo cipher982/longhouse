@@ -150,7 +150,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=14,
+    scenario_revision=15,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -1794,6 +1794,53 @@ def _wait_owned_processes_dead(claims: list[dict[str, Any]], timeout: float = 15
     return all(_pid_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id")) for claim in claims)
 
 
+# How long the engine has to close the provider it ran a turn in, once it has
+# reported the run terminal. A provider normally exits within about half a
+# second of its final reply; this is some thirty times that, and far short of
+# any wait it stands in front of.
+PROVIDER_CLOSE_SECONDS = 15.0
+# The engine reported a run terminal, did not say it parked the invocation,
+# and the provider it ran the turn in was still alive when that ran out.
+PROVIDER_OUTLIVED_TERMINAL_RUN = "provider_outlived_terminal_run"
+
+
+def _await_provider_closed(claim: Mapping[str, object], longhouse_home: Path, *, turn: str) -> dict[str, object]:
+    """Wait until the provider a terminal run ran in is gone, before the Machine Agent is stopped.
+
+    The engine reports a run terminal first and closes the provider after.
+    The per-turn flush stops the Machine Agent, and one stopped in between
+    leaves the provider running with nobody left to close it: the session's
+    next turn then finds a second writer on the provider's session file. So
+    every flush waits here first and keeps how long the close took.
+
+    A provider still alive at `PROVIDER_CLOSE_SECONDS` is the engine not
+    closing what it reported finished: typed, and declared a wait on the
+    engine. Not waited for: a claim that names no process, and one whose
+    invocation the engine says it parked (it keeps that provider on purpose,
+    for work still pending). The claim is read again at the bound, since the
+    engine records an invocation's state after the terminal one.
+    """
+
+    pid, group = claim.get("pid"), claim.get("process_group_id")
+    if claim.get("invocation_state") == "parked" or not isinstance(pid, int) or not isinstance(group, int):
+        return {"provider_closed": None}
+    started = time.monotonic()
+    if _wait_owned_processes_dead([dict(claim)], timeout=PROVIDER_CLOSE_SECONDS):
+        return {"provider_closed": True, "close_wait_seconds": round(time.monotonic() - started, 3)}
+    latest = _read_claim(_claim_path(longhouse_home, str(claim.get("run_id")))) or claim
+    if latest.get("invocation_state") == "parked":
+        return {"provider_closed": None}
+    raise expired(
+        ConsoleTurnFailure(
+            PROVIDER_OUTLIVED_TERMINAL_RUN,
+            f"the engine reported the {turn} turn's run terminal and did not close its provider: pid {pid} alive={not _pid_dead(pid)}, "
+            f"process group {group} alive={not _process_group_dead(group)} after {PROVIDER_CLOSE_SECONDS:g} s "
+            f"(invocation_state={latest.get('invocation_state')}, pending_count={latest.get('pending_count')})",
+        ),
+        LONGHOUSE_ENGINE,
+    )
+
+
 def _owned_process_evidence(claims: list[dict[str, Any]]) -> list[dict[str, object]]:
     """Retain exact provider owners and their independently observed cleanup state."""
 
@@ -2640,7 +2687,7 @@ def _run_steer_step(
         timeout=180,
     )
     receipt["same_run_completed"] = _run_completed(terminal) and str(terminal.get("run_id")) == str(turn["run_id"])
-    flush_for_projection("console-steer-turn")
+    flush_for_projection("console-steer-turn", terminal)
     try:
         # A run the engine ended as failed or cancelled has no reply to wait
         # for: the assertion already fails on it, and why is kept as the error.
@@ -2995,13 +3042,15 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             "argv": (first_claim.get("result") or {}).get("argv"),
         }
         write_json(root / "adapter-dispatch-receipt.json", dispatch)
-        flush_receipt = _retain_flush_diagnostics(shipper.flush("console-first-turn"))
+        first_provider_close = _await_provider_closed(first_claim, longhouse_home, turn="first")
+        flush_receipt = {**_retain_flush_diagnostics(shipper.flush("console-first-turn")), "provider_close": first_provider_close}
         write_json(root / "transcript-flush-receipt.json", flush_receipt)
 
-        def flush_for_projection(label: str) -> dict[str, object]:
+        def flush_for_projection(label: str, claim: Mapping[str, object]) -> dict[str, object]:
             if shipper is None:
                 raise RuntimeError(f"Console transcript shipper unavailable for {label}")
-            receipt = _retain_flush_diagnostics(shipper.flush(label))
+            closed = _await_provider_closed(claim, longhouse_home, turn=label.removeprefix("console-").removesuffix("-turn"))
+            receipt = {**_retain_flush_diagnostics(shipper.flush(label)), "provider_close": closed}
             turn_receipts = flush_receipt.setdefault("turns", {})
             if not isinstance(turn_receipts, dict):
                 raise RuntimeError("Console transcript flush receipt has an invalid turns field")
@@ -3119,7 +3168,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 turn_id=str(resume["turn_id"]),
                 run_id=str(resume["run_id"]),
             )
-            flush_for_projection("console-resume-turn")
+            flush_for_projection("console-resume-turn", resume_claim)
             resume_events, resume_correspondence = _wait_turn_served(
                 api_url,
                 token,
@@ -3323,7 +3372,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 turn_id=str(post["turn_id"]),
                 run_id=str(post["run_id"]),
             )
-            flush_for_projection("console-post-interrupt-turn")
+            flush_for_projection("console-post-interrupt-turn", post_claim)
             post_events, _post_correspondence = _wait_turn_served(
                 api_url, token, session_id, provider, post_claim, post_marker, turn="post-interrupt"
             )
@@ -3427,7 +3476,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 turn_id=str(interrupt_turn["turn_id"]),
                 run_id=str(interrupt_turn["run_id"]),
             )
-            flush_for_projection("console-unsupported-interrupt-turn")
+            flush_for_projection("console-unsupported-interrupt-turn", terminal)
             _wait_turn_served(api_url, token, session_id, provider, terminal, interrupt_marker, turn="unsupported-interrupt", timeout=60)
             post_marker = f"LH_{provider.upper()}_AFTER_UNSUPPORTED_{uuid4().hex}"
             post_message = f"Reply with exactly {post_marker} and nothing else."
@@ -3454,7 +3503,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 turn_id=str(post["turn_id"]),
                 run_id=str(post["run_id"]),
             )
-            flush_for_projection("console-after-unsupported-post-turn")
+            flush_for_projection("console-after-unsupported-post-turn", post_claim)
             _wait_turn_served(api_url, token, session_id, provider, post_claim, post_marker, turn="after-unsupported")
             interrupt_receipt = {
                 "status": "pass" if refused else "fail",

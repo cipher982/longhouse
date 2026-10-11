@@ -1808,3 +1808,32 @@ def test_a_stream_that_echoes_no_prompt_or_cannot_be_read_claims_only_what_it_sh
         lifecycle._unanswered_turn_error("omp", unrecorded, _ASKED, turn="resume", context_marker=_CONTEXT).reason
         == "provider_reply_not_judged"
     )
+
+
+def test_the_flush_waits_for_the_provider_the_engine_reported_finished(monkeypatch, tmp_path):
+    from zerg.qa.wait_kind import waited_on
+
+    child = os.fork()
+    if child == 0:
+        os._exit(0)
+    os.waitpid(child, 0)
+    closed = lifecycle._await_provider_closed({"run_id": "run-1", "pid": child, "process_group_id": child}, tmp_path, turn="resume")
+    assert closed["provider_closed"] is True and closed["close_wait_seconds"] < 1
+
+    # Still running when the bound runs out: the engine reported terminal and did not close it.
+    monkeypatch.setattr(lifecycle, "PROVIDER_CLOSE_SECONDS", 0.3)
+    alive = {"run_id": "run-2", "pid": os.getpid(), "process_group_id": os.getpgrp()}
+    with pytest.raises(
+        lifecycle.ConsoleTurnFailure, match="^provider_outlived_terminal_run: the engine reported the steer turn's run terminal"
+    ) as raised:
+        lifecycle._await_provider_closed(alive, tmp_path, turn="steer")
+    assert waited_on(raised.value) == "longhouse_engine" and f"pid {os.getpid()} alive=True" in str(raised.value)
+
+    # An invocation the engine parked keeps its provider on purpose, whenever its claim came to say so.
+    assert lifecycle._await_provider_closed({**alive, "invocation_state": "parked"}, tmp_path, turn="steer") == {"provider_closed": None}
+    claim_path = lifecycle._claim_path(tmp_path, "run-2")
+    claim_path.parent.mkdir(parents=True)
+    claim_path.write_text(json.dumps({**alive, "invocation_state": "parked", "pending_count": 1}), encoding="utf-8")
+    assert lifecycle._await_provider_closed(alive, tmp_path, turn="steer") == {"provider_closed": None}
+    # A claim that names no process is nothing to observe.
+    assert lifecycle._await_provider_closed({"run_id": "run-3"}, tmp_path, turn="first") == {"provider_closed": None}
