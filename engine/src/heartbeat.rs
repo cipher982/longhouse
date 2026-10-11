@@ -1116,7 +1116,7 @@ impl HeartbeatPayload {
                     ..StorageV2OutboxSnapshot::default()
                 }
             });
-        let history_import = crate::state::source_inventory::HistoryImportSnapshot::load(
+        let history_import = crate::state::source_inventory::HistoryImportSnapshot::load_recent(
             stats.conn,
             &storage_v2_outbox,
         );
@@ -4510,7 +4510,157 @@ impl Serialize for PhaseLedgerStatus {
     }
 }
 
-/// Write status to `~/.longhouse/agent/engine-status.json`.
+/// How often an unchanged status file is rewritten just to advance its clocks.
+///
+/// Readers call the engine pulse fresh for 30 s and stale at 60 s, and the
+/// shortest validity window carried in the file is a phase-ledger row's 600 s.
+/// A 10 s pulse keeps every clock-only reader at least 3x inside its freshness
+/// horizon. The previous behaviour rewrote the whole file on every tick and
+/// every projection (2.8 writes/s of 2.9 MB on cinder, 2026-10-11).
+pub const STATUS_FILE_PULSE_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Owner of `~/.longhouse/agent/engine-status.json` publication.
+///
+/// Every daemon write site goes through one writer so a meaningful change is
+/// published at once while clock-only churn (pulses, rates, rolling-window
+/// counters, observation stamps) is coalesced to [`STATUS_FILE_PULSE_INTERVAL`].
+#[derive(Debug)]
+pub struct StatusFileWriter {
+    path: std::path::PathBuf,
+    last_semantic_digest: Option<u64>,
+    last_written_at: Option<Instant>,
+}
+
+impl StatusFileWriter {
+    pub fn new(path: std::path::PathBuf) -> Self {
+        Self {
+            path,
+            last_semantic_digest: None,
+            last_written_at: None,
+        }
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// Write `status` unless only volatile clocks changed since the last
+    /// write and the pulse interval has not elapsed. Returns whether it wrote.
+    fn publish(&mut self, status: &serde_json::Value, now: Instant) -> bool {
+        let digest = status_semantic_digest(status);
+        let pulse_due = self
+            .last_written_at
+            .is_none_or(|at| now.duration_since(at) >= STATUS_FILE_PULSE_INTERVAL);
+        if self.last_semantic_digest == Some(digest) && !pulse_due {
+            return false;
+        }
+        let Ok(json) = serde_json::to_vec(status) else {
+            return false;
+        };
+        if let Some(parent) = self.path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        // Atomic replace via tmp+rename so a concurrent reader never sees a
+        // half-written file.
+        let tmp_path = self.path.with_extension("json.tmp");
+        if std::fs::write(&tmp_path, json).is_err()
+            || std::fs::rename(&tmp_path, &self.path).is_err()
+        {
+            return false;
+        }
+        self.last_semantic_digest = Some(digest);
+        self.last_written_at = Some(now);
+        true
+    }
+}
+
+/// Keys whose values move on their own with time rather than with machine
+/// state: timestamps, validity deadlines, rates, rolling-window counters,
+/// elapsed-time counters, free disk space, projection sequence numbers and
+/// heartbeat send telemetry. A change confined to these is published on the
+/// pulse, not immediately.
+fn is_volatile_status_key(key: &str) -> bool {
+    key.ends_with("_at")
+        || key == "last_updated"
+        || key == "valid_until"
+        || key == "send_metrics"
+        || key.contains("_ewma_")
+        || key.ends_with("_1h")
+        || key.ends_with("_10m")
+        || key.ends_with("_ms")
+        || key.starts_with("seconds_")
+        || key == "disk_free_bytes"
+        || key == "sequence"
+        || key == "sessions_sequence"
+}
+
+fn status_semantic_digest(status: &serde_json::Value) -> u64 {
+    fn feed(value: &serde_json::Value, hasher: &mut std::collections::hash_map::DefaultHasher) {
+        match value {
+            serde_json::Value::Object(map) => {
+                hasher.write_u8(b'{');
+                for (key, value) in map {
+                    if is_volatile_status_key(key) {
+                        continue;
+                    }
+                    key.hash(hasher);
+                    feed(value, hasher);
+                }
+                hasher.write_u8(b'}');
+            }
+            serde_json::Value::Array(items) => {
+                hasher.write_u8(b'[');
+                hasher.write_usize(items.len());
+                for item in items {
+                    feed(item, hasher);
+                }
+                hasher.write_u8(b']');
+            }
+            other => other.to_string().hash(hasher),
+        }
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut status = status.clone();
+    // `local_projection.version` mirrors `sessions_sequence`.
+    if let Some(projection) = status
+        .get_mut("local_projection")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        projection.remove("version");
+    }
+    feed(&status, &mut hasher);
+    hasher.finish()
+}
+
+/// The status file's slice of machine evidence: control facts for sessions
+/// this machine currently manages, plus any control path still attached.
+///
+/// The full evidence envelope (process, run, continuation, transcript,
+/// identities, readiness, activity) is heartbeat payload for the Runtime
+/// Host and stays out of the local file: on cinder it was 2.3 MB of the
+/// 2.9 MB file, almost all of it dead history. Local readers (directed-input
+/// qualification) only read `control` for a live session.
+fn local_status_machine_evidence(payload: &HeartbeatPayload) -> Option<serde_json::Value> {
+    let evidence = payload.machine_evidence.as_ref()?;
+    let managed: HashSet<&str> = payload
+        .managed_sessions
+        .iter()
+        .map(|lease| lease.session_id.as_str())
+        .collect();
+    let control: Vec<&ControlEvidence> = evidence
+        .control
+        .iter()
+        .filter(|fact| managed.contains(fact.session_id.as_str()) || fact.state == "attached")
+        .collect();
+    Some(serde_json::json!({
+        "schema_version": evidence.schema_version,
+        "observed_at": evidence.observed_at,
+        "control": control,
+    }))
+}
+
+/// Publish the local status projection to `engine-status.json` through
+/// `writer`.
 ///
 /// `phase_ledger` is passed in explicitly (not pulled from a store) so
 /// callers can't accidentally emit an empty ledger by forgetting to wire
@@ -4525,7 +4675,7 @@ pub fn write_status_file(
     reconciliation: &ProjectionReconciliation,
     progress_observation: &mut ShippingProgressObservation,
     is_offline: bool,
-    status_path: &std::path::Path,
+    writer: &mut StatusFileWriter,
 ) {
     #[derive(Serialize)]
     struct LocalProjectionFile<'a> {
@@ -4599,6 +4749,9 @@ pub fn write_status_file(
     let now = now_utc.to_rfc3339();
     let daemon_started_at = DAEMON_STARTED_AT.get_or_init(|| now.clone()).clone();
     let (binary_path, binary_mtime) = inspect_current_exe();
+    let local_evidence = local_status_machine_evidence(&projection.payload);
+    // Serialize without the full evidence envelope; it is put back below.
+    let evidence = projection.payload.machine_evidence.take();
     let status = StatusFile {
         payload: &projection.payload,
         heartbeat_transport: &projection.heartbeat_transport,
@@ -4619,19 +4772,15 @@ pub fn write_status_file(
         control_channel,
         last_updated: now.clone(),
     };
-
-    if let Some(parent) = status_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    let value = serde_json::to_value(&status);
+    projection.payload.machine_evidence = evidence;
+    let Ok(mut value) = value else {
+        return;
+    };
+    if let (Some(object), Some(local_evidence)) = (value.as_object_mut(), local_evidence) {
+        object.insert("machine_evidence".to_string(), local_evidence);
     }
-    // Atomic replace via tmp+rename so a concurrent reader never sees a
-    // half-written file. Readers would otherwise hit JSONDecodeError and
-    // silently drop phase_ledger from their cross-check.
-    if let Ok(json) = serde_json::to_string_pretty(&status) {
-        let tmp_path = status_path.with_extension("json.tmp");
-        if std::fs::write(&tmp_path, json).is_ok() {
-            let _ = std::fs::rename(&tmp_path, status_path);
-        }
-    }
+    writer.publish(&value, monotonic_now);
 }
 
 /// Keep a prior coherent projection visibly alive while startup or wake
@@ -4643,11 +4792,11 @@ pub fn refresh_existing_status_pulse(
     reconciliation: &ProjectionReconciliation,
     progress_observation: &mut ShippingProgressObservation,
     is_offline: bool,
-    status_path: &std::path::Path,
+    writer: &mut StatusFileWriter,
     heartbeat_transport: &HeartbeatTransportStatus,
     host_link: Option<&crate::host_link::HostLinkStatus>,
 ) {
-    let Ok(bytes) = std::fs::read(status_path) else {
+    let Ok(bytes) = std::fs::read(writer.path()) else {
         return;
     };
     let Ok(mut status) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
@@ -4688,13 +4837,7 @@ pub fn refresh_existing_status_pulse(
         monotonic_now,
     ))
     .unwrap_or(serde_json::Value::Null);
-
-    if let Ok(json) = serde_json::to_string_pretty(&status) {
-        let tmp_path = status_path.with_extension("json.tmp");
-        if std::fs::write(&tmp_path, json).is_ok() {
-            let _ = std::fs::rename(&tmp_path, status_path);
-        }
-    }
+    writer.publish(&status, monotonic_now);
 }
 
 fn inspect_current_exe() -> (Option<String>, Option<String>) {
@@ -5068,12 +5211,13 @@ mod tests {
         let start = Instant::now() - Duration::from_secs(70);
         let mut observation = ShippingProgressObservation::new(start);
         observation.observe_pending_work(true, start);
+        let mut writer = StatusFileWriter::new(path.clone());
 
         refresh_existing_status_pulse(
             &ProjectionReconciliation::idle(),
             &mut observation,
             false,
-            &path,
+            &mut writer,
             &HeartbeatTransportStatus::default(),
             None,
         );
@@ -5106,7 +5250,7 @@ mod tests {
             &ProjectionReconciliation::idle(),
             &mut observation,
             false,
-            &path,
+            &mut writer,
             &HeartbeatTransportStatus::default(),
             None,
         );
@@ -5121,6 +5265,51 @@ mod tests {
         assert!(pending.pending_work);
         assert!(!pending.stalled);
         assert_eq!(pending.seconds_without_progress, 0);
+    }
+
+    #[test]
+    fn status_writer_coalesces_clock_only_changes_to_the_pulse() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("agent").join("engine-status.json");
+        let mut writer = StatusFileWriter::new(path.clone());
+        let start = Instant::now();
+        let status = |pulse: &str, pending: u64, ewma: f64| {
+            serde_json::json!({
+                "spool_pending_count": pending,
+                "events_per_sec_ewma_10s": ewma,
+                "managed_sessions": [{"session_id": "s1", "state": "attached", "sequence": 7}],
+                "local_projection": {"engine_pulse_at": pulse, "version": 7},
+            })
+        };
+
+        assert!(writer.publish(&status("t0", 1, 0.5), start));
+        let written = std::fs::read(&path).unwrap();
+        assert!(!written.contains(&b'\n'), "status file is compact JSON");
+
+        // Clocks, rates and sequence numbers alone wait for the pulse.
+        let quiet = start + Duration::from_secs(1);
+        assert!(!writer.publish(&status("t1", 1, 9.0), quiet));
+        let mut resequenced = status("t1", 1, 0.5);
+        resequenced["managed_sessions"][0]["sequence"] = serde_json::json!(8);
+        resequenced["local_projection"]["version"] = serde_json::json!(8);
+        assert!(!writer.publish(&resequenced, quiet));
+        assert_eq!(std::fs::read(&path).unwrap(), written);
+
+        // A state change is published at once.
+        assert!(writer.publish(&status("t2", 2, 0.5), quiet));
+        let mut detached = status("t2", 2, 0.5);
+        detached["managed_sessions"][0]["state"] = serde_json::json!("detached");
+        assert!(writer.publish(&detached, quiet));
+
+        // The pulse still advances an unchanged file.
+        let pulse = quiet + STATUS_FILE_PULSE_INTERVAL;
+        assert!(!writer.publish(&detached, pulse - Duration::from_millis(1)));
+        let mut pulsed = detached.clone();
+        pulsed["local_projection"]["engine_pulse_at"] = serde_json::json!("t3");
+        assert!(writer.publish(&pulsed, pulse));
+        let on_disk: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(on_disk["local_projection"]["engine_pulse_at"], "t3");
     }
 
     #[test]
@@ -8409,6 +8598,7 @@ mod tests {
             .expect("fresh_rows should succeed on a live DB");
 
         let status_path = dir.path().join("agent").join("engine-status.json");
+        let mut writer = StatusFileWriter::new(status_path.clone());
         let mut projection =
             build_status_file_projection(payload, phase_ledger, PhaseLedgerStatus::Ok);
         let mut progress_observation = ShippingProgressObservation::new(Instant::now());
@@ -8418,7 +8608,7 @@ mod tests {
             &ProjectionReconciliation::idle(),
             &mut progress_observation,
             false,
-            &status_path,
+            &mut writer,
         );
 
         let json = std::fs::read_to_string(status_path).unwrap();
@@ -8433,7 +8623,33 @@ mod tests {
     #[test]
     fn test_write_status_file_records_ledger_read_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let payload = HeartbeatPayload {
+        let payload = bare_status_payload();
+
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let mut writer = StatusFileWriter::new(status_path.clone());
+        let mut projection = build_status_file_projection(
+            payload,
+            Vec::new(),
+            PhaseLedgerStatus::ReadFailed("db locked".to_string()),
+        );
+        let mut progress_observation = ShippingProgressObservation::new(Instant::now());
+        write_status_file(
+            &mut projection,
+            None,
+            &ProjectionReconciliation::idle(),
+            &mut progress_observation,
+            false,
+            &mut writer,
+        );
+
+        let json = std::fs::read_to_string(status_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["phase_ledger"], serde_json::json!([]));
+        assert_eq!(parsed["phase_ledger_status"], "read_failed: db locked");
+    }
+
+    fn bare_status_payload() -> HeartbeatPayload {
+        HeartbeatPayload {
             version: "0.1.0".to_string(),
             daemon_pid: 42,
             last_ship_at: None,
@@ -8480,27 +8696,98 @@ mod tests {
             ship_scheduler: None,
             history_import: Default::default(),
             update: None,
-        };
+        }
+    }
 
-        let status_path = dir.path().join("agent").join("engine-status.json");
-        let mut projection = build_status_file_projection(
-            payload,
-            Vec::new(),
-            PhaseLedgerStatus::ReadFailed("db locked".to_string()),
-        );
-        let mut progress_observation = ShippingProgressObservation::new(Instant::now());
+    #[test]
+    fn status_file_carries_only_live_control_evidence_and_heartbeat_keeps_all() {
+        let control = |session_id: &str, state: &str| ControlEvidence {
+            authority_class: "provider_control".to_string(),
+            provider: "claude".to_string(),
+            session_id: session_id.to_string(),
+            run_id: None,
+            provider_session_id: None,
+            connection_id: Some(format!("conn-{session_id}")),
+            lease_generation: None,
+            ownership: "managed".to_string(),
+            state: state.to_string(),
+            terminal_attached: None,
+            bridge_status: None,
+            thread_subscription_status: None,
+            lease_ttl_ms: 900_000,
+            granted_operations: vec!["send_input".to_string()],
+            source: "claude_channel_scan".to_string(),
+            observed_at: "2026-10-11T00:00:00Z".to_string(),
+        };
+        let mut payload = bare_status_payload();
+        payload.managed_sessions.push(ManagedSessionLease {
+            session_id: "managed".to_string(),
+            provider: "claude".to_string(),
+            machine_id: "cinder".to_string(),
+            sequence: 1,
+            state: "detached".to_string(),
+            phase: None,
+            tool_name: None,
+            bridge_status: None,
+            thread_subscription_status: None,
+            observed_at: "2026-10-11T00:00:00Z".to_string(),
+            lease_ttl_ms: 900_000,
+        });
+        payload.machine_evidence = Some(MachineEvidence {
+            schema_version: 3,
+            observed_at: "2026-10-11T00:00:00Z".to_string(),
+            identities: Vec::new(),
+            candidate_identities: Arc::from(Vec::new()),
+            run: Vec::new(),
+            process: Vec::new(),
+            activity: Vec::new(),
+            control: vec![
+                control("managed", "detached"),
+                control("attached-unleased", "attached"),
+                control("history", "detached"),
+            ],
+            transcript: Vec::new(),
+            process_snapshot_scopes: Vec::new(),
+            readiness: Vec::new(),
+            continuation: Vec::new(),
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("engine-status.json");
+        let mut writer = StatusFileWriter::new(path.clone());
+        let mut projection =
+            build_status_file_projection(payload, Vec::new(), PhaseLedgerStatus::Ok);
         write_status_file(
             &mut projection,
             None,
             &ProjectionReconciliation::idle(),
-            &mut progress_observation,
+            &mut ShippingProgressObservation::new(Instant::now()),
             false,
-            &status_path,
+            &mut writer,
         );
 
-        let json = std::fs::read_to_string(status_path).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["phase_ledger"], serde_json::json!([]));
-        assert_eq!(parsed["phase_ledger_status"], "read_failed: db locked");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let evidence = parsed["machine_evidence"].as_object().unwrap();
+        let mut keys: Vec<&str> = evidence.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["control", "observed_at", "schema_version"]);
+        let sessions: Vec<&str> = evidence["control"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|fact| fact["session_id"].as_str().unwrap())
+            .collect();
+        assert_eq!(sessions, ["managed", "attached-unleased"]);
+        // The heartbeat payload still holds the whole envelope.
+        assert_eq!(
+            projection
+                .payload
+                .machine_evidence
+                .as_ref()
+                .unwrap()
+                .control
+                .len(),
+            3
+        );
     }
 }

@@ -141,7 +141,7 @@ impl DaemonState {
                     &mut self.shipping_progress,
                     self.offline.is_offline,
                     &self.host_link,
-                    &self.status_path,
+                    &mut self.status_file,
                 );
             }
             Some(Err(err)) => {
@@ -164,7 +164,7 @@ impl DaemonState {
                     &mut self.shipping_progress,
                     self.offline.is_offline,
                     &self.host_link,
-                    &self.status_path,
+                    &mut self.status_file,
                 );
             }
             None => {}
@@ -292,7 +292,7 @@ impl DaemonState {
                     &mut self.shipping_progress,
                     self.offline.is_offline,
                     &self.host_link,
-                    &self.status_path,
+                    &mut self.status_file,
                 );
                 spawn_heartbeat_post(
                     &mut self.heartbeat_post_tasks,
@@ -318,7 +318,7 @@ impl DaemonState {
                 &self.managed_reconciliation,
                 &mut self.shipping_progress,
                 self.offline.is_offline,
-                &self.status_path,
+                &mut self.status_file,
             );
             if !self.offline.is_offline {
                 if self.heartbeat_post_tasks.is_empty() {
@@ -332,7 +332,7 @@ impl DaemonState {
                         &self.managed_reconciliation,
                         &mut self.shipping_progress,
                         self.offline.is_offline,
-                        &self.status_path,
+                        &mut self.status_file,
                     );
                     let payload = projection.payload.clone();
                     let signature = runtime_truth_signature(&payload);

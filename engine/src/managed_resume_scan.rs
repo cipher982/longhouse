@@ -314,13 +314,58 @@ fn validate_omp(
     let provider_session_id =
         nonempty(value.get("native_session_id")).ok_or("provider_state_missing")?;
     let session_file = nonempty(value.get("session_file")).ok_or("provider_state_missing")?;
-    crate::omp_session::verify_exact_session_file(
-        Path::new(&session_file),
-        &provider_session_id,
-        Some(&cwd),
-    )
-    .map_err(|_| "provider_state_missing")?;
+    verify_omp_session_file_cached(Path::new(&session_file), &provider_session_id, &cwd)
+        .map_err(|_| "provider_state_missing")?;
     Ok((provider_session_id, cwd))
+}
+
+/// Transcripts already verified whole, keyed by what was verified, with the
+/// file's rest stamp at verification time.
+///
+/// `verify_exact_session_file` parses every record of a retained OMP
+/// transcript, and every managed observation scan re-validates every
+/// retained contract: on cinder that is ~270 stopped sessions and 1.4 GB of
+/// JSONL, re-read continuously. A stopped transcript does not change, so the
+/// verdict is reused while the file keeps the identity, length and mtime it
+/// was verified at (`rest_stamp`; a file written in the last
+/// `AT_REST_AFTER` is never reused). Only successes are kept: a failure is
+/// re-checked every scan, exactly as before.
+static VERIFIED_OMP_SESSION_FILES: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<(PathBuf, String, String), String>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Entries kept at once: well above any machine's retained OMP contracts; the
+/// bound only stops unbounded growth from path churn.
+const MAX_VERIFIED_OMP_SESSION_FILES: usize = 4096;
+
+fn verify_omp_session_file_cached(
+    session_file: &Path,
+    native_id: &str,
+    cwd: &str,
+) -> anyhow::Result<()> {
+    // Stamp before reading, so a write that lands during the read moves the
+    // stamp the next scan compares against.
+    let stamp = fs::metadata(session_file)
+        .ok()
+        .and_then(|metadata| crate::state::file_identity::rest_stamp(&metadata));
+    let key = (
+        session_file.to_path_buf(),
+        native_id.to_string(),
+        cwd.to_string(),
+    );
+    if let (Some(stamp), Ok(cache)) = (stamp.as_deref(), VERIFIED_OMP_SESSION_FILES.lock()) {
+        if cache.get(&key).is_some_and(|verified| verified == stamp) {
+            return Ok(());
+        }
+    }
+    crate::omp_session::verify_exact_session_file(session_file, native_id, Some(cwd))?;
+    if let (Some(stamp), Ok(mut cache)) = (stamp, VERIFIED_OMP_SESSION_FILES.lock()) {
+        if cache.len() >= MAX_VERIFIED_OMP_SESSION_FILES && !cache.contains_key(&key) {
+            cache.clear();
+        }
+        cache.insert(key, stamp);
+    }
+    Ok(())
 }
 
 fn validate_omp_owners(
@@ -657,6 +702,41 @@ mod tests {
             item.contract_state == "invalid"
                 && item.unavailable_reason.as_deref() == Some("provider_incompatible")
         }));
+    }
+
+    #[test]
+    fn omp_session_verification_is_redone_when_the_transcript_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path().join("workspace");
+        fs::create_dir_all(&cwd).unwrap();
+        let session_file = root.path().join("session.jsonl");
+        let rested = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        let write = |native_id: &str, modified: std::time::SystemTime| {
+            fs::write(
+                &session_file,
+                format!(
+                    "{{\"type\":\"session\",\"id\":\"{native_id}\",\"cwd\":\"{}\"}}\n",
+                    cwd.display()
+                ),
+            )
+            .unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&session_file)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+        };
+        let cwd_text = cwd.to_str().unwrap();
+
+        write("native-omp", rested);
+        verify_omp_session_file_cached(&session_file, "native-omp", cwd_text).unwrap();
+        verify_omp_session_file_cached(&session_file, "native-omp", cwd_text).unwrap();
+
+        // The provider rewrote the transcript under another identity: the
+        // earlier success must not be reused.
+        write("someone-else", rested + std::time::Duration::from_secs(1));
+        assert!(verify_omp_session_file_cached(&session_file, "native-omp", cwd_text).is_err());
     }
 
     #[test]

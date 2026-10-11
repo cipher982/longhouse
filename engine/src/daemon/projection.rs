@@ -454,7 +454,7 @@ impl DaemonState {
                                 &self.managed_reconciliation,
                                 &mut self.shipping_progress,
                                 self.offline.is_offline,
-                                &self.status_path,
+                                &mut self.status_file,
                             );
                             let payload = projection.payload.clone();
                             self.last_status_projection = Some(projection);
@@ -481,7 +481,7 @@ impl DaemonState {
                                             &mut self.shipping_progress,
                                             self.offline.is_offline,
                                             &self.host_link,
-                                            &self.status_path,
+                                            &mut self.status_file,
                                         );
                                         spawn_heartbeat_post(
                                             &mut self.heartbeat_post_tasks,
@@ -636,14 +636,14 @@ impl DaemonState {
                 &self.managed_reconciliation,
                 &mut self.shipping_progress,
                 self.offline.is_offline,
-                &self.status_path,
+                &mut self.status_file,
             );
         } else {
             heartbeat::refresh_existing_status_pulse(
                 &self.managed_reconciliation,
                 &mut self.shipping_progress,
                 self.offline.is_offline,
-                &self.status_path,
+                &mut self.status_file,
                 &self.heartbeat_transport,
                 Some(&host_link_status),
             );

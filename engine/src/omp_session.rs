@@ -498,24 +498,51 @@ pub fn is_session_path(root: &Path, path: &Path) -> bool {
 /// directory. It also accepts OMP's single cwd-bucket layer before the file
 /// exists, so lazy session creation can be reserved without inventing a header.
 pub fn session_file_path_in_session_dir(session_dir: &Path, source: &Path) -> bool {
-    if !session_dir.is_absolute()
-        || !source.is_absolute()
-        || source.extension().and_then(|value| value.to_str()) != Some("jsonl")
-    {
-        return false;
+    SessionSourceLocation::new(source).is_some_and(|location| location.is_in(session_dir))
+}
+
+/// A candidate OMP source path, canonicalized once so it can be tested
+/// against many launch session directories (one per retained Helm state)
+/// without re-resolving the same parent directories for each.
+pub struct SessionSourceLocation {
+    parent: PathBuf,
+    /// The parent's parent, when the parent itself is a bucket directory OMP
+    /// made inside the launch's session directory.
+    bucket_root: Option<PathBuf>,
+}
+
+impl SessionSourceLocation {
+    pub fn new(source: &Path) -> Option<Self> {
+        if !source.is_absolute()
+            || source.extension().and_then(|value| value.to_str()) != Some("jsonl")
+        {
+            return None;
+        }
+        let raw_parent = source.parent()?;
+        let parent = crate::storage_v2_shipper::stable_source_path(raw_parent);
+        let bucket_root = raw_parent
+            .parent()
+            .filter(|_| {
+                native_filename_id(raw_parent).is_none()
+                    && !raw_parent.with_extension("jsonl").is_file()
+            })
+            .map(crate::storage_v2_shipper::stable_source_path);
+        Some(Self {
+            parent,
+            bucket_root,
+        })
     }
-    let session_dir = crate::storage_v2_shipper::stable_source_path(session_dir);
-    let Some(parent) = source.parent() else {
-        return false;
-    };
-    if crate::storage_v2_shipper::stable_source_path(parent) == session_dir {
-        return true;
+
+    pub fn is_in(&self, session_dir: &Path) -> bool {
+        session_dir.is_absolute()
+            && self.is_in_resolved(&crate::storage_v2_shipper::stable_source_path(session_dir))
     }
-    parent.parent().is_some_and(|bucket_root| {
-        crate::storage_v2_shipper::stable_source_path(bucket_root) == session_dir
-            && native_filename_id(parent).is_none()
-            && !parent.with_extension("jsonl").is_file()
-    })
+
+    /// `session_dir` already resolved with `stable_source_path` (or
+    /// `fs::canonicalize`, which agrees for a directory that exists).
+    pub fn is_in_resolved(&self, session_dir: &Path) -> bool {
+        self.parent == session_dir || self.bucket_root.as_deref() == Some(session_dir)
+    }
 }
 
 /// Longhouse identity is derived from OMP's opaque native id only. A native

@@ -70,12 +70,23 @@ pub(crate) fn source_ownership(path: &Path) -> anyhow::Result<crate::omp_session
     source_ownership_in(&state_dir, path)
 }
 
+/// A parsed Helm state plus its session directory resolved at parse time.
+/// `dir_cache` keeps the parse while the state directory is at rest, so the
+/// realpath runs once per state-file change instead of once per source path
+/// asked about. `None` when the directory does not resolve (not created yet,
+/// or gone); the caller then resolves it on demand, as before.
 fn parse_source_state(
     path: &Path,
     bytes: std::io::Result<Vec<u8>>,
-) -> Option<(PathBuf, OmpHelmStateFile)> {
-    let state = serde_json::from_slice(&bytes.ok()?).ok()?;
-    Some((path.to_path_buf(), state))
+) -> Option<(PathBuf, OmpHelmStateFile, Option<PathBuf>)> {
+    let state: OmpHelmStateFile = serde_json::from_slice(&bytes.ok()?).ok()?;
+    let resolved_session_dir = state
+        .session_dir
+        .as_deref()
+        .map(Path::new)
+        .filter(|dir| dir.is_absolute())
+        .and_then(|dir| fs::canonicalize(dir).ok());
+    Some((path.to_path_buf(), state, resolved_session_dir))
 }
 
 fn source_ownership_in(
@@ -85,11 +96,16 @@ fn source_ownership_in(
     let stable = crate::storage_v2_shipper::stable_source_path;
     let mut owner = None;
     let mut pending = false;
+    // Resolved once: this runs for every OMP path job against every retained
+    // Helm state, and re-resolving the same source per state was most of a
+    // busy session's engine CPU (realpath syscalls).
+    let location = crate::omp_session::SessionSourceLocation::new(path);
+    let stable_path = stable(path);
     let states =
         crate::dir_cache::parsed_json_dir(state_dir, parse_source_state, |left, right| {
             left.0.cmp(&right.0)
         })?;
-    for (state_path, state) in states.iter() {
+    for (state_path, state, resolved_session_dir) in states.iter() {
         let (Some(session_id), Some(run_id), Some(session_dir)) = (
             state.session_id.as_deref(),
             state.run_id.as_deref(),
@@ -100,7 +116,12 @@ fn source_ownership_in(
         if uuid::Uuid::parse_str(session_id).is_err()
             || uuid::Uuid::parse_str(run_id).is_err()
             || state_path.file_stem().and_then(|name| name.to_str()) != Some(session_id)
-            || !crate::omp_session::session_file_path_in_session_dir(Path::new(session_dir), path)
+            || !location
+                .as_ref()
+                .is_some_and(|location| match resolved_session_dir {
+                    Some(resolved) => location.is_in_resolved(resolved),
+                    None => location.is_in(Path::new(session_dir)),
+                })
         {
             continue;
         }
@@ -108,7 +129,7 @@ fn source_ownership_in(
         if let Some(claim) = claim.filter(|claim| {
             claim.provider == "omp"
                 && claim.state == crate::managed_source_claim::ClaimState::Bound
-                && stable(Path::new(&claim.source_path)) == stable(path)
+                && stable(Path::new(&claim.source_path)) == stable_path
         }) {
             let native_id = claim
                 .native_session_id

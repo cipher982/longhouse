@@ -608,7 +608,18 @@ struct DiscoveryTaskResult {
 struct OpenHistoryReconciliation {
     attempt_id: u64,
     remaining_paths: HashSet<PathBuf>,
+    /// When the last seal check found durable work still lagging. The check
+    /// aggregates every current source epoch (~50 ms at 18k epochs on cinder)
+    /// and ran after every path job; while one live transcript keeps growing
+    /// it can only fail, so a failed check is repeated at most every
+    /// [`HISTORY_SEAL_RECHECK_INTERVAL`].
+    last_unsealed_check: Option<Instant>,
 }
+
+/// How long a seal check that found lagging work is trusted before the next
+/// one. Sealing only flips history import to `current`; a 30 s delay is
+/// invisible next to the reconciliation scan it closes.
+const HISTORY_SEAL_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Live Helm sessions as the disk guard sees them: the agent's own pids, as
 /// verified by each provider scan. Work running under them is the session's.
@@ -723,7 +734,7 @@ struct DaemonState {
     transcript_wake_rx: mpsc::UnboundedReceiver<TranscriptWakeSignal>,
     control_channel_task: Option<tokio::task::JoinHandle<()>>,
     control_channel_status: crate::control_channel::ControlChannelStatus,
-    status_path: PathBuf,
+    status_file: heartbeat::StatusFileWriter,
     runtime_events_outbox_dir: PathBuf,
     outbox_dir: PathBuf,
     daily_maintenance_tasks: JoinSet<()>,
@@ -1292,7 +1303,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         transcript_wake_rx,
         control_channel_task,
         control_channel_status,
-        status_path,
+        status_file: heartbeat::StatusFileWriter::new(status_path),
         runtime_events_outbox_dir,
         outbox_dir,
         daily_maintenance_tasks,
@@ -1930,7 +1941,7 @@ fn publish_heartbeat_transport_status(
     shipping_progress: &mut heartbeat::ShippingProgressObservation,
     is_offline: bool,
     host_link: &crate::host_link::HostLink,
-    status_path: &Path,
+    status_file: &mut heartbeat::StatusFileWriter,
 ) {
     let host_link_status = host_link.snapshot();
     if let Some(projection) = last_status_projection.as_mut() {
@@ -1942,14 +1953,14 @@ fn publish_heartbeat_transport_status(
             managed_reconciliation,
             shipping_progress,
             is_offline,
-            status_path,
+            status_file,
         );
     } else {
         heartbeat::refresh_existing_status_pulse(
             managed_reconciliation,
             shipping_progress,
             is_offline,
-            status_path,
+            status_file,
             heartbeat_transport,
             Some(&host_link_status),
         );

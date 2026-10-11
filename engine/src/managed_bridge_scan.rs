@@ -130,6 +130,15 @@ pub(crate) fn collect_observations_from_paths(
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<CodexBridgeObservation> {
     let mut out = Vec::new();
+    // Only `--remote` processes can attach a TUI. Filtering them once keeps
+    // the per-state check off the whole process table: 299 retained states
+    // x ~1,150 processes of substring search was ~1 s of every 5 s scan on
+    // cinder (2026-10-11).
+    let remote_commands: Vec<&str> = process_facts
+        .values()
+        .map(|fact| fact.command.as_str())
+        .filter(|command| command.contains("--remote"))
+        .collect();
     for path in paths {
         let path = path.as_path();
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
@@ -152,11 +161,10 @@ pub(crate) fn collect_observations_from_paths(
                 state.bridge_process_start_time.as_deref(),
                 &state.session_id,
             );
-        let has_tui_attachment = state.ws_url.as_deref().is_some_and(|ws| {
-            process_facts
-                .values()
-                .any(|fact| fact.command.contains(ws) && fact.command.contains("--remote"))
-        });
+        let has_tui_attachment = state
+            .ws_url
+            .as_deref()
+            .is_some_and(|ws| remote_commands.iter().any(|command| command.contains(ws)));
         let app_server_alive = state
             .app_server_pid
             .and_then(|pid| process_facts.get(&pid))

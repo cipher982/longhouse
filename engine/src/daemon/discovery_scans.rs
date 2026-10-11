@@ -45,7 +45,7 @@ pub(super) fn maybe_seal_history_reconciliation(
     deferred_retries: &HashMap<PathBuf, DeferredRetry>,
     discovery_idle: bool,
 ) {
-    let Some(attempt) = open.as_ref() else {
+    let Some(attempt) = open.as_mut() else {
         return;
     };
     let history_retry_pending = deferred_retries
@@ -59,6 +59,12 @@ pub(super) fn maybe_seal_history_reconciliation(
     {
         return;
     }
+    if attempt
+        .last_unsealed_check
+        .is_some_and(|at| at.elapsed() < super::HISTORY_SEAL_RECHECK_INTERVAL)
+    {
+        return;
+    }
     let attempt_id = attempt.attempt_id;
     match crate::state::source_inventory::try_seal_reconciliation(conn, attempt_id) {
         Ok(true) => {
@@ -68,7 +74,7 @@ pub(super) fn maybe_seal_history_reconciliation(
             );
             *open = None;
         }
-        Ok(false) => {}
+        Ok(false) => attempt.last_unsealed_check = Some(Instant::now()),
         Err(error) => tracing::warn!(
             attempt_id,
             error = %error,
@@ -269,12 +275,56 @@ pub(super) fn reconcile_target_for(
     })
 }
 
+/// Bound sources found fully shipped (lane at the file's length), by
+/// database and path, with the stat they were judged on.
+///
+/// The binding table keeps every session a launcher ever bound (1,472 rows on
+/// cinder, 2026-10-11), and each pass did a stat plus three SQLite lookups per
+/// row every second. A source whose lane had reached its length and whose
+/// file has not changed cannot have become a target: with no lag it is
+/// neither starved nor stale, whatever the clock says. So only the stat is
+/// repeated for it, and a full pass every [`RECONCILE_FULL_PASS_INTERVAL`]
+/// re-reads everything in case durable state moved without the file moving.
+static RECONCILED_CURRENT: std::sync::LazyLock<std::sync::Mutex<ReconciledCurrent>> =
+    std::sync::LazyLock::new(Default::default);
+
+#[derive(Default)]
+struct ReconciledCurrent {
+    full_pass_at: HashMap<PathBuf, Instant>,
+    sources: HashMap<(PathBuf, String), SourceStat>,
+}
+
+/// How long a "fully shipped and unchanged" verdict is trusted.
+const RECONCILE_FULL_PASS_INTERVAL: Duration = Duration::from_secs(60);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SourceStat {
+    len: u64,
+    modified_nanos: i128,
+    inode: u64,
+}
+
+fn source_stat(metadata: &std::fs::Metadata) -> SourceStat {
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(metadata);
+    #[cfg(not(unix))]
+    let inode = 0;
+    SourceStat {
+        len: metadata.len(),
+        modified_nanos: metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|elapsed| elapsed.as_nanos() as i128)
+            .unwrap_or(-1),
+        inode,
+    }
+}
+
 /// Walk the bound working set off the event loop.
 ///
-/// The set is small by construction — sessions a launcher deliberately bound —
-/// so a one-second cadence is a handful of stats and reads. What it must not do
-/// is run *on* the loop: the reviewers' objection to a timer inside a biased
-/// `select!` is that sustained events still starve it.
+/// What it must not do is run *on* the loop: the reviewers' objection to a
+/// timer inside a biased `select!` is that sustained events still starve it.
 pub(super) fn maybe_start_reconcile_scan(
     tasks: &mut JoinSet<ReconcileScanResult>,
     db_path: Option<PathBuf>,
@@ -291,15 +341,49 @@ pub(super) fn maybe_start_reconcile_scan(
             error: None,
         };
         match crate::state::db::resolve_db_path(db_path.as_deref())
-            .and_then(|path| crate::state::db::open_connection(&path))
+            .and_then(|path| crate::state::db::open_connection(&path).map(|conn| (path, conn)))
         {
-            Ok(conn) => {
+            Ok((path, conn)) => {
                 match crate::state::session_binding::SessionBinding::new(&conn).list_bindings() {
                     Ok(bindings) => {
+                        let mut current = RECONCILED_CURRENT
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let full_pass = current
+                            .full_pass_at
+                            .get(&path)
+                            .is_none_or(|at| at.elapsed() >= RECONCILE_FULL_PASS_INTERVAL);
+                        if full_pass {
+                            current.sources.retain(|(db, _), _| db != &path);
+                            current.full_pass_at.insert(path.clone(), Instant::now());
+                        }
                         for binding in bindings {
                             result.scanned += 1;
-                            if let Some(target) = reconcile_target_for(&conn, &binding) {
-                                result.targets.push(target);
+                            let key = (path.clone(), binding.path.clone());
+                            let stat = std::fs::metadata(&binding.path)
+                                .ok()
+                                .map(|metadata| source_stat(&metadata));
+                            if stat.is_some() && current.sources.get(&key) == stat.as_ref() {
+                                continue;
+                            }
+                            current.sources.remove(&key);
+                            match reconcile_target_for(&conn, &binding) {
+                                Some(target) => result.targets.push(target),
+                                None => {
+                                    if let Some(stat) = stat.filter(|stat| {
+                                        stat.len > 0
+                                            && crate::storage_v2_shipper::durable_lane_position(
+                                                &conn,
+                                                &binding.provider,
+                                                &binding.path,
+                                            )
+                                            .ok()
+                                            .flatten()
+                                                == Some(stat.len)
+                                    }) {
+                                        current.sources.insert(key, stat);
+                                    }
+                                }
                             }
                         }
                     }
@@ -369,6 +453,7 @@ impl DaemonState {
                                         Some(OpenHistoryReconciliation {
                                             attempt_id: attempt.attempt_id,
                                             remaining_paths,
+                                            last_unsealed_check: None,
                                         });
                                 }
                                 Ok(None) => self.open_history_reconciliation = None,

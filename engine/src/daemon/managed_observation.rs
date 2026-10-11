@@ -945,7 +945,7 @@ impl DaemonState {
                         &self.managed_reconciliation,
                         &mut self.shipping_progress,
                         self.offline.is_offline,
-                        &self.status_path,
+                        &mut self.status_file,
                         &self.heartbeat_transport,
                         Some(&self.host_link.snapshot()),
                     );
@@ -1097,7 +1097,7 @@ impl DaemonState {
                         &self.managed_reconciliation,
                         &mut self.shipping_progress,
                         self.offline.is_offline,
-                        &self.status_path,
+                        &mut self.status_file,
                         &self.heartbeat_transport,
                         Some(&self.host_link.snapshot()),
                     );
@@ -1321,7 +1321,7 @@ impl DaemonState {
                     &self.managed_reconciliation,
                     &mut self.shipping_progress,
                     self.offline.is_offline,
-                    &self.status_path,
+                    &mut self.status_file,
                     &self.heartbeat_transport,
                     Some(&self.host_link.snapshot()),
                 );

@@ -68,6 +68,18 @@ Helm and Console ownership are revalidated together on the existing managed
 scan cadence. New exact owners resolve on the one-second status cadence through
 bounded, batched PID probes; stale or failed evidence remains unknown.
 
+On macOS, process facts and open-file/cwd paths come directly from libproc and
+`KERN_PROCARGS2`; unavailable or partial probes remain unknown. Non-macOS keeps
+the existing `ps`/`lsof` process-inspection fallback.
+
+`~/.longhouse/agent/engine-status.json` is the local projection for
+`longhouse local-health` and the Desktop App. It is compact JSON, rewritten as
+soon as machine state changes and otherwise only every 10 s to advance its
+clocks (`heartbeat::StatusFileWriter`; timestamps, rates and sequence numbers
+alone do not count as a change). Its `machine_evidence` carries only the
+control facts of currently managed or attached sessions; the full evidence
+envelope goes to the Runtime Host in the heartbeat, never to the local file.
+
 Fresh OMP Helm and Console use native creation, not resume. OMP may report its
 exact session path before writing a JSONL header: controls can be ready while
 that source remains pending. Archive admission verifies the provider-written

@@ -121,10 +121,25 @@ impl Default for HistoryImportSnapshot {
 
 impl HistoryImportSnapshot {
     pub fn load(conn: &Connection, outbox: &StorageV2OutboxSnapshot) -> Self {
+        Self::load_with(conn, outbox, EpochProgressRead::Fresh)
+    }
+
+    /// `load`, but the per-provider epoch aggregate may be up to
+    /// [`EPOCH_PROGRESS_MAX_AGE`] old. For the local status projection only,
+    /// which rebuilds several times a second while a session ships.
+    pub fn load_recent(conn: &Connection, outbox: &StorageV2OutboxSnapshot) -> Self {
+        Self::load_with(conn, outbox, EpochProgressRead::Recent)
+    }
+
+    fn load_with(
+        conn: &Connection,
+        outbox: &StorageV2OutboxSnapshot,
+        read: EpochProgressRead,
+    ) -> Self {
         match load_inventory(conn) {
             Ok(Some(inventory)) => {
                 match reconciliation_sealed(conn, &inventory).and_then(|sealed| {
-                    load_progress(conn, &inventory, outbox, sealed).map(|p| (p, sealed))
+                    load_progress(conn, &inventory, outbox, sealed, read).map(|p| (p, sealed))
                 }) {
                     Ok((progress, sealed)) => Self {
                         state: if progress.blocked_source_count > 0 {
@@ -190,7 +205,7 @@ fn progress_has_work(progress: &HistoryImportProgress) -> bool {
             .any(|provider| !provider.inventory_coverage_complete)
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct EpochProgress {
     tracked_source_count: u64,
     complete_source_count: u64,
@@ -199,12 +214,55 @@ struct EpochProgress {
     remaining_units: u64,
 }
 
-fn load_progress(
-    conn: &Connection,
-    inventory: &SourceInventorySnapshot,
-    outbox: &StorageV2OutboxSnapshot,
-    reconciliation_sealed: bool,
-) -> Result<HistoryImportProgress> {
+#[derive(Clone, Copy)]
+enum EpochProgressRead {
+    Fresh,
+    Recent,
+}
+
+/// How old a cached epoch aggregate may be for [`HistoryImportSnapshot::load_recent`].
+///
+/// The aggregate joins every current source epoch with its durable lane
+/// (~35 ms at 18k epochs on cinder) and the projection rebuilt it on every
+/// path-job and phase change: about 2-3 times a second during an active
+/// session, the largest single cost of the build. It feeds progress counters
+/// only; the periodic managed observation scan rebuilds the projection at
+/// least every 5 s, so a stale count is replaced within ~7 s at worst.
+pub const EPOCH_PROGRESS_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(2);
+
+type EpochProgressByProvider = BTreeMap<String, EpochProgress>;
+
+static RECENT_EPOCH_PROGRESS: std::sync::LazyLock<
+    std::sync::Mutex<
+        std::collections::HashMap<String, (std::time::Instant, EpochProgressByProvider)>,
+    >,
+> = std::sync::LazyLock::new(Default::default);
+
+fn epoch_progress(conn: &Connection, read: EpochProgressRead) -> Result<EpochProgressByProvider> {
+    // Keyed by database file: an in-memory or unnamed database is never cached.
+    let key = conn
+        .path()
+        .filter(|path| !path.is_empty())
+        .map(str::to_string);
+    if let (EpochProgressRead::Recent, Some(key)) = (read, key.as_ref()) {
+        if let Ok(cache) = RECENT_EPOCH_PROGRESS.lock() {
+            if let Some((at, progress)) = cache.get(key) {
+                if at.elapsed() < EPOCH_PROGRESS_MAX_AGE {
+                    return Ok(progress.clone());
+                }
+            }
+        }
+    }
+    let progress = query_epoch_progress(conn)?;
+    if let Some(key) = key {
+        if let Ok(mut cache) = RECENT_EPOCH_PROGRESS.lock() {
+            cache.insert(key, (std::time::Instant::now(), progress.clone()));
+        }
+    }
+    Ok(progress)
+}
+
+fn query_epoch_progress(conn: &Connection) -> Result<EpochProgressByProvider> {
     let mut stmt = conn.prepare(
         "SELECT epoch.provider,
                 COUNT(*),
@@ -243,6 +301,17 @@ fn load_progress(
         let (provider, progress) = row?;
         epochs.insert(provider, progress);
     }
+    Ok(epochs)
+}
+
+fn load_progress(
+    conn: &Connection,
+    inventory: &SourceInventorySnapshot,
+    outbox: &StorageV2OutboxSnapshot,
+    reconciliation_sealed: bool,
+    read: EpochProgressRead,
+) -> Result<HistoryImportProgress> {
+    let mut epochs = epoch_progress(conn, read)?;
 
     let mut providers = Vec::with_capacity(inventory.providers.len());
     let mut acknowledged_source_bytes = 0_u64;
