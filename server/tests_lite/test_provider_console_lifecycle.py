@@ -1873,7 +1873,7 @@ def test_a_session_persistence_notice_is_kept_with_the_turn_that_raised_it(tmp_p
     assert len(retention["sources"]) == 2
 
 
-# --- A wait for a served reply ends early only when the provider's stream shows a finished turn that did not answer ---
+# --- Waits are timed on the producer's own clock ---
 
 
 class _Clock:
@@ -1889,95 +1889,16 @@ class _Clock:
         self.now += seconds
 
 
-def test_a_served_wait_stops_early_only_on_what_is_already_certain(monkeypatch):
-    from zerg.qa.wait_kind import waited_on
-
-    marker = "LH_CODEX_STEERED_abc"
+def test_a_converged_page_stands_its_two_seconds_from_a_clock_that_reads_zero(monkeypatch):
+    marker = "LH_CODEX_CONSOLE_abc"
     clock = _Clock()
     monkeypatch.setattr(lifecycle, "time", clock)
-    _served(monkeypatch, [{"id": "other", "role": "assistant", "content_text": "LH_CODEX_STEER_abc"}])
+    _served(monkeypatch, [{"id": "reply", "role": "assistant", "content_text": marker}])
 
-    def wait(stream_unanswered, native: dict[str, int] | None = None, state: str = "read") -> RuntimeError:
-        clock.now = 0.0
-        with pytest.raises(RuntimeError) as gave_up:
-            lifecycle._wait_served_answers(
-                "https://runtime.example",
-                "token",
-                "session-1",
-                marker,
-                timeout=120,
-                native_answers=None if native is None else (lambda: (dict(native) if state == "read" else None, state)),
-                unanswered=lambda served: RuntimeError(f"from the stream ({served})"),
-                stream_unanswered=stream_unanswered,
-            )
-        return gave_up.value
-
-    # The stream shows a finished turn that did not answer: nothing is coming, and the wait says so from the stream.
-    # It stands for the two seconds a converged page must, from a clock that starts at zero too.
-    assert str(wait(lambda: True)) == "from the stream (count=0, events that only mention it=0)" and 2 <= clock.now < 5
-    assert str(wait(lambda: True, native={})).startswith("from the stream (count=0, ") and 2 <= clock.now < 5
-    # Without that reading, or with none to ask, the wait runs to its deadline as it always did.
-    for undecided in (lambda: False, None):
-        wait(undecided)
-        assert clock.now >= 120
-    # Nor does the stream outrank the provider's own record: a row of it that answers is still to be
-    # served, and a record that could not be read may hold one.
-    assert "from the stream" in str(wait(lambda: True, native={"row": 1})) and clock.now >= 120
-    unread = wait(lambda: True, native={}, state="unreadable")
-    assert str(unread).startswith("provider_reply_not_judged: ") and clock.now >= 120 and waited_on(unread) is None
-
-
-def _served_from(monkeypatch, clock: _Clock, at: float, events: list[dict[str, object]]) -> None:
-    """An archive that serves ``events`` only once the clock has reached ``at``."""
-
-    monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": events if clock.now >= at else []})
-
-
-def _turn_wait(provider: str, claim: dict[str, object], **wait: object):
-    return lifecycle._wait_turn_served("https://runtime.example", "token", "session-1", provider, claim, _ASKED, turn="resume", **wait)
-
-
-@pytest.mark.parametrize("provider", ["codex", "cursor", "opencode"])
-def test_a_counted_adapters_wait_is_cut_short_only_by_a_finished_turn_whose_replies_were_read(monkeypatch, tmp_path, provider):
-    """These adapters have no row of the provider's record to wait on, so the stream alone must be certain."""
-
-    from zerg.qa.wait_kind import waited_on
-
-    clock = _Clock()
-    monkeypatch.setattr(lifecycle, "time", clock)
-    answer = [{"id": "served", "role": "assistant", "content_text": _ASKED}]
-
-    # The turn ended and its replies were read; none answers. Certain: the wait ends on the settle time.
-    _served_from(monkeypatch, clock, 0, [])
-    with pytest.raises(RuntimeError, match=r"^reply_carried_another_marker: the resume turn completed .*\(served: count=0, "):
-        _turn_wait(provider, _turn_claim(tmp_path, provider, _ask(), ["Reading first.", _EARLIER]), timeout=120)
-    assert 2 <= clock.now < 5
-
-    # The provider answered in a shape the stream's reader does not know, so no reply was recognised at all.
-    # That is not a turn without an answer: the page serves the reply late and the wait takes it.
-    unknown = _turn_claim(tmp_path, provider, _ask(), [])
-    with Path(str(unknown[lifecycle._TURN_STREAM_IN_CLAIM[provider]])).open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps({"type": "reply.v2", "delta": {"value": _ASKED}}) + "\n")
-    clock.now = 0.0
-    _served_from(monkeypatch, clock, 30, answer)
-    answers, _account = _turn_wait(provider, unknown, timeout=120)
-    assert [event["id"] for event in answers] == ["served"] and 30 <= clock.now < 40
-    # Served nothing, it runs to the deadline, and nothing is said about the model.
-    clock.now = 0.0
-    _served_from(monkeypatch, clock, 0, [])
-    with pytest.raises(lifecycle.ConsoleTurnFailure, match="^provider_reply_not_judged: .* without producing an assistant reply"):
-        _turn_wait(provider, unknown, timeout=120)
-    assert clock.now >= 120
-
-    # A stream with a reply and no end of turn is not finished: waited for, and declared a wait on the provider.
-    clock.now = 0.0
-    with pytest.raises(lifecycle.ConsoleTurnFailure, match="^provider_turn_not_ended: ") as still_open:
-        _turn_wait(provider, _turn_claim(tmp_path, provider, _ask(), [_EARLIER], ended=False), timeout=120)
-    assert clock.now >= 120 and waited_on(still_open.value) == "provider_turn"
-    # And a late answer to a turn the stream calls unfinished is taken, as before.
-    clock.now = 0.0
-    _served_from(monkeypatch, clock, 30, answer)
-    assert _turn_wait(provider, _turn_claim(tmp_path, provider, _ask(), [_EARLIER], ended=False), timeout=120)[0] == answer
+    # Zero is a time the page converged at, not the absence of one: read as unset, the two
+    # seconds would start again at the next look.
+    answers, _account = _wait(marker, None, timeout=120)
+    assert [event["id"] for event in answers] == ["reply"] and clock.now == 2.0
 
 
 # --- The steer cell: whose doing a reply without the steered marker is ---
@@ -2154,9 +2075,9 @@ def test_a_wrong_reply_to_a_steer_the_provider_recorded_is_the_models(monkeypatc
     }
     # Where the factory reads it: on the observation, under the assertion that is false.
     assert _steer_observation(receipt)["model_noncompliance"] == {lifecycle.STEER_ASSERTION_ID: receipt["model_noncompliance"]}
-    # The stream had ended without the reply before the wait began: it stood for the
-    # settle time and not for its 120 seconds (6 of these are the pause before the steer).
-    assert clock.now < 6 + 5
+    # The stream is asked why only once the wait has run its 120 seconds (6 more are the pause before the
+    # steer): a reply the stream's reader does not know could still have been served until then.
+    assert clock.now >= 6 + 120
 
     # The first marker, with the steer on record ahead of it: delivery is shown, so not following it was the model's.
     ignored, _clock = _run_steer(monkeypatch, tmp_path, provider, _steer_page(provider, first))
@@ -2176,7 +2097,7 @@ def test_an_accepted_steer_the_provider_never_recorded_stays_a_finding(monkeypat
     assert receipt["steer_delivery"]["delivered_before_final_reply"] is False
     assert receipt["steer_delivery"]["missing"] == "no served user event carries the steer"
     assert "model_noncompliance" not in receipt and "model_noncompliance" not in _steer_observation(receipt)
-    assert clock.now < 6 + 5
+    assert clock.now >= 6 + 120
 
     # Recorded only once the provider had finished replying: not delivered.
     late, _clock = _run_steer(monkeypatch, tmp_path, provider, _steer_page(provider, first, steer="late"))
