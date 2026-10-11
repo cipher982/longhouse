@@ -810,6 +810,7 @@ _PROBE_MISMATCH = {
         "assertions": [
             {"probe_id": "shared_title_boundary", "status": "pass", "failure_code": None},
             {
+                "probe_id": "cursor_model_launch_option",
                 "status": "blocked",
                 "failure_code": "interaction_post_state_evidence_missing",
                 "probe_failure_code": "cursor_model_identity_mismatch",
@@ -821,6 +822,7 @@ _PROBE_MISMATCH = {
 _PROBE_REASON = {
     "stage": "interaction_semantics",
     "failure_code": "cursor_model_identity_mismatch",
+    "failed_scenario": "cursor_model_launch_option",
     "message": "Cursor's sessionStart hook receipt names model 'other'; the probe requested 'requested'.",
 }
 
@@ -934,7 +936,51 @@ def test_cursor_probe_blocked_before_it_produced_anything_reports_the_code_it_wa
     )
 
     assert assertions[0].outcome.value == "blocked"
-    assert assertions[0].reasons == ({"stage": "interaction_semantics", "failure_code": "interaction_probe_setup_failed"},)
+    assert assertions[0].reasons == (
+        {
+            "stage": "interaction_semantics",
+            "failure_code": "interaction_probe_setup_failed",
+            "failed_scenario": "cursor_model_launch_option",
+        },
+    )
+
+
+def test_cursor_interaction_reports_every_probe_that_did_not_pass_in_order(tmp_path: Path, monkeypatch) -> None:
+    """An earlier non-passing row must not stand in for the model probe's cause, nor hide it."""
+
+    request, binary = _cursor_request(tmp_path)
+    _cursor_gate0(tmp_path, monkeypatch, status="passed")
+    _cursor_harness(
+        monkeypatch,
+        live={"status": "pass"},
+        interaction={
+            "status": "blocked",
+            "failure_code": "interaction_semantics_assertion_failed",
+            "data": {
+                "assertions": [
+                    {"probe_id": "fixture_earlier_probe", "status": "fail", "failure_code": "interaction_semantics_assertion_failed"},
+                    {"probe_id": "fixture_passing_probe", "status": "pass", "failure_code": None},
+                    *_PROBE_MISMATCH["data"]["assertions"],
+                ]
+            },
+        },
+    )
+
+    _observation, assertions, _secrets = bridge._cursor_observed_install_executor(  # noqa: SLF001
+        binary,
+        tmp_path / "output" / "evidence",
+        request=json.loads(request.read_text(encoding="utf-8")),
+    )
+
+    assert assertions[0].outcome.value == "blocked"
+    assert assertions[0].reasons == (
+        {
+            "stage": "interaction_semantics",
+            "failure_code": "interaction_semantics_assertion_failed",
+            "failed_scenario": "fixture_earlier_probe",
+        },
+        _PROBE_REASON,
+    )
 
 
 def test_cursor_live_canary_is_its_own_cause_only_when_gate0_passed(tmp_path: Path, monkeypatch) -> None:

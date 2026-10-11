@@ -1144,29 +1144,40 @@ def _cursor_requirement_failures(
         )
     interaction_status = interaction_result.get("status")
     if interaction_status != "pass":
+        outcome = AssertionOutcome.BLOCKED if interaction_status == "blocked" else AssertionOutcome.INFRASTRUCTURE_ERROR
         data = interaction_result.get("data")
         verdict_rows = data.get("assertions") if isinstance(data, Mapping) else None
-        # The probe that did not pass knows more than the scenario's verdict
-        # code: its own reason when it ran but was not observed (a model
-        # identity mismatch, a missing hook receipt), else the code it was
-        # blocked with before it produced anything.
-        verdict = next(
-            (row for row in verdict_rows or () if isinstance(row, Mapping) and row.get("status") != "pass"),
-            {},
-        )
-        failures.append(
-            (
-                AssertionOutcome.BLOCKED if interaction_status == "blocked" else AssertionOutcome.INFRASTRUCTURE_ERROR,
-                _outcome_reason(
-                    "interaction_semantics",
-                    verdict.get("probe_failure_code")
-                    or verdict.get("failure_code")
-                    or interaction_result.get("failure_code")
-                    or f"interaction_semantics_{interaction_status}",
-                    message=verdict.get("probe_message") or verdict.get("message") or interaction_result.get("message"),
-                ),
+        # One cause per probe that did not pass, in the scenario's own order.
+        # The probes are independent, so naming only one of them (the first,
+        # or a preferred one) would hide the others. Each probe knows more
+        # than the scenario's verdict code: its own reason when it ran but was
+        # not observed (a model identity mismatch, a missing hook receipt),
+        # else the code it was blocked with before it produced anything.
+        not_passed = [row for row in verdict_rows or () if isinstance(row, Mapping) and row.get("status") != "pass"]
+        for row in not_passed:
+            failures.append(
+                (
+                    outcome,
+                    _outcome_reason(
+                        "interaction_semantics",
+                        row.get("probe_failure_code") or row.get("failure_code") or f"interaction_semantics_{row.get('status')}",
+                        failed_scenario=row.get("probe_id"),
+                        message=row.get("probe_message") or row.get("message"),
+                    ),
+                )
             )
-        )
+        if not not_passed:
+            # The scenario did not pass without a probe row to blame.
+            failures.append(
+                (
+                    outcome,
+                    _outcome_reason(
+                        "interaction_semantics",
+                        interaction_result.get("failure_code") or f"interaction_semantics_{interaction_status}",
+                        message=interaction_result.get("message"),
+                    ),
+                )
+            )
     return failures
 
 
