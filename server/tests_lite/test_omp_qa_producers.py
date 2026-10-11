@@ -1078,7 +1078,7 @@ def test_omp_helm_zero_delta_flush_is_accepted_only_before_independent_marker_pr
     )
 
     # OMP's own transcript answers in the row the page serves.
-    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._native_answer_rows", lambda *_a, **_k: {"event-1": 1})
+    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._native_answer_rows", lambda *_a, **_k: ({"event-1": 1}, "read"))
     convergence = _runtime_convergence(
         "https://runtime.example",
         "token",
@@ -2061,9 +2061,11 @@ def _converge(
         return _served_events_snapshot(events)
 
     monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_snapshot", snapshot)
+    # A refusal has to stand; these tests do not wait for the window, only for the second read.
+    monkeypatch.setattr("zerg.qa.console_served_state_core.SERVED_ANSWER_SETTLE_SECONDS", kwargs.pop("settle", 0.0))
     if "native_source_path" not in kwargs:
         answers = {"reply": 1} if native_answers is None else native_answers
-        monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._native_answer_rows", lambda *_a, **_k: dict(answers))
+        monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._native_answer_rows", lambda *_a, **_k: (dict(answers), "read"))
     arguments = {
         "session_id": "session-1",
         "native_session_id": "native-1",
@@ -2151,13 +2153,86 @@ def test_omp_runtime_convergence_serves_both_answers_of_a_model_woken_by_a_backg
     assert lagging.value.observation["unserved_native_row_ids"] == ["adf024ae"]
 
 
-def test_omp_runtime_convergence_gives_no_verdict_without_omps_transcript(monkeypatch, tmp_path) -> None:
-    """A transcript that cannot be read is unknown, not empty: the served answer is neither refused nor accepted."""
+def _omp_native_row(row_id: str, role: str, text: str) -> str:
+    return json.dumps({"type": "message", "id": row_id, "message": {"role": role, "content": [{"type": "text", "text": text}]}})
 
+
+@pytest.mark.parametrize(
+    ("state", "write"),
+    [
+        # Present and not readable: a directory where the transcript should be.
+        ("unreadable", lambda path: path.mkdir()),
+        ("empty", lambda path: path.write_text("", encoding="utf-8")),
+        # OMP is in the middle of appending the row: the last line has no newline yet.
+        ("mid_write", lambda path: path.write_text(_omp_native_row("reply", "assistant", _FINAL_REPLY)[:-9], encoding="utf-8")),
+        ("unreadable", lambda path: None),
+    ],
+)
+def test_omp_runtime_convergence_gives_no_verdict_on_a_transcript_it_did_not_read(monkeypatch, tmp_path, state, write) -> None:
+    """A transcript that was not read to the end is unknown, not empty: the served answer is neither refused nor accepted."""
+
+    session_file = tmp_path / "session.jsonl"
+    write(session_file)
     reply = {"id": "reply", "role": "assistant", "content_text": _FINAL_REPLY}
+    reads: list[int] = []
     with pytest.raises(RuntimeConvergenceTimeout) as raised:
-        _converge(monkeypatch, [reply], native_source_path=str(tmp_path / "missing.jsonl"), timeout=0.5)
+        _converge(monkeypatch, [reply], reads=reads, native_source_path=str(session_file), timeout=0.6)
+
+    # It kept polling: an answering served page with no transcript to hold it to is not a product finding.
+    assert len(reads) > 2
+    assert f"'native_transcript_state': '{state}'" in str(raised.value)
     assert "'native_transcript_readable': False" in str(raised.value)
+
+
+def test_omp_runtime_convergence_waits_for_a_row_the_page_served_before_the_read_saw_it(monkeypatch, tmp_path) -> None:
+    """OMP appends the answering row, the engine ships it, and this process's read of the file is the last to see it."""
+
+    session_file = tmp_path / "session.jsonl"
+    prompt = _omp_native_row("prompt", "user", f"Reply with exactly {_REPLY_MARKER}.")
+    session_file.write_text(prompt + "\n", encoding="utf-8")
+    reply = {"id": "reply", "role": "assistant", "content_text": _FINAL_REPLY}
+    reads: list[int] = []
+
+    def snapshot(*_args: object) -> dict[str, object]:
+        reads.append(1)
+        if len(reads) == 2:
+            with session_file.open("a", encoding="utf-8") as handle:
+                handle.write(_omp_native_row("reply", "assistant", _FINAL_REPLY) + "\n")
+        return _served_events_snapshot([reply])
+
+    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_snapshot", snapshot)
+    convergence = _runtime_convergence(
+        "https://runtime.example",
+        "token",
+        session_id="session-1",
+        native_session_id="native-1",
+        marker=_REPLY_MARKER,
+        flush={"status": "pass"},
+        native_source_path=str(session_file),
+        native_reply_id="reply",
+        timeout=30,
+    )
+
+    # The first read lacked the row and refused nothing; the second read has it.
+    assert convergence["status"] == "pass" and len(reads) == 2
+    assert convergence["answer_correspondence"]["native_answer_rows"] == {"reply": 1}
+
+
+def test_omp_runtime_convergence_refuses_a_served_answer_only_after_later_reads_still_lack_its_row(monkeypatch, tmp_path) -> None:
+    session_file = tmp_path / "session.jsonl"
+    session_file.write_text(_omp_native_row("prompt", "user", f"Reply with exactly {_REPLY_MARKER}.") + "\n", encoding="utf-8")
+    reply = {"id": "reply", "role": "assistant", "content_text": _FINAL_REPLY}
+
+    # Inside the window nothing is refused: the wait runs to its own deadline.
+    with pytest.raises(RuntimeConvergenceTimeout):
+        _converge(monkeypatch, [reply], native_source_path=str(session_file), settle=30.0, timeout=0.6)
+    # Once the same fault has stood for the window, on a transcript that was read each time, it is final.
+    reads: list[int] = []
+    with pytest.raises(MarkerAnswerCountError) as raised:
+        _converge(monkeypatch, [reply], reads=reads, native_source_path=str(session_file), settle=0.4, timeout=30)
+    assert raised.value.reason == "served_answer_without_native_row"
+    assert len(reads) >= 3
+    assert raised.value.evidence()["observation"]["answer_correspondence"]["native_transcript_state"] == "read"
 
 
 def test_omp_runtime_convergence_refuses_an_answer_the_transcript_does_not_account_for(monkeypatch) -> None:
@@ -2170,7 +2245,8 @@ def test_omp_runtime_convergence_refuses_an_answer_the_transcript_does_not_accou
         _converge(monkeypatch, [narration, reply, dict(reply)], reads=reads)
 
     error = raised.value
-    assert reads == [1]
+    # Raised on the second read: the first only starts the clock.
+    assert reads == [1, 1]
     assert error.reason == "native_answer_served_more_than_once"
     assert str(error).startswith("native_answer_served_more_than_once: ")
     assert error.answer_event_ids == ["reply", "reply"]
@@ -2201,7 +2277,7 @@ def test_omp_runtime_convergence_fails_at_once_when_the_served_reply_row_does_no
     with pytest.raises(MarkerAnswerCountError) as raised:
         _converge(monkeypatch, events, reads=reads)
 
-    assert reads == [1]
+    assert reads == [1, 1]
     assert raised.value.reason == "marker_reply_served_without_answer"
     assert raised.value.answer_event_ids == []
     assert raised.value.mention_event_ids == ["narration", "reply"]

@@ -28,6 +28,11 @@ from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.answer_markers import marker_answer_count
 from zerg.qa.answer_markers import marker_answered
+from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_EMPTY
+from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_MID_WRITE
+from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_READ
+from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_UNREADABLE
+from zerg.qa.console_served_state_core import StandingServedAnswerFault
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import assistant_marker_mentions
 from zerg.qa.console_served_state_core import event_text
@@ -647,6 +652,7 @@ def _wait_runtime_convergence(
     """
 
     last_runtime_observation: dict[str, Any] | None = None
+    refusal = StandingServedAnswerFault()
 
     def observe() -> dict[str, Any] | None:
         nonlocal last_runtime_observation
@@ -671,24 +677,30 @@ def _wait_runtime_convergence(
             recalled=recalled,
         )
         # Read after the page, so nothing served is newer than what is read here.
-        native_answers = _native_answer_rows(session_file, marker, alongside=alongside, recalled=recalled)
+        native_answers, native_state = _native_answer_rows(session_file, marker, alongside=alongside, recalled=recalled)
         native_readable = native_answers is not None
         native_answers = native_answers or {}
         correspondence = served_answer_correspondence(
             events, marker, native_answers, default_origin="durable", alongside=alongside, recalled=recalled
         )
         correspondence["native_transcript_readable"] = native_readable
+        correspondence["native_transcript_state"] = native_state
         last_runtime_observation["answer_correspondence"] = correspondence
         last_runtime_observation["native_reply_served"] = reply_event_id is not None and any(
             isinstance(event, dict) and event.get("id") == reply_event_id for event in events
         )
-        # Without Pi's transcript there is nothing to hold the page to: no
-        # verdict either way, and the wait runs to its deadline saying so.
-        if native_readable and events_payload.get("has_more") is False:
-            fault = served_answer_fault(events, marker, native_answers, default_origin="durable", alongside=alongside, recalled=recalled)
-            if fault is not None:
-                fault.observation = dict(last_runtime_observation)
-                raise fault
+        # Without Pi's transcript read to the end there is nothing to hold the
+        # page to: no verdict either way. And a refusal has to stand
+        # (`StandingServedAnswerFault`), so an entry Pi appended between the
+        # engine shipping it and this read is seen on the next one.
+        fault = refusal.standing(
+            served_answer_fault(events, marker, native_answers, default_origin="durable", alongside=alongside, recalled=recalled)
+            if native_readable and events_payload.get("has_more") is False
+            else None
+        )
+        if fault is not None:
+            fault.observation = dict(last_runtime_observation)
+            raise fault
         if (
             correspondence["converged"] is True
             and binding["one_session"]
@@ -725,19 +737,24 @@ def _wait_runtime_convergence(
 
 def _native_answer_rows(
     session_file: Path, marker: str, *, alongside: tuple[str, ...] = (), recalled: bool = False
-) -> dict[str, int] | None:
-    """The assistant entries of Pi's own transcript that answer ``marker``, and how often each does.
+) -> tuple[dict[str, int] | None, str]:
+    """The assistant entries of Pi's own transcript that answer ``marker``, and what the read found.
 
-    None when the transcript cannot be read: what the provider wrote is then
-    unknown, which is not the same as the provider having written nothing.
+    The second value says whether the transcript was read, from what the
+    reader itself reports of its one read (`pi_transcript_rows`: an ``error``
+    when the file could not be read, the bytes it read, and whether the last
+    line was complete). The first is None unless that is ``read``: a transcript
+    that could not be read, is empty or ends inside a row is not a transcript
+    without answers, it is one whose answers are not known yet.
     """
 
-    if not session_file.is_file():
-        return None
-    try:
-        rows, _metadata, _taxonomy = _native_snapshot(session_file)
-    except OSError:
-        return None
+    rows, _provider_session_id, metadata = pi_transcript_rows(session_file)
+    if metadata.get("error"):
+        return None, NATIVE_TRANSCRIPT_UNREADABLE
+    if not metadata.get("source_end_offset") or not metadata.get("lines"):
+        return None, NATIVE_TRANSCRIPT_EMPTY
+    if metadata.get("complete_last_line") is not True:
+        return None, NATIVE_TRANSCRIPT_MID_WRITE
     answers: dict[str, int] = {}
     for row in rows:
         entry_id = row.get("entry_id")
@@ -747,7 +764,7 @@ def _native_answer_rows(
         count = text.count(marker) if recalled else marker_answer_count(text, marker, alongside=alongside)
         if count:
             answers[entry_id] = max(answers.get(entry_id, 0), count)
-    return answers
+    return answers, NATIVE_TRANSCRIPT_READ
 
 
 def _native_snapshot(session_file: Path) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:

@@ -122,8 +122,11 @@ def _pi_converge(
         return _pi_snapshot(events)
 
     monkeypatch.setattr(helm, "_runtime_snapshot", snapshot)
-    answers = {"reply": 1} if native_answers is None else native_answers
-    monkeypatch.setattr(helm, "_native_answer_rows", lambda *_a, **_k: dict(answers))
+    # A refusal has to stand; these tests do not wait for the window, only for the second read.
+    monkeypatch.setattr("zerg.qa.console_served_state_core.SERVED_ANSWER_SETTLE_SECONDS", kwargs.pop("settle", 0.0))
+    if "session_file" not in kwargs:
+        answers = {"reply": 1} if native_answers is None else native_answers
+        monkeypatch.setattr(helm, "_native_answer_rows", lambda *_a, **_k: (dict(answers), "read"))
     arguments = {"reply_event_id": "reply", "session_file": Path("/native/session.jsonl"), "timeout": 30, **kwargs}
     marker = str(arguments.pop("marker", _PI_MARKER))
     return helm._wait_runtime_convergence("https://runtime.invalid", "fixture", "session-1", "native-1", marker, **arguments)
@@ -169,7 +172,8 @@ def test_pi_runtime_convergence_fails_at_once_on_an_answer_the_transcript_does_n
     reads: list[int] = []
     with pytest.raises(helm._RuntimeConvergenceError) as raised:
         _pi_converge(monkeypatch, twice, reads=reads)
-    assert reads == [1]
+    # Raised on the second read: the first only starts the clock.
+    assert reads == [1, 1]
     assert raised.value.cause_type == "MarkerAnswerCountError"
     assert "served_answer_without_native_row: " in str(raised.value)
     assert "has 2 answering served assistant event(s)" in str(raised.value)
@@ -187,9 +191,113 @@ def test_pi_runtime_convergence_fails_at_once_on_an_answer_the_transcript_does_n
     reads.clear()
     with pytest.raises(helm._RuntimeConvergenceError) as raised:
         _pi_converge(monkeypatch, served_without_answer, reads=reads)
-    assert reads == [1]
+    assert reads == [1, 1]
     assert "marker_reply_served_without_answer: " in str(raised.value)
     assert raised.value.last_runtime_observation["assistant_marker_mention_count"] == 1
+
+
+_PI_HEADER = json.dumps({"type": "session", "id": "native-1", "version": 3, "cwd": "/workspace"})
+
+
+def _pi_native_entry(entry_id: str, role: str, text: str) -> str:
+    message = {
+        "role": role,
+        "content": [{"type": "text", "text": text}],
+        **({"stopReason": "stop", "model": "fixture"} if role == "assistant" else {}),
+    }
+    return json.dumps({"type": "message", "id": entry_id, "parentId": None, "timestamp": "2026-01-01T00:00:01Z", "message": message})
+
+
+@pytest.mark.parametrize(
+    ("state", "write"),
+    [
+        # Present and not readable: a directory where the transcript should be.
+        ("unreadable", lambda path: path.mkdir()),
+        ("empty", lambda path: path.write_text("", encoding="utf-8")),
+        # Pi is in the middle of appending the entry: the last line has no newline yet.
+        (
+            "mid_write",
+            lambda path: path.write_text(
+                _PI_HEADER + "\n" + _pi_native_entry("reply", "assistant", _PI_FINAL_REPLY)[:-9], encoding="utf-8"
+            ),
+        ),
+        ("unreadable", lambda path: None),
+    ],
+)
+def test_pi_runtime_convergence_gives_no_verdict_on_a_transcript_it_did_not_read(monkeypatch, tmp_path, state, write) -> None:
+    """A transcript that was not read to the end is unknown, not empty: the served answer is neither refused nor accepted."""
+
+    from zerg.qa import pi_helm_lifecycle as helm
+
+    session_file = tmp_path / "session.jsonl"
+    write(session_file)
+    reply = {"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY}
+    reads: list[int] = []
+    with pytest.raises(helm._RuntimeConvergenceError) as raised:
+        _pi_converge(monkeypatch, [reply], reads=reads, session_file=session_file, timeout=0.6)
+
+    # It kept polling: an answering served page with no transcript to hold it to is not a product finding.
+    assert len(reads) > 2
+    assert raised.value.cause_type != "MarkerAnswerCountError" and "timed out waiting" in str(raised.value)
+    assert raised.value.last_runtime_observation["answer_correspondence"]["native_transcript_state"] == state
+
+
+def test_pi_runtime_convergence_waits_for_an_entry_the_page_served_before_the_read_saw_it(monkeypatch, tmp_path) -> None:
+    """Pi appends the answering entry, the engine ships it, and this process's read of the file is the last to see it."""
+
+    from zerg.qa import pi_helm_lifecycle as helm
+
+    session_file = tmp_path / "session.jsonl"
+    session_file.write_text(
+        _PI_HEADER + "\n" + _pi_native_entry("prompt", "user", f"Reply with exactly {_PI_MARKER}.") + "\n", encoding="utf-8"
+    )
+    reply = {"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY}
+    reads: list[int] = []
+
+    def snapshot(*_args: object) -> dict[str, object]:
+        reads.append(1)
+        if len(reads) == 2:
+            with session_file.open("a", encoding="utf-8") as handle:
+                handle.write(_pi_native_entry("reply", "assistant", _PI_FINAL_REPLY) + "\n")
+        return _pi_snapshot([reply])
+
+    monkeypatch.setattr(helm, "_runtime_snapshot", snapshot)
+    runtime = helm._wait_runtime_convergence(
+        "https://runtime.invalid",
+        "fixture",
+        "session-1",
+        "native-1",
+        _PI_MARKER,
+        reply_event_id="reply",
+        session_file=session_file,
+        timeout=30,
+    )
+
+    # The first read lacked the entry and refused nothing; the second read has it.
+    assert len(reads) == 2
+    assert runtime["answer_correspondence"]["native_answer_rows"] == {"reply": 1}
+
+
+def test_pi_runtime_convergence_refuses_a_served_answer_only_after_later_reads_still_lack_its_entry(monkeypatch, tmp_path) -> None:
+    from zerg.qa import pi_helm_lifecycle as helm
+
+    session_file = tmp_path / "session.jsonl"
+    session_file.write_text(
+        _PI_HEADER + "\n" + _pi_native_entry("prompt", "user", f"Reply with exactly {_PI_MARKER}.") + "\n", encoding="utf-8"
+    )
+    reply = {"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY}
+
+    # Inside the window nothing is refused: the wait runs to its own deadline.
+    with pytest.raises(helm._RuntimeConvergenceError) as inside:
+        _pi_converge(monkeypatch, [reply], session_file=session_file, settle=30.0, timeout=0.6)
+    assert inside.value.cause_type != "MarkerAnswerCountError"
+    # Once the same fault has stood for the window, on a transcript that was read each time, it is final.
+    reads: list[int] = []
+    with pytest.raises(helm._RuntimeConvergenceError) as raised:
+        _pi_converge(monkeypatch, [reply], reads=reads, session_file=session_file, settle=0.4, timeout=30)
+    assert raised.value.cause_type == "MarkerAnswerCountError" and "served_answer_without_native_row: " in str(raised.value)
+    assert len(reads) >= 3
+    assert raised.value.last_runtime_observation["answer_correspondence"]["native_transcript_state"] == "read"
 
 
 def test_pi_runtime_convergence_keeps_waiting_until_the_reply_row_is_served(monkeypatch) -> None:

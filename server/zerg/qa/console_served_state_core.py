@@ -512,6 +512,62 @@ def served_answer_fault(
     return None
 
 
+# How long a served-answer fault must stand before it is raised.
+SERVED_ANSWER_SETTLE_SECONDS = 2.0
+
+# What a read of the provider's own transcript found. Only ``read`` is a
+# transcript that was actually read to the end of a complete line; the others
+# are a transcript whose content is not known yet.
+NATIVE_TRANSCRIPT_READ = "read"
+NATIVE_TRANSCRIPT_UNREADABLE = "unreadable"
+NATIVE_TRANSCRIPT_EMPTY = "empty"
+NATIVE_TRANSCRIPT_MID_WRITE = "mid_write"
+
+
+def native_transcript_state(content: bytes | None) -> str:
+    """Whether the bytes of a provider's JSONL transcript are a transcript that was read.
+
+    ``None`` is a file that could not be read. An empty file, and one whose
+    last line has no newline yet, are a provider that has not written or is in
+    the middle of a row: what it will hold is not known, which is not the same
+    as holding no answer.
+    """
+
+    if content is None:
+        return NATIVE_TRANSCRIPT_UNREADABLE
+    if not content.strip():
+        return NATIVE_TRANSCRIPT_EMPTY
+    return NATIVE_TRANSCRIPT_READ if content.endswith(b"\n") else NATIVE_TRANSCRIPT_MID_WRITE
+
+
+class StandingServedAnswerFault:
+    """Let a served-answer fault through only once it has stood.
+
+    A convergence wait refuses a page as soon as nothing can change the
+    verdict. That is true of the page (events are only added), and it has to
+    be true of the transcript it is held to as well: the provider appends the
+    answering row, the engine ships it and the Runtime Host may serve it
+    before this process's next read of the file shows the row. So a fault is
+    raised only when two observations at least ``SERVED_ANSWER_SETTLE_SECONDS``
+    apart produce the same one (same reason, same served ids), each from a
+    complete page and a transcript that was read to the end of a complete line
+    after that page. Anything else in between (a different fault, no fault, a
+    transcript that could not be read) starts the clock again.
+    """
+
+    def __init__(self) -> None:
+        self._key: tuple[str, tuple[str, ...]] | None = None
+        self._since = 0.0
+
+    def standing(self, fault: MarkerAnswerCountError | None) -> MarkerAnswerCountError | None:
+        key = None if fault is None else (fault.reason, tuple(str(event_id) for event_id in fault.answer_event_ids))
+        now = time.monotonic()
+        if key is None or key != self._key:
+            self._key, self._since = key, now
+            return None
+        return fault if now - self._since >= SERVED_ANSWER_SETTLE_SECONDS else None
+
+
 def assistant_marker_evidence(workspace: dict, session_id: str, marker: str) -> dict:
     projection = workspace.get("projection") or {}
     matches = assistant_marker_events(

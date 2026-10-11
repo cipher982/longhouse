@@ -645,6 +645,47 @@ def test_a_served_answer_the_providers_transcript_does_not_account_for_is_a_type
     assert unanswered.answer_event_ids == [] and unanswered.mention_event_ids == ["narration"]
 
 
+def test_only_a_transcript_read_to_the_end_of_a_complete_line_is_a_transcript_that_was_read():
+    assert core.native_transcript_state(None) == core.NATIVE_TRANSCRIPT_UNREADABLE
+    assert core.native_transcript_state(b"") == core.NATIVE_TRANSCRIPT_EMPTY
+    assert core.native_transcript_state(b"\n \n") == core.NATIVE_TRANSCRIPT_EMPTY
+    assert core.native_transcript_state(b'{"type":"message"}\n{"type":"mess') == core.NATIVE_TRANSCRIPT_MID_WRITE
+    assert core.native_transcript_state(b'{"type":"message"}\n') == core.NATIVE_TRANSCRIPT_READ
+
+
+def test_a_served_answer_fault_is_raised_only_once_it_has_stood(monkeypatch):
+    """The provider may have appended the row between the engine shipping it and the read that missed it."""
+
+    clock = [100.0]
+    monkeypatch.setattr(core.time, "monotonic", lambda: clock[0])
+    reply = _served_event("reply", _FINAL_REPLY)
+
+    def stray() -> core.MarkerAnswerCountError:
+        fault = core.served_answer_fault([reply, _served_event("again", _MARKER)], _MARKER, {"reply": 1})
+        assert fault is not None
+        return fault
+
+    refusal = core.StandingServedAnswerFault()
+    assert refusal.standing(stray()) is None
+    clock[0] += core.SERVED_ANSWER_SETTLE_SECONDS - 0.1
+    assert refusal.standing(stray()) is None
+    clock[0] += 0.2
+    assert refusal.standing(stray()).reason == core.SERVED_ANSWER_WITHOUT_NATIVE_ROW
+
+    # A read that could not judge, or that found nothing wrong, starts the clock again.
+    refusal = core.StandingServedAnswerFault()
+    assert refusal.standing(stray()) is None
+    clock[0] += 10
+    assert refusal.standing(None) is None
+    assert refusal.standing(stray()) is None
+    # So does a different fault: it is not the one that was standing.
+    clock[0] += 10
+    twice = core.served_answer_fault([reply, dict(reply)], _MARKER, {"reply": 1})
+    assert refusal.standing(twice) is None
+    clock[0] += core.SERVED_ANSWER_SETTLE_SECONDS
+    assert refusal.standing(twice) is twice
+
+
 def test_a_recalled_phrase_is_a_reply_wherever_the_model_puts_it():
     phrase = "LH_FIXTURE_CONTEXT_0123456789abcdef"
     events = [_served_event("reply", f"The phrase I was asked to remember is {phrase}.\n\n{_MARKER}")]

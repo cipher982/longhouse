@@ -25,10 +25,13 @@ from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.answer_markers import marker_answer_count
 from zerg.qa.answer_markers import marker_answered
+from zerg.qa.console_served_state_core import NATIVE_TRANSCRIPT_READ
 from zerg.qa.console_served_state_core import MarkerAnswerCountError
+from zerg.qa.console_served_state_core import StandingServedAnswerFault
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import assistant_marker_mentions
 from zerg.qa.console_served_state_core import event_text
+from zerg.qa.console_served_state_core import native_transcript_state
 from zerg.qa.console_served_state_core import served_answer_correspondence
 from zerg.qa.console_served_state_core import served_answer_fault
 from zerg.qa.failed_results import reached_only
@@ -585,21 +588,32 @@ def _served_projection_evidence(
     }
 
 
-def _native_answer_rows(session_file: Path, marker: str, *, alongside: tuple[str, ...] = ()) -> dict[str, int] | None:
-    """The assistant rows of OMP's own transcript that answer ``marker``, and how often each does.
+def _native_answer_rows(session_file: Path, marker: str, *, alongside: tuple[str, ...] = ()) -> tuple[dict[str, int] | None, str]:
+    """The assistant rows of OMP's own transcript that answer ``marker``, and what the read found.
 
-    None when the transcript cannot be read: what the provider wrote is then
-    unknown, which is not the same as the provider having written nothing.
+    The second value is `native_transcript_state` of the bytes read here, in
+    one read. The first is None unless that state is ``read``: a transcript
+    that could not be read, is empty or ends inside a row is not a transcript
+    without answers, it is one whose answers are not known yet.
     """
 
-    if not session_file.is_file():
-        return None
+    try:
+        content: bytes | None = session_file.read_bytes()
+    except OSError:
+        content = None
+    state = native_transcript_state(content)
+    if content is None or state != NATIVE_TRANSCRIPT_READ:
+        return None, state
     answers: dict[str, int] = {}
-    for row in _native_rows(session_file):
-        message = row.get("message")
-        row_id = row.get("id")
-        if row.get("type") != "message" or not isinstance(message, Mapping) or message.get("role") != "assistant":
+    for raw in content.splitlines():
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
             continue
+        message = row.get("message") if isinstance(row, Mapping) else None
+        if not isinstance(message, Mapping) or row.get("type") != "message" or message.get("role") != "assistant":
+            continue
+        row_id = row.get("id")
         if not isinstance(row_id, str) or not row_id:
             continue
         count = marker_answer_count(_native_message_text(message), marker, alongside=alongside)
@@ -607,7 +621,7 @@ def _native_answer_rows(session_file: Path, marker: str, *, alongside: tuple[str
             # OMP can retain a message more than once while it reconciles its
             # stream; the record that answers most is the row as it stands.
             answers[row_id] = max(answers.get(row_id, 0), count)
-    return answers
+    return answers, state
 
 
 def _runtime_convergence(
@@ -638,6 +652,7 @@ def _runtime_convergence(
     """
 
     last: dict[str, Any] = {}
+    refusal = StandingServedAnswerFault()
 
     def observe() -> dict[str, Any] | None:
         try:
@@ -672,16 +687,19 @@ def _runtime_convergence(
                 "served_projection": served_projection,
             }
         # Read after the page, so nothing served is newer than what is read here.
-        native_answers = _native_answer_rows(Path(native_source_path), marker, alongside=alongside)
+        native_answers, native_state = _native_answer_rows(Path(native_source_path), marker, alongside=alongside)
         native_readable = native_answers is not None
         native_answers = native_answers or {}
-        # Without OMP's transcript there is nothing to hold the page to: no
-        # verdict either way, and the wait runs to its deadline saying so.
-        fault = (
+        # Without OMP's transcript read to the end there is nothing to hold the
+        # page to: no verdict either way. And a refusal has to stand
+        # (`StandingServedAnswerFault`), so a row OMP appended between the
+        # engine shipping it and this read is seen on the next one.
+        fault = refusal.standing(
             served_answer_fault(events, marker, native_answers, default_origin="durable", alongside=alongside) if native_readable else None
         )
         correspondence = served_answer_correspondence(events, marker, native_answers, default_origin="durable", alongside=alongside)
         correspondence["native_transcript_readable"] = native_readable
+        correspondence["native_transcript_state"] = native_state
         if fault is not None:
             fault.observation = {
                 "provider": "omp",
@@ -721,6 +739,7 @@ def _runtime_convergence(
             {
                 "answer_event_count": len(matches),
                 "native_transcript_readable": native_readable,
+                "native_transcript_state": native_state,
                 "native_answer_rows": correspondence["native_answer_rows"],
                 "unserved_native_row_ids": correspondence["unserved_native_row_ids"],
                 "mention_event_count": len(served_projection["marker_mention_events"]),
