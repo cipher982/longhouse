@@ -150,7 +150,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=15,
+    scenario_revision=16,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -2437,6 +2437,29 @@ def _retain_failure_claim_diagnostics(
     write_json(root / "provider-failure-diagnostics.json", {"claims": retained})
 
 
+def _session_persistence_notices(content: bytes) -> list[dict[str, object]]:
+    """OMP's own warnings, in one turn's output, about the session file it was started on.
+
+    OMP raises ``{"type": "notice", "source": "session-persistence"}`` when
+    another process still holds that file open, and names the file: a session
+    about to continue somewhere else.
+    """
+
+    notices: list[dict[str, object]] = []
+    for line in content.splitlines():
+        if b"session-persistence" not in line:
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, Mapping) and event.get("type") == "notice" and event.get("source") == "session-persistence":
+            message = str(event.get("message") or "")
+            named = re.search(r"\S+\.jsonl", message)
+            notices.append({"level": event.get("level"), "session_file": named.group(0) if named else None, "message": message[:500]})
+    return notices
+
+
 def _retain_claim_sources(
     root: Path,
     claims: list[dict[str, Any]],
@@ -2444,11 +2467,17 @@ def _retain_claim_sources(
     *,
     complete: bool = False,
 ) -> list[dict[str, object]]:
-    """Verify retained provider bytes before the isolated HOME can disappear."""
+    """Verify retained provider bytes before the isolated HOME can disappear.
+
+    The receipt also lists every session-persistence notice in the turns'
+    output with the run that raised it, so a forked session is in the
+    evidence of the first turn that saw it, whatever the run goes on to do.
+    """
 
     secrets = [value for name, value in environment.items() if value and (name.endswith("_KEY") or name.endswith("_TOKEN"))]
     target_root = root / "provider-sources"
     retained: list[dict[str, object]] = []
+    notices: list[dict[str, object]] = []
     seen: dict[tuple[str, str], list[dict[str, object]]] = {}
     for index, claim in enumerate(claims):
         run_id = str(claim.get("run_id") or index)
@@ -2472,6 +2501,10 @@ def _retain_claim_sources(
                 original_digest = _sha256_bytes(content)
                 for secret in secrets:
                     content = content.replace(secret.encode(), b"[REDACTED]")
+                if field == "stdout_path":
+                    notices += [
+                        {"turn_index": index, "run_id": claim.get("run_id"), **found} for found in _session_persistence_notices(content)
+                    ]
                 max_bytes = 16 * 1024 * 1024
                 truncated = not complete and len(content) > max_bytes
                 if truncated:
@@ -2498,7 +2531,7 @@ def _retain_claim_sources(
             except OSError as exc:
                 entry["error"] = f"{type(exc).__name__}: {exc}"
             retained.append(entry)
-    write_json(root / "provider-source-retention.json", {"sources": retained})
+    write_json(root / "provider-source-retention.json", {"sources": retained, "session_persistence_notices": notices})
     return retained
 
 

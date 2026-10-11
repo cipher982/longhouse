@@ -1837,3 +1837,24 @@ def test_the_flush_waits_for_the_provider_the_engine_reported_finished(monkeypat
     assert lifecycle._await_provider_closed(alive, tmp_path, turn="steer") == {"provider_closed": None}
     # A claim that names no process is nothing to observe.
     assert lifecycle._await_provider_closed({"run_id": "run-3"}, tmp_path, turn="first") == {"provider_closed": None}
+
+
+def test_a_session_persistence_notice_is_kept_with_the_turn_that_raised_it(tmp_path):
+    message = "Session ~/sessions/example/first.jsonl is open for writing in another process, so this one continues elsewhere."
+    forked = tmp_path / "forked.jsonl"
+    forked.write_text(
+        json.dumps({"type": "notice", "level": "warning", "source": "session-persistence", "message": message})
+        + "\n"
+        + json.dumps({"type": "notice", "source": "other", "message": "unrelated.jsonl"})
+        + "\n",
+        encoding="utf-8",
+    )
+    claims = [_turn_claim(tmp_path, "omp", _ask(), [_ASKED]), {"run_id": "run-2", "stdout_path": str(forked)}]
+
+    # Written with the retained sources, which a passing run and a failing one both do.
+    lifecycle._retain_claim_sources(tmp_path / "evidence", claims, {})
+    retention = json.loads((tmp_path / "evidence" / "provider-source-retention.json").read_text(encoding="utf-8"))
+    assert retention["session_persistence_notices"] == [
+        {"turn_index": 1, "run_id": "run-2", "level": "warning", "session_file": "~/sessions/example/first.jsonl", "message": message}
+    ]
+    assert len(retention["sources"]) == 2
