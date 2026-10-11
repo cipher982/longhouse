@@ -68,7 +68,19 @@ def _nested_keys(obj: object, prefix: str) -> list[str]:
 
 
 def _version_key(value: str) -> tuple:
-    return tuple(int(part) if part.isdigit() else part for part in value.split("."))
+    """Order CLI versions, a prerelease (`0.163.0-alpha.5`) before its release.
+
+    Numeric and non-numeric parts are tagged so two versions always compare:
+    providers ship prerelease tags, and a census can see both kinds at once.
+    """
+
+    def parts(text: str) -> tuple:
+        return tuple(
+            (0, int(part)) if part.isdigit() else (1, part) for part in text.split(".")
+        )
+
+    core, _, prerelease = value.partition("-")
+    return parts(core), 0 if prerelease else 1, parts(prerelease) if prerelease else ()
 
 
 def claude_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:

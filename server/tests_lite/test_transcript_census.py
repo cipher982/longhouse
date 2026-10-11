@@ -264,3 +264,14 @@ def test_omp_sessions_are_shaped_like_pi_and_checked_against_their_own_catalog(t
     session.write_text(json.dumps({"type": "ttsr_injection", "id": "c", "parentId": "b", "timestamp": "2026-10-11T00:00:00.000Z"}) + "\n")
     result = _check("omp", session)
     assert result.returncode == 1 and "ttsr_injection" in result.stdout
+
+
+def test_a_census_orders_prerelease_and_release_versions_of_one_provider(tmp_path: Path):
+    """Codex ships `-alpha.N` tags between releases; seeing both must not break the version range."""
+    rollouts = []
+    for index, version in enumerate(("0.163.0", "0.163.0-alpha.5", "0.151.0")):
+        rollout = tmp_path / f"rollout-{index}.jsonl"
+        rollout.write_text(json.dumps({"type": "session_meta", "payload": {"id": str(index), "cli_version": version}}) + "\n")
+        rollouts.append(rollout)
+    shape = _census("codex", *rollouts)["session_meta"]
+    assert (shape["first_seen_version"], shape["last_seen_version"]) == ("0.151.0", "0.163.0")
