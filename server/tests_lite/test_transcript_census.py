@@ -183,8 +183,8 @@ def _census(provider: str, *paths: Path) -> dict:
     return json.loads(result.stdout)["shapes"]
 
 
-def _cursor_store(path: Path, *, message_id_bytes: int = 32) -> Path:
-    """A Cursor conversation store: hex-encoded root metadata, a protobuf root and JSON message blobs."""
+def _cursor_store(path: Path, *, message_id_bytes: int = 32, meta_encoding: str = "hex") -> Path:
+    """A Cursor conversation store: root metadata, a protobuf root and JSON message blobs."""
     path.parent.mkdir(parents=True, exist_ok=True)
     messages = {
         "a" * 64: {"role": "user", "content": [{"type": "text", "text": "private prompt"}], "providerOptions": {}},
@@ -192,14 +192,14 @@ def _cursor_store(path: Path, *, message_id_bytes: int = 32) -> Path:
     }
     root = b"".join(b"\x0a" + bytes([message_id_bytes]) + bytes.fromhex(blob_id)[:message_id_bytes] for blob_id in messages)
     root += b"\x50\x01"  # field 10, a varint the reader skips
-    meta = {"agentId": "agent-1", "latestRootBlobId": "root-1", "createdAt": 1, "name": "private title"}
+    meta = json.dumps({"agentId": "agent-1", "latestRootBlobId": "c" * 64, "createdAt": 1, "name": "private title"})
     with sqlite3.connect(path) as connection:
         connection.executescript(
             "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);"
         )
-        connection.execute("INSERT INTO meta VALUES ('0', ?)", (json.dumps(meta).encode().hex(),))
-        connection.execute("INSERT INTO blobs VALUES ('root-1', ?)", (root,))
-        connection.execute("INSERT INTO blobs VALUES ('superseded-root', ?)", (b"\x0a\x20" + b"\x00" * 32,))
+        connection.execute("INSERT INTO meta VALUES ('0', ?)", (meta.encode().hex() if meta_encoding == "hex" else meta,))
+        connection.execute("INSERT INTO blobs VALUES (?, ?)", ("c" * 64, root))
+        connection.execute("INSERT INTO blobs VALUES (?, ?)", ("d" * 64, b"\x0a\x20" + b"\x00" * 32))  # a superseded root
         for blob_id, message in messages.items():
             connection.execute("INSERT INTO blobs VALUES (?, ?)", (blob_id, json.dumps(message).encode()))
     connection.close()
@@ -211,18 +211,16 @@ def test_cursor_store_census_names_the_meta_row_the_root_blob_and_each_message(t
     shapes = _census("cursor", tmp_path)
 
     assert sorted(shapes) == ["store/assistant/text", "store/meta/0", "store/root", "store/user/text"]
-    assert shapes["store/meta/0"]["keys"] == ["agentId", "createdAt", "latestRootBlobId", "name"]
+    # The metadata row is named by its keys and by how it was written.
+    assert shapes["store/meta/0"]["keys"] == ["agentId", "createdAt", "encoding:hex", "latestRootBlobId", "name"]
     # The root is named by its protobuf fields and the length of the ids it lists; a superseded root is not a record.
     assert shapes["store/root"]["count"] == 1
     assert shapes["store/root"]["keys"] == ["field1.len32", "field1.wire2", "field10.wire0"]
     assert shapes["store/assistant/text"]["keys"] == ["content", "content[].text", "content[].type", "id", "providerOptions", "role"]
     assert "private" not in json.dumps(shapes)
 
-    # Every shape but the root metadata row is classified; that row stays a finding.
     result = _check("cursor", store)
-    assert result.returncode == 1
-    assert "1 unclassified shape(s)" in result.stdout and "store/meta/0" in result.stdout
-    assert "missing a key" not in result.stdout and "never seen" not in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_cursor_root_blob_whose_message_ids_change_length_is_drift(tmp_path: Path):
@@ -232,6 +230,60 @@ def test_cursor_root_blob_whose_message_ids_change_length_is_drift(tmp_path: Pat
     assert result.returncode == 1
     assert "store/root  field1.len32 absent in 1 of 1 lines" in result.stdout
     assert "store/root  +field1.len16" in result.stdout
+
+
+def test_cursor_metadata_written_as_plain_json_is_read_and_reported(tmp_path: Path):
+    """The server's reader takes plain JSON too, so the census finds the root; the engine takes hex only, so it is drift."""
+    store = _cursor_store(tmp_path / "store.db", meta_encoding="json")
+    shapes = _census("cursor", store)
+    assert shapes["store/root"]["count"] == 1
+    assert "encoding:json" in shapes["store/meta/0"]["keys"]
+
+    result = _check("cursor", store)
+    assert result.returncode == 1
+    assert "store/meta/0  encoding:hex absent in 1 of 1 lines" in result.stdout
+    assert "store/meta/0  +encoding:json" in result.stdout
+
+
+def test_the_census_reads_every_cursor_store_the_servers_reader_decodes(tmp_path: Path):
+    """Over the stores the reader's own tests build, in each form of metadata and root id it accepts."""
+    from tests_lite.test_cursor_transcript import _basic_messages
+    from tests_lite.test_cursor_transcript import _write_store
+    from zerg.services.cursor_transcript import decode_store_db
+    from zerg.services.cursor_transcript import peek_cursor_session
+
+    def rewrite_meta(store: Path, change) -> None:
+        with sqlite3.connect(store) as connection:
+            (raw,) = connection.execute("SELECT value FROM meta WHERE key = '0'").fetchone()
+            connection.execute("UPDATE meta SET value = ? WHERE key = '0'", (change(json.loads(bytes.fromhex(raw))),))
+        connection.close()
+
+    forms = {
+        "as cursor-agent writes it": None,
+        "plain JSON metadata": lambda meta: json.dumps(meta),
+        "upper-case root id": lambda meta: json.dumps({**meta, "latestRootBlobId": meta["latestRootBlobId"].upper()}).encode().hex(),
+    }
+    for form, change in forms.items():
+        store = _write_store(
+            tmp_path / form.replace(" ", "-") / "agent",
+            agent_id="agent-1",
+            created_at_ms=1_760_000_000_000,
+            updated_at_ms=1_760_000_060_000,
+            messages=_basic_messages(),
+        )
+        if change is not None:
+            rewrite_meta(store, change)
+
+        summary = peek_cursor_session(store)
+        decoded = decode_store_db(store)
+        assert summary is not None and decoded.session is not None, form
+        shapes = _census("cursor", store)
+
+        assert shapes["store/root"]["count"] == 1, form
+        assert shapes["store/meta/0"]["count"] == 1, form
+        messages = sum(shape["count"] for name, shape in shapes.items() if name not in {"store/root", "store/meta/0"})
+        assert messages == len(_basic_messages()), form
+        assert "<unparseable>" not in shapes, form
 
 
 def test_cursor_projection_lifecycle_line_is_named_by_its_type(tmp_path: Path):

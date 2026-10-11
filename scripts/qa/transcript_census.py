@@ -471,6 +471,31 @@ def _protobuf_fields(data: bytes) -> list[str] | None:
     return sorted(fields) if index == len(data) else None
 
 
+def _cursor_meta_json(value: object) -> tuple[Any, str]:
+    """Decode a `meta` value as the server's Cursor reader does, and say how it was written.
+
+    cursor-agent writes the root metadata as hex-encoded JSON; the reader
+    (`zerg.services.cursor_transcript._decode_meta_json`) also accepts plain
+    JSON, so the census does too and records which it found.
+    """
+    raw = value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
+    try:
+        return json.loads(bytes.fromhex(raw).decode("utf-8")), "hex"
+    except (ValueError, UnicodeDecodeError):
+        try:
+            return json.loads(raw), "json"
+        except ValueError:
+            return None, ""
+
+
+def _cursor_blob_id(value: object) -> bytes | str:
+    """A blob id as the reader compares them: by its bytes when it is hex, whatever its case."""
+    try:
+        return bytes.fromhex(str(value))
+    except ValueError:
+        return str(value)
+
+
 def _cursor_store_records(path: Path) -> Iterator[dict[str, Any] | None]:
     """The rows of a Cursor `store.db` that carry a shape, as census records.
 
@@ -479,6 +504,11 @@ def _cursor_store_records(path: Path) -> Iterator[dict[str, Any] | None]:
     current conversation opens: messages of abandoned branches stay in the
     store and are fingerprinted too. Other binary blobs are superseded roots
     and tree nodes; they are not records.
+
+    The metadata and the root are found the way the server's reader finds
+    them (`_cursor_meta_json`, `_cursor_blob_id`), so a store that reader
+    decodes is one the census reads. How the metadata was written is part of
+    its shape (`encoding:hex`), because not every reader takes both forms.
     """
     try:
         connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -486,22 +516,22 @@ def _cursor_store_records(path: Path) -> Iterator[dict[str, Any] | None]:
         yield None
         return
     try:
-        root_id = None
+        root_id: bytes | str | None = None
         for key, value in connection.execute(
             "SELECT key, value FROM meta ORDER BY key"
         ):
-            try:
-                raw = value if isinstance(value, bytes) else str(value).encode()
-                decoded = json.loads(bytes.fromhex(raw.decode("ascii")))
-            except (TypeError, ValueError):
-                yield None
-                continue
+            decoded, encoding = _cursor_meta_json(value)
             if not isinstance(decoded, dict):
                 yield None
                 continue
-            if str(key) == "0":
-                root_id = decoded.get("latestRootBlobId")
-            yield {**decoded, "_census_store": "meta", "_census_meta_key": str(key)}
+            if str(key) == "0" and decoded.get("latestRootBlobId"):
+                root_id = _cursor_blob_id(decoded["latestRootBlobId"])
+            yield {
+                **decoded,
+                f"encoding:{encoding}": True,
+                "_census_store": "meta",
+                "_census_meta_key": str(key),
+            }
         for blob_id, data in connection.execute("SELECT id, data FROM blobs"):
             raw = data if isinstance(data, bytes) else str(data).encode()
             try:
@@ -510,7 +540,7 @@ def _cursor_store_records(path: Path) -> Iterator[dict[str, Any] | None]:
                 message = None
             if isinstance(message, dict):
                 yield {**message, "_census_store": "message"}
-            elif blob_id == root_id:
+            elif root_id is not None and _cursor_blob_id(blob_id) == root_id:
                 fields = _protobuf_fields(raw)
                 if fields is None:
                     yield None

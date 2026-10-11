@@ -82,6 +82,25 @@
    ],
    "required_keys": ["role", "content", "content[].type", "content[].text"]
   },
+  "store/meta/0": {
+   "classification": "state:session meta",
+   "first_seen_version": "2026.10.01-e373342",
+   "last_seen_version": "2026.10.01-e373342",
+   "entrypoints": [],
+   "keys": [
+    "agentId",
+    "approvalMode",
+    "blobEncryptionKey",
+    "createdAt",
+    "encoding:hex",
+    "isRunEverything",
+    "lastUsedModel",
+    "latestRootBlobId",
+    "mode",
+    "name"
+   ],
+   "required_keys": ["agentId", "latestRootBlobId", "encoding:hex"]
+  },
   "store/root": {
    "classification": "state:root message order",
    "first_seen_version": "2026.10.01-e373342",
