@@ -1915,21 +1915,6 @@ def _remove_isolation_after_source_retention(
     return not isolation.exists()
 
 
-def _wait_native_agent_end(
-    session_file: Path,
-    *,
-    minimum_offset: int,
-    timeout: float = 90,
-) -> dict[str, Any]:
-    def observe() -> dict[str, Any] | None:
-        for row in _native_rows(session_file, minimum_offset):
-            if row.get("type") == "agent_end":
-                return row
-        return None
-
-    return _wait(observe, timeout=timeout, description="OMP native agent_end", waited_on=PROVIDER_TURN)
-
-
 def _process_record(pid: object, expected_birth: object, label: str, *, owner: str) -> dict[str, Any]:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return {
