@@ -106,8 +106,14 @@ def test_every_implemented_codex_signal_has_a_classified_shape():
     assert "longhouse_console" in shapes["event_msg/task_complete"]["entrypoints"]
 
 
-def _codex_rollout(path: Path, *, token_count: bool, version: str = "0.163.0-alpha.5") -> Path:
-    """One completed Codex turn as 0.162 and later write it, with or without the `token_count` event."""
+CODEX_TURN_CLOSERS = {
+    "task_complete": {"type": "task_complete", "turn_id": "u", "last_agent_message": "ok", "duration_ms": 5},
+    "turn_aborted": {"type": "turn_aborted", "turn_id": "u", "reason": "interrupted", "duration_ms": 5},
+}
+
+
+def _codex_rollout(path: Path, *, token_count: bool, version: str = "0.163.0-alpha.5", closes: str = "task_complete") -> Path:
+    """One Codex turn as 0.162 and later write it, closed either way, with or without the `token_count` event."""
     usage = {"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 2, "reasoning_output_tokens": 0, "total_tokens": 12}
     ids = {"thread_id": "t", "turn_id": "u", "session_id": "s", "root_turn_id": "u", "response_id": "r"}
     lines = [
@@ -120,7 +126,7 @@ def _codex_rollout(path: Path, *, token_count: bool, version: str = "0.163.0-alp
                 "info": {"last_token_usage": usage, "total_token_usage": usage, "model_context_window": 100},
             },
         },
-        {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "u", "last_agent_message": "ok", "duration_ms": 5}},
+        {"type": "event_msg", "payload": CODEX_TURN_CLOSERS[closes]},
     ]
     if not token_count:
         del lines[2]
@@ -128,27 +134,44 @@ def _codex_rollout(path: Path, *, token_count: bool, version: str = "0.163.0-alp
     return path
 
 
-def test_a_codex_turn_that_completes_without_token_count_is_reported(tmp_path: Path):
+def test_the_engine_closes_a_codex_turn_on_exactly_the_lines_that_require_token_count():
+    """The usage fact is made in one arm of the parser; every line that arm takes requires the event."""
+    parser = (REPO_ROOT / "engine" / "src" / "pipeline" / "parser.rs").read_text()
+    arm = '("event_msg", "task_complete" | "turn_aborted") => {'
+    assert parser.count(arm) == 1 and parser.count("state.usage_payload()") == 1
+    assert parser.index(arm) < parser.index("state.usage_payload()") < parser.index('("event_msg", "error" | "stream_error")')
+
+    shapes = json.loads((REPO_ROOT / "schemas" / "transcript_shapes" / "codex.json").read_text())["shapes"]
+    requiring = {shape for shape, row in shapes.items() if "with:event_msg/token_count" in (row.get("required_keys") or [])}
+    assert requiring == {f"event_msg/{closer}" for closer in CODEX_TURN_CLOSERS}
+    # The marker is not a key Codex writes: it is declared once, as a requirement.
+    assert all("with:event_msg/token_count" not in shapes[shape]["keys"] for shape in requiring)
+
+
+@pytest.mark.parametrize("closes", sorted(CODEX_TURN_CLOSERS))
+def test_a_codex_turn_that_closes_without_token_count_is_reported(tmp_path: Path, closes: str):
     """The parser makes a turn's usage fact from `token_count`; the per-response usage record does not replace it.
 
     A provider that stops writing a line leaves nothing to carry a missing key, so the catalog
-    requires the event beside the line that closes a turn (`with:event_msg/token_count`).
+    requires the event beside each line that closes a turn (`with:event_msg/token_count`). The
+    requirement is counted per transcript file, not per turn.
     """
-    written = _codex_rollout(tmp_path / "rollout-2026-10-11T00-00-00-written.jsonl", token_count=True)
+    written = _codex_rollout(tmp_path / "rollout-2026-10-11T00-00-00-written.jsonl", token_count=True, closes=closes)
     result = _check("codex", written)
     assert result.returncode == 0, result.stdout
-    assert "with:event_msg/token_count" in _census("codex", written)["event_msg/task_complete"]["keys"]
+    assert "codex: written by CLI version(s) 0.163.0-alpha.5" in result.stdout
+    assert "with:event_msg/token_count" in _census("codex", written)[f"event_msg/{closes}"]["keys"]
 
-    dropped = _codex_rollout(tmp_path / "rollout-2026-10-11T00-00-01-dropped.jsonl", token_count=False)
-    assert sorted(_census("codex", dropped)) == ["event_msg/task_complete", "session_meta", "token_usage_record"]
+    dropped = _codex_rollout(tmp_path / "rollout-2026-10-11T00-00-01-dropped.jsonl", token_count=False, closes=closes)
+    assert sorted(_census("codex", dropped)) == sorted([f"event_msg/{closes}", "session_meta", "token_usage_record"])
     result = _check("codex", dropped)
     assert result.returncode == 1
-    assert "event_msg/task_complete  with:event_msg/token_count absent in 1 of 1 lines" in result.stdout
-    assert "unclassified" not in result.stdout
+    assert f"event_msg/{closes}  with:event_msg/token_count absent in 1 of 1 lines" in result.stdout
+    assert "unclassified" not in result.stdout and "never seen" not in result.stdout
 
     # It is counted per transcript: one that has the event does not cover one that lacks it.
     result = _check("codex", written, dropped)
-    assert "event_msg/task_complete  with:event_msg/token_count absent in 1 of 2 lines" in result.stdout
+    assert f"event_msg/{closes}  with:event_msg/token_count absent in 1 of 2 lines" in result.stdout
 
     shapes = json.loads((REPO_ROOT / "schemas" / "transcript_shapes" / "codex.json").read_text())["shapes"]
     assert shapes["token_usage_record"]["classification"] == "state:token usage record"
@@ -281,7 +304,8 @@ def test_required_keys_name_what_the_parser_reads():
         shapes = json.loads((REPO_ROOT / "schemas" / "transcript_shapes" / f"{provider}.json").read_text())["shapes"]
         for shape, keys in expected.items():
             assert shapes[shape]["required_keys"] == keys, (provider, shape)
-            assert set(keys) <= set(shapes[shape]["keys"]), "a required key must be one the provider has actually written"
+            written = [key for key in keys if not key.startswith("with:")]
+            assert set(written) <= set(shapes[shape]["keys"]), "a required key must be one the provider has actually written"
 
 
 def test_every_launch_provider_has_boundary_and_drift_catalog_rows():

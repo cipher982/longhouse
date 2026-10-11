@@ -330,8 +330,7 @@
     "started_at",
     "time_to_first_token_ms",
     "turn_id",
-    "type",
-    "with:event_msg/token_count"
+    "type"
    ],
    "required_keys": [
     "duration_ms",
@@ -457,7 +456,8 @@
     "type"
    ],
    "required_keys": [
-    "reason"
+    "reason",
+    "with:event_msg/token_count"
    ]
   },
   "event_msg/user_message": {

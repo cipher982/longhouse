@@ -17,7 +17,8 @@ discriminator is a finding, not a silently ignored line.
         shape lacks a key the parser requires (`required_keys`), or if a
         shape carries a key the catalog has never seen.
         A row may also require `with:<shape>`: another shape in the same
-        transcript, for a fact the parser makes from two lines.
+        transcript file, for a fact the parser makes from two lines. It is
+        counted per file, not per turn.
     transcript_census.py seed    --provider claude PATH [PATH ...]
         Add every unseen shape to the catalog as `unclassified`, widen each
         shape's key set and version range. Rows and keys are never removed;
@@ -703,6 +704,11 @@ def _written_with(provider: str) -> dict[str, list[str]]:
     may require `with:<shape>`: the other shape, in the same file. The census
     counts it on the row's lines like any key, and `drift` reports its
     absence the way it reports a dropped field.
+
+    The guarantee is per transcript file, not per turn: a file in which one
+    turn has the other shape and a later turn lacks it is not reported. The
+    marker is declared in `required_keys` alone; it is not a key the provider
+    writes, so it does not belong in `keys`, and `widened` knows it anyway.
     """
     rows = load_catalog(provider).get("shapes") or {}
     expected = {
@@ -933,7 +939,12 @@ def widened(
         row = catalog_row(catalog, shape)
         if row is None or row.get("keys") is None:
             continue
-        new_keys = sorted(set(record.get("keys") or []) - set(row["keys"]))
+        known = set(row["keys"]) | {
+            key
+            for key in row.get("required_keys") or []
+            if isinstance(key, str) and key.startswith(WRITTEN_WITH)
+        }
+        new_keys = sorted(set(record.get("keys") or []) - known)
         if new_keys:
             found[shape] = new_keys
     return found
@@ -1036,6 +1047,8 @@ def main(argv: list[str] | None = None) -> int:
     missing = unclassified(catalog, observed)
     drifted = drift(catalog, observed)
     new_keys = widened(catalog, observed)
+    if versions := cli_versions(observed):
+        print(f"{args.provider}: written by CLI version(s) {', '.join(versions)}")
     if missing:
         print(
             f"{args.provider}: {len(missing)} unclassified shape(s) in {len(files)} file(s):"
