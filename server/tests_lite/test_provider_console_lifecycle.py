@@ -707,10 +707,17 @@ def test_an_adapter_whose_served_ids_are_not_the_providers_is_counted_to_one(mon
     assert [event["id"] for event in answers] == ["5a2f"] and account is None
     _served(monkeypatch, twice)
     with pytest.raises(MarkerAnswerCountError, match="marker_answered_more_than_once: .* has 2 answering .* expected exactly 1") as counted:
-        _wait(marker, None, one_reply=False)
+        _wait(marker, None)
     # The message alone says which of the two remaining counts this was, and which events.
     assert "2 answering served assistant event(s), expected exactly 1 (counted adapter: its served ids are not" in str(counted.value)
     assert "(answering event ids ['5a2f', '9c1d']; " in str(counted.value)
+    # A turn that binds no single reply (the steer) takes the provider's repeated reply on a
+    # counted adapter as it does on one held by id; nothing served is still not converged.
+    answers, account = _wait(marker, None, one_reply=False)
+    assert [event["id"] for event in answers] == ["5a2f", "9c1d"] and account is None
+    _served(monkeypatch, [])
+    with pytest.raises(RuntimeError, match=r"count=0"):
+        _wait(marker, None, one_reply=False, timeout=0.6)
 
     # Every Console adapter is on one side or the other, and each counted one says why.
     adapters = {*lifecycle.PROVIDERS, *lifecycle.CAN_RESUME}

@@ -150,7 +150,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=19,
+    scenario_revision=20,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -692,7 +692,7 @@ def _wait_served_answers(
     of its answers served more often than it was written, fails with the typed
     reason of `served_answer_fault`, which is a finding about Longhouse.
     Without it (an adapter in `_SERVED_IDS_NOT_NATIVE`) the served replies are
-    counted to one and the account is None.
+    counted, to one where the turn binds one reply, and the account is None.
 
     ``one_reply`` is a turn whose receipts bind one reply: the first turn, the
     continuation and the turns around an interrupt each ask for one reply of a
@@ -702,7 +702,9 @@ def _wait_served_answers(
     of the provider's rows and not of what was served. The steer step binds no
     such receipt and passes False: OMP moves a running command to a background
     job when a steer arrives, answers as the steer lands and again when the
-    job's notice arrives, and both replies are its own.
+    job's notice arrives, and both replies are its own. False means the same
+    for a counted adapter, whose repeated reply is accepted as it is for one
+    held by id.
 
     The provider's turn is over before this is called, so what it waits on is
     Longhouse serving the reply. When the wait gives up, why is decided from
@@ -726,13 +728,16 @@ def _wait_served_answers(
         last_count = len(matches)
         last_mentions = len(mentions)
         if native_answers is None:
-            # Counted, for the reason `_SERVED_IDS_NOT_NATIVE` gives. More
-            # replies cannot bring the count back down, so this fails now.
-            if last_count > 1:
+            # Counted, for the reason `_SERVED_IDS_NOT_NATIVE` gives. In a turn
+            # that binds one reply, more replies cannot bring the count back
+            # down, so that fails now. A turn that binds none takes however
+            # many the provider gave: they cannot be held to its rows by id,
+            # and they are not refused for a count the scenario allows.
+            if one_reply and last_count > 1:
                 raise MarkerAnswerCountError(
                     MARKER_ANSWERED_MORE_THAN_ONCE, marker=marker, answers=matches, mentions=mentions, expected=_COUNTED_ADAPTER
                 )
-            converged = last_count == 1
+            converged = last_count >= 1
         else:
             # Read after the page, so nothing served is newer than what is read here.
             native, native_state = native_answers()
