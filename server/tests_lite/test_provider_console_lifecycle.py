@@ -1871,3 +1871,69 @@ def test_a_session_persistence_notice_is_kept_with_the_turn_that_raised_it(tmp_p
         {"turn_index": 1, "run_id": "run-2", "level": "warning", "session_file": "~/sessions/example/first.jsonl", "message": message}
     ]
     assert len(retention["sources"]) == 2
+
+
+# --- A wait for a served reply ends once the provider's stream holds none to serve ---
+
+
+class _Clock:
+    """The producer's clock, so that how long a wait took is read and not sat through."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def test_a_served_wait_ends_once_the_providers_stream_holds_no_reply_to_serve(monkeypatch, tmp_path):
+    from zerg.qa.wait_kind import waited_on
+
+    marker = "LH_CODEX_STEERED_abc"
+    clock = _Clock()
+    monkeypatch.setattr(lifecycle, "time", clock)
+    _served(monkeypatch, [{"id": "other", "role": "assistant", "content_text": "LH_CODEX_STEER_abc"}])
+
+    def wait(stream_answers, native: dict[str, int] | None = None, state: str = "read") -> RuntimeError:
+        clock.now = 0.0
+        with pytest.raises(RuntimeError) as gave_up:
+            lifecycle._wait_served_answers(
+                "https://runtime.example",
+                "token",
+                "session-1",
+                marker,
+                timeout=120,
+                native_answers=None if native is None else (lambda: (dict(native) if state == "read" else None, state)),
+                unanswered=lambda served: RuntimeError(f"from the stream ({served})"),
+                stream_answers=stream_answers,
+            )
+        return gave_up.value
+
+    # The stream ended without a reply that answers: nothing is coming, and the wait says so from the stream.
+    assert str(wait(lambda: False)) == "from the stream (count=0, events that only mention it=0)" and clock.now < 5
+    assert str(wait(lambda: False, native={})).startswith("from the stream (count=0, ") and clock.now < 5
+    # A reply the stream holds is Longhouse's to serve, and a stream or a record that cannot be read
+    # says nothing either way: those are waited for to the deadline, as they were.
+    for pending in (lambda: True, lambda: None, None):
+        wait(pending)
+        assert clock.now >= 120
+    assert "from the stream" in str(wait(lambda: False, native={"row": 1})) and clock.now >= 120
+    unread = wait(lambda: False, native={}, state="unreadable")
+    assert str(unread).startswith("provider_reply_not_judged: ") and clock.now >= 120 and waited_on(unread) is None
+
+    # Any Console turn's wait reads it from the turn's own stream: here one whose model replied with something else.
+    clock.now = 0.0
+    with pytest.raises(RuntimeError, match=r"^reply_carried_another_marker: the resume turn completed .*\(served: count=0, "):
+        lifecycle._wait_turn_served(
+            "https://runtime.example",
+            "token",
+            "session-1",
+            "codex",
+            _turn_claim(tmp_path, "codex", _ask(), [_EARLIER]),
+            _ASKED,
+            turn="resume",
+        )
+    assert clock.now < 5

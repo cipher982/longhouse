@@ -676,6 +676,7 @@ def _wait_served_answers(
     native_answers: Callable[[], tuple[dict[str, int] | None, str]] | None = None,
     one_reply: bool = True,
     unanswered: Callable[[str], RuntimeError] | None = None,
+    stream_answers: Callable[[], bool | None] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, object] | None]:
     """Wait until the archive serves what the provider answered ``marker`` with.
 
@@ -707,12 +708,17 @@ def _wait_served_answers(
     held by id.
 
     The provider's turn is over before this is called, so what it waits on is
-    Longhouse serving the reply. When the wait gives up, why is decided from
-    the provider's own stream for the turn and not from the count that never
-    came: ``unanswered`` takes the last served count and returns the failure
-    (`_unanswered_turn_error`). A served-answer fault still standing at the
-    deadline is reported as that fault. Only a caller with no turn to read,
-    which no live path is, gets the bare count.
+    Longhouse serving the reply, and it waits only while there is one to
+    serve. ``stream_answers`` says whether the provider's own stream for the
+    turn holds a reply that answers (None when the stream cannot be read).
+    That stream is complete, its process having exited, so once it holds no
+    answer and the page serves none the wait gives up as soon as that has
+    stood for the time a converged page must. Otherwise it gives up at the
+    deadline. Either way, why is decided from the provider's stream and not
+    from the count that never came: ``unanswered`` takes the last served count
+    and returns the failure (`_unanswered_turn_error`). A served-answer fault
+    still standing when the wait gives up is reported as that fault. Only a
+    caller with no turn to read, which no live path is, gets the bare count.
     """
 
     deadline = time.monotonic() + timeout
@@ -738,6 +744,7 @@ def _wait_served_answers(
                     MARKER_ANSWERED_MORE_THAN_ONCE, marker=marker, answers=matches, mentions=mentions, expected=_COUNTED_ADAPTER
                 )
             converged = last_count >= 1
+            awaited = False
         else:
             # Read after the page, so nothing served is newer than what is read here.
             native, native_state = native_answers()
@@ -773,6 +780,9 @@ def _wait_served_answers(
             if fault is not None:
                 raise fault
             converged = correspondence["converged"] is True
+            # A row of the provider's record that answers is still to be served, a record
+            # that was not read may hold one, and a fault on the page has yet to stand or clear.
+            awaited = bool(native) or not native_readable or found is not None
         # One reply says its marker once; a reply that repeats it is not one,
         # and nothing served later changes what this one says.
         repeated = [event for event in matches if event_text(event).count(marker) != 1] if one_reply else []
@@ -780,10 +790,15 @@ def _wait_served_answers(
             raise MarkerAnswerCountError(
                 MARKER_REPEATED_IN_ONE_REPLY, marker=marker, answers=repeated, mentions=mentions, expected="each to say its marker once"
             )
-        if converged:
+        # Nothing is coming once the page serves no answer, nothing above is still
+        # awaited and the provider's own stream holds no reply for Longhouse to serve.
+        nothing_to_serve = not (converged or awaited or last_count) and stream_answers is not None and stream_answers() is False
+        if converged or nothing_to_serve:
             stable_since = stable_since or time.monotonic()
             if time.monotonic() - stable_since >= 2:
-                return matches, correspondence
+                if converged:
+                    return matches, correspondence
+                break
         else:
             stable_since = None
         time.sleep(0.5)
@@ -821,7 +836,11 @@ def _wait_turn_served(
     context_marker: str | None = None,
     **wait: Any,
 ) -> tuple[list[dict[str, Any]], dict[str, object] | None]:
-    """`_wait_served_answers` for one Console turn: held to the rows its claim names, decided from its stream if it gives up."""
+    """`_wait_served_answers` for one Console turn: held to the rows its claim names, and given up from what its stream holds."""
+
+    def stream_answers() -> bool | None:
+        account = _turn_account(provider, claim, marker, alongside=alongside)
+        return None if account is None else bool(account["answering_replies"])
 
     return _wait_served_answers(
         api_url,
@@ -833,6 +852,7 @@ def _wait_turn_served(
         unanswered=lambda served: _unanswered_turn_error(
             provider, claim, marker, turn=turn, alongside=alongside, served=served, context_marker=context_marker
         ),
+        stream_answers=stream_answers,
         **wait,
     )
 
