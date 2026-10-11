@@ -1812,8 +1812,8 @@ def _wait_owned_processes_dead(claims: list[dict[str, Any]], timeout: float = 15
 
 
 # How long the engine has to close the provider it ran a turn in, once it has
-# reported the run terminal. A provider normally exits within about half a
-# second of its final reply; this is some thirty times that, and far short of
+# reported the run terminal. An adapter that reports first closes its provider
+# within about half a second; this is some thirty times that, and far short of
 # any wait it stands in front of.
 PROVIDER_CLOSE_SECONDS = 15.0
 # The engine reported a run terminal, did not say it parked the invocation,
@@ -1824,11 +1824,16 @@ PROVIDER_OUTLIVED_TERMINAL_RUN = "provider_outlived_terminal_run"
 def _await_provider_closed(claim: Mapping[str, object], longhouse_home: Path, *, turn: str) -> dict[str, object]:
     """Wait until the provider a terminal run ran in is gone, before the Machine Agent is stopped.
 
-    The engine reports a run terminal first and closes the provider after.
-    The per-turn flush stops the Machine Agent, and one stopped in between
-    leaves the provider running with nobody left to close it: the session's
-    next turn then finds a second writer on the provider's session file. So
-    every flush waits here first and keeps how long the close took.
+    The per-turn flush stops the Machine Agent, and one stopped between a
+    run's terminal report and the close of its provider leaves the provider
+    running with nobody left to close it: the session's next turn then finds
+    a second writer on the provider's session file. So every flush waits here
+    first and keeps how long the close took.
+
+    Nothing here depends on which comes first. OpenCode, Cursor and OMP stop
+    the provider before they report terminal, and for them this is an
+    assertion that returns at once; an adapter that reports first and closes
+    after (Codex) is waited for.
 
     A provider still alive at `PROVIDER_CLOSE_SECONDS` is the engine not
     closing what it reported finished: typed, and declared a wait on the
