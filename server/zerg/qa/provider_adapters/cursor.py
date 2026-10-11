@@ -270,15 +270,21 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
         # process: that is resume_reattach's claim. A Helm cold Resume also
         # needs the run, bridge and process-loss facts only the direct native
         # Resume producer observes, so this column declares the limit and
-        # names the assertion that proves the capability.
+        # names where the capability is checked. It reads no result from
+        # there, so the record says only that this column does not prove it.
         payload = self._unsupported_payload(
             "helm_cold_resume_native",
             "cursor_cold_resume_canary_missing",
-            "The universal column runs no native cold Resume for Cursor; the assurance cells "
-            "native_provider_resume_proven (clean_exit, process_loss) prove it.",
+            "The universal column runs no native cold Resume for Cursor, so this record does not prove one. "
+            "The factory's resume-assurance cells check it separately (assertion native_provider_resume_proven: "
+            "clean_exit, process_loss); this record carries no result of theirs.",
         )
-        payload["proof_scope"] = "assurance_cells.native_provider_resume_proven"
-        payload["next"] = "Read native_provider_resume_proven (clean_exit, process_loss) for Cursor's native cold Resume."
+        # The scope named is where the check lives, outside this record.
+        payload["proof_scope"] = "external.resume_assurance_cells.native_provider_resume_proven"
+        payload["next"] = (
+            "Read the factory's resume-assurance results for native_provider_resume_proven (clean_exit, process_loss); "
+            "this column does not report them."
+        )
         package.write_json("assertions/helm_cold_resume_native.json", payload)
         return payload
 

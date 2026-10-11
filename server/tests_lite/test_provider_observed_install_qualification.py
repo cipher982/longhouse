@@ -134,7 +134,8 @@ def test_cursor_observed_install_column_passes_with_native_cold_resume_as_a_decl
         "passed": 28,
         "no_token_safety_gate": 1,
         # Native cold Resume: Gate 0 proves reattach, and the column runs no
-        # cold Resume of its own. The assurance cells prove it.
+        # cold Resume of its own. The resume-assurance cells check it; this
+        # column carries no result of theirs.
         "missing_live_canary": 1,
         "not_applicable": 1,
         "provider_contract_unsupported": 1,
@@ -144,8 +145,19 @@ def test_cursor_observed_install_column_passes_with_native_cold_resume_as_a_decl
     assert gate["expected_limits"]["helm_cold_resume"] == {"status": "unsupported_gap", "failure_code": "cursor_cold_resume_canary_missing"}
     native = cold_resume["data"]["native_resume_evidence"]
     assert native["status"] == "unsupported_gap"
-    assert native["proof_scope"] == "assurance_cells.native_provider_resume_proven"
+    assert native["proof_scope"] == "external.resume_assurance_cells.native_provider_resume_proven"
     assert cold_resume["data"]["assertions"]["native_provider_resume_proven"] is False
+    # Every copy of the gap record names where native cold Resume is checked
+    # and claims no result from there: its own assertion above is False.
+    records = [
+        json.loads(path.read_text(encoding="utf-8")) for path in (tmp_path / "output").rglob("assertions/helm_cold_resume_native.json")
+    ]
+    assert records
+    for record in records:
+        assert record["status"] == "unsupported_gap"
+        assert "does not prove" in record["message"] and "carries no result" in record["message"]
+        assert "native_provider_resume_proven" in record["message"] and "native_provider_resume_proven" in record["next"]
+        assert "prove it" not in record["message"]
     actions = _suite_actions(result)
     # Gate 0's active_steer scenario is the steer evidence.
     assert actions["steer_active_turn"]["coverage_status"] == "pass"
