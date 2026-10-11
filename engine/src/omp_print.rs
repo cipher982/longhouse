@@ -4659,6 +4659,54 @@ for line in sys.stdin:
         }
     }
 
+    /// Claim and start one user turn against the fake OMP in `temp`, resuming
+    /// `resume`'s native session when given.
+    async fn start_fake_turn(
+        temp: &Path,
+        prompt: &str,
+        resume: Option<&OmpPrintRunSummary>,
+    ) -> (Result<OmpPrintRunSummary>, String) {
+        let fake_omp = temp.join("omp");
+        if !fake_omp.exists() {
+            write_fake_omp(&fake_omp);
+        }
+        let new_id = || Uuid::new_v4().to_string();
+        let session_id = resume.map_or_else(new_id, |first| first.session_id.clone());
+        let thread_id = resume.map_or_else(new_id, |first| first.thread_id.clone());
+        let run_id = new_id();
+        crate::turn_claims::default_registry()
+            .unwrap()
+            .claim(&run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let started = start_omp_print_turn(lifecycle_config(
+            temp,
+            &fake_omp,
+            &session_id,
+            &thread_id,
+            &run_id,
+            prompt,
+            resume.and_then(|first| first.provider_thread_id.clone()),
+            resume.map(|first| PathBuf::from(&first.session_file)),
+            "user",
+            None,
+            None,
+        ))
+        .await;
+        (started, run_id)
+    }
+
+    async fn wait_for_active_response(started: &OmpPrintRunSummary) {
+        let marker = PathBuf::from(format!("{}.active", started.session_file));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !marker.exists() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "fake OMP did not start its in-flight response"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
     fn runtime_events() -> Vec<Value> {
         let directory = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
         std::fs::read_dir(directory)
@@ -5096,60 +5144,13 @@ for line in sys.stdin:
         let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let previous_home = set_test_longhouse_home(temp.path().join("longhouse"));
-        let fake_omp = temp.path().join("omp");
-        write_fake_omp(&fake_omp);
-        let session_id = Uuid::new_v4().to_string();
-        let thread_id = Uuid::new_v4().to_string();
-        let first_run_id = Uuid::new_v4().to_string();
-        let second_run_id = Uuid::new_v4().to_string();
-        let claims = crate::turn_claims::default_registry().unwrap();
-        claims
-            .claim(&first_run_id, &session_id, &thread_id, None, None, "omp")
-            .unwrap();
+        let (first, first_run_id) = start_fake_turn(temp.path(), "scenario=responding", None).await;
+        let first = first.unwrap();
+        wait_for_active_response(&first).await;
 
-        let first = start_omp_print_turn(lifecycle_config(
-            temp.path(),
-            &fake_omp,
-            &session_id,
-            &thread_id,
-            &first_run_id,
-            "scenario=responding",
-            None,
-            None,
-            "user",
-            None,
-            None,
-        ))
-        .await
-        .unwrap();
-        let active_marker = PathBuf::from(format!("{}.active", first.session_file));
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while !active_marker.exists() {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "fake OMP did not start its in-flight response"
-            );
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-
-        claims
-            .claim(&second_run_id, &session_id, &thread_id, None, None, "omp")
-            .unwrap();
-        let second = start_omp_print_turn(lifecycle_config(
-            temp.path(),
-            &fake_omp,
-            &session_id,
-            &thread_id,
-            &second_run_id,
-            "second queued prompt",
-            first.provider_thread_id.clone(),
-            Some(PathBuf::from(&first.session_file)),
-            "user",
-            None,
-            None,
-        ))
-        .await
-        .unwrap();
+        let (second, second_run_id) =
+            start_fake_turn(temp.path(), "second queued prompt", Some(&first)).await;
+        let second = second.unwrap();
 
         assert_eq!(second.pid, first.pid);
         assert_eq!(second.launch_id, first.launch_id);
@@ -5178,59 +5179,13 @@ for line in sys.stdin:
         let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let previous_home = set_test_longhouse_home(temp.path().join("longhouse"));
-        let fake_omp = temp.path().join("omp");
-        write_fake_omp(&fake_omp);
-        let session_id = Uuid::new_v4().to_string();
-        let thread_id = Uuid::new_v4().to_string();
-        let first_run_id = Uuid::new_v4().to_string();
-        let queued_run_id = Uuid::new_v4().to_string();
-        let claims = crate::turn_claims::default_registry().unwrap();
-        claims
-            .claim(&first_run_id, &session_id, &thread_id, None, None, "omp")
-            .unwrap();
-        let first = start_omp_print_turn(lifecycle_config(
-            temp.path(),
-            &fake_omp,
-            &session_id,
-            &thread_id,
-            &first_run_id,
-            "scenario=responding",
-            None,
-            None,
-            "user",
-            None,
-            None,
-        ))
-        .await
-        .unwrap();
-        let active_marker = PathBuf::from(format!("{}.active", first.session_file));
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while !active_marker.exists() {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "fake OMP did not start its in-flight response"
-            );
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
+        let (first, _) = start_fake_turn(temp.path(), "scenario=responding", None).await;
+        let first = first.unwrap();
+        wait_for_active_response(&first).await;
 
-        claims
-            .claim(&queued_run_id, &session_id, &thread_id, None, None, "omp")
-            .unwrap();
-        let queued = start_omp_print_turn(lifecycle_config(
-            temp.path(),
-            &fake_omp,
-            &session_id,
-            &thread_id,
-            &queued_run_id,
-            "scenario=queued-failure",
-            first.provider_thread_id.clone(),
-            Some(PathBuf::from(&first.session_file)),
-            "user",
-            None,
-            None,
-        ))
-        .await
-        .unwrap();
+        let (queued, queued_run_id) =
+            start_fake_turn(temp.path(), "scenario=queued-failure", Some(&first)).await;
+        let queued = queued.unwrap();
         assert_eq!(queued.pid, first.pid);
 
         let queued_claim = wait_for_terminal(&queued_run_id).await;
@@ -5255,59 +5210,13 @@ for line in sys.stdin:
         let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let previous_home = set_test_longhouse_home(temp.path().join("longhouse"));
-        let fake_omp = temp.path().join("omp");
-        write_fake_omp(&fake_omp);
-        let session_id = Uuid::new_v4().to_string();
-        let thread_id = Uuid::new_v4().to_string();
-        let first_run_id = Uuid::new_v4().to_string();
-        let queued_run_id = Uuid::new_v4().to_string();
-        let claims = crate::turn_claims::default_registry().unwrap();
-        claims
-            .claim(&first_run_id, &session_id, &thread_id, None, None, "omp")
-            .unwrap();
-        let first = start_omp_print_turn(lifecycle_config(
-            temp.path(),
-            &fake_omp,
-            &session_id,
-            &thread_id,
-            &first_run_id,
-            "scenario=responding",
-            None,
-            None,
-            "user",
-            None,
-            None,
-        ))
-        .await
-        .unwrap();
-        let active_marker = PathBuf::from(format!("{}.active", first.session_file));
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while !active_marker.exists() {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "fake OMP did not start its in-flight response"
-            );
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
+        let (first, first_run_id) = start_fake_turn(temp.path(), "scenario=responding", None).await;
+        let first = first.unwrap();
+        wait_for_active_response(&first).await;
 
-        claims
-            .claim(&queued_run_id, &session_id, &thread_id, None, None, "omp")
-            .unwrap();
-        let queued = start_omp_print_turn(lifecycle_config(
-            temp.path(),
-            &fake_omp,
-            &session_id,
-            &thread_id,
-            &queued_run_id,
-            "scenario=queued-closed",
-            first.provider_thread_id.clone(),
-            Some(PathBuf::from(&first.session_file)),
-            "user",
-            None,
-            None,
-        ))
-        .await
-        .unwrap();
+        let (queued, queued_run_id) =
+            start_fake_turn(temp.path(), "scenario=queued-closed", Some(&first)).await;
+        let queued = queued.unwrap();
         assert_eq!(queued.pid, first.pid);
         let queued_marker = PathBuf::from(format!("{}.queued", first.session_file));
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -5348,61 +5257,13 @@ for line in sys.stdin:
         let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let previous_home = set_test_longhouse_home(temp.path().join("longhouse"));
-        let fake_omp = temp.path().join("omp");
-        write_fake_omp(&fake_omp);
-        let session_id = Uuid::new_v4().to_string();
-        let thread_id = Uuid::new_v4().to_string();
-        let first_run_id = Uuid::new_v4().to_string();
-        let queued_run_id = Uuid::new_v4().to_string();
-        let rejected_run_id = Uuid::new_v4().to_string();
-        let claims = crate::turn_claims::default_registry().unwrap();
-        claims
-            .claim(&first_run_id, &session_id, &thread_id, None, None, "omp")
-            .unwrap();
+        let (first, first_run_id) = start_fake_turn(temp.path(), "scenario=responding", None).await;
+        let first = first.unwrap();
+        wait_for_active_response(&first).await;
 
-        let first = start_omp_print_turn(lifecycle_config(
-            temp.path(),
-            &fake_omp,
-            &session_id,
-            &thread_id,
-            &first_run_id,
-            "scenario=responding",
-            None,
-            None,
-            "user",
-            None,
-            None,
-        ))
-        .await
-        .unwrap();
-        let active_marker = PathBuf::from(format!("{}.active", first.session_file));
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while !active_marker.exists() {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "fake OMP did not start its in-flight response"
-            );
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-
-        claims
-            .claim(&queued_run_id, &session_id, &thread_id, None, None, "omp")
-            .unwrap();
-        let queued = start_omp_print_turn(lifecycle_config(
-            temp.path(),
-            &fake_omp,
-            &session_id,
-            &thread_id,
-            &queued_run_id,
-            "scenario=queued-closed",
-            first.provider_thread_id.clone(),
-            Some(PathBuf::from(&first.session_file)),
-            "user",
-            None,
-            None,
-        ))
-        .await
-        .unwrap();
+        let (queued, queued_run_id) =
+            start_fake_turn(temp.path(), "scenario=queued-closed", Some(&first)).await;
+        let queued = queued.unwrap();
         assert_eq!(queued.pid, first.pid);
         let queued_marker = PathBuf::from(format!("{}.queued", first.session_file));
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -5421,23 +5282,8 @@ for line in sys.stdin:
                 .unwrap();
         assert!(invocation.has_queued_user_turn(&queued_run_id));
 
-        claims
-            .claim(&rejected_run_id, &session_id, &thread_id, None, None, "omp")
-            .unwrap();
-        let rejected = start_omp_print_turn(lifecycle_config(
-            temp.path(),
-            &fake_omp,
-            &session_id,
-            &thread_id,
-            &rejected_run_id,
-            "third user turn",
-            first.provider_thread_id.clone(),
-            Some(PathBuf::from(&first.session_file)),
-            "user",
-            None,
-            None,
-        ))
-        .await;
+        let (rejected, rejected_run_id) =
+            start_fake_turn(temp.path(), "third user turn", Some(&first)).await;
         assert!(rejected.is_err());
         assert!(crate::process_group::group_is_alive(
             first.process_group_id.unwrap()
@@ -5445,7 +5291,10 @@ for line in sys.stdin:
         assert_eq!(invocation.state(), InvocationState::Responding);
         assert!(invocation.has_queued_user_turn(&queued_run_id));
 
-        let rejected_claim = claims.read(&rejected_run_id).unwrap();
+        let rejected_claim = crate::turn_claims::default_registry()
+            .unwrap()
+            .read(&rejected_run_id)
+            .unwrap();
         assert_eq!(rejected_claim.state, "terminal");
         assert_eq!(
             rejected_claim.result.as_ref().unwrap()["terminal_state"],
