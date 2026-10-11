@@ -132,9 +132,19 @@ def _open_readonly(path: Path) -> sqlite3.Connection:
     WAL. ``mode=ro`` reads the WAL (WAL readers don't block the writer) so the
     live-transcript tailer can decode an in-flight session. Fall back to
     ``immutable=1`` for a cold store whose ``-shm`` is gone/locked.
+
+    A ``mode=ro`` open succeeds on such a store; it is the first read that
+    fails (``attempt to write a readonly database`` when the directory cannot
+    take a new ``-shm``), so the fallback is decided by a read, not the open.
     """
     try:
-        return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            con.execute("select name from sqlite_master limit 1").fetchall()
+        except sqlite3.OperationalError:
+            con.close()
+            raise
+        return con
     except sqlite3.OperationalError:
         return sqlite3.connect(f"file:{path}?immutable=1", uri=True)
 

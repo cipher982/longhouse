@@ -438,6 +438,27 @@ def iter_files(paths: list[str], provider: str) -> list[Path]:
     return files
 
 
+def _open_sqlite_readonly(path: Path) -> sqlite3.Connection:
+    """Open a provider's SQLite store without writing to it or beside it.
+
+    `mode=ro` reads the write-ahead log, which is where a store still being
+    written keeps its newest rows. It also needs the log's index file, and a
+    store that was closed cleanly has none: when the directory cannot take a
+    new one the first read fails, not the open. `immutable=1` reads the main
+    file alone, which is all a closed store has, so it is the fallback.
+    """
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+        except sqlite3.OperationalError:
+            connection.close()
+            raise
+        return connection
+    except sqlite3.OperationalError:
+        return sqlite3.connect(f"file:{path}?immutable=1", uri=True)
+
+
 def _protobuf_fields(data: bytes) -> tuple[list[str], list[bytes]] | None:
     """Field numbers and wire types of one protobuf message, and its field-1 values.
 
@@ -522,13 +543,14 @@ def _cursor_store_records(path: Path) -> Iterator[dict[str, Any] | None]:
     message: that is the older chunked format no reader decodes, and it is
     reported as unparseable.
 
-    The metadata and the root are found the way the server's reader finds
-    them (`_cursor_meta_json`, `_cursor_blob_id`), so a store that reader
-    decodes is one the census reads. How the metadata was written is part of
-    its shape (`encoding:hex`), because not every reader takes both forms.
+    The store is opened, and the metadata and the root found, the way the
+    server's reader does it (`_open_sqlite_readonly`, `_cursor_meta_json`,
+    `_cursor_blob_id`), so a store that reader decodes is one the census
+    reads. How the metadata was written is part of its shape
+    (`encoding:hex`), because not every reader takes both forms.
     """
     try:
-        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        connection = _open_sqlite_readonly(path)
     except sqlite3.Error:
         yield None
         return
@@ -584,7 +606,7 @@ def _iter_records(path: Path, provider: str) -> Iterator[dict[str, Any] | None]:
 
     if provider == "opencode" and path.suffix == ".db":
         try:
-            connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            connection = _open_sqlite_readonly(path)
             try:
                 rows = connection.execute(
                     "SELECT m.data, p.data FROM part p JOIN message m ON m.id = p.message_id ORDER BY p.time_created, p.id"

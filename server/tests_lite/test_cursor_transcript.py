@@ -14,6 +14,7 @@ import os as _os
 import sqlite3
 from pathlib import Path
 
+import pytest
 from cryptography.fernet import Fernet
 
 _os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -380,6 +381,67 @@ def test_legacy_chunked_format_reported_as_gap(tmp_path: Path) -> None:
     result = decode_store_db(store_path)
     assert result.session is None
     assert result.diagnostics.unsupported_gap == GAP_LEGACY_CHUNKED
+
+
+def _as_cold_wal_store(store: Path) -> None:
+    """Leave the store as cursor-agent does on exit: WAL mode, checkpointed, no sidecars."""
+    con = sqlite3.connect(str(store))
+    con.execute("pragma journal_mode=wal")
+    con.close()
+    assert not store.with_name("store.db-wal").exists() and not store.with_name("store.db-shm").exists()
+
+
+def test_cold_store_in_a_directory_that_cannot_be_written_is_decoded(tmp_path: Path) -> None:
+    """Reading it through the WAL needs a new `-shm`; without one the reader takes the main file alone."""
+    store = _write_store(
+        tmp_path / "sess",
+        agent_id="cold-001",
+        created_at_ms=1_700_000_000_000,
+        updated_at_ms=1_700_000_060_000,
+        messages=_basic_messages(),
+    )
+    _as_cold_wal_store(store)
+    store.parent.chmod(0o555)
+    try:
+        if _os.access(store.parent, _os.W_OK):
+            pytest.skip("this user can write a new -shm into a read-only directory")
+        result = decode_store_db(store)
+        summary = peek_cursor_session(store)
+    finally:
+        store.parent.chmod(0o755)
+    assert result.session is not None and result.diagnostics.message_count == len(_basic_messages())
+    assert summary is not None and summary.agent_id == "cold-001"
+
+
+def test_reader_falls_back_when_the_first_read_fails_not_the_open(tmp_path: Path, monkeypatch) -> None:
+    """The same failure without relying on directory permissions, which root ignores."""
+    from zerg.services import cursor_transcript as ct
+
+    store = _write_store(
+        tmp_path / "sess",
+        agent_id="cold-002",
+        created_at_ms=1_700_000_000_000,
+        updated_at_ms=1_700_000_060_000,
+        messages=_basic_messages(),
+    )
+    real_connect = sqlite3.connect
+    opened: list[str] = []
+
+    class Unreadable:
+        def execute(self, *_args):
+            raise sqlite3.OperationalError("attempt to write a readonly database")
+
+        def close(self) -> None:
+            opened.append("closed")
+
+    def connect(database: str, **kwargs):
+        opened.append(database.rsplit("?", 1)[1])
+        return Unreadable() if database.endswith("mode=ro") else real_connect(database, **kwargs)
+
+    monkeypatch.setattr(ct.sqlite3, "connect", connect)
+    result = decode_store_db(store)
+    assert opened == ["mode=ro", "closed", "immutable=1"]
+    assert result.session is not None and result.diagnostics.message_count == len(_basic_messages())
 
 
 def test_missing_store_reported_as_gap(tmp_path: Path) -> None:

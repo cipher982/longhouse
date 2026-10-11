@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -344,6 +345,71 @@ def test_check_agrees_with_the_servers_reader_on_every_store_its_tests_build(tmp
         "test_legacy_chunked_format_reported_as_gap",
         "test_peek_cursor_session_legacy_flag",
     ]
+
+
+@pytest.mark.parametrize("provider", ["cursor", "opencode"])
+def test_a_closed_store_in_a_directory_that_cannot_be_written_is_still_read(tmp_path: Path, provider: str):
+    """Reading through the WAL needs a new index file beside the store; the census takes the main file alone."""
+    if provider == "cursor":
+        store = _cursor_store(tmp_path / "cold" / "store.db")
+        expected = {"store/assistant/text", "store/meta/0", "store/root", "store/user/text"}
+    else:
+        store = tmp_path / "cold" / "opencode.db"
+        store.parent.mkdir()
+        with sqlite3.connect(store) as connection:
+            connection.executescript(
+                "CREATE TABLE message (id TEXT PRIMARY KEY, data TEXT);"
+                "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, time_created INTEGER, data TEXT);"
+            )
+            connection.execute("INSERT INTO message VALUES ('m1', ?)", (json.dumps({"role": "user"}),))
+            connection.execute("INSERT INTO part VALUES ('p1', 'm1', 1, ?)", (json.dumps({"type": "text", "text": "private"}),))
+        connection.close()
+        expected = {"part/text/user"}
+    connection = sqlite3.connect(store)
+    connection.execute("PRAGMA journal_mode=wal")
+    connection.close()
+    assert sorted(path.name for path in store.parent.iterdir()) == [store.name]
+
+    store.parent.chmod(0o555)
+    try:
+        if os.access(store.parent, os.W_OK):
+            pytest.skip("this user can write the WAL index into a read-only directory")
+        shapes = _census(provider, store)
+    finally:
+        store.parent.chmod(0o755)
+    assert set(shapes) == expected
+
+
+def test_the_census_sqlite_reader_falls_back_when_the_first_read_fails(tmp_path: Path, monkeypatch):
+    """`mode=ro` opens a store it cannot read through its log; only the first read says so."""
+    store = tmp_path / "store.db"
+    with sqlite3.connect(store) as connection:
+        connection.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+    connection.close()
+    from tests_lite.test_transcript_census_families import _tool
+
+    tool = _tool()
+    real_connect = sqlite3.connect
+    opened: list[str] = []
+
+    class Unreadable:
+        def execute(self, *_args):
+            raise sqlite3.OperationalError("attempt to write a readonly database")
+
+        def close(self):
+            opened.append("closed")
+
+    def connect(database: str, **kwargs):
+        opened.append(database.rsplit("?", 1)[1])
+        return Unreadable() if database.endswith("mode=ro") else real_connect(database, **kwargs)
+
+    monkeypatch.setattr(tool.sqlite3, "connect", connect)
+    connection = tool._open_sqlite_readonly(store)
+    try:
+        assert opened == ["mode=ro", "closed", "immutable=1"]
+        assert connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall() == [("meta",)]
+    finally:
+        connection.close()
 
 
 def test_cursor_projection_lifecycle_line_is_named_by_its_type(tmp_path: Path):
