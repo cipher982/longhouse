@@ -99,6 +99,80 @@ def test_redacted_native_capture_refreshes_result_and_hook_model_source_digests(
     assert hook_source["sha256"] == hashlib.sha256(hook_path.read_bytes()).hexdigest()
 
 
+def _redacted_hook_observation(tmp_path: Path, hook_rows: list[dict], *, session_id: str | None) -> dict:
+    """A Cursor observation whose designated hook receipt no longer matches its digest."""
+    stream_path = tmp_path / "native.jsonl"
+    hook_path = tmp_path / "hooks.jsonl"
+    result = {"type": "result", "subtype": "success", **({"session_id": session_id} if session_id else {})}
+    _write_jsonl(stream_path, [result])
+    _write_jsonl(hook_path, hook_rows)
+    return {
+        "live_model_evidence": {
+            "source_canary": "cursor_model_probe",
+            "result_event": {
+                "type": "result",
+                "subtype": "success",
+                **({"session_id": session_id} if session_id else {}),
+                "native_event_sha256": semantic._native_event_digest(result),  # noqa: SLF001
+                "model_source": "provider_hook",
+                "model_source_event_sha256": "a" * 64,
+            },
+            "source_artifacts": [
+                {
+                    "path": str(stream_path.resolve()),
+                    "kind": "provider_jsonl_stream",
+                    "event_type": "result",
+                    "event_sha256": semantic._native_event_digest(result),  # noqa: SLF001
+                },
+                {
+                    "path": str(hook_path.resolve()),
+                    "kind": "provider_hook_receipt",
+                    "event_type": "sessionStart",
+                    "event_sha256": "a" * 64,
+                },
+            ],
+        }
+    }
+
+
+def test_redacted_hook_receipt_is_rebound_to_the_observations_own_session(tmp_path: Path) -> None:
+    """The file can hold another session's sessionStart first; the receipt is still this session's."""
+    other = {"event": "sessionStart", "conversation_id": "session-other", "model": "another-model"}
+    mine = {"event": "sessionStart", "conversation_id": "session-1", "model": "fixture-model", "cwd": "[QUALIFICATION_SECRET_1]"}
+    observation = _redacted_hook_observation(tmp_path, [other, mine], session_id="session-1")
+
+    evidence = semantic._refresh_native_source_digests(observation, artifact_root=tmp_path)["live_model_evidence"]  # noqa: SLF001
+
+    assert evidence["result_event"]["model_source_event_sha256"] == semantic._native_event_digest(mine)  # noqa: SLF001
+    assert evidence["source_artifacts"][1]["event_sha256"] == semantic._native_event_digest(mine)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("hook_rows", "session_id"),
+    [
+        # Only another session's receipt is in the file.
+        ([{"event": "sessionStart", "conversation_id": "session-other", "model": "another-model"}], "session-1"),
+        # This session's receipt names no model.
+        ([{"event": "sessionStart", "conversation_id": "session-1", "model": ""}], "session-1"),
+        # No session to match and more than one candidate.
+        (
+            [
+                {"event": "sessionStart", "conversation_id": "session-1", "model": "fixture-model"},
+                {"event": "sessionStart", "conversation_id": "session-other", "model": "another-model"},
+            ],
+            None,
+        ),
+    ],
+)
+def test_redacted_hook_receipt_is_not_rebound_to_an_event_it_cannot_identify(
+    tmp_path: Path, hook_rows: list[dict], session_id: str | None
+) -> None:
+    observation = _redacted_hook_observation(tmp_path, hook_rows, session_id=session_id)
+
+    with pytest.raises(identity.RequestError, match="hook event could not be selected"):
+        semantic._refresh_native_source_digests(observation, artifact_root=tmp_path)  # noqa: SLF001
+
+
 def test_hook_model_source_fails_closed_without_its_receipt(tmp_path: Path) -> None:
     # A model bound to a hook receipt must never be rebound to a stream event.
     stream_path = tmp_path / "native.jsonl"

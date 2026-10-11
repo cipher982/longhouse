@@ -157,15 +157,35 @@ def _select_redacted_hook_event(
     *,
     event_name: str,
     previous_digest: str | None,
+    session_id: str | None,
 ) -> dict[str, Any] | None:
-    """Hook receipts name their event in ``event``, not ``type``."""
+    """Find a hook receipt again after redaction changed its digest.
+
+    Hook receipts name their event in ``event``, not ``type``. An unredacted
+    receipt is found by its digest. A redacted one is found the way its
+    producer found it: the first event of that name for the observation's
+    session that names a model. Without a session to match, only a file
+    holding exactly one event of that name identifies it. Anything else
+    selects nothing, and the caller fails closed rather than bind another
+    session's receipt.
+    """
 
     if previous_digest:
         expected_digest = previous_digest.removeprefix("sha256:")
         exact = next((event for event in events if _native_event_digest(event) == expected_digest), None)
         if exact is not None:
             return exact
-    return next((event for event in events if event.get("event") == event_name), None)
+    named = [event for event in events if event.get("event") == event_name]
+    if session_id:
+        return next(
+            (
+                event
+                for event in named
+                if event.get("conversation_id") == session_id and isinstance(event.get("model"), str) and event["model"].strip()
+            ),
+            None,
+        )
+    return named[0] if len(named) == 1 else None
 
 
 def _select_model_source_event(events: list[dict[str, Any]], *, source_canary: str) -> dict[str, Any] | None:
@@ -236,10 +256,13 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path, source_ro
             if not source_events or not isinstance(source.get("event_type"), str):
                 selected_event = None
             elif hook_receipt:
+                result_event = refreshed.get("result_event")
+                session_id = result_event.get("session_id") if isinstance(result_event, dict) else None
                 selected_event = _select_redacted_hook_event(
                     source_events,
                     event_name=source["event_type"],
                     previous_digest=previous_event_digest if isinstance(previous_event_digest, str) else None,
+                    session_id=session_id if isinstance(session_id, str) and session_id.strip() else None,
                 )
             else:
                 selected_event = _select_redacted_native_event(
