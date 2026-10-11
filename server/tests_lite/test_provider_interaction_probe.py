@@ -1,7 +1,12 @@
 import hashlib
 import json
+import shlex
+import sys
 from pathlib import Path
+from subprocess import DEVNULL
+from subprocess import PIPE
 from subprocess import CompletedProcess
+from subprocess import Popen
 
 import pytest
 
@@ -164,7 +169,8 @@ def test_cursor_model_probe_selects_the_first_model_bearing_init_event() -> None
 # print stream's init event, and the base model (no tier) on tool hooks. Only the
 # sessionStart hook receipt carries the alias.
 _CURSOR_ALIAS = "gpt-5.3-codex-low"
-_CURSOR_SESSION_START = {"event": "sessionStart", "conversation_id": "cursor-session-1", "model": _CURSOR_ALIAS}
+_CURSOR_SESSION = {"conversation_id": "cursor-session-1", "model": _CURSOR_ALIAS}
+_CURSOR_SESSION_START = ("sessionStart", _CURSOR_SESSION)
 
 
 def _cursor_print_stream(*, api_key_source: str = "env") -> str:
@@ -186,19 +192,24 @@ def _cursor_print_stream(*, api_key_source: str = "env") -> str:
     )
 
 
-def _cursor_print_run(stdout: str, hook_rows: list[dict[str, object]], runtime_homes: list[Path] | None = None):
-    """Answer the model probe with a print stream and the hook receipts Cursor would have written."""
+def _cursor_print_run(stdout: str, hook_calls: list[tuple[str, dict[str, object]]], runtime_homes: list[Path] | None = None):
+    """Answer the model probe the way Cursor does.
+
+    Nothing here writes a receipt. Each hook call runs the command the probe
+    registered for that event in the workspace's ``.cursor/hooks.json``, with
+    Cursor's payload on stdin and the environment the probe gave the CLI, so
+    the receipt exists only if the probe installed its hooks.
+    """
 
     def fake_run(*_args, **kwargs):
         env = kwargs["env"]
         if runtime_homes is not None:
             runtime_homes.append(Path(env["HOME"]))
-        Path(env["LONGHOUSE_CURSOR_GATE0_EVENTS"]).write_text(
-            "".join(
-                json.dumps({**row, "longhouse_session_id": env["LONGHOUSE_MANAGED_SESSION_ID"]}, sort_keys=True) + "\n" for row in hook_rows
-            ),
-            encoding="utf-8",
-        )
+        registered = json.loads((Path(kwargs["cwd"]) / ".cursor" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+        for event, payload in hook_calls:
+            hook = Popen([sys.executable, *shlex.split(registered[event][0]["command"])], stdin=PIPE, stdout=DEVNULL, env=env, text=True)
+            hook.communicate(json.dumps(payload))
+            assert hook.returncode == 0
         return CompletedProcess([], 0, stdout, "")
 
     return fake_run
@@ -211,15 +222,15 @@ def test_cursor_model_probe_binds_model_identity_to_the_session_start_hook_recei
     binary = tmp_path / "cursor-agent"
     binary.write_text("fixture", encoding="utf-8")
     runtime_homes: list[Path] = []
-    hook_rows = [
+    hook_calls = [
         _CURSOR_SESSION_START,
-        {"event": "beforeShellExecution", "conversation_id": "cursor-session-1", "model": "gpt-5.3-codex"},
-        {"event": "sessionEnd", "conversation_id": "cursor-session-1", "model": _CURSOR_ALIAS},
+        ("beforeShellExecution", {**_CURSOR_SESSION, "model": "gpt-5.3-codex"}),
+        ("sessionEnd", _CURSOR_SESSION),
     ]
     monkeypatch.setattr(
         provider_interaction_probe.subprocess,
         "run",
-        _cursor_print_run(_cursor_print_stream(), hook_rows, runtime_homes),
+        _cursor_print_run(_cursor_print_stream(), hook_calls, runtime_homes),
     )
 
     artifact_root = tmp_path / "artifacts"
@@ -266,6 +277,7 @@ def test_cursor_model_probe_binds_model_identity_to_the_session_start_hook_recei
     hook_path = Path(hook_source["path"])
     session_start = json.loads(hook_path.read_text(encoding="utf-8").splitlines()[0])
     assert session_start["event"] == "sessionStart"
+    assert session_start["longhouse_session_id"].startswith("direct-")
     assert hook_source == {
         "path": str(hook_path),
         "sha256": hashlib.sha256(hook_path.read_bytes()).hexdigest(),
@@ -279,22 +291,23 @@ def test_cursor_model_probe_binds_model_identity_to_the_session_start_hook_recei
 
 
 @pytest.mark.parametrize(
-    ("hook_rows", "api_key_source", "failure_code"),
+    ("hook_calls", "api_key_source", "failure_code"),
     (
         # The receipt names another model: the base model is not the requested tier.
-        ([{**_CURSOR_SESSION_START, "model": "gpt-5.3-codex"}], "env", "cursor_model_identity_mismatch"),
+        ([("sessionStart", {**_CURSOR_SESSION, "model": "gpt-5.3-codex"})], "env", "cursor_model_identity_mismatch"),
+        # Cursor fired no hook at all.
         ([], "env", "cursor_model_hook_receipt_missing"),
         # A receipt for another session, or a later hook of this one, is not this session's receipt.
-        ([{**_CURSOR_SESSION_START, "conversation_id": "cursor-session-2"}], "env", "cursor_model_hook_receipt_missing"),
-        ([{**_CURSOR_SESSION_START, "event": "afterAgentThought"}], "env", "cursor_model_hook_receipt_missing"),
-        ([{**_CURSOR_SESSION_START, "model": ""}], "env", "cursor_model_hook_receipt_missing"),
+        ([("sessionStart", {**_CURSOR_SESSION, "conversation_id": "cursor-session-2"})], "env", "cursor_model_hook_receipt_missing"),
+        ([("afterAgentThought", _CURSOR_SESSION)], "env", "cursor_model_hook_receipt_missing"),
+        ([("sessionStart", {**_CURSOR_SESSION, "model": ""})], "env", "cursor_model_hook_receipt_missing"),
         ([_CURSOR_SESSION_START], "login", "cursor_api_key_binding_missing"),
     ),
 )
 def test_cursor_model_probe_fails_closed_without_a_matching_model_receipt(
     monkeypatch,
     tmp_path: Path,
-    hook_rows: list[dict[str, object]],
+    hook_calls: list[tuple[str, dict[str, object]]],
     api_key_source: str,
     failure_code: str,
 ) -> None:
@@ -303,7 +316,7 @@ def test_cursor_model_probe_fails_closed_without_a_matching_model_receipt(
     monkeypatch.setattr(
         provider_interaction_probe.subprocess,
         "run",
-        _cursor_print_run(_cursor_print_stream(api_key_source=api_key_source), hook_rows),
+        _cursor_print_run(_cursor_print_stream(api_key_source=api_key_source), hook_calls),
     )
 
     artifact_root = tmp_path / "artifacts"
