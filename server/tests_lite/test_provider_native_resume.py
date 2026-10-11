@@ -1876,46 +1876,78 @@ def test_cursor_bootstrap_hook_sequence_rejects_multiple_matching_generations(tm
         )
 
 
-def test_cursor_bootstrap_correlation_allows_exact_hook_with_shipped_events() -> None:
-    result = _cursor_bootstrap_correlation(
-        {
-            "marker_observed_in_transcript": False,
-            "marker_observed_in_assistant": False,
-            "new_assistant_events": 0,
-        },
-        {"hook_response_correlated": True},
-        {"status": "pass", "events_shipped": 11},
-    )
-
-    assert result == {
-        "transcript_projection_correlated": False,
+def test_cursor_bootstrap_is_proven_by_the_hosted_transcript_and_never_by_the_hook_alone() -> None:
+    served = {"marker_observed_in_transcript": True, "marker_observed_in_assistant": True, "new_assistant_events": 1}
+    assert _cursor_bootstrap_correlation(served, {"hook_response_correlated": True}) == {
+        "transcript_projection_correlated": True,
         "hook_response_correlated": True,
-        "method": "cursor_hook_with_transcript_ship",
+        "method": "transcript_projection",
         "bootstrap_correlated": True,
+        "hosted_transcript_gap": None,
+    }
+
+    # Cursor answered and the hosted transcript never showed it. Whether a flush
+    # or the daemon shipped the records used to decide a pass; nothing does now.
+    missing = {"marker_observed_in_transcript": True, "marker_observed_in_assistant": False, "new_assistant_events": 0}
+    result = _cursor_bootstrap_correlation(missing, {"hook_response_correlated": True})
+    assert result["bootstrap_correlated"] is False
+    assert (result["method"], result["hook_response_correlated"]) == ("unverified", True)
+
+
+def _delivery_snapshot(
+    *, shipped_through: int = 899, source_bytes: int = 899, marker_count: int = 2, pending: int = 0, session_id: str = "s1"
+) -> dict[str, object]:
+    """A projection snapshot: Cursor's transcript beside the engine's epochs for one session."""
+
+    return {
+        "schema": "cursor_projection_diagnostics.v2",
+        "session_id": "s1",
+        "files": [
+            {"kind": "agent_transcript", "size": source_bytes, "marker_count": marker_count},
+            {"kind": "store_db", "size": 61440, "marker_count": 0},
+        ],
+        "engine_db": {
+            "present": True,
+            "table_rows": {
+                "source_epoch_registry": [
+                    {"source_epoch": "live", "bound_session_id": session_id, "ended_at": None},
+                    {"source_epoch": "ended", "bound_session_id": session_id, "ended_at": "2026-01-01T00:00:00+00:00"},
+                    {"source_epoch": "other", "bound_session_id": "another-session", "ended_at": None},
+                ],
+                "source_epoch_lane_state": [
+                    {"source_epoch": "live", "lane": "durable", "last_position": shipped_through},
+                    {"source_epoch": "ended", "lane": "durable", "last_position": 400},
+                    {"source_epoch": "other", "lane": "durable", "last_position": 9000},
+                ],
+                "pending_source_envelope": [{"source_epoch": "live", "envelope_id": f"e{n}"} for n in range(pending)],
+            },
+        },
     }
 
 
-@pytest.mark.parametrize(
-    "ship_receipt",
-    [
-        {"status": "failed", "events_shipped": 11},
-        {"status": "pass", "events_shipped": 0},
-        {"status": "pass", "events_shipped": True},
-    ],
-)
-def test_cursor_bootstrap_correlation_rejects_unshipped_hook_fallback(ship_receipt: dict[str, object]) -> None:
-    result = _cursor_bootstrap_correlation(
-        {
-            "marker_observed_in_transcript": False,
-            "marker_observed_in_assistant": False,
-            "new_assistant_events": 0,
-        },
-        {"hook_response_correlated": True},
-        ship_receipt,
-    )
+def test_cursor_turn_delivery_is_counted_over_the_turn_whoever_shipped() -> None:
+    delivery = live_session_toolkit.cursor_turn_delivery
 
-    assert result["bootstrap_correlated"] is False
-    assert result["method"] == "unverified"
+    # The engine shipped through the end of the transcript that holds prompt and reply.
+    assert delivery(_delivery_snapshot()) == {
+        "known": True,
+        "source_holds_prompt_and_reply": True,
+        "source_bytes": 899,
+        "shipped_through": 899,
+        "pending_envelopes": 0,
+        "delivered": True,
+    }
+    # The reply is not shipped yet: the engine is behind, or an envelope is still waiting.
+    assert delivery(_delivery_snapshot(shipped_through=757))["delivered"] is False
+    assert delivery(_delivery_snapshot(pending=1))["delivered"] is False
+    # Cursor's transcript holds only the prompt: there is no reply to have shipped.
+    behind = delivery(_delivery_snapshot(marker_count=1))
+    assert (behind["source_holds_prompt_and_reply"], behind["delivered"]) == (False, False)
+    # Another session's epoch is not this turn's delivery, however far it got.
+    assert delivery(_delivery_snapshot(session_id="another-session"))["delivered"] is False
+    # A snapshot that could not be taken says nothing either way.
+    unavailable = delivery({"schema": "cursor_projection_diagnostics_unavailable.v1", "status": "unavailable"})
+    assert (unavailable["known"], unavailable["delivered"]) == (False, False)
 
 
 def test_codex_resume_intent_uses_the_actual_isolated_workspace(tmp_path: Path) -> None:

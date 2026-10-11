@@ -95,7 +95,7 @@ def registration_for(provider: str) -> ProducerRegistration:
         producer_id=spec.producer_id,
         producer_revision=6 if provider == "cursor" else 5 if provider == "opencode" else 4,
         scenario_id="helm_cold_resume",
-        scenario_revision={"cursor": 7, "opencode": 6}.get(provider, 5),
+        scenario_revision={"cursor": 8, "opencode": 6}.get(provider, 5),
         assertion_cells=(
             ("native_provider_resume_proven", "clean_exit"),
             ("native_provider_resume_proven", "process_loss"),
@@ -515,6 +515,13 @@ def _hosted_correlation_waited_on(
     return None
 
 
+# Cursor answered, the engine shipped the turn's records, and the hosted
+# transcript did not show the reply inside the wait. A fault of Longhouse's
+# hosted side, named so that it is its own result and never read as "the
+# provider did not answer" or absorbed by another kind of evidence.
+HOSTED_TRANSCRIPT_MISSING_SHIPPED_REPLY = "hosted_transcript_missing_shipped_reply"
+
+
 def _uncorrelated(
     message: str,
     spec: live_session_toolkit.ProviderSpec,
@@ -525,6 +532,8 @@ def _uncorrelated(
     environment: Mapping[str, str],
     shipper: live_session_toolkit.TranscriptShipper | None = None,
     label: str | None = None,
+    correlation: dict[str, Any] | None = None,
+    receipt: Path | None = None,
 ) -> RuntimeError:
     """The "did not correlate" failure, marked with the side that stopped when that is known.
 
@@ -534,12 +543,42 @@ def _uncorrelated(
     The snapshots taken around the flush predate the hosted wait, so until
     this one a failure could say the reply had been in Cursor's store minutes
     earlier, and nothing about the moment it was judged missing.
+
+    That snapshot says whether the engine delivered the turn
+    (`live_session_toolkit.cursor_turn_delivery`), and with Cursor's hooks it
+    settles which fault this is. Cursor answered and the engine shipped the
+    turn's records: the hosted transcript is what failed, and the failure
+    opens with ``HOSTED_TRANSCRIPT_MISSING_SHIPPED_REPLY``. Cursor answered
+    and the engine had not shipped them: the engine is what was awaited.
+    Either way the delivery, and the named observation when it holds, are
+    written to the step's ``correlation`` receipt.
     """
 
-    error = RuntimeError(message)
-    if spec.provider == "cursor" and shipper is not None and label:
-        shipper.capture_cursor_projection_diagnostics(dict(state), marker=marker, label=f"{label}-at-timeout")
     kind = _hosted_correlation_waited_on(spec, state, marker=marker, home=home, environment=environment)
+    gap: dict[str, Any] | None = None
+    if spec.provider == "cursor" and shipper is not None and label:
+        delivery = shipper.cursor_turn_delivery(dict(state), marker=marker, label=f"{label}-at-timeout")
+        if kind == LONGHOUSE_INGEST and delivery["known"]:
+            if delivery["delivered"]:
+                gap = {
+                    "reason": HOSTED_TRANSCRIPT_MISSING_SHIPPED_REPLY,
+                    "provider_answered": True,
+                    "engine_delivery": delivery,
+                }
+            else:
+                kind = LONGHOUSE_ENGINE
+        if correlation is not None:
+            correlation["engine_delivery"] = delivery
+            correlation["hosted_transcript_gap"] = gap
+            if receipt is not None:
+                live_session_toolkit._write_best_effort_json(receipt, correlation)
+    if gap is not None:
+        message = (
+            f"{HOSTED_TRANSCRIPT_MISSING_SHIPPED_REPLY}: {message}: Cursor answered and the engine shipped the turn's records "
+            f"(through byte {gap['engine_delivery']['shipped_through']} of {gap['engine_delivery']['source_bytes']}, nothing pending), "
+            "and the hosted transcript did not show the reply"
+        )
+    error = RuntimeError(message)
     return expired(error, kind) if kind else error
 
 
@@ -673,15 +712,19 @@ def _cursor_initial_send_then_flush(
 def _cursor_bootstrap_correlation(
     transcript_correlation: dict[str, Any],
     hook_sequence: dict[str, Any],
-    ship_receipt: dict[str, Any],
 ) -> dict[str, Any]:
-    """Classify Cursor's bootstrap response without weakening the final proof.
+    """Whether the resumed Cursor's bootstrap reply reached the hosted transcript.
 
-    Cursor's native hook is provider-owned evidence for the bootstrap turn,
-    while the Runtime Host transcript remains the authority for the later
-    managed Resume marker.  A hook-only bootstrap fallback is valid only when
-    the exact hook sequence passed and the same transcript shipper delivered
-    at least one event.
+    The hosted transcript is the authority, here as for every other marker of
+    this proof. Cursor's hook says whether Cursor answered, and is recorded
+    beside it, but a reply the hosted transcript never showed is not proven
+    by the hook. It used to be: a bootstrap whose hook passed was admitted
+    when the one flush after it had shipped at least one event. Whether that
+    flush or the engine's daemon shipped the turn's records is chance (the
+    engine had delivered them in all 40 retained runs where the hosted
+    transcript lacked the reply, and the flush had shipped events in 21), so
+    the same fault passed in one run and failed in the next. It is now one
+    result, named by `_uncorrelated`.
     """
 
     transcript_projection_correlated = bool(
@@ -691,25 +734,13 @@ def _cursor_bootstrap_correlation(
         and not isinstance(transcript_correlation.get("new_assistant_events"), bool)
         and transcript_correlation["new_assistant_events"] > 0
     )
-    hook_response_correlated = hook_sequence.get("hook_response_correlated") is True
-    events_shipped = ship_receipt.get("events_shipped")
-    bootstrap_ship_succeeded = bool(
-        ship_receipt.get("status") == "pass"
-        and isinstance(events_shipped, int)
-        and not isinstance(events_shipped, bool)
-        and events_shipped > 0
-    )
-    if transcript_projection_correlated:
-        method = "transcript_projection"
-    elif hook_response_correlated and bootstrap_ship_succeeded:
-        method = "cursor_hook_with_transcript_ship"
-    else:
-        method = "unverified"
     return {
         "transcript_projection_correlated": transcript_projection_correlated,
-        "hook_response_correlated": hook_response_correlated,
-        "method": method,
-        "bootstrap_correlated": transcript_projection_correlated or (hook_response_correlated and bootstrap_ship_succeeded),
+        "hook_response_correlated": hook_sequence.get("hook_response_correlated") is True,
+        "method": "transcript_projection" if transcript_projection_correlated else "unverified",
+        "bootstrap_correlated": transcript_projection_correlated,
+        # Set by `_uncorrelated` when the reply was shipped and never served.
+        "hosted_transcript_gap": None,
     }
 
 
@@ -1443,6 +1474,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 environment=environment,
                 shipper=shipper,
                 label="initial",
+                correlation=initial_response_correlation,
+                receipt=root / "initial-response-correlation.json",
             )
         # The correlated assistant response is the completed-turn oracle for
         # the initial marker. Cursor's hook may publish its next idle phase
@@ -1588,7 +1621,6 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 _cursor_bootstrap_correlation(
                     bootstrap_response_correlation,
                     bootstrap_hook_sequence,
-                    bootstrap_ship_receipt,
                 )
             )
             live_session_toolkit.write_json(root / "resume-bootstrap-response-correlation.json", bootstrap_response_correlation)
@@ -1602,6 +1634,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                     environment=environment,
                     shipper=shipper,
                     label="resume-bootstrap",
+                    correlation=bootstrap_response_correlation,
+                    receipt=root / "resume-bootstrap-response-correlation.json",
                 )
             live_session_toolkit.write_json(root / "resume-bootstrap-transcript.jsonl", bootstrap_tail)
             # Cursor publishes its afterAgentResponse hook before the TUI has
@@ -1702,6 +1736,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                     environment=environment,
                     shipper=shipper,
                     label="post-resume",
+                    correlation=response_correlation,
+                    receipt=root / "post-resume-response-correlation.json",
                 )
             if not hook_fallback:
                 shipper.capture_cursor_projection_diagnostics(
@@ -1749,6 +1785,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 environment=environment,
                 shipper=shipper,
                 label="post-resume",
+                correlation=response_correlation,
+                receipt=root / "post-resume-response-correlation.json",
             )
         live_session_toolkit.write_json(root / "resumed-transcript.jsonl", resumed_tail)
         post_resume_marker_observed = response_correlation["marker_observed_in_assistant"]

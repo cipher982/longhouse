@@ -48,6 +48,9 @@ class _FakeShipper:
     def capture_cursor_projection_diagnostics(self, *_args: object, **_kwargs: object) -> None:
         return None
 
+    def cursor_turn_delivery(self, *_args: object, **_kwargs: object) -> dict[str, Any]:
+        return {"known": False, "delivered": False}
+
 
 class _FakePty:
     def __init__(self, *_args: object, **_kwargs: object) -> None:

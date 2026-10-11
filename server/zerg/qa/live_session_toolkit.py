@@ -37,6 +37,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Collection
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -620,6 +621,19 @@ class TranscriptShipper:
         transcript content into the proof bundle.
         """
 
+        return self._cursor_projection_snapshot(state, marker=marker, label=label)[0]
+
+    def cursor_turn_delivery(self, state: dict[str, Any], *, marker: str, label: str) -> dict[str, Any]:
+        """Retain the same snapshot and say whether the engine delivered the turn that carries ``marker``.
+
+        See `cursor_turn_delivery`. This is read after a hosted wait gave up,
+        to tell a reply the engine never shipped from one it shipped and the
+        hosted transcript never served. It never turns a failure into a pass.
+        """
+
+        return cursor_turn_delivery(self._cursor_projection_snapshot(state, marker=marker, label=label)[1])
+
+    def _cursor_projection_snapshot(self, state: dict[str, Any], *, marker: str, label: str) -> tuple[str, dict[str, Any]]:
         path = self.evidence_root / f"cursor-projection-diagnostics-{label}.json"
         try:
             payload = _cursor_projection_diagnostics(
@@ -642,7 +656,7 @@ class TranscriptShipper:
                 "error": f"{type(exc).__name__}: {exc}",
             }
         _write_best_effort_json(path, payload)
-        return str(path)
+        return str(path), payload
 
     def _terminate_daemon(self) -> str | None:
         signal_sent: str | None = None
@@ -2372,6 +2386,67 @@ def _cursor_sqlite_observation(path: Path, *, marker: str) -> dict[str, Any]:
     except sqlite3.Error as exc:
         return {"kind": "store_db", **observation, "sqlite_error": f"{type(exc).__name__}: {exc}"}
     return {"kind": "store_db", **observation, "sqlite_tables": sorted(tables), "sqlite_counts": table_counts}
+
+
+def cursor_turn_delivery(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Whether the engine captured and shipped the records of one Cursor turn, from a projection snapshot.
+
+    Delivery is counted over the turn, whoever shipped: the engine's daemon
+    ships a record as soon as it sees it and a proof's one-shot flush ships
+    whatever is left, so "this flush shipped events" says which of the two got
+    there first and nothing about whether the turn was delivered.
+
+    The snapshot (`_cursor_projection_diagnostics`) holds Cursor's own
+    transcript files with how often each names the turn's marker, and the
+    engine's source epochs with how far each has been shipped. The turn is
+    delivered when a transcript of Cursor's names the marker at least twice
+    (the prompt and the reply), the engine's open source epoch bound to this
+    session has shipped its durable lane to the end of that transcript, and no
+    envelope of the session's epochs is waiting to be sent. ``known`` is
+    False when the snapshot could not be taken or does not hold the engine's
+    rows; then nothing is said either way.
+    """
+
+    files = snapshot.get("files") if isinstance(snapshot.get("files"), list) else []
+    engine = snapshot.get("engine_db") if isinstance(snapshot.get("engine_db"), Mapping) else {}
+    tables = engine.get("table_rows") if isinstance(engine.get("table_rows"), Mapping) else {}
+
+    def rows(table: str) -> list[Mapping[str, Any]]:
+        value = tables.get(table)
+        return [row for row in value if isinstance(row, Mapping)] if isinstance(value, list) else []
+
+    session_id = snapshot.get("session_id")
+    registry = [row for row in rows("source_epoch_registry") if session_id and row.get("bound_session_id") == session_id]
+    epochs = {row.get("source_epoch") for row in registry}
+    live = {row.get("source_epoch") for row in registry if not row.get("ended_at")}
+    shipped = [
+        row["last_position"]
+        for row in rows("source_epoch_lane_state")
+        if row.get("source_epoch") in live and row.get("lane") == "durable" and type(row.get("last_position")) is int
+    ]
+    sizes = [
+        item["size"]
+        for item in files
+        if isinstance(item, Mapping)
+        and item.get("kind") == "agent_transcript"
+        and type(item.get("size")) is int
+        and type(item.get("marker_count")) is int
+        and item["marker_count"] >= 2
+    ]
+    known = "source_epoch_registry" in tables and "source_epoch_lane_state" in tables
+    source_bytes = max(sizes, default=None)
+    shipped_through = max(shipped, default=None)
+    pending = sum(1 for row in rows("pending_source_envelope") if row.get("source_epoch") in epochs)
+    return {
+        "known": known,
+        "source_holds_prompt_and_reply": bool(sizes),
+        "source_bytes": source_bytes,
+        "shipped_through": shipped_through,
+        "pending_envelopes": pending,
+        "delivered": bool(
+            known and source_bytes is not None and shipped_through is not None and shipped_through >= source_bytes and pending == 0
+        ),
+    }
 
 
 def _cursor_engine_db_observation(path: Path) -> dict[str, Any]:

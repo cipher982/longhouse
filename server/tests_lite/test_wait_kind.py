@@ -528,15 +528,30 @@ def test_an_uncorrelated_hosted_transcript_says_which_side_stopped_for_each_prov
     assert kind("cursor", {"session_id": "s1"}) is None
 
 
+class _DeliveryShipper:
+    """A shipper whose at-timeout snapshot says what the engine had delivered."""
+
+    def __init__(self, *, known: bool = True, delivered: bool = True) -> None:
+        self.captured: list[tuple[str, str]] = []
+        self.delivery = {
+            "known": known,
+            "source_holds_prompt_and_reply": known,
+            "source_bytes": 899 if known else None,
+            "shipped_through": (899 if delivered else 757) if known else None,
+            "pending_envelopes": 0,
+            "delivered": known and delivered,
+        }
+
+    def cursor_turn_delivery(self, state: dict, *, marker: str, label: str) -> dict:
+        self.captured.append((marker, label))
+        return dict(self.delivery)
+
+
 def test_a_cursor_correlation_failure_retains_where_the_reply_was_when_the_wait_gave_up(monkeypatch) -> None:
     """The snapshots around the flush predate the hosted wait; this one is taken when it expires."""
 
-    captured: list[tuple[str, str]] = []
-
-    class _Shipper:
-        def capture_cursor_projection_diagnostics(self, state: dict, *, marker: str, label: str) -> str:
-            captured.append((marker, label))
-            return "unused"
+    shipper = _DeliveryShipper(known=False)
+    captured = shipper.captured
 
     monkeypatch.setattr(provider_native_resume, "_hosted_correlation_waited_on", lambda *_a, **_k: LONGHOUSE_INGEST)
 
@@ -552,13 +567,62 @@ def test_a_cursor_correlation_failure_retains_where_the_reply_was_when_the_wait_
             label="post-resume",
         )
 
-    error = failure("cursor", _Shipper())
+    error = failure("cursor", shipper)
     assert captured == [(MARKER, "post-resume-at-timeout")]
     assert waited_on(error) == LONGHOUSE_INGEST and str(error).startswith("provider transcript did not correlate post-resume cursor")
     # Only Cursor has a store to snapshot, and a run without a shipper has nothing to ask.
-    failure("claude", _Shipper())
+    failure("claude", shipper)
     failure("cursor", None)
     assert len(captured) == 1
+
+
+def test_a_reply_cursor_gave_and_the_engine_shipped_but_the_hosted_transcript_never_showed_is_its_own_result(monkeypatch, tmp_path) -> None:
+    message = f"provider transcript did not correlate resumed Cursor bootstrap marker {MARKER}"
+    receipt = tmp_path / "resume-bootstrap-response-correlation.json"
+
+    def failure(shipper: _DeliveryShipper, hooks: str | None) -> tuple[BaseException, dict]:
+        monkeypatch.setattr(provider_native_resume, "_hosted_correlation_waited_on", lambda *_a, **_k: hooks)
+        correlation: dict = {"marker_observed_in_assistant": False, "new_assistant_events": 0, "hosted_transcript_gap": None}
+        error = provider_native_resume._uncorrelated(
+            message,
+            provider_native_resume.SPECS["cursor"],
+            {"session_id": "s1"},
+            marker=MARKER,
+            home=None,
+            environment={},
+            shipper=shipper,
+            label="resume-bootstrap",
+            correlation=correlation,
+            receipt=receipt,
+        )
+        assert json.loads(receipt.read_text(encoding="utf-8")) == correlation
+        return error, correlation
+
+    # Cursor's hooks hold the reply and the engine shipped the turn: Longhouse's hosted side is what failed.
+    error, correlation = failure(_DeliveryShipper(), LONGHOUSE_INGEST)
+    assert str(error).startswith(f"hosted_transcript_missing_shipped_reply: {message}: Cursor answered and the engine shipped")
+    assert "(through byte 899 of 899, nothing pending)" in str(error)
+    assert waited_on(error) == LONGHOUSE_INGEST
+    assert correlation["hosted_transcript_gap"] == {
+        "reason": provider_native_resume.HOSTED_TRANSCRIPT_MISSING_SHIPPED_REPLY,
+        "provider_answered": True,
+        "engine_delivery": correlation["engine_delivery"],
+    }
+    assert correlation["engine_delivery"]["delivered"] is True
+
+    # Cursor answered and the engine had not shipped it: the engine is what was awaited, and there is no gap to name.
+    error, correlation = failure(_DeliveryShipper(delivered=False), LONGHOUSE_INGEST)
+    assert str(error) == message and waited_on(error) == LONGHOUSE_ENGINE
+    assert correlation["hosted_transcript_gap"] is None and correlation["engine_delivery"]["shipped_through"] == 757
+
+    # Without the engine's state nothing more is known than what the hooks say.
+    error, correlation = failure(_DeliveryShipper(known=False), LONGHOUSE_INGEST)
+    assert str(error) == message and waited_on(error) == LONGHOUSE_INGEST and correlation["hosted_transcript_gap"] is None
+
+    # Cursor never answered: whatever the engine shipped, the reply was never there to serve.
+    for hooks in (PROVIDER_TURN, None):
+        error, correlation = failure(_DeliveryShipper(), hooks)
+        assert str(error) == message and waited_on(error) == hooks and correlation["hosted_transcript_gap"] is None
 
 
 def test_the_post_resume_receipt_says_what_the_providers_hooks_showed() -> None:
