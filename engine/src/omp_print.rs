@@ -1395,8 +1395,8 @@ pub async fn recover_omp_print_turns(
             &launch_id,
             machine_name,
             local_db_path.clone(),
-            "queued OMP user turn was not started before Machine Agent recovery",
             "run_cancelled",
+            "queued OMP user turn was not started before Machine Agent recovery",
         )
         .await
         {
@@ -5832,15 +5832,48 @@ for line in sys.stdin:
                         )
                         .unwrap();
                     registry
-                        .mark_spawned(
+                        .mark_spawned_invocation(
                             run_id,
-                            Some(u32::MAX),
-                            Some(i32::MAX),
+                            u32::MAX,
+                            i32::MAX,
                             Some("old-birth".into()),
                             OMP_PRINT_ADAPTER,
-                            serde_json::json!({}),
+                            run_id,
+                            None,
+                            "/gone/stdout.log",
+                            "/gone/stderr.log",
+                            serde_json::json!({"session_file": "/gone/session.jsonl"}),
                         )
                         .unwrap();
+                }
+                // A turn queued in the good invocation never started.
+                let queued = uuid::Uuid::new_v4().to_string();
+                let parked = registry.read(&good).unwrap();
+                registry
+                    .claim(
+                        &queued,
+                        &parked.session_id,
+                        &parked.thread_id,
+                        None,
+                        None,
+                        "omp",
+                    )
+                    .unwrap();
+                registry
+                    .mark_spawned_invocation(
+                        &queued,
+                        u32::MAX,
+                        i32::MAX,
+                        Some("old-birth".into()),
+                        OMP_PRINT_ADAPTER,
+                        &good,
+                        None,
+                        "/gone/stdout.log",
+                        "/gone/stderr.log",
+                        parked.result.clone().unwrap(),
+                    )
+                    .unwrap();
+                for run_id in [&bad, &good] {
                     registry
                         .record_invocation_state(run_id, "parked", 2)
                         .unwrap();
@@ -5864,6 +5897,10 @@ for line in sys.stdin:
                 assert_eq!(
                     registry.read(&good).unwrap().invocation_state.as_deref(),
                     Some("closed")
+                );
+                assert_eq!(
+                    registry.read(&queued).unwrap().result.unwrap()["terminal_state"],
+                    "run_cancelled"
                 );
             });
         });
