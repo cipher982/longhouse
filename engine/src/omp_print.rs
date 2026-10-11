@@ -2702,7 +2702,7 @@ struct OmpStreamProjection {
     session_settled: bool,
     has_pending_async_work: Option<bool>,
     native_error: Option<String>,
-    /// What OMP's session store last reported short of moving the session.
+    /// What OMP's session store reported in this turn short of moving the session.
     persistence_notice: Option<String>,
     /// OMP refused the prompt before accepting it: no run will follow.
     rpc_rejected: bool,
@@ -2721,6 +2721,7 @@ impl OmpStreamProjection {
         self.session_settled = false;
         self.has_pending_async_work = None;
         self.native_error = None;
+        self.persistence_notice = None;
         self.rpc_rejected = false;
         self.prompt_acknowledged = false;
     }
@@ -6089,6 +6090,18 @@ for line in sys.stdin:
             (
                 "run_failed",
                 Some("Session persistence failed: disk full.".to_string())
+            )
+        );
+        // The notice belongs to the turn it arrived in: the next turn's own
+        // failure to drain is not explained by it.
+        projection
+            .apply(None, &json!({"type": "agent_start"}))
+            .unwrap();
+        assert_eq!(
+            terminal_state_for_projection(&projection, Some(true), false, None, true, true, false),
+            (
+                "run_failed",
+                Some("OMP native session source did not drain completely".to_string())
             )
         );
     }
