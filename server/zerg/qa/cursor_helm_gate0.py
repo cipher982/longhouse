@@ -636,13 +636,22 @@ def _identity_scenario(
             timeout=timeout,
         )
         store = wait_for_store(provider_id, timeout=timeout)
-        boot_event_count = len(read_hook_events(events_path))
+        # The launch turn may already be over, and its stop row is not always
+        # its last row, so find the stop by the turn's generation rather than
+        # by where it sits in the file. This session has run no other turn.
+        launch_prompt = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="beforeSubmitPrompt",
+            conversation_id=provider_id,
+            timeout=timeout,
+        )
         launch_stop = wait_for_hook(
             events_path,
             longhouse_session_id=longhouse_session_id,
             event="stop",
             conversation_id=provider_id,
-            after_count=max(0, boot_event_count - 1),
+            generation_id=str(launch_prompt.get("generation_id") or ""),
             timeout=timeout,
         )
         probe_text = probe_prompt or f"Reply with exactly LONGHOUSE_CURSOR_GATE0_{name.upper()}_{uuid4().hex[:10]} and nothing else."

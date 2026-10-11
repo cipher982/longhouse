@@ -987,6 +987,48 @@ def test_identity_scenario_fails_when_the_probe_turn_ends_in_error(monkeypatch, 
     assert failure.value.facts["turn"] == "probe"
 
 
+def test_identity_scenario_finds_a_launch_stop_that_landed_before_the_store_and_ahead_of_its_response(monkeypatch, tmp_path: Path) -> None:
+    """The launch turn's stop is found by its generation, not by where its row sits.
+
+    The launch turn can finish before the native store appears, and its stop
+    row can precede its response row. A window that starts at the last row
+    present when the store appeared then holds only the response.
+    """
+
+    replay = _HookReplay.install(monkeypatch)
+    _stub_native_store(monkeypatch, tmp_path)
+
+    def late_store(*_args: Any, **_kwargs: Any) -> Path:
+        replay.sleep(3.0)
+        return tmp_path / "store.db"
+
+    monkeypatch.setattr(gate, "wait_for_store", late_store)
+    launch_turn = [
+        _hook(0.0, "beforeSubmitPrompt", "gen-0"),
+        _hook(1.4, "stop", "gen-0", status="completed"),
+        _hook(1.42, "afterAgentResponse", "gen-0"),
+    ]
+    probe_turn = [
+        _hook(0.6, "beforeSubmitPrompt", prompt_sha256=gate._marker_digest(_PROBE_PROMPT)),
+        _hook(5.0, "afterAgentResponse", text_sha256="digest"),
+        _hook(5.0, "stop", status="completed"),
+    ]
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, launch_turn, probe_turn))
+
+    result = gate._identity_scenario(
+        name="new_session_id",
+        provider_id="conversation-1",
+        launch_args=["--new-session-id", "conversation-1"],
+        probe_prompt=_PROBE_PROMPT,
+        **_scenario_paths(tmp_path),
+    )
+
+    assert result["status"] == "passed"
+    assert result["launch_turn"] == {"role": "readiness_barrier", "generation_id": "gen-0", "stop_status": "completed"}
+    assert result["probe_generation_id"] == "gen-1"
+    assert replay.now < 30.0
+
+
 def test_identity_scenario_names_the_probe_turn_that_ended_before_its_response(monkeypatch, tmp_path: Path) -> None:
     with pytest.raises(gate.Gate0Failure) as failure:
         _run_identity_scenario(
