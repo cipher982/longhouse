@@ -10,13 +10,16 @@ use std::time::{Duration, Instant};
 
 use chrono::DateTime;
 use chrono::Utc;
+#[cfg(target_os = "macos")]
+#[path = "process_identity_macos.rs"]
+mod macos;
 
 pub const PID_REUSE_TOLERANCE_SECS: i64 = 120;
-// A full `ps` inventory is cheap when idle but can take several seconds while
-// macOS is servicing hundreds of provider and helper processes. Treating a
-// two-second scheduling hiccup as an unavailable inventory makes the whole
-// local projection yellow even though the durable managed state is readable.
+// A full process inventory can take several seconds on hosts servicing
+// hundreds of provider and helper processes.
+#[cfg(not(target_os = "macos"))]
 const PROCESS_INVENTORY_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(not(target_os = "macos"))]
 const TARGETED_PROCESS_INVENTORY_TIMEOUT: Duration = Duration::from_secs(1);
 pub(crate) const TARGETED_PROCESS_FACT_BATCH_MAX: usize = 256;
 
@@ -73,6 +76,12 @@ pub fn try_collect_process_fact(pid: u32) -> Option<ProcessFact> {
 
 /// Inspect one PID while preserving the difference between a missing process
 /// and an unavailable process-identity probe.
+#[cfg(target_os = "macos")]
+pub fn inspect_process_fact(pid: u32) -> ProcessFactLookup {
+    macos::inspect_process_fact(pid)
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn inspect_process_fact(pid: u32) -> ProcessFactLookup {
     let output = Command::new("ps")
         .args([
@@ -107,8 +116,14 @@ pub fn inspect_process_fact(pid: u32) -> ProcessFactLookup {
 }
 
 /// Collect one coherent process inventory, distinguishing a valid empty scan
-/// from a failed `ps` invocation. Callers reconciling durable state must retain
-/// their last observation when this returns `None`.
+/// from an unavailable or partial observation. Callers reconciling durable
+/// state must retain their last observation when this returns `None`.
+#[cfg(target_os = "macos")]
+pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
+    macos::try_collect_process_facts_by_pid()
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     let mut command = Command::new("ps");
     command.args(["-axo", "pid=,tty=,stat=,lstart=,command="]);
@@ -127,9 +142,14 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     }
     Some(facts)
 }
-/// Whether process group `pgid` has a member that is not a zombie, from one
-/// bounded `ps` pass. `None` when `ps` fails, times out or prints a line it
-/// cannot parse; callers then fall back to the zombie-inclusive probe.
+/// Whether process group `pgid` has a member that is not a zombie. `None` when
+/// the native process scan or its non-macOS `ps` fallback is incomplete.
+#[cfg(target_os = "macos")]
+pub fn try_group_has_non_zombie(pgid: i32) -> Option<bool> {
+    macos::try_group_has_non_zombie(pgid)
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn try_group_has_non_zombie(pgid: i32) -> Option<bool> {
     let mut command = Command::new("ps");
     command.args(["-axo", "pgid=,stat="]);
@@ -158,8 +178,14 @@ fn group_has_non_zombie_in(text: &str, pgid: i32) -> Option<bool> {
 
 /// Read one bounded batch of exact process identities without enumerating the
 /// rest of the machine. A successful result is a complete observation for the
-/// requested PIDs: omitted PIDs were absent, while a failed/partial `ps` pass
+/// requested PIDs: omitted PIDs were absent, while a failed/partial probe
 /// remains unavailable.
+#[cfg(target_os = "macos")]
+pub fn try_collect_process_facts_for_pids(pids: &[u32]) -> Option<HashMap<u32, ProcessFact>> {
+    macos::try_collect_process_facts_for_pids(pids)
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn try_collect_process_facts_for_pids(pids: &[u32]) -> Option<HashMap<u32, ProcessFact>> {
     if pids.len() > TARGETED_PROCESS_FACT_BATCH_MAX || pids.iter().any(|pid| *pid <= 1) {
         return None;
@@ -196,6 +222,41 @@ pub fn try_collect_process_facts_for_pids(pids: &[u32]) -> Option<HashMap<u32, P
         }
     }
     (facts.len() == line_count).then_some(facts)
+}
+
+/// Resolve one process's executable name and parent without launching `ps`.
+/// The name matches `ps -o comm=`; callers use it for executable identity,
+/// not the potentially user-controlled argument vector.
+pub(crate) fn process_comm_and_parent(pid: u32) -> Option<(String, u32)> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::process_comm_and_parent(pid)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let output = Command::new("ps")
+            .args(["-o", "comm=,ppid=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut fields = text.split_whitespace();
+        Some((fields.next()?.to_string(), fields.next()?.parse().ok()?))
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn try_collect_process_cwds(pids: &[u32]) -> Option<HashMap<u32, String>> {
+    macos::try_collect_process_cwds(pids)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn try_collect_process_open_files(
+    pids: &[u32],
+) -> Option<HashMap<u32, Vec<std::path::PathBuf>>> {
+    macos::try_collect_process_open_files(pids)
 }
 
 #[cfg(unix)]
@@ -506,9 +567,15 @@ impl ProcessLineage {
     }
 }
 
-/// Collect one coherent parent/process-group inventory. `None` distinguishes a
-/// failed `ps` from a genuinely empty result, so callers never read a scan
-/// failure as evidence of anything.
+/// Collect a coherent process-lineage inventory. `None` distinguishes a
+/// failed native process scan or `ps` fallback from a genuinely empty result,
+/// so callers never read a scan failure as evidence of anything.
+#[cfg(target_os = "macos")]
+pub fn try_collect_process_lineage() -> Option<Vec<ProcessLineage>> {
+    macos::try_collect_process_lineage()
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn try_collect_process_lineage() -> Option<Vec<ProcessLineage>> {
     let output = Command::new("ps")
         .args(["-axo", "pid=,ppid=,pgid=,stat=,command="])
@@ -847,5 +914,215 @@ mod tests {
 
         assert!(shell.start_time.is_none());
         assert!(provider.start_time.is_some());
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_libproc_inventory_matches_ps_and_lsof() {
+        use std::os::fd::AsRawFd;
+
+        let _guard = crate::console_adapter::agent_state_guard();
+        let ps_started = Instant::now();
+
+        fn identity_matches(actual: &ProcessFact, expected: &ProcessFact) -> bool {
+            actual.pid == expected.pid
+                && actual.tty == expected.tty
+                && actual.lstart == expected.lstart
+                && actual.command == expected.command
+        }
+
+        fn compare_identity(actual: &ProcessFact, expected: &ProcessFact) {
+            assert_eq!(actual.pid, expected.pid);
+            assert_eq!(actual.tty, expected.tty);
+            assert_eq!(actual.lstart, expected.lstart);
+            assert_eq!(actual.command, expected.command);
+        }
+
+        // kinfo_proc reports every live process as SRUN; ps derives R/S/I from
+        // per-thread run states. Callers only read stopped (T), zombie (Z)
+        // and the foreground-group `+`, so those are the axes compared.
+        fn compare_stat(actual: &ProcessFact, expected: &ProcessFact) {
+            let first = |fact: &ProcessFact| fact.stat.chars().next();
+            assert_eq!(first(actual) == Some('T'), first(expected) == Some('T'));
+            assert_eq!(first(actual) == Some('Z'), first(expected) == Some('Z'));
+            assert_eq!(actual.stat.contains('+'), expected.stat.contains('+'));
+        }
+
+        // `/bin/ps` is setuid root, so it reads every process's argv; an
+        // unprivileged engine can only read its own user's. Provider processes
+        // always run as the user, so the oracle is processes whose effective
+        // uid is ours. The uid column rides on the same scan, so a setuid
+        // child (e.g. a `ps` the live engine runs) can't race the filter.
+        fn read_ps_facts() -> HashMap<u32, ProcessFact> {
+            let uid = unsafe { libc::geteuid() };
+            let output = Command::new("ps")
+                .args(["-axo", "uid=,pid=,tty=,stat=,lstart=,command="])
+                .output()
+                .expect("run full ps oracle");
+            assert!(
+                output.status.success(),
+                "ps failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let mut facts = HashMap::new();
+            for line in String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+            {
+                let line = line.trim_start();
+                let (euid, rest) = line.split_once(char::is_whitespace).expect("uid column");
+                // ps prints `nobody` as -2.
+                if euid.parse::<i64>().expect("numeric uid") != i64::from(uid) {
+                    continue;
+                }
+                let (pid, fact) = parse_process_fact(rest).expect("parse full ps output");
+                assert!(facts.insert(pid, fact).is_none(), "duplicate ps pid {pid}");
+            }
+            facts
+        }
+
+        fn ps_fact_for_pid(pid: u32) -> Option<ProcessFact> {
+            let output = Command::new("ps")
+                .args([
+                    "-p",
+                    &pid.to_string(),
+                    "-o",
+                    "pid=,tty=,stat=,lstart=,command=",
+                ])
+                .output()
+                .expect("run one-pid ps oracle");
+            if !output.status.success() {
+                assert_eq!(output.status.code(), Some(1));
+                assert!(output.stderr.is_empty());
+                return None;
+            }
+            let text = String::from_utf8_lossy(&output.stdout);
+            let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+            let Some(line) = lines.next() else {
+                return None;
+            };
+            let (parsed_pid, fact) = parse_process_fact(line).expect("parse one-pid ps output");
+            assert_eq!(parsed_pid, pid);
+            assert!(lines.next().is_none());
+            Some(fact)
+        }
+
+        let ps_before = read_ps_facts();
+        let ps_elapsed = ps_started.elapsed();
+        let backend_started = Instant::now();
+        let inventory =
+            try_collect_process_facts_by_pid().expect("complete libproc process inventory");
+        let backend_elapsed = backend_started.elapsed();
+        eprintln!(
+            "process inventory benchmark ({} processes): libproc {:?}; ps -axo {:?}",
+            inventory.len(),
+            backend_elapsed,
+            ps_elapsed
+        );
+        let ps_after = read_ps_facts();
+        assert!(inventory.contains_key(&std::process::id()));
+        for (pid, fact) in &inventory {
+            let before = ps_before
+                .get(pid)
+                .filter(|oracle| oracle.lstart == fact.lstart);
+            let after = ps_after
+                .get(pid)
+                .filter(|oracle| oracle.lstart == fact.lstart);
+            let oracle = before
+                .filter(|oracle| identity_matches(fact, oracle))
+                .or_else(|| after.filter(|oracle| identity_matches(fact, oracle)))
+                .cloned()
+                .or_else(|| {
+                    ps_fact_for_pid(*pid)
+                        .filter(|oracle| oracle.lstart == fact.lstart)
+                        .filter(|oracle| identity_matches(fact, oracle))
+                });
+            if let Some(oracle) = oracle {
+                compare_identity(fact, &oracle);
+            } else if let (Some(before), Some(after)) = (before, after) {
+                if before.command != after.command {
+                    continue;
+                }
+                // Both ps reads agree, so the process did not exec across
+                // the window; a short-lived process that exec'd between reads
+                // legitimately shows either command.
+                panic!(
+                    "libproc identity mismatch for exec-stable PID {pid}: libproc={fact:?} ps={before:?}"
+                );
+            }
+            if let (Some(before), Some(after)) = (before, after) {
+                if before.stat == after.stat && identity_matches(fact, before) {
+                    compare_stat(fact, before);
+                }
+            }
+        }
+        for (pid, earlier) in &ps_before {
+            if inventory
+                .get(pid)
+                .is_some_and(|fact| fact.lstart == earlier.lstart)
+            {
+                continue;
+            }
+            if let Some(current) = ps_fact_for_pid(*pid) {
+                assert_ne!(
+                    current.lstart, earlier.lstart,
+                    "libproc omitted still-live PID {pid}"
+                );
+            }
+        }
+
+        let pid = std::process::id();
+        let cwd = std::env::current_dir().unwrap();
+        let cwd = cwd.to_string_lossy().into_owned();
+        let probed_cwd = try_collect_process_cwds(&[pid])
+            .expect("complete cwd probe")
+            .remove(&pid)
+            .expect("test process cwd");
+        assert_eq!(probed_cwd, cwd);
+        let cwd_oracle = Command::new("lsof")
+            .args(["-a", "-d", "cwd", "-F", "pn", "-p", &pid.to_string()])
+            .output()
+            .expect("run lsof cwd oracle");
+        assert!(
+            cwd_oracle.status.success(),
+            "lsof cwd failed: {}",
+            String::from_utf8_lossy(&cwd_oracle.stderr)
+        );
+        let cwd_text = String::from_utf8_lossy(&cwd_oracle.stdout);
+        let cwd_from_lsof = cwd_text
+            .lines()
+            .find_map(|line| line.strip_prefix('n'))
+            .expect("lsof cwd path");
+        assert_eq!(probed_cwd, cwd_from_lsof);
+
+        let file = tempfile::NamedTempFile::new().expect("create open-file oracle");
+        // Kernel and lsof report the resolved path (/private/var/...).
+        let expected_path = file
+            .path()
+            .canonicalize()
+            .expect("resolve open-file oracle");
+        let descriptor = file.as_file().as_raw_fd().to_string();
+        let file_oracle = Command::new("lsof")
+            .args(["-a", "-d", &descriptor, "-F", "pn", "-p", &pid.to_string()])
+            .output()
+            .expect("run lsof open-file oracle");
+        assert!(
+            file_oracle.status.success(),
+            "lsof open-file probe failed: {}",
+            String::from_utf8_lossy(&file_oracle.stderr)
+        );
+        let file_text = String::from_utf8_lossy(&file_oracle.stdout);
+        let path_from_lsof = file_text
+            .lines()
+            .find_map(|line| line.strip_prefix('n'))
+            .expect("lsof open-file path");
+        assert_eq!(Path::new(path_from_lsof), expected_path);
+        let open_files =
+            try_collect_process_open_files(&[pid]).expect("complete libproc open-file inventory");
+        assert!(
+            open_files
+                .get(&pid)
+                .is_some_and(|paths| paths.contains(&expected_path)),
+            "libproc did not find the open file {expected_path:?}"
+        );
     }
 }

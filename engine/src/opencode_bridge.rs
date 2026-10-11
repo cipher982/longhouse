@@ -1173,14 +1173,14 @@ fn write_private_json(path: &Path, payload: &serde_json::Value) -> Result<()> {
 }
 
 fn process_identity(pid: u32) -> Option<(String, String)> {
-    let output = Command::new("ps")
-        .args(["-o", "lstart=,command=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    let line = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    (line.len() > 24).then(|| (line[..24].trim().to_owned(), line[24..].trim().to_owned()))
+    match crate::process_identity::inspect_process_fact(pid) {
+        crate::process_identity::ProcessFactLookup::Present(fact) => {
+            Some((fact.lstart, fact.command))
+        }
+        crate::process_identity::ProcessFactLookup::Absent
+        | crate::process_identity::ProcessFactLookup::Unavailable => None,
+    }
 }
-
 fn stop_pid(pid: u32) -> Result<()> {
     #[cfg(unix)]
     {

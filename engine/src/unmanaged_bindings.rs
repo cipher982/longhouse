@@ -10,20 +10,18 @@
 //! `host_state=online`/`offline` honestly (Phase 5c) and lets Phase 6
 //! promote `lifecycle=closed` when the process is confirmed gone.
 //!
-//! Algorithm (macOS- and Linux-friendly via `ps` + `lsof`):
+//! Algorithm (native libproc on macOS; `ps` + `lsof` on non-macOS):
 //!
 //!   1. Validate hook-resolved bindings first, then inspect open files for
 //!      unresolved live provider processes.
 //!   2. Discover only provider roots implicated by that open-file evidence
 //!      via `discovery::discover_all_files`, filtered by mtime.
-//!   3. Enumerate candidate provider-CLI processes with
-//!      `ps -axo pid=,lstart=,command=`. Filter by command basename
-//!      (`claude`, `codex`, `agy`, `opencode`, `pi`, `omp`) plus the stock
-//!      Node-backed launcher shapes (`node .../codex`, `node .../opencode`,
-//!      etc.) - never `longhouse-*` wrappers (those are managed sessions and
-//!      get their own lease surface).
-//!   4. For each candidate pid, ask `lsof -F n -p <pid>` which regular
-//!      files it has open, and look for transcript paths.
+//!   3. Enumerate candidate provider-CLI processes with the shared process
+//!      identity backend. Filter by command basename and stock Node-backed
+//!      launcher shapes; never `longhouse-*` wrappers, which have their own
+//!      lease surface.
+//!   4. Inspect candidate file descriptors through libproc or `lsof`, and look
+//!      for transcript paths.
 //!   5. Emit one [`UnmanagedSessionBinding`] per `(provider,
 //!      provider_session_id)` with `(pid, process_start_time)` as the
 //!      liveness identity.
@@ -32,8 +30,9 @@
 //! without shelling out.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::path::PathBuf;
+use std::path::Path;
+#[cfg(not(target_os = "macos"))]
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -56,7 +55,7 @@ const MAX_BINDINGS: usize = 128;
 /// for liveness decisions.
 const TRANSCRIPT_MTIME_WINDOW: chrono::Duration = chrono::Duration::hours(24);
 /// Bound one optional process inspection so one dead provider cannot hold the
-/// whole Shadow discovery pass open.
+#[cfg(not(target_os = "macos"))]
 const LSOF_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 /// Stop starting more optional work after this cooperative per-pass budget.
 /// Expiry is non-authoritative, not an empty or complete process inventory.
@@ -299,9 +298,8 @@ pub struct ProcessInfo {
 /// Injectable source of open-file truth. Process inventory is collected once
 /// by the daemon and passed in; tests substitute only the fd lookup.
 ///
-/// The lookup is batched because `lsof` is a subprocess: asking it once per
-/// process is the same answer bought N times, and the refresh runs against
-/// every unmanaged provider process on the machine.
+/// The lookup is batched because it probes all candidate descriptors in one
+/// pass rather than starting an `lsof` subprocess for every process.
 #[allow(dead_code)]
 pub trait ProcessScanner {
     /// Open files per PID. A PID that is absent from the map holds none (it can
@@ -318,6 +316,13 @@ impl ProcessScanner for SystemScanner {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn run_lsof(pids: &[u32]) -> Result<HashMap<u32, Vec<PathBuf>>, String> {
+    crate::process_identity::try_collect_process_open_files(pids)
+        .ok_or_else(|| format!("libproc open-file inventory unavailable for unmanaged pids {pids:?}"))
+}
+
+#[cfg(not(target_os = "macos"))]
 fn run_lsof(pids: &[u32]) -> Result<HashMap<u32, Vec<PathBuf>>, String> {
     let list = pids
         .iter()

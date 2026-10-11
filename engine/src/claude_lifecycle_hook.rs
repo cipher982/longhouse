@@ -7,7 +7,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 use std::sync::{LazyLock, Mutex};
 
 use chrono::{DateTime, Utc};
@@ -263,16 +262,8 @@ fn unmanaged_provider_pid() -> Option<u32> {
         if pid == 0 {
             return None;
         }
-        let output = Command::new("ps")
-            .args(["-o", "comm=,ppid=", "-p", &pid.to_string()])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let row = String::from_utf8_lossy(&output.stdout);
-        let (command, parent) = parse_process_row(&row)?;
-        if std::path::Path::new(command)
+        let (command, parent) = crate::process_identity::process_comm_and_parent(pid)?;
+        if std::path::Path::new(&command)
             .file_name()
             .and_then(|name| name.to_str())
             == Some("claude")
@@ -301,12 +292,7 @@ fn unmanaged_provider_identity() -> Option<(u32, String)> {
     (!start_time.is_empty()).then(|| (pid, start_time.to_string()))
 }
 
-fn parse_process_row(row: &str) -> Option<(&str, u32)> {
-    let mut fields = row.split_whitespace();
-    let command = fields.next()?;
-    let parent = fields.last()?.parse().ok()?;
-    Some((command, parent))
-}
+
 
 /// Bounded registry from Claude's parent Stop hook.
 ///
@@ -1237,13 +1223,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parses_process_row() {
-        assert_eq!(
-            parse_process_row("/opt/homebrew/bin/claude 123\n"),
-            Some(("/opt/homebrew/bin/claude", 123))
-        );
-    }
 
     #[test]
     fn managed_presence_carries_provider_session_id() {

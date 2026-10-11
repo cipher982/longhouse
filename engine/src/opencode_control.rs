@@ -418,13 +418,16 @@ fn pid_is_running(pid: u32) -> bool {
     if rc == 0 {
         // A terminated child can remain a zombie until its owner reaps it.
         // `kill(pid, 0)` still succeeds for that state, but a zombie server
-        // cannot accept control traffic and must not block bridge cleanup.
-        let state = std::process::Command::new("ps")
-            .args(["-o", "stat=", "-p", &pid.to_string()])
-            .output()
-            .ok()
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
-        return !state.is_some_and(|state| state.starts_with('Z'));
+        return match crate::process_identity::inspect_process_fact(pid) {
+            crate::process_identity::ProcessFactLookup::Present(fact) => {
+                !fact.stat.starts_with('Z')
+            }
+            // `kill(pid, 0)` succeeded, but the process may have exited during
+            // the probe or its state may be hidden; preserve the prior
+            // conservative "still running" result.
+            crate::process_identity::ProcessFactLookup::Absent
+            | crate::process_identity::ProcessFactLookup::Unavailable => true,
+        };
     }
     let err = std::io::Error::last_os_error();
     matches!(err.raw_os_error(), Some(code) if code == libc::EPERM)
@@ -434,27 +437,16 @@ fn process_identity(pid: u32) -> Option<(String, String)> {
     if pid == 0 {
         return None;
     }
-    let output = std::process::Command::new("ps")
-        .arg("-o")
-        .arg("lstart=,command=")
-        .arg("-p")
-        .arg(pid.to_string())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+    match crate::process_identity::inspect_process_fact(pid) {
+        crate::process_identity::ProcessFactLookup::Present(fact)
+            if !fact.lstart.trim().is_empty() && !fact.command.trim().is_empty() =>
+        {
+            Some((fact.lstart, fact.command))
+        }
+        crate::process_identity::ProcessFactLookup::Present(_)
+        | crate::process_identity::ProcessFactLookup::Absent
+        | crate::process_identity::ProcessFactLookup::Unavailable => None,
     }
-    let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if line.len() <= 24 {
-        return None;
-    }
-    let (start, command) = line.split_at(24);
-    let start = start.trim().to_string();
-    let command = command.trim().to_string();
-    if command.is_empty() {
-        return None;
-    }
-    Some((start, command))
 }
 
 fn pid_matches_strict_opencode_identity(state: &OpenCodeControlState) -> bool {

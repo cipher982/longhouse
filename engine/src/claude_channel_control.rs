@@ -547,14 +547,17 @@ fn terminate_foreground_tool(claude_pid: i32, command: &str) -> Option<i32> {
     if wanted.is_empty() {
         return None;
     }
-    let output = std::process::Command::new("ps")
-        .args(["-A", "-o", "pid=,ppid=,pgid=,args="])
-        .output()
-        .ok()?;
-    let listing = String::from_utf8_lossy(&output.stdout);
-    let group = listing
-        .lines()
-        .find_map(|line| foreground_tool_group(line, claude_pid, &wanted))?;
+    let entries = crate::process_identity::try_collect_process_lineage()?;
+    let group = entries.iter().find_map(|entry| {
+        foreground_tool_group(
+            i32::try_from(entry.pid).ok()?,
+            i32::try_from(entry.ppid).ok()?,
+            entry.pgid,
+            &entry.command,
+            claude_pid,
+            &wanted,
+        )
+    })?;
     (unsafe { libc::kill(-group, libc::SIGTERM) } == 0).then_some(group)
 }
 
@@ -569,12 +572,15 @@ fn shell_words_key(text: &str) -> String {
         .join(" ")
 }
 
-fn foreground_tool_group(line: &str, claude_pid: i32, wanted: &str) -> Option<i32> {
-    let mut fields = line.split_whitespace();
-    let pid: i32 = fields.next()?.parse().ok()?;
-    let ppid: i32 = fields.next()?.parse().ok()?;
-    let pgid: i32 = fields.next()?.parse().ok()?;
-    let args = shell_words_key(&fields.collect::<Vec<_>>().join(" "));
+fn foreground_tool_group(
+    pid: i32,
+    ppid: i32,
+    pgid: i32,
+    command: &str,
+    claude_pid: i32,
+    wanted: &str,
+) -> Option<i32> {
+    let args = shell_words_key(command);
     (ppid == claude_pid && pid == pgid && args.contains("eval") && args.contains(wanted))
         .then_some(pgid)
 }
@@ -1803,9 +1809,15 @@ mod tests {
     #[test]
     fn foreground_tool_matches_claude_eval_quoting() {
         let command = "python3 -c \"import select; select.select([], [], [], 45); print('lh_x')\"";
-        let line = "  5690  5641  5690 /bin/bash -c source snap.sh && eval 'python3 -c \"import select; select.select([], [], [], 45); print('\\''lh_x'\\'')\"' < /dev/null && pwd -P";
+        let shell = "/bin/bash -c source snap.sh && eval 'python3 -c \"import select; select.select([], [], [], 45); print('\\''lh_x'\\'')\"' < /dev/null && pwd -P";
         let wanted = shell_words_key(command);
-        assert_eq!(foreground_tool_group(line, 5641, &wanted), Some(5690));
-        assert_eq!(foreground_tool_group(line, 1, &wanted), None);
+        assert_eq!(
+            foreground_tool_group(5690, 5641, 5690, shell, 5641, &wanted),
+            Some(5690)
+        );
+        assert_eq!(
+            foreground_tool_group(5690, 5641, 5690, shell, 1, &wanted),
+            None
+        );
     }
 }

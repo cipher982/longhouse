@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 
 use chrono::DateTime;
 use chrono::Utc;
@@ -243,8 +242,8 @@ struct ParsedClaudeState {
     claude_foreground_tui: bool,
 }
 
-/// Resolve the working directory of every PID that needs one, in as few probes
-/// as `lsof`'s pid list allows.
+/// Resolve working directories with one libproc query per PID on macOS and
+/// `/proc` links on Linux.
 fn process_cwds(pids: &[u32]) -> HashMap<u32, String> {
     #[cfg(target_os = "linux")]
     {
@@ -260,7 +259,7 @@ fn process_cwds(pids: &[u32]) -> HashMap<u32, String> {
     }
     #[cfg(target_os = "macos")]
     {
-        process_cwds_via_lsof(pids)
+        crate::process_identity::try_collect_process_cwds(pids).unwrap_or_default()
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -310,54 +309,6 @@ fn process_identity_matches(fact: &ProcessFact, recorded_start: Option<DateTime<
     started_before_or_near_recorded(fact, recorded_start)
 }
 
-/// One `lsof` per chunk of PIDs: a pid list answers for all of them, and the
-/// chunk bounds argv on a machine with many sessions.
-#[cfg(target_os = "macos")]
-fn process_cwds_via_lsof(pids: &[u32]) -> HashMap<u32, String> {
-    const LSOF_PID_CHUNK: usize = 256;
-    let mut out = HashMap::new();
-    for chunk in pids.chunks(LSOF_PID_CHUNK) {
-        let list = chunk
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let output = Command::new("lsof")
-            .args(["-a", "-d", "cwd", "-F", "pn", "-p", &list])
-            .output();
-        let Ok(output) = output else {
-            continue;
-        };
-        if !output.status.success() {
-            continue;
-        }
-        for (pid, cwd) in parse_lsof_cwds_output(&String::from_utf8_lossy(&output.stdout)) {
-            out.insert(pid, cwd);
-        }
-    }
-    out
-}
-
-/// Parse `lsof -F pn` records: a `p<pid>` line opens a process record and the
-/// `n<path>` line that follows it is that process's cwd.
-#[cfg(any(test, target_os = "macos"))]
-fn parse_lsof_cwds_output(output: &str) -> Vec<(u32, String)> {
-    let mut out = Vec::new();
-    let mut current: Option<u32> = None;
-    for line in output.lines() {
-        if let Some(pid) = line.strip_prefix('p') {
-            current = pid.trim().parse().ok();
-        } else if let Some(path) = line.strip_prefix('n') {
-            let path = path.trim();
-            if let Some(pid) = current.take() {
-                if !path.is_empty() {
-                    out.push((pid, path.to_string()));
-                }
-            }
-        }
-    }
-    out
-}
 
 #[cfg(test)]
 mod tests {
@@ -663,26 +614,4 @@ mod tests {
         assert!(!path.exists());
     }
 
-    #[test]
-    fn parses_lsof_cwd_output() {
-        assert_eq!(
-            parse_lsof_cwds_output("p11713\nfcwd\nn/Users/test/git/acme\n"),
-            vec![(11713, "/Users/test/git/acme".to_string())]
-        );
-    }
-
-    #[test]
-    fn parses_one_lsof_cwd_per_process() {
-        // One `lsof` answers for the whole pid list, so the parse has to keep
-        // each record with its own process.
-        assert_eq!(
-            parse_lsof_cwds_output(
-                "p11713\nfcwd\nn/Users/test/git/acme\np11714\nfcwd\nn/Users/test/git/other\n"
-            ),
-            vec![
-                (11713, "/Users/test/git/acme".to_string()),
-                (11714, "/Users/test/git/other".to_string()),
-            ]
-        );
-    }
 }

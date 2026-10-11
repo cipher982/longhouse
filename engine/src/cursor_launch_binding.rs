@@ -7,6 +7,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::process::Command;
 use std::sync::Arc;
 
@@ -291,6 +292,9 @@ fn reservation_owner_is_alive(value: &serde_json::Value) -> bool {
     else {
         return false;
     };
+    let Ok(pid) = u32::try_from(pid) else {
+        return false;
+    };
     let Some(expected_start) = value
         .get("owner_start_time")
         .and_then(serde_json::Value::as_str)
@@ -299,16 +303,11 @@ fn reservation_owner_is_alive(value: &serde_json::Value) -> bool {
     else {
         return false;
     };
-    let Ok(output) = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "lstart="])
-        .output()
-    else {
-        return false;
-    };
-    output.status.success()
-        && String::from_utf8(output.stdout)
-            .map(|actual| actual.trim() == expected_start)
-            .unwrap_or(false)
+    matches!(
+        crate::process_identity::inspect_process_fact(pid),
+        crate::process_identity::ProcessFactLookup::Present(fact)
+            if fact.lstart.trim() == expected_start
+    )
 }
 
 fn reset_binding_may_be_pending_in(dir: &Path, conversation_uuid: &str) -> Result<bool> {
