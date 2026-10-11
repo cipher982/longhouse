@@ -122,13 +122,13 @@ const INTERRUPTED = '[Request interrupted by user]'
 // session as working. Report the turn's end through Longhouse's own lifecycle
 // hook, as Stop reports an answered one.
 async function reportTurnEnd($) {
-  const payload = {
-    hook_event_name: 'Stop',
-    session_id: await $.session.id(),
-    cwd: await $.session.cwd(),
-    stop_hook_active: false,
-  }
   try {
+    const payload = {
+      hook_event_name: 'Stop',
+      session_id: await $.session.id(),
+      cwd: await $.session.cwd(),
+      stop_hook_active: false,
+    }
     await $.process.run([engine, 'claude-lifecycle-hook'], { stdin: JSON.stringify(payload) })
   } catch (error) {
     $.ui.log('longhouse: turn end not reported: ' + String(error), { to: 'debug' })
@@ -210,9 +210,10 @@ export function register(on) {
     const completed = await next(e)
     if (e.agentId !== undefined) return completed
     if (e.turnId === turnId) turnId = undefined
+    const ownerAborted = e.turnId === abortedByOwner
+    if (ownerAborted) abortedByOwner = undefined
     if (e.reason === 'aborted' && engine) {
-      if (e.turnId === abortedByOwner) {
-        abortedByOwner = undefined
+      if (ownerAborted) {
         try {
           await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: INTERRUPTED }] } })
         } catch (error) {
