@@ -218,20 +218,28 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     // restarted Machine Agent follows from its claim, or one whose stop was
     // never verified. OMP moves a second process on the session to a forked
     // file, so none is started. A live process is the recorded pid with its
-    // recorded start time, which no pid reused after a reboot can have.
+    // recorded start time, which no pid reused after a reboot can have. One
+    // that cannot be shown to have exited is not assumed gone.
     if let Some(provider_thread_id) = expected_provider_thread_id.as_deref() {
         let inventory = crate::process_identity::try_collect_process_facts_by_pid();
-        if let Some(holder) = registry.list_all_shared()?.iter().find(|claim| {
+        for claim in registry.list_all_shared()?.iter().filter(|claim| {
             claim.adapter.as_deref() == Some(OMP_PRINT_ADAPTER)
                 && claim.session_id == config.session_id
                 && claim.provider_thread_id.as_deref() == Some(provider_thread_id)
-                && crate::console_adapter::claim_liveness(claim, inventory.as_ref())
-                    == ClaimLiveness::Live
+                && claim.pid.is_some()
         }) {
-            anyhow::bail!(
-                "the OMP process of an earlier turn in this session (run {}) is still running",
-                holder.run_id
-            );
+            match crate::console_adapter::claim_liveness(claim, inventory.as_ref()) {
+                ClaimLiveness::Gone => {}
+                ClaimLiveness::Live => anyhow::bail!(
+                    "the OMP process of an earlier turn in this session (run {}) is still running",
+                    claim.run_id
+                ),
+                ClaimLiveness::Unknown => anyhow::bail!(
+                    "could not confirm that the OMP process of an earlier turn in this session \
+                     (run {}) has exited, so a second one was not started",
+                    claim.run_id
+                ),
+            }
         }
     }
     // A cold resume already has an exact retained path to reserve. A fresh
@@ -6156,47 +6164,91 @@ for line in sys.stdin:
         }
     }
 
-    #[tokio::test]
-    async fn a_live_claim_of_another_session_does_not_block_a_resume() {
-        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
-        let temp = tempfile::tempdir().unwrap();
-        let previous = set_test_longhouse_home(temp.path().join("longhouse"));
-        let (first, first_run_id) = start_fake_turn(temp.path(), "plain", None).await;
-        let first = first.unwrap();
-        wait_for_terminal(&first_run_id).await;
-        // Another managed session's claim names the same native session and a
-        // process that is alive (this one; its group is never looked up).
+    /// The claim an earlier turn left for `session_id` on `first`'s native
+    /// session, with `pid` as its provider. Returns its run id.
+    fn earlier_claim(
+        first: &OmpPrintRunSummary,
+        session_id: &str,
+        pid: u32,
+        process_start_time: Option<String>,
+    ) -> String {
         let registry = crate::turn_claims::default_registry().unwrap();
-        let new_id = || Uuid::new_v4().to_string();
-        let other_run_id = new_id();
+        let run_id = Uuid::new_v4().to_string();
         registry
-            .claim(&other_run_id, &new_id(), &new_id(), None, None, "omp")
+            .claim(&run_id, session_id, &first.thread_id, None, None, "omp")
             .unwrap();
         registry
             .mark_spawned_invocation(
-                &other_run_id,
-                std::process::id(),
+                &run_id,
+                pid,
                 i32::MAX,
-                crate::turn_claims::process_start_time_for_pid(Some(std::process::id())),
+                process_start_time,
                 OMP_PRINT_ADAPTER,
-                "other-launch",
+                "earlier-launch",
                 first.provider_thread_id.as_deref(),
                 "/gone/stdout.log",
                 "/gone/stderr.log",
                 json!({}),
             )
             .unwrap();
+        run_id
+    }
+
+    /// This test process, as a process that is certainly alive. Its group is
+    /// never looked up.
+    fn live_process() -> (u32, Option<String>) {
+        let pid = std::process::id();
+        (
+            pid,
+            crate::turn_claims::process_start_time_for_pid(Some(pid)),
+        )
+    }
+
+    /// One completed turn, whatever `leave` then adds to the registry, and a
+    /// resume of that session: the resumed turn completes, or the launch error.
+    async fn resume_after(leave: impl FnOnce(&OmpPrintRunSummary)) -> Result<()> {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = set_test_longhouse_home(temp.path().join("longhouse"));
+        let (first, first_run_id) = start_fake_turn(temp.path(), "plain", None).await;
+        let first = first.unwrap();
+        wait_for_terminal(&first_run_id).await;
+        leave(&first);
 
         let (second, second_run_id) = start_fake_turn(temp.path(), "again", Some(&first)).await;
 
-        let second = second.expect("another session's claim blocked the resume");
-        let claim = wait_for_terminal(&second_run_id).await;
-        assert_eq!(
-            claim.result.as_ref().unwrap()["terminal_state"],
-            "run_completed"
-        );
-        wait_for_process_group_exit(second.process_group_id.unwrap()).await;
+        if let Ok(second) = &second {
+            let claim = wait_for_terminal(&second_run_id).await;
+            assert_eq!(
+                claim.result.as_ref().unwrap()["terminal_state"],
+                "run_completed"
+            );
+            wait_for_process_group_exit(second.process_group_id.unwrap()).await;
+        }
         restore_test_longhouse_home(previous);
+        second.map(|_| ())
+    }
+
+    #[tokio::test]
+    async fn a_live_claim_of_another_session_does_not_block_a_resume() {
+        resume_after(|first| {
+            let (pid, start) = live_process();
+            earlier_claim(first, &Uuid::new_v4().to_string(), pid, start);
+        })
+        .await
+        .expect("another session's claim blocked the resume");
+    }
+
+    #[tokio::test]
+    async fn a_resume_is_refused_while_an_earlier_omp_cannot_be_shown_to_have_exited() {
+        // The recorded pid is in use, and with no recorded start time nothing
+        // says whether it is still that OMP.
+        let error = resume_after(|first| {
+            earlier_claim(first, &first.session_id, live_process().0, None);
+        })
+        .await
+        .expect_err("a second OMP was started beside one that may still run");
+        assert!(error.to_string().contains("could not confirm"), "{error:#}");
     }
 
     #[tokio::test]
