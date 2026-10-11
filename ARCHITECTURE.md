@@ -143,8 +143,9 @@ The project uses some shorthand nouns. The important ones:
   signals each provider writes, and how proven each is, is declared per
   provider under `transcript_signals` in `schemas/managed_providers.yml`;
   `schemas/transcript_shapes/` is the append-only catalog of every transcript
-  line shape seen per provider version, and `scripts/qa/transcript_census.py`
-  fails on a shape nobody has classified.
+  line shape seen per provider version and of every shape a parser's arms can
+  produce (`families`), and `scripts/qa/transcript_census.py` fails on a
+  shape nobody has classified.
 
 ## Code map
 

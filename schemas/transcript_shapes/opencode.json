@@ -123,5 +123,56 @@
    ],
    "required_keys": ["type", "message.role", "tool", "state"]
   }
- }
+ },
+ "families": [
+  {
+   "parser": "engine/src/opencode_db.rs extract_events_from_part, event_role",
+   "segments": [
+    "part",
+    {
+     "file": {
+      "classification": "transcript:file"
+     },
+     "patch": {
+      "classification": "transcript:patch"
+     },
+     "reasoning": {
+      "classification": "provider_internal:reasoning",
+      "keys": ["text", "type"]
+     },
+     "step-finish": {
+      "classification": "provider_internal:step_finish",
+      "keys": ["cost", "reason", "tokens", "type"]
+     },
+     "step-start": {
+      "classification": "provider_internal:step_start",
+      "keys": ["type"]
+     },
+     "text": {
+      "classification": "transcript:text",
+      "keys": ["text", "time", "type"],
+      "required_keys": ["text"]
+     },
+     "tool": {
+      "classification": "provider_tool:tool",
+      "keys": ["callID", "state", "tool", "type"],
+      "required_keys": ["tool", "state"]
+     }
+    },
+    {
+     "assistant": {
+      "keys": ["message.agent", "message.cost", "message.finish", "message.mode", "message.modelID", "message.parentID", "message.path", "message.providerID", "message.role", "message.time", "message.tokens"]
+     },
+     "developer": {},
+     "system": {},
+     "tool": {},
+     "user": {
+      "keys": ["message.agent", "message.model", "message.role", "message.summary", "message.time"]
+     }
+    }
+   ],
+   "keys": ["type"],
+   "required_keys": ["type", "message.role"]
+  }
+ ]
 }

@@ -22,6 +22,15 @@
     "compaction": "context.compaction"
   },
   "shapes": {
+    "branch_summary": {
+      "classification": "state:branch",
+      "first_seen_version": null,
+      "last_seen_version": null,
+      "entrypoints": [],
+      "required_keys": [
+        "type"
+      ]
+    },
     "compaction": {
       "classification": "signal:context.compaction",
       "first_seen_version": null,
@@ -38,6 +47,15 @@
       "required_keys": [
         "type",
         "tokensBefore"
+      ]
+    },
+    "credential_pin": {
+      "classification": "state:credential_pin",
+      "first_seen_version": null,
+      "last_seen_version": null,
+      "entrypoints": [],
+      "required_keys": [
+        "type"
       ]
     },
     "custom": {
@@ -77,6 +95,15 @@
         "type",
         "content",
         "display"
+      ]
+    },
+    "label": {
+      "classification": "state:label",
+      "first_seen_version": null,
+      "last_seen_version": null,
+      "entrypoints": [],
+      "required_keys": [
+        "type"
       ]
     },
     "message/assistant/?": {
@@ -459,6 +486,15 @@
         "message.content[].text"
       ]
     },
+    "mode_change": {
+      "classification": "state:mode",
+      "first_seen_version": null,
+      "last_seen_version": null,
+      "entrypoints": [],
+      "required_keys": [
+        "type"
+      ]
+    },
     "model_change": {
       "classification": "state:model",
       "first_seen_version": "18.1.16",
@@ -527,6 +563,15 @@
         "type",
         "id",
         "cwd"
+      ]
+    },
+    "session_info": {
+      "classification": "state:session_info",
+      "first_seen_version": null,
+      "last_seen_version": null,
+      "entrypoints": [],
+      "required_keys": [
+        "type"
       ]
     },
     "session_init": {
@@ -599,6 +644,15 @@
         "title"
       ]
     },
+    "ttsr_injection": {
+      "classification": "state:ttsr_injection",
+      "first_seen_version": null,
+      "last_seen_version": null,
+      "entrypoints": [],
+      "required_keys": [
+        "type"
+      ]
+    },
     "unknown_future_record": {
       "classification": "provider_drift:unknown_record",
       "first_seen_version": null,
@@ -615,5 +669,125 @@
         "type"
       ]
     }
-  }
+  },
+  "families": [
+    {
+      "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role user",
+      "segments": [
+        "message",
+        "user",
+        {
+          "image": {
+            "classification": "transcript:user_image",
+            "keys": ["message.content[].data", "message.content[].mimeType", "message.content[].type"],
+            "required_keys": ["message.content[].type"]
+          },
+          "string": {
+            "classification": "transcript:user",
+            "keys": []
+          },
+          "text": {
+            "classification": "transcript:user",
+            "keys": ["message.content[].text", "message.content[].textSignature", "message.content[].type"],
+            "required_keys": ["message.content[].type", "message.content[].text"]
+          }
+        }
+      ],
+      "keys": ["id", "message", "message.attribution", "message.content", "message.role", "message.steering", "message.timestamp", "parentId", "timestamp", "type"],
+      "required_keys": ["type", "message.role", "message.content"]
+    },
+    {
+      "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role assistant",
+      "segments": [
+        "message",
+        "assistant",
+        {
+          "image": {
+            "classification": "transcript:assistant_image",
+            "keys": ["message.content[].data", "message.content[].mimeType", "message.content[].type"],
+            "required_keys": ["message.content[].type"]
+          },
+          "string": {
+            "classification": "transcript:assistant",
+            "keys": []
+          },
+          "text": {
+            "classification": "transcript:assistant",
+            "keys": ["message.content[].text", "message.content[].textSignature", "message.content[].type"],
+            "required_keys": ["message.content[].type", "message.content[].text"]
+          },
+          "thinking": {
+            "classification": "transcript:thinking",
+            "keys": ["message.content[].thinking", "message.content[].type"],
+            "required_keys": ["message.content[].type", "message.content[].thinking"]
+          },
+          "toolCall": {
+            "classification": "provider_tool:call",
+            "keys": ["message.content[].arguments", "message.content[].id", "message.content[].intent", "message.content[].name", "message.content[].type"],
+            "required_keys": ["message.content[].type", "message.content[].name", "message.content[].id", "message.content[].arguments"]
+          }
+        }
+      ],
+      "keys": ["id", "message", "message.api", "message.completedAt", "message.content", "message.contextSnapshot", "message.duration", "message.errorId", "message.errorMessage", "message.model", "message.provider", "message.providerPayload", "message.responseId", "message.role", "message.stopReason", "message.timestamp", "message.ttft", "message.usage", "message.usage.cacheRead", "message.usage.cacheWrite", "message.usage.cost", "message.usage.input", "message.usage.output", "message.usage.reasoningTokens", "message.usage.totalTokens", "parentId", "timestamp", "type"],
+      "required_keys": ["type", "message.role", "message.content"]
+    },
+    {
+      "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role toolResult",
+      "segments": [
+        "message",
+        "toolResult",
+        {
+          "?": {
+            "classification": "provider_tool:result",
+            "keys": []
+          },
+          "image": {
+            "classification": "provider_tool:result_image",
+            "keys": ["message.content[].data", "message.content[].mimeType", "message.content[].type"],
+            "required_keys": ["message.content[].type"]
+          },
+          "string": {
+            "classification": "provider_tool:result",
+            "keys": []
+          },
+          "text": {
+            "classification": "provider_tool:result",
+            "keys": ["message.content[].text", "message.content[].type"],
+            "required_keys": ["message.content[].text"]
+          }
+        }
+      ],
+      "keys": ["id", "message", "message.content", "message.details", "message.isError", "message.role", "message.timestamp", "message.toolCallId", "message.toolName", "parentId", "timestamp", "type"],
+      "required_keys": ["type", "message.role", "message.toolCallId", "message.content"]
+    },
+    {
+      "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, the roles that are not a turn",
+      "segments": [
+        "message",
+        {
+          "bashExecution": {
+            "classification": "transcript:bash_execution"
+          },
+          "branchSummary": {
+            "classification": "state:branch"
+          },
+          "compactionSummary": {
+            "classification": "state:compaction_summary"
+          },
+          "custom": {
+            "classification": "extension:message"
+          },
+          "custom_message": {
+            "classification": "extension:message"
+          }
+        },
+        {
+          "?": {},
+          "string": {},
+          "text": {}
+        }
+      ],
+      "required_keys": ["type", "message.role"]
+    }
+  ]
 }

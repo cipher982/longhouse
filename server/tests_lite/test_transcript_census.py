@@ -6,11 +6,14 @@ tool makes that a failing check instead of a thing the human notices later.
 
 from __future__ import annotations
 
+import inspect
 import json
 import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOL = REPO_ROOT / "scripts" / "qa" / "transcript_census.py"
@@ -258,12 +261,13 @@ def test_the_census_reads_every_cursor_store_the_servers_reader_decodes(tmp_path
             connection.execute("UPDATE meta SET value = ? WHERE key = '0'", (change(json.loads(bytes.fromhex(raw))),))
         connection.close()
 
+    # Each form, and whether the engine's reader takes it too: plain JSON metadata it does not, which is drift.
     forms = {
-        "as cursor-agent writes it": None,
-        "plain JSON metadata": lambda meta: json.dumps(meta),
-        "upper-case root id": lambda meta: json.dumps({**meta, "latestRootBlobId": meta["latestRootBlobId"].upper()}).encode().hex(),
+        "as cursor-agent writes it": (None, 0),
+        "plain JSON metadata": (lambda meta: json.dumps(meta), 1),
+        "upper-case root id": (lambda meta: json.dumps({**meta, "latestRootBlobId": meta["latestRootBlobId"].upper()}).encode().hex(), 0),
     }
-    for form, change in forms.items():
+    for form, (change, check_exit) in forms.items():
         store = _write_store(
             tmp_path / form.replace(" ", "-") / "agent",
             agent_id="agent-1",
@@ -284,6 +288,62 @@ def test_the_census_reads_every_cursor_store_the_servers_reader_decodes(tmp_path
         messages = sum(shape["count"] for name, shape in shapes.items() if name not in {"store/root", "store/meta/0"})
         assert messages == len(_basic_messages()), form
         assert "<unparseable>" not in shapes, form
+        result = _check("cursor", store)
+        assert result.returncode == check_exit, (form, result.stdout)
+        assert "unclassified" not in result.stdout, (form, result.stdout)
+
+
+def test_check_agrees_with_the_servers_reader_on_every_store_its_tests_build(tmp_path: Path):
+    """Each of the reader's tests is run here, and every store it leaves behind is checked.
+
+    Where the reader decodes a store and knows every block in it, the check
+    is clean. Where the reader meets a block it has no arm for, or cannot
+    decode the store at all, the check says so too.
+    """
+    import tests_lite.test_cursor_transcript as reader_tests
+    from zerg.services.cursor_transcript import decode_store_db
+
+    outcomes: dict[str, list[str]] = {"clean": [], "unknown block": [], "not decoded": []}
+    for name, test in sorted(vars(reader_tests).items()):
+        if not name.startswith("test_") or not callable(test):
+            continue
+        fixtures = list(inspect.signature(test).parameters)
+        assert set(fixtures) <= {"tmp_path", "monkeypatch"}, f"{name} takes a fixture this test does not supply: {fixtures}"
+        directory = tmp_path / name
+        directory.mkdir()
+        with pytest.MonkeyPatch.context() as patch:
+            try:
+                test(**{fixture: {"tmp_path": directory, "monkeypatch": patch}[fixture] for fixture in fixtures})
+            except pytest.skip.Exception:
+                pass  # the stores it built before skipping are still checked
+
+        for store in sorted(directory.rglob("store.db")):
+            decoded = decode_store_db(store)
+            result = _check("cursor", store)
+            where = f"{name}: {store.relative_to(directory)}\n{result.stdout}{result.stderr}"
+            if decoded.session is None:
+                outcomes["not decoded"].append(name)
+                assert result.returncode == 1, where
+                # A message the root lists that is not JSON, or a root that lists no message.
+                assert "<unparseable>" in result.stdout or "store/root  field1.wire2 absent" in result.stdout, where
+            elif decoded.diagnostics.unknown_block_types:
+                outcomes["unknown block"].append(name)
+                assert result.returncode == 1, where
+                unclassified = [line for line in result.stdout.splitlines() if line.startswith("  store/")]
+                for block in decoded.diagnostics.unknown_block_types:
+                    assert any(block in line.split()[0].rsplit("/", 1)[1].split("+") for line in unclassified), where
+            else:
+                outcomes["clean"].append(name)
+                assert result.returncode == 0, where
+
+    # Every kind of outcome was met, so none of the branches above passed on nothing.
+    assert len(outcomes["clean"]) >= 10, outcomes
+    assert outcomes["unknown block"] == ["test_unknown_block_type_preserved_not_dropped"]
+    assert outcomes["not decoded"] == [
+        "test_empty_session_reported_as_gap",
+        "test_legacy_chunked_format_reported_as_gap",
+        "test_peek_cursor_session_legacy_flag",
+    ]
 
 
 def test_cursor_projection_lifecycle_line_is_named_by_its_type(tmp_path: Path):
@@ -314,10 +374,10 @@ def test_omp_sessions_are_shaped_like_pi_and_checked_against_their_own_catalog(t
     assert sorted(_census("omp", session)) == ["message/user/text", "service_tier_change", "session", "title"]
     assert _check("omp", session).returncode == 0, "every line type above is one the OMP catalog classifies"
 
-    # A line type nobody has classified is reported under OMP's own catalog, not Pi's.
-    session.write_text(json.dumps({"type": "ttsr_injection", "id": "c", "parentId": "b", "timestamp": "2026-10-11T00:00:00.000Z"}) + "\n")
+    # A line type the parser has no arm for is reported under OMP's own catalog, not Pi's.
+    session.write_text(json.dumps({"type": "brand_new_line", "id": "c", "parentId": "b", "timestamp": "2026-10-11T00:00:00.000Z"}) + "\n")
     result = _check("omp", session)
-    assert result.returncode == 1 and "ttsr_injection" in result.stdout
+    assert result.returncode == 1 and "brand_new_line" in result.stdout
 
 
 def test_a_census_orders_prerelease_and_release_versions_of_one_provider(tmp_path: Path):

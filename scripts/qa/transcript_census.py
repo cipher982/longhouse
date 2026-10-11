@@ -24,6 +24,18 @@ discriminator is a finding, not a silently ignored line.
 The catalog lives in `schemas/transcript_shapes/<provider>.json` and is
 append-only: `first_seen_version` and `last_seen_version` make it the
 longitudinal record of which harness added which display feature when.
+
+A parser that dispatches on each content block handles every combination of
+the blocks it has an arm for, and a row per combination cannot keep up with
+that: four block types are fifteen shapes. So a catalog may also declare
+`families`. A family gives one entry per segment of the shape path, either a
+literal or the names that segment may hold, and a shape belongs to it when
+every `+`-joined name in every segment is listed. Its row is the union of
+what those names carry (`keys`, `required_keys`), merged with the shape's own
+row when it has one. A name with no `keys` has never been observed, so a
+shape that uses it has no baseline to compare new keys against. One entry
+per parser arm therefore classifies every shape the arms can produce, and a
+block type the parser has no arm for still makes its shape unclassified.
 """
 
 from __future__ import annotations
@@ -426,14 +438,16 @@ def iter_files(paths: list[str], provider: str) -> list[Path]:
     return files
 
 
-def _protobuf_fields(data: bytes) -> list[str] | None:
-    """Field numbers and wire types of one protobuf message, without its values.
+def _protobuf_fields(data: bytes) -> tuple[list[str], list[bytes]] | None:
+    """Field numbers and wire types of one protobuf message, and its field-1 values.
 
     Cursor's root blob lists the conversation's message blobs as field 1, each
     a 32-byte id, so the length of every field-1 value is part of the shape.
+    The values themselves are returned beside the shape, never in it.
     """
     index = 0
     fields: set[str] = set()
+    listed: list[bytes] = []
 
     def varint() -> int:
         nonlocal index
@@ -460,6 +474,7 @@ def _protobuf_fields(data: bytes) -> list[str] | None:
                 length = varint()
                 if number == 1:
                     fields.add(f"field1.len{length}")
+                    listed.append(data[index : index + length])
                 index += length
             elif wire == 5:
                 index += 4
@@ -468,7 +483,7 @@ def _protobuf_fields(data: bytes) -> list[str] | None:
             fields.add(f"field{number}.wire{wire}")
     except (IndexError, ValueError):
         return None
-    return sorted(fields) if index == len(data) else None
+    return (sorted(fields), listed) if index == len(data) else None
 
 
 def _cursor_meta_json(value: object) -> tuple[Any, str]:
@@ -503,7 +518,9 @@ def _cursor_store_records(path: Path) -> Iterator[dict[str, Any] | None]:
     every message blob (JSON). That is a superset of what a reader of the
     current conversation opens: messages of abandoned branches stay in the
     store and are fingerprinted too. Other binary blobs are superseded roots
-    and tree nodes; they are not records.
+    and tree nodes; they are not records, except one the root lists as a
+    message: that is the older chunked format no reader decodes, and it is
+    reported as unparseable.
 
     The metadata and the root are found the way the server's reader finds
     them (`_cursor_meta_json`, `_cursor_blob_id`), so a store that reader
@@ -532,6 +549,8 @@ def _cursor_store_records(path: Path) -> Iterator[dict[str, Any] | None]:
                 "_census_store": "meta",
                 "_census_meta_key": str(key),
             }
+        binary: set[bytes | str] = set()
+        listed: list[bytes] = []
         for blob_id, data in connection.execute("SELECT id, data FROM blobs"):
             raw = data if isinstance(data, bytes) else str(data).encode()
             try:
@@ -540,12 +559,18 @@ def _cursor_store_records(path: Path) -> Iterator[dict[str, Any] | None]:
                 message = None
             if isinstance(message, dict):
                 yield {**message, "_census_store": "message"}
-            elif root_id is not None and _cursor_blob_id(blob_id) == root_id:
-                fields = _protobuf_fields(raw)
-                if fields is None:
+                continue
+            binary.add(_cursor_blob_id(blob_id))
+            if root_id is not None and _cursor_blob_id(blob_id) == root_id:
+                parsed = _protobuf_fields(raw)
+                if parsed is None:
                     yield None
                 else:
+                    fields, listed = parsed
                     yield {"_census_store": "root", "_census_fields": fields}
+        for message_id in listed:
+            if message_id in binary:
+                yield None
     except sqlite3.Error:
         yield None
     finally:
@@ -648,7 +673,9 @@ def census(files: list[Path], provider: str) -> dict[str, dict[str, Any]]:
                     record["versions"].add(version)
                 if entrypoint:
                     record["entrypoints"].add(entrypoint)
-                for key in keys:
+                # Once per line: a key two blocks of one message both carry
+                # must not hide a line that lacks it.
+                for key in dict.fromkeys(keys):
                     record["key_counts"][key] += 1
         except OSError:
             continue
@@ -688,17 +715,85 @@ def save_catalog(provider: str, catalog: dict[str, Any]) -> None:
     )
 
 
+def _family_row(catalog: dict[str, Any], shape: str) -> dict[str, Any] | None:
+    """The row a family gives a shape, or None when no family holds it.
+
+    `baseline` is False when one of the names the shape uses has no recorded
+    keys: `keys` is then only what the others are known to carry, and not
+    something to compare the shape's keys against.
+    """
+    segments = shape.split("/")
+    for family in catalog.get("families") or []:
+        pattern = family.get("segments") or []
+        if len(pattern) != len(segments):
+            continue
+        parts: list[dict[str, Any]] = [family]
+        for allowed, segment in zip(pattern, segments):
+            if isinstance(allowed, str):
+                if allowed != segment:
+                    break
+                continue
+            names = segment.split("+")
+            if not all(name in allowed for name in names):
+                break
+            parts.extend(allowed[name] for name in names)
+        else:
+            classifications = dict.fromkeys(
+                str(part["classification"])
+                for part in parts
+                if str(part.get("classification") or "").strip()
+            )
+            return {
+                "classification": " + ".join(classifications),
+                "keys": sorted(
+                    {key for part in parts for key in part.get("keys") or []}
+                ),
+                "baseline": all(part.get("keys") is not None for part in parts),
+                "required_keys": sorted(
+                    {key for part in parts for key in part.get("required_keys") or []}
+                ),
+            }
+    return None
+
+
+def catalog_row(catalog: dict[str, Any], shape: str) -> dict[str, Any] | None:
+    """What the catalog says of a shape: its own row, its family's, or both merged.
+
+    A shape's own row keeps its classification and evidence; the keys and
+    required keys its family knows are added to it, so a key the parser's arm
+    is known to carry is not new on one combination of blocks. `keys` is None
+    when nothing has recorded what the shape carries.
+    """
+    own = (catalog.get("shapes") or {}).get(shape)
+    family = _family_row(catalog, shape)
+    if family is None:
+        return own
+    if own is None:
+        return {
+            "classification": family["classification"],
+            "keys": family["keys"] if family["baseline"] else None,
+            "required_keys": family["required_keys"],
+        }
+    merged = dict(own)
+    if own.get("keys") is not None:
+        merged["keys"] = sorted(set(own["keys"]) | set(family["keys"]))
+    else:
+        merged["keys"] = family["keys"] if family["baseline"] else None
+    merged["required_keys"] = sorted(
+        set(own.get("required_keys") or []) | set(family["required_keys"])
+    )
+    return merged
+
+
 def unclassified(
     catalog: dict[str, Any], observed: dict[str, dict[str, Any]]
 ) -> list[str]:
-    rows = catalog.get("shapes", {})
-    return sorted(
-        shape
-        for shape in observed
-        if shape not in rows
-        or not str(rows[shape].get("classification") or "").strip()
-        or rows[shape]["classification"] == "unclassified"
-    )
+    def classified(shape: str) -> bool:
+        row = catalog_row(catalog, shape)
+        classification = str((row or {}).get("classification") or "").strip()
+        return bool(classification) and classification != "unclassified"
+
+    return sorted(shape for shape in observed if not classified(shape))
 
 
 def drift(
@@ -711,10 +806,9 @@ def drift(
     key set can say the fact will silently stop. Reported per shape with how
     many of its lines lacked each key.
     """
-    rows = catalog.get("shapes", {})
     found: dict[str, dict[str, Any]] = {}
     for shape, record in observed.items():
-        row = rows.get(shape)
+        row = catalog_row(catalog, shape)
         if row is None:
             continue
         required = [
@@ -736,14 +830,18 @@ def drift(
 def widened(
     catalog: dict[str, Any], observed: dict[str, dict[str, Any]]
 ) -> dict[str, list[str]]:
-    """Catalogued shapes carrying keys the catalog has never recorded: something new to classify."""
-    rows = catalog.get("shapes", {})
+    """Catalogued shapes carrying keys the catalog has never recorded: something new to classify.
+
+    A shape whose keys were never recorded (a row or a family name written
+    from the parser's arm, before any transcript carried it) has no baseline,
+    so nothing on it is new until `seed` records what it carries.
+    """
     found: dict[str, list[str]] = {}
     for shape, record in observed.items():
-        row = rows.get(shape)
-        if row is None:
+        row = catalog_row(catalog, shape)
+        if row is None or row.get("keys") is None:
             continue
-        new_keys = sorted(set(record.get("keys") or []) - set(row.get("keys") or []))
+        new_keys = sorted(set(record.get("keys") or []) - set(row["keys"]))
         if new_keys:
             found[shape] = new_keys
     return found
@@ -752,14 +850,20 @@ def widened(
 def seed(
     catalog: dict[str, Any], observed: dict[str, dict[str, Any]]
 ) -> tuple[int, int]:
-    """Append unseen shapes as unclassified; widen key sets and version ranges. Never delete."""
+    """Append unseen shapes; widen key sets and version ranges. Never delete.
+
+    An unseen shape is `unclassified` unless a family already classifies it;
+    then its row records only that it was seen, and with which keys.
+    """
     rows = catalog.setdefault("shapes", {})
     added = widened_rows = 0
     for shape, record in observed.items():
         row = rows.get(shape)
         if row is None:
+            family = _family_row(catalog, shape)
             rows[shape] = {
-                "classification": "unclassified",
+                "classification": (family or {}).get("classification")
+                or "unclassified",
                 "first_seen_version": record["first_seen_version"],
                 "last_seen_version": record["last_seen_version"],
                 "entrypoints": record["entrypoints"],

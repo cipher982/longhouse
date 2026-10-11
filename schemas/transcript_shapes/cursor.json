@@ -198,5 +198,124 @@
    ],
    "required_keys": ["role", "message.content"]
   }
- }
+ },
+ "families": [
+  {
+   "parser": "engine/src/storage_v2_shipper/cursor_store_source.rs cursor_render_records; server/zerg/services/cursor_transcript.py _map_message",
+   "segments": [
+    "store",
+    {
+     "assistant": {
+      "keys": []
+     },
+     "system": {
+      "keys": []
+     },
+     "tool": {
+      "keys": []
+     },
+     "user": {
+      "keys": []
+     }
+    },
+    {
+     "reasoning": {
+      "classification": "transcript:reasoning",
+      "keys": ["content[].providerOptions", "content[].signature", "content[].text", "content[].type"],
+      "required_keys": ["content[].type", "content[].text"]
+     },
+     "string": {
+      "classification": "transcript:text",
+      "keys": []
+     },
+     "text": {
+      "classification": "transcript:text",
+      "keys": ["content[].text", "content[].type"],
+      "required_keys": ["content[].type", "content[].text"]
+     },
+     "tool-call": {
+      "classification": "provider_tool:call",
+      "required_keys": ["content[].type", "content[].toolCallId", "content[].toolName"]
+     },
+     "tool-result": {
+      "classification": "provider_tool:result",
+      "required_keys": ["content[].type", "content[].toolCallId", "content[].result"]
+     }
+    }
+   ],
+   "keys": ["content", "id", "providerOptions", "role"],
+   "required_keys": ["role", "content"]
+  },
+  {
+   "parser": "engine/src/pipeline/parser.rs extract_cursor_events",
+   "segments": [
+    {
+     "assistant": {
+      "keys": []
+     },
+     "system": {
+      "keys": []
+     },
+     "tool": {
+      "keys": []
+     },
+     "user": {
+      "keys": []
+     }
+    },
+    {
+     "provider_context": {
+      "classification": "provider_injection:context",
+      "keys": []
+     },
+     "reasoning": {
+      "classification": "transcript:reasoning",
+      "keys": []
+     },
+     "redacted-reasoning": {
+      "classification": "transcript:reasoning",
+      "keys": []
+     },
+     "string": {
+      "classification": "transcript:text",
+      "keys": []
+     },
+     "text": {
+      "classification": "transcript:text",
+      "keys": []
+     },
+     "tool-call": {
+      "classification": "provider_tool:call",
+      "keys": []
+     },
+     "tool-result": {
+      "classification": "provider_tool:result",
+      "keys": []
+     },
+     "tool-use": {
+      "classification": "provider_tool:call",
+      "keys": []
+     },
+     "tool_call": {
+      "classification": "provider_tool:call",
+      "keys": []
+     },
+     "tool_result": {
+      "classification": "provider_tool:result",
+      "keys": []
+     },
+     "tool_use": {
+      "classification": "provider_tool:call",
+      "keys": []
+     },
+     "user_query": {
+      "classification": "transcript:user_query",
+      "keys": []
+     }
+    }
+   ],
+   "keys": ["message", "message.content", "role", "version"],
+   "required_keys": ["role", "message.content"]
+  }
+ ]
 }
