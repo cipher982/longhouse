@@ -808,12 +808,13 @@ _PROBE_MISMATCH = {
     "failure_code": "interaction_semantics_assertion_failed",
     "data": {
         "assertions": [
+            {"probe_id": "shared_title_boundary", "status": "pass", "failure_code": None},
             {
                 "status": "blocked",
                 "failure_code": "interaction_post_state_evidence_missing",
                 "probe_failure_code": "cursor_model_identity_mismatch",
                 "probe_message": "Cursor's sessionStart hook receipt names model 'other'; the probe requested 'requested'.",
-            }
+            },
         ]
     },
 }
@@ -906,6 +907,34 @@ def test_cursor_blocked_probe_carries_the_probes_own_reason(tmp_path: Path, monk
     assert observation["status"] == "blocked"
     assert assertions[0].outcome.value == "blocked"
     assert assertions[0].reasons == (_PROBE_REASON,)
+
+
+def test_cursor_probe_blocked_before_it_produced_anything_reports_the_code_it_was_blocked_with(tmp_path: Path, monkeypatch) -> None:
+    request, binary = _cursor_request(tmp_path)
+    _cursor_gate0(tmp_path, monkeypatch, status="passed")
+    _cursor_harness(
+        monkeypatch,
+        live={"status": "pass"},
+        interaction={
+            "status": "blocked",
+            "failure_code": "interaction_semantics_assertion_failed",
+            "data": {
+                "assertions": [
+                    {"probe_id": "cursor_model_launch_option", "status": "blocked", "failure_code": "interaction_probe_setup_failed"},
+                    {"probe_id": "shared_title_boundary", "status": "pass", "failure_code": None},
+                ]
+            },
+        },
+    )
+
+    _observation, assertions, _secrets = bridge._cursor_observed_install_executor(  # noqa: SLF001
+        binary,
+        tmp_path / "output" / "evidence",
+        request=json.loads(request.read_text(encoding="utf-8")),
+    )
+
+    assert assertions[0].outcome.value == "blocked"
+    assert assertions[0].reasons == ({"stage": "interaction_semantics", "failure_code": "interaction_probe_setup_failed"},)
 
 
 def test_cursor_live_canary_is_its_own_cause_only_when_gate0_passed(tmp_path: Path, monkeypatch) -> None:

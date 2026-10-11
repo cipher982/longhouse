@@ -1146,10 +1146,12 @@ def _cursor_requirement_failures(
     if interaction_status != "pass":
         data = interaction_result.get("data")
         verdict_rows = data.get("assertions") if isinstance(data, Mapping) else None
-        # The probe's own reason (a model identity mismatch, a missing hook
-        # receipt) is more specific than the scenario's verdict code.
-        probe = next(
-            (row for row in verdict_rows or () if isinstance(row, Mapping) and row.get("probe_failure_code")),
+        # The probe that did not pass knows more than the scenario's verdict
+        # code: its own reason when it ran but was not observed (a model
+        # identity mismatch, a missing hook receipt), else the code it was
+        # blocked with before it produced anything.
+        verdict = next(
+            (row for row in verdict_rows or () if isinstance(row, Mapping) and row.get("status") != "pass"),
             {},
         )
         failures.append(
@@ -1157,10 +1159,11 @@ def _cursor_requirement_failures(
                 AssertionOutcome.BLOCKED if interaction_status == "blocked" else AssertionOutcome.INFRASTRUCTURE_ERROR,
                 _outcome_reason(
                     "interaction_semantics",
-                    probe.get("probe_failure_code")
+                    verdict.get("probe_failure_code")
+                    or verdict.get("failure_code")
                     or interaction_result.get("failure_code")
                     or f"interaction_semantics_{interaction_status}",
-                    message=probe.get("probe_message") or interaction_result.get("message"),
+                    message=verdict.get("probe_message") or verdict.get("message") or interaction_result.get("message"),
                 ),
             )
         )
