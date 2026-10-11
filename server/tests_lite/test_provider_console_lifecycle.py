@@ -671,6 +671,9 @@ def test_a_turn_that_binds_one_reply_tells_a_provider_that_answered_twice_from_a
         with pytest.raises(MarkerAnswerCountError, match="^marker_answered_more_than_once: .* 2 answering native assistant row") as twice:
             _wait(marker, {"reply": 1, "second": 1})
         assert twice.value.answer_event_ids == ["reply", "second"]
+        # The message alone says which of the two remaining counts this was, and which rows.
+        assert "expected exactly 1 (single-reply turn: the provider itself answered in more than one row)" in str(twice.value)
+        assert "(answering row ids ['reply', 'second']; " in str(twice.value)
 
 
 def test_a_reply_not_served_yet_is_lag_and_the_expired_wait_says_what_the_provider_wrote(monkeypatch):
@@ -699,8 +702,11 @@ def test_an_adapter_whose_served_ids_are_not_the_providers_is_counted_to_one(mon
     answers, account = _wait(marker, None)
     assert [event["id"] for event in answers] == ["5a2f"] and account is None
     _served(monkeypatch, twice)
-    with pytest.raises(MarkerAnswerCountError, match="marker_answered_more_than_once: .* has 2 answering .* expected exactly 1"):
+    with pytest.raises(MarkerAnswerCountError, match="marker_answered_more_than_once: .* has 2 answering .* expected exactly 1") as counted:
         _wait(marker, None, one_reply=False)
+    # The message alone says which of the two remaining counts this was, and which events.
+    assert "2 answering served assistant event(s), expected exactly 1 (counted adapter: its served ids are not" in str(counted.value)
+    assert "(answering event ids ['5a2f', '9c1d']; " in str(counted.value)
 
     # Every Console adapter is on one side or the other, and each counted one says why.
     adapters = {*lifecycle.PROVIDERS, *lifecycle.CAN_RESUME}
@@ -1196,6 +1202,8 @@ def test_native_marker_answered_in_two_rows_is_refused_with_the_typed_reason(tmp
     assert raised.value.reason == "marker_answered_more_than_once"
     assert raised.value.answer_event_ids == ["reply", "reply-again"]
     assert raised.value.mention_event_ids == ["tool-call"]
+    assert "native assistant row(s), expected exactly 1 (single-reply turn: " in str(raised.value)
+    assert "(answering row ids ['reply', 'reply-again']; 1 other event(s) only mention it: ['tool-call'])" in str(raised.value)
     message = str(raised.value)
     assert message.startswith("marker_answered_more_than_once: ")
     assert "has 2 answering native assistant row(s), expected exactly 1" in message

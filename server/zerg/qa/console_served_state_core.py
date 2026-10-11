@@ -386,9 +386,11 @@ class MarkerAnswerCountError(RuntimeError):
         self.answer_event_ids = [event.get("id") for event in answers]
         self.mention_event_ids = [event.get("id") for event in mentions]
         self.observation: dict[str, object] = {}
+        # What the ids name: served events, or the provider's own rows.
+        ids = "event ids" if surface == "served assistant event" else "row ids"
         super().__init__(
             f"{reason}: marker {marker} has {len(answers)} answering {surface}(s), expected {expected} "
-            f"(answering event ids {self.answer_event_ids}; {len(mentions)} other event(s) only mention it: {self.mention_event_ids})"
+            f"(answering {ids} {self.answer_event_ids}; {len(mentions)} other event(s) only mention it: {self.mention_event_ids})"
         )
 
     def evidence(self) -> dict[str, object]:

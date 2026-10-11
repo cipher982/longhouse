@@ -315,7 +315,10 @@ def test_console_first_turn_answered_in_two_rows_is_refused_with_the_typed_reaso
     assert "assertions" not in result
     assert result["error"].startswith("MarkerAnswerCountError: marker_answered_more_than_once: ")
     assert "has 2 answering native assistant row(s), expected exactly 1" in result["error"]
-    assert "answering event ids ['reply', 'reply-again']" in result["error"]
+    # The failure alone says which count this was (the provider's own rows of a
+    # single-reply turn, not a served page) and which rows.
+    assert "expected exactly 1 (single-reply turn: the provider itself answered in more than one row)" in result["error"]
+    assert "answering row ids ['reply', 'reply-again']" in result["error"]
     assert "only mention it: ['tool-call']" in result["error"]
     assert "I will read the file" not in result["error"]
 

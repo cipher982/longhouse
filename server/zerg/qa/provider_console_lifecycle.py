@@ -146,7 +146,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=10,
+    scenario_revision=11,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -520,6 +520,13 @@ _SERVED_IDS_NOT_NATIVE = {
 }
 
 
+# The two things `marker_answered_more_than_once` still says, in the words its
+# message carries, so that the first occurrence can be read from the failure
+# alone: which of the two it was, beside the ids it counted.
+_COUNTED_ADAPTER = "exactly 1 (counted adapter: its served ids are not the provider's rows, so served replies are counted)"
+_SINGLE_REPLY_TURN = "exactly 1 (single-reply turn: the provider itself answered in more than one row)"
+
+
 def _native_assistant_rows(provider: str, path: Path) -> tuple[list[dict[str, object]] | None, str, list[str]]:
     """The assistant rows of the provider's own record at ``path``, what the read found, and the sessions it names.
 
@@ -696,7 +703,9 @@ def _wait_served_answers(
             # Counted, for the reason `_SERVED_IDS_NOT_NATIVE` gives. More
             # replies cannot bring the count back down, so this fails now.
             if last_count > 1:
-                raise MarkerAnswerCountError(MARKER_ANSWERED_MORE_THAN_ONCE, marker=marker, answers=matches, mentions=mentions)
+                raise MarkerAnswerCountError(
+                    MARKER_ANSWERED_MORE_THAN_ONCE, marker=marker, answers=matches, mentions=mentions, expected=_COUNTED_ADAPTER
+                )
             converged = last_count == 1
         else:
             # Read after the page, so nothing served is newer than what is read here.
@@ -709,6 +718,7 @@ def _wait_served_answers(
                     marker=marker,
                     answers=[{"id": row_id} for row_id in native],
                     mentions=[],
+                    expected=_SINGLE_REPLY_TURN,
                     surface="native assistant row",
                 )
             correspondence = served_answer_correspondence(events, marker, native, default_origin="durable", alongside=alongside)
@@ -967,6 +977,7 @@ def _one_marker_reply(
             marker=marker,
             answers=[{"id": row.get("id")} for row in answers],
             mentions=[{"id": row.get("id")} for row in mentions],
+            expected=_SINGLE_REPLY_TURN,
             surface=surface,
         )
     if not answers:
@@ -1291,6 +1302,7 @@ def _pi_native_tool_receipt(
             marker=marker,
             answers=[{"id": response.get("native_message_id")} for response in marker_responses],
             mentions=[{"id": mention.get("native_message_id")} for mention in marker_mentions] if isinstance(marker_mentions, list) else [],
+            expected=_SINGLE_REPLY_TURN,
             surface="native assistant row",
         )
 
