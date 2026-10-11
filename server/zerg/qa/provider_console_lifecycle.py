@@ -150,7 +150,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=17,
+    scenario_revision=18,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -1029,7 +1029,7 @@ def _require_run_completed(provider: str, claim: Mapping[str, object], *, turn: 
     The claim is the engine's statement of how the run ended. A run it ended
     as failed or cancelled will never be followed by a served reply worth
     waiting for, so this is raised as soon as the claim is read. The message
-    carries the engine's error and, beside it, what the provider's own stream
+    carries the engine's reason code and error and, beside them, what the provider's own stream
     holds for the turn: whether the provider answered is a separate fact from
     how the engine ended the run.
     """
@@ -1037,6 +1037,12 @@ def _require_run_completed(provider: str, claim: Mapping[str, object], *, turn: 
     if _run_completed(claim):
         return
     result = claim.get("result") if isinstance(claim.get("result"), Mapping) else {}
+    # The engine's own code for why (a provider that moved the session to
+    # another file, a refused credential), where the claim keeps its terminal event.
+    event = claim.get("terminal_event")
+    payload = event.get("payload") if isinstance(event, Mapping) else None
+    code = payload.get("terminal_reason") if isinstance(payload, Mapping) else None
+    reason = f" terminal_reason={code}" if isinstance(code, str) and code else ""
     account = _turn_account(provider, claim, marker, alongside=alongside)
     if account is None:
         answered = "could not be read"
@@ -1046,7 +1052,7 @@ def _require_run_completed(provider: str, claim: Mapping[str, object], *, turn: 
         answered = f"holds {account['assistant_replies']} assistant reply(ies) and none answers {_marker_name(marker)}"
     raise ConsoleTurnFailure(
         CONSOLE_RUN_NOT_COMPLETED,
-        f"the engine ended the {turn} turn as state={claim.get('state')} terminal_state={result.get('terminal_state')} "
+        f"the engine ended the {turn} turn as state={claim.get('state')} terminal_state={result.get('terminal_state')}{reason} "
         f"with error {str(result.get('error') or claim.get('error'))[:500]!r}; the provider's own stream for the turn {answered}",
     )
 

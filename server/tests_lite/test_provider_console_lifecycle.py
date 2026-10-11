@@ -1704,6 +1704,12 @@ def test_a_turn_that_had_to_complete_fails_at_once_on_the_engines_claim(tmp_path
         "with error 'native session source did not drain'; the provider's own stream for the turn holds the reply that "
         "answers LH_OMP_POST_INTERRUPT"
     )
+    # The engine's reason code is carried when the claim keeps its terminal event: a provider
+    # that moved the session to another file reads as that, in the engine's words.
+    moved = {**failed, "error": "OMP stopped saving to this session's file: Session a.jsonl is open in another process"}
+    moved["terminal_event"] = {"payload": {"terminal_state": "run_failed", "terminal_reason": "provider_session_moved"}}
+    with pytest.raises(lifecycle.ConsoleTurnFailure, match="terminal_state=run_failed terminal_reason=provider_session_moved with error"):
+        lifecycle._require_run_completed("omp", moved, turn="resume", marker=_ASKED)
     # A claim the engine wrote as failed without a result is the same failure; a completed one is none.
     with pytest.raises(
         lifecycle.ConsoleTurnFailure, match="state=failed terminal_state=None with error 'spawn failed'; .* could not be read"
