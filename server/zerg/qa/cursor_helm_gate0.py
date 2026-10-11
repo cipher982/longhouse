@@ -489,6 +489,18 @@ def _turn_ended_before(awaited_event: str, stop: dict[str, Any]) -> Gate0Failure
     )
 
 
+def _require_completed_turn(stop: dict[str, Any], *, turn: str) -> None:
+    """Refuse proof from a turn the provider did not complete."""
+
+    if stop.get("status") != "completed":
+        facts = {"turn": turn, **_stop_facts(stop)}
+        raise Gate0Failure(
+            "cursor_turn_ended_in_error",
+            f"Cursor ended the {turn} turn with stop status {facts['stop_status']!r}",
+            **facts,
+        )
+
+
 def wait_for_hook_match(
     path: Path,
     *,
@@ -622,7 +634,7 @@ def _identity_scenario(
         )
         store = wait_for_store(provider_id, timeout=timeout)
         boot_event_count = len(read_hook_events(events_path))
-        wait_for_hook(
+        launch_stop = wait_for_hook(
             events_path,
             longhouse_session_id=longhouse_session_id,
             event="stop",
@@ -660,6 +672,7 @@ def _identity_scenario(
             after_count=before,
             timeout=timeout,
         )
+        _require_completed_turn(stop, turn="probe")
         expected_prompt_digest = _marker_digest(probe_text)
         facts = {
             "status": "passed",
@@ -672,6 +685,15 @@ def _identity_scenario(
             "cursor_pid": session.process.pid,
             "process_alive_after_turn": session.alive(),
             "first_hook_event": first.get("event"),
+            # The launch turn only brings the TUI to an idle prompt. Every
+            # fact proven below comes from the probe turn and the native
+            # store, so the launch turn's ending is recorded, not required.
+            "launch_turn": {
+                "role": "readiness_barrier",
+                "generation_id": launch_stop.get("generation_id"),
+                "stop_status": launch_stop.get("status"),
+            },
+            "probe_generation_id": probe_generation_id,
             "prompt_sha256": prompt.get("prompt_sha256"),
             "expected_prompt_sha256": expected_prompt_digest,
             "prompt_digest_matches": prompt.get("prompt_sha256") == expected_prompt_digest,
@@ -794,8 +816,7 @@ def _cancel_scenario(
             after_count=turn_start,
             timeout=timeout,
         )
-        if completed.get("status") != "completed":
-            raise RuntimeError("Cursor did not complete the post-cancel turn")
+        _require_completed_turn(completed, turn="post-cancel")
         return {
             "status": "passed",
             "provider_conversation_id": provider_id,
@@ -912,10 +933,16 @@ def _resume_scenario(
             longhouse_session_id=longhouse_session_id,
             event="stop",
             conversation_id=provider_id,
+            generation_id=str(prompt.get("generation_id") or ""),
             after_count=before,
             timeout=timeout,
         )
-        return {
+        # Continuity means the resumed conversation can carry a turn. A hook
+        # that names the same conversation proves the identity was rebound,
+        # not that the conversation still works, so a turn the provider ended
+        # in error is no evidence of it.
+        _require_completed_turn(stop, turn="resumed")
+        facts = {
             "status": "passed",
             "provider_conversation_id": provider_id,
             "longhouse_session_id": longhouse_session_id,
@@ -924,6 +951,14 @@ def _resume_scenario(
             "store_agent_id": _cursor_store_agent_id(wait_for_store(provider_id, timeout=timeout)),
             "process_alive_after_turn": session.alive(),
         }
+        required = {
+            "store_identity": facts["store_agent_id"] == provider_id,
+            "process_alive_after_turn": facts["process_alive_after_turn"] is True,
+        }
+        failed = [name for name, passed in required.items() if not passed]
+        if failed:
+            raise RuntimeError(f"Cursor resume scenario failed proof: {', '.join(failed)}")
+        return facts
     finally:
         session.close()
 
@@ -1383,7 +1418,7 @@ def _managed_conversation_reset_scenario(
             after_count=before,
             timeout=timeout,
         )
-        wait_for_hook(
+        stop_a = wait_for_hook(
             events_path,
             longhouse_session_id=longhouse_session_id,
             event="stop",
@@ -1392,6 +1427,7 @@ def _managed_conversation_reset_scenario(
             after_count=before,
             timeout=timeout,
         )
+        _require_completed_turn(stop_a, turn="pre-reset")
         old_store = wait_for_store(provider_id, timeout=timeout)
         reset_start = len(read_hook_events(events_path))
         session.submit_idle("/clear")

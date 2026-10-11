@@ -586,12 +586,14 @@ class _FakeCursor:
             "conversation_id": argv[argv.index(identity_flag) + 1],
         }
         self.process = SimpleNamespace(pid=4242, returncode=None)
+        self.survives = True
 
     @classmethod
-    def launcher(cls, replay: _HookReplay, *batches: list[tuple[float, dict[str, Any]]]):
+    def launcher(cls, replay: _HookReplay, *batches: list[tuple[float, dict[str, Any]]], survives: bool = True):
         def start(*, argv, cwd, env, terminal_path):  # noqa: ANN001 - test double
             terminal_path.touch()
             session = cls(replay, list(batches), env, list(argv))
+            session.survives = survives
             session._next_batch()
             return session
 
@@ -611,7 +613,7 @@ class _FakeCursor:
         self._next_batch()
 
     def alive(self) -> bool:
-        return True
+        return self.survives
 
     def close(self) -> None:
         return None
@@ -877,3 +879,115 @@ def test_gate0_report_names_the_failed_scenario_and_its_typed_code(
     assert failed["failure_code"] == failure_code
     assert failed.get("stop_status") == stop_status
     assert report == json.loads((Path(report["artifact_root"]) / "gate0.json").read_text(encoding="utf-8"))
+
+
+def _stub_native_store(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(gate, "wait_for_store", lambda *_args, **_kwargs: tmp_path / "store.db")
+    monkeypatch.setattr(gate, "_cursor_store_agent_id", lambda _path: "conversation-1")
+
+
+def test_native_resume_fails_when_the_resumed_turn_ends_in_error(monkeypatch, tmp_path: Path) -> None:
+    """A resumed conversation whose only turn errored has not shown continuity.
+
+    The hook naming the same conversation proves the identity was rebound; it
+    does not prove the conversation still answers.
+    """
+
+    replay = _HookReplay.install(monkeypatch)
+    _stub_native_store(monkeypatch, tmp_path)
+    errored = [_hook(0.0, "beforeSubmitPrompt"), _hook(1.2, "afterAgentThought"), _hook(23.7, "stop", status="error")]
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, errored))
+
+    with pytest.raises(gate.Gate0Failure) as failure:
+        gate._resume_scenario(provider_id="conversation-1", longhouse_session_id="session-1", **_scenario_paths(tmp_path))
+
+    assert failure.value.failure_code == "cursor_turn_ended_in_error"
+    assert failure.value.facts["turn"] == "resumed"
+    assert failure.value.facts["stop_status"] == "error"
+
+
+_RESUMED_COMPLETED = [_hook(0.0, "beforeSubmitPrompt"), _hook(1.3, "afterAgentResponse"), _hook(1.3, "stop", status="completed")]
+
+
+def test_native_resume_passes_on_a_completed_resumed_turn(monkeypatch, tmp_path: Path) -> None:
+    replay = _HookReplay.install(monkeypatch)
+    _stub_native_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, _RESUMED_COMPLETED))
+
+    result = gate._resume_scenario(provider_id="conversation-1", longhouse_session_id="session-1", **_scenario_paths(tmp_path))
+
+    assert result["status"] == "passed"
+    assert result["stop_status"] == "completed"
+    assert result["store_agent_id"] == "conversation-1"
+
+
+def test_native_resume_fails_when_the_resumed_process_did_not_survive_the_turn(monkeypatch, tmp_path: Path) -> None:
+    replay = _HookReplay.install(monkeypatch)
+    _stub_native_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, _RESUMED_COMPLETED, survives=False))
+
+    with pytest.raises(RuntimeError, match="process_alive_after_turn"):
+        gate._resume_scenario(provider_id="conversation-1", longhouse_session_id="session-1", **_scenario_paths(tmp_path))
+
+
+_PROBE_PROMPT = "Reply with exactly PROBE and nothing else."
+
+
+def _run_identity_scenario(monkeypatch, tmp_path: Path, probe_turn: list[tuple[float, dict[str, Any]]]) -> dict[str, Any]:
+    replay = _HookReplay.install(monkeypatch)
+    _stub_native_store(monkeypatch, tmp_path)
+    launch_turn = [_hook(0.0, "beforeSubmitPrompt", "gen-0"), _hook(22.0, "stop", "gen-0", status="error")]
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, launch_turn, probe_turn))
+    return gate._identity_scenario(
+        name="create_chat_resume",
+        provider_id="conversation-1",
+        launch_args=["--resume", "conversation-1"],
+        probe_prompt=_PROBE_PROMPT,
+        **_scenario_paths(tmp_path),
+    )
+
+
+def test_identity_scenario_records_an_errored_launch_turn_it_does_not_rely_on(monkeypatch, tmp_path: Path) -> None:
+    """The launch turn is a readiness barrier; the proof is the probe turn's."""
+
+    result = _run_identity_scenario(
+        monkeypatch,
+        tmp_path,
+        [
+            _hook(0.6, "beforeSubmitPrompt", prompt_sha256=gate._marker_digest(_PROBE_PROMPT)),
+            _hook(5.0, "stop", status="completed"),
+            _hook(5.0, "afterAgentResponse", text_sha256="digest"),
+        ],
+    )
+
+    assert result["status"] == "passed"
+    assert result["stop_status"] == "completed"
+    assert result["launch_turn"] == {"role": "readiness_barrier", "generation_id": "gen-0", "stop_status": "error"}
+
+
+def test_identity_scenario_fails_when_the_probe_turn_ends_in_error(monkeypatch, tmp_path: Path) -> None:
+    with pytest.raises(gate.Gate0Failure) as failure:
+        _run_identity_scenario(
+            monkeypatch,
+            tmp_path,
+            [
+                _hook(0.6, "beforeSubmitPrompt", prompt_sha256=gate._marker_digest(_PROBE_PROMPT)),
+                _hook(5.0, "afterAgentResponse", text_sha256="digest"),
+                _hook(5.1, "stop", status="error"),
+            ],
+        )
+
+    assert failure.value.failure_code == "cursor_turn_ended_in_error"
+    assert failure.value.facts["turn"] == "probe"
+
+
+def test_ctrl_c_cancel_fails_typed_when_the_recovery_turn_ends_in_error(monkeypatch, tmp_path: Path) -> None:
+    with pytest.raises(gate.Gate0Failure) as failure:
+        _run_cancel_scenario(
+            monkeypatch,
+            tmp_path,
+            [_hook(1.5, "beforeSubmitPrompt", "gen-2"), _hook(9.0, "stop", "gen-2", status="error")],
+        )
+
+    assert failure.value.failure_code == "cursor_turn_ended_in_error"
+    assert failure.value.facts["turn"] == "post-cancel"
