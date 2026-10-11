@@ -341,8 +341,7 @@ async fn route_owner_message(
         });
     }
     let id = input_id
-        .filter(|id| claude_owner_input::valid_id(id))
-        .map(str::to_owned)
+        .map(claude_owner_input::input_id_for_command)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     let text = text.to_string();
     let outcome = tokio::task::spawn_blocking(move || {

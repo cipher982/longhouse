@@ -3155,7 +3155,12 @@ fn record_claude_owner_input_route(
 ) -> anyhow::Result<()> {
     let home = std::env::var_os("HOME").context("HOME is not set")?;
     let root = PathBuf::from(home).join(".claude/channels/longhouse");
-    claude_owner_input::write_route(&claude_owner_input::spool_dir(&root, session_id), route)?;
+    // The engine finds the queue by the canonical form of the session id.
+    let session = Uuid::parse_str(session_id).context("session id is not a UUID")?;
+    claude_owner_input::write_route(
+        &claude_owner_input::spool_dir(&root, &session.to_string()),
+        route,
+    )?;
     Ok(())
 }
 

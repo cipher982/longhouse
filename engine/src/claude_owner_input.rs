@@ -212,8 +212,12 @@ pub fn watcher_attached(dir: &Path) -> bool {
     let Ok(file) = File::open(dir.join(LOCK_FILE)) else {
         return false;
     };
-    // Taking the lock means nobody holds it; drop releases it again.
-    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) != 0 }
+    // Taking the lock means nobody holds it; drop releases it again. Only a
+    // lock someone holds counts: a filesystem that cannot lock is no mod.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return false;
+    }
+    io::Error::last_os_error().raw_os_error() == Some(libc::EWOULDBLOCK)
 }
 
 #[cfg(not(unix))]
@@ -252,6 +256,17 @@ fn item_file_name(id: &str) -> String {
     format!("{nanos:020}-{id}.json")
 }
 
+/// The queue id for a Runtime Host command id: the id itself when it is a
+/// plain token, otherwise a digest of it, so the same command always maps to the
+/// same input and a replay is recognised.
+pub fn input_id_for_command(command_id: &str) -> String {
+    if valid_id(command_id) {
+        return command_id.to_string();
+    }
+    use sha2::{Digest, Sha256};
+    format!("cmd-{:x}", Sha256::digest(command_id.as_bytes()))[..36].to_string()
+}
+
 /// Ids name files, so only a plain token is accepted.
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -277,7 +292,6 @@ pub fn enqueue(dir: &Path, item: &OwnerInputItem) -> io::Result<PathBuf> {
 }
 
 fn find_item(dir: &Path, sub: &str, id: &str) -> Option<PathBuf> {
-    let suffix = format!("-{id}.json");
     fs::read_dir(dir.join(sub))
         .ok()?
         .filter_map(Result::ok)
@@ -285,8 +299,16 @@ fn find_item(dir: &Path, sub: &str, id: &str) -> Option<PathBuf> {
         .find(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.ends_with(&suffix))
+                .and_then(item_file_id)
+                == Some(id)
         })
+}
+
+/// The id in `<20-digit seq>-<id>.json`, exactly.
+fn item_file_id(name: &str) -> Option<&str> {
+    let rest = name.strip_suffix(".json")?;
+    let (seq, id) = rest.split_once('-')?;
+    (seq.len() == 20 && seq.bytes().all(|byte| byte.is_ascii_digit())).then_some(id)
 }
 
 /// The mod takes an input before submitting it. Exactly one claim of a pending
@@ -885,6 +907,38 @@ mod tests {
         assert!(withdraw(&dir, "cmd-2", &second).unwrap());
         assert!(!claim(&dir, "cmd-2").unwrap());
         assert!(!withdraw(&dir, "cmd-2", &second).unwrap());
+    }
+
+    #[test]
+    fn a_command_id_maps_to_one_stable_input_id() {
+        let command = "managed-control:3f0e:session.send_text:req-1";
+        let id = input_id_for_command(command);
+        assert!(valid_id(&id));
+        assert_eq!(id, input_id_for_command(command));
+        assert_ne!(
+            id,
+            input_id_for_command("managed-control:3f0e:session.send_text:req-2")
+        );
+        assert_eq!(input_id_for_command("cmd-plain_1"), "cmd-plain_1");
+    }
+
+    /// An id that ends another id's name is a different input.
+    #[test]
+    fn inputs_are_found_by_their_exact_id() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = spool_dir(root.path(), "s1");
+        enqueue(
+            &dir,
+            &OwnerInputItem {
+                id: "a-x".into(),
+                kind: "send".into(),
+                text: Some("one".into()),
+                enqueued_at: "t".into(),
+            },
+        )
+        .unwrap();
+        assert!(!claim(&dir, "x").unwrap());
+        assert!(claim(&dir, "a-x").unwrap());
     }
 
     #[test]

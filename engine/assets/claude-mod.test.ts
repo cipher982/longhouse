@@ -7,7 +7,7 @@ type Hook = ($: unknown, e: Record<string, unknown>, next: (e: unknown) => Promi
 let loads = 0;
 
 /** A fresh copy of the module (its state is per copy, as in Claude Code) and a fake $. */
-async function loadMod(lines: string[], options: { claimExit?: number } = {}) {
+async function loadMod(lines: string[], options: { claimExit?: number; refuse?: string } = {}) {
   loads += 1;
   const { register } = await import(`./claude-mod/hooks/register.js?copy=${loads}`);
   const hooks = new Map<string, Hook>();
@@ -29,10 +29,12 @@ async function loadMod(lines: string[], options: { claimExit?: number } = {}) {
     },
     clock: {
       now: async () => Date.now(),
-      // Run the first timer (the watcher); a restart would only loop the fake stream.
-      after: (_ms: number, fn: () => Promise<void>) => {
+      // Run the watcher and the refusal window; a watcher restart would only
+      // replay the fake stream.
+      after: (ms: number, fn: () => Promise<void>) => {
         timers += 1;
         if (timers === 1) void fn();
+        else if (ms === 200) setTimeout(fn, 0);
         return { cancel: () => undefined };
       },
     },
@@ -53,6 +55,7 @@ async function loadMod(lines: string[], options: { claimExit?: number } = {}) {
     prompt: {
       submit: (args: { text: string; asUser: boolean }) => {
         submits.push(args);
+        if (options.refuse) return Promise.reject(new Error(options.refuse));
         return new Promise<void>((resolve) => {
           resolveTurn = resolve;
         });
@@ -69,7 +72,7 @@ async function loadMod(lines: string[], options: { claimExit?: number } = {}) {
     hooks.get(event)!($, e, async (passed) => passed);
   const settle = async () => {
     await streamDone;
-    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 20));
   };
   const acks = () =>
     runs
@@ -103,11 +106,23 @@ describe("Longhouse Claude mod", () => {
     expect(mod.submits).toEqual([{ text: "create proof.txt", asUser: true }]);
     await mod.fire("turn.start", { turnId: "turn-7", text: "create proof.txt" });
     mod.resolveTurn();
-    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(mod.acks()).toEqual([
       "claim --id cmd-1 --session session-1",
       "ack --id cmd-1 --state submitted --session session-1",
       "ack --id cmd-1 --state delivered --turn-id turn-7 --session session-1",
+    ]);
+  });
+
+  it("reports a submit Claude Code refused as failed, never as submitted", async () => {
+    const mod = await loadMod([line({ id: "cmd-1", kind: "send", text: "hello", state: "pending" })], {
+      refuse: "prompt.submit: the turn is held",
+    });
+    await mod.fire("session.start");
+    await mod.settle();
+    expect(mod.acks()).toEqual([
+      "claim --id cmd-1 --session session-1",
+      "ack --id cmd-1 --state failed --detail Error: prompt.submit: the turn is held --session session-1",
     ]);
   });
 

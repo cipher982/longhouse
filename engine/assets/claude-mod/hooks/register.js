@@ -15,6 +15,9 @@
 const RESTART_DELAY_MS = 1000
 const MAX_QUICK_RESTARTS = 5
 const QUICK_RUN_MS = 10000
+// How long a refused submit takes to say so; a queued one resolves only when
+// its turn starts.
+const REFUSAL_WINDOW_MS = 200
 
 let engine
 let sessionId
@@ -65,12 +68,26 @@ async function send($, input) {
     await ack($, input.id, 'failed', { detail: String(error) })
     return
   }
-  await ack($, input.id, 'submitted')
   // Resolves when the turn it opens starts: now when idle, after the running
-  // turn otherwise.
-  started.then(
-    () => ack($, input.id, 'delivered', { turnId }),
-    (error) => ack($, input.id, 'failed', { detail: String(error) }),
+  // turn otherwise. A refusal rejects at once, so it is awaited briefly before
+  // the input is reported submitted, and its outcome is recorded after that.
+  let refused
+  const outcome = started.then(
+    () => undefined,
+    (error) => {
+      refused = error
+    },
+  )
+  await Promise.race([outcome, new Promise((resolve) => $.clock.after(REFUSAL_WINDOW_MS, resolve))])
+  if (refused !== undefined) {
+    await ack($, input.id, 'failed', { detail: String(refused) })
+    return
+  }
+  await ack($, input.id, 'submitted')
+  outcome.then(() =>
+    refused === undefined
+      ? ack($, input.id, 'delivered', { turnId })
+      : ack($, input.id, 'failed', { detail: String(refused) }),
   )
 }
 
