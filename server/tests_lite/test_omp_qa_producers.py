@@ -16,7 +16,6 @@ from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.omp_console_producer import _PROFILE as CONSOLE_PROFILE
 from zerg.qa.omp_console_producer import _VARIANT as CONSOLE_VARIANT
 from zerg.qa.omp_console_producer import ASSERTION_ID as CONSOLE_ASSERTION
-from zerg.qa.omp_console_producer import _is_terminal_agent_end
 from zerg.qa.omp_console_producer import _native_settlement as omp_console_settlement
 from zerg.qa.omp_console_producer import omp_console_assertions
 from zerg.qa.omp_console_producer import omp_native_model_evidence
@@ -52,6 +51,7 @@ from zerg.qa.omp_helm_lifecycle import _wait_runtime_control_identity
 from zerg.qa.omp_helm_lifecycle import _wait_served_run_retirement
 from zerg.qa.omp_helm_lifecycle import omp_helm_lifecycle_assertions
 from zerg.qa.provider_console_lifecycle import _omp_continuation_prompt
+from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 
 def _identity_receipt(
@@ -174,7 +174,7 @@ def test_qualification_isolation_root_keeps_unique_tmp_behavior_outside_sandbox(
     ),
 )
 def test_omp_agent_end_lifecycle_fields_are_strict(event: dict[str, object], expected: bool) -> None:
-    assert _is_terminal_agent_end(event) is expected
+    assert omp_agent_end_is_terminal(event) is expected
 
 
 def test_omp_helm_channel_terminal_evidence_preserves_lifecycle_field_presence(monkeypatch, tmp_path) -> None:
@@ -205,7 +205,7 @@ def test_omp_helm_channel_terminal_evidence_preserves_lifecycle_field_presence(m
     )
 
     assert event == {"type": "agent_end", "source": "omp_helm_extension_channel"}
-    assert _is_terminal_agent_end(event) is True
+    assert omp_agent_end_is_terminal(event) is True
 
     state.update(
         {

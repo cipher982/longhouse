@@ -1221,10 +1221,6 @@ def _wait_native_marker(
     )
 
 
-def _is_terminal_agent_end(event: Mapping[str, Any]) -> bool:
-    return omp_agent_end_is_terminal(event)
-
-
 def _native_marker_evidence(
     row: Mapping[str, Any],
     session_file: Path,
@@ -1269,7 +1265,7 @@ def _native_terminal_evidence(
     native_session_id: str,
 ) -> dict[str, Any]:
     offset = row.get("_source_offset")
-    terminal = row.get("type") == "agent_end" and _is_terminal_agent_end(row)
+    terminal = row.get("type") == "agent_end" and omp_agent_end_is_terminal(row)
     return {
         "native_source_bound": session_file.is_file() and terminal and isinstance(offset, int) and offset >= minimum_offset,
         "source_path": str(session_file),
@@ -1288,7 +1284,7 @@ def _channel_terminal_evidence(
     native_session_id: str,
     session_file: Path,
 ) -> dict[str, Any]:
-    terminal = event.get("type") == "agent_end" and _is_terminal_agent_end(event)
+    terminal = event.get("type") == "agent_end" and omp_agent_end_is_terminal(event)
     evidence = {
         "channel_source_bound": (
             terminal

@@ -889,10 +889,6 @@ def _stream_events(provider: str, content: str) -> list[tuple[str, str]]:
     return read
 
 
-def _assistant_output_texts(provider: str, content: str) -> list[str]:
-    return [text for kind, text in _stream_events(provider, content) if kind == "assistant"]
-
-
 def _claim_output_evidence(provider: str, claim: Mapping[str, object], marker: str) -> dict[str, object] | None:
     candidates: list[dict[str, object]] = []
     for key in ("stdout_path", "source_path"):
@@ -903,7 +899,7 @@ def _claim_output_evidence(provider: str, claim: Mapping[str, object], marker: s
             content = Path(raw).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        assistant_output = "\n".join(_assistant_output_texts(provider, content))
+        assistant_output = "\n".join(text for kind, text in _stream_events(provider, content) if kind == "assistant")
         candidates.append(
             {
                 "provider_response_source_kind": key,
@@ -1931,20 +1927,9 @@ def _retained_post_interrupt_output_evidence(
         terminal_indices: list[int] = []
         for index, event in enumerate(events):
             found = _stream_event(provider, event)
-            output_text = found[1] if found is not None and found[0] == "assistant" else ""
-            if marker in output_text:
-                output_messages.append({"id": index, "text": output_text})
-            if event.get("type") == "agent_end":
-                is_terminal = (
-                    omp_agent_end_is_terminal(event)
-                    if provider == "omp"
-                    else event.get("isTerminal")
-                    if isinstance(event.get("isTerminal"), bool)
-                    else event.get("willContinue") is False
-                )
-            else:
-                is_terminal = False
-            if is_terminal is True:
+            if found is not None and found[0] == "assistant" and marker in found[1]:
+                output_messages.append({"id": index, "text": found[1]})
+            elif found == ("end", ""):
                 terminal_indices.append(index)
         reply = _one_marker_reply(output_messages, marker, surface="provider output message")
         # The reply must say the marker once; a reply that repeats it is not one.

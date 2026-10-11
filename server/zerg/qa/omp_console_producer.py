@@ -325,10 +325,6 @@ def _exact_session_retirement(receipt: Mapping[str, Any] | None, session_id: str
     )
 
 
-def _is_terminal_agent_end(event: Mapping[str, Any]) -> bool:
-    return omp_agent_end_is_terminal(event)
-
-
 def _parse_native_events(source_bytes: bytes) -> tuple[list[Mapping[str, Any]], bool]:
     events: list[Mapping[str, Any]] = []
     malformed = False
@@ -528,7 +524,7 @@ def _native_settlement(root: Path) -> dict[str, object]:
 
         if kind == response_source_kind and raw_source == response_source_path:
             provider_response_source_bound = True
-            terminal_events = [event for event in events if event.get("type") == "agent_end" and _is_terminal_agent_end(event)]
+            terminal_events = [event for event in events if event.get("type") == "agent_end" and omp_agent_end_is_terminal(event)]
             provider_response_terminal = provider_response_terminal or bool(terminal_events)
             provider_response_terminal_shape = provider_response_terminal_shape or any(
                 event.get("type") == "agent_end"
