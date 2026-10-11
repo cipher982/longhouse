@@ -2381,33 +2381,74 @@ def _cursor_sqlite_observation(path: Path, *, marker: str) -> dict[str, Any]:
             for table in ("meta", "blobs"):
                 if table in tables:
                     table_counts[table] = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            root_meta = connection.execute("SELECT value FROM meta WHERE key = '0'").fetchone() if "meta" in tables else None
         finally:
             connection.close()
     except sqlite3.Error as exc:
         return {"kind": "store_db", **observation, "sqlite_error": f"{type(exc).__name__}: {exc}"}
-    return {"kind": "store_db", **observation, "sqlite_tables": sorted(tables), "sqlite_counts": table_counts}
+    return {
+        "kind": "store_db",
+        **observation,
+        "sqlite_tables": sorted(tables),
+        "sqlite_counts": table_counts,
+        # The root Cursor's conversation stands at: an id, never content.
+        "latest_root_blob_id": _cursor_latest_root_blob_id(root_meta[0] if root_meta else None),
+    }
+
+
+def _cursor_latest_root_blob_id(meta_value: object) -> str | None:
+    """Cursor's ``latestRootBlobId`` from its store's ``meta['0']``, as the engine reads it (hex-encoded JSON)."""
+
+    try:
+        text = meta_value.decode("utf-8") if isinstance(meta_value, bytes) else str(meta_value or "")
+        try:
+            metadata = json.loads(bytes.fromhex(text.strip()))
+        except ValueError:
+            metadata = json.loads(text)
+    except (UnicodeDecodeError, ValueError):
+        return None
+    value = metadata.get("latestRootBlobId") if isinstance(metadata, dict) else None
+    return value if isinstance(value, str) and value else None
 
 
 def cursor_turn_delivery(snapshot: Mapping[str, Any]) -> dict[str, Any]:
-    """Whether the engine captured and shipped the records of one Cursor turn, from a projection snapshot.
+    """Whether the engine captured and shipped one Cursor turn, from a projection snapshot.
 
     Delivery is counted over the turn, whoever shipped: the engine's daemon
     ships a record as soon as it sees it and a proof's one-shot flush ships
     whatever is left, so "this flush shipped events" says which of the two got
     there first and nothing about whether the turn was delivered.
 
-    The snapshot (`_cursor_projection_diagnostics`) holds Cursor's own
-    transcript files with how often each names the turn's marker, and the
-    engine's source epochs with how far each has been shipped. The turn is
-    delivered when a transcript of Cursor's names the marker at least twice
-    (the prompt and the reply), the engine's open source epoch bound to this
-    session has shipped its durable lane to the end of that transcript, and no
-    envelope of the session's epochs is waiting to be sent. ``known`` is
-    False when the snapshot could not be taken or does not hold the engine's
-    rows; then nothing is said either way.
+    Cursor keeps a conversation in two places and the engine ships both, each
+    as a source epoch with its own measure. Every comparison here is between
+    two quantities of the same kind, as the engine itself sets them.
+
+    The store (``store.db``) is what the transcript is rendered from
+    (``engine/src/cursor_visibility.rs``: "store.db is the render authority").
+    Its epoch is ``cursor-store-v1:<conversation>`` and its positions count
+    records (``cursor_store_source.rs``: ``range_end`` is the last record's
+    position plus one). The engine has what it needs to render the store as it
+    stands when the root it has recorded is the store's latest root: it
+    records a root "only after every reference needed to render this
+    transition is durable". It has shipped that when the epoch's durable
+    position has reached the number of records captured.
+
+    The agent transcript (``agent-transcripts/<id>.jsonl``) is Cursor's lossy
+    projection of the same conversation, shipped as a raw archive. Its epoch
+    is ``path-sha256:<sha256 of the path>`` and its positions are bytes of
+    the file (``storage_v2_shipper``: ``range_end`` is the byte length read;
+    the engine's durability audit compares the lane cursor with the file's
+    length). It is where this proof can see that Cursor wrote the reply: the
+    file names the turn's marker at least twice, the prompt and the reply.
+
+    The turn is delivered when all of that holds and no envelope of the
+    session's epochs is waiting to be sent. ``known`` is False when the
+    snapshot does not hold what the judgement needs (it could not be taken, or
+    it predates the store's root being recorded); then nothing is said either
+    way.
     """
 
-    files = snapshot.get("files") if isinstance(snapshot.get("files"), list) else []
+    files = [item for item in snapshot.get("files") or [] if isinstance(item, Mapping)]
     engine = snapshot.get("engine_db") if isinstance(snapshot.get("engine_db"), Mapping) else {}
     tables = engine.get("table_rows") if isinstance(engine.get("table_rows"), Mapping) else {}
 
@@ -2416,36 +2457,64 @@ def cursor_turn_delivery(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         return [row for row in value if isinstance(row, Mapping)] if isinstance(value, list) else []
 
     session_id = snapshot.get("session_id")
-    registry = [row for row in rows("source_epoch_registry") if session_id and row.get("bound_session_id") == session_id]
-    epochs = {row.get("source_epoch") for row in registry}
-    live = {row.get("source_epoch") for row in registry if not row.get("ended_at")}
-    shipped = [
-        row["last_position"]
+    conversation = str(snapshot.get("provider_session_id") or "")
+    bound = [row for row in rows("source_epoch_registry") if session_id and row.get("bound_session_id") == session_id]
+    shipped = {
+        row.get("source_epoch"): row["last_position"]
         for row in rows("source_epoch_lane_state")
-        if row.get("source_epoch") in live and row.get("lane") == "durable" and type(row.get("last_position")) is int
-    ]
-    sizes = [
-        item["size"]
+        if row.get("lane") == "durable" and type(row.get("last_position")) is int
+    }
+
+    def open_epoch(source_id: str) -> Mapping[str, Any] | None:
+        return next((row for row in bound if row.get("opaque_source_id") == source_id and not row.get("ended_at")), None)
+
+    # The projection, in bytes.
+    transcripts = [
+        item
         for item in files
-        if isinstance(item, Mapping)
-        and item.get("kind") == "agent_transcript"
+        if item.get("kind") == "agent_transcript"
+        and isinstance(item.get("path"), str)
         and type(item.get("size")) is int
         and type(item.get("marker_count")) is int
-        and item["marker_count"] >= 2
     ]
-    known = "source_epoch_registry" in tables and "source_epoch_lane_state" in tables
-    source_bytes = max(sizes, default=None)
-    shipped_through = max(shipped, default=None)
-    pending = sum(1 for row in rows("pending_source_envelope") if row.get("source_epoch") in epochs)
+    transcript = max(transcripts, key=lambda item: item["marker_count"], default=None)
+    projection = open_epoch("path-sha256:" + hashlib.sha256(transcript["path"].encode("utf-8")).hexdigest()) if transcript else None
+    projection_bytes = transcript["size"] if transcript else None
+    projection_shipped_bytes = shipped.get(projection.get("source_epoch")) if projection else None
+
+    # The store, in records, and the root it stands at.
+    store = open_epoch(f"cursor-store-v1:{conversation}") if conversation else None
+    captured_records = store.get("max_observed_len") if store and type(store.get("max_observed_len")) is int else None
+    shipped_records = shipped.get(store.get("source_epoch")) if store else None
+    store_roots = [item.get("latest_root_blob_id") for item in files if item.get("kind") == "store_db"]
+    store_root = next((value for value in store_roots if isinstance(value, str) and value), None)
+    engine_root = next(
+        (row.get("root_blob_id") for row in rows("cursor_store_root_state") if row.get("conversation_uuid") == conversation),
+        None,
+    )
+
+    pending = sum(1 for row in rows("pending_source_envelope") if row.get("source_epoch") in {row.get("source_epoch") for row in bound})
+    known = (
+        all(table in tables for table in ("source_epoch_registry", "source_epoch_lane_state", "cursor_store_root_state"))
+        and store_root is not None
+        and transcript is not None
+    )
+    reply_written = bool(transcript) and transcript["marker_count"] >= 2
+    store_root_captured = store_root is not None and engine_root == store_root
+    store_shipped = captured_records is not None and shipped_records is not None and shipped_records >= captured_records
+    projection_shipped = (
+        projection_bytes is not None and projection_shipped_bytes is not None and projection_shipped_bytes >= projection_bytes
+    )
     return {
         "known": known,
-        "source_holds_prompt_and_reply": bool(sizes),
-        "source_bytes": source_bytes,
-        "shipped_through": shipped_through,
+        "source_holds_prompt_and_reply": reply_written,
+        "store_root_captured": store_root_captured,
+        "store_captured_records": captured_records,
+        "store_shipped_records": shipped_records,
+        "projection_bytes": projection_bytes,
+        "projection_shipped_bytes": projection_shipped_bytes,
         "pending_envelopes": pending,
-        "delivered": bool(
-            known and source_bytes is not None and shipped_through is not None and shipped_through >= source_bytes and pending == 0
-        ),
+        "delivered": bool(known and reply_written and store_root_captured and store_shipped and projection_shipped and pending == 0),
     }
 
 
@@ -2475,6 +2544,7 @@ def _cursor_engine_db_observation(path: Path) -> dict[str, Any]:
                 "pending_source_envelope",
                 "cursor_store_raw_record",
                 "cursor_store_capture_cursor",
+                "cursor_store_root_state",
             ):
                 if table in tables:
                     try:
@@ -2519,6 +2589,8 @@ def _cursor_engine_db_observation(path: Path) -> dict[str, Any]:
                 ),
                 "cursor_store_raw_record": ("source_epoch", "source_position", "record_hash"),
                 "cursor_store_capture_cursor": ("source_epoch", "last_blob_id", "updated_at"),
+                # Ids only: the ordered message ids the engine also keeps are not copied.
+                "cursor_store_root_state": ("conversation_uuid", "root_blob_id", "updated_at"),
             }
             for table, requested_columns in row_specs.items():
                 if table not in tables:
@@ -2654,7 +2726,7 @@ def _cursor_projection_diagnostics(
                 observation["kind"] = "agent_transcript"
                 files.append(observation)
     return {
-        "schema": "cursor_projection_diagnostics.v2",
+        "schema": "cursor_projection_diagnostics.v3",
         "phase": phase,
         "captured_at": now(),
         "provider": "cursor",

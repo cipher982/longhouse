@@ -122,7 +122,7 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
         assert registration.executable is True
         assert registration.executable_module == SPECS[provider].executable_module
         assert registration.producer_revision == (6 if provider == "cursor" else 5 if provider == "opencode" else 4)
-        assert registration.scenario_revision == {"cursor": 9, "opencode": 6}.get(provider, 5)
+        assert registration.scenario_revision == {"cursor": 10, "opencode": 6}.get(provider, 5)
         assert {
             "transcript_shipper_receipt",
             "initial_seed_send",
@@ -1374,7 +1374,7 @@ def test_cursor_projection_diagnostics_capture_marker_and_binding_state(tmp_path
         phase="post-resume-before-flush",
     )
 
-    assert payload["schema"] == "cursor_projection_diagnostics.v2"
+    assert payload["schema"] == "cursor_projection_diagnostics.v3"
     assert payload["managed_state"][0]["fields"]["conversation_uuid"] == "conversation-1"
     assert payload["engine_db"]["present"] is False
     assert len(payload["files"]) == 1
@@ -1894,32 +1894,63 @@ def test_cursor_bootstrap_is_proven_by_the_hosted_transcript_and_never_by_the_ho
     assert (result["method"], result["hook_response_correlated"]) == ("unverified", True)
 
 
-def _delivery_snapshot(
-    *, shipped_through: int = 899, source_bytes: int = 899, marker_count: int = 2, pending: int = 0, session_id: str = "s1"
-) -> dict[str, object]:
-    """A projection snapshot: Cursor's transcript beside the engine's epochs for one session."""
+_TRANSCRIPT_PATH = "/home/.cursor/projects/workspace/agent-transcripts/conversation-1/conversation-1.jsonl"
 
+
+def _delivery_snapshot(
+    *,
+    transcript_bytes: int = 899,
+    transcript_shipped: int = 899,
+    marker_count: int = 2,
+    store_root: str | None = "root-2",
+    engine_root: str | None = "root-2",
+    records_captured: int = 34,
+    records_shipped: int = 34,
+    pending: int = 0,
+    session_id: str = "s1",
+) -> dict[str, object]:
+    """A projection snapshot: Cursor's two records of one conversation beside the engine's epochs for them.
+
+    The store epoch counts records and the transcript epoch counts bytes, as
+    the engine sets them; the defaults are a turn delivered in full.
+    """
+
+    transcript_epoch = "path-sha256:" + hashlib.sha256(_TRANSCRIPT_PATH.encode()).hexdigest()
     return {
-        "schema": "cursor_projection_diagnostics.v2",
+        "schema": "cursor_projection_diagnostics.v3",
         "session_id": "s1",
+        "provider_session_id": "conversation-1",
         "files": [
-            {"kind": "agent_transcript", "size": source_bytes, "marker_count": marker_count},
-            {"kind": "store_db", "size": 61440, "marker_count": 0},
+            {"kind": "agent_transcript", "path": _TRANSCRIPT_PATH, "size": transcript_bytes, "marker_count": marker_count},
+            {"kind": "store_db", "path": "/home/.cursor/chats/x/store.db", "size": 61440, "latest_root_blob_id": store_root},
         ],
         "engine_db": {
             "present": True,
             "table_rows": {
                 "source_epoch_registry": [
-                    {"source_epoch": "live", "bound_session_id": session_id, "ended_at": None},
-                    {"source_epoch": "ended", "bound_session_id": session_id, "ended_at": "2026-01-01T00:00:00+00:00"},
-                    {"source_epoch": "other", "bound_session_id": "another-session", "ended_at": None},
+                    {"source_epoch": "t-live", "opaque_source_id": transcript_epoch, "bound_session_id": session_id},
+                    {
+                        "source_epoch": "t-ended",
+                        "opaque_source_id": transcript_epoch,
+                        "bound_session_id": session_id,
+                        "ended_at": "2026-01-01T00:00:00+00:00",
+                    },
+                    {
+                        "source_epoch": "store",
+                        "opaque_source_id": "cursor-store-v1:conversation-1",
+                        "bound_session_id": session_id,
+                        "max_observed_len": records_captured,
+                    },
+                    {"source_epoch": "other", "opaque_source_id": "path-sha256:feed", "bound_session_id": "another-session"},
                 ],
                 "source_epoch_lane_state": [
-                    {"source_epoch": "live", "lane": "durable", "last_position": shipped_through},
-                    {"source_epoch": "ended", "lane": "durable", "last_position": 400},
+                    {"source_epoch": "t-live", "lane": "durable", "last_position": transcript_shipped},
+                    {"source_epoch": "t-ended", "lane": "durable", "last_position": 400},
+                    {"source_epoch": "store", "lane": "durable", "last_position": records_shipped},
                     {"source_epoch": "other", "lane": "durable", "last_position": 9000},
                 ],
-                "pending_source_envelope": [{"source_epoch": "live", "envelope_id": f"e{n}"} for n in range(pending)],
+                "pending_source_envelope": [{"source_epoch": "store", "envelope_id": f"e{n}"} for n in range(pending)],
+                "cursor_store_root_state": ([{"conversation_uuid": "conversation-1", "root_blob_id": engine_root}] if engine_root else []),
             },
         },
     }
@@ -1928,26 +1959,97 @@ def _delivery_snapshot(
 def test_cursor_turn_delivery_is_counted_over_the_turn_whoever_shipped() -> None:
     delivery = live_session_toolkit.cursor_turn_delivery
 
-    # The engine shipped through the end of the transcript that holds prompt and reply.
+    # The engine recorded the store's latest root, shipped every record it captured
+    # and the whole of the transcript that holds prompt and reply.
     assert delivery(_delivery_snapshot()) == {
         "known": True,
         "source_holds_prompt_and_reply": True,
-        "source_bytes": 899,
-        "shipped_through": 899,
+        "store_root_captured": True,
+        "store_captured_records": 34,
+        "store_shipped_records": 34,
+        "projection_bytes": 899,
+        "projection_shipped_bytes": 899,
         "pending_envelopes": 0,
         "delivered": True,
     }
-    # The reply is not shipped yet: the engine is behind, or an envelope is still waiting.
-    assert delivery(_delivery_snapshot(shipped_through=757))["delivered"] is False
+    # The engine has not read the store as it stands: what the transcript is rendered from is not captured.
+    behind_store = delivery(_delivery_snapshot(engine_root="root-1"))
+    assert (behind_store["known"], behind_store["store_root_captured"], behind_store["delivered"]) == (True, False, False)
+    assert delivery(_delivery_snapshot(engine_root=None))["delivered"] is False
+    # Captured and not all shipped, in records; or an envelope still waiting.
+    assert delivery(_delivery_snapshot(records_shipped=33))["delivered"] is False
     assert delivery(_delivery_snapshot(pending=1))["delivered"] is False
+    # The raw transcript is behind, in bytes.
+    assert delivery(_delivery_snapshot(transcript_shipped=757))["delivered"] is False
     # Cursor's transcript holds only the prompt: there is no reply to have shipped.
-    behind = delivery(_delivery_snapshot(marker_count=1))
-    assert (behind["source_holds_prompt_and_reply"], behind["delivered"]) == (False, False)
-    # Another session's epoch is not this turn's delivery, however far it got.
+    no_reply = delivery(_delivery_snapshot(marker_count=1))
+    assert (no_reply["source_holds_prompt_and_reply"], no_reply["delivered"]) == (False, False)
+    # Another session's epochs are not this turn's delivery, however far they got.
     assert delivery(_delivery_snapshot(session_id="another-session"))["delivered"] is False
-    # A snapshot that could not be taken says nothing either way.
+
+
+def test_cursor_turn_delivery_never_compares_records_with_bytes() -> None:
+    """The store's epoch counts records and the transcript's counts bytes; each is held to its own kind."""
+
+    delivery = live_session_toolkit.cursor_turn_delivery
+
+    # A store position far past the transcript's size says nothing about the transcript.
+    lagging_transcript = delivery(_delivery_snapshot(records_captured=5000, records_shipped=5000, transcript_shipped=180))
+    assert lagging_transcript["delivered"] is False
+    assert (lagging_transcript["store_shipped_records"], lagging_transcript["projection_shipped_bytes"]) == (5000, 180)
+    # And a transcript shipped in full says nothing about records the store epoch has not shipped.
+    lagging_store = delivery(_delivery_snapshot(records_captured=40, records_shipped=34))
+    assert lagging_store["delivered"] is False
+
+    # A snapshot that does not hold what the judgement needs says nothing either way:
+    # one that could not be taken, and one from before the store's root was recorded.
     unavailable = delivery({"schema": "cursor_projection_diagnostics_unavailable.v1", "status": "unavailable"})
     assert (unavailable["known"], unavailable["delivered"]) == (False, False)
+    older = _delivery_snapshot(store_root=None)
+    del older["engine_db"]["table_rows"]["cursor_store_root_state"]
+    assert (delivery(older)["known"], delivery(older)["delivered"]) == (False, False)
+    assert delivery(_delivery_snapshot(store_root=None))["known"] is False
+
+
+def test_the_projection_snapshot_records_the_roots_delivery_is_judged_by(tmp_path: Path) -> None:
+    """Cursor's latest root from its own store, and the root the engine has recorded: ids, never content."""
+
+    home = tmp_path / "home"
+    store = home / ".cursor" / "chats" / "workspace" / "conversation-1" / "store.db"
+    store.parent.mkdir(parents=True)
+    metadata = json.dumps({"agentId": "conversation-1", "latestRootBlobId": "root-2"}).encode().hex()
+    with sqlite3.connect(store) as connection:
+        connection.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        connection.execute("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)")
+        connection.execute("INSERT INTO meta VALUES ('0', ?)", (metadata,))
+    engine_db = tmp_path / "engine.db"
+    with sqlite3.connect(engine_db) as connection:
+        connection.execute(
+            "CREATE TABLE cursor_store_root_state "
+            "(conversation_uuid TEXT PRIMARY KEY, root_blob_id TEXT, message_blob_ids_json TEXT, updated_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cursor_store_root_state VALUES ('conversation-1', 'root-2', '[\"secret-id\"]', '2026-01-01T00:00:00+00:00')"
+        )
+
+    payload = live_session_toolkit._cursor_projection_diagnostics(
+        environment={"HOME": str(home), "CURSOR_HOME": str(home / ".cursor"), "LONGHOUSE_HOME": str(home / ".longhouse")},
+        state={"session_id": "session-1", "provider_session_id": "conversation-1"},
+        marker="LH_CURSOR_POST_test",
+        engine_db_path=engine_db,
+        phase="resume-bootstrap-at-timeout",
+    )
+
+    assert payload["schema"] == "cursor_projection_diagnostics.v3"
+    (observed,) = [item for item in payload["files"] if item["kind"] == "store_db"]
+    assert observed["latest_root_blob_id"] == "root-2"
+    assert payload["engine_db"]["table_rows"]["cursor_store_root_state"] == [
+        {"conversation_uuid": "conversation-1", "root_blob_id": "root-2", "updated_at": "2026-01-01T00:00:00+00:00"}
+    ]
+    # A value that is not the hex JSON Cursor writes yields no root, not an error.
+    assert live_session_toolkit._cursor_latest_root_blob_id("not hex") is None
+    assert live_session_toolkit._cursor_latest_root_blob_id(None) is None
+    assert live_session_toolkit._cursor_latest_root_blob_id(metadata.encode()) == "root-2"
 
 
 def test_codex_resume_intent_uses_the_actual_isolated_workspace(tmp_path: Path) -> None:

@@ -95,7 +95,7 @@ def registration_for(provider: str) -> ProducerRegistration:
         producer_id=spec.producer_id,
         producer_revision=6 if provider == "cursor" else 5 if provider == "opencode" else 4,
         scenario_id="helm_cold_resume",
-        scenario_revision={"cursor": 9, "opencode": 6}.get(provider, 5),
+        scenario_revision={"cursor": 10, "opencode": 6}.get(provider, 5),
         assertion_cells=(
             ("native_provider_resume_proven", "clean_exit"),
             ("native_provider_resume_proven", "process_loss"),
@@ -546,19 +546,21 @@ def _uncorrelated(
 
     That snapshot says whether the engine delivered the turn
     (`live_session_toolkit.cursor_turn_delivery`), and with Cursor's hooks it
-    settles which fault this is. Cursor answered and the engine shipped the
-    turn's records: the hosted transcript is what failed, and the failure
-    opens with ``HOSTED_TRANSCRIPT_MISSING_SHIPPED_REPLY``. Cursor answered
-    and the engine had not shipped them: the engine is what was awaited.
-    Either way the delivery, and the named observation when it holds, are
-    written to the step's ``correlation`` receipt.
+    settles which fault this is. Cursor answered and the engine captured and
+    shipped the turn: the hosted transcript is what failed, and the failure
+    opens with ``HOSTED_TRANSCRIPT_MISSING_SHIPPED_REPLY``. Cursor's records
+    hold the reply and the engine had not captured or shipped all of it: the
+    engine is what was awaited. A snapshot that cannot say, or records of
+    Cursor's that do not show the reply, change nothing. Either way the
+    delivery, and the named observation when it holds, are written to the
+    step's ``correlation`` receipt.
     """
 
     kind = _hosted_correlation_waited_on(spec, state, marker=marker, home=home, environment=environment)
     gap: dict[str, Any] | None = None
     if spec.provider == "cursor" and shipper is not None and label:
         delivery = shipper.cursor_turn_delivery(dict(state), marker=marker, label=f"{label}-at-timeout")
-        if kind == LONGHOUSE_INGEST and delivery["known"]:
+        if kind == LONGHOUSE_INGEST and delivery["known"] and delivery["source_holds_prompt_and_reply"]:
             if delivery["delivered"]:
                 gap = {
                     "reason": HOSTED_TRANSCRIPT_MISSING_SHIPPED_REPLY,
@@ -566,6 +568,8 @@ def _uncorrelated(
                     "engine_delivery": delivery,
                 }
             else:
+                # Cursor's own records hold the reply and the engine has not
+                # captured or shipped all of it.
                 kind = LONGHOUSE_ENGINE
         if correlation is not None:
             correlation["engine_delivery"] = delivery
@@ -573,10 +577,12 @@ def _uncorrelated(
             if receipt is not None:
                 live_session_toolkit._write_best_effort_json(receipt, correlation)
     if gap is not None:
+        delivery = gap["engine_delivery"]
         message = (
-            f"{HOSTED_TRANSCRIPT_MISSING_SHIPPED_REPLY}: {message}: Cursor answered and the engine shipped the turn's records "
-            f"(through byte {gap['engine_delivery']['shipped_through']} of {gap['engine_delivery']['source_bytes']}, nothing pending), "
-            "and the hosted transcript did not show the reply"
+            f"{HOSTED_TRANSCRIPT_MISSING_SHIPPED_REPLY}: {message}: Cursor answered and the engine shipped the turn "
+            f"(the store's latest root captured, {delivery['store_shipped_records']} of {delivery['store_captured_records']} "
+            f"store records and {delivery['projection_shipped_bytes']} of {delivery['projection_bytes']} transcript bytes "
+            "shipped, nothing pending), and the hosted transcript did not show the reply"
         )
     error = RuntimeError(message)
     return expired(error, kind) if kind else error
@@ -720,11 +726,14 @@ def _cursor_bootstrap_correlation(
     beside it, but a reply the hosted transcript never showed is not proven
     by the hook. It used to be: a bootstrap whose hook passed was admitted
     when the one flush after it had shipped at least one event. Whether that
-    flush or the engine's daemon shipped the turn's records is chance (the
-    engine had delivered them in all 40 retained runs where the hosted
-    transcript lacked the reply, and the flush had shipped events in 21), so
-    the same fault passed in one run and failed in the next. It is now one
-    result, named by `_uncorrelated`.
+    flush or the engine's daemon shipped the turn's records is chance: in all
+    40 retained runs where the hosted transcript lacked the reply the engine
+    had shipped every record it had captured and the whole raw transcript,
+    with nothing pending, and the flush had shipped events in 21 of them. So
+    the same condition passed in one run and failed in the next. Those
+    snapshots do not say whether the engine had captured the store's latest
+    root, which is what tells a hosted fault from an engine one; the snapshot
+    records it now, and `_uncorrelated` names the result from it.
     """
 
     transcript_projection_correlated = bool(
