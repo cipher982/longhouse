@@ -1,11 +1,15 @@
 """Open a provider's SQLite store for reading, without writing to it.
 
 Cursor's ``store.db`` and OpenCode's ``opencode.db`` are the providers' own
-files. Every Python reader of them opens them here, so there is one answer to
-how such a store is opened.
+files. Every QA producer and oracle that reads one opens it here, so the
+verifier has one answer to how such a store is opened.
 
-This module imports only the standard library: ``scripts/qa/transcript_census.py``
-loads it by path, outside the ``zerg`` package.
+The verifier does not import the code it judges, so the product's one reader
+of a provider store, ``zerg.services.cursor_transcript``, keeps its own
+opener; ``tests_lite/test_provider_sqlite.py`` holds the two to the same
+behaviour. This module imports only the standard library:
+``scripts/qa/transcript_census.py`` loads it by path, outside the ``zerg``
+package.
 """
 
 from __future__ import annotations
