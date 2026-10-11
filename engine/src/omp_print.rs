@@ -1600,6 +1600,7 @@ async fn monitor_omp_print(
     let mut prompt_written_at = Instant::now();
     let mut last_trigger = json!({"kind": "unknown", "task_ids": [], "summary": ""});
     let mut deferred_updates = Vec::<(PendingItem, bool)>::new();
+    let mut closing_idle = None;
 
     loop {
         if invocation.state() == InvocationState::Closed {
@@ -1611,6 +1612,13 @@ async fn monitor_omp_print(
                     process_group_id = invocation.process_identity().1,
                     "OMP Console process group survived lifecycle close"
                 );
+            }
+            // The turn that closed the invocation is reported only now, with
+            // its provider stopped. A Machine Agent that stops right after a
+            // terminal then leaves no provider holding the session, and one
+            // that stops before it finds a spawned claim at its next start.
+            if let Some(outcome) = closing_idle.take() {
+                complete_idle(&invocation, &sink, outcome).await;
             }
             settle_omp_invocation_turns(
                 &invocation,
@@ -1838,12 +1846,18 @@ async fn monitor_omp_print(
                     source_drained,
                 );
                 let stderr = reason.or_else(|| stderr_tail(stderr_path));
-                if let Some(outcome) = invocation.idle(IdleSignal {
+                match invocation.idle(IdleSignal {
                     terminal_state: terminal_state.to_string(),
                     exit_code: None,
                     stderr,
                 }) {
-                    complete_idle(&invocation, &sink, outcome).await;
+                    Some(outcome) if outcome.invocation_state == InvocationState::Closed => {
+                        closing_idle = Some(outcome)
+                    }
+                    Some(outcome) => {
+                        complete_idle(&invocation, &sink, outcome).await;
+                    }
+                    None => {}
                 }
                 if invocation.state() == InvocationState::Closed {
                     break;
@@ -3384,11 +3398,13 @@ async fn cleanup_live_claim(run_id: &str) -> bool {
         && !crate::process_group::running_member_off_runtime(pgid).await
 }
 async fn cleanup_owned_child(child: &mut Child, run_id: &str) -> bool {
-    let _ = cleanup_live_claim(run_id).await;
-    let reaped = tokio::time::timeout(Duration::from_secs(2), child.wait())
-        .await
-        .is_ok_and(|result| result.is_ok());
-    if !reaped {
+    // Reap while the group is stopped: until its leader is reaped the group
+    // still reads as present, and the stop would wait out its own zombie.
+    let (_, reaped) = tokio::join!(
+        cleanup_live_claim(run_id),
+        tokio::time::timeout(Duration::from_secs(2), child.wait())
+    );
+    if !reaped.is_ok_and(|result| result.is_ok()) {
         let _ = child.kill().await;
         let _ = child.wait().await;
     }
@@ -4202,6 +4218,7 @@ mod tests {
             r##"#!/usr/bin/env python3
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -4318,6 +4335,8 @@ for line in sys.stdin:
     elif kind == "prompt":
         prompt = command["message"]
         out({"id":command.get("id"),"type":"response","command":"prompt","success":True})
+        if prompt == "scenario=slow-exit":
+            signal.signal(signal.SIGTERM, lambda *_: (time.sleep(0.3), os._exit(0)))
         if prompt == "scenario=sentinel":
             user_message(prompt)
             pending_jobs.discard("job-0")
@@ -5807,6 +5826,53 @@ for line in sys.stdin:
         let _ = provider.wait().await;
         restore_test_longhouse_home(previous);
     }
+    /// A Machine Agent of its own: dropping the runtime stops every monitor
+    /// where it stands, as the process exiting does.
+    fn machine_agent_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    /// Whether the group is still running, after which nothing of it is.
+    fn stop_if_running(process_group_id: i32) -> bool {
+        let running = crate::process_group::group_has_running_member(process_group_id);
+        unsafe {
+            libc::killpg(process_group_id, libc::SIGKILL);
+        }
+        running
+    }
+
+    #[test]
+    fn a_machine_agent_stopped_at_the_terminal_leaves_no_provider_behind() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = set_test_longhouse_home(temp.path().join("longhouse"));
+        let machine_agent = machine_agent_runtime();
+        // This provider takes 300 ms to exit once asked, so a terminal recorded
+        // before the stop is observed while the provider still runs.
+        let process_group_id = machine_agent.block_on(async {
+            let (started, run_id) = start_fake_turn(temp.path(), "scenario=slow-exit", None).await;
+            let claim = wait_for_terminal(&run_id).await;
+            assert_eq!(
+                claim.result.as_ref().unwrap()["terminal_state"],
+                "run_completed",
+                "{:?}",
+                claim.error
+            );
+            assert_eq!(claim.invocation_state.as_deref(), Some("closed"));
+            started.unwrap().process_group_id.unwrap()
+        });
+        drop(machine_agent);
+
+        assert!(
+            !stop_if_running(process_group_id),
+            "the provider outlived the Machine Agent that reported its turn terminal"
+        );
+        restore_test_longhouse_home(previous);
+    }
+
     #[test]
     fn one_unwritable_parked_claim_does_not_abort_other_omp_recovery() {
         let _guard = crate::console_adapter::agent_state_guard();
