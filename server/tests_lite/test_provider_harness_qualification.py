@@ -1019,6 +1019,25 @@ def test_cursor_interaction_does_not_report_a_probe_that_is_not_applicable(tmp_p
     assert interaction_semantics.non_passing_rows(rows) == [{"status": "blocked"}, {}]
 
 
+def test_cursor_interaction_that_is_not_applicable_is_not_a_cause(tmp_path: Path, monkeypatch) -> None:
+    """The scenario is judged as its rows are: not applicable declares nothing, no status is a failure."""
+
+    request, binary = _cursor_request(tmp_path)
+    _cursor_gate0(tmp_path, monkeypatch, status="passed")
+    _cursor_harness(monkeypatch, live={"status": "pass"}, interaction={"status": "not_applicable"})
+
+    _observation, assertions, _secrets = bridge._cursor_observed_install_executor(  # noqa: SLF001
+        binary,
+        tmp_path / "output" / "evidence",
+        request=json.loads(request.read_text(encoding="utf-8")),
+    )
+
+    assert assertions[0].outcome.value == "pass"
+    assert assertions[0].reasons == ()
+    statusless = bridge._cursor_requirement_failures({"status": "passed"}, {"status": "pass"}, {})  # noqa: SLF001
+    assert [outcome.value for outcome, _reason in statusless] == ["infrastructure_error"]
+
+
 def test_cursor_live_canary_is_its_own_cause_only_when_gate0_passed(tmp_path: Path, monkeypatch) -> None:
     request, binary = _cursor_request(tmp_path)
     _cursor_gate0(tmp_path, monkeypatch, status="passed")

@@ -1143,7 +1143,10 @@ def _cursor_requirement_failures(
             )
         )
     interaction_status = interaction_result.get("status")
-    if interaction_status != "pass":
+    # The scenario's status is the verdict's own, so it is judged by the same
+    # definition as the verdict's rows: a scenario that is not applicable is
+    # not a cause.
+    if interaction_semantics.non_passing_rows((interaction_result,)):
         outcome = AssertionOutcome.BLOCKED if interaction_status == "blocked" else AssertionOutcome.INFRASTRUCTURE_ERROR
         data = interaction_result.get("data")
         verdict_rows = data.get("assertions") if isinstance(data, Mapping) else None
