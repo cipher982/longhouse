@@ -214,13 +214,16 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         .or_else(|| crate::config::get_agent_db_path().ok());
     let registry = crate::turn_claims::default_registry()?;
     // No live invocation holds this native session (those joined above), but a
-    // provider started for it can still run: a turn a restarted Machine Agent
-    // follows from its claim, or one whose stop was never verified. OMP moves
-    // a second process on the session to a forked file, so none is started.
+    // provider this managed session started for it can still run: a turn a
+    // restarted Machine Agent follows from its claim, or one whose stop was
+    // never verified. OMP moves a second process on the session to a forked
+    // file, so none is started. A live process is the recorded pid with its
+    // recorded start time, which no pid reused after a reboot can have.
     if let Some(provider_thread_id) = expected_provider_thread_id.as_deref() {
         let inventory = crate::process_identity::try_collect_process_facts_by_pid();
         if let Some(holder) = registry.list_all_shared()?.iter().find(|claim| {
             claim.adapter.as_deref() == Some(OMP_PRINT_ADAPTER)
+                && claim.session_id == config.session_id
                 && claim.provider_thread_id.as_deref() == Some(provider_thread_id)
                 && crate::console_adapter::claim_liveness(claim, inventory.as_ref())
                     == ClaimLiveness::Live
@@ -6138,6 +6141,49 @@ for line in sys.stdin:
             let _ = provider.wait();
             restore_test_longhouse_home(previous);
         }
+    }
+
+    #[tokio::test]
+    async fn a_live_claim_of_another_session_does_not_block_a_resume() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = set_test_longhouse_home(temp.path().join("longhouse"));
+        let (first, first_run_id) = start_fake_turn(temp.path(), "plain", None).await;
+        let first = first.unwrap();
+        wait_for_terminal(&first_run_id).await;
+        // Another managed session's claim names the same native session and a
+        // process that is alive (this one; its group is never looked up).
+        let registry = crate::turn_claims::default_registry().unwrap();
+        let new_id = || Uuid::new_v4().to_string();
+        let other_run_id = new_id();
+        registry
+            .claim(&other_run_id, &new_id(), &new_id(), None, None, "omp")
+            .unwrap();
+        registry
+            .mark_spawned_invocation(
+                &other_run_id,
+                std::process::id(),
+                i32::MAX,
+                crate::turn_claims::process_start_time_for_pid(Some(std::process::id())),
+                OMP_PRINT_ADAPTER,
+                "other-launch",
+                first.provider_thread_id.as_deref(),
+                "/gone/stdout.log",
+                "/gone/stderr.log",
+                json!({}),
+            )
+            .unwrap();
+
+        let (second, second_run_id) = start_fake_turn(temp.path(), "again", Some(&first)).await;
+
+        let second = second.expect("another session's claim blocked the resume");
+        let claim = wait_for_terminal(&second_run_id).await;
+        assert_eq!(
+            claim.result.as_ref().unwrap()["terminal_state"],
+            "run_completed"
+        );
+        wait_for_process_group_exit(second.process_group_id.unwrap()).await;
+        restore_test_longhouse_home(previous);
     }
 
     #[tokio::test]
