@@ -25,6 +25,74 @@
    ],
    "required_keys": ["type", "message.role", "text"]
   },
+  "part/step-finish/assistant": {
+   "classification": "provider_internal:step_finish",
+   "first_seen_version": "1.18.35",
+   "last_seen_version": "1.19.0",
+   "entrypoints": [],
+   "keys": [
+    "cost",
+    "message.agent",
+    "message.cost",
+    "message.finish",
+    "message.mode",
+    "message.modelID",
+    "message.parentID",
+    "message.path",
+    "message.providerID",
+    "message.role",
+    "message.time",
+    "message.tokens",
+    "reason",
+    "tokens",
+    "type"
+   ],
+   "required_keys": ["type", "message.role"]
+  },
+  "part/step-start/assistant": {
+   "classification": "provider_internal:step_start",
+   "first_seen_version": "1.18.35",
+   "last_seen_version": "1.19.0",
+   "entrypoints": [],
+   "keys": [
+    "message.agent",
+    "message.cost",
+    "message.finish",
+    "message.mode",
+    "message.modelID",
+    "message.parentID",
+    "message.path",
+    "message.providerID",
+    "message.role",
+    "message.time",
+    "message.tokens",
+    "type"
+   ],
+   "required_keys": ["type", "message.role"]
+  },
+  "part/text/assistant": {
+   "classification": "transcript:assistant",
+   "first_seen_version": "1.18.35",
+   "last_seen_version": "1.19.0",
+   "entrypoints": [],
+   "keys": [
+    "message.agent",
+    "message.cost",
+    "message.finish",
+    "message.mode",
+    "message.modelID",
+    "message.parentID",
+    "message.path",
+    "message.providerID",
+    "message.role",
+    "message.time",
+    "message.tokens",
+    "text",
+    "time",
+    "type"
+   ],
+   "required_keys": ["type", "message.role", "text"]
+  },
   "part/text/user": {
    "classification": "transcript:user",
    "first_seen_version": "1.17.20",

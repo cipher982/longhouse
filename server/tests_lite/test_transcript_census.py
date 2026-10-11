@@ -34,6 +34,7 @@ def test_golden_fixtures_contain_only_classified_shapes():
         "antigravity": (golden / "antigravity", golden / "antigravity_legacy_json" / "basic.json"),
         "opencode": (golden / "opencode",),
         "pi": (golden / "pi",),
+        "omp": (golden / "omp",),
     }
     for provider, paths in checks.items():
         result = _check(provider, *paths)
@@ -164,6 +165,7 @@ def test_every_launch_provider_has_boundary_and_drift_catalog_rows():
         "antigravity": ("UI/USER_INPUT", "transcript:user"),
         "opencode": ("part/future_text/assistant", "provider_drift:unknown_text"),
         "pi": ("message/user/text", "transcript:user"),
+        "omp": ("unknown_future_record", "provider_drift:unknown_record"),
     }
     for provider, (shape, classification) in expected.items():
         catalog = json.loads((REPO_ROOT / "schemas" / "transcript_shapes" / f"{provider}.json").read_text())

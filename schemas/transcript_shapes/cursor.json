@@ -50,6 +50,23 @@
    ],
    "required_keys": ["type", "status"]
   },
+  "store/assistant/reasoning+text": {
+   "classification": "transcript:assistant",
+   "first_seen_version": "2026.10.01-e373342",
+   "last_seen_version": "2026.10.01-e373342",
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].providerOptions",
+    "content[].signature",
+    "content[].text",
+    "content[].type",
+    "id",
+    "providerOptions",
+    "role"
+   ],
+   "required_keys": ["role", "content", "content[].type", "content[].text"]
+  },
   "store/assistant/text": {
    "classification": "transcript:assistant",
    "first_seen_version": "2026.10.01-e373342",
