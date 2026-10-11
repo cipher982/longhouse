@@ -656,8 +656,12 @@ def _runtime_convergence(
     (`served_answer_correspondence`). How many there are is OMP's business: it
     ends a reply while a background job runs and wakes the agent when the job
     finishes, and the agent may answer again. ``alongside`` names the other
-    markers the reply was asked to carry, and ``native_reply_id`` the row the
-    native wait returned. A complete served page with an answer the transcript
+    markers the reply was asked to carry. ``native_reply_id`` is the row the
+    native wait returned; it decides nothing about convergence, which is
+    judged against every answering row of the transcript. It is recorded
+    beside the observation (``native_reply_served``), and having it is what
+    lets an expired wait say it was waiting on Longhouse and not on OMP's
+    turn. A complete served page with an answer the transcript
     does not account for fails at once with a typed reason
     (`served_answer_fault`); a page that has not reached an answering row yet,
     or has only its first block, is the lag this waits out. A wait that gives

@@ -657,7 +657,11 @@ def _wait_runtime_convergence(
     business. ``alongside`` names the other markers the reply was asked to
     carry; ``recalled`` is for a phrase the model brings back from restored
     history, which it may put in a sentence. ``reply_event_id`` is the native
-    entry the native wait returned. A complete served page with an answer the
+    entry the native wait returned; it decides nothing about convergence,
+    which is judged against every answering entry of the transcript. It is
+    recorded beside the observation (``native_reply_served``), and having it is
+    what lets an expired wait say it was waiting on Longhouse and not on Pi's
+    turn. A complete served page with an answer the
     transcript does not account for fails at once with a typed reason
     (`served_answer_fault`); a page that has not reached an answering entry yet,
     or has only its first block, is the lag this waits out. A wait that gives
