@@ -426,6 +426,7 @@ def wait_for_hook(
     generation_id: str | None = None,
     after_count: int = 0,
     timeout: float = _DEFAULT_TIMEOUT_SECONDS,
+    turn: str | None = None,
 ) -> dict[str, Any]:
     """Wait for one hook row of a session, conversation and (optionally) generation.
 
@@ -434,7 +435,8 @@ def wait_for_hook(
     the wait fails with the stop's status instead of running out the clock.
     Callers awaiting an in-turn event must therefore scope the wait (by
     `generation_id`, or by an `after_count` window holding a single turn) so an
-    earlier turn's stop cannot match. A `stop` is returned whatever its status
+    earlier turn's stop cannot match, and name the scenario's `turn` so that
+    failure says which one ended. A `stop` is returned whatever its status
     when it is the awaited event; judging that status is the caller's job.
     """
 
@@ -458,7 +460,7 @@ def wait_for_hook(
             if turn_end_deadline is None:
                 turn_end_deadline = min(deadline, now + _HOOK_TIMEOUT_SECONDS)
             if now >= turn_end_deadline:
-                raise _turn_ended_before(str(event), turn_stop)
+                raise _turn_ended_before(str(event), turn_stop, turn=turn)
         elif now >= deadline:
             raise TimeoutError(f"Cursor hook did not produce event={event!r} conversation_id={conversation_id!r}")
         time.sleep(0.1)
@@ -474,17 +476,18 @@ def _stop_facts(stop: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _turn_ended_before(awaited_event: str, stop: dict[str, Any]) -> Gate0Failure:
-    facts = {"awaited_event": awaited_event, **_stop_facts(stop)}
+def _turn_ended_before(awaited_event: str, stop: dict[str, Any], *, turn: str | None) -> Gate0Failure:
+    facts = {"turn": turn, "awaited_event": awaited_event, **_stop_facts(stop)}
+    named = f"the {turn} turn" if turn else "the turn"
     if facts["stop_status"] == "completed":
         return Gate0Failure(
             "cursor_turn_ended_without_event",
-            f"Cursor completed the turn without producing {awaited_event}",
+            f"Cursor completed {named} without producing {awaited_event}",
             **facts,
         )
     return Gate0Failure(
         "cursor_turn_ended_in_error",
-        f"Cursor ended the turn with stop status {facts['stop_status']!r} before producing {awaited_event}",
+        f"Cursor ended {named} with stop status {facts['stop_status']!r} before producing {awaited_event}",
         **facts,
     )
 
@@ -662,6 +665,7 @@ def _identity_scenario(
             generation_id=probe_generation_id,
             after_count=before,
             timeout=timeout,
+            turn="probe",
         )
         stop = wait_for_hook(
             events_path,
@@ -751,6 +755,7 @@ def _cancel_scenario(
             conversation_id=provider_id,
             after_count=before,
             timeout=timeout,
+            turn="cancelled",
         )
         generation_id = str(shell.get("generation_id") or "")
         try:
@@ -1258,6 +1263,7 @@ def _managed_conversation_reset_scenario(
             generation_id=str(prompt_a_event.get("generation_id") or ""),
             after_count=before,
             timeout=timeout,
+            turn="pre-reset",
         )
         stop_a = wait_for_hook(
             events_path,
@@ -1310,6 +1316,7 @@ def _managed_conversation_reset_scenario(
             generation_id=str(prompt_b_event.get("generation_id") or ""),
             after_count=marker_b_start,
             timeout=timeout,
+            turn="post-reset",
         )
         stop_b = wait_for_hook(
             events_path,
@@ -1509,6 +1516,7 @@ def _permission_scenario(
             conversation_id=provider_id,
             after_count=before,
             timeout=timeout,
+            turn="permission",
         )
         if decision == "allow":
             wait_for_hook(
@@ -1518,6 +1526,7 @@ def _permission_scenario(
                 conversation_id=provider_id,
                 after_count=before,
                 timeout=timeout,
+                turn="permission",
             )
             if not marker_file.exists():
                 raise RuntimeError("Cursor ignored permission=allow")
@@ -1586,6 +1595,7 @@ def _active_steer_scenario(
             conversation_id=provider_id,
             after_count=before,
             timeout=timeout,
+            turn="steered",
         )
         generation_id = str(shell.get("generation_id") or "")
         session.submit_active("Instead, reply with exactly STEERED and nothing else.")
@@ -1597,6 +1607,7 @@ def _active_steer_scenario(
             generation_id=generation_id,
             after_count=before,
             timeout=timeout,
+            turn="steered",
         )
         steered = response.get("text_sha256") == _marker_digest("STEERED")
         return {

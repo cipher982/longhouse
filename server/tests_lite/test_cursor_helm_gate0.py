@@ -660,6 +660,7 @@ def test_wait_for_hook_fails_typed_when_the_turn_errors_before_the_awaited_event
     assert failure.value.facts["awaited_event"] == "afterAgentResponse"
     assert failure.value.facts["stop_status"] == "error"
     assert failure.value.facts["generation_id"] == "gen-1"
+    assert failure.value.facts["turn"] is None
     assert 20.4 <= replay.now < 20.4 + gate._HOOK_TIMEOUT_SECONDS + 1
 
 
@@ -700,10 +701,13 @@ def test_wait_for_hook_names_a_completed_turn_that_never_produced_the_event(monk
             tmp_path / "events.ndjson",
             [_hook(3.0, "afterAgentResponse"), _hook(3.0, "stop", status="completed")],
             event="beforeShellExecution",
+            turn="permission",
         )
 
     assert failure.value.failure_code == "cursor_turn_ended_without_event"
     assert failure.value.facts["stop_status"] == "completed"
+    assert failure.value.facts["turn"] == "permission"
+    assert "the permission turn" in str(failure.value)
     assert replay.now < 3.0 + gate._HOOK_TIMEOUT_SECONDS + 1
 
 
@@ -768,6 +772,7 @@ def test_active_steer_reports_the_provider_error_not_a_timeout(monkeypatch, tmp_
 
     assert failure.value.failure_code == "cursor_turn_ended_in_error"
     assert failure.value.facts["stop_status"] == "error"
+    assert failure.value.facts["turn"] == "steered"
     assert replay.now < 30.0
 
 
@@ -878,6 +883,7 @@ def test_gate0_report_names_the_failed_scenario_and_its_typed_code(
     assert failed["status"] == "failed"
     assert failed["failure_code"] == failure_code
     assert failed.get("stop_status") == stop_status
+    assert failed.get("turn") == ("steered" if stop_status else None)
     assert report == json.loads((Path(report["artifact_root"]) / "gate0.json").read_text(encoding="utf-8"))
 
 
@@ -979,6 +985,22 @@ def test_identity_scenario_fails_when_the_probe_turn_ends_in_error(monkeypatch, 
 
     assert failure.value.failure_code == "cursor_turn_ended_in_error"
     assert failure.value.facts["turn"] == "probe"
+
+
+def test_identity_scenario_names_the_probe_turn_that_ended_before_its_response(monkeypatch, tmp_path: Path) -> None:
+    with pytest.raises(gate.Gate0Failure) as failure:
+        _run_identity_scenario(
+            monkeypatch,
+            tmp_path,
+            [
+                _hook(0.6, "beforeSubmitPrompt", prompt_sha256=gate._marker_digest(_PROBE_PROMPT)),
+                _hook(21.0, "stop", status="error"),
+            ],
+        )
+
+    assert failure.value.failure_code == "cursor_turn_ended_in_error"
+    assert failure.value.facts["turn"] == "probe"
+    assert failure.value.facts["awaited_event"] == "afterAgentResponse"
 
 
 def test_ctrl_c_cancel_fails_typed_when_the_recovery_turn_ends_in_error(monkeypatch, tmp_path: Path) -> None:
