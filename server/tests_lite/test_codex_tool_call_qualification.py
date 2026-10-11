@@ -53,20 +53,30 @@ if sys.argv[1:] == ["--version"]:
     print("codex-cli 1.2.3")
     raise SystemExit(0)
 if sys.argv[1:] == ["login", "--with-api-key"]:
-    if not sys.stdin.read().strip():
+    key = sys.stdin.read().strip()
+    if not key:
         raise SystemExit(4)
     auth_path = Path(os.environ["CODEX_HOME"]) / "auth.json"
     auth_path.parent.mkdir(parents=True, exist_ok=True)
-    auth_path.write_text("{{}}", encoding="utf-8")
+    auth_path.write_text(json.dumps({{"OPENAI_API_KEY": key, "auth_mode": "apikey"}}), encoding="utf-8")
     raise SystemExit(0)
 prompt = sys.argv[-1]
 command = prompt.split("exactly this one command: ", 1)[1].split("\\nThen", 1)[0]
 behavior = {behavior!r}
 if "--ephemeral" not in sys.argv:
     # Stock `codex exec` keeps a rollout of the session under CODEX_HOME.
-    rollout = Path(os.environ["CODEX_HOME"]) / "sessions" / "2026" / "01" / "01" / "rollout-2026-01-01T00-00-00-fake.jsonl"
+    codex_home = Path(os.environ["CODEX_HOME"])
+    rollout = codex_home / "sessions" / "2026" / "01" / "01" / "rollout-2026-01-01T00-00-00-fake.jsonl"
     rollout.parent.mkdir(parents=True, exist_ok=True)
     rollout.write_text(json.dumps({{"type": "session_meta", "payload": {{"id": "fake", "originator": "codex_exec"}}}}) + "\\n", encoding="utf-8")
+    if behavior == "leaky_home":
+        # A Codex that keeps its key and more beside the sessions, and inside them.
+        key = os.environ.get("CODEX_API_KEY") or json.loads((codex_home / "auth.json").read_text())["OPENAI_API_KEY"]
+        (codex_home / "auth.json").write_text(json.dumps({{"OPENAI_API_KEY": key, "auth_mode": "apikey"}}), encoding="utf-8")
+        (codex_home / "history.jsonl").write_text(json.dumps({{"text": key}}) + "\\n", encoding="utf-8")
+        (rollout.parent / "auth.json").write_text(json.dumps({{"OPENAI_API_KEY": key}}), encoding="utf-8")
+        (rollout.parent / "rollout-2026-01-01T00-00-01-leaked.jsonl").write_text(json.dumps({{"type": "leak", "payload": key}}) + "\\n", encoding="utf-8")
+        (rollout.parent / "rollout-2026-01-01T00-00-02-link.jsonl").symlink_to(codex_home / "auth.json")
 if behavior == "timeout":
     subprocess.Popen([
         sys.executable,
@@ -435,14 +445,19 @@ def _rollouts(root: Path) -> list[Path]:
     return sorted(root.rglob("rollout-*.jsonl"))
 
 
-def _launch(entry: str, tmp_path: Path, monkeypatch) -> list[str]:
+SECRET = "seeded-test-api-key-not-a-real-secret"
+
+
+def _launch(entry: str, tmp_path: Path, monkeypatch, *, behavior: str = "pass") -> list[str]:
     """Run the tool-call turn through one of its two entry points and return the argv Codex was launched with."""
     if entry == "harness":
-        binary, _identity, calls = _fake_codex(tmp_path)
-        observed = profile.run_codex_real_tool_command(binary, api_key="seeded-test-api-key-not-a-real-secret")
+        binary, _identity, calls = _fake_codex(tmp_path, behavior=behavior)
+        observed = profile.run_codex_real_tool_command(binary, api_key=SECRET)
         assert observed["returncode"] == 0
+        (tmp_path / "output").mkdir()
+        (tmp_path / "output" / "observed.json").write_text(json.dumps(observed), encoding="utf-8")
     else:
-        result, _output, calls = _run(tmp_path, monkeypatch)
+        result, _output, calls = _run(tmp_path, monkeypatch, behavior=behavior)
         assert result["execution_status"] == "completed"
     return json.loads(calls.read_text().splitlines()[-1])["argv"]
 
@@ -463,6 +478,61 @@ def test_the_turn_keeps_its_rollout_in_the_qualification_sandbox_codex_home(tmp_
     assert "--ignore-user-config" in live
     # The session is left where the sandbox put the provider's home, and nowhere else.
     assert [path.relative_to(exported).parts[0] for path in _rollouts(tmp_path)] == ["sessions"]
+
+
+@pytest.mark.parametrize("entry", ["harness", "run"])
+def test_the_sandbox_codex_home_holds_the_session_rollout_and_never_the_credential(tmp_path: Path, monkeypatch, entry: str) -> None:
+    """The turn's own CODEX_HOME, where `auth.json` is, goes with the turn; only a rollout is carried out of it."""
+    sandbox_home = tmp_path / "sandbox-home"
+    sandbox_home.mkdir()
+    exported = sandbox_home / ".codex"
+    monkeypatch.setenv(profile.QUALIFICATION_SANDBOX_ENV, profile.QUALIFICATION_SANDBOX_PROFILE)
+    monkeypatch.setenv(profile.QUALIFICATION_HOME_ENV, str(sandbox_home))
+    monkeypatch.setenv(profile.CODEX_HOME_ENV, str(exported))
+    scratch_parent = tmp_path / "scratch"
+    scratch_parent.mkdir()
+    monkeypatch.setattr(profile.tempfile, "tempdir", str(scratch_parent))
+
+    _launch(entry, tmp_path, monkeypatch, behavior="leaky_home")
+
+    # The fake kept the key in auth.json, in a history file, in a file named auth.json among the
+    # sessions, in a rollout, and behind a rollout-named link to auth.json.
+    kept = sorted(path.relative_to(sandbox_home).as_posix() for path in sandbox_home.rglob("*") if not path.is_dir())
+    assert kept == [".codex/sessions/2026/01/01/rollout-2026-01-01T00-00-00-fake.jsonl"]
+    # The scratch home is gone, and the key and the credential file's name are nowhere that outlives the turn.
+    assert list(scratch_parent.iterdir()) == []
+    surviving = [path for root in (sandbox_home, tmp_path / "output") for path in root.rglob("*")]
+    assert surviving and not any(path.name == "auth.json" for path in surviving)
+    # `run` records that it logged in, with a fixed label for where; nothing else names the file.
+    login_label = b"isolated_codex_home/auth.json"
+    for path in surviving:
+        if path.is_file():
+            content = path.read_bytes()
+            assert SECRET.encode() not in content, path
+            assert b"auth.json" not in content.replace(login_label, b""), path
+            assert entry == "run" or login_label not in content, path
+
+
+@pytest.mark.parametrize("behavior", ["timeout", "nonzero"])
+def test_a_turn_that_fails_still_leaves_only_its_rollout(tmp_path: Path, monkeypatch, behavior: str) -> None:
+    sandbox_home = tmp_path / "sandbox-home"
+    sandbox_home.mkdir()
+    monkeypatch.setenv(profile.QUALIFICATION_SANDBOX_ENV, profile.QUALIFICATION_SANDBOX_PROFILE)
+    monkeypatch.setenv(profile.QUALIFICATION_HOME_ENV, str(sandbox_home))
+    monkeypatch.setenv(profile.CODEX_HOME_ENV, str(sandbox_home / ".codex"))
+    scratch_parent = tmp_path / "scratch"
+    scratch_parent.mkdir()
+    monkeypatch.setattr(profile.tempfile, "tempdir", str(scratch_parent))
+    if behavior == "timeout":
+        # Longer than the fake needs to write its rollout, shorter than it then sleeps.
+        monkeypatch.setattr(profile, "TIMEOUT_SECONDS", 0.6)
+
+    result, _output, _calls = _run(tmp_path, monkeypatch, behavior=behavior)
+
+    assert result["execution_status"] == {"timeout": "timed_out", "nonzero": "infrastructure_error"}[behavior]
+    kept = sorted(path.relative_to(sandbox_home).as_posix() for path in sandbox_home.rglob("*") if not path.is_dir())
+    assert kept == [".codex/sessions/2026/01/01/rollout-2026-01-01T00-00-00-fake.jsonl"]
+    assert list(scratch_parent.iterdir()) == []
 
 
 @pytest.mark.parametrize("entry", ["harness", "run"])
@@ -495,7 +565,7 @@ def test_the_turn_never_writes_a_codex_home_outside_the_sandbox_home(tmp_path: P
     live = _launch(entry, tmp_path, monkeypatch)
 
     assert "--ephemeral" not in live
-    # The rollout went to the run's scratch home, which is gone with the run.
+    # The rollout stayed in the turn's scratch home, which is gone with the turn.
     assert list(outside.iterdir()) == []
     assert _rollouts(tmp_path) == []
 

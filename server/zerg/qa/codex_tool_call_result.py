@@ -9,6 +9,7 @@ import platform
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -32,9 +33,11 @@ from zerg.services.provider_capability_proof_store import ProviderCapabilityProo
 
 PROFILE = "codex_tool_call_result_v1"
 SCENARIO_ID = "codex_tool_call_result"
-# Revision 2: the tool-call turn persists its session (no `--ephemeral`), in
-# the qualification sandbox's own CODEX_HOME when there is one. Both entry
-# points, `run` and `run_codex_real_tool_command`, launch it that way.
+# Revision 2: the tool-call turn persists its session (no `--ephemeral`). Its
+# CODEX_HOME is a scratch directory that goes when the turn ends, and only the
+# session rollout is then kept, in the qualification sandbox's own CODEX_HOME
+# when there is one. Both entry points, `run` and
+# `run_codex_real_tool_command`, launch it that way.
 SCENARIO_REVISION = 2
 TIMEOUT_SECONDS = 180
 API_KEY_ENV = "CODEX_API_KEY"
@@ -90,19 +93,15 @@ def _codex_sandbox_mode() -> tuple[str, str | None]:
     return "workspace-write", None
 
 
-def _codex_session_home(scratch: Path) -> Path:
-    """Where this run's Codex keeps its session rollout.
+def _sandbox_session_store() -> Path | None:
+    """The CODEX_HOME the qualification sandbox exports, or None outside it.
 
-    Inside the qualification sandbox that is the CODEX_HOME the sandbox
-    exports: a directory under the sandbox's own home, made for one invocation
-    and removed with it, so the rollout is left for whoever runs the sandbox to
-    read and reaches no other run. Anywhere else it is a directory in the run's
-    scratch that goes when the run ends; an ambient CODEX_HOME outside the
-    sandbox is never written.
-
-    Both paths are resolved before they are compared, so an exported path that
-    leaves the sandbox home through `..` or a symlink is not taken for one
-    inside it.
+    That is a directory under the sandbox's own home, made for one invocation
+    and removed with it, which whoever runs the sandbox reads the provider's
+    session rollout from. An ambient CODEX_HOME anywhere else is never
+    written: both paths are resolved before they are compared, so an exported
+    path that leaves the sandbox home through `..` or a symlink is not taken
+    for one inside it.
     """
     exported = os.environ.get(CODEX_HOME_ENV, "").strip()
     qualification_home = os.environ.get(QUALIFICATION_HOME_ENV, "").strip()
@@ -111,7 +110,59 @@ def _codex_session_home(scratch: Path) -> Path:
             home, root = Path(exported).resolve(), Path(qualification_home).resolve()
             if home != root and home.is_relative_to(root):
                 return home
-    return scratch / "codex-home"
+    return None
+
+
+def _keep_session_rollouts(codex_home: Path, *, secret: str) -> int:
+    """Leave the turn's session rollouts in the sandbox's CODEX_HOME; returns how many.
+
+    The turn runs with a scratch CODEX_HOME, which is where Codex also keeps
+    `auth.json` and whatever else it writes. That directory goes when the turn
+    ends. Only rollout files are carried over, by name, so the directory the
+    sandbox's owner reads holds session rollouts and nothing else: the
+    credential file is never in it. A rollout that is not a regular file, or
+    that contains the API key, is not carried.
+    """
+    store = _sandbox_session_store()
+    sessions = codex_home / "sessions"
+    if store is None or sessions.is_symlink() or not sessions.is_dir():
+        return 0
+    kept = 0
+    needle = secret.encode("utf-8") if secret else None
+    for directory, _names, filenames in os.walk(sessions, followlinks=False):
+        for filename in sorted(filenames):
+            if not (filename.startswith("rollout-") and filename.endswith(".jsonl")):
+                continue
+            source = Path(directory) / filename
+            try:
+                if not stat.S_ISREG(source.lstat().st_mode):
+                    continue
+                payload = source.read_bytes()
+            except OSError:
+                continue
+            if needle is not None and needle in payload:
+                continue
+            if _write_under(store, source.relative_to(codex_home), payload):
+                kept += 1
+    return kept
+
+
+def _write_under(root: Path, relative: Path, payload: bytes) -> bool:
+    """Write a file below `root`, creating its directories, without following a link on the way."""
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        directory = root
+        for part in relative.parent.parts:
+            directory = directory / part
+            if directory.is_symlink():
+                return False
+            directory.mkdir(exist_ok=True)
+        descriptor = os.open(directory / relative.name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        return False
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(payload)
+    return True
 
 
 def _jsonl_events(stdout: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -475,9 +526,9 @@ def run_codex_real_tool_command(
     with tempfile.TemporaryDirectory(prefix="longhouse-codex-tool-call-result-") as raw_runtime:
         runtime_root = Path(raw_runtime)
         workspace = runtime_root / "workspace"
-        codex_home = _codex_session_home(runtime_root)
+        codex_home = runtime_root / "codex-home"
         workspace.mkdir()
-        codex_home.mkdir(parents=True, exist_ok=True)
+        codex_home.mkdir()
         helper_link: Path | None = None
         if managed_package_resources is not None:
             _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
@@ -498,8 +549,9 @@ def run_codex_real_tool_command(
                     shim_path=str(helper_link),
                 )
         # No `--ephemeral`: the session rollout is the provider's own record of
-        # this turn, and `_codex_session_home` already keeps it out of any home
-        # another run or a person uses.
+        # this turn. It is written to the scratch CODEX_HOME, beside whatever
+        # else Codex keeps there, and `_keep_session_rollouts` carries only
+        # the rollout out before that directory goes.
         argv = [
             str(binary),
             "exec",
@@ -546,6 +598,8 @@ def run_codex_real_tool_command(
         else:
             tool_stdout = tool_result.stdout
             tool_stderr = tool_result.stderr
+        finally:
+            _keep_session_rollouts(codex_home, secret=api_key)
     if sandbox_helper_evidence is not None and managed_package_resources is not None:
         _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
         try:
@@ -690,9 +744,9 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="longhouse-codex-qualification-") as raw_runtime:
             runtime_root = Path(raw_runtime)
             workspace = runtime_root / "workspace"
-            codex_home = _codex_session_home(runtime_root)
+            codex_home = runtime_root / "codex-home"
             workspace.mkdir()
-            codex_home.mkdir(parents=True, exist_ok=True)
+            codex_home.mkdir()
             helper_link: Path | None = None
             if managed_package_resources is not None:
                 _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
@@ -713,8 +767,9 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                         shim_target_identity=actual_identity,
                         shim_path=str(helper_link),
                     )
-            # As in run_codex_real_tool_command: no `--ephemeral`, and the
-            # session home `_codex_session_home` chooses.
+            # As in run_codex_real_tool_command: no `--ephemeral`, a scratch
+            # CODEX_HOME that holds `auth.json` and goes with this block, and
+            # only the session rollout carried out of it.
             argv = [
                 str(binary),
                 "exec",
@@ -775,6 +830,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             else:
                 tool_stdout = tool_result.stdout
                 tool_stderr = tool_result.stderr
+            finally:
+                _keep_session_rollouts(codex_home, secret=api_key)
         if sandbox_helper_evidence is not None:
             _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
             try:
