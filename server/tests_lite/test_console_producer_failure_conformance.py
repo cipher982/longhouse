@@ -192,7 +192,7 @@ def test_omp_console_main_retains_boot_receipts_on_late_failure(monkeypatch, tmp
 _PAST_THE_NATIVE_REPLY = "fixture stops the turn after its native reply was bound"
 
 
-def _console_first_turn_result(monkeypatch, tmp_path, provider: str, assistant_rows) -> dict[str, object]:
+def _console_first_turn_result(monkeypatch, tmp_path, provider: str, assistant_rows, *, with_stream: bool = False) -> dict[str, object]:
     """Run a Pi or OMP Console entry point over one faked first turn and return its result.
 
     Everything up to the provider's own transcript is faked; the transcript is
@@ -200,6 +200,8 @@ def _console_first_turn_result(monkeypatch, tmp_path, provider: str, assistant_r
     the rows that follow the tool result from the turn's marker and stored
     context value. A turn whose native reply is bound stops at the next
     boundary (the transcript flush) with ``_PAST_THE_NATIVE_REPLY``.
+    ``with_stream`` also writes the turn's output stream, with the same
+    prompt and replies, as the provider process would have.
     """
 
     lifecycle = provider_console_lifecycle
@@ -248,12 +250,19 @@ def _console_first_turn_result(monkeypatch, tmp_path, provider: str, assistant_r
             ),
         ]
         native.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
-        return {
+        claim = {
             "state": "terminal",
             "result": {"terminal_state": "run_completed"},
             "source_path": str(native),
             "provider_thread_id": "native-1",
         }
+        if with_stream:
+            replies = [{"role": "assistant", "content": text} for _row_id, text in assistant_rows(marker, context)]
+            events = [{"type": "message_end", "message": message} for message in ({"role": "user", "content": prompts[0]}, *replies)]
+            stream = tmp_path / "turn-stdout.jsonl"
+            stream.write_text("".join(json.dumps(event) + "\n" for event in [*events, {"type": "agent_end"}]), encoding="utf-8")
+            claim["stdout_path"] = str(stream)
+        return claim
 
     monkeypatch.setattr(lifecycle, "start_transcript_shipper", lambda *_args, **_kwargs: Shipper())
     monkeypatch.setattr(lifecycle, "_create_session", lambda **_kwargs: {"session_id": "session-1", "thread_id": "thread-1"})
@@ -331,6 +340,21 @@ def test_console_first_turn_that_never_answers_with_its_marker_is_a_producer_fai
 
     assert "assertions" not in result
     assert result["error"] == f"RuntimeError: first Console {provider} turn has no native assistant row that answers with its marker once"
+
+    # With the turn's own stream to read, the same reply is the model's deviation, and the artifact carries the claim.
+    (tmp_path / "stream").mkdir()
+    result = _console_first_turn_result(
+        monkeypatch, tmp_path / "stream", provider, lambda _marker, context: [("reply", context)], with_stream=True
+    )
+    assert result["error"].startswith(
+        f"ModelDeviation: reply_carried_another_marker: the first turn completed and its final reply carries LH_{provider.upper()}_CONTEXT "
+    )
+    assert set(result["model_noncompliance"]["contract_evidence"]) == {
+        "run_completed",
+        "provider_turn_ended",
+        "provider_replied",
+        "prompt_named_marker",
+    }
 
 
 @pytest.mark.parametrize("producer", [provider_console_lifecycle, omp_console_producer, pi_console_tool_producer])

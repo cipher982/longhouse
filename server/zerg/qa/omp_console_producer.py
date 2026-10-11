@@ -38,7 +38,7 @@ REGISTRATION = ProducerRegistration(
     # 9: the shared lifecycle adds a mid-turn steer step (its own cell).
     # 11: the native reply is the row that answers with the marker, not every
     # row that names it; the oracle reads `native_reply_count`.
-    scenario_revision=20,
+    scenario_revision=21,
     assertion_cells=((ASSERTION_ID, None), (lifecycle.STEER_ASSERTION_ID, None)),
     providers=("omp",),
     platforms=("linux", "darwin"),

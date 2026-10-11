@@ -150,7 +150,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=16,
+    scenario_revision=17,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -3054,6 +3054,11 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             else None
         )
         if provider in {"pi", "omp"} and first_native_response is None:
+            # A reply the model never gave is said as that, from the turn's stream. What is
+            # left is a stream that answers beside a session record that does not.
+            account = _turn_account(provider, first_claim, marker, alongside=reply_alongside)
+            if account is not None and not account["answering_replies"]:
+                raise _unanswered_turn_error(provider, first_claim, marker, turn="first", alongside=reply_alongside)
             raise RuntimeError(f"first Console {provider} turn has no native assistant row that answers with its marker once")
         dispatch = {
             "status": "pass",
