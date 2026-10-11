@@ -20,5 +20,208 @@
     "title": "session.title",
     "reset_boundary": "omp_reset_boundary",
     "compaction": "context.compaction"
+  },
+  "shapes": {
+    "custom": {
+      "classification": "extension:state",
+      "first_seen_version": "18.1.16",
+      "last_seen_version": "18.9.0",
+      "entrypoints": [],
+      "keys": [
+        "customType",
+        "data",
+        "id",
+        "parentId",
+        "timestamp",
+        "type"
+      ],
+      "required_keys": [
+        "type"
+      ]
+    },
+    "custom_message": {
+      "classification": "extension:message",
+      "first_seen_version": "18.1.20",
+      "last_seen_version": "18.9.0",
+      "entrypoints": [],
+      "keys": [
+        "attribution",
+        "content",
+        "customType",
+        "details",
+        "display",
+        "id",
+        "parentId",
+        "timestamp",
+        "type"
+      ],
+      "required_keys": [
+        "type",
+        "content",
+        "display"
+      ]
+    },
+    "message/toolResult/text": {
+      "classification": "provider_tool:result",
+      "first_seen_version": "18.1.16",
+      "last_seen_version": "18.9.0",
+      "entrypoints": [],
+      "keys": [
+        "id",
+        "message",
+        "message.content",
+        "message.content[].text",
+        "message.content[].type",
+        "message.details",
+        "message.isError",
+        "message.role",
+        "message.timestamp",
+        "message.toolCallId",
+        "message.toolName",
+        "parentId",
+        "timestamp",
+        "type"
+      ],
+      "required_keys": [
+        "type",
+        "message.role",
+        "message.toolCallId",
+        "message.content",
+        "message.content[].text"
+      ]
+    },
+    "message/user/text": {
+      "classification": "transcript:user",
+      "first_seen_version": "18.1.16",
+      "last_seen_version": "18.9.0",
+      "entrypoints": [],
+      "keys": [
+        "id",
+        "message",
+        "message.attribution",
+        "message.content",
+        "message.content[].text",
+        "message.content[].type",
+        "message.role",
+        "message.steering",
+        "message.timestamp",
+        "parentId",
+        "timestamp",
+        "type"
+      ],
+      "required_keys": [
+        "type",
+        "message.role",
+        "message.content",
+        "message.content[].type",
+        "message.content[].text"
+      ]
+    },
+    "model_change": {
+      "classification": "state:model",
+      "first_seen_version": "18.1.16",
+      "last_seen_version": "18.9.0",
+      "entrypoints": [],
+      "keys": [
+        "id",
+        "model",
+        "parentId",
+        "resolvedModelIsFallback",
+        "timestamp",
+        "type"
+      ],
+      "required_keys": [
+        "type",
+        "model"
+      ]
+    },
+    "service_tier_change": {
+      "classification": "state:service_tier",
+      "first_seen_version": "18.1.17",
+      "last_seen_version": "18.9.0",
+      "entrypoints": [],
+      "keys": [
+        "id",
+        "parentId",
+        "serviceTier",
+        "timestamp",
+        "type"
+      ],
+      "required_keys": [
+        "type"
+      ]
+    },
+    "session": {
+      "classification": "state:session_header",
+      "first_seen_version": "18.1.16",
+      "last_seen_version": "18.9.0",
+      "entrypoints": [],
+      "keys": [
+        "cwd",
+        "id",
+        "timestamp",
+        "type",
+        "version"
+      ],
+      "required_keys": [
+        "type",
+        "id",
+        "cwd"
+      ]
+    },
+    "thinking_level_change": {
+      "classification": "state:thinking_level",
+      "first_seen_version": "18.1.16",
+      "last_seen_version": "18.9.0",
+      "entrypoints": [],
+      "keys": [
+        "configured",
+        "id",
+        "parentId",
+        "thinkingLevel",
+        "timestamp",
+        "type"
+      ],
+      "required_keys": [
+        "type",
+        "thinkingLevel"
+      ]
+    },
+    "title": {
+      "classification": "signal:session.title",
+      "first_seen_version": "18.1.16",
+      "last_seen_version": "18.9.0",
+      "entrypoints": [],
+      "keys": [
+        "pad",
+        "source",
+        "title",
+        "type",
+        "updatedAt",
+        "v"
+      ],
+      "required_keys": [
+        "type",
+        "title"
+      ]
+    },
+    "title_change": {
+      "classification": "signal:session.title",
+      "first_seen_version": "18.9.0",
+      "last_seen_version": "18.9.0",
+      "entrypoints": [],
+      "keys": [
+        "id",
+        "parentId",
+        "source",
+        "timestamp",
+        "title",
+        "type"
+      ],
+      "required_keys": [
+        "type",
+        "title"
+      ]
+    }
   }
 }
