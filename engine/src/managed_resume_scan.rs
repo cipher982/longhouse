@@ -372,7 +372,11 @@ fn verify_omp_session_file_cached(
         cwd.to_string(),
     );
     if let (Some(stamp), Ok(cache)) = (stamp.as_deref(), VERIFIED_OMP_SESSION_FILES.lock()) {
-        if cache.get(&key).is_some_and(|verified| verified == stamp) {
+        // Readability is not in any stamp (a chmod moves neither identity,
+        // length nor mtime), so a cached success also needs the file to open.
+        if cache.get(&key).is_some_and(|verified| verified == stamp)
+            && fs::File::open(session_file).is_ok()
+        {
             return Ok(());
         }
     }
@@ -773,6 +777,19 @@ mod tests {
             verify_omp_session_file_cached(&session_file, "native-omp", cwd_text).is_ok(),
             uncached
         );
+
+        // Read access removed (stamp unchanged): no cached success.
+        fs::remove_file(&session_file).unwrap();
+        fs::rename(&target, &session_file).unwrap();
+        verify_omp_session_file_cached(&session_file, "native-omp", cwd_text).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&session_file, fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = verify_omp_session_file_cached(&session_file, "native-omp", cwd_text);
+        fs::set_permissions(&session_file, fs::Permissions::from_mode(0o600)).unwrap();
+        // Root opens a 0o000 file anyway (CI containers run as root).
+        if unsafe { libc::geteuid() } != 0 {
+            assert!(unreadable.is_err());
+        }
     }
 
     #[test]

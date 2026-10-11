@@ -534,14 +534,11 @@ impl SessionSourceLocation {
     }
 
     pub fn is_in(&self, session_dir: &Path) -> bool {
-        session_dir.is_absolute()
-            && self.is_in_resolved(&crate::storage_v2_shipper::stable_source_path(session_dir))
-    }
-
-    /// `session_dir` already resolved with `stable_source_path` (or
-    /// `fs::canonicalize`, which agrees for a directory that exists).
-    pub fn is_in_resolved(&self, session_dir: &Path) -> bool {
-        self.parent == session_dir || self.bucket_root.as_deref() == Some(session_dir)
+        if !session_dir.is_absolute() {
+            return false;
+        }
+        let session_dir = crate::storage_v2_shipper::stable_source_path(session_dir);
+        self.parent == session_dir || self.bucket_root.as_ref() == Some(&session_dir)
     }
 }
 

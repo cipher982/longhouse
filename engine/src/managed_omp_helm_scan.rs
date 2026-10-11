@@ -70,23 +70,12 @@ pub(crate) fn source_ownership(path: &Path) -> anyhow::Result<crate::omp_session
     source_ownership_in(&state_dir, path)
 }
 
-/// A parsed Helm state plus its session directory resolved at parse time.
-/// `dir_cache` keeps the parse while the state directory is at rest, so the
-/// realpath runs once per state-file change instead of once per source path
-/// asked about. `None` when the directory does not resolve (not created yet,
-/// or gone); the caller then resolves it on demand, as before.
 fn parse_source_state(
     path: &Path,
     bytes: std::io::Result<Vec<u8>>,
-) -> Option<(PathBuf, OmpHelmStateFile, Option<PathBuf>)> {
-    let state: OmpHelmStateFile = serde_json::from_slice(&bytes.ok()?).ok()?;
-    let resolved_session_dir = state
-        .session_dir
-        .as_deref()
-        .map(Path::new)
-        .filter(|dir| dir.is_absolute())
-        .and_then(|dir| fs::canonicalize(dir).ok());
-    Some((path.to_path_buf(), state, resolved_session_dir))
+) -> Option<(PathBuf, OmpHelmStateFile)> {
+    let state = serde_json::from_slice(&bytes.ok()?).ok()?;
+    Some((path.to_path_buf(), state))
 }
 
 fn source_ownership_in(
@@ -105,7 +94,7 @@ fn source_ownership_in(
         crate::dir_cache::parsed_json_dir(state_dir, parse_source_state, |left, right| {
             left.0.cmp(&right.0)
         })?;
-    for (state_path, state, resolved_session_dir) in states.iter() {
+    for (state_path, state) in states.iter() {
         let (Some(session_id), Some(run_id), Some(session_dir)) = (
             state.session_id.as_deref(),
             state.run_id.as_deref(),
@@ -116,12 +105,11 @@ fn source_ownership_in(
         if uuid::Uuid::parse_str(session_id).is_err()
             || uuid::Uuid::parse_str(run_id).is_err()
             || state_path.file_stem().and_then(|name| name.to_str()) != Some(session_id)
+            // Each state's session directory is resolved now, not cached: a
+            // directory symlink can be retargeted without its state changing.
             || !location
                 .as_ref()
-                .is_some_and(|location| match resolved_session_dir {
-                    Some(resolved) => location.is_in_resolved(resolved),
-                    None => location.is_in(Path::new(session_dir)),
-                })
+                .is_some_and(|location| location.is_in(Path::new(session_dir)))
         {
             continue;
         }
