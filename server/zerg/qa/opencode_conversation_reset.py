@@ -8,12 +8,14 @@ import os
 import sqlite3
 import subprocess
 import time
+from contextlib import closing
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from zerg.provider_sqlite import open_readonly
 from zerg.qa.claude_conversation_reset import _read_json
 from zerg.qa.claude_conversation_reset import _sha256
 from zerg.qa.claude_conversation_reset import _tail
@@ -31,7 +33,7 @@ from zerg.qa.pty_session import wait_for_terminal_quiescence
 
 def _matching_session(db: Path, marker: str, *, assistant: bool) -> str | None:
     try:
-        with sqlite3.connect(db) as conn:
+        with closing(open_readonly(db)) as conn:
             rows = conn.execute(
                 """
                 SELECT part.session_id, part.data, message.data
@@ -52,14 +54,14 @@ def _matching_session(db: Path, marker: str, *, assistant: bool) -> str | None:
 
 def _session_ids_since(db: Path, started_at_ms: int) -> set[str]:
     try:
-        with sqlite3.connect(db) as conn:
+        with closing(open_readonly(db)) as conn:
             return {str(row[0]) for row in conn.execute("SELECT id FROM session WHERE time_created >= ?", (started_at_ms,))}
     except sqlite3.Error:
         return set()
 
 
 def _session_snapshot(db: Path, session_id: str) -> tuple[str, str]:
-    with sqlite3.connect(db) as conn:
+    with closing(open_readonly(db)) as conn:
         message_rows = conn.execute("SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created, id", (session_id,)).fetchall()
         part_rows = conn.execute("SELECT id, data FROM part WHERE session_id = ? ORDER BY time_created, id", (session_id,)).fetchall()
     raw = "\n".join(f"message\t{row[0]}\t{row[1]}" for row in message_rows)

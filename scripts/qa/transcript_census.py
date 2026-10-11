@@ -41,6 +41,7 @@ block type the parser has no arm for still makes its shape unclassified.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sqlite3
 import sys
@@ -438,25 +439,24 @@ def iter_files(paths: list[str], provider: str) -> list[Path]:
     return files
 
 
-def _open_sqlite_readonly(path: Path) -> sqlite3.Connection:
-    """Open a provider's SQLite store without writing to it or beside it.
+def _load_open_readonly():
+    """The server's one way to open a provider's SQLite store for reading.
 
-    `mode=ro` reads the write-ahead log, which is where a store still being
-    written keeps its newest rows. It also needs the log's index file, and a
-    store that was closed cleanly has none: when the directory cannot take a
-    new one the first read fails, not the open. `immutable=1` reads the main
-    file alone, which is all a closed store has, so it is the fallback.
+    `zerg.provider_sqlite` is loaded by path, not imported: this tool runs
+    where the `zerg` package is not installed, beside a checkout that has the
+    file. It reads through the write-ahead log, and reads the main file alone
+    when a closed store sits in a directory that cannot be written.
     """
-    try:
-        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        try:
-            connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
-        except sqlite3.OperationalError:
-            connection.close()
-            raise
-        return connection
-    except sqlite3.OperationalError:
-        return sqlite3.connect(f"file:{path}?immutable=1", uri=True)
+    path = REPO_ROOT / "server" / "zerg" / "provider_sqlite.py"
+    spec = importlib.util.spec_from_file_location("longhouse_provider_sqlite", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.open_readonly
+
+
+_open_sqlite_readonly = _load_open_readonly()
 
 
 def _protobuf_fields(data: bytes) -> tuple[list[str], list[bytes]] | None:

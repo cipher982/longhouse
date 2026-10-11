@@ -436,11 +436,11 @@ def test_reader_falls_back_when_the_first_read_fails_not_the_open(tmp_path: Path
 
     def connect(database: str, **kwargs):
         opened.append(database.rsplit("?", 1)[1])
-        return Unreadable() if database.endswith("mode=ro") else real_connect(database, **kwargs)
+        return Unreadable() if database.endswith("?mode=ro") else real_connect(database, **kwargs)
 
     monkeypatch.setattr(ct.sqlite3, "connect", connect)
     result = decode_store_db(store)
-    assert opened == ["mode=ro", "closed", "immutable=1"]
+    assert opened == ["mode=ro", "closed", "mode=ro&immutable=1"]
     assert result.session is not None and result.diagnostics.message_count == len(_basic_messages())
 
 

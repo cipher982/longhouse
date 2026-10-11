@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_sqlite import open_readonly
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 
@@ -2352,7 +2353,7 @@ def _cursor_sqlite_observation(path: Path, *, marker: str) -> dict[str, Any]:
     if "read_error" in observation:
         return {"kind": "store_db", **observation}
     try:
-        connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=1.0)
+        connection = open_readonly(path, timeout=1.0)
         try:
             tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
             table_counts: dict[str, int] = {}
@@ -2544,7 +2545,7 @@ def _cursor_projection_diagnostics(
             if provider_session_id and provider_session_id not in str(path):
                 if path.name == "store.db":
                     try:
-                        connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=0.5)
+                        connection = open_readonly(path, timeout=0.5)
                         try:
                             row = connection.execute("SELECT value FROM meta WHERE key = '0'").fetchone()
                         finally:

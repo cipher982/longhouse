@@ -92,6 +92,29 @@ def test_cursor_store_agent_id_reads_native_meta(tmp_path: Path) -> None:
     assert _cursor_store_agent_id(path) == "provider-native-id"
 
 
+def test_cursor_store_agent_id_reads_a_closed_store_in_a_directory_that_cannot_be_written(tmp_path: Path) -> None:
+    """cursor-agent leaves a WAL-mode store with no sidecars; reading it must not need a new one."""
+    path = tmp_path / "chats" / "workspace" / "chat" / "store.db"
+    path.parent.mkdir(parents=True)
+    connection = sqlite3.connect(path)
+    connection.execute("PRAGMA journal_mode=wal")
+    connection.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    payload = json.dumps({"agentId": "provider-native-id"}).encode("utf-8").hex()
+    connection.execute("INSERT INTO meta(key, value) VALUES ('0', ?)", [payload])
+    connection.commit()
+    connection.close()
+    assert sorted(entry.name for entry in path.parent.iterdir()) == ["store.db"]
+
+    path.parent.chmod(0o555)
+    try:
+        if os.access(path.parent, os.W_OK):
+            pytest.skip("this user can write a new -shm into a read-only directory")
+        assert _cursor_store_agent_id(path) == "provider-native-id"
+        assert find_cursor_store("provider-native-id", root=tmp_path / "chats") == path
+    finally:
+        path.parent.chmod(0o755)
+
+
 def test_find_cursor_store_honors_xdg_config_home(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     path = tmp_path / "config" / "cursor" / "chats" / "workspace" / "provider-session" / "store.db"

@@ -22,6 +22,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+from contextlib import closing
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +32,7 @@ from uuid import uuid4
 
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.provider_sqlite import open_readonly
 from zerg.qa import antigravity_release_identity
 from zerg.qa import claude_release_identity
 from zerg.qa import codex_release_identity
@@ -661,7 +663,7 @@ def _opencode_native_interaction_capture(
             return None
         native_rows, native_payload = native_capture
         try:
-            with sqlite3.connect(database) as connection:
+            with closing(open_readonly(database)) as connection:
                 event_rows = connection.execute("SELECT id, type, data FROM event ORDER BY id").fetchall()
                 message_count = int(connection.execute("SELECT count(*) FROM message").fetchone()[0])
                 part_count = int(connection.execute("SELECT count(*) FROM part").fetchone()[0])

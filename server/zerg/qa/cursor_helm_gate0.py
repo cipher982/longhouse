@@ -30,6 +30,7 @@ from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
+from zerg.provider_sqlite import open_readonly
 from zerg.qa.conversation_reset import classify_identity_transition
 from zerg.qa.conversation_reset import evaluate_reset_observation
 from zerg.qa.conversation_reset import longhouse_provider_aliases
@@ -283,9 +284,8 @@ def _decode_cursor_meta_value(value: object) -> dict[str, Any]:
 
 
 def _cursor_store_agent_id(path: Path) -> str | None:
-    uri = f"file:{path}?mode=ro"
     try:
-        connection = sqlite3.connect(uri, uri=True, timeout=1.0)
+        connection = open_readonly(path, timeout=1.0)
         try:
             row = connection.execute("SELECT value FROM meta WHERE key = '0'").fetchone()
         finally:
@@ -1956,7 +1956,7 @@ def _snapshot_native_evidence(report: dict[str, Any], artifact_root: Path) -> li
                 ):
                     raise RuntimeError("Cursor native store contains provider credential material")
                 try:
-                    connection = sqlite3.connect(f"file:{destination}?mode=ro", uri=True, timeout=1.0)
+                    connection = open_readonly(destination, timeout=1.0)
                     try:
                         blob_count = int(connection.execute("SELECT COUNT(*) FROM blobs").fetchone()[0])
                     finally:

@@ -7,9 +7,11 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from collections.abc import Mapping
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_sqlite import open_readonly
 from zerg.qa.provider_event_digest import raw_event_digest
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL_OUTPUT
@@ -462,8 +464,7 @@ def _live_negative_provenance(
         if observed_database is None or observed_database[1] != database_digest:
             return STATUS_FAIL, "interaction_negative_database_receipt_invalid"
         try:
-            database_uri = f"file:{resolved_database}?mode=ro"
-            with sqlite3.connect(database_uri, uri=True) as connection:
+            with closing(open_readonly(resolved_database)) as connection:
                 counts = {
                     "event_count": int(connection.execute("SELECT count(*) FROM event").fetchone()[0]),
                     "session_count": int(connection.execute("SELECT count(*) FROM session").fetchone()[0]),
