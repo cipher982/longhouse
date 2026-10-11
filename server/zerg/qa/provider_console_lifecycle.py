@@ -137,7 +137,7 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=8,
+    scenario_revision=9,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -447,21 +447,25 @@ def _wait_claim(
 def _claim_wait_kind(claim: Mapping[str, Any] | None) -> str | None:
     """What a wait on an adapter claim was waiting on, from the claim it last read.
 
-    The claim is the engine's record of one Console turn: it appears when the
-    engine takes the run, reads ``spawned`` once the provider process is
-    running, and ``terminal`` or ``failed`` when that process is done. A turn
-    stuck at ``spawned`` with the provider still alive is the provider's own
-    turn; with the provider gone, the engine never recorded the exit. A claim
-    that has not reached ``spawned`` is the engine not yet running the
-    provider. No claim at all says nothing: the Runtime Host may never have
-    dispatched the run, or the engine never took it.
+    The claim is the engine's record of one Console turn
+    (``engine/src/turn_claims.rs``): written ``claimed`` when the engine takes
+    the run, ``spawned`` once the provider process is running, and
+    ``terminal`` or ``failed`` when that process is done. A claim still at
+    ``claimed`` is the engine not yet running the provider. A turn stuck at
+    ``spawned`` with the provider still alive is the provider's own turn; with
+    the provider gone, the engine never recorded the exit. Only those two
+    states are read here. No claim at all says nothing (the Runtime Host may
+    never have dispatched the run, or the engine never took it), and neither
+    does any other state: one this producer has not been taught is not
+    evidence about who was being waited on.
     """
 
-    if not isinstance(claim, Mapping):
-        return None
-    if claim.get("state") != "spawned":
+    state = claim.get("state") if isinstance(claim, Mapping) else None
+    if state == "claimed":
         return LONGHOUSE_ENGINE
-    return LONGHOUSE_ENGINE if _pid_dead(claim.get("pid")) else PROVIDER_TURN
+    if state == "spawned":
+        return LONGHOUSE_ENGINE if _pid_dead(claim.get("pid")) else PROVIDER_TURN
+    return None
 
 
 def _archive_events(api_url: str, token: str, session_id: str) -> list[object]:

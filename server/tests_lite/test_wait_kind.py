@@ -367,8 +367,11 @@ def test_a_console_claim_wait_reads_the_claim_to_say_what_it_waited_on(tmp_path)
     # No claim: the run was never dispatched or never taken. Not attributable.
     assert waited_on(claim_wait()) is None
     # The engine holds the run and has not started the provider.
-    path.write_text(json.dumps({"state": "acquired"}))
+    path.write_text(json.dumps({"state": "claimed"}))
     assert waited_on(claim_wait()) == LONGHOUSE_ENGINE
+    # A state this producer has not been taught says nothing about who was awaited.
+    path.write_text(json.dumps({"state": "parked", "pid": os.getpid()}))
+    assert waited_on(claim_wait()) is None
     # The provider process is running and has not finished its turn.
     path.write_text(json.dumps({"state": "spawned", "pid": os.getpid()}))
     assert waited_on(claim_wait()) == PROVIDER_TURN
