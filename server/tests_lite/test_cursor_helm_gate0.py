@@ -28,9 +28,9 @@ from zerg.qa.cursor_helm_gate0 import _storage_v2_receipt_payload
 from zerg.qa.cursor_helm_gate0 import find_cursor_store
 from zerg.qa.cursor_helm_gate0 import read_hook_events
 from zerg.qa.cursor_helm_gate0 import write_project_hooks
+from zerg.qa.harness_input import DEFAULT_HARNESS_PROMPT
+from zerg.qa.harness_input import HARNESS_REPLY_PHRASE
 from zerg.qa.pty_session import ProviderPtySession
-from zerg.qa.universal_agent_harness import DEFAULT_HARNESS_PROMPT
-from zerg.qa.universal_agent_harness import HARNESS_REPLY_PHRASE
 
 
 def test_decode_cursor_meta_accepts_hex_encoded_json() -> None:
@@ -1095,9 +1095,7 @@ def test_gate0_report_names_a_launch_turn_that_ended_in_error(monkeypatch, tmp_p
     monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, _LAUNCH_ERRORED))
 
     report = gate.run_gate0(
-        gate.build_parser().parse_args(
-            ["--cursor-bin", str(binary), "--artifact-root", str(tmp_path / "artifacts"), "--input-prompt", DEFAULT_HARNESS_PROMPT]
-        )
+        gate.build_parser().parse_args(["--cursor-bin", str(binary), "--artifact-root", str(tmp_path / "artifacts"), "--harness-input"])
     )
 
     assert (report["status"], report["failed_scenario"], report["failure_code"]) == (
@@ -1108,6 +1106,55 @@ def test_gate0_report_names_a_launch_turn_that_ended_in_error(monkeypatch, tmp_p
     failed = report["scenarios"]["create_chat_resume"]
     assert (failed["turn"], failed["stop_status"]) == ("launch", "error")
     assert "launch turn" in report["error"]
+
+
+@pytest.mark.parametrize("harness_input", [True, False])
+def test_the_harness_input_flag_decides_the_create_chat_resume_probe_and_no_other(monkeypatch, tmp_path: Path, harness_input: bool) -> None:
+    """With the flag the probe is the universal harness's own input, read here and not handed in as text."""
+
+    binary = tmp_path / "cursor-agent"
+    binary.write_bytes(b"fixture")
+    probes: dict[str, str | None] = {}
+
+    def identity(*, name: str, probe_prompt: str | None = None, **_kwargs: Any) -> dict[str, Any]:
+        probes[name] = probe_prompt
+        return {"status": "passed", "longhouse_session_id": "session-1"}
+
+    def passed(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"status": "passed"}
+
+    def stop_here(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("fixture: the scenarios under test have run")
+
+    monkeypatch.setattr(gate, "_identity_scenario", identity)
+    for name in (
+        "_trust_workspace",
+        "_resume_scenario",
+        "_managed_conversation_reset_scenario",
+        "_cancel_scenario",
+        "_permission_scenario",
+    ):
+        monkeypatch.setattr(gate, name, passed)
+    monkeypatch.setattr(gate, "_active_steer_scenario", stop_here)
+    monkeypatch.setattr(gate, "_provider_version", lambda *_args: "0.0.0-fixture")
+    monkeypatch.setattr(gate, "_run_json", lambda *_args, **_kwargs: {"isAuthenticated": True})
+    monkeypatch.setattr(gate, "_create_chat", lambda *_args: "conversation-1")
+    monkeypatch.setattr(gate, "_git_commit", lambda: None)
+    monkeypatch.setattr(gate, "evaluate_reset_observation", lambda _observation: {"status": "pass", "failed_assertions": []})
+
+    argv = ["--cursor-bin", str(binary), "--artifact-root", str(tmp_path / "artifacts"), *(["--harness-input"] if harness_input else [])]
+    report = gate.run_gate0(gate.build_parser().parse_args(argv))
+
+    assert report["failed_scenario"] == "active_steer"
+    assert probes == {"create_chat_resume": DEFAULT_HARNESS_PROMPT if harness_input else None, "new_session_id": None}
+
+
+def test_the_gate_takes_no_probe_text_from_its_caller(capsys) -> None:
+    with pytest.raises(SystemExit) as refused:
+        gate.build_parser().parse_args(["--input-prompt", DEFAULT_HARNESS_PROMPT])
+
+    assert refused.value.code == 2
+    assert "unrecognized arguments: --input-prompt" in capsys.readouterr().err
 
 
 def test_identity_scenario_passes_when_the_instruction_probe_is_answered_with_the_phrase(monkeypatch, tmp_path: Path) -> None:

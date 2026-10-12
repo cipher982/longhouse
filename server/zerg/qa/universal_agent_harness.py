@@ -36,6 +36,8 @@ from zerg.qa import qualification_request as qualification_request_contract
 from zerg.qa.background_fidelity import combine_real_replay_results
 from zerg.qa.background_fidelity import run_claude_lifecycle_hook_replay
 from zerg.qa.background_fidelity import run_engine_fact_replay
+from zerg.qa.harness_input import DEFAULT_HARNESS_PROMPT
+from zerg.qa.harness_input import HARNESS_REPLY_PHRASE
 from zerg.qa.provider_build_store import GENERATED_FAKE_PROVENANCE
 from zerg.qa.provider_build_store import ProviderBuildRef
 from zerg.qa.provider_build_store import verify_provider_builds
@@ -260,11 +262,6 @@ STATUS_NOT_APPLICABLE = "not_applicable"
 STATUS_BLOCKED = "blocked"
 STATUS_FLAKY = "flaky"
 STATUS_XFAIL_WITH_EXPIRY = "xfail_with_expiry"
-# The default input is an instruction with one right answer, so a provider
-# that receives it has a turn it can finish. The phrase is the reply it asks
-# for; the prompt is built from it so the two cannot drift.
-HARNESS_REPLY_PHRASE = "LONGHOUSE UNIVERSAL HARNESS"
-DEFAULT_HARNESS_PROMPT = f"Reply with exactly {HARNESS_REPLY_PHRASE} and nothing else."
 STATUSES = (
     STATUS_PASS,
     STATUS_FAIL,

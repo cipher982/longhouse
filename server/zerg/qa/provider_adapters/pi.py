@@ -40,9 +40,9 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import pi_native
+from zerg.qa.harness_input import DEFAULT_HARNESS_PROMPT
+from zerg.qa.harness_input import HARNESS_REPLY_PHRASE
 from zerg.qa.provider_build_store import GENERATED_FAKE_PROVENANCE
-from zerg.qa.universal_agent_harness import DEFAULT_HARNESS_PROMPT
-from zerg.qa.universal_agent_harness import HARNESS_REPLY_PHRASE
 from zerg.qa.universal_agent_harness import STATUS_FAIL
 from zerg.qa.universal_agent_harness import STATUS_PASS
 from zerg.qa.universal_agent_harness import EvidencePackage

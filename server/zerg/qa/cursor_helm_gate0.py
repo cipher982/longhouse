@@ -34,6 +34,7 @@ from zerg.qa.conversation_reset import classify_identity_transition
 from zerg.qa.conversation_reset import evaluate_reset_observation
 from zerg.qa.conversation_reset import longhouse_provider_aliases
 from zerg.qa.conversation_reset import longhouse_source_binding
+from zerg.qa.harness_input import DEFAULT_HARNESS_PROMPT
 from zerg.qa.provider_sqlite import open_readonly
 from zerg.qa.pty_session import ProviderPtySession as CursorPtySession
 
@@ -1794,7 +1795,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             launch_args=["--resume", provider_id],
             timeout=args.timeout,
             model=args.model,
-            probe_prompt=args.input_prompt,
+            probe_prompt=DEFAULT_HARNESS_PROMPT if args.harness_input else None,
         )
         first_identity = report["scenarios"]["create_chat_resume"]
         scenario = "native_resume_continuity"
@@ -2038,8 +2039,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cursor-bin", help="Explicit stock cursor-agent binary")
     parser.add_argument("--model", help="Optional model override for low-cost proof turns")
     parser.add_argument(
-        "--input-prompt",
-        help="Exact prompt to bind into the create_chat_resume evidence for universal send_receive qualification.",
+        "--harness-input",
+        action="store_true",
+        help=(
+            "Probe create_chat_resume with the universal harness's default input, so its send_receive can bind to this evidence by sha256."
+        ),
     )
     parser.add_argument("--timeout", type=float, default=_DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument(
