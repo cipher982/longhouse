@@ -24,7 +24,7 @@ QA_DIR = pathlib.Path(zerg.qa.__file__).parent
 TOOLKIT = QA_DIR / "live_session_toolkit.py"
 
 # The resume producer keeps these: they are the producer, not the toolkit.
-RESUME_PRODUCER_EXPORTS = {"main_for", "registration_for", "SPECS"}
+RESUME_PRODUCER_EXPORTS = {"main_for", "producer_for", "registration_for", "SPECS"}
 
 
 def _public_names(path: pathlib.Path) -> set[str]:
