@@ -176,6 +176,33 @@ fn group_has_non_zombie_in(text: &str, pgid: i32) -> Option<bool> {
     Some(running)
 }
 
+/// The `ps -o lstart=` text of each requested pid that is running, from one
+/// process-table read with no argv. Absent pids are omitted; `None` is a
+/// failed read. What liveness checks compare, at a cost independent of how
+/// many pids a claim has recorded.
+#[cfg(target_os = "macos")]
+pub fn try_collect_process_start_keys(pids: &[u32]) -> Option<HashMap<u32, String>> {
+    macos::try_collect_process_start_keys(pids)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn try_collect_process_start_keys(pids: &[u32]) -> Option<HashMap<u32, String>> {
+    let mut requested: Vec<u32> = pids.iter().copied().filter(|pid| *pid > 1).collect();
+    requested.sort_unstable();
+    requested.dedup();
+    let facts = if requested.len() > TARGETED_PROCESS_FACT_BATCH_MAX {
+        try_collect_process_facts_by_pid()?
+    } else {
+        try_collect_process_facts_for_pids(&requested)?
+    };
+    Some(
+        requested
+            .into_iter()
+            .filter_map(|pid| facts.get(&pid).map(|fact| (pid, fact.lstart.clone())))
+            .collect(),
+    )
+}
+
 /// Read one bounded batch of exact process identities without enumerating the
 /// rest of the machine. A successful result is a complete observation for the
 /// requested PIDs: omitted PIDs were absent, while a failed/partial probe
@@ -616,14 +643,76 @@ pub fn parse_process_lineage(line: &str) -> Option<ProcessLineage> {
     })
 }
 
+/// Parentage alone: what ownership walks need, without any process's argv.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProcessTreeEntry {
+    pub pid: u32,
+    pub ppid: u32,
+    pub pgid: i32,
+}
+
+/// Something `owned_processes` can walk.
+pub trait ProcessTreeNode {
+    fn tree_pid(&self) -> u32;
+    fn tree_ppid(&self) -> u32;
+    fn tree_pgid(&self) -> i32;
+}
+
+impl ProcessTreeNode for ProcessLineage {
+    fn tree_pid(&self) -> u32 {
+        self.pid
+    }
+    fn tree_ppid(&self) -> u32 {
+        self.ppid
+    }
+    fn tree_pgid(&self) -> i32 {
+        self.pgid
+    }
+}
+
+impl ProcessTreeNode for ProcessTreeEntry {
+    fn tree_pid(&self) -> u32 {
+        self.pid
+    }
+    fn tree_ppid(&self) -> u32 {
+        self.ppid
+    }
+    fn tree_pgid(&self) -> i32 {
+        self.pgid
+    }
+}
+
+/// The whole machine's pid/ppid/pgid table. On macOS one `KERN_PROC` sysctl,
+/// with no per-process argv read: the lineage scan reads every process's
+/// argv, which a 100 ms ownership poll cannot afford (~1,150 processes on
+/// cinder). `None` is a failed scan, never an empty machine.
+#[cfg(target_os = "macos")]
+pub fn try_collect_process_tree() -> Option<Vec<ProcessTreeEntry>> {
+    macos::try_collect_process_tree()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn try_collect_process_tree() -> Option<Vec<ProcessTreeEntry>> {
+    Some(
+        try_collect_process_lineage()?
+            .into_iter()
+            .map(|entry| ProcessTreeEntry {
+                pid: entry.pid,
+                ppid: entry.ppid,
+                pgid: entry.pgid,
+            })
+            .collect(),
+    )
+}
+
 /// Transitive descendants of `root`, plus any process sharing `pgid` when one is
 /// recorded. The process-group arm is load-bearing: a wedged command can be
 /// reparented to PID 1 and drop out of the descendant tree entirely.
-pub fn owned_processes<'a>(
-    entries: &'a [ProcessLineage],
+pub fn owned_processes<'a, T: ProcessTreeNode>(
+    entries: &'a [T],
     root: u32,
     pgid: Option<i32>,
-) -> Vec<(&'a ProcessLineage, &'static str)> {
+) -> Vec<(&'a T, &'static str)> {
     let mut descendants: std::collections::HashSet<u32> = std::collections::HashSet::new();
     descendants.insert(root);
     // Bounded relaxation: process trees here are shallow, and each pass can only
@@ -631,8 +720,9 @@ pub fn owned_processes<'a>(
     for _ in 0..entries.len().min(64) {
         let mut grew = false;
         for entry in entries {
-            if !descendants.contains(&entry.pid) && descendants.contains(&entry.ppid) {
-                descendants.insert(entry.pid);
+            if !descendants.contains(&entry.tree_pid()) && descendants.contains(&entry.tree_ppid())
+            {
+                descendants.insert(entry.tree_pid());
                 grew = true;
             }
         }
@@ -643,11 +733,11 @@ pub fn owned_processes<'a>(
 
     entries
         .iter()
-        .filter(|entry| entry.pid != root)
+        .filter(|entry| entry.tree_pid() != root)
         .filter_map(|entry| {
-            if descendants.contains(&entry.pid) {
+            if descendants.contains(&entry.tree_pid()) {
                 Some((entry, "descendant"))
-            } else if pgid.is_some_and(|group| group == entry.pgid) {
+            } else if pgid.is_some_and(|group| group == entry.tree_pgid()) {
                 Some((entry, "process_group"))
             } else {
                 None
@@ -754,6 +844,42 @@ mod tests {
         let started = Instant::now();
         assert!(output_with_timeout(command, Duration::from_millis(100)).is_none());
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn start_keys_match_full_facts_and_omit_absent_pids() {
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let own = std::process::id();
+        let dead = 4_000_000_u32; // above macOS and Linux pid_max
+        let starts = try_collect_process_start_keys(&[own, child.id(), dead]).unwrap();
+        let facts = try_collect_process_facts_for_pids(&[own, child.id()]).unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(starts.get(&own), facts.get(&own).map(|fact| &fact.lstart));
+        assert_eq!(
+            starts.get(&child.id()),
+            facts.get(&child.id()).map(|fact| &fact.lstart)
+        );
+        assert!(!starts.contains_key(&dead));
+    }
+
+    #[test]
+    fn process_tree_parentage_matches_lineage() {
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let tree = try_collect_process_tree().unwrap();
+        let lineage = try_collect_process_lineage().unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+        let in_tree = tree.iter().find(|entry| entry.pid == child.id()).unwrap();
+        let in_lineage = lineage
+            .iter()
+            .find(|entry| entry.pid == child.id())
+            .unwrap();
+        assert_eq!(
+            (in_tree.ppid, in_tree.pgid),
+            (in_lineage.ppid, in_lineage.pgid)
+        );
+        assert_eq!(in_tree.ppid, std::process::id());
     }
 
     #[test]

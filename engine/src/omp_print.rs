@@ -3515,41 +3515,71 @@ fn refresh_owned_processes(run_id: &str) {
     let (Some(pid), Some(process_group_id)) = (claim.pid, claim.process_group_id) else {
         return;
     };
-    let Some(lineage) = crate::process_identity::try_collect_process_lineage() else {
+    // Runs every 100 ms per live Console turn. Ownership needs only the
+    // pid/ppid/pgid table and the owned pids' start times, two process-table
+    // reads with no argv. Reading every process's argv twice per poll was the
+    // engine's largest cost while an OMP turn ran (cinder, 2026-10-11).
+    let Some(tree) = crate::process_identity::try_collect_process_tree() else {
         return;
     };
-    let Some(facts) = crate::process_identity::try_collect_process_facts_by_pid() else {
+    let owned: Vec<crate::process_identity::ProcessTreeEntry> =
+        crate::process_identity::owned_processes(&tree, pid, Some(process_group_id))
+            .into_iter()
+            .map(|(entry, _)| *entry)
+            .collect();
+    // Recorded children are probed too, so exited ones can be dropped.
+    let mut pids: Vec<u32> = owned.iter().map(|entry| entry.pid).collect();
+    pids.push(pid);
+    pids.extend(claim.owned_processes.iter().map(|identity| identity.pid));
+    let Some(starts) = crate::process_identity::try_collect_process_start_keys(&pids) else {
         return;
     };
-    let Some(root_fact) = facts.get(&pid) else {
+    let Some(root_start) = starts.get(&pid) else {
         return;
     };
     if claim
         .process_start_time
         .as_deref()
-        .is_some_and(|expected| root_fact.lstart != expected)
+        .is_some_and(|expected| root_start != expected)
     {
         return;
     }
     let mut observed = vec![crate::turn_claims::OwnedProcessIdentity {
         pid,
         process_group_id,
-        process_start_time: Some(root_fact.lstart.clone()),
+        process_start_time: Some(root_start.clone()),
     }];
-    observed.extend(
-        crate::process_identity::owned_processes(&lineage, pid, Some(process_group_id))
-            .into_iter()
-            .filter_map(|(entry, _)| {
-                facts
-                    .get(&entry.pid)
-                    .map(|fact| crate::turn_claims::OwnedProcessIdentity {
-                        pid: entry.pid,
-                        process_group_id: entry.pgid,
-                        process_start_time: Some(fact.lstart.clone()),
-                    })
-            }),
-    );
-    let _ = registry.record_owned_processes(run_id, observed);
+    observed.extend(owned.iter().filter_map(|entry| {
+        starts
+            .get(&entry.pid)
+            .map(|start| crate::turn_claims::OwnedProcessIdentity {
+                pid: entry.pid,
+                process_group_id: entry.pgid,
+                process_start_time: Some(start.clone()),
+            })
+    }));
+    let exited: Vec<crate::turn_claims::OwnedProcessIdentity> = claim
+        .owned_processes
+        .iter()
+        .filter(|identity| {
+            identity
+                .process_start_time
+                .as_deref()
+                .is_some_and(|recorded| {
+                    starts.get(&identity.pid).map(String::as_str) != Some(recorded)
+                })
+        })
+        .cloned()
+        .collect();
+    // Nothing new and nothing exited: skip the locked claim rewrite.
+    if exited.is_empty()
+        && observed
+            .iter()
+            .all(|identity| claim.owned_processes.contains(identity))
+    {
+        return;
+    }
+    let _ = registry.record_owned_processes(run_id, observed, &exited);
 }
 
 fn recorded_process_matches(
@@ -4590,6 +4620,7 @@ for line in sys.stdin:
                     process_group_id: current_pgid,
                     process_start_time: Some(child_fact.lstart),
                 }],
+                &[],
             )
             .unwrap();
         let waiter = std::thread::spawn(move || child.wait().unwrap());
@@ -4643,6 +4674,7 @@ for line in sys.stdin:
                     process_group_id: current_pgid,
                     process_start_time: Some(child_fact.lstart),
                 }],
+                &[],
             )
             .unwrap();
         let waiter = std::thread::spawn(move || child.wait().unwrap());
@@ -6269,6 +6301,7 @@ for line in sys.stdin:
                         process_group_id: i32::MAX,
                         process_start_time,
                     }],
+                    &[],
                 )
                 .unwrap();
         })

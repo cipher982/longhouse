@@ -518,16 +518,26 @@ impl TurnClaimRegistry {
         Ok(claim)
     }
 
+    /// Merge `observed` into the claim's owned processes after removing the
+    /// `exited` identities.
+    ///
+    /// An exited identity can never match a live process again (a reused pid
+    /// has another start time), so dropping it loses nothing liveness or
+    /// cleanup reads. Without it the list filled with a long turn's finished
+    /// children: at the 256 cap every new child was truncated away and the
+    /// claim was rewritten on every 100 ms poll.
     pub fn record_owned_processes(
         &self,
         run_id: &str,
         observed: Vec<OwnedProcessIdentity>,
+        exited: &[OwnedProcessIdentity],
     ) -> Result<TurnClaim> {
         let (_lock, mut claim) = self.read_for_update(run_id)?;
         if claim.state != "spawned" {
             return Ok(claim);
         }
-        let mut merged = claim.owned_processes;
+        let mut merged = claim.owned_processes.clone();
+        merged.retain(|identity| !exited.contains(identity));
         for identity in observed {
             if identity.pid == 0 || identity.process_group_id <= 0 {
                 continue;
@@ -541,6 +551,9 @@ impl TurnClaimRegistry {
         merged.sort_by_key(|identity| identity.pid);
         merged.dedup_by_key(|identity| identity.pid);
         merged.truncate(256);
+        if merged == claim.owned_processes {
+            return Ok(claim);
+        }
         claim.owned_processes = merged;
         claim.updated_at = Utc::now().to_rfc3339();
         self.write(&claim)?;
@@ -1084,6 +1097,55 @@ mod tests {
         assert_eq!(existing.state, "claimed");
         assert_eq!(existing.turn_id, Some(id(4)));
         assert_eq!(existing.client_request_id.as_deref(), Some("request-1"));
+    }
+
+    #[test]
+    fn exited_owned_processes_make_room_and_unchanged_ones_write_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_id = id(21);
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        registry
+            .claim(&run_id, &id(22), &id(23), None, None, "omp")
+            .unwrap();
+        registry
+            .mark_spawned_invocation(
+                &run_id,
+                42,
+                42,
+                Some("Mon Jul 15 10:00:00 2026".to_string()),
+                "omp_print",
+                "launch-21",
+                None,
+                "/tmp/stdout.jsonl",
+                "/tmp/stderr.log",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        let child = |pid: u32| OwnedProcessIdentity {
+            pid,
+            process_group_id: 42,
+            process_start_time: Some(format!("start-{pid}")),
+        };
+        let full: Vec<_> = (1000..1256).map(child).collect();
+        registry
+            .record_owned_processes(&run_id, full.clone(), &[])
+            .unwrap();
+
+        // A new child at the cap is kept once an exited one is dropped.
+        let claim = registry
+            .record_owned_processes(&run_id, vec![child(5000)], &full[..1])
+            .unwrap();
+        assert_eq!(claim.owned_processes.len(), 256);
+        assert!(claim.owned_processes.contains(&child(5000)));
+        assert!(!claim.owned_processes.contains(&full[0]));
+
+        // Nothing new: the file is not rewritten.
+        let path = temp.path().join(format!("{run_id}.json"));
+        let before = std::fs::read(&path).unwrap();
+        registry
+            .record_owned_processes(&run_id, vec![child(5000)], &[])
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
     #[test]

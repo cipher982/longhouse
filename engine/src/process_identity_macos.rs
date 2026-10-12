@@ -212,6 +212,46 @@ pub(super) fn try_collect_process_facts_for_pids(
     Some(facts)
 }
 
+pub(super) fn try_collect_process_start_keys(pids: &[u32]) -> Option<HashMap<u32, String>> {
+    let requested: std::collections::HashSet<u32> =
+        pids.iter().copied().filter(|pid| *pid > 1).collect();
+    if requested.is_empty() {
+        return Some(HashMap::new());
+    }
+    let mut starts = HashMap::with_capacity(requested.len());
+    for info in list_kinfo_processes().ok()? {
+        let Ok(pid) = u32::try_from(info.kp_proc.p_pid) else {
+            continue;
+        };
+        if !requested.contains(&pid) {
+            continue;
+        }
+        let seconds = u64::try_from(info.kp_proc.p_starttime.tv_sec).ok()?;
+        starts.insert(pid, format_lstart(seconds)?);
+    }
+    Some(starts)
+}
+
+pub(super) fn try_collect_process_tree() -> Option<Vec<super::ProcessTreeEntry>> {
+    let processes = list_kinfo_processes().ok()?;
+    let mut entries = Vec::with_capacity(processes.len());
+    for info in processes {
+        let pid = u32::try_from(info.kp_proc.p_pid).ok()?;
+        if pid == 0 {
+            continue;
+        }
+        entries.push(super::ProcessTreeEntry {
+            pid,
+            ppid: u32::try_from(info.kp_eproc.e_ppid).ok()?,
+            pgid: info.kp_eproc.e_pgid,
+        });
+    }
+    entries
+        .iter()
+        .any(|entry| entry.pid == std::process::id())
+        .then_some(entries)
+}
+
 pub(super) fn try_collect_process_lineage() -> Option<Vec<ProcessLineage>> {
     let processes = list_kinfo_processes().ok()?;
     let mut entries = Vec::with_capacity(processes.len());

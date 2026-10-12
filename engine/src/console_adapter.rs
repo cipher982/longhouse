@@ -70,49 +70,62 @@ pub fn claim_liveness(
     let Some(inventory) = inventory else {
         return ClaimLiveness::Unknown;
     };
+    claim_liveness_by_start(claim, |pid| {
+        inventory.get(&pid).map(|fact| fact.lstart.as_str())
+    })
+}
+
+/// `claim_liveness` over a lookup of each live pid's `ps lstart` text,
+/// `None` for a pid that is not running. Liveness reads nothing else.
+fn claim_liveness_by_start<'a>(
+    claim: &TurnClaim,
+    start_of: impl Fn(u32) -> Option<&'a str>,
+) -> ClaimLiveness {
     let Some(pid) = claim.pid else {
         // A spawned claim without a pid has no provider process to recover.
         return ClaimLiveness::Gone;
     };
     if claim.owned_processes.iter().any(|owned| {
-        inventory
-            .get(&owned.pid)
-            .and_then(|fact| {
-                owned
-                    .process_start_time
-                    .as_deref()
-                    .map(|start| (fact, start))
-            })
-            .is_some_and(|(fact, start)| fact.lstart == start)
+        start_of(owned.pid)
+            .zip(owned.process_start_time.as_deref())
+            .is_some_and(|(live, recorded)| live == recorded)
     }) {
         return ClaimLiveness::Live;
     }
-    if !inventory.contains_key(&pid) {
+    let Some(live_start) = start_of(pid) else {
         // A readable full inventory proves that the recorded PID is gone even
         // when the spawn-time birth probe was unavailable.
         return ClaimLiveness::Gone;
-    }
+    };
     let Some(expected) = claim.process_start_time.as_deref() else {
         // The PID is present, but without its birth identity we cannot prove
         // that it still belongs to this turn.
         return ClaimLiveness::Unknown;
     };
-    if inventory
-        .get(&pid)
-        .is_some_and(|fact| fact.lstart == expected)
-    {
+    if live_start == expected {
         ClaimLiveness::Live
     } else {
         ClaimLiveness::Gone
     }
 }
 
-/// Collect one inventory and classify a single claim against it.
+/// Classify a single claim against the start times of its own processes.
+///
+/// Console monitors call this every 100 ms, and a claim records every child
+/// its turn ever spawned (256 on a long OMP turn). Start times for all of
+/// them come from one process-table read; a per-pid argv probe of each, or a
+/// whole-machine argv scan, was the engine's largest cost.
 pub fn claim_process_liveness(claim: &TurnClaim) -> ClaimLiveness {
-    claim_liveness(
-        claim,
-        crate::process_identity::try_collect_process_facts_by_pid().as_ref(),
-    )
+    let pids: Vec<u32> = claim
+        .owned_processes
+        .iter()
+        .map(|owned| owned.pid)
+        .chain(claim.pid)
+        .collect();
+    let Some(starts) = crate::process_identity::try_collect_process_start_keys(&pids) else {
+        return ClaimLiveness::Unknown;
+    };
+    claim_liveness_by_start(claim, |pid| starts.get(&pid).map(String::as_str))
 }
 
 /// Read whatever a provider appended to its JSONL file since `offset`, and
