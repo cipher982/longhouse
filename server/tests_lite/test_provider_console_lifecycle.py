@@ -2029,6 +2029,33 @@ def _run_steer(monkeypatch, tmp_path: Path, provider: str, page: list[dict[str, 
     return receipt, clock
 
 
+@pytest.mark.parametrize("provider", sorted(lifecycle.STEER_PROVIDERS))
+def test_the_steered_command_is_asked_for_in_the_foreground_in_the_interrupt_prompts_words(monkeypatch, tmp_path, provider):
+    # OMP runs a bash command it is given a name for as a service whose output never reaches the conversation, so the
+    # command's marker is nowhere the step reads. Both prompts that hand a turn a shell command say so, from one place.
+    import inspect
+
+    asked: list[str] = []
+    monkeypatch.setattr(lifecycle, "_start_turn", lambda **turn: asked.append(turn["message"]) or {"run_id": "run-1", "turn_id": "turn-1"})
+    monkeypatch.setattr(lifecycle, "_wait_claim", lambda *_args, **_kwargs: {"state": "terminal"})
+    receipt = lifecycle._run_steer_step(
+        api_url="https://runtime.example",
+        token="token",
+        session_id="session-1",
+        provider=provider,
+        longhouse_home=tmp_path,
+        claims=[],
+        flush_for_projection=lambda *_args: {},
+    )
+
+    assert receipt["reason"] == "turn_finished_before_steer"
+    assert len(asked) == 1 and f"` {lifecycle._IN_THE_FOREGROUND}, then reply with exactly" in asked[0]
+    assert lifecycle._IN_THE_FOREGROUND == "in the foreground (not as a named or background job)"
+    assert "`sleep 8` {_IN_THE_FOREGROUND}, " in inspect.getsource(lifecycle._run_live)
+    # Neither prompt spells the sentence itself.
+    assert inspect.getsource(lifecycle).count("not as a named or background job") == 1
+
+
 def _steer_observation(receipt: dict) -> dict:
     dispatch, binding, interrupt, cleanup = _receipts()
     return lifecycle._observation_from_receipts(dispatch=dispatch, binding=binding, interrupt=interrupt, cleanup=cleanup, steer=receipt)

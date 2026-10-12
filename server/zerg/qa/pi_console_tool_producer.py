@@ -37,7 +37,8 @@ REGISTRATION = ProducerRegistration(
     # 7: the native reply is the row that answers with the marker, not every
     # row that names it.
     # 22: the waits for a served reply read the newest events, as the steer receipt does.
-    # 23: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    # 23: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead), and the
+    # shared steer step asks for its command in the foreground.
     scenario_revision=23,
     assertion_cells=((ASSERTION_ID, None), (lifecycle.STEER_ASSERTION_ID, None)),
     providers=("pi",),

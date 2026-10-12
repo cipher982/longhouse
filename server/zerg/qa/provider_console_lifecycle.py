@@ -154,7 +154,8 @@ REGISTRATION = ProducerRegistration(
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
     # 22: the waits for a served reply read the newest events, as the steer receipt does.
-    # 23: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    # 23: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead), and the
+    # steer step asks for its command in the foreground, as the interrupt step does.
     scenario_revision=23,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
@@ -2654,11 +2655,18 @@ def _post_steer(
 
 
 # OMP moves a running shell command to a background job when a steer arrives and
-# reports the result in a later notice. That result reaches OMP as a `custom`
-# message in its own stream, and the served transcript does not carry that
-# system row. For these providers the stream the Machine Agent captured is the
-# completion evidence.
+# reports the result in a later notice, a `custom` message in its own stream. The
+# served transcript carries that notice as a system event, and the result is read
+# there first. For these providers the stream the Machine Agent captured is the
+# second place to find it, when the served events read for the receipt do not hold it.
 _STEER_TOOL_RESULT_IN_PROVIDER_STREAM = frozenset({"omp"})
+
+# How a prompt asks for the shell command a step then interrupts or steers. OMP runs
+# a command its `bash` tool is given a name for as a supervised service: the output
+# goes to the service's own log and never into the conversation, so the command's
+# result is nowhere a producer reads and the turn no longer owns the work. One
+# wording for every such prompt, so that none is left without it.
+_IN_THE_FOREGROUND = "in the foreground (not as a named or background job)"
 
 
 def _run_steer_step(
@@ -2682,7 +2690,7 @@ def _run_steer_step(
     first_marker = f"LH_{provider.upper()}_STEER_FIRST_{tag}"
     steer_marker = f"LH_{provider.upper()}_STEERED_{tag}"
     message = (
-        f"Use the shell tool to run `sleep 15 && echo {tool_prefix}$((40+2))_{tag}`, "
+        f"Use the shell tool to run `sleep 15 && echo {tool_prefix}$((40+2))_{tag}` {_IN_THE_FOREGROUND}, "
         f"then reply with exactly {first_marker} and nothing else."
     )
     request_id = f"console-steer-turn-{uuid4()}"
@@ -3388,8 +3396,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
 
         interrupt_marker = f"LH_{provider.upper()}_INTERRUPT_{uuid4().hex}"
         interrupt_message = (
-            "Use the shell tool to run `sleep 8` in the foreground (not as a named or background job), "
-            f"then reply with exactly {interrupt_marker} and nothing else."
+            f"Use the shell tool to run `sleep 8` {_IN_THE_FOREGROUND}, then reply with exactly {interrupt_marker} and nothing else."
         )
         interrupt_request_id = f"console-interrupt-{uuid4()}"
         interrupt_turn = _start_turn(
