@@ -33,23 +33,22 @@ import json
 import os
 import subprocess
 import time
-from collections.abc import Mapping
 from pathlib import Path
 
 from zerg.qa.codex_auth import login_with_api_key
-from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import isolated_provider_home
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
+from zerg.qa.producer_shell import write_json
 from zerg.qa.provider_console_lifecycle import _force_cleanup
 from zerg.qa.provider_console_lifecycle import _terminate_live_qualification_session
 from zerg.qa.provider_console_lifecycle import turn_identity_mismatches
-from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
-from zerg.qa.wait_kind import failure_fields
 
 SCENARIO_ID = "console_served_state"
 ASSERTION_LIVE = "live_frames_reach_the_viewer_during_the_turn"
@@ -100,69 +99,6 @@ REGISTRATION = ProducerRegistration(
     provider_artifact_required=False,
     subject_kind="longhouse_product",
 )
-
-
-def _write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-
-
-def _manifest(root: Path) -> list[dict[str, object]]:
-    entries: list[dict[str, object]] = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        content = path.read_bytes()
-        entries.append(
-            {
-                "path": path.relative_to(root).as_posix(),
-                "size": len(content),
-                "sha256": f"sha256:{hashlib.sha256(content).hexdigest()}",
-            }
-        )
-    return entries
-
-
-def _failure_result(
-    *,
-    model: str,
-    provider: str,
-    device_id: str | None,
-    session_id: str | None,
-    failure: Exception,
-    reached: Mapping[str, object] | None = None,
-) -> dict[str, object]:
-    """Return a typed harness failure when shared infrastructure fails before any observation."""
-
-    result: dict[str, object] = {
-        "schema_version": 1,
-        "artifact_kind": "longhouse_console_served_state_result",
-        "producer": REGISTRATION.to_dict(),
-        "provider": None,
-        "vehicle_provider": provider,
-        "vehicle_qualification_model": model,
-        "vehicle_device_id": device_id,
-        "variant": None,
-        "scenario_id": SCENARIO_ID,
-        "scenario_revision": REGISTRATION.scenario_revision,
-        "evidence_class": "live_token",
-        "generated_at": now(),
-        "status": "fail",
-        "failure_code": "console_served_state_failed",
-        "failure_context": {"vehicle_device_id": device_id, "session_id": session_id},
-        "error": f"{type(failure).__name__}: {failure}",
-        **failure_fields(failure),
-    }
-    # Keep a failing verdict the run reached; otherwise (infrastructure failed
-    # first, or only cleanup failed after every assertion held) no failing
-    # verdict exists and this is a typed harness failure.
-    reached = reached or {}
-    assertions = reached.get("assertions")
-    return settle_failed_result(
-        result,
-        observation=reached.get("observation"),
-        assertions=assertions if isinstance(assertions, Mapping) else {},
-    )
 
 
 def _sha256_file(path: Path) -> str:
@@ -287,8 +223,8 @@ def assertions_from_report(report: dict) -> dict[str, bool]:
     return {ASSERTION_LIVE: live, ASSERTION_SETTLED: settled, ASSERTION_CAPABILITY: composer_ready}
 
 
-def run_console_served_state(
-    root: Path,
+def observe_console_served_state(
+    run: Run,
     *,
     provider: str,
     device_id: str,
@@ -296,6 +232,8 @@ def run_console_served_state(
     model: str | None = None,
     on_session_created=None,
 ) -> dict[str, object]:
+    """Drive one Console turn through the vehicle and put the served-state report and its verdict on ``run``."""
+
     from zerg.qa import console_served_state_core as core
 
     arguments = argparse.Namespace(
@@ -310,64 +248,14 @@ def run_console_served_state(
         model=model,
     )
     report = core.run(arguments, on_session_created=on_session_created)
-    assertions = assertions_from_report(report)
-    cleanup = report.get("cleanup_receipt")
-    cleanup_ok = (
-        isinstance(cleanup, dict)
-        and cleanup.get("status") == "pass"
-        and cleanup.get("archived") is True
-        and cleanup.get("present_in_served_inventory") is False
-        and cleanup.get("served_run_retired") is True
-    )
-    _write_json(root / "console-served-state-observation.json", report)
-    return {
-        "schema_version": 1,
-        "artifact_kind": "longhouse_console_served_state_result",
-        "producer": REGISTRATION.to_dict(),
-        # The subject is Longhouse, so the identity carries no provider -- the
-        # factory compares this against a contract that pins `provider: null`
-        # and rejects the result outright when it names one. The vehicle that
-        # actually drove the turn is in the observation below, which is where
-        # evidence belongs; it is not part of what this result claims to be.
-        "provider": None,
-        "vehicle_provider": provider,
-        "variant": None,
-        "scenario_id": SCENARIO_ID,
-        "scenario_revision": REGISTRATION.scenario_revision,
-        "evidence_class": "live_token",
-        "generated_at": now(),
-        "status": "pass" if all(assertions.values()) and cleanup_ok else "fail",
-        "observation": report,
-        "assertions": assertions,
-    }
+    run.write("console-served-state-observation.json", report)
+    run.observation = report
+    run.assertions = assertions_from_report(report)
+    return report
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--registration", action="store_true")
-    parser.add_argument("--evidence-root", type=Path)
-    parser.add_argument("--engine", type=Path)
-    parser.add_argument("--provider-bin", type=Path)
-    parser.add_argument("--provider-version")
-    parser.add_argument("--repo-root", type=Path)
-    parser.add_argument("--model")
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    if args.registration:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    if args.evidence_root is None:
-        print(json.dumps({"status": "fail", "failure_code": "evidence_root_missing"}))
-        return 2
-    if any(value in (None, "") for value in (args.engine, args.provider_bin, args.provider_version, args.repo_root, args.model)):
-        print(json.dumps({"status": "fail", "failure_code": "vehicle_arguments_missing"}))
-        return 2
-
-    root = args.evidence_root.resolve()
-    root.mkdir(mode=0o700, parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace) -> None:
+    root = run.root
     cleanup: dict[str, object] = {
         "schema_version": 1,
         "artifact_kind": "longhouse_console_served_state_cleanup_receipt",
@@ -381,11 +269,15 @@ def main(argv: list[str] | None = None) -> int:
         },
     }
     provider = "codex"
+    # The subject is Longhouse, so the result's identity carries no provider:
+    # the factory compares it with a contract that pins ``provider: null``.
+    # The vehicle that drove the turn is named beside the identity.
+    run.fields.update(vehicle_provider=provider, vehicle_qualification_model=str(args.model))
     device_id: str | None = None
     session_id: str | None = None
     shipper: TranscriptShipper | None = None
     vehicle_claim: dict[str, object] | None = None
-    result: dict[str, object] | None = None
+    reached = False
     failure: Exception | None = None
     api_url = str(os.environ.get(RUNTIME_API_URL_ENV) or "").strip().rstrip("/")
     require_disposable_runtime(api_url)
@@ -433,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
             "version": str(args.provider_version),
             "raw_version_output": version.stdout.strip(),
         }
-        _write_json(root / "provider-binary-receipt.json", provider_receipt)
+        write_json(root / "provider-binary-receipt.json", provider_receipt)
         auth_receipt = login_with_api_key(
             args.provider_bin,
             api_key=str(environment.get("CODEX_API_KEY") or ""),
@@ -442,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         environment.pop("CODEX_API_KEY", None)
         environment.pop("OPENAI_API_KEY", None)
-        _write_json(root / "provider-auth-receipt.json", auth_receipt)
+        write_json(root / "provider-auth-receipt.json", auth_receipt)
         args.api_url = api_url
         args.agents_token = token
         shipper = start_transcript_shipper(
@@ -459,15 +351,15 @@ def main(argv: list[str] | None = None) -> int:
             nonlocal session_id
             session_id = created_session_id
 
-        result = run_console_served_state(
-            root,
+        report = observe_console_served_state(
+            run,
             provider=provider,
             device_id=device_id,
             cwd=str(workspace),
             model=str(args.model),
             on_session_created=remember_session,
         )
-        report = result.get("observation") if isinstance(result.get("observation"), dict) else {}
+        reached = True
         run_id = str(report.get("run_id") or "")
         if not run_id:
             raise RuntimeError("served-state oracle returned no vehicle run identity")
@@ -483,16 +375,11 @@ def main(argv: list[str] | None = None) -> int:
             thread_id=str(report.get("thread_id") or ""),
             run_id=run_id,
         )
-        _write_json(root / "vehicle-dispatch-receipt.json", dispatch)
+        write_json(root / "vehicle-dispatch-receipt.json", dispatch)
         if dispatch["status"] != "pass":
             raise RuntimeError("Console vehicle did not bind the exact staged binary, model, and run")
-        result["provider_binary"] = provider_receipt
-        result["vehicle_qualification_model"] = str(args.model)
-        result["observation"] = {
-            **report,
-            "vehicle_binary_bound": True,
-            "vehicle_model_bound": True,
-        }
+        run.fields["provider_binary"] = provider_receipt
+        run.observation = {**report, "vehicle_binary_bound": True, "vehicle_model_bound": True}
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         failure = exc
     finally:
@@ -518,12 +405,11 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:  # noqa: BLE001 - cleanup failure must dominate the result
                 failure = failure or exc
                 shipper_receipt = {"stopped": False, "process_dead": False, "process_group_dead": False}
-            _write_json(root / "machine-shipper-receipt.json", shipper_receipt)
+            write_json(root / "machine-shipper-receipt.json", shipper_receipt)
         else:
             shipper_receipt = {"stopped": True, "process_dead": True, "process_group_dead": True}
         retirement: dict[str, object] | None = None
-        observation = result.get("observation") if isinstance(result, dict) else None
-        candidate = observation.get("cleanup_receipt") if isinstance(observation, dict) else None
+        candidate = run.observation.get("cleanup_receipt") if run.observation is not None else None
         if isinstance(candidate, dict):
             retirement = candidate
         elif session_id:
@@ -551,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
         # lifecycle state that proves it never started is failure before the
         # disposable session was created; every later missing-claim case fails
         # closed.
-        vehicle_never_started = session_id is None and result is None
+        vehicle_never_started = session_id is None and not reached
         provider_dead = _wait_vehicle_dead(vehicle_claim) if vehicle_claim is not None else vehicle_never_started
         machine_dead = all(shipper_receipt.get(field) is True for field in ("stopped", "process_dead", "process_group_dead"))
         cleanup_ok = provider_dead and machine_dead and served_run_retired and hidden and archived and served_session_absent
@@ -573,26 +459,29 @@ def main(argv: list[str] | None = None) -> int:
             failure = RuntimeError("Console vehicle cleanup did not satisfy its required contract")
         if failure is not None:
             cleanup["error_type"] = type(failure).__name__
-        _write_json(root / "cleanup-receipt.json", cleanup)
+        write_json(root / "cleanup-receipt.json", cleanup)
 
-    if failure is not None or result is None:
-        result = _failure_result(
-            model=str(args.model),
-            provider=provider,
-            device_id=device_id,
-            session_id=session_id,
-            failure=failure or RuntimeError("served-state producer returned no result"),
-            reached=result,
-        )
-        result["artifact_manifest"] = _manifest(root)
-        _write_json(root / "result.json", result)
-        print(json.dumps(result, sort_keys=True, default=str))
-        return 1
+    if failure is not None:
+        run.fields.update(vehicle_device_id=device_id, failure_context={"vehicle_device_id": device_id, "session_id": session_id})
+        raise failure
 
-    result["artifact_manifest"] = _manifest(root)
-    _write_json(root / "result.json", result)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+
+def _refuse(args: argparse.Namespace) -> str | None:
+    vehicle = (args.engine, args.provider_bin, args.provider_version, args.repo_root, args.model)
+    return "vehicle_arguments_missing" if any(value in (None, "") for value in vehicle) else None
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="longhouse_console_served_state_result",
+    failure_code="console_served_state_failed",
+    variant_required=False,
+    refuse=_refuse,
+)
+
+
+def main(argv: list[str] | None = None) -> int:
+    return PRODUCER.main(lambda args: PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args)), argv)
 
 
 if __name__ == "__main__":

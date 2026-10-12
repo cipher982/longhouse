@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -28,7 +27,6 @@ from uuid import uuid4
 from zerg.qa import provider_console_lifecycle as console
 from zerg.qa import search_ingest_oracle as oracle
 from zerg.qa.codex_auth import login_with_api_key
-from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
@@ -37,10 +35,9 @@ from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import write_json
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
-from zerg.qa.wait_kind import failure_fields
 
 PROVIDERS = ("codex", "claude", "opencode", "cursor", "pi", "omp")
 ASSERTION_ID = "transcript_ingested_searchable"
@@ -150,7 +147,8 @@ def _search_turn(
     }
 
 
-def run_transcript_search(provider: str, args: argparse.Namespace, root: Path) -> dict[str, Any]:
+def _reach(run: Run, provider: str, args: argparse.Namespace) -> None:
+    root = run.root
     home = isolated_provider_home()
     environment = console._provider_environment(provider, args, home)
     fault_receipt_path = root / "qa-fault-receipt.jsonl"
@@ -183,6 +181,7 @@ def run_transcript_search(provider: str, args: argparse.Namespace, root: Path) -
         "raw_version_output": raw_version,
     }
     write_json(root / "provider-binary-receipt.json", binary_receipt)
+    run.fields["provider_binary"] = binary_receipt
 
     _runtime_root, _unused, workspace, longhouse_home = console._console_runtime_paths(home)
     workspace.mkdir(mode=0o700, parents=True)
@@ -292,96 +291,52 @@ def run_transcript_search(provider: str, args: argparse.Namespace, root: Path) -
         cleanup["status"] = "pass" if all(cleanup["required_cleanup"].values()) else "fail"
         write_json(root / "cleanup-receipt.json", cleanup)
 
-    result: dict[str, Any] = {
-        "schema_version": 1,
-        "artifact_kind": "provider_transcript_search_result",
-        "producer": REGISTRATION.to_dict(),
-        "provider": provider,
-        "variant": None,
-        "scenario_id": f"{provider}_transcript_search",
-        "scenario_revision": REGISTRATION.scenario_revision,
-        "evidence_class": "live_token",
-        "generated_at": now(),
-        "provider_binary": binary_receipt,
-        "observation": observation,
-    }
+    run.observation = observation
     verdict = oracle.search_ingest_verdict(observation)
     cleanup_ok = cleanup["status"] == "pass"
     if args.negative_control:
+        # A control's result is the control's verdict, not an assertion's: a
+        # failed run under the fault is inconclusive, and says why.
         control = oracle.negative_control_verdict(observation, fault_receipts=_fault_receipts(fault_receipt_path))
         if failure is not None:
             control["status"] = "inconclusive"
-        result["negative_control"] = control
-        result["status"] = control["status"] if cleanup_ok else "inconclusive"
-    else:
-        passed = failure is None and verdict["passed"] and cleanup_ok
-        result["assertions"] = {ASSERTION_ID: passed}
-        result["search_verdict"] = verdict
-        result["status"] = "pass" if passed else "fail"
+            run.fields.update(failure_code=PRODUCER.failure_code, error=f"{type(failure).__name__}: {failure}")
+        run.fields.update(negative_control=control, status=control["status"] if cleanup_ok else "inconclusive")
+        return
+    run.fields["search_verdict"] = verdict
     if failure is not None:
-        result["failure_code"] = "transcript_search_harness_failed"
-        result["error"] = f"{type(failure).__name__}: {failure}"
-        if not args.negative_control:
-            # The harness raised, so the run never finished: a search verdict
-            # over its partial observation is not one. A typed harness failure
-            # keeps that observation as evidence instead of filing a False.
-            settle_failed_result(result, observation=observation, assertions={})
-    elif not args.negative_control and not verdict["passed"]:
-        result["failure_code"] = verdict["failure_code"]
-    result["artifact_manifest"] = artifact_manifest(root)
-    return result
+        # The harness raised, so the run never finished: a search verdict over
+        # its partial observation is not one. With no assertion reached, the
+        # typed failure keeps that observation as evidence instead of a False.
+        raise failure
+    run.assertions = {ASSERTION_ID: verdict["passed"] and cleanup_ok}
+    if not verdict["passed"]:
+        run.fields["failure_code"] = verdict["failure_code"]
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--provider", choices=PROVIDERS, required=True)
-    parser.add_argument("--variant", default=None)
-    parser.add_argument("--evidence-root", type=Path, required=True)
-    parser.add_argument("--repo-root", type=Path, required=True)
-    parser.add_argument("--engine", type=Path, required=True)
-    parser.add_argument("--longhouse-cli", type=Path, required=True)
-    parser.add_argument("--provider-bin", type=Path, required=True)
-    parser.add_argument("--provider-version", required=True)
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--negative-control", choices=NEGATIVE_CONTROLS, default=None)
-    return parser
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="provider_transcript_search_result",
+    failure_code="transcript_search_harness_failed",
+    needs=("provider", "evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin", "provider_version", "model"),
+    binaries=(("engine", "engine_missing"), ("longhouse_cli", "longhouse_cli_missing"), ("provider_bin", "provider_bin_missing")),
+    variant_required=False,
+    negative_controls=NEGATIVE_CONTROLS,
+)
+
+
+def run_transcript_search(args: argparse.Namespace) -> dict[str, Any]:
+    return PRODUCER.execute(
+        args.evidence_root,
+        lambda run: _reach(run, args.provider, args),
+        failure_status="inconclusive" if args.negative_control else "fail",
+        provider=args.provider,
+        scenario_id=f"{args.provider}_transcript_search",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    for name in ("engine", "longhouse_cli", "provider_bin"):
-        path = getattr(args, name)
-        if not path.is_file() or not os.access(path, os.X_OK):
-            print(json.dumps({"status": "fail", "failure_code": f"{name}_missing"}))
-            return 2
-    root = args.evidence_root.resolve()
-    root.mkdir(mode=0o700, parents=True, exist_ok=False)
-    try:
-        result = run_transcript_search(args.provider, args, root)
-    except Exception as exc:  # noqa: BLE001 - one typed failure artifact
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "provider_transcript_search_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": args.provider,
-            "variant": None,
-            "scenario_id": f"{args.provider}_transcript_search",
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "inconclusive" if args.negative_control else "fail",
-            "failure_code": "transcript_search_harness_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            "artifact_manifest": artifact_manifest(root),
-        }
-    write_json(root / "result.json", result)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_transcript_search, argv)
 
 
 if __name__ == "__main__":

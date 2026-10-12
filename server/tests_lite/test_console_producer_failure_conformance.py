@@ -17,6 +17,7 @@ from zerg.qa import title_dependency_live_producer
 from zerg.qa import title_dependency_recovery_producer
 from zerg.qa import transcript_search_producer
 from zerg.qa import workspace_suggestions_live_producer
+from zerg.qa.producer_shell import Run
 
 
 def _json(path: Path):
@@ -43,9 +44,11 @@ def test_console_served_state_entrypoint_retains_late_stream_failure(monkeypatch
         "cleanup_receipt": {"status": "fail", "archived": True, "present_in_served_inventory": True, "served_run_retired": False},
     }
     monkeypatch.setattr(console_served_state_core, "run", lambda _args, on_session_created=None: report)
-    result = console_served_state.run_console_served_state(
-        root, provider="codex", device_id="failure-machine", cwd="/workspace/served", model="model"
+    run = Run(root=root)
+    console_served_state.observe_console_served_state(
+        run, provider="codex", device_id="failure-machine", cwd="/workspace/served", model="model"
     )
+    result = console_served_state.PRODUCER.verdict(run)
     assert result["status"] == "fail"
     assert result["observation"]["first_live_frame_s"] == 0.12
     assert result["assertions"][console_served_state.ASSERTION_LIVE] is True

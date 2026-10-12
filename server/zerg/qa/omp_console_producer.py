@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import os
-import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -15,14 +14,11 @@ from typing import Any
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
-from zerg.qa.model_compliance import failure_claim
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_event_digest import raw_event_digest
-from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
@@ -38,7 +34,9 @@ REGISTRATION = ProducerRegistration(
     # 9: the shared lifecycle adds a mid-turn steer step (its own cell).
     # 11: the native reply is the row that answers with the marker, not every
     # row that names it; the oracle reads `native_reply_count`.
-    scenario_revision=25,
+    # 26: the oracle names the two shared-transaction facts it left to the
+    # status, and a failed run's result is cell-scoped like its registration.
+    scenario_revision=26,
     assertion_cells=((ASSERTION_ID, None), (lifecycle.STEER_ASSERTION_ID, None)),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -634,6 +632,11 @@ def omp_console_assertions(observation: Mapping[str, object]) -> dict[str, bool]
             (
                 model_evidence_ok,
                 observation.get("runtime_host_turn_dispatch") is True,
+                # The two facts of the shared Console transaction this oracle did not
+                # repeat: a run that missed either was a failed result whose own
+                # assertion still read true.
+                observation.get("qualification_model_bound") is True,
+                observation.get("stock_provider_response_bound") is True,
                 observation.get("exact_session_thread_run_binding") is True,
                 observation.get("transcript_converged_exactly_once") is True,
                 settlement.get("agent_end_terminal") is True,
@@ -656,12 +659,10 @@ def omp_console_assertions(observation: Mapping[str, object]) -> dict[str, bool]
     }
 
 
-def run_omp_console(args: argparse.Namespace) -> dict[str, object]:
-    root = args.evidence_root.resolve()
-    root.mkdir(mode=0o700, parents=True, exist_ok=False)
-    steer = getattr(args, "variant", None) == _STEER_VARIANT
+def _reach(run: Run, args: argparse.Namespace, *, steer: bool) -> None:
+    root = run.root
     generic = lifecycle._run_live("omp", SUPPORTED_VARIANT, args, root, steer=steer)
-    observation = dict(generic.get("observation") or {})
+    observation = dict(generic["observation"])
     observation["runtime_host_turn_dispatch"] = observation.get("adapter_dispatch_started") is True
     dispatch = _read_json(root / "adapter-dispatch-receipt.json") or {}
     cleanup = _read_json(root / "cleanup-receipt.json") or {}
@@ -701,31 +702,14 @@ def run_omp_console(args: argparse.Namespace) -> dict[str, object]:
         dispatch["native_provider"] = result_event.get("provider") if isinstance(result_event, Mapping) else None
         dispatch["native_model_evidence"] = dict(result_event) if isinstance(result_event, Mapping) else None
         lifecycle.write_json(root / "adapter-dispatch-receipt.json", dispatch)
-    assertions = (
-        {lifecycle.STEER_ASSERTION_ID: (generic.get("assertions") or {}).get(lifecycle.STEER_ASSERTION_ID) is True}
-        if steer
-        else omp_console_assertions(observation)
-    )
-    result = {
-        "schema_version": 1,
-        "artifact_kind": "omp_console_lifecycle_result",
-        "producer": REGISTRATION.to_dict(),
-        "provider": "omp",
-        "variant": None,
-        "scenario_id": SCENARIO_ID,
-        "scenario_revision": REGISTRATION.scenario_revision,
-        "evidence_class": "live_token",
-        "generated_at": now(),
-        "status": "pass" if generic.get("status") == "pass" and all(assertions.values()) else "fail",
-        "assertions": assertions,
-        "steer": generic.get("steer"),
-        "provider_binary": generic.get("provider_binary"),
-        "observation": observation,
-        "generic_lifecycle_result": generic,
-        "artifact_manifest": artifact_manifest(root),
-    }
-    lifecycle.write_json(root / "result.json", result)
-    return result
+    run.observation = observation
+    run.assertions = generic["assertions"] if steer else omp_console_assertions(observation)
+    run.fields.update(steer=generic["steer"], provider_binary=generic["provider_binary"])
+
+
+def run_omp_console(args: argparse.Namespace, *, raises: bool = False) -> dict[str, object]:
+    steer = getattr(args, "variant", None) == _STEER_VARIANT
+    return lifecycle.run_console_cell(PRODUCER, args, lambda run: _reach(run, args, steer=steer), raises=raises)
 
 
 def _request_args(request_path: Path, output_root: Path) -> argparse.Namespace:
@@ -758,7 +742,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
     def execute(binary: Path, evidence_root: Path):
         args = _request_args(request_path, evidence_root)
         args.provider_bin = binary
-        result = run_omp_console(args)
+        result = run_omp_console(args, raises=True)
         observation = dict(result.get("observation") or {})
         passed = result.get("status") == "pass"
         assertion = semantic.SemanticAssertion(
@@ -783,56 +767,19 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
     )
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(parser, variants=(_VARIANT, _STEER_VARIANT))
-    parser.add_argument("--negative-control", choices=(lifecycle.CONSOLE_STEER_FAULT,))
-    parser.add_argument("--model", required=True)
-    return parser
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="omp_console_lifecycle_result",
+    failure_code="omp_console_lifecycle_failed",
+    needs=("evidence_root", "model"),
+    variants=(_VARIANT, _STEER_VARIANT),
+    negative_controls=(lifecycle.CONSOLE_STEER_FAULT,),
+    refuse=lifecycle.negative_control_needs_steer((_STEER_VARIANT,)),
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-
-    def execute() -> dict[str, object]:
-        try:
-            return run_omp_console(args)
-        except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-            result = {
-                "schema_version": 1,
-                "artifact_kind": "omp_console_lifecycle_result",
-                "producer": REGISTRATION.to_dict(),
-                "provider": "omp",
-                "variant": SUPPORTED_VARIANT,
-                "observation_scope": "scenario",
-                "scenario_id": SCENARIO_ID,
-                "scenario_revision": REGISTRATION.scenario_revision,
-                "evidence_class": "live_token",
-                "generated_at": now(),
-                "status": "fail",
-                "failure_code": "omp_console_lifecycle_failed",
-                "error": f"{type(exc).__name__}: {exc}",
-                **failure_fields(exc),
-                **failure_claim(exc),
-            }
-            args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-            result["artifact_manifest"] = artifact_manifest(args.evidence_root)
-            lifecycle.write_json(args.evidence_root / "result.json", result)
-            return result
-
-    if args.negative_control:
-        if args.variant != _STEER_VARIANT:
-            print(json.dumps({"status": "fail", "failure_code": "negative_control_requires_steer_variant"}))
-            return 2
-        result = lifecycle.run_with_console_steer_fault(execute, args.evidence_root.resolve())
-    else:
-        result = execute()
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_omp_console, argv)
 
 
 if __name__ == "__main__":

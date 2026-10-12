@@ -425,12 +425,11 @@ def test_pi_wait_native_marker_returns_on_the_answer_and_counts_the_narration_ap
 
 
 def test_pi_console_main_failure_retains_partial_artifact_manifest(monkeypatch, tmp_path, capsys) -> None:
-    def fail(args):
-        args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        (args.evidence_root / "partial-receipt.json").write_text("{}\n", encoding="utf-8")
+    def fail(_provider, _variant, _args, root, **_kwargs):
+        (root / "partial-receipt.json").write_text("{}\n", encoding="utf-8")
         raise RuntimeError("synthetic qualification failure")
 
-    monkeypatch.setattr(pi_console, "run_pi_console_tool", fail)
+    monkeypatch.setattr(pi_console.lifecycle, "_run_live", fail)
     result = pi_console.main(
         [
             "--variant",

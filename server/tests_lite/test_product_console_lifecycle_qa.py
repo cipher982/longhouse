@@ -32,6 +32,7 @@ def test_product_console_lifecycle_oracle_proves_user_visible_sequence(tmp_path)
     assert {path.name for path in evidence.iterdir()} == {
         "cleanup-receipt.json",
         "console-lifecycle-observation.json",
+        "result.json",
     }
     assert not tuple(evidence.rglob("*.db"))
 

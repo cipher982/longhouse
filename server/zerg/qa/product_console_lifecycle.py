@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import argparse
-import json
 import os
 import tempfile
 from datetime import UTC
@@ -13,8 +11,8 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from zerg.qa.provider_release_identity import now
-from zerg.qa.provider_release_identity import sha256_file
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
 
 SCENARIO_ID = "product_console_lifecycle"
@@ -64,25 +62,6 @@ class _ConsoleRegistry:
         return owner_id == 1 and device_id == "factory-machine" and capability == "codex.turn_start"
 
 
-def _write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def _manifest(root: Path) -> list[dict[str, object]]:
-    return [
-        {
-            "path": path.relative_to(root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": sha256_file(path),
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
-
-
 def _project(store: object, session_id: str):
     from zerg.services.live_catalog_timeline import project_catalog_session_facts
 
@@ -98,8 +77,10 @@ def _project(store: object, session_id: str):
 def run_product_console_lifecycle(root: Path) -> dict[str, object]:
     """Exercise the production Console store/projector without a provider process."""
 
-    root = root.resolve()
-    root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    return PRODUCER.execute(root, _reach, failure_cleanup={**_CLEANUP, "status": "fail"})
+
+
+def _reach(run: Run) -> None:
     raw_runtime_home = os.environ.get("LONGHOUSE_QUALIFICATION_HOME", "").strip()
     runtime_home = Path(raw_runtime_home).resolve() if raw_runtime_home else None
     # Catalog/runtime databases are reconstructable execution scratch, not
@@ -117,10 +98,10 @@ def run_product_console_lifecycle(root: Path) -> dict[str, object]:
             "TESTING": "1",
         }
         with patch.dict(os.environ, isolated_config, clear=False):
-            return _run_product_console_lifecycle(root, runtime_root=runtime_root)
+            _run_product_console_lifecycle(run, runtime_root=runtime_root)
 
 
-def _run_product_console_lifecycle(root: Path, *, runtime_root: Path) -> dict[str, object]:
+def _run_product_console_lifecycle(run: Run, *, runtime_root: Path) -> None:
     """Run after establishing explicit test-safe process configuration."""
 
     from sqlalchemy.orm import Session
@@ -137,8 +118,6 @@ def _run_product_console_lifecycle(root: Path, *, runtime_root: Path) -> dict[st
     store = CatalogStore(engine)
     session_id = uuid4()
     thread_id = uuid4()
-    observed: dict[str, object] = {}
-    assertions: dict[str, bool] = {ASSERTION_ID: False}
     try:
         initialize_catalog_schema(engine)
         with Session(engine) as db:
@@ -325,85 +304,25 @@ def _run_product_console_lifecycle(root: Path, *, runtime_root: Path) -> dict[st
             "active_state": active.model_dump(mode="json"),
             "terminal_state": terminal.model_dump(mode="json"),
         }
-        assertions[ASSERTION_ID] = all(observed[name] is True for name in REGISTRATION.observed_activity)
-        _write_json(root / "console-lifecycle-observation.json", observed)
-        return {
-            "schema_version": 1,
-            "artifact_kind": "longhouse_product_console_lifecycle_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": None,
-            "variant": None,
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": 1,
-            "evidence_class": "hermetic",
-            "generated_at": now(),
-            "status": "pass" if assertions[ASSERTION_ID] else "fail",
-            "observation": observed,
-            "assertions": assertions,
-        }
+        run.write("console-lifecycle-observation.json", observed)
+        run.observation = observed
+        run.assertions = {ASSERTION_ID: all(observed[name] is True for name in REGISTRATION.observed_activity)}
     finally:
         engine.dispose()
-        cleanup = {
-            "schema_version": 1,
-            "artifact_kind": "longhouse_product_console_cleanup_receipt",
-            "status": "pass",
-            "catalog_disposed": True,
-            "orphan_count": 0,
-        }
-        _write_json(root / "cleanup-receipt.json", cleanup)
+        run.write("cleanup-receipt.json", {**_CLEANUP, "status": "pass", "catalog_disposed": True})
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--registration", action="store_true")
-    parser.add_argument("--evidence-root", type=Path)
-    return parser
+_CLEANUP = {"schema_version": 1, "artifact_kind": "longhouse_product_console_cleanup_receipt", "orphan_count": 0}
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="longhouse_product_console_lifecycle_result",
+    failure_code="product_console_lifecycle_failed",
+    variant_required=False,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    if args.registration:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    if args.evidence_root is None:
-        print(json.dumps({"status": "fail", "failure_code": "evidence_root_missing"}))
-        return 2
-    try:
-        result = run_product_console_lifecycle(args.evidence_root)
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-        args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        _write_json(
-            args.evidence_root / "cleanup-receipt.json",
-            {
-                "schema_version": 1,
-                "artifact_kind": "longhouse_product_console_cleanup_receipt",
-                "status": "fail",
-                "orphan_count": 0,
-                "error_type": type(exc).__name__,
-            },
-        )
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "longhouse_product_console_lifecycle_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": None,
-            "variant": None,
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": 1,
-            "evidence_class": "hermetic",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "product_console_lifecycle_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            "artifact_manifest": _manifest(args.evidence_root),
-        }
-        _write_json(args.evidence_root / "result.json", result)
-        print(json.dumps(result, sort_keys=True, default=str))
-        return 1
-    result["artifact_manifest"] = _manifest(args.evidence_root)
-    _write_json(args.evidence_root / "result.json", result)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(lambda args: run_product_console_lifecycle(args.evidence_root), argv)
 
 
 if __name__ == "__main__":

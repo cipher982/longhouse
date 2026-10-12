@@ -33,10 +33,6 @@ _SHELL_BUILT = sorted(f"zerg.qa.{path.stem}" for path in _QA.glob("*.py") if "\n
 # Registered producers still written by hand. This list only shrinks.
 _NOT_YET_ON_THE_SHELL = frozenset(
     {
-        "zerg.qa.provider_console_lifecycle",
-        "zerg.qa.pi_console_tool_producer",
-        "zerg.qa.omp_console_producer",
-        "zerg.qa.transcript_search_producer",
         "zerg.qa.codex_native_resume",
         "zerg.qa.claude_native_resume",
         "zerg.qa.cursor_native_resume",

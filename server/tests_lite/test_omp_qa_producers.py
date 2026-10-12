@@ -643,6 +643,8 @@ def test_omp_native_settlement_binds_the_row_that_answers_when_the_tool_call_row
     assert settlement["native_reply_message_id"] == "reply"
     observation = {
         "runtime_host_turn_dispatch": True,
+        "qualification_model_bound": True,
+        "stock_provider_response_bound": True,
         "exact_session_thread_run_binding": True,
         "transcript_converged_exactly_once": True,
         "omp_continuation_context_recalled": True,
@@ -1733,6 +1735,8 @@ def test_omp_selected_assertion_status_ignores_unrelated_sibling_failures() -> N
 def test_omp_console_settlement_and_context_recall_are_required() -> None:
     observation = {
         "runtime_host_turn_dispatch": True,
+        "qualification_model_bound": True,
+        "stock_provider_response_bound": True,
         "exact_session_thread_run_binding": True,
         "transcript_converged_exactly_once": True,
         "omp_continuation_context_recalled": True,
@@ -2497,30 +2501,32 @@ def test_omp_manifest_stability_detects_post_manifest_mutation(tmp_path) -> None
 
 
 @pytest.mark.parametrize(
-    ("module_name", "runner_name", "variant"),
+    ("module_name", "runner", "variant", "scope"),
     (
-        ("zerg.qa.omp_console_producer", "run_omp_console", CONSOLE_VARIANT),
-        ("zerg.qa.omp_helm_lifecycle", "run_omp_helm", _VARIANTS[0]),
+        # The Console producer's work is the shared Console transaction; its registration is cell-scoped.
+        ("zerg.qa.omp_console_producer", "zerg.qa.provider_console_lifecycle._run_live", CONSOLE_VARIANT, None),
+        ("zerg.qa.omp_helm_lifecycle", "zerg.qa.omp_helm_lifecycle.run_omp_helm", _VARIANTS[0], "scenario"),
     ),
 )
-def test_omp_main_failure_retains_partial_artifact_manifest(monkeypatch, tmp_path, module_name, runner_name, variant, capsys) -> None:
+def test_omp_main_failure_retains_partial_artifact_manifest(monkeypatch, tmp_path, module_name, runner, variant, scope, capsys) -> None:
     module = __import__(module_name, fromlist=["main"])
+    root = tmp_path / "evidence"
 
-    def fail(args):
-        args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        (args.evidence_root / "partial-receipt.json").write_text("{}\n", encoding="utf-8")
+    def fail(*_args, **_kwargs):
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (root / "partial-receipt.json").write_text("{}\n", encoding="utf-8")
         raise RuntimeError("synthetic qualification failure")
 
-    monkeypatch.setattr(module, runner_name, fail)
+    monkeypatch.setattr(runner, fail)
 
-    arguments = ["--variant", variant, "--evidence-root", str(tmp_path / "evidence")]
+    arguments = ["--variant", variant, "--evidence-root", str(root)]
     if module_name == "zerg.qa.omp_console_producer":
         arguments.extend(["--model", "fixture-model"])
     result = module.main(arguments)
 
     assert result == 1
-    payload = json.loads((tmp_path / "evidence" / "result.json").read_text(encoding="utf-8"))
-    assert payload["observation_scope"] == "scenario"
+    payload = json.loads((root / "result.json").read_text(encoding="utf-8"))
+    assert payload.get("observation_scope") == scope
     assert payload["failure_code"].endswith("_lifecycle_failed")
     assert payload["error"] == "RuntimeError: synthetic qualification failure"
     assert [entry["path"] for entry in payload["artifact_manifest"]] == ["partial-receipt.json"]
@@ -2553,6 +2559,8 @@ def test_omp_helm_oracle_rejects_archive_only_or_unbound_evidence() -> None:
 def test_omp_console_oracle_requires_exact_native_settlement_and_retirement() -> None:
     observation = {
         "runtime_host_turn_dispatch": True,
+        "qualification_model_bound": True,
+        "stock_provider_response_bound": True,
         "omp_continuation_context_recalled": True,
         "omp_settlement": {
             "agent_end_terminal": True,

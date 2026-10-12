@@ -18,7 +18,6 @@ import os
 import re
 import signal
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -57,11 +56,11 @@ from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import write_json
 from zerg.qa.model_compliance import ModelDeviation
 from zerg.qa.model_compliance import attach
-from zerg.qa.model_compliance import failure_claim
 from zerg.qa.openrouter_routing import prepare_pi_openrouter_routing
 from zerg.qa.pi_native import pi_transcript_rows
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.wait_kind import LONGHOUSE_ENGINE
@@ -69,7 +68,6 @@ from zerg.qa.wait_kind import LONGHOUSE_INGEST
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
-from zerg.qa.wait_kind import failure_fields
 from zerg.qa.wait_kind import waited_on
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
@@ -3742,22 +3740,10 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
         if provider == "pi":
             assertion = assertion and observation.get("pi_tool_enabled") is True
         return {
-            "schema_version": 1,
-            "artifact_kind": "provider_console_lifecycle_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": provider,
-            # The steer cell's authored variant is null.
-            "variant": None if steer else variant,
-            "scenario_id": _scenario_id(provider),
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "pass" if (steer_passed if steer else assertion) else "fail",
             "assertions": {STEER_ASSERTION_ID: steer_passed} if steer else {ASSERTION_ID: assertion},
             "steer": steer_receipt,
             "provider_binary": binary_receipt,
             "observation": observation,
-            "artifact_manifest": artifact_manifest(root),
         }
     finally:
         if not cleanup_written:
@@ -3799,85 +3785,65 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             write_json(root / "cleanup-receipt.json", cleanup)
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--provider", choices=PROVIDERS)
-    parser.add_argument("--variant", choices=(SUPPORTED_VARIANT, *STEER_VARIANTS.values()))
-    parser.add_argument("--evidence-root", type=Path)
-    parser.add_argument("--repo-root", type=Path)
-    parser.add_argument("--engine", type=Path)
-    parser.add_argument("--longhouse-cli", type=Path)
-    parser.add_argument("--provider-bin", type=Path)
-    parser.add_argument("--provider-version")
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--registration", action="store_true")
-    parser.add_argument("--negative-control", choices=(CONSOLE_STEER_FAULT,))
-    return parser
+def run_console_cell(producer: Producer, args: argparse.Namespace, body: Callable[[Run], object], **identity: Any) -> dict[str, Any]:
+    """Run one Console cell through its producer; under ``--negative-control``, against the Machine Agent that drops the steer."""
+
+    def execute() -> dict[str, Any]:
+        return producer.execute(args.evidence_root, body, **identity)
+
+    if getattr(args, "negative_control", None):
+        return run_with_console_steer_fault(execute, args.evidence_root.resolve())
+    return execute()
+
+
+def negative_control_needs_steer(steer_variants: Iterable[str]) -> Callable[[argparse.Namespace], str | None]:
+    """The refusal of a negative control asked of a cell that is not a steer cell."""
+
+    variants = frozenset(steer_variants)
+    return lambda args: "negative_control_requires_steer_variant" if args.negative_control and args.variant not in variants else None
+
+
+def _refuse(args: argparse.Namespace) -> str | None:
+    if args.variant in STEER_VARIANTS.values() and args.variant != STEER_VARIANTS.get(args.provider):
+        return "steer_variant_provider_mismatch"
+    return negative_control_needs_steer(STEER_VARIANTS.values())(args)
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="provider_console_lifecycle_result",
+    failure_code="provider_console_lifecycle_failed",
+    needs=("provider", "variant", "evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin", "provider_version", "model"),
+    binaries=(("engine", "engine_missing"), ("longhouse_cli", "longhouse_cli_missing"), ("provider_bin", "provider_bin_missing")),
+    variants=(SUPPORTED_VARIANT, *STEER_VARIANTS.values()),
+    variant_required=False,
+    negative_controls=(CONSOLE_STEER_FAULT,),
+    refuse=_refuse,
+)
+
+
+def run_console_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
+    steer = args.variant in STEER_VARIANTS.values()
+
+    def body(run: Run) -> None:
+        reached = _run_live(args.provider, _expected_variant(args.provider) if steer else args.variant, args, run.root, steer=steer)
+        run.observation = reached.pop("observation")
+        run.assertions = reached.pop("assertions")
+        run.fields.update(reached)
+
+    return run_console_cell(
+        PRODUCER,
+        args,
+        body,
+        provider=args.provider,
+        # The steer cell's authored variant is null.
+        variant=None if steer else args.variant,
+        scenario_id=_scenario_id(args.provider),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    for name in (
-        "provider",
-        "variant",
-        "evidence_root",
-        "repo_root",
-        "engine",
-        "longhouse_cli",
-        "provider_bin",
-        "provider_version",
-    ):
-        if getattr(args, name) is None:
-            print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{name.replace('_', '-')}"}))
-            return 2
-    for name in ("engine", "longhouse_cli", "provider_bin"):
-        path = getattr(args, name)
-        if not path.is_file() or not os.access(path, os.X_OK):
-            print(json.dumps({"status": "fail", "failure_code": f"{name}_missing"}))
-            return 2
-    root = args.evidence_root.resolve()
-    root.mkdir(mode=0o700, parents=True, exist_ok=False)
-    steer = args.variant in STEER_VARIANTS.values()
-    if steer and args.variant != STEER_VARIANTS.get(args.provider):
-        print(json.dumps({"status": "fail", "failure_code": "steer_variant_provider_mismatch"}))
-        return 2
-    if args.negative_control and not steer:
-        print(json.dumps({"status": "fail", "failure_code": "negative_control_requires_steer_variant"}))
-        return 2
-    if args.negative_control:
-        result = run_with_console_steer_fault(lambda: _execute(args, root, steer), root)
-    else:
-        result = _execute(args, root, steer)
-        write_json(root / "result.json", result)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
-
-
-def _execute(args: argparse.Namespace, root: Path, steer: bool) -> dict[str, Any]:
-    try:
-        return _run_live(args.provider, _expected_variant(args.provider) if steer else args.variant, args, root, steer=steer)
-    except Exception as exc:  # noqa: BLE001 - producer must retain one typed failure artifact
-        return {
-            "schema_version": 1,
-            "artifact_kind": "provider_console_lifecycle_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": args.provider,
-            "variant": None if steer else args.variant,
-            "scenario_id": _scenario_id(args.provider),
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "provider_console_lifecycle_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            **failure_claim(exc),
-            "artifact_manifest": artifact_manifest(root),
-        }
+    return PRODUCER.main(run_console_lifecycle, argv)
 
 
 if __name__ == "__main__":

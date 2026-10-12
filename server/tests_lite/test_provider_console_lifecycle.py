@@ -1464,7 +1464,7 @@ def test_steer_cell_is_its_own_factory_invocation():
     base = ["--model", "m", "--provider", "codex"]
     steer = lifecycle.STEER_VARIANTS["codex"]
     assert steer not in (lifecycle.SUPPORTED_VARIANT, lifecycle.UNSUPPORTED_VARIANT)
-    assert lifecycle._parser().parse_args([*base, "--variant", steer]).variant == steer
+    assert lifecycle.PRODUCER.parser().parse_args([*base, "--variant", steer]).variant == steer
     assert set(lifecycle.STEER_VARIANTS) == {"codex", "claude", "opencode"}
     for producer in (pi_console_tool_producer, omp_console_producer):
         assert producer._STEER_VARIANT != producer._VARIANT
@@ -1506,9 +1506,9 @@ def test_console_steer_negative_control_is_accepted_by_every_steer_producer():
     from zerg.qa import pi_console_tool_producer
 
     fault = ["--negative-control", lifecycle.CONSOLE_STEER_FAULT]
-    assert lifecycle._parser().parse_args(["--model", "m", *fault]).negative_control == lifecycle.CONSOLE_STEER_FAULT
+    assert lifecycle.PRODUCER.parser().parse_args(["--model", "m", *fault]).negative_control == lifecycle.CONSOLE_STEER_FAULT
     for producer in (pi_console_tool_producer, omp_console_producer):
-        action = next(a for a in producer._parser()._actions if a.dest == "negative_control")
+        action = next(a for a in producer.PRODUCER.parser()._actions if a.dest == "negative_control")
         assert action.choices == (lifecycle.CONSOLE_STEER_FAULT,)
 
 

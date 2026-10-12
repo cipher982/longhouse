@@ -6,19 +6,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
-from zerg.qa.model_compliance import failure_claim
-from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 
@@ -88,47 +84,18 @@ def pi_console_tool_assertions(observation: dict[str, object]) -> dict[str, bool
     }
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(parser, variants=(_VARIANT, _STEER_VARIANT))
-    parser.add_argument("--negative-control", choices=(lifecycle.CONSOLE_STEER_FAULT,))
-    parser.add_argument("--model", required=True)
-    return parser
-
-
-def run_pi_console_tool(args: argparse.Namespace) -> dict[str, object]:
-    root = args.evidence_root.resolve()
-    root.mkdir(mode=0o700, parents=True, exist_ok=False)
+def run_pi_console_tool(args: argparse.Namespace, *, raises: bool = False) -> dict[str, object]:
     # Reuse the established Runtime Host + Machine Agent + stock-provider
     # transaction. Only the subject registration and Pi-specific oracle differ.
     steer = getattr(args, "variant", None) == _STEER_VARIANT
-    generic = lifecycle._run_live("pi", lifecycle.SUPPORTED_VARIANT, args, root, steer=steer)
-    observation = dict(generic.get("observation") or {})
-    assertions = (
-        {lifecycle.STEER_ASSERTION_ID: (generic.get("assertions") or {}).get(lifecycle.STEER_ASSERTION_ID) is True}
-        if steer
-        else pi_console_tool_assertions(observation)
-    )
-    result = {
-        "schema_version": 1,
-        "artifact_kind": "pi_console_tool_lifecycle_result",
-        "producer": REGISTRATION.to_dict(),
-        "provider": "pi",
-        "variant": None,
-        "scenario_id": SCENARIO_ID,
-        "scenario_revision": REGISTRATION.scenario_revision,
-        "evidence_class": "live_token",
-        "generated_at": now(),
-        "status": "pass" if generic.get("status") == "pass" and all(assertions.values()) else "fail",
-        "assertions": assertions,
-        "steer": generic.get("steer"),
-        "provider_binary": generic.get("provider_binary"),
-        "observation": observation,
-        "generic_lifecycle_result": generic,
-        "artifact_manifest": artifact_manifest(root),
-    }
-    lifecycle.write_json(root / "result.json", result)
-    return result
+
+    def body(run: Run) -> None:
+        generic = lifecycle._run_live("pi", lifecycle.SUPPORTED_VARIANT, args, run.root, steer=steer)
+        run.observation = dict(generic["observation"])
+        run.assertions = generic["assertions"] if steer else pi_console_tool_assertions(run.observation)
+        run.fields.update(steer=generic["steer"], provider_binary=generic["provider_binary"])
+
+    return lifecycle.run_console_cell(PRODUCER, args, body, raises=raises)
 
 
 def _request_args(request_path: Path, output_root: Path) -> argparse.Namespace:
@@ -159,7 +126,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
     def execute(binary: Path, evidence_root: Path):
         args = _request_args(request_path, evidence_root)
         args.provider_bin = binary
-        result = run_pi_console_tool(args)
+        result = run_pi_console_tool(args, raises=True)
         observation = dict(result.get("observation") or {})
         passed = result.get("status") == "pass"
         assertion = semantic.SemanticAssertion(
@@ -191,55 +158,19 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
     )
 
 
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="pi_console_tool_lifecycle_result",
+    failure_code="pi_console_tool_lifecycle_failed",
+    needs=("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin", "provider_version", "model"),
+    variants=(_VARIANT, _STEER_VARIANT),
+    negative_controls=(lifecycle.CONSOLE_STEER_FAULT,),
+    refuse=lifecycle.negative_control_needs_steer((_STEER_VARIANT,)),
+)
+
+
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    missing = [
-        name
-        for name in ("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin", "provider_version")
-        if getattr(args, name) is None
-    ]
-    if missing:
-        print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{missing[0].replace('_', '-')}"}))
-        return 2
-
-    def execute() -> dict[str, object]:
-        try:
-            return run_pi_console_tool(args)
-        except Exception as exc:  # noqa: BLE001 - keep a typed failure artifact
-            result = {
-                "schema_version": 1,
-                "artifact_kind": "pi_console_tool_lifecycle_result",
-                "producer": REGISTRATION.to_dict(),
-                "provider": "pi",
-                "variant": None,
-                "scenario_id": SCENARIO_ID,
-                "scenario_revision": REGISTRATION.scenario_revision,
-                "evidence_class": "live_token",
-                "generated_at": now(),
-                "status": "fail",
-                "failure_code": "pi_console_tool_lifecycle_failed",
-                "error": f"{type(exc).__name__}: {exc}",
-                **failure_fields(exc),
-                **failure_claim(exc),
-            }
-            args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-            result["artifact_manifest"] = artifact_manifest(args.evidence_root)
-            lifecycle.write_json(args.evidence_root / "result.json", result)
-            return result
-
-    if args.negative_control:
-        if args.variant != _STEER_VARIANT:
-            print(json.dumps({"status": "fail", "failure_code": "negative_control_requires_steer_variant"}))
-            return 2
-        result = lifecycle.run_with_console_steer_fault(execute, args.evidence_root.resolve())
-    else:
-        result = execute()
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_pi_console_tool, argv)
 
 
 if __name__ == "__main__":

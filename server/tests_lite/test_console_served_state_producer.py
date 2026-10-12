@@ -15,6 +15,7 @@ import pytest
 
 from zerg.qa import console_served_state as producer
 from zerg.qa import console_served_state_core as core
+from zerg.qa.producer_shell import Run
 
 
 def test_a_clean_report_passes_both_assertions():
@@ -56,7 +57,7 @@ def test_settlement_needs_a_served_reply_not_just_a_latency():
 def test_the_factory_product_argv_parses_without_a_provider():
     # The auxiliary vehicle is explicit, but it is not a provider subject
     # argument: the factory supplies its exact binary/version/model separately.
-    args = producer._parser().parse_args(["--evidence-root", "/tmp/evidence"])
+    args = producer.PRODUCER.parser().parse_args(["--evidence-root", "/tmp/evidence"])
     assert not hasattr(args, "provider")
 
 
@@ -175,75 +176,12 @@ def test_the_result_identity_carries_no_provider_but_still_names_the_vehicle(mon
         "run",
         lambda args, **_kwargs: {**report, "provider": args.provider},
     )
-    result = producer.run_console_served_state(tmp_path, provider="codex", device_id="d", cwd="/tmp/x")
+    run = Run(root=tmp_path)
+    producer.observe_console_served_state(run, provider="codex", device_id="d", cwd="/tmp/x")
+    result = producer.PRODUCER.verdict(run)
     assert result["provider"] is None
-    assert result["vehicle_provider"] == "codex"
     assert result["observation"]["provider"] == "codex"
     assert result["status"] == "pass"
-
-
-def test_result_status_fails_when_cleanup_receipt_fails(monkeypatch, tmp_path):
-    from zerg.qa import console_served_state_core as core
-
-    report = _qualified_report()
-    report["cleanup_receipt"] = {
-        "status": "fail",
-        "archived": False,
-        "present_in_served_inventory": True,
-        "served_run_retired": False,
-    }
-    monkeypatch.setattr(
-        core,
-        "run",
-        lambda args, **_kwargs: {**report, "provider": args.provider},
-    )
-
-    result = producer.run_console_served_state(tmp_path, provider="codex", device_id="d", cwd="/tmp/x")
-
-    assert result["status"] == "fail"
-
-
-def test_infrastructure_failure_is_a_typed_harness_failure_with_vehicle_identity():
-    result = producer._failure_result(
-        model="gpt-5.6-sol",
-        provider="codex",
-        device_id="factory-machine",
-        session_id="session-1",
-        failure=RuntimeError("runtime unavailable"),
-    )
-
-    assert result["provider"] is None
-    assert result["vehicle_provider"] == "codex"
-    assert result["vehicle_qualification_model"] == "gpt-5.6-sol"
-    assert result["failure_context"] == {"vehicle_device_id": "factory-machine", "session_id": "session-1"}
-    # No observation was reached, so no verdict: the factory reports the cause
-    # instead of filing three false assertions as product findings.
-    assert "observation" not in result and "assertions" not in result
-
-
-def test_late_failure_keeps_a_failing_verdict_the_run_reached():
-    reached = {
-        "observation": {"marker_served": False},
-        "assertions": {producer.ASSERTION_LIVE: False, producer.ASSERTION_SETTLED: True, producer.ASSERTION_CAPABILITY: True},
-    }
-    result = producer._failure_result(
-        model="m", provider="codex", device_id="d", session_id="s", failure=RuntimeError("cleanup"), reached=reached
-    )
-
-    assert result["observation"] == {"marker_served": False}
-    assert result["assertions"][producer.ASSERTION_LIVE] is False
-
-
-def test_cleanup_failure_after_every_assertion_held_is_a_harness_failure():
-    reached = {
-        "observation": {"marker_served": True},
-        "assertions": {producer.ASSERTION_LIVE: True, producer.ASSERTION_SETTLED: True, producer.ASSERTION_CAPABILITY: True},
-    }
-    result = producer._failure_result(
-        model="m", provider="codex", device_id="d", session_id="s", failure=RuntimeError("cleanup"), reached=reached
-    )
-
-    assert "observation" not in result and "assertions" not in result
 
 
 def _qualified_report():
@@ -486,11 +424,11 @@ def test_dispatch_failure_without_vehicle_claim_cannot_certify_cleanup(monkeypat
     monkeypatch.setattr(producer, "_terminate_live_qualification_session", lambda *_args: {"status": "fail"}, raising=False)
     monkeypatch.setattr(producer, "_wait_served_run_retirement", lambda *_args: {"retired": False}, raising=False)
 
-    def dispatch_failure(_root, **kwargs):
+    def dispatch_failure(_run, **kwargs):
         kwargs["on_session_created"]("owned-session")
         raise RuntimeError("dispatch response lost before vehicle claim")
 
-    monkeypatch.setattr(producer, "run_console_served_state", dispatch_failure)
+    monkeypatch.setattr(producer, "observe_console_served_state", dispatch_failure)
     evidence = tmp_path / "evidence"
     vehicle = tmp_path / "vehicle"
     vehicle.write_bytes(b"fixture")
