@@ -101,6 +101,16 @@ def _iter_sse(response: httpx.Response):
             data_lines.append(value)
 
 
+def _count_ignored_event(ignored: dict[str, int], event_name: str) -> None:
+    """Count an unknown stream event; journal the first of each type and every 100th."""
+    count = ignored[event_name] = ignored.get(event_name, 0) + 1
+    if count == 1 or count % 100 == 0:
+        print(
+            f"canary stream: ignored event {event_name!r} (count={count})",
+            file=sys.stderr,
+        )
+
+
 def _canary_marker(payload: str) -> tuple[int, int, int, int, int]:
     try:
         data = json.loads(payload)
@@ -200,6 +210,7 @@ def main() -> int:
     backoff_s = 1.0
     last_canary_seq = -1
     stream_established = False
+    ignored_events: dict[str, int] = {}
 
     with httpx.Client(http2=False, timeout=timeout) as client:
         while not stopping:
@@ -250,9 +261,15 @@ def main() -> int:
                                 f"canary stream error: {payload[:200]}"
                             )
                         if event_name != "canary_observation":
-                            raise _FatalCanaryError(
-                                f"unexpected canary stream event: {event_name!r}"
-                            )
+                            # Only a canary_observation is a delivery, so an
+                            # event type this observer does not know cannot
+                            # fake one: ignore it and keep count. A draining
+                            # Runtime Host answers a reconnect with a single
+                            # host_lifecycle event and ends the stream; exiting
+                            # on it cost a supervisor restart mid-cutover
+                            # (2026-10-11 19:41Z).
+                            _count_ignored_event(ignored_events, event_name)
+                            continue
                         (
                             canary_seq,
                             emitted_at_ms,

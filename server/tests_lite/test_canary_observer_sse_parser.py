@@ -217,6 +217,72 @@ def test_observer_waits_for_initial_server_bootstrap(monkeypatch, tmp_path):
     assert deliveries == [41]
 
 
+def test_unknown_stream_events_are_counted_and_never_end_the_observer(monkeypatch, tmp_path, capsys):
+    """A draining Runtime Host answers a reconnect with host_lifecycle and ends the stream.
+
+    2026-10-11 19:41Z: the observer exited on it and waited for systemd. It
+    must reconnect instead, report the deliveries around it, and never treat an
+    event it does not know as one.
+    """
+    stream_requests = 0
+    deliveries = []
+    emitted_at_ms = int(time.time() * 1000) - 10
+
+    def marker(seq: int) -> bytes:
+        payload = {
+            "canary_seq": seq,
+            "canary_emitted_at_ms": emitted_at_ms,
+            "server_fanout_at_ms": emitted_at_ms + 2,
+            "server_now_ms": emitted_at_ms + 3,
+            "pubsub_seq": seq,
+        }
+        return f"event: canary_observation\ndata: {json.dumps(payload)}\n\n".encode()
+
+    lifecycle = b'event: host_lifecycle\ndata: {"state":"draining","accepting_writes":false}\n\n'
+
+    def handler(request):
+        nonlocal stream_requests
+        if request.method == "GET":
+            stream_requests += 1
+            if stream_requests == 1:
+                # The draining host: one lifecycle event, then the stream ends.
+                body = lifecycle
+            elif stream_requests == 2:
+                # The new host, with unknown events on either side of real deliveries.
+                body = marker(41) + lifecycle + b"event: something_new\ndata: {}\n\n" + marker(42)
+            else:
+                return httpx.Response(401, stream=httpx.ByteStream(b"unauthorized"))
+            return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, stream=httpx.ByteStream(body))
+        delivery = json.loads(request.content)
+        deliveries.append(delivery["canary_seq"])
+        return httpx.Response(200, json={"ok": True, "hop": "sse", "seq": delivery["canary_seq"]})
+
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    # The run ends on the third connection's 401, not on any unknown event.
+    assert _run_observer(monkeypatch, tmp_path, handler) == 3
+    assert stream_requests == 3
+    assert deliveries == [41, 42]
+
+    journal = capsys.readouterr().err
+    assert "unexpected canary stream event" not in journal
+    assert "canary stream: ignored event 'host_lifecycle' (count=1)" in journal
+    assert "canary stream: ignored event 'something_new' (count=1)" in journal
+    assert "canary stream returned HTTP 401" in journal
+
+
+def test_ignored_events_are_journaled_once_and_then_every_hundredth(capsys):
+    observer = _load_observer()
+    ignored: dict[str, int] = {}
+    for _ in range(250):
+        observer._count_ignored_event(ignored, "chatty")
+    assert ignored == {"chatty": 250}
+    assert capsys.readouterr().err.splitlines() == [
+        "canary stream: ignored event 'chatty' (count=1)",
+        "canary stream: ignored event 'chatty' (count=100)",
+        "canary stream: ignored event 'chatty' (count=200)",
+    ]
+
+
 def test_hop_line_names_each_hop_and_sums_to_the_sla_latency():
     observer = _load_observer()
     line = observer._hop_line(41, 1_000, 1_150, 1_151, 1_230)
