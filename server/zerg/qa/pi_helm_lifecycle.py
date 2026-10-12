@@ -64,7 +64,8 @@ REGISTRATION = ProducerRegistration(
     # 19: send, steer, abort and terminate go through the Runtime Host, as a remote user's do; the engine's local
     # command is proven beside them, in turns of its own and with the last terminate.
     # 20: a send that is not accepted starts no turn, and the run ends there and names it, not at a later wait.
-    scenario_revision=20,
+    # 21: a second launcher started against the live owner is refused, and the stale-owner cell rests on that too.
+    scenario_revision=21,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -317,7 +318,10 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
             and bound(resume, "context_served")
         ),
         "pi_helm_stale_owner_refused": (
-            stale.get("accepted") is False
+            # One session has one execution owner: a second launcher is turned away while the first is live,
+            # and a frame from an owner that is no longer current is refused and reaches no provider.
+            _mapping(stale.get("second_launcher")).get("owner_refusal_observed") is True
+            and stale.get("accepted") is False
             and stale.get("error_code") in _STALE_REFUSALS
             and _mapping(stale.get("native_dispatch")).get("observed") is False
         ),
@@ -393,6 +397,7 @@ FAMILY = Family(
 def _steps(life: Lifecycle) -> None:
     local = FAMILY.local_controls
     life.launch()
+    life.second_launcher()
     life.send_idle()
     life.follow_up()
     life.steer()

@@ -156,6 +156,8 @@ _BROKEN = [
     ("pi", "cold_resume_exact_file", "convergence.resume_context.binding.provider_session_bound", False),
     ("pi", "stale_owner_refused", "controls.stale_owner.native_dispatch.observed", True),
     ("pi", "stale_owner_refused", "controls.stale_owner.error_code", "bad_request"),
+    ("pi", "stale_owner_refused", "controls.stale_owner.second_launcher.owner_refusal_observed", False),
+    ("pi", "stale_owner_refused", "controls.stale_owner.second_launcher", None),
 ]
 
 
