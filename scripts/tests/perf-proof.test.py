@@ -4,11 +4,17 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import sqlite3
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts" / "ci"))
+
 SCRIPT = REPO_ROOT / "scripts/ci/perf-proof.py"
 
 
@@ -20,6 +26,18 @@ def _module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+def _soak_module():
+    script = REPO_ROOT / "scripts" / "ci" / "perf-soak.py"
+    spec = importlib.util.spec_from_file_location("perf_soak", script)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load perf-soak.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 
 
 def test_parse_engine_parse_bench_output() -> None:
@@ -166,6 +184,148 @@ def test_failed_surfaces_ignores_skips_but_reports_failures() -> None:
         "mixed_live_archive",
     ]
 
+def test_soak_budget_and_baseline_regression_rules() -> None:
+    soak = _soak_module()
+    previous = {
+        "scenarios": {
+            "active": {
+                "engine": {
+                    "cpu_percent": 20.0,
+                    "disk_write_bytes_per_second": 300_000,
+                    "processes_spawned_per_minute": 3.0,
+                },
+                "desktop_app": {"cpu_percent": 2.0},
+            }
+        }
+    }
+    scenarios = {
+        "idle": {
+            "engine": {
+                "cpu_percent": 1.0,
+                "disk_write_bytes_per_second": 50_000,
+                "processes_spawned_per_minute": 0.0,
+            },
+            "desktop_app": {"cpu_percent": 1.0},
+        },
+        "active": {
+            "engine": {
+                "cpu_percent": 31.0,
+                "disk_write_bytes_per_second": 600_000,
+                "processes_spawned_per_minute": 8.0,
+            },
+            "desktop_app": {"cpu_percent": 4.0},
+        },
+    }
+    failures = soak.evaluate_budgets_and_regressions(scenarios, "macOS", previous)
+    failed_metrics = {failure["metric"] for failure in failures}
+    assert failed_metrics == {
+        "engine.cpu_percent",
+        "engine.disk_write_bytes_per_second",
+        "engine.processes_spawned_per_minute",
+        "desktop_app.cpu_percent",
+    }
+    assert scenarios["idle"]["budgets"]["engine.processes_spawned_per_minute"]["status"] == "pass"
+    assert scenarios["active"]["budgets"]["engine.cpu_percent"]["regressed_over_50_percent"]
+    fallback = {
+        "idle": {
+            "engine": {
+                "cpu_percent": 1.0,
+                "disk_write_bytes_per_second": 50_000,
+                "processes_spawned_per_minute": 0.0,
+            },
+            "desktop_core_renderer": {"cpu_percent": 0.4},
+        }
+    }
+    assert soak.evaluate_budgets_and_regressions(
+        fallback, "macOS", None, desktop_app_measured=False
+    ) == []
+    assert "desktop_app.cpu_percent" not in fallback["idle"]["budgets"]
+
+
+def test_soak_darwin_rusage_info_v4_layout() -> None:
+    soak = _soak_module()
+    if soak.platform.system() == "Darwin":
+        import ctypes
+
+        _, usage_type = soak._mac_proc_api()
+        assert ctypes.sizeof(usage_type) == 296
+        before = soak._mac_proc_sample(os.getpid())
+        clock_before = time.process_time()
+        deadline = clock_before + 0.3
+        while time.process_time() < deadline:
+            pass
+        after = soak._mac_proc_sample(os.getpid())
+        # CPU must be in nanoseconds: raw mach ticks read 41.7x low on Apple
+        # Silicon and made a busy engine look idle.
+        sampled = (after["cpu_ns"] - before["cpu_ns"]) / 1e9
+        clocked = time.process_time() - clock_before
+        assert after["rss_bytes"]
+        assert 0.7 * clocked <= sampled <= 1.3 * clocked, (sampled, clocked)
+
+
+
+
+def test_soak_linux_wakeups_are_unavailable_not_zero() -> None:
+    soak = _soak_module()
+    if soak.platform.system() == "Linux":
+        assert soak._linux_proc_sample(os.getpid())["wakeups"] is None
+
+
+def test_cinder_fixture_generator_writes_reader_shaped_state() -> None:
+    import perf_soak_fixtures as fixtures
+
+    shape = {name: {**definition, "count": 1} for name, definition in fixtures.DEFAULT_SHAPE.items()}
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        home = root / "home"
+        longhouse_home = home / ".longhouse"
+        workspace = root / "workspace"
+        db_path = longhouse_home / "agent" / "longhouse-shipper.db"
+        db_path.parent.mkdir(parents=True)
+        with sqlite3.connect(db_path) as db:
+            db.executescript(
+                """
+                CREATE TABLE source_epoch_registry (
+                    source_epoch TEXT PRIMARY KEY, provider TEXT NOT NULL,
+                    opaque_source_id TEXT NOT NULL, file_incarnation TEXT NOT NULL,
+                    predecessor_epoch TEXT, start_reason TEXT NOT NULL,
+                    max_observed_len INTEGER NOT NULL, source_revision TEXT,
+                    bound_session_id TEXT, provider_session_id TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    ended_at TEXT, end_reason TEXT
+                );
+                CREATE TABLE file_state (
+                    path TEXT PRIMARY KEY, provider TEXT NOT NULL,
+                    queued_offset INTEGER NOT NULL, acked_offset INTEGER NOT NULL,
+                    file_identity TEXT, acked_cursor_fingerprint TEXT,
+                    session_id TEXT, provider_session_id TEXT, last_updated TEXT NOT NULL
+                );
+                CREATE TABLE session_binding (
+                    path TEXT PRIMARY KEY, session_id TEXT NOT NULL, provider TEXT NOT NULL,
+                    updated_at TEXT NOT NULL, provider_session_id TEXT, state TEXT NOT NULL,
+                    bound_at TEXT, last_seen_at TEXT
+                );
+                CREATE TABLE session_phase_state (
+                    session_id TEXT PRIMARY KEY, provider TEXT NOT NULL, phase TEXT NOT NULL,
+                    tool_name TEXT, source TEXT NOT NULL, observed_at TEXT NOT NULL,
+                    run_id TEXT, revision INTEGER NOT NULL
+                );
+                """
+            )
+        fixture = fixtures.create_fixtures(home, longhouse_home, workspace, db_path, shape)
+        assert all(item["count"] == 1 for item in fixture["files"].values())
+        assert fixture["database_rows"] == {
+            "source_epoch_registry": 1,
+            "file_state": 1,
+            "session_binding": 1,
+            "session_phase_state": 1,
+        }
+        transcript = Path(fixture["active_shadow_transcript"])
+        event = json.loads(transcript.read_text(encoding="utf-8").splitlines()[0])
+        assert event["type"] == "user"
+        assert event["cwd"] == fixture["workspace"]
+
+
 
 def main() -> int:
     tests = [
@@ -178,6 +338,10 @@ def main() -> int:
         test_summary_markdown_contains_core_surfaces,
         test_shipper_signal_treats_zero_rss_as_unavailable,
         test_failed_surfaces_ignores_skips_but_reports_failures,
+        test_soak_budget_and_baseline_regression_rules,
+        test_soak_linux_wakeups_are_unavailable_not_zero,
+        test_soak_darwin_rusage_info_v4_layout,
+        test_cinder_fixture_generator_writes_reader_shaped_state,
     ]
     for test in tests:
         test()

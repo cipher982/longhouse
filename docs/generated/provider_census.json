@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 324,
+  "file_count": 326,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -669,6 +669,22 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "scripts/ci/perf-soak.py",
+      "providers": [
+        "claude",
+        "omp"
+      ]
+    },
+    {
+      "path": "scripts/ci/perf_soak_fixtures.py",
+      "providers": [
+        "claude",
+        "codex",
+        "omp",
+        "opencode"
       ]
     },
     {
