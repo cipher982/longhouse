@@ -32,16 +32,14 @@ _FOLLOW_UP_FAILED = {
 
 def _run_main_with(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, observation: dict | None) -> tuple[dict, str]:
     evidence = tmp_path / "evidence"
-    evidence.mkdir(mode=0o700)
-    if observation is not None:
-        (evidence / "partial-observation.json").write_text(
-            json.dumps({"schema_version": 1, "status": "fail", "error": "x", "observation": observation})
-        )
 
-    def boom(_args):
+    def boom(run, _args):
+        # What the run had observed is on disk by the time it raises.
+        if observation is not None:
+            run.write("partial-observation.json", {"schema_version": 1, "status": "fail", "error": "x", "observation": observation})
         raise RuntimeError("late OMP failure")
 
-    monkeypatch.setattr(producer, "run_omp_helm", boom)
+    monkeypatch.setattr(producer, "_reach", boom)
     variant = producer._VARIANTS[0]
     binary = tmp_path / "omp"
     binary.write_text("#!/bin/sh\n")
@@ -109,7 +107,7 @@ def test_an_error_before_any_step_is_a_typed_harness_failure(tmp_path, monkeypat
 def test_reached_markers_cover_every_assertion_and_none_is_pre_initialized() -> None:
     """A marker only proves a step ran if the run does not set it up front.
 
-    run_omp_helm initializes every step flag to False and settlement/cleanup to {}
+    The run initializes every step flag to False and settlement/cleanup to {}
     before any step runs; a marker initialized to anything non-empty would mark an
     unreached step as reached.
     """
@@ -121,7 +119,7 @@ def test_reached_markers_cover_every_assertion_and_none_is_pre_initialized() -> 
     assert isinstance(returned, ast.Dict)
     assert set(producer.REACHED_MARKERS) == {key.value for key in returned.keys}
 
-    run_fn = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run_omp_helm")
+    run_fn = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_reach")
     initializer = next(
         node.value
         for node in ast.walk(run_fn)

@@ -34,14 +34,8 @@ _SHELL_BUILT = sorted(f"zerg.qa.{path.stem}" for path in _QA.glob("*.py") if "\n
 # Registered producers still written by hand. This list only shrinks.
 _NOT_YET_ON_THE_SHELL = frozenset(
     {
-        "zerg.qa.pi_helm_lifecycle",
-        "zerg.qa.omp_background_producer",
-        "zerg.qa.omp_helm_lifecycle",
-        "zerg.qa.cursor_helm_lifecycle",
         "zerg.qa.claude_helm_lifecycle",
         "zerg.qa.claude_background_producer",
-        "zerg.qa.codex_helm_lifecycle",
-        "zerg.qa.opencode_helm_lifecycle",
     }
 )
 
@@ -83,6 +77,19 @@ def _factory_arguments(command: dict, root: Path, binary: Path) -> list[str]:
     return arguments
 
 
+def _observation_that_reached(producer: Producer, assertion_id: str) -> dict:
+    """An observation in which the step behind ``assertion_id`` was reached, for a producer that declares what proves it."""
+
+    observation: dict = {"reached": True}
+    for marker in (producer.reached or {}).get(assertion_id, ()):
+        *parents, leaf = marker.split(".")
+        node = observation
+        for parent in parents:
+            node = node.setdefault(parent, {})
+        node[leaf] = {"decided": True}
+    return observation
+
+
 @pytest.mark.parametrize("module_name", _SHELL_BUILT)
 def test_a_producer_answers_each_factory_command_with_an_envelope_the_factory_accepts(module_name, monkeypatch, tmp_path, capsys):
     module = importlib.import_module(module_name)
@@ -113,12 +120,13 @@ def test_a_producer_answers_each_factory_command_with_an_envelope_the_factory_ac
         assert module.main(_factory_arguments(command, root, binary)) == 1, command
         assert len(identities) == 1, f"{module_name} did not run {command} through the shell once"
         assertion_id = command["assertion_id"]
+        observed = _observation_that_reached(producer, assertion_id)
         results = {
-            "pass": producer.verdict(Run(root, observation={"reached": True}, assertions={assertion_id: True}), **identities[0]),
-            "fail": producer.verdict(Run(root, observation={"reached": True}, assertions={assertion_id: False}), **identities[0]),
+            "pass": producer.verdict(Run(root, observation=observed, assertions={assertion_id: True}), **identities[0]),
+            "fail": producer.verdict(Run(root, observation=observed, assertions={assertion_id: False}), **identities[0]),
             "typed failure": producer.failure(Run(root), RuntimeError("synthetic"), **identities[0]),
             "failure after a failing verdict": producer.failure(
-                Run(root, observation={"reached": True}, assertions={assertion_id: False}), RuntimeError("synthetic"), **identities[0]
+                Run(root, observation=observed, assertions={assertion_id: False}), RuntimeError("synthetic"), **identities[0]
             ),
         }
         assert results["pass"]["status"] == "pass" and results["fail"]["status"] == "fail"
@@ -207,6 +215,41 @@ def test_a_run_that_raises_keeps_only_a_failing_verdict(tmp_path, reached, kept)
         "status": "fail",
         "error_type": "ProducerFailure",
     }
+
+
+def test_a_failed_run_of_several_steps_reports_verdicts_only_for_the_steps_it_reached(tmp_path):
+    producer = Producer(
+        _REGISTRATION, artifact_kind="fixture_result", failure_code="fixture_failed", reached={"held": ("send",), "later": ("steer",)}
+    )
+
+    def body(run: Run) -> None:
+        run.observation = {"send": {"marker_count": 0}}
+        run.assertions = {"held": False, "later": False}  # the second step never ran: its False is not a finding
+        raise RuntimeError("the steer step raised")
+
+    result = producer.execute(tmp_path / "evidence", body)
+
+    assert result["assertions"] == {"held": False} and result["failure_code"] == "fixture_failed"
+
+
+def test_a_negative_control_reports_its_own_verdict_and_stays_inconclusive_evidence_when_it_fails(tmp_path):
+    def caught(run: Run) -> None:
+        run.observation = {"send": {"dropped": True}}
+        run.assertions = {"held": False}
+        run.control({"fault": "send_noop", "verdict": "rejected"}, status="pass")
+
+    def failed(run: Run) -> None:
+        caught(run)
+        run.control({"fault": "send_noop", "verdict": "inconclusive"}, status="fail")
+        run.failed = RuntimeError("the control could not finish")  # caught and cleaned up by the run itself
+
+    result = _FIXTURE.execute(tmp_path / "caught", caught)
+    assert (result["status"], result["assertions"]) == ("pass", {"held": False})  # the fault was caught
+
+    # Reported like a run that raised, even to a caller that asked for the exception, and it keeps what it observed.
+    result = _FIXTURE.execute(tmp_path / "failed", failed, raises=True)
+    assert (result["status"], result["error"]) == ("fail", "RuntimeError: the control could not finish")
+    assert result["observation"] == {"send": {"dropped": True}} and result["negative_control"]["verdict"] == "inconclusive"
 
 
 def test_a_pass_whose_result_cannot_be_written_leaves_a_typed_failure_and_never_a_pass(tmp_path, monkeypatch):

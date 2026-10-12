@@ -34,7 +34,12 @@ The rules it holds for all of them:
 - **A failure keeps a verdict only when it reached one that fails**
   (``failed_results.settle_failed_result``). An exception after every
   assertion held, or before any was reached, is a typed harness failure with
-  what was observed kept as ``partial_observation``.
+  what was observed kept as ``partial_observation``. A producer of several
+  steps declares what proves each was reached (``reached``), and a failed run
+  reports verdicts for those steps only.
+- **A negative control reports the control's verdict** (``Run.control``) over
+  the assertions it evaluated. One that raised is inconclusive and keeps what
+  it observed: it is not a harness failure of the subject.
 - **Scope.** A scenario-scoped registration's every result says so, failed
   ones included.
 - **What a wait was waiting on** and **a model's deviation** travel on the
@@ -51,12 +56,14 @@ import json
 import os
 import sys
 from collections.abc import Callable
+from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
 from typing import Any
 
+from zerg.qa.failed_results import reached_only
 from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_kit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_kit import RUNTIME_API_URL_ENV
@@ -106,9 +113,18 @@ class Run:
     observation: dict[str, Any] | None = None
     assertions: dict[str, bool] = field(default_factory=dict)
     fields: dict[str, Any] = field(default_factory=dict)
+    controlled: bool = False
+    # Set by a run that caught its own failure, cleaned up and came to an end: reported like one that raised.
+    failed: BaseException | None = None
 
     def write(self, name: str, payload: object) -> None:
         write_json(self.root / name, payload)
+
+    def control(self, verdict: dict[str, Any], *, status: str) -> None:
+        """Report a negative control: its verdict, and a status that is the control's (``pass`` means the fault was caught)."""
+
+        self.controlled = True
+        self.fields.update(negative_control=verdict, status=status)
 
     def block(self, failure_code: str, error: str) -> None:
         """Say the run could not ask its question: a prerequisite was absent, which is neither a pass nor a failing verdict."""
@@ -145,6 +161,8 @@ class Producer:
     # The environment variable ``--model`` defaults to, and the faults ``--negative-control`` may name.
     model_env: str | None = None
     negative_controls: tuple[str, ...] = ()
+    # Per assertion, the observation records that exist only once that step's verdict was decided (failed_results.reached_only).
+    reached: Mapping[str, Sequence[str]] | None = None
     refuse: Callable[[argparse.Namespace], str | None] | None = None
     add_arguments: Callable[[argparse.ArgumentParser], None] | None = None
 
@@ -182,7 +200,8 @@ class Producer:
             **self.envelope(**identity),
             "status": "pass" if run.assertions and all(run.assertions.values()) else "fail",
             "observation": run.observation,
-            "assertions": dict(run.assertions),
+            # A control that evaluated no assertion of the scenario reports none.
+            **({} if run.controlled and not run.assertions else {"assertions": dict(run.assertions)}),
             **run.fields,
             "artifact_manifest": artifact_manifest(run.root),
         }
@@ -201,7 +220,10 @@ class Producer:
             **run.fields,
             "artifact_manifest": artifact_manifest(run.root),
         }
-        return settle_failed_result(failure, observation=run.observation, assertions=run.assertions)
+        if run.controlled:
+            return {**failure, "observation": run.observation, "assertions": dict(run.assertions)}
+        assertions = run.assertions if self.reached is None else reached_only(run.assertions, run.observation or {}, self.reached)
+        return settle_failed_result(failure, observation=run.observation, assertions=assertions)
 
     def execute(
         self,
@@ -223,7 +245,8 @@ class Producer:
         receipt a failed run leaves when it did not get as far as its own.
         ``raises`` is for a caller that types the failure itself (the release
         identity lane has its own outcome for an exception): nothing is
-        written for a run that raised.
+        written for a run that raised. A run that set ``failed`` came to its
+        own end and is reported either way.
         """
 
         run = Run(root=root.resolve())
@@ -231,7 +254,10 @@ class Producer:
             run.root.mkdir(mode=0o700, parents=True, exist_ok=False)
         try:
             body(run)
-            result = self.verdict(run, **identity)
+            if run.failed is None:
+                result = self.verdict(run, **identity)
+            else:
+                result = self.failure(run, run.failed, status=failure_status, **identity)
             run.write("result.json", result)
         except Exception as exc:  # noqa: BLE001 - a producer leaves one typed artifact, whatever raised
             if raises:
@@ -289,7 +315,7 @@ class Producer:
             return 0
         args = self.parser().parse_args(arguments)
         for name in self.needs:
-            if getattr(args, name) is None:
+            if getattr(args, name) in (None, ""):
                 return refusal(f"missing_required_argument:--{name.replace('_', '-')}")
         if self.runtime_host:
             require_disposable_runtime(args.api_url)

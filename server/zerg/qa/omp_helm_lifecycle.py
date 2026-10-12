@@ -11,7 +11,6 @@ import shutil
 import signal
 import socket
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -32,7 +31,6 @@ from zerg.qa.console_served_state_core import event_text
 from zerg.qa.console_served_state_core import served_answer_correspondence
 from zerg.qa.console_served_state_core import served_answer_fault
 from zerg.qa.failed_results import reached_only
-from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import require_disposable_runtime
@@ -51,9 +49,10 @@ from zerg.qa.pi_family_turn_oracle import read_session_entries
 from zerg.qa.pi_family_turn_oracle import steer_turn_verdict
 from zerg.qa.pi_family_turn_oracle import step_task_prompt
 from zerg.qa.pi_family_turn_oracle import task_tool_boundary
-from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import ProducerFailure
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.resume_assurance import ProducerRegistration
@@ -64,7 +63,6 @@ from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
 from zerg.qa.wait_kind import expired_wait
-from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
@@ -111,7 +109,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
     producer_revision=10,
     scenario_id=SCENARIO_ID,
-    scenario_revision=21,
+    # 22: a run that held every assertion over a changing evidence tree is a typed failure.
+    scenario_revision=22,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -173,20 +172,6 @@ def _assertion_result_status(assertions: Mapping[str, bool], variant: object) ->
     requested = _requested_assertion_id(variant)
     passed = assertions.get(requested) is True if requested is not None else all(assertions.values())
     return "pass" if passed else "fail"
-
-
-def _helm_result_status(
-    assertions: Mapping[str, bool],
-    variant: object,
-    *,
-    cleanup_ready: bool,
-    manifest_stable: bool,
-) -> str:
-    # The result envelope is the scenario-level status consumed by the private
-    # verifier. Per-cell selection happens in semantic qualification; a
-    # passing selected assertion must not hide failed siblings here.
-    _ = variant
-    return "pass" if cleanup_ready and manifest_stable and bool(assertions) and all(assertions.values()) else "fail"
 
 
 # What proves each assertion's step was reached and its verdict decided. The run
@@ -2083,9 +2068,8 @@ def _setup_marker_prompt(marker: str, *, setup: str) -> str:
     )
 
 
-def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
-    root = args.evidence_root.resolve()
-    root.mkdir(mode=0o700, parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace) -> None:
+    root = run.root
     if os.environ.get("LONGHOUSE_OMP_LIVE") not in {"1", "true", "yes", "on"}:
         raise RuntimeError("OMP Helm qualification requires explicit LONGHOUSE_OMP_LIVE opt-in")
     if not args.api_url or not args.agents_token:
@@ -3424,35 +3408,16 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
     lifecycle.write_json(root / "cleanup-receipt.json", cleanup)
     assertions = omp_helm_lifecycle_assertions(observation)
     final_manifest = artifact_manifest(root)
-    manifest_stable = _manifest_is_stable(root, final_manifest)
-    result_status = _helm_result_status(
-        assertions,
-        getattr(args, "variant", None),
-        cleanup_ready=cleanup_ready,
-        manifest_stable=manifest_stable,
-    )
-    result = {
-        "schema_version": 1,
-        "artifact_kind": "omp_helm_lifecycle_result",
-        "producer": REGISTRATION.to_dict(),
-        "provider": "omp",
-        "variant": None,
-        "observation_scope": "scenario",
-        "scenario_id": SCENARIO_ID,
-        "scenario_revision": REGISTRATION.scenario_revision,
-        "evidence_class": "live_token",
-        "generated_at": now(),
-        "status": result_status,
-        "assertions": assertions,
-        "provider_binary": binary_receipt,
-        "observation": observation,
-        "final_evidence": {
+    run.observation = observation
+    run.assertions = assertions
+    run.fields.update(
+        provider_binary=binary_receipt,
+        final_evidence={
             **dict(observation["final_evidence"]),
-            "manifest_stable": manifest_stable,
+            "manifest_stable": _manifest_is_stable(root, final_manifest),
             "manifest_entry_count": len(final_manifest),
         },
-        "artifact_manifest": final_manifest,
-    }
+    )
     if negative_control:
         control_verdict = negative_control_verdict(
             negative_control,
@@ -3462,10 +3427,34 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             fault_receipts=read_fault_receipts(root / "qa-fault-receipt.jsonl"),
             session_id=str(observation.get("control_session_id") or ""),
         )
-        result["negative_control"] = control_verdict
-        result["status"] = "pass" if control_verdict["status"] == "pass" else "fail"
-    lifecycle.write_json(root / "result.json", result)
-    return result
+        run.control(control_verdict, status="pass" if control_verdict["status"] == "pass" else "fail")
+
+
+def run_omp_helm(args: argparse.Namespace, *, raises: bool = False) -> dict[str, object]:
+    def body(run: Run) -> None:
+        try:
+            _reach(run, args)
+        except Exception:
+            # A run that raised left what it had observed on disk. An errored
+            # run vouches for nothing, model compliance included.
+            partial = _read_state(run.root / "partial-observation.json") or {}
+            observation = partial.get("observation")
+            if not isinstance(observation, dict):
+                observation = {}
+            observation.pop("model_noncompliance", None)
+            cleanup = _read_state(run.root / "cleanup-receipt.json")
+            if cleanup is not None:
+                observation["cleanup"] = cleanup
+            run.observation = observation
+            run.assertions = omp_helm_lifecycle_assertions(observation)
+            raise
+        final = run.fields["final_evidence"]
+        if not run.controlled and all(run.assertions.values()) and not (final["cleanup_ready"] and final["manifest_stable"]):
+            # Every assertion held over an evidence tree that was still
+            # changing: not a pass, and not a verdict against the subject.
+            raise ProducerFailure("omp_helm_evidence_not_final", "the evidence tree changed after every assertion held")
+
+    return PRODUCER.execute(args.evidence_root, body, raises=raises)
 
 
 def _request_args(
@@ -3507,7 +3496,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
         # the provider binary/version, while the runtime token remains secret.
         run_args = _request_args(request_path, evidence_root, request=request, agents_token=runtime_token)
         run_args.provider_bin = binary
-        result = run_omp_helm(run_args)
+        result = run_omp_helm(run_args, raises=True)
         observation = dict(result.get("observation") or {})
         model_evidence = omp_native_model_evidence(
             evidence_root,
@@ -3552,59 +3541,19 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
     )
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(parser, variants=_VARIANTS)
-    parser.add_argument("--model", required=False)
-    parser.add_argument("--negative-control", choices=tuple(NEGATIVE_CONTROLS))
-    parser.add_argument("--api-url", default=os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
-    parser.add_argument("--agents-token", default=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"))
-    return parser
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="omp_helm_lifecycle_result",
+    failure_code="omp_helm_lifecycle_failed",
+    variants=_VARIANTS,
+    negative_controls=tuple(NEGATIVE_CONTROLS),
+    # A run that raised reports verdicts only for the steps it reached.
+    reached=REACHED_MARKERS,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    try:
-        result = run_omp_helm(args)
-    except Exception as exc:  # noqa: BLE001 - preserve a typed harness failure
-        partial = _read_state(args.evidence_root / "partial-observation.json") or {}
-        observation = partial.get("observation")
-        if not isinstance(observation, dict):
-            observation = {}
-        # An errored run vouches for nothing, model compliance included.
-        observation.pop("model_noncompliance", None)
-        cleanup = _read_state(args.evidence_root / "cleanup-receipt.json")
-        if cleanup is not None:
-            observation["cleanup"] = cleanup
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "omp_helm_lifecycle_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "omp",
-            "variant": None,
-            "observation_scope": "scenario",
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "omp_helm_lifecycle_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-        }
-        # A verdict only over the steps this run reached: a reached failing step
-        # is a finding; if every reached step held, the run is a typed harness
-        # failure and what it saw stays as partial_observation.
-        settle_failed_result(result, observation=observation, assertions=reached_assertions(observation))
-        args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        result["artifact_manifest"] = artifact_manifest(args.evidence_root)
-        lifecycle.write_json(args.evidence_root / "result.json", result)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_omp_helm, argv)
 
 
 if __name__ == "__main__":

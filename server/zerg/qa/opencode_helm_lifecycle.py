@@ -37,7 +37,6 @@ import json
 import os
 import signal
 import subprocess
-import sys
 import threading
 import time
 import urllib.error
@@ -50,17 +49,13 @@ from urllib.request import urlopen
 from zerg.qa import live_session_toolkit
 from zerg.qa import provider_console_lifecycle as console_lifecycle
 from zerg.qa.answer_markers import marker_answered
-from zerg.qa.failed_results import reached_only
-from zerg.qa.failed_results import settle_failed_result
-from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import expired_wait
-from zerg.qa.wait_kind import failure_fields
 
 SCENARIO_ID = "opencode_helm_lifecycle"
 ASSERTIONS = (
@@ -108,7 +103,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="opencode.helm_lifecycle.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=3,
+    # 4: a run that raised outside its own handling leaves a complete, written result.
+    scenario_revision=4,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),  # type: ignore[arg-type]
     providers=("opencode",),
     platforms=("linux", "darwin"),
@@ -636,10 +632,9 @@ def control_run_assertions(assertions: dict[str, bool], codes: dict[str, str], t
 # --- scenario ------------------------------------------------------------------
 
 
-def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
+def _reach(run: Run, args: argparse.Namespace) -> None:
     live_session_toolkit.require_disposable_runtime(args.api_url)
-    root = args.evidence_root.resolve()
-    root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    root = run.root
     timeout = float(args.live_send_timeout_secs)
     provider_receipt = {
         "path": str(args.provider_bin),
@@ -649,6 +644,7 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         ).stdout.strip(),
     }
     _write_json(root / "provider-binary-receipt.json", provider_receipt)
+    run.fields["provider_binary"] = provider_receipt
 
     environment = {
         key: value for key, value in os.environ.items() if not key.startswith("LONGHOUSE_MANAGED_") and key != "LONGHOUSE_SESSION_ID"
@@ -929,25 +925,10 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                 fired.append(json.loads(line))
             except json.JSONDecodeError:
                 fired.append({"unparseable_receipt_line": line[:300]})
-    # Status follows the assertion map, as the factory validator requires;
-    # cleanup is judged from the cleanup receipt (REGISTRATION.required_cleanup).
-    status = "pass" if failure is None and all(assertions.values()) else "fail"
-    result: dict[str, Any] = {
-        "schema_version": 1,
-        "artifact_kind": "opencode_helm_lifecycle_result",
-        "producer": REGISTRATION.to_dict(),
-        "provider": "opencode",
-        "variant": None,
-        "scenario_id": SCENARIO_ID,
-        "scenario_revision": REGISTRATION.scenario_revision,
-        "evidence_class": "live_token",
-        "observation_scope": "scenario",
-        "generated_at": now(),
-        "assertions": control_run_assertions(assertions, codes, control_target) if args.negative_control else assertions,
-        "failure_codes": codes,
-        "observation": observation,
-        "provider_binary": provider_receipt,
-    }
+    # Cleanup is judged from the cleanup receipt (REGISTRATION.required_cleanup), not here.
+    run.observation = observation
+    run.assertions = assertions
+    run.fields["failure_codes"] = codes
     if args.negative_control:
         target, expected_code = NEGATIVE_CONTROLS[args.negative_control]
         preconditions = [
@@ -977,78 +958,34 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             if failure is not None and not verdict["fault_fired"]
             else "fail"
         )
-        result["artifact_kind"] = "opencode_helm_lifecycle_negative_control"
-        result["negative_control"] = verdict
-        status = verdict["status"]
-    result["status"] = status
-    if failure is not None:
-        result["failure_code"] = "opencode_helm_lifecycle_failed"
-        result["error"] = f"{type(failure).__name__}: {failure}"
-        result.update(failure_fields(failure))
-        if not args.negative_control:
-            # Verdicts only for the steps this run reached: a reached failing step
-            # is a finding; if every reached step held, a typed harness failure
-            # with the observation kept as evidence.
-            observed = result.get("observation") or {}
-            settle_failed_result(
-                result,
-                observation=observed,
-                assertions=reached_only(result.get("assertions") or {}, observed, REACHED_MARKERS),
-            )
+        run.assertions = control_run_assertions(assertions, codes, control_target)
+        run.fields["artifact_kind"] = "opencode_helm_lifecycle_negative_control"
+        run.control(verdict, status=verdict["status"])
     secrets = list(live_session_toolkit.qualification_secrets(environment, str(args.agents_token)))
-    result["redacted_secret_files"] = live_session_toolkit.secret_scan(root, secrets)
-    result["artifact_manifest"] = artifact_manifest(root)
-    _write_json(root / "result.json", result)
-    return result
+    run.fields["redacted_secret_files"] = live_session_toolkit.secret_scan(root, secrets)
+    if failure is not None:
+        raise failure
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(parser, variants=_VARIANTS)
-    parser.add_argument("--api-url", default=os.environ.get(live_session_toolkit.RUNTIME_API_URL_ENV))
-    parser.add_argument("--agents-token", default=os.environ.get(live_session_toolkit.RUNTIME_AGENTS_TOKEN_ENV))
-    parser.add_argument("--live-send-timeout-secs", type=int, default=180)
-    parser.add_argument("--negative-control", choices=tuple(NEGATIVE_CONTROLS))
-    return parser
+def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args))
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="opencode_helm_lifecycle_result",
+    failure_code="opencode_helm_lifecycle_failed",
+    needs=("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin", "api_url", "agents_token"),
+    variants=_VARIANTS,
+    negative_controls=tuple(NEGATIVE_CONTROLS),
+    # A run that raised reports verdicts only for the steps it reached.
+    reached=REACHED_MARKERS,
+    add_arguments=lambda parser: parser.add_argument("--live-send-timeout-secs", type=int, default=180),
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    missing = [
-        name
-        for name in ("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin", "api_url", "agents_token")
-        if not getattr(args, name)
-    ]
-    if missing:
-        print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{missing[0].replace('_', '-')}"}))
-        return 2
-    try:
-        result = run_opencode_helm_lifecycle(args)
-    except Exception as exc:  # noqa: BLE001 - a typed producer failure, never a traceback-only exit
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "opencode_helm_lifecycle_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "opencode",
-            "scenario_id": SCENARIO_ID,
-            "status": "fail",
-            "failure_code": "opencode_helm_lifecycle_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            "generated_at": now(),
-        }
-    print(
-        json.dumps(
-            {key: result.get(key) for key in ("status", "failure_code", "error", "assertions", "failure_codes", "negative_control")},
-            sort_keys=True,
-            default=str,
-        )
-    )
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_opencode_helm_lifecycle, argv)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,6 @@ import os
 import shutil
 import socket
 import subprocess
-import sys
 import time
 import urllib.error
 from pathlib import Path
@@ -52,9 +51,8 @@ from zerg.qa.pi_family_turn_oracle import step_task_prompt
 from zerg.qa.pi_family_turn_oracle import task_tool_boundary
 from zerg.qa.pi_native import pi_native_shadow_taxonomy
 from zerg.qa.pi_native import pi_transcript_rows
-from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.resume_assurance import ProducerRegistration
@@ -66,7 +64,6 @@ from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
 from zerg.qa.wait_kind import expired_wait
-from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 
@@ -100,7 +97,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=16,
+    # 17: a run that raised outside its own handling leaves a complete result; --model is required.
+    scenario_revision=17,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -1331,24 +1329,13 @@ def pi_helm_lifecycle_assertions(observation: dict[str, Any]) -> dict[str, bool]
     }
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(parser, variants=_VARIANTS)
-    parser.add_argument("--api-url", default=os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
-    parser.add_argument("--agents-token", default=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"))
-    parser.add_argument("--model", default=os.environ.get("LONGHOUSE_PI_QUALIFICATION_MODEL", "anthropic/claude-haiku-4.5:off"))
-    parser.add_argument("--negative-control", choices=tuple(NEGATIVE_CONTROLS))
-    return parser
-
-
-def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
+def _reach(run: Run, args: argparse.Namespace) -> None:
     # A live provider turn spends real credentials; the factory opts in for Pi
     # producers, ambient developer credentials never do by accident.
     if os.environ.get("LONGHOUSE_PI_LIVE") not in {"1", "true", "yes", "on"}:
         raise RuntimeError("Pi Helm qualification requires explicit LONGHOUSE_PI_LIVE opt-in")
     require_disposable_runtime(args.api_url or os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
-    root = args.evidence_root.resolve()
-    root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    root = run.root
     isolation = new_qualification_isolation_root("pi-helm")
     provider_home = isolation / "provider-home"
     home = isolation / "longhouse"
@@ -2552,23 +2539,9 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         "path": str(args.provider_bin),
         "sha256": observations.get("provider_binary_sha256"),
     }
-    result = {
-        "schema_version": 1,
-        "artifact_kind": "pi_helm_lifecycle_result",
-        "producer": REGISTRATION.to_dict(),
-        "provider": "pi",
-        "variant": None,
-        "scenario_id": SCENARIO_ID,
-        "scenario_revision": REGISTRATION.scenario_revision,
-        "evidence_class": "live_token",
-        "observation_scope": "scenario",
-        "generated_at": now(),
-        "status": "pass" if failure is None and all(assertions.values()) else "fail",
-        "assertions": assertions,
-        "observation": observations,
-        "provider_binary": provider_binary,
-        "artifact_manifest": artifact_manifest(root),
-    }
+    run.fields["provider_binary"] = provider_binary
+    run.observation = observations
+    run.assertions = assertions
     if negative_control:
         control_verdict = negative_control_verdict(
             negative_control,
@@ -2578,20 +2551,19 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             fault_receipts=read_fault_receipts(root / "qa-fault-receipt.jsonl"),
             session_id=str(observations.get("session_id") or ""),
         )
-        result["negative_control"] = control_verdict
-        result["status"] = "pass" if control_verdict["status"] == "pass" and observations["cleanup"].get("status") == "pass" else "fail"
-        _write_json(root / "result.json", result)
-        return result
-    if failure is not None:
-        result["failure_code"] = "pi_helm_lifecycle_failed"
-        result["error"] = f"{type(failure).__name__}: {failure}"
-        result.update(failure_fields(failure))
-        # An errored run vouches for nothing, model compliance included.
-        result["observation"].pop("model_noncompliance", None)
-        result["diagnostic_observation"] = result.pop("observation")
-        result["diagnostic_assertions"] = result.pop("assertions")
-    _write_json(root / "result.json", result)
-    return result
+        cleaned_up = observations["cleanup"].get("status") == "pass"
+        run.control(control_verdict, status="pass" if control_verdict["status"] == "pass" and cleaned_up else "fail")
+    elif failure is not None:
+        # An errored run vouches for nothing, model compliance included: no
+        # verdict, and what it saw kept as diagnostics.
+        observations.pop("model_noncompliance", None)
+        run.fields.update(diagnostic_observation=observations, diagnostic_assertions=assertions)
+        run.observation, run.assertions = None, {}
+        run.failed = failure
+
+
+def run_pi_helm_lifecycle(args: argparse.Namespace, *, raises: bool = False) -> dict[str, Any]:
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args), raises=raises)
 
 
 def _request_args(
@@ -2627,7 +2599,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
     def execute(binary: Path, evidence_root: Path):
         run_args = _request_args(request_path, evidence_root, request=request)
         run_args.provider_bin = binary
-        result = run_pi_helm_lifecycle(run_args)
+        result = run_pi_helm_lifecycle(run_args, raises=True)
         observation = dict(result.get("observation") or result.get("diagnostic_observation") or {})
         assertions = dict(result.get("assertions") or result.get("diagnostic_assertions") or {})
         semantic_assertions = tuple(
@@ -2655,49 +2627,21 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
     )
 
 
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="pi_helm_lifecycle_result",
+    failure_code="pi_helm_lifecycle_failed",
+    # The factory names the qualification model: there is no default, and an
+    # Anthropic model must never be routed through OpenRouter.
+    needs=("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin", "provider_version", "api_url", "agents_token", "model"),
+    variants=_VARIANTS,
+    model_env="LONGHOUSE_PI_QUALIFICATION_MODEL",
+    negative_controls=tuple(NEGATIVE_CONTROLS),
+)
+
+
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    required = (
-        "evidence_root",
-        "repo_root",
-        "engine",
-        "longhouse_cli",
-        "provider_bin",
-        "provider_version",
-        "api_url",
-        "agents_token",
-    )
-    missing = [name for name in required if not getattr(args, name)]
-    if missing:
-        print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{missing[0].replace('_', '-')}"}))
-        return 2
-    try:
-        result = run_pi_helm_lifecycle(args)
-    except Exception as exc:  # noqa: BLE001 - retain a typed producer failure
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "pi_helm_lifecycle_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "pi",
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "observation_scope": "scenario",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "pi_helm_lifecycle_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-        }
-        if args.evidence_root:
-            args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-            _write_json(args.evidence_root / "result.json", result)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_pi_helm_lifecycle, argv)
 
 
 if __name__ == "__main__":

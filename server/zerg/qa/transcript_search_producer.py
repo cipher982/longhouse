@@ -302,7 +302,7 @@ def _reach(run: Run, provider: str, args: argparse.Namespace) -> None:
         if failure is not None:
             control["status"] = "inconclusive"
             run.fields.update(failure_code=PRODUCER.failure_code, error=f"{type(failure).__name__}: {failure}")
-        run.fields.update(negative_control=control, status=control["status"] if cleanup_ok else "inconclusive")
+        run.control(control, status=control["status"] if cleanup_ok else "inconclusive")
         return
     run.fields["search_verdict"] = verdict
     if failure is not None:

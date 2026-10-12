@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 import shutil
-import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -16,10 +15,10 @@ from typing import Any
 from zerg.qa import omp_helm_lifecycle as helm
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
-from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.qa.wait_kind import failure_fields
 
 SCENARIO_ID = "omp_background_jobs"
 PROFILE = "omp_background_v1"
@@ -54,7 +53,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.background_jobs.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=9,
+    # 10: every result is an omp_background_jobs_result; the failure copy is gone.
+    scenario_revision=10,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -340,10 +340,11 @@ def omp_background_assertions(root: Path, result: Mapping[str, Any] | None = Non
     }
 
 
-def run_omp_background(args: argparse.Namespace) -> dict[str, Any]:
+def _reach(run: Run, args: argparse.Namespace) -> None:
     # Reuse the existing Helm PTY, extension channel, shipper and retirement
     # mechanics. Ask for bounded native child-task and command jobs; missing
     # async evidence remains a semantic failure, never green.
+    root = run.root
     args.background_prompt = (
         "Use task once to start a named background worker that performs one read-only "
         "inspection of the current workspace, reports progress, waits two seconds "
@@ -358,9 +359,23 @@ def run_omp_background(args: argparse.Namespace) -> dict[str, Any]:
     try:
         if fault:
             os.environ["LONGHOUSE_QA_FAULT"] = fault
-            os.environ["LONGHOUSE_QA_FAULT_RECEIPT"] = str(args.evidence_root.resolve() / "qa-fault-receipt.jsonl")
+            os.environ["LONGHOUSE_QA_FAULT_RECEIPT"] = str(root / "qa-fault-receipt.jsonl")
             args.negative_control = None
-        result = helm.run_omp_helm(args)
+        helm._reach(run, args)
+        # The Helm run's observation is this scenario's; its verdicts are the Helm lifecycle's, not ours.
+        run.assertions = {}
+    except Exception:
+        # What the Helm run had observed stays as evidence; a failed attempt reaches no verdict.
+        partial = helm._read_state(root / "partial-observation.json") or {}
+        observation = dict(partial.get("observation") or {})
+        cleanup = helm._read_state(root / "cleanup-receipt.json")
+        if cleanup is not None:
+            observation["cleanup"] = cleanup
+        run.observation, run.assertions = observation, {}
+        run.fields.update(profile=PROFILE, execution_variant=getattr(args, "variant", None))
+        if fault:
+            run.fields["negative_control"] = {"fault": fault, "status": "inconclusive"}
+        raise
     finally:
         args.negative_control = fault
         for name, value in fault_environment.items():
@@ -368,7 +383,8 @@ def run_omp_background(args: argparse.Namespace) -> dict[str, Any]:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
-    root = args.evidence_root.resolve()
+    # The Helm run this scenario rides on, as the oracle reads it.
+    result = {"provider": "omp", "observation_scope": "scenario", "observation": run.observation}
     raw_artifacts = _retain_native_extension_artifacts(root)
     managed_identity = _managed_omp_identity(root, result)
     assertions = omp_background_assertions(root, result)
@@ -388,19 +404,8 @@ def run_omp_background(args: argparse.Namespace) -> dict[str, Any]:
         "fault": getattr(args, "negative_control", None),
     }
     (root / "omp-background-receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    result = dict(result)
-    result.update(
-        {
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "producer": REGISTRATION.to_dict(),
-            "requested_assertion": requested_assertion,
-            "assertions": assertions,
-            "managed_identity": managed_identity,
-            "raw_artifacts": raw_artifacts,
-        }
-    )
-    fault = getattr(args, "negative_control", None)
+    run.assertions = assertions
+    run.fields.update(requested_assertion=requested_assertion, managed_identity=managed_identity, raw_artifacts=raw_artifacts)
     if fault:
         (target,) = NEGATIVE_CONTROLS[fault]
         receipt_path = root / "qa-fault-receipt.jsonl"
@@ -415,7 +420,7 @@ def run_omp_background(args: argparse.Namespace) -> dict[str, Any]:
                     fault_receipts.append(value)
         target_rejected = not assertions.get(target, False)
         healthy_control_assertions = all(value for name, value in assertions.items() if name != target)
-        result["negative_control"] = {
+        run.fields["negative_control"] = {
             "fault": fault,
             "target_assertion": target,
             "fault_fired": bool(fault_receipts),
@@ -438,10 +443,10 @@ def run_omp_background(args: argparse.Namespace) -> dict[str, Any]:
                 else "inconclusive"
             ),
         }
-    result["status"] = "pass" if native_run_healthy and all(assertions.values()) else "fail"
-    result["artifact_manifest"] = identity.artifact_manifest(root)
-    helm.lifecycle.write_json(root / "result.json", result)
-    return result
+
+
+def run_omp_background(args: argparse.Namespace, *, raises: bool = False) -> dict[str, Any]:
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args), raises=raises)
 
 
 def _request_args(
@@ -471,7 +476,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
     def execute(binary: Path, evidence_root: Path):
         args = _request_args(request_path, evidence_root, request=request)
         args.provider_bin = binary
-        result = run_omp_background(args)
+        result = run_omp_background(args, raises=True)
         assertions = result["assertions"]
         return (
             result,
@@ -503,60 +508,17 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
     )
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(parser, variants=_VARIANTS)
-    parser.add_argument("--model", required=False)
-    parser.add_argument("--api-url", default=os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
-    parser.add_argument("--agents-token", default=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"))
-    parser.add_argument("--negative-control", choices=(FAULT,))
-    return parser
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="omp_background_jobs_result",
+    failure_code="omp_background_failed",
+    variants=_VARIANTS,
+    negative_controls=(FAULT,),
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    try:
-        result = run_omp_background(args)
-    except Exception as exc:  # noqa: BLE001 - retain a typed failed attempt, never a proof
-        args.evidence_root.mkdir(parents=True, exist_ok=True)
-        partial = helm._read_state(args.evidence_root / "partial-observation.json") or {}
-        observation = dict(partial.get("observation") or {})
-        cleanup = helm._read_state(args.evidence_root / "cleanup-receipt.json")
-        if cleanup is not None:
-            observation["cleanup"] = cleanup
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "omp_background_jobs_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "omp",
-            "profile": PROFILE,
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            # Every result of a scenario-scoped producer says so, failed ones too:
-            # without it the factory reported "returned a cell-specific result"
-            # and the real failure below never reached a case.
-            "observation_scope": REGISTRATION.observation_scope,
-            "variant": None,
-            "execution_variant": getattr(args, "variant", None),
-            "evidence_class": "live_token",
-            "generated_at": identity.now(),
-            "status": "fail",
-            "failure_code": "omp_background_failed",
-            "partial_observation": observation,
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-        }
-        if args.negative_control:
-            result["negative_control"] = {"fault": args.negative_control, "status": "inconclusive"}
-        helm.lifecycle.write_json(args.evidence_root / "omp-background-failure.json", result)
-        result["artifact_manifest"] = identity.artifact_manifest(args.evidence_root)
-        helm.lifecycle.write_json(args.evidence_root / "result.json", result)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_omp_background, argv)
 
 
 if __name__ == "__main__":

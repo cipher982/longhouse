@@ -31,7 +31,6 @@ import argparse
 import json
 import os
 import shutil
-import sys
 import tempfile
 import time
 import uuid
@@ -39,19 +38,14 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
-from zerg.qa.failed_results import reached_only
-from zerg.qa.failed_results import settle_failed_result
-from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
-from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import write_json
-from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.qa.wait_kind import failure_fields
 
 SCENARIO_ID = "codex_helm_lifecycle"
 SEND_IDLE = "codex_helm_send_idle"
@@ -75,7 +69,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="codex.helm_lifecycle.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=1,
+    # 2: a version probe that fails leaves a typed failure.
+    scenario_revision=2,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("codex",),
     platforms=("linux", "darwin"),
@@ -455,9 +450,8 @@ def _fault_receipts(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def run_codex_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace) -> None:
+    root = run.root
     provider_receipt = {
         "provider": "codex",
         "path": str(args.codex_bin),
@@ -465,6 +459,7 @@ def run_codex_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         "version": bridge_canary._run([str(args.codex_bin), "--version"], timeout=30).stdout.strip(),
     }
     write_json(root / "provider-binary-receipt.json", provider_receipt)
+    run.fields["provider_binary"] = provider_receipt
     negative = getattr(args, "negative_control", None)
     fault_receipt_path = root / "qa-fault-receipt.jsonl"
     if negative:
@@ -527,21 +522,8 @@ def run_codex_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             os.environ.pop("LONGHOUSE_QA_FAULT_RECEIPT", None)
 
     assertions = codex_helm_lifecycle_assertions(observations, records)
-    result: dict[str, Any] = {
-        "schema_version": 1,
-        "artifact_kind": "codex_helm_lifecycle_result",
-        "producer": REGISTRATION.to_dict(),
-        "provider": "codex",
-        "variant": None,
-        "scenario_id": SCENARIO_ID,
-        "scenario_revision": REGISTRATION.scenario_revision,
-        "evidence_class": "live_token",
-        "observation_scope": "scenario",
-        "generated_at": now(),
-        "assertions": control_run_assertions(assertions, NEGATIVE_CONTROLS[negative][1]) if negative else assertions,
-        "observation": observations,
-        "provider_binary": provider_receipt,
-    }
+    run.observation = observations
+    run.assertions = assertions
     if negative:
         fault, target = NEGATIVE_CONTROLS[negative]
         fired = [receipt for receipt in _fault_receipts(fault_receipt_path) if receipt.get("session_id") == session.session_id]
@@ -551,72 +533,53 @@ def run_codex_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             verdict = "undetected"
         else:
             verdict = "rejected"
-        result["negative_control"] = {
-            "fault": fault,
-            "target_assertion": target,
-            "fault_fired": bool(fired),
-            "target_outcome": "semantic_fail" if not assertions[target] else "pass",
-            "verdict": verdict,
-        }
-        result["status"] = "pass" if verdict == "rejected" and assertions[TERMINATE_OWNED] else "fail"
-    else:
-        result["status"] = "pass" if failure is None and all(assertions.values()) else "fail"
+        run.assertions = control_run_assertions(assertions, target)
+        run.control(
+            {
+                "fault": fault,
+                "target_assertion": target,
+                "fault_fired": bool(fired),
+                "target_outcome": "semantic_fail" if not assertions[target] else "pass",
+                "verdict": verdict,
+            },
+            status="pass" if verdict == "rejected" and assertions[TERMINATE_OWNED] else "fail",
+        )
     if failure is not None:
-        result["failure_code"] = "codex_helm_lifecycle_failed"
-        result["error"] = f"{type(failure).__name__}: {failure}"
-        result.update(failure_fields(failure))
-        if not negative:
-            # Verdicts only for the phases this run reached: a reached failing
-            # phase is a finding; if every reached phase held, a typed harness
-            # failure with the observation kept as evidence.
-            settle_failed_result(
-                result,
-                observation=observations,
-                assertions=reached_only(assertions, observations, REACHED_MARKERS),
-            )
-    result["artifact_manifest"] = artifact_manifest(root)
-    write_json(root / "result.json", result)
-    return result
+        raise failure
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", choices=_VARIANTS)
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--engine", required=True, type=Path)
-    parser.add_argument("--codex-bin", required=True, type=Path)
-    parser.add_argument("--model", default=os.environ.get("CODEX_MODEL"))
+def run_codex_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
+    args.script_bin = args.timeout_bin = None
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args))
+
+
+def _add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--bridge-start-timeout-secs", type=int, default=60)
     parser.add_argument("--live-send-timeout-secs", type=int, default=180)
-    parser.add_argument("--negative-control", choices=tuple(NEGATIVE_CONTROLS))
-    return parser
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="codex_helm_lifecycle_result",
+    failure_code="codex_helm_lifecycle_failed",
+    needs=("evidence_root", "repo_root", "engine", "codex_bin"),
+    binaries=(("engine", "longhouse_engine_missing"), ("codex_bin", "codex_binary_missing")),
+    runtime_host=True,
+    variants=_VARIANTS,
+    variant_required=False,
+    provider_bin_aliases=("--codex-bin",),
+    provider_bin_dest="codex_bin",
+    model_env="CODEX_MODEL",
+    negative_controls=tuple(NEGATIVE_CONTROLS),
+    # A run that raised reports verdicts only for the phases it reached.
+    reached=REACHED_MARKERS,
+    refuse=lambda args: None if args.negative_control or args.variant else "missing_required_argument:--variant",
+    add_arguments=_add_arguments,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    if not args.negative_control and not args.variant:
-        print(json.dumps({"status": "fail", "failure_code": "missing_required_argument:--variant"}))
-        return 2
-    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
-    require_disposable_runtime(args.api_url)
-    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
-    args.script_bin = None
-    args.timeout_bin = None
-    if not args.api_url or not args.agents_token:
-        print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
-        return 2
-    for path, code in ((args.engine, "longhouse_engine_missing"), (args.codex_bin, "codex_binary_missing")):
-        if not path.is_file() or not os.access(path, os.X_OK):
-            print(json.dumps({"status": "fail", "failure_code": code}))
-            return 2
-    result = run_codex_helm_lifecycle(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_codex_helm_lifecycle, argv)
 
 
 if __name__ == "__main__":

@@ -22,30 +22,25 @@ import argparse
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 from zerg.qa import cursor_helm_product_e2e
-from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import bound_terminal_recordings
 from zerg.qa.live_session_toolkit import isolated_provider_home
 from zerg.qa.live_session_toolkit import qualification_secrets
-from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import secret_scan
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import wait_pid_dead
 from zerg.qa.live_session_toolkit import wait_process_group_dead
 from zerg.qa.live_session_toolkit import write_json
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD
 from zerg.qa.wait_kind import declared as declared_wait
-from zerg.qa.wait_kind import failure_fields
 
 _DEFAULT_CURSOR_MODEL = "gpt-5.3-codex-low"
 NEGATIVE_CONTROLS = ("cursor_steer_queue_only", "cursor_abort_noop")
@@ -70,7 +65,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="cursor.helm_lifecycle.v1",
     producer_revision=1,
     scenario_id="cursor_helm_lifecycle",
-    scenario_revision=7,
+    # 8: a failed result carries the binary receipt.
+    scenario_revision=8,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("cursor",),
     platforms=("linux", "darwin"),
@@ -207,9 +203,8 @@ def negative_control_verdict(report: dict[str, Any], *, fault: str) -> dict[str,
     }
 
 
-def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace) -> None:
+    root = run.root
     provider_receipt = {
         "path": str(args.provider_bin),
         "sha256": sha256_file(args.provider_bin),
@@ -218,12 +213,14 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         ).stdout.strip(),
     }
     write_json(root / "provider-binary-receipt.json", provider_receipt)
+    run.fields["provider_binary"] = provider_receipt
+    if args.negative_control:
+        run.fields["artifact_kind"] = "negative_control_result"
 
     home = isolated_provider_home()
     shipper: TranscriptShipper | None = None
     report: dict[str, Any] | None = None
     saved = {name: os.environ.get(name) for name in ("LONGHOUSE_CURSOR_BIN", "LONGHOUSE_HOME", "LH_QA_FAULT", "AGENT_CLI_CREDENTIAL_STORE")}
-    artifact_kind = "negative_control_result" if args.negative_control else "direct_helm_lifecycle_result"
     try:
         # The Machine Agent computes its control grants when its channel starts,
         # so the staged binary must be bound before the shipper starts.
@@ -306,57 +303,17 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         bound_terminal_recordings(
             root / "product-e2e", provider="cursor-helm-lifecycle", states=[], recording_names=("terminal.raw",), checkpoint_name=None
         )
-        redacted = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
-        result: dict[str, Any] = {
-            "schema_version": 1,
-            "artifact_kind": artifact_kind,
-            "producer": REGISTRATION.to_dict(),
-            "provider": "cursor",
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "observation_scope": "scenario",
-            "generated_at": now(),
-            "session_id": report.get("session_id"),
-            "provider_binary": provider_receipt,
-            "observation": {"lifecycle": report.get("lifecycle"), "error": report.get("error"), **required_cleanup},
-            "redacted_secret_files": redacted,
-        }
+        run.fields["session_id"] = report.get("session_id")
+        run.observation = {"lifecycle": report.get("lifecycle"), "error": report.get("error"), **required_cleanup}
         if args.negative_control:
             verdict = negative_control_verdict(report, fault=args.negative_control)
-            result.update({"status": verdict["status"], "negative_control": verdict})
+            run.control(verdict, status=verdict["status"])
         else:
-            assertions = lifecycle_assertions(report, cleanup_ok=cleanup_ok)
-            result.update({"status": "pass" if all(assertions.values()) else "fail", "assertions": assertions})
-            if result["status"] == "fail":
-                result["failure_code"] = "cursor_helm_lifecycle_failed"
+            run.assertions = lifecycle_assertions(report, cleanup_ok=cleanup_ok)
+            if not all(run.assertions.values()):
+                run.fields["failure_code"] = "cursor_helm_lifecycle_failed"
                 # What the run was waiting on when it stopped, if it stopped on a wait.
-                result.update(declared_wait(report.get(WAITED_ON_FIELD)))
-        result["artifact_manifest"] = artifact_manifest(root)
-        write_json(root / "result.json", result)
-        return result
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-        failure = {
-            "schema_version": 1,
-            "artifact_kind": artifact_kind,
-            "producer": REGISTRATION.to_dict(),
-            "provider": "cursor",
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "observation_scope": "scenario",
-            "generated_at": now(),
-            "status": "inconclusive" if args.negative_control else "fail",
-            "failure_code": "cursor_helm_lifecycle_harness_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            "redacted_secret_files": secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token))),
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", failure)
-        return failure
+                run.fields.update(declared_wait(report.get(WAITED_ON_FIELD)))
     finally:
         if shipper is not None:
             try:
@@ -368,46 +325,38 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = previous
+        run.fields["redacted_secret_files"] = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", required=True)
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--engine", required=True, type=Path)
-    parser.add_argument("--longhouse-cli", required=True, type=Path)
-    parser.add_argument("--provider-bin", required=True, type=Path)
-    parser.add_argument("--model", default=None)
+def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
+    return PRODUCER.execute(
+        args.evidence_root, lambda run: _reach(run, args), failure_status="inconclusive" if args.negative_control else "fail"
+    )
+
+
+def _add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--timeout-secs", type=float, default=150.0)
     parser.add_argument("--max-archive-lag-secs", type=float, default=20.0)
-    parser.add_argument("--negative-control", choices=NEGATIVE_CONTROLS, default=None)
-    return parser
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="direct_helm_lifecycle_result",
+    failure_code="cursor_helm_lifecycle_harness_failed",
+    needs=("variant", "evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin"),
+    binaries=(
+        ("engine", "longhouse_engine_missing"),
+        ("longhouse_cli", "longhouse_cli_missing"),
+        ("provider_bin", "cursor_binary_missing"),
+    ),
+    runtime_host=True,
+    negative_controls=NEGATIVE_CONTROLS,
+    add_arguments=_add_arguments,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
-    require_disposable_runtime(args.api_url)
-    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
-    if not args.api_url or not args.agents_token:
-        print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
-        return 2
-    for path, code in (
-        (args.engine, "longhouse_engine_missing"),
-        (args.longhouse_cli, "longhouse_cli_missing"),
-        (args.provider_bin, "cursor_binary_missing"),
-    ):
-        if not path.is_file() or not os.access(path, os.X_OK):
-            print(json.dumps({"status": "fail", "failure_code": code}))
-            return 2
-    result = run_lifecycle(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_lifecycle, argv)
 
 
 if __name__ == "__main__":

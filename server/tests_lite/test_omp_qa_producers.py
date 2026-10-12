@@ -32,7 +32,6 @@ from zerg.qa.omp_helm_lifecycle import _events_page_metadata
 from zerg.qa.omp_helm_lifecycle import _exact_session_retirement
 from zerg.qa.omp_helm_lifecycle import _flush_receipt_complete
 from zerg.qa.omp_helm_lifecycle import _helm_cleanup_ready
-from zerg.qa.omp_helm_lifecycle import _helm_result_status
 from zerg.qa.omp_helm_lifecycle import _manifest_is_stable
 from zerg.qa.omp_helm_lifecycle import _native_settlement
 from zerg.qa.omp_helm_lifecycle import _record_retirement_claim_terminal
@@ -1937,14 +1936,6 @@ def test_omp_cleanup_gate_is_required_for_every_selected_assertion() -> None:
     assert not _helm_cleanup_ready(cleanup)
 
 
-def test_omp_result_status_cannot_pass_on_a_selected_assertion_without_final_evidence() -> None:
-    assertions = {assertion: assertion == HELM_ASSERTIONS[0] for assertion in HELM_ASSERTIONS}
-
-    assert _helm_result_status(assertions, _VARIANTS[0], cleanup_ready=False, manifest_stable=True) == "fail"
-    assert _helm_result_status(assertions, _VARIANTS[0], cleanup_ready=True, manifest_stable=False) == "fail"
-    assert _helm_result_status(assertions, _VARIANTS[0], cleanup_ready=True, manifest_stable=True) == "fail"
-
-
 def test_omp_served_projection_requires_exact_runtime_identity_and_marker_event() -> None:
     marker = "OMP_EXACT_MARKER"
     snapshot = {
@@ -2505,7 +2496,7 @@ def test_omp_manifest_stability_detects_post_manifest_mutation(tmp_path) -> None
     (
         # The Console producer's work is the shared Console transaction; its registration is cell-scoped.
         ("zerg.qa.omp_console_producer", "zerg.qa.provider_console_lifecycle._run_live", CONSOLE_VARIANT, None),
-        ("zerg.qa.omp_helm_lifecycle", "zerg.qa.omp_helm_lifecycle.run_omp_helm", _VARIANTS[0], "scenario"),
+        ("zerg.qa.omp_helm_lifecycle", "zerg.qa.omp_helm_lifecycle._reach", _VARIANTS[0], "scenario"),
     ),
 )
 def test_omp_main_failure_retains_partial_artifact_manifest(monkeypatch, tmp_path, module_name, runner, variant, scope, capsys) -> None:
@@ -2531,6 +2522,20 @@ def test_omp_main_failure_retains_partial_artifact_manifest(monkeypatch, tmp_pat
     assert payload["error"] == "RuntimeError: synthetic qualification failure"
     assert [entry["path"] for entry in payload["artifact_manifest"]] == ["partial-receipt.json"]
     assert "synthetic qualification failure" in capsys.readouterr().out
+
+
+def test_omp_helm_run_that_held_every_assertion_over_a_changing_evidence_tree_is_a_typed_failure(monkeypatch, tmp_path) -> None:
+    def reach(run, _args) -> None:
+        run.observation = {"settlement": {"agent_end_terminal": True}}
+        run.assertions = dict.fromkeys(HELM_ASSERTIONS, True)
+        run.fields["final_evidence"] = {"cleanup_ready": True, "manifest_stable": False}
+
+    monkeypatch.setattr(omp_helm_lifecycle, "_reach", reach)
+    result = omp_helm_lifecycle.run_omp_helm(SimpleNamespace(evidence_root=tmp_path / "evidence"))
+
+    # Not a pass, and not a verdict against OMP: what it saw stays as evidence.
+    assert (result["status"], result["failure_code"]) == ("fail", "omp_helm_evidence_not_final")
+    assert "assertions" not in result and result["partial_observation"] == {"settlement": {"agent_end_terminal": True}}
 
 
 def test_omp_helm_oracle_rejects_archive_only_or_unbound_evidence() -> None:

@@ -837,7 +837,7 @@ def test_a_scenario_producers_failed_result_is_scenario_scoped(monkeypatch, tmp_
         raise RuntimeError("harness exploded before the observation boundary")
 
     if module == "omp_background_producer":
-        monkeypatch.setattr(producer, "run_omp_background", boom)
+        monkeypatch.setattr(producer.helm, "_reach", boom)
     else:
         monkeypatch.setattr(producer, "require_disposable_runtime", lambda _url: None)
         monkeypatch.setattr(producer, "_run_direct", boom)
@@ -888,7 +888,7 @@ def test_a_producer_stopped_by_an_expired_wait_says_what_it_waited_on(monkeypatc
             raise RuntimeError(f"{exc}; last_observation={{}}") from exc
 
     if module == "omp_background_producer":
-        monkeypatch.setattr(producer, "run_omp_background", stalled)
+        monkeypatch.setattr(producer.helm, "_reach", stalled)
     else:
         monkeypatch.setattr(producer, "require_disposable_runtime", lambda _url: None)
         monkeypatch.setattr(producer, "_run_direct", stalled)
