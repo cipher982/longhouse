@@ -891,7 +891,7 @@ pub fn reserve_source_for_thread(
 pub fn bind_discovered_source(
     conn: &rusqlite::Connection,
     path: &Path,
-    claims: &[crate::turn_claims::TurnClaim],
+    claims: &[impl std::borrow::Borrow<crate::turn_claims::TurnClaim>],
 ) -> Result<SourceOwnership> {
     let path = normalized_source_path(path)?;
     let path_text = path.to_string_lossy().into_owned();
@@ -937,7 +937,8 @@ pub fn bind_discovered_source(
 
     for claim in claims
         .iter()
-        .filter(|claim| claim.provider.eq_ignore_ascii_case("omp"))
+        .map(std::borrow::Borrow::borrow)
+        .filter(|claim: &&crate::turn_claims::TurnClaim| claim.provider.eq_ignore_ascii_case("omp"))
     {
         let Some(session_id) = normalized_uuid(&claim.session_id) else {
             continue;

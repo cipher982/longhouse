@@ -95,7 +95,8 @@ fn source_ownership_in(
         crate::dir_cache::parsed_json_dir(state_dir, parse_source_state, |left, right| {
             left.0.cmp(&right.0)
         })?;
-    for (state_path, state) in states.iter() {
+    for item in states.iter() {
+        let (state_path, state) = &**item;
         let (Some(session_id), Some(run_id), Some(session_dir)) = (
             state.session_id.as_deref(),
             state.run_id.as_deref(),
@@ -120,13 +121,15 @@ fn source_ownership_in(
         if claims.is_none() {
             claims = Some(crate::managed_source_claim::claims_by_session()?);
         }
+        let claims = claims.as_ref().expect("claims loaded above");
         let claim = match claims
-            .as_ref()
-            .and_then(|claims| claims.iter().find(|(id, _)| id == session_id))
+            .binary_search_by(|entry| entry.0.as_str().cmp(session_id))
+            .ok()
+            .map(|index| &claims[index].1)
         {
             None => None,
-            Some((_, Ok(claim))) => Some(claim.clone()),
-            Some((_, Err(error))) => anyhow::bail!("{error}"),
+            Some(Ok(claim)) => Some(claim),
+            Some(Err(error)) => anyhow::bail!("{error}"),
         };
         if let Some(claim) = claim.filter(|claim| {
             claim.provider == "omp"

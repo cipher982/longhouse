@@ -147,7 +147,8 @@ fn scan_dir(
     else {
         return;
     };
-    for (path, parsed) in contracts.iter() {
+    for item in contracts.iter() {
+        let (path, parsed) = &**item;
         let path = path.as_path();
         let Some(session_id) = path
             .file_name()

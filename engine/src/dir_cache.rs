@@ -44,7 +44,7 @@ struct Entry {
 /// A file's (length, inode, modification nanos) as listed.
 type Stamp = (u64, u64, i128);
 
-type Files<T> = HashMap<PathBuf, (Stamp, Option<T>)>;
+type Files<T> = HashMap<PathBuf, (Stamp, Option<Arc<T>>)>;
 
 #[cfg(test)]
 thread_local! {
@@ -85,13 +85,17 @@ static CACHE: LazyLock<Mutex<HashMap<CacheKey, Entry>>> =
 /// with the stamp it was parsed at keeps its parse. Turn-claim directories
 /// hold hundreds of settled claims while one live turn rewrites its own, and
 /// re-reading every file on each such write was a leading engine cost.
+/// Parses are shared: a reused file costs a reference count, not a deep
+/// copy, so a directory where one live session rewrites its file among
+/// hundreds of settled ones no longer clones every settled parse per call.
+/// Each returned snapshot is immutable; later changes build a new one.
 pub(crate) fn parsed_json_dir<T>(
     dir: &Path,
     parse: fn(&Path, std::io::Result<Vec<u8>>) -> Option<T>,
     order: fn(&T, &T) -> std::cmp::Ordering,
-) -> std::io::Result<Arc<Vec<T>>>
+) -> std::io::Result<Arc<Vec<Arc<T>>>>
 where
-    T: Clone + Send + Sync + 'static,
+    T: Send + Sync + 'static,
 {
     let listing = match list_json(dir) {
         Ok(listing) => listing,
@@ -113,7 +117,7 @@ where
     if let Ok(cache) = CACHE.lock() {
         if let Some(entry) = cache.get(&key) {
             if listing.signature.is_some() && entry.signature == listing.signature {
-                if let Ok(parsed) = Arc::clone(&entry.parsed).downcast::<Vec<T>>() {
+                if let Ok(parsed) = Arc::clone(&entry.parsed).downcast::<Vec<Arc<T>>>() {
                     return Ok(parsed);
                 }
             }
@@ -125,7 +129,7 @@ where
     // the name, length, inode or mtime that a copy is trusted on.
     let mut every_file_read = true;
     let mut files: Files<T> = HashMap::with_capacity(listing.files.len());
-    let mut parsed: Vec<T> = Vec::with_capacity(listing.files.len());
+    let mut parsed: Vec<Arc<T>> = Vec::with_capacity(listing.files.len());
     for file in listing.files {
         let reused = file
             .rested
@@ -144,7 +148,7 @@ where
                     every_file_read = false;
                     UNREAD_FILES.with(|unread| unread.set(unread.get() + 1));
                 }
-                let value = parse(&file.path, bytes);
+                let value = parse(&file.path, bytes).map(Arc::new);
                 if !(read && file.rested) {
                     if let Some(value) = value {
                         parsed.push(value);
@@ -154,12 +158,12 @@ where
                 value
             }
         };
-        if let Some(value) = value.clone() {
-            parsed.push(value);
+        if let Some(value) = value.as_ref() {
+            parsed.push(Arc::clone(value));
         }
         files.insert(file.path, (file.stamp, value));
     }
-    parsed.sort_by(order);
+    parsed.sort_by(|left, right| order(left, right));
     let parsed = Arc::new(parsed);
     if let Ok(mut cache) = CACHE.lock() {
         if cache.len() >= MAX_DIRECTORIES && !cache.contains_key(&key) {
@@ -282,10 +286,16 @@ fn read_entries(dir: &Path) -> std::io::Result<Vec<RawEntry>> {
     read_entries_portable(dir)
 }
 
+/// `*.json` entries of `dir`, stat'ed one by one. Other names are skipped
+/// before the stat: this directory may hold logs and locks too.
 fn read_entries_portable(dir: &Path) -> std::io::Result<Vec<RawEntry>> {
     let mut entries = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
+        let name = entry.file_name();
+        if Path::new(&name).extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
         let stat = entry.metadata().ok().map(|metadata| RawStat {
             len: metadata.len(),
             #[cfg(unix)]
@@ -295,10 +305,7 @@ fn read_entries_portable(dir: &Path) -> std::io::Result<Vec<RawEntry>> {
             modified: metadata.modified().ok(),
             is_symlink: metadata.file_type().is_symlink(),
         });
-        entries.push(RawEntry {
-            name: entry.file_name(),
-            stat,
-        });
+        entries.push(RawEntry { name, stat });
     }
     Ok(entries)
 }
@@ -436,6 +443,10 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    fn owned(values: Arc<Vec<Arc<String>>>) -> Vec<String> {
+        values.iter().map(|value| String::clone(value)).collect()
+    }
+
     fn parse(_path: &Path, bytes: std::io::Result<Vec<u8>>) -> Option<String> {
         String::from_utf8(bytes.ok()?).ok()
     }
@@ -454,7 +465,11 @@ mod tests {
         for index in 0..600 {
             fs::write(dir.path().join(format!("claim-{index:04}.json")), "{}").unwrap();
         }
-        let mut bulk = bulk::read_entries(dir.path()).unwrap();
+        let mut bulk: Vec<RawEntry> = bulk::read_entries(dir.path())
+            .unwrap()
+            .into_iter()
+            .filter(|entry| Path::new(&entry.name).extension() == Some("json".as_ref()))
+            .collect();
         let mut portable = read_entries_portable(dir.path()).unwrap();
         bulk.sort_by(|left, right| left.name.cmp(&right.name));
         portable.sort_by(|left, right| left.name.cmp(&right.name));
@@ -495,7 +510,7 @@ mod tests {
             fs::write(dir.path().join(name), name).unwrap();
             age(&dir.path().join(name), 60);
         }
-        let read = |dir: &Path| parsed_json_dir(dir, parse, Ord::cmp).unwrap().to_vec();
+        let read = |dir: &Path| owned(parsed_json_dir(dir, parse, Ord::cmp).unwrap());
         assert_eq!(read(dir.path()), ["a.json", "b.json", "c.json"]);
         let before = files_parsed();
 
@@ -542,7 +557,7 @@ mod tests {
         fs::write(&a, "one").unwrap();
         age(&a, 60);
         let values =
-            |dir: &Path| -> Vec<String> { parsed_json_dir(dir, parse, Ord::cmp).unwrap().to_vec() };
+            |dir: &Path| -> Vec<String> { owned(parsed_json_dir(dir, parse, Ord::cmp).unwrap()) };
         assert_eq!(values(dir.path()), ["one"]);
 
         // Same name and length, rewritten in place: only the mtime moved.
@@ -605,13 +620,13 @@ mod tests {
 
         // What the link points at can change without the link changing.
         assert_eq!(
-            parsed_json_dir(&claims, parse, Ord::cmp).unwrap().to_vec(),
+            owned(parsed_json_dir(&claims, parse, Ord::cmp).unwrap()),
             ["one"]
         );
         fs::write(&target, "two").unwrap();
         age(&target, 30);
         assert_eq!(
-            parsed_json_dir(&claims, parse, Ord::cmp).unwrap().to_vec(),
+            owned(parsed_json_dir(&claims, parse, Ord::cmp).unwrap()),
             ["two"]
         );
     }
@@ -623,11 +638,12 @@ mod tests {
             fs::write(dir.path().join(name), name).unwrap();
             age(&dir.path().join(name), 60);
         }
-        let ascending = |dir: &Path| parsed_json_dir(dir, parse, Ord::cmp).unwrap().to_vec();
+        let ascending = |dir: &Path| owned(parsed_json_dir(dir, parse, Ord::cmp).unwrap());
         let descending = |dir: &Path| {
-            parsed_json_dir(dir, parse, |left: &String, right: &String| right.cmp(left))
-                .unwrap()
-                .to_vec()
+            owned(
+                parsed_json_dir(dir, parse, |left: &String, right: &String| right.cmp(left))
+                    .unwrap(),
+            )
         };
         assert_eq!(ascending(dir.path()), ["a.json", "b.json"]);
         assert_eq!(descending(dir.path()), ["b.json", "a.json"]);
@@ -664,9 +680,7 @@ mod tests {
         // Made readable again, with nothing a stat can see having changed.
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(
-            parsed_json_dir(dir.path(), parse, Ord::cmp)
-                .unwrap()
-                .to_vec(),
+            owned(parsed_json_dir(dir.path(), parse, Ord::cmp).unwrap()),
             ["one"]
         );
         assert_eq!(

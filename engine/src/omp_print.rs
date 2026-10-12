@@ -237,7 +237,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         }) {
             let leader = crate::turn_claims::TurnClaim {
                 owned_processes: Vec::new(),
-                ..claim.clone()
+                ..crate::turn_claims::TurnClaim::clone(claim)
             };
             match crate::console_adapter::claim_liveness(&leader, inventory.as_ref()) {
                 ClaimLiveness::Gone => {}

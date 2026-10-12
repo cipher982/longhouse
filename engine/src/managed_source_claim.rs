@@ -297,8 +297,11 @@ pub fn read_claim(session_id: &str) -> Result<Option<SourceClaim>> {
 /// [`read_claim`] would return for each session, for a caller that asks
 /// about many sessions at once. An unreadable file is absent (as `read_claim`
 /// returns `Ok(None)`); an unparsable one keeps its error for the caller.
-pub fn claims_by_session(
-) -> Result<std::sync::Arc<Vec<(String, std::result::Result<SourceClaim, String>)>>> {
+/// Sorted by session id, so a caller can binary-search it.
+pub type ClaimsBySession =
+    std::sync::Arc<Vec<std::sync::Arc<(String, std::result::Result<SourceClaim, String>)>>>;
+
+pub fn claims_by_session() -> Result<ClaimsBySession> {
     fn parse(
         path: &std::path::Path,
         bytes: std::io::Result<Vec<u8>>,

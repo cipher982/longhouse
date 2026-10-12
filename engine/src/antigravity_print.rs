@@ -940,7 +940,7 @@ pub(crate) enum SourceOwnership {
 pub(crate) fn bind_discovered_source(
     conn: &rusqlite::Connection,
     path: &Path,
-    claims: &[crate::turn_claims::TurnClaim],
+    claims: &[impl std::borrow::Borrow<crate::turn_claims::TurnClaim>],
     agent_dir: &Path,
 ) -> Result<SourceOwnership> {
     let Some(logs) = path
@@ -969,7 +969,8 @@ pub(crate) fn bind_discovered_source(
     let mut pending_owner = false;
     for claim in claims
         .iter()
-        .filter(|claim| claim.provider == "antigravity")
+        .map(std::borrow::Borrow::borrow)
+        .filter(|claim: &&crate::turn_claims::TurnClaim| claim.provider == "antigravity")
     {
         let nonterminal = !matches!(claim.state.as_str(), "terminal" | "failed");
         let id = if claim.provider_identity_confirmed {

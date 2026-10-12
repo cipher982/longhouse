@@ -388,7 +388,8 @@ fn managed_longhouse_session_id_for_opencode_from_roots(
             left.0.cmp(&right.0)
         })
         .unwrap_or_default();
-        for (_path, value) in states.iter() {
+        for item in states.iter() {
+            let (_path, value) = &**item;
             let provider = value
                 .get("provider")
                 .and_then(Value::as_str)

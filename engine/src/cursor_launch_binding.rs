@@ -388,7 +388,7 @@ fn parse_json_value(_path: &Path, bytes: std::io::Result<Vec<u8>>) -> Option<ser
 /// A directory that cannot be read is an error, not "no claims": with no claims
 /// a managed conversation reads as unmanaged and would be archived as a session
 /// of its own. Only a directory that does not exist has no claims.
-fn binding_claims(dir: &Path) -> Result<Arc<Vec<LaunchBindingClaim>>> {
+fn binding_claims(dir: &Path) -> Result<Arc<Vec<Arc<LaunchBindingClaim>>>> {
     crate::dir_cache::parsed_json_dir(dir, parse_binding_claim, |_, _| std::cmp::Ordering::Equal)
         .with_context(|| format!("reading Cursor launch claims in {}", dir.display()))
 }

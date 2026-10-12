@@ -569,12 +569,17 @@ impl TurnClaimRegistry {
     }
 
     pub fn list_all(&self) -> Result<Vec<TurnClaim>> {
-        Ok(self.list_all_shared()?.to_vec())
+        Ok(self
+            .list_all_shared()?
+            .iter()
+            .map(|claim| TurnClaim::clone(claim))
+            .collect())
     }
 
     /// The same claims as `list_all`, shared. A scan asks this once per source it
-    /// examines, so the directory is read again only when a claim file changed.
-    pub fn list_all_shared(&self) -> Result<Arc<Vec<TurnClaim>>> {
+    /// examines, so the directory is read again only when a claim file changed,
+    /// and an unchanged claim is shared rather than copied.
+    pub fn list_all_shared(&self) -> Result<Arc<Vec<Arc<TurnClaim>>>> {
         crate::dir_cache::parsed_json_dir(&self.root, parse_claim_file, |left, right| {
             left.claimed_at.cmp(&right.claimed_at)
         })
