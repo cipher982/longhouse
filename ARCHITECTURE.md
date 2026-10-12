@@ -262,7 +262,7 @@ Python modules stay flat by design; services group by file prefix.
 | `server/zerg/schemas/` | Pydantic request/response models |
 | `server/zerg/cli/` | `longhouse-server` commands |
 | `server/zerg/mcp_server/` | MCP tools (search, recall) for agents over stdio |
-| `server/zerg/qa/` | Live QA producers and oracles |
+| `server/zerg/qa/` | Live QA producers and oracles; every producer is built in `producer_shell.py` (the factory's command line, the result envelope, the typed failure), and what lifecycle producers share is in `live_kit.py` |
 | `server/zerg/auth/`, `server/zerg/middleware/`, `server/zerg/websocket/` | Auth, middleware, WebSocket |
 | `server/tests_lite/` | Backend tests (`make test`) |
 
