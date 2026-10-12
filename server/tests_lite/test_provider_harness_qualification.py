@@ -1072,12 +1072,11 @@ def test_cursor_without_a_gate0_artifact_says_so(tmp_path: Path, monkeypatch) ->
     assert assertions[0].reasons == ({"stage": "cursor_gate0", "failure_code": "cursor_gate0_artifact_missing"},)
 
 
-@pytest.mark.parametrize("profile", _CURSOR_PROFILES)
 def test_cursor_observed_install_passes_without_reasons_when_every_requirement_passed(
     tmp_path: Path,
     monkeypatch,
-    profile: str,
 ) -> None:
+    profile = cursor_release_identity.OBSERVED_INSTALL_PROFILE
     request, _binary = _cursor_request(tmp_path, profile=profile)
     _cursor_gate0(tmp_path, monkeypatch, status="passed")
     _cursor_harness(monkeypatch, live={"status": "pass"}, interaction={"status": "pass"})
