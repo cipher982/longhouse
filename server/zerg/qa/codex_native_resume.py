@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import re
@@ -19,6 +20,9 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa.live_kit import RuntimeHostError as _RuntimeHostHTTPError
+from zerg.qa.live_kit import poll
+from zerg.qa.live_kit import runtime_host_json
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import qualification_secrets
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
@@ -35,7 +39,6 @@ from zerg.qa.wait_kind import LONGHOUSE_ENGINE
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
 
-_RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 _CODEX_REMOTE_TOKEN_ENV = "CODEX_REMOTE_AUTH_TOKEN"
 
 REGISTRATION = ProducerRegistration(
@@ -173,44 +176,7 @@ def _redact_process_command(command: str) -> str:
     )
 
 
-class _RuntimeHostHTTPError(RuntimeError):
-    def __init__(self, status: int, detail: str) -> None:
-        self.status = status
-        self.detail = detail
-        super().__init__(f"Runtime Host HTTP {status}: {detail}")
-
-
-def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> dict[str, Any]:
-    request = urllib.request.Request(
-        f"{api_url.rstrip('/')}/api/agents/{path.lstrip('/')}",
-        headers={
-            "X-Agents-Token": token,
-            "Accept": "application/json",
-            "User-Agent": _RUNTIME_HOST_USER_AGENT,
-        },
-        data=b"" if method == "POST" else None,
-        method=method,
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            payload = json.load(response)
-    except urllib.error.HTTPError as exc:
-        try:
-            raw_detail = exc.read(4096).decode("utf-8", "replace")
-        except OSError:
-            raw_detail = ""
-        try:
-            parsed_detail = json.loads(raw_detail)
-        except json.JSONDecodeError:
-            parsed_detail = raw_detail[:1000]
-        if isinstance(parsed_detail, dict):
-            detail = str(parsed_detail.get("detail") or parsed_detail)[:1000]
-        else:
-            detail = str(parsed_detail)[:1000]
-        raise _RuntimeHostHTTPError(exc.code, detail) from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("Runtime Host returned a non-object")
-    return payload
+_api_json = functools.partial(runtime_host_json, timeout=10)
 
 
 def _wait_resume_intent(args: argparse.Namespace, session_id: str, *, timeout: float = 90) -> dict[str, Any]:
@@ -267,21 +233,7 @@ def _validate_resume_intent(
 
 
 def _pid_alive(pid: int) -> bool:
-    if pid <= 1:
-        return False
-    try:
-        fields = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8").split()
-        if len(fields) > 2 and fields[2] == "Z":
-            return False
-    except OSError:
-        pass
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return pid > 1 and bridge_canary._pid_alive(pid)
 
 
 def _proc_command(pid: int) -> str:
@@ -297,10 +249,7 @@ def _process_start_time(pid: int) -> str:
 
 
 def _wait_dead(pid: int, *, timeout: float = 10.0) -> bool:
-    deadline = time.monotonic() + timeout
-    while _pid_alive(pid) and time.monotonic() < deadline:
-        time.sleep(0.05)
-    return not _pid_alive(pid)
+    return poll(lambda: not _pid_alive(pid), timeout=timeout, interval=0.05)
 
 
 def _force_process_loss(state: dict[str, Any], codex_bin: Path, state_file: Path) -> dict[str, Any]:

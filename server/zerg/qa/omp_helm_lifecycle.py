@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import json
 import os
 import shutil
@@ -31,6 +32,10 @@ from zerg.qa.console_served_state_core import event_text
 from zerg.qa.console_served_state_core import served_answer_correspondence
 from zerg.qa.console_served_state_core import served_answer_fault
 from zerg.qa.failed_results import reached_only
+from zerg.qa.live_kit import group_dead as _pgid_dead
+from zerg.qa.live_kit import pid_alive as _pid_alive
+from zerg.qa.live_kit import pid_dead as _pid_dead
+from zerg.qa.live_kit import poll
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import require_disposable_runtime
@@ -62,7 +67,6 @@ from zerg.qa.wait_kind import LONGHOUSE_INGEST
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
-from zerg.qa.wait_kind import expired_wait
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
@@ -349,35 +353,8 @@ class RuntimeConvergenceTimeout(RuntimeError):
         super().__init__(message)
 
 
-def _wait(
-    observe: Any,
-    *,
-    timeout: float,
-    description: str,
-    on_timeout: Any = None,
-    waited_on: Any = None,
-) -> Any:
-    """Poll ``observe`` until it returns a value.
-
-    ``on_timeout`` builds the error from the standard message prefix, for a
-    wait that can say what it last saw; without it the message ends in the
-    last return value, which is always ``None``.
-
-    ``waited_on`` is what the wait was waiting on (``zerg.qa.wait_kind``), or a
-    callable that decides it when the wait expires, from what the wait last
-    saw. A wait that cannot tell passes nothing and declares nothing.
-    """
-
-    deadline = time.monotonic() + timeout
-    last: object = None
-    while time.monotonic() < deadline:
-        last = observe()
-        if last is not None:
-            return last
-        time.sleep(0.2)
-    prefix = f"timed out waiting for {description}"
-    error = on_timeout(prefix) if on_timeout is not None else RuntimeError(f"{prefix}: {last!r}")
-    raise expired_wait(error, waited_on)
+# An OMP wait is over when its reading is anything at all: a falsy reading is still one.
+_wait = functools.partial(poll, until=lambda value: value is not None)
 
 
 _RUNTIME_HOST_RETRY_STATUSES = frozenset({404, 429, 500, 502, 503, 504})
@@ -1889,42 +1866,6 @@ def _process_record(pid: object, expected_birth: object, label: str, *, owner: s
         "process_group_dead": _pgid_dead(pgid),
         "alive": _pid_alive(pid),
     }
-
-
-def _pid_alive(pid: object) -> bool:
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _pid_dead(pid: object) -> bool:
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return False
-
-
-def _pgid_dead(pgid: object) -> bool:
-    if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
-        return False
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return False
 
 
 def _cleanup_receipt(records: list[dict[str, Any]]) -> dict[str, Any]:

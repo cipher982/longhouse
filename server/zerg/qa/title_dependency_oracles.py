@@ -30,8 +30,9 @@ from uuid import uuid4
 
 import httpx
 
+from zerg.qa.producer_shell import write_json as _write_json
+from zerg.qa.provider_artifacts import artifact_manifest
 from zerg.qa.provider_artifacts import now
-from zerg.qa.provider_artifacts import sha256_file
 from zerg.services.factory_assurance_title_binding import FACTORY_ASSURANCE_ENVIRONMENT
 from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
 from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_PROJECT
@@ -45,19 +46,6 @@ _TITLE_CHECK = "session_titles"
 
 class TitleDependencyTemporarilyUnavailable(RuntimeError):
     """The live product contract was blocked only by a typed availability incident."""
-
-
-def _write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-
-
-def artifact_manifest(root: Path) -> list[dict[str, Any]]:
-    return [
-        {"path": path.relative_to(root).as_posix(), "size": path.stat().st_size, "sha256": sha256_file(path)}
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
 
 
 def _free_port() -> int:

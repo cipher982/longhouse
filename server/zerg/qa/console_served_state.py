@@ -28,14 +28,15 @@ for.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
-import time
 from pathlib import Path
 
 from zerg.qa.codex_auth import login_with_api_key
+from zerg.qa.live_kit import group_dead as _process_group_dead
+from zerg.qa.live_kit import pid_dead as _process_dead
+from zerg.qa.live_kit import poll
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
@@ -45,6 +46,7 @@ from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
 from zerg.qa.producer_shell import write_json
+from zerg.qa.provider_artifacts import sha256_file as _sha256_file
 from zerg.qa.provider_console_lifecycle import _force_cleanup
 from zerg.qa.provider_console_lifecycle import _terminate_live_qualification_session
 from zerg.qa.provider_console_lifecycle import turn_identity_mismatches
@@ -102,47 +104,12 @@ REGISTRATION = ProducerRegistration(
 )
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def _process_dead(pid: object) -> bool:
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return False
-
-
-def _process_group_dead(pgid: object) -> bool:
-    if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
-        return False
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return False
-
-
 def _wait_vehicle_dead(claim: dict[str, object] | None, *, timeout: float = 10.0) -> bool:
     if not isinstance(claim, dict):
         return False
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if _process_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id")):
-            return True
-        time.sleep(0.1)
-    return _process_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id"))
+    return poll(
+        lambda: _process_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id")), timeout=timeout, interval=0.1
+    )
 
 
 def _vehicle_dispatch_receipt(

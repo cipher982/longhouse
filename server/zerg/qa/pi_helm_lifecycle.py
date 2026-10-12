@@ -32,6 +32,12 @@ from zerg.qa.console_served_state_core import assistant_marker_mentions
 from zerg.qa.console_served_state_core import event_text
 from zerg.qa.console_served_state_core import served_answer_correspondence
 from zerg.qa.console_served_state_core import served_answer_fault
+from zerg.qa.live_kit import RUNTIME_HOST_USER_AGENT as _RUNTIME_HOST_USER_AGENT
+from zerg.qa.live_kit import RuntimeHostError as _RuntimeHostHTTPError
+from zerg.qa.live_kit import group_dead as _pgid_dead
+from zerg.qa.live_kit import pid_alive as _pid_alive
+from zerg.qa.live_kit import pid_dead as _pid_dead
+from zerg.qa.live_kit import poll as _wait
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retire_qualification_session
@@ -53,6 +59,7 @@ from zerg.qa.pi_native import pi_native_shadow_taxonomy
 from zerg.qa.pi_native import pi_transcript_rows
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
+from zerg.qa.producer_shell import write_json as _write_json
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.resume_assurance import ProducerRegistration
@@ -63,7 +70,6 @@ from zerg.qa.wait_kind import PROVIDER_PROCESS
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
-from zerg.qa.wait_kind import expired_wait
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 
@@ -76,7 +82,6 @@ _PROFILE = identity.IdentityProfile(
     version_line=identity.semver_version_line(),
     oracle_source=Path(__file__),
 )
-_RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 _PROPAGATING_HTTP_STATUSES = frozenset({404, 429, 500, 502, 503, 504})
 ASSERTIONS = (
     "pi_helm_launch_registration",
@@ -146,14 +151,6 @@ REGISTRATION = ProducerRegistration(
 )
 
 
-class _RuntimeHostHTTPError(RuntimeError):
-    def __init__(self, status: int, detail: str) -> None:
-        self.status = status
-        self.detail = detail
-        self.last_runtime_observation: dict[str, Any] | None = None
-        super().__init__(f"Runtime Host HTTP {status}: {detail}")
-
-
 class _RuntimeConvergenceError(RuntimeError):
     def __init__(self, marker: str, cause: BaseException, last_runtime_observation: dict[str, Any] | None) -> None:
         self.marker = marker
@@ -164,40 +161,11 @@ class _RuntimeConvergenceError(RuntimeError):
         super().__init__(f"Runtime Host convergence for Pi marker {marker} failed: {cause}")
 
 
-def _write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-
-
 def _read_json(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError(f"expected JSON object at {path}")
     return value
-
-
-def _wait(predicate, *, timeout: float, description: str, on_timeout=None, waited_on=None):
-    """Poll ``predicate`` until it is truthy.
-
-    ``on_timeout`` builds the error from the standard message prefix, for a
-    wait that can say what it last saw; without it the message ends in the
-    last return value, which is always falsy.
-
-    ``waited_on`` is what the wait was waiting on (``zerg.qa.wait_kind``), or a
-    callable that decides it when the wait expires, from what the wait last
-    saw. A wait that cannot tell passes nothing and declares nothing.
-    """
-
-    deadline = time.monotonic() + timeout
-    last = None
-    while time.monotonic() < deadline:
-        last = predicate()
-        if last:
-            return last
-        time.sleep(0.2)
-    prefix = f"timed out waiting for {description}"
-    error = on_timeout(prefix) if on_timeout is not None else RuntimeError(f"{prefix}: {last}")
-    raise expired_wait(error, waited_on)
 
 
 def _state_paths(home: Path) -> list[Path]:
@@ -1043,42 +1011,6 @@ def _process_record(pid: object, expected_birth: object, label: str) -> dict[str
         "birth_matches": bool(birth and expected_birth and birth == str(expected_birth)),
         "alive": _pid_alive(pid),
     }
-
-
-def _pid_alive(pid: object) -> bool:
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _pid_dead(pid: object) -> bool:
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return False
-
-
-def _pgid_dead(pgid: object) -> bool:
-    if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
-        return False
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return False
 
 
 def _recorded_owner_status(record: dict[str, Any]) -> str:

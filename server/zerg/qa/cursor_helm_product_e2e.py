@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import pty
@@ -24,12 +25,12 @@ import httpx
 
 from zerg.qa.answer_markers import any_marker_answered
 from zerg.qa.answer_markers import marker_answered
+from zerg.qa.live_kit import poll
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.wait_kind import LONGHOUSE_ENGINE
 from zerg.qa.wait_kind import LONGHOUSE_INGEST
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
-from zerg.qa.wait_kind import expired_wait
 from zerg.qa.wait_kind import failure_fields
 from zerg.services.longhouse_paths import get_managed_local_dir
 
@@ -54,22 +55,7 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _wait_until(predicate, *, timeout: float, description: str, waited_on=None):
-    """Poll ``predicate`` until it is truthy.
-
-    ``waited_on`` is what the wait was waiting on (``zerg.qa.wait_kind``), or a
-    callable that decides it when the wait expires. A wait that cannot tell
-    passes nothing and declares nothing.
-    """
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(0.25)
-    error = RuntimeError(f"timed out waiting for {description}")
-    raise expired_wait(error, waited_on)
+_wait_until = functools.partial(poll, interval=0.25)
 
 
 def _state_ids(root: Path) -> set[str]:

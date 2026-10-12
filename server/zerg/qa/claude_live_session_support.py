@@ -25,7 +25,7 @@ activity facts at all.
 
 from __future__ import annotations
 
-import hashlib
+import functools
 import json
 import os
 import re
@@ -33,12 +33,12 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
-from typing import Callable
 
+from zerg.qa.live_kit import RuntimeHostError as RuntimeHostHTTPError
+from zerg.qa.live_kit import poll
+from zerg.qa.live_kit import runtime_host_json as api_json
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import latest_claude_startup_prompt
 from zerg.qa.live_session_toolkit import start_transcript_shipper
@@ -50,11 +50,11 @@ from zerg.qa.managed_claude_live import strip_terminal_controls
 from zerg.qa.managed_claude_live import transcript_lookup_id
 from zerg.qa.managed_claude_live import transcript_paths
 from zerg.qa.managed_claude_live import wait_for_channel_ready
+from zerg.qa.producer_shell import write_json as write_json
+from zerg.qa.provider_artifacts import artifact_manifest as artifact_manifest
+from zerg.qa.provider_artifacts import sha256_file as sha256_file
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.wait_kind import PROVIDER_TURN
-from zerg.qa.wait_kind import expired_wait
-
-_RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 
 
 class ScenarioError(RuntimeError):
@@ -69,40 +69,6 @@ class RuntimeHostCoordinationAuthorityUnavailable(ScenarioError):
     process.  Coordination scenarios must therefore abandon this launch and
     let the assurance runner retry the whole scenario.
     """
-
-
-class RuntimeHostHTTPError(RuntimeError):
-    def __init__(self, status: int, detail: str) -> None:
-        self.status = status
-        self.detail = detail
-        super().__init__(f"Runtime Host HTTP {status}: {detail}")
-
-
-def now_iso() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def artifact_manifest(root: Path) -> list[dict[str, Any]]:
-    return [
-        {"path": path.relative_to(root).as_posix(), "size": path.stat().st_size, "sha256": sha256_file(path)}
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
 
 
 def write_claude_cleanup_aggregate(
@@ -150,28 +116,7 @@ def failed_session_close_receipt(session: ProviderPtySession, error: BaseExcepti
     return receipt
 
 
-def wait_until(
-    predicate: Callable[[], Any],
-    *,
-    timeout: float,
-    description: str,
-    waited_on: str | Callable[[], str | None] | None = None,
-) -> Any:
-    """Poll ``predicate`` until it is truthy.
-
-    ``waited_on`` is what the wait was waiting on (``zerg.qa.wait_kind``), or a
-    callable that decides it when the wait expires. A wait that cannot tell
-    passes nothing and declares nothing.
-    """
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(0.5)
-    error = ScenarioError(f"timed out waiting for {description}")
-    raise expired_wait(error, waited_on)
+wait_until = functools.partial(poll, interval=0.5, error=ScenarioError)
 
 
 def terminal_text(path: Path) -> str:
@@ -179,61 +124,6 @@ def terminal_text(path: Path) -> str:
         return strip_terminal_controls(path.read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return ""
-
-
-def api_json(
-    api_url: str,
-    token: str,
-    path: str,
-    *,
-    method: str = "GET",
-    json_body: dict[str, Any] | None = None,
-    extra_headers: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    """Call ``/api/agents/<path>`` the same way the other native producers do.
-
-    Mirrors ``codex_native_resume._api_json`` / ``provider_native_resume._api_json``
-    (urllib, not httpx) so this family of producers has one consistent Runtime
-    Host client convention. ``extra_headers`` exists for callers authenticating
-    with a session-scoped coordination token that also needs the current
-    session identity header (``X-Longhouse-Session-Id``) -- see
-    ``zerg.services.managed_session_env.CURRENT_SESSION_HEADER``.
-    """
-
-    data = json.dumps(json_body).encode("utf-8") if json_body is not None else (b"" if method == "POST" else None)
-    headers = {
-        "X-Agents-Token": token,
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": _RUNTIME_HOST_USER_AGENT,
-    }
-    headers.update(extra_headers or {})
-    request = urllib.request.Request(
-        f"{api_url.rstrip('/')}/api/agents/{path.lstrip('/')}",
-        headers=headers,
-        data=data,
-        method=method,
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            payload = json.load(response)
-    except urllib.error.HTTPError as exc:
-        try:
-            raw_detail = exc.read(4096).decode("utf-8", "replace")
-        except OSError:
-            raw_detail = ""
-        try:
-            parsed_detail = json.loads(raw_detail)
-        except json.JSONDecodeError:
-            parsed_detail = raw_detail[:1000]
-        if isinstance(parsed_detail, dict):
-            detail = str(parsed_detail.get("detail") or parsed_detail)[:1000]
-        else:
-            detail = str(parsed_detail)[:1000]
-        raise RuntimeHostHTTPError(exc.code, detail) from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("Runtime Host returned a non-object")
-    return payload
 
 
 def api_json_tolerant(api_url: str, token: str, path: str, *, method: str = "GET") -> dict[str, Any] | None:

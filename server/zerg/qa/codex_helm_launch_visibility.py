@@ -32,6 +32,7 @@ from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa.claude_live_session_support import sha256_file
 from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.codex_auth import login_with_api_key
+from zerg.qa.live_kit import pid_dead as _pid_dead
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
@@ -107,16 +108,6 @@ def _cleanup_evidence(cleanups: list[dict[str, Any]]) -> tuple[str, dict[str, bo
         "runtime_host_canary_isolated": status == "pass",
         "owned_processes_dead": owned_processes_dead,
     }
-
-
-def _pid_dead(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return False
 
 
 class RuntimeHostRecordingProxy:

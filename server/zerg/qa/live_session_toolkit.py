@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import base64
 import errno
+import functools
 import hashlib
 import http
 import http.client
@@ -44,7 +45,14 @@ from typing import Any
 from zerg.qa.live_kit import HOSTED_TARGET_ENV as HOSTED_TARGET_ENV
 from zerg.qa.live_kit import RUNTIME_AGENTS_TOKEN_ENV as RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_kit import RUNTIME_API_URL_ENV as RUNTIME_API_URL_ENV
+from zerg.qa.live_kit import RUNTIME_HOST_USER_AGENT as _RUNTIME_HOST_USER_AGENT
+from zerg.qa.live_kit import RuntimeHostError as _RuntimeHostHTTPError
+from zerg.qa.live_kit import group_dead as _process_group_dead
+from zerg.qa.live_kit import pid_dead as _pid_dead
+from zerg.qa.live_kit import poll
 from zerg.qa.live_kit import require_disposable_runtime as require_disposable_runtime
+from zerg.qa.live_kit import runtime_host_json
+from zerg.qa.producer_shell import write_json
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.provider_sqlite import open_readonly
@@ -71,9 +79,6 @@ def new_qualification_isolation_root(prefix: str) -> Path:
 
 
 _ANSI_CONTROL_RE = re.compile(r"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-_]|.)")
-
-
-_RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 
 
 _EVIDENCE_SECRET_KEY_RE = re.compile(r"(?:^|_)(?:token|secret|password|api_key|access_key|authorization)$")
@@ -809,12 +814,6 @@ def _raise_known_registration_transient(process: PtyProcess) -> None:
         raise RuntimeHostRegistrationTransient("managed Claude resume registration temporarily unavailable")
 
 
-def write_json(path: Path, payload: object) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
 def _write_best_effort_json(path: Path, payload: object) -> bool:
     """Write diagnostic evidence without taking ownership of the verdict."""
 
@@ -825,42 +824,12 @@ def _write_best_effort_json(path: Path, payload: object) -> bool:
     return True
 
 
-def _process_group_dead(pid: int) -> bool:
-    try:
-        os.killpg(pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return False
-
-
 def wait_process_group_dead(pid: int, timeout: float = 5) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if _process_group_dead(pid):
-            return True
-        time.sleep(0.1)
-    return _process_group_dead(pid)
-
-
-def _pid_dead(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return False
+    return poll(lambda: _process_group_dead(pid), timeout=timeout, interval=0.1)
 
 
 def wait_pid_dead(pid: int, timeout: float = 5) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if _pid_dead(pid):
-            return True
-        time.sleep(0.1)
-    return _pid_dead(pid)
+    return poll(lambda: _pid_dead(pid), timeout=timeout, interval=0.1)
 
 
 def _provision_transcript_roots(home: Path, environment: dict[str, str]) -> None:
@@ -1805,44 +1774,7 @@ def wait_state(
     )
 
 
-class _RuntimeHostHTTPError(RuntimeError):
-    def __init__(self, status: int, detail: str) -> None:
-        self.status = status
-        self.detail = detail
-        super().__init__(f"Runtime Host HTTP {status}: {detail}")
-
-
-def _api_json(api_url: str, token: str, path: str, *, method: str = "GET") -> dict[str, Any]:
-    request = urllib.request.Request(
-        f"{api_url.rstrip('/')}/api/agents/{path.lstrip('/')}",
-        headers={
-            "X-Agents-Token": token,
-            "Accept": "application/json",
-            "User-Agent": _RUNTIME_HOST_USER_AGENT,
-        },
-        data=b"" if method == "POST" else None,
-        method=method,
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            payload = json.load(response)
-    except urllib.error.HTTPError as exc:
-        try:
-            raw_detail = exc.read(4096).decode("utf-8", "replace")
-        except OSError:
-            raw_detail = ""
-        try:
-            parsed_detail = json.loads(raw_detail)
-        except json.JSONDecodeError:
-            parsed_detail = raw_detail[:1000]
-        if isinstance(parsed_detail, dict):
-            detail = str(parsed_detail.get("detail") or parsed_detail)[:1000]
-        else:
-            detail = str(parsed_detail)[:1000]
-        raise _RuntimeHostHTTPError(exc.code, detail) from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("Runtime Host returned a non-object")
-    return payload
+_api_json = functools.partial(runtime_host_json, timeout=10)
 
 
 def wait_session_tail(

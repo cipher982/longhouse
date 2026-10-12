@@ -10,7 +10,6 @@ the expected brace depth.  A stale unit test cannot satisfy this assertion.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +18,7 @@ from typing import Callable
 
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
+from zerg.qa.producer_shell import write_json as _write_json
 from zerg.qa.resume_assurance import ProducerRegistration
 
 SCENARIO_ID = "ios_workspace_selection_source_contract"
@@ -351,11 +351,6 @@ def _repo_root_from_cwd() -> Path:
         if (candidate / SOURCE_PATH).is_file() and (candidate / "schemas/product_assurance.yml").is_file():
             return candidate
     raise SourceContractError("could not locate the pinned Longhouse source checkout from cwd")
-
-
-def _write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
 
 
 def run_ios_workspace_selection_source_oracle(*, evidence_root: Path, repo_root: Path | None = None) -> dict[str, Any]:

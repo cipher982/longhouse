@@ -31,7 +31,6 @@ from zerg.qa.claude_live_session_support import close_session
 from zerg.qa.claude_live_session_support import failed_session_close_receipt
 from zerg.qa.claude_live_session_support import isolation_paths
 from zerg.qa.claude_live_session_support import launch_claude_session
-from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_for_served_quiescent
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
@@ -39,6 +38,7 @@ from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.live_session_toolkit import prepare_claude_profile
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
+from zerg.qa.provider_artifacts import now as now_iso
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 

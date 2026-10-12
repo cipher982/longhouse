@@ -25,12 +25,12 @@ from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.answer_markers import any_marker_answered
 from zerg.qa.claude_live_session_support import ScenarioError
-from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import ProducerFailure
 from zerg.qa.producer_shell import Run
+from zerg.qa.provider_artifacts import now as now_iso
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.wait_kind import PROVIDER_TURN

@@ -31,8 +31,6 @@ import json
 import os
 import tempfile
 import time
-import urllib.error
-import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
@@ -40,6 +38,7 @@ from typing import Any
 from websockets.sync.client import connect as websocket_connect
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa.live_kit import runtime_host_json as _api_call
 from zerg.qa.live_session_toolkit import qualification_secrets
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import start_transcript_shipper
@@ -146,15 +145,6 @@ REGISTRATION = ProducerRegistration(
     observation_scope="scenario",
 )
 
-_RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
-
-
-class _RuntimeHostHTTPError(RuntimeError):
-    def __init__(self, status: int, detail: str) -> None:
-        self.status = status
-        self.detail = detail
-        super().__init__(f"Runtime Host HTTP {status}: {detail}")
-
 
 def _redact_retained_secrets(root: Path, secrets: list[str]) -> list[str]:
     encoded = [secret.encode() for secret in secrets if secret]
@@ -175,56 +165,6 @@ def _redact_retained_secrets(root: Path, secrets: list[str]) -> list[str]:
             path.write_bytes(replaced)
             redacted.append(path.relative_to(root).as_posix())
     return redacted
-
-
-def _api_call(
-    api_url: str,
-    token: str,
-    path: str,
-    *,
-    method: str = "GET",
-    json_body: dict[str, Any] | None = None,
-    extra_headers: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    headers = {
-        "X-Agents-Token": token,
-        "Accept": "application/json",
-        "User-Agent": _RUNTIME_HOST_USER_AGENT,
-    }
-    if extra_headers:
-        headers.update(extra_headers)
-    data: bytes | None = None
-    if json_body is not None:
-        data = json.dumps(json_body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    elif method == "POST":
-        data = b""
-    request = urllib.request.Request(
-        f"{api_url.rstrip('/')}/api/agents/{path.lstrip('/')}",
-        headers=headers,
-        data=data,
-        method=method,
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            payload = json.load(response)
-    except urllib.error.HTTPError as exc:
-        try:
-            raw_detail = exc.read(4096).decode("utf-8", "replace")
-        except OSError:
-            raw_detail = ""
-        try:
-            parsed_detail = json.loads(raw_detail)
-        except json.JSONDecodeError:
-            parsed_detail = raw_detail[:1000]
-        if isinstance(parsed_detail, dict):
-            detail = str(parsed_detail.get("detail") or parsed_detail)[:1000]
-        else:
-            detail = str(parsed_detail)[:1000]
-        raise _RuntimeHostHTTPError(exc.code, detail) from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("Runtime Host returned a non-object")
-    return payload
 
 
 def _issue_coordination_token(args: argparse.Namespace, session_id: str) -> str:

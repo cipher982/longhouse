@@ -54,7 +54,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.coordination_awareness_create.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=4,
+    # 5: an expired wait's message no longer ends in the empty value it last read.
+    scenario_revision=5,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("pi",),
     platforms=("linux", "darwin"),

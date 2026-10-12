@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from zerg.qa.producer_shell import write_json as _write_json
 from zerg.qa.provider_artifacts import artifact_manifest
 from zerg.qa.provider_artifacts import now
 from zerg.qa.provider_resume_oracles import ASSERTIONS_BY_SCENARIO
@@ -45,13 +46,6 @@ REGISTRATION = ProducerRegistration(
     executable_module="zerg.qa.provider_generic_resume",
     provider_artifact_required=False,
 )
-
-
-def _write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    temporary.replace(path)
 
 
 def run_generic_resume(*, provider: str, scenario_id: str, root: Path) -> dict[str, Any]:

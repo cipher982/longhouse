@@ -72,7 +72,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.coordination_awareness_create.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=5,
+    # 6: an expired wait's message no longer ends in the empty value it last read.
+    scenario_revision=6,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("omp",),
     platforms=("linux", "darwin"),

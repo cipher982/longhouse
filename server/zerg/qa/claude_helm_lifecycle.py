@@ -48,7 +48,6 @@ from zerg.qa.claude_live_session_support import close_session
 from zerg.qa.claude_live_session_support import failed_session_close_receipt
 from zerg.qa.claude_live_session_support import isolation_paths
 from zerg.qa.claude_live_session_support import launch_claude_session
-from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.claude_live_session_support import open_turn_waited_on
 from zerg.qa.claude_live_session_support import scanner_visible_claude_binary
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
@@ -67,6 +66,7 @@ from zerg.qa.model_compliance import attach
 from zerg.qa.model_compliance import noncompliance_entry
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
+from zerg.qa.provider_artifacts import now as now_iso
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD

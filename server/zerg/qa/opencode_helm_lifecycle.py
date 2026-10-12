@@ -32,6 +32,7 @@ failed with its typed failure code.
 from __future__ import annotations
 
 import argparse
+import functools
 import http.client
 import json
 import os
@@ -49,13 +50,15 @@ from urllib.request import urlopen
 from zerg.qa import live_session_toolkit
 from zerg.qa import provider_console_lifecycle as console_lifecycle
 from zerg.qa.answer_markers import marker_answered
+from zerg.qa.live_kit import RUNTIME_HOST_USER_AGENT as _RUNTIME_HOST_USER_AGENT
+from zerg.qa.live_kit import poll
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
+from zerg.qa.producer_shell import write_json as _write_json
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.wait_kind import PROVIDER_TURN
-from zerg.qa.wait_kind import expired_wait
 
 SCENARIO_ID = "opencode_helm_lifecycle"
 ASSERTIONS = (
@@ -145,8 +148,6 @@ REGISTRATION = ProducerRegistration(
     observation_scope="scenario",
 )
 
-_RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
-
 
 def _kill_session_processes(identities: list[str]) -> list[dict[str, Any]]:
     needles = [value for value in identities if len(value) >= 8]
@@ -166,32 +167,11 @@ def _kill_session_processes(identities: list[str]) -> list[dict[str, Any]]:
     return orphans
 
 
-def _write_json(path: Path, payload: object) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
 def _marker(label: str) -> str:
     return f"LH_OPENCODE_{label}_{uuid.uuid4().hex[:10].upper()}"
 
 
-def _wait(predicate, *, timeout: float, description: str, interval: float = 0.5, waited_on=None):
-    """Poll ``predicate`` until it is truthy.
-
-    ``waited_on`` is what the wait was waiting on (``zerg.qa.wait_kind``), or a
-    callable that decides it when the wait expires. A wait that cannot tell
-    passes nothing and declares nothing.
-    """
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(interval)
-    error = TimeoutError(f"timed out waiting for {description}")
-    raise expired_wait(error, waited_on)
+_wait = functools.partial(poll, interval=0.5, error=TimeoutError)
 
 
 # --- Runtime Host (the product control path) --------------------------------
