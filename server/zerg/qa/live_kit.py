@@ -23,12 +23,15 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from zerg.qa.wait_kind import expired_wait
@@ -78,8 +81,29 @@ def _is_pid(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def _exited_uncollected(pid: int) -> bool:
+    """Whether the process has exited and only its entry is left for its parent to collect (a zombie)."""
+
+    try:
+        # The state follows the command name, which may itself hold spaces and brackets.
+        return Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[-1].split()[:1] == ["Z"]
+    except OSError:
+        if sys.platform.startswith("linux"):
+            return False
+    try:
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=5, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return state.strip().startswith("Z")
+
+
 def pid_dead(pid: object) -> bool:
-    """Whether no process has this pid. A process this user may not signal exists."""
+    """Whether the process has stopped: none has this pid, or it has exited and not been collected yet.
+
+    One rule for every producer. Collecting an exited child is its parent's
+    duty and a separate question: a process that only awaits that runs
+    nothing. A process this user may not signal exists.
+    """
 
     if not _is_pid(pid):
         return False
@@ -89,11 +113,15 @@ def pid_dead(pid: object) -> bool:
         return True
     except PermissionError:
         return False
-    return False
+    return _exited_uncollected(pid)
 
 
 def group_dead(pgid: object) -> bool:
-    """Whether no process is left in this process group."""
+    """Whether no process is left in this process group.
+
+    An exited member that has not been collected still holds its group: the
+    owner of a child collects it before asking (``ProviderPtySession.close``).
+    """
 
     if not _is_pid(pgid):
         return False

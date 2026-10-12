@@ -33,6 +33,7 @@ from typing import Callable
 from typing import Mapping
 
 from zerg.qa.codex_auth import login_with_api_key
+from zerg.qa.live_kit import pid_alive as _pid_alive
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.repo_root import default_repo_root
 from zerg.qa.wait_kind import LONGHOUSE_ENGINE
@@ -1196,22 +1197,6 @@ def _managed_bridge_credentials_gap(args: argparse.Namespace) -> dict[str, Any] 
         message="Managed Codex bridge canary requires Runtime Host credentials.",
         missing=missing,
     )
-
-
-def _pid_alive(pid: int) -> bool:
-    try:
-        fields = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8").split()
-        if len(fields) > 2 and fields[2] == "Z":
-            return False
-    except OSError:
-        pass
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 def _verify_bridge_stopped(state_file: Path, *, timeout_secs: float = 5.0) -> dict[str, Any]:
