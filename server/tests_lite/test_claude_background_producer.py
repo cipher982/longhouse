@@ -396,7 +396,18 @@ def test_a_setup_failure_reports_the_authored_variant_and_keeps_the_execution_ke
     }
     assert json.loads((evidence_root / "result.json").read_text(encoding="utf-8")) == result
     if negative_control:
-        assert result["negative_control"]["status"] == "inconclusive"
+        # The shell's account of a control whose run raised: it decided nothing, the fault had not fired (the setup
+        # failed before any hook ran), and its preconditions were not evaluated.
+        assert result["negative_control"] == {
+            "control": negative_control,
+            "status": "inconclusive",
+            "run_failed": True,
+            "preconditions_held": None,
+            "fault_fired": False,
+            "fault_receipts": [],
+        }
+    else:
+        assert "negative_control" not in result
 
 
 def _run_cell(monkeypatch: Any, tmp_path: Path, result: dict[str, Any]) -> dict[str, Any]:

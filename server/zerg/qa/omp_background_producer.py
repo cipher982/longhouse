@@ -380,8 +380,6 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             observation["cleanup"] = cleanup
         run.observation, run.assertions = observation, {}
         run.fields.update(profile=PROFILE, execution_variant=getattr(args, "variant", None))
-        if fault:
-            run.fields["negative_control"] = {"fault": fault, "status": "inconclusive"}
         raise
     finally:
         args.negative_control = fault

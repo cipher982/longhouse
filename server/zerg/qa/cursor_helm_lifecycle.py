@@ -352,6 +352,8 @@ PRODUCER = Producer(
     ),
     runtime_host=True,
     negative_controls=NEGATIVE_CONTROLS,
+    # Cursor's faults record that they fired in the lifecycle's own step record (`qa_fault_receipt`), not in a file.
+    fault_receipts=None,
     add_arguments=_add_arguments,
 )
 

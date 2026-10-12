@@ -39,7 +39,10 @@ The rules it holds for all of them:
   reports verdicts for those steps only.
 - **A negative control reports the control's verdict** (``Run.control``) over
   the assertions it evaluated. One that raised is inconclusive and keeps what
-  it observed: it is not a harness failure of the subject.
+  it observed: it is not a harness failure of the subject. One that raised
+  before its producer reached a verdict says so, and what is known of the
+  control (``Producer.failure``): whether the fault had fired, and that its
+  preconditions were not evaluated, which is unknown and not false.
 - **Scope.** A scenario-scoped registration's every result says so, failed
   ones included.
 - **What a wait was waiting on** and **a model's deviation** travel on the
@@ -124,6 +127,11 @@ class ProducerFailure(RuntimeError):
 
 # The evidence class of the cell this invocation runs, from the command line; a registration may list several.
 _EVIDENCE_CLASS: ContextVar[str | None] = ContextVar("producer_shell_evidence_class", default=None)
+# The negative control this invocation was asked for, from the command line.
+_NEGATIVE_CONTROL: ContextVar[str | None] = ContextVar("producer_shell_negative_control", default=None)
+# Where an engine fault leaves its receipt, under the evidence root: the producer passes the path as
+# ``LONGHOUSE_QA_FAULT_RECEIPT`` and the fault appends a line when it fires (engine/src/qa_fault.rs).
+FAULT_RECEIPTS = "qa-fault-receipt.jsonl"
 
 
 # What the shell says of every run: the identity the factory compares, what the result is called, and the verdict.
@@ -244,6 +252,9 @@ class Producer:
     # The environment variable ``--model`` defaults to, and the faults ``--negative-control`` may name.
     model_env: str | None = None
     negative_controls: tuple[str, ...] = ()
+    # The file its faults leave their receipts in, under the evidence root; None for a producer whose fault
+    # records itself elsewhere (Cursor's is in the lifecycle's own step record).
+    fault_receipts: str | None = FAULT_RECEIPTS
     # Per assertion, the observation records that exist only once that step's verdict was decided (failed_results.reached_only).
     reached: Mapping[str, Sequence[str]] | None = None
     refuse: Callable[[argparse.Namespace], str | None] | None = None
@@ -319,10 +330,41 @@ class Producer:
             **run.fields,
             "artifact_manifest": artifact_manifest(run.root),
         }
+        control = _NEGATIVE_CONTROL.get()
+        if control and "negative_control" not in run.fields:
+            failure["negative_control"] = self._unjudged_control(run, control)
         if run.controlled:
             return {**failure, "observation": run.observation, "assertions": dict(run.assertions)}
         assertions = run.assertions if self.reached is None else reached_only(run.assertions, run.observation or {}, self.reached)
         return settle_failed_result(failure, observation=run.observation, assertions=assertions)
+
+    def _unjudged_control(self, run: Run, control: str) -> dict[str, Any]:
+        """What is known of a negative control whose run raised before its producer reached a verdict.
+
+        The run failed, so the control decided nothing. Whether the fault had
+        fired by then is known from the receipt it leaves; whether the
+        preconditions held is not known, because nothing evaluated them, and
+        that is not the same as their having failed. A reader that took what a
+        bare ``{"fault", "status"}`` left out for false recorded such runs as
+        "the fault did not fire and a precondition did not hold".
+        """
+
+        stub: dict[str, Any] = {"control": control, "status": "inconclusive", "run_failed": True, "preconditions_held": None}
+        if self.fault_receipts is None:
+            return stub
+        receipts: list[dict[str, Any]] = []
+        try:
+            lines = (run.root / self.fault_receipts).read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            try:
+                receipt = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(receipt, dict):
+                receipts.append(receipt)
+        return {**stub, "fault_fired": bool(receipts), "fault_receipts": receipts[:8]}
 
     def execute(
         self,
@@ -437,9 +479,11 @@ class Producer:
         if self.refuse is not None and (failure_code := self.refuse(args)):
             return refusal(failure_code)
         evidence_class = _EVIDENCE_CLASS.set(args.evidence_class or None)
+        negative_control = _NEGATIVE_CONTROL.set(getattr(args, "negative_control", None) or None)
         try:
             result = invoke(args)
         finally:
             _EVIDENCE_CLASS.reset(evidence_class)
+            _NEGATIVE_CONTROL.reset(negative_control)
         print(json.dumps(result, sort_keys=True, default=str))
         return 0 if result.get("status") == "pass" else 1

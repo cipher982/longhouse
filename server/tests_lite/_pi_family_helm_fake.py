@@ -41,8 +41,9 @@ BUSY_SECONDS = 2.0
 MAX_LIFETIME_SECONDS = 600
 # Faults, comma separated: ``exit_after:<n>`` kills the launcher and its provider once the n-th turn has ended;
 # ``steer_as_follow_up`` holds a steer until the turn it was sent into is over (the engine's own negative control,
-# zerg.qa.pi_family_turn_oracle: NEGATIVE_CONTROLS). The engine's two faults that end a run at their target, a send
-# and a terminate that do nothing, a launcher takes from the engine's own variable, as ``--negative-control`` sets it.
+# zerg.qa.pi_family_turn_oracle: NEGATIVE_CONTROLS). That one, and the engine's two faults that end a run at their
+# target (a send and a terminate that do nothing), a launcher also takes from the engine's own variable, as
+# ``--negative-control`` sets it, and then leaves the engine's receipt.
 FAULT_ENV = "LONGHOUSE_FAKE_HELM_FAULT"
 _REPLY = re.compile(r"reply (?:only )?with (?:exactly )?([A-Za-z0-9_]+)", re.IGNORECASE)
 _RECALL = re.compile(r"context phrase that starts with ([A-Z_]+_)\..*then ([A-Za-z0-9_]+), and nothing else", re.DOTALL)
@@ -366,7 +367,8 @@ class _Launcher:
             elif kind == "steer":
                 if not self.busy:
                     return refused("turn_ended")
-                if "steer_as_follow_up" in _faults():
+                if "steer_as_follow_up" in {fault, *_faults()}:
+                    self._fault_fired("steer_as_follow_up", {"forwarded_kind": "send"})
                     self.held_steer = str(frame.get("text") or "")
                 else:
                     self.steer = str(frame.get("text") or "")

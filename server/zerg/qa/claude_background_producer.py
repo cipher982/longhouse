@@ -507,19 +507,14 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
         f"LONGHOUSE_CLAUDE_BG_CHILD_{token}",
         f"LONGHOUSE_CLAUDE_BG_SHELL_{token}",
     )
-    try:
-        helm._reach(
-            run,
-            args,
-            registration=REGISTRATION,
-            scenario_prompt=prompt,
-            scenario_capture=_capture_background,
-            capture_hook_stdin=True,
-        )
-    except Exception:
-        if fault:
-            run.fields["negative_control"] = {"fault": fault, "status": "inconclusive"}
-        raise
+    helm._reach(
+        run,
+        args,
+        registration=REGISTRATION,
+        scenario_prompt=prompt,
+        scenario_capture=_capture_background,
+        capture_hook_stdin=True,
+    )
     # The lifecycle this scenario rides on says whether its own part held; the status is this producer's.
     lifecycle_held, run.status = run.status is None, None
     session_id = run.fields.get("session_id")

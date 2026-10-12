@@ -405,6 +405,39 @@ def test_a_pi_send_control_run_with_a_false_launch_cell_reports_it_and_does_not_
 
 
 @pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    ("dies_after", "fired"),
+    [
+        # After the steered turn: the launcher had held the steer back, and left its receipt.
+        (6, True),
+        # After the idle send's turn, before any steer was sent.
+        (2, False),
+    ],
+)
+def test_a_control_whose_run_died_before_a_verdict_says_whether_its_fault_had_fired(dies_after, fired, tmp_path, monkeypatch, capsys):
+    """OMP's steer control, and the launcher dies. The run failed, so the control decided nothing; the result says
+    that, and what is known: whether the fault had fired by then, and that nothing evaluated the preconditions.
+
+    A run that raised used to leave no control block here, and a bare one from two other producers, and the factory
+    read what was missing as "the fault did not fire and a precondition did not hold".
+    """
+
+    monkeypatch.setenv(fake.FAULT_ENV, f"exit_after:{dies_after}")
+    code, root, _left = fake.run_lifecycle("omp", tmp_path, monkeypatch.setenv, arguments=("--negative-control", "steer"))
+    result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+    capsys.readouterr()
+
+    assert (code, result["status"], result["failure_code"]) == (1, "fail", "omp_helm_lifecycle_failed")
+    control = result["negative_control"]
+    assert (control["control"], control["status"], control["run_failed"]) == ("steer", "inconclusive", True)
+    assert control["preconditions_held"] is None
+    assert control["fault_fired"] is fired
+    assert [receipt["fault"] for receipt in control["fault_receipts"]] == (["omp_steer_as_follow_up"] if fired else [])
+    # What the run had reached is still there: the steer cell it had decided, false under the fault, or no verdict on it.
+    assert result.get("assertions", {}).get("omp_helm_steer_active") is (False if fired else None)
+
+
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("control", sorted(ENDS_AT_TARGET))
 @pytest.mark.parametrize("provider", ["omp", "pi"])
 def test_a_control_that_ends_at_its_target_decides(provider, control, tmp_path, monkeypatch, capsys):

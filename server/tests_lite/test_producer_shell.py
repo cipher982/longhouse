@@ -293,6 +293,74 @@ def test_a_negative_control_reports_its_own_verdict_and_stays_inconclusive_evide
     assert result["observation"] == {"send": {"dropped": True}} and result["negative_control"]["verdict"] == "inconclusive"
 
 
+def _control_run(producer: Producer, root: Path, body, capsys, *extra: str) -> dict:
+    code = producer.main(lambda args: producer.execute(args.evidence_root, body), ["--variant", "v", "--evidence-root", str(root), *extra])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 1 and json.loads((root / "result.json").read_text(encoding="utf-8")) == result
+    return result
+
+
+def test_a_control_whose_run_raised_before_a_verdict_says_what_is_known_and_what_is_not(tmp_path, capsys):
+    """The run failed, so the control decided nothing: that is said, with whether the fault had fired by then.
+
+    Two producers wrote a bare ``{"fault", "status"}`` here and two wrote nothing, and the factory read what was left
+    out as false: "the fault did not fire and a precondition did not hold", of runs that had said neither.
+    """
+    faulted = dataclasses.replace(_FIXTURE, needs=("evidence_root",), negative_controls=("send_noop",))
+    receipt = {"schema_version": 1, "fault": "codex_send_noop", "session_id": "s1"}
+
+    def raises_after_the_fault_fired(run: Run) -> None:
+        (run.root / producer_shell.FAULT_RECEIPTS).write_text(json.dumps(receipt) + "\nnot json\n", encoding="utf-8")
+        raise RuntimeError("the turn after the send never came")
+
+    def raises_before(run: Run) -> None:
+        raise RuntimeError("the launch never became ready")
+
+    after = _control_run(faulted, tmp_path / "after", raises_after_the_fault_fired, capsys, "--negative-control", "send_noop")
+    assert (after["status"], after["failure_code"], after["error"]) == (
+        "fail",
+        "fixture_failed",
+        "RuntimeError: the turn after the send never came",
+    )
+    assert after["negative_control"] == {
+        "control": "send_noop",
+        "status": "inconclusive",
+        "run_failed": True,
+        # Nothing evaluated them: unknown, which is not the same as their having failed.
+        "preconditions_held": None,
+        "fault_fired": True,
+        "fault_receipts": [receipt],
+    }
+
+    before = _control_run(faulted, tmp_path / "before", raises_before, capsys, "--negative-control", "send_noop")
+    assert (before["negative_control"]["fault_fired"], before["negative_control"]["fault_receipts"]) == (False, [])
+    assert before["negative_control"]["preconditions_held"] is None
+
+    # A producer whose fault leaves no receipt file cannot say whether it fired, and does not.
+    elsewhere = dataclasses.replace(faulted, fault_receipts=None)
+    unknown = _control_run(elsewhere, tmp_path / "elsewhere", raises_before, capsys, "--negative-control", "send_noop")
+    assert unknown["negative_control"] == {"control": "send_noop", "status": "inconclusive", "run_failed": True, "preconditions_held": None}
+
+    # A verdict the producer reached before the failure is its own, and a run that is no control's has no such block.
+    def judged_then_raises(run: Run) -> None:
+        run.control({"fault": "codex_send_noop", "verdict": "inconclusive", "fault_fired": True}, status="fail")
+        raise RuntimeError("cleanup failed")
+
+    own = _control_run(faulted, tmp_path / "own", judged_then_raises, capsys, "--negative-control", "send_noop")
+    assert own["negative_control"] == {"fault": "codex_send_noop", "verdict": "inconclusive", "fault_fired": True}
+    assert "negative_control" not in _control_run(faulted, tmp_path / "honest", raises_before, capsys)
+
+
+def test_no_producer_builds_its_own_account_of_a_control_whose_run_raised():
+    # The shell says it once. A producer's own copy is how two of them came to say less than they knew.
+    copies = [
+        path.name
+        for path in sorted(_QA.glob("*.py"))
+        if re.search(r'\["negative_control"\]\s*=\s*\{[^}]*"status":\s*"inconclusive"\s*\}', path.read_text(encoding="utf-8"))
+    ]
+    assert copies == []
+
+
 def test_a_pass_whose_result_cannot_be_written_leaves_a_typed_failure_and_never_a_pass(tmp_path, monkeypatch):
     real_write, writes = producer_shell.write_json, []
 
