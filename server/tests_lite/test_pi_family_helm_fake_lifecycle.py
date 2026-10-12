@@ -262,6 +262,12 @@ def test_a_failing_verdict_reached_before_a_late_failure_is_kept(provider, longh
         reached |= {"launch_registration": True, "native_tool_taxonomy": True}
     assert result["assertions"] == {f"{provider}_helm_{cell}": held for cell, held in reached.items()}
     assert result["observation"]["steer_turn_verdict"]["code"] == "steer_delivered_as_queued_follow_up"
+    # What a run that died leaves of its registered receipts: all of them, but the one only a finished run writes.
+    # The factory asks a false cell for no more than that.
+    module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
+    left = {entry["path"] for entry in result["artifact_manifest"]}
+    missing = {role for role in module.REGISTRATION.required_artifacts if f"{role.replace('_', '-')}.json" not in left}
+    assert missing == ({"native_settlement_receipt"} if provider == "omp" else set())
 
 
 @pytest.mark.parametrize(
