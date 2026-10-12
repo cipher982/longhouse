@@ -25,6 +25,12 @@ public final class SnapshotStore: ObservableObject {
     /// setup on this Mac" after the machine was connected and healthy, until
     /// a manual Refresh. `longhouse local-health --json` costs ~30 ms.
     public static let defaultSetupRefreshIntervalSeconds: TimeInterval = 5
+    /// Session phase/ledger churn can arrive twice a second. Its current
+    /// projection is applied immediately; a full producer snapshot only needs
+    /// to catch up every few phase updates, keeping non-critical health fresh
+    /// within five seconds without re-running local-health for each write.
+    static let localStatusRefreshCoalescingSeconds: TimeInterval = 5
+
     /// How often relative age labels ("updated 12s ago") move while a panel is
     /// visible. Only while a presentation consumer exists; hidden panels never
     /// tick.
@@ -62,6 +68,10 @@ public final class SnapshotStore: ObservableObject {
     /// quiet machine with no `--refresh-seconds` aged into "refresh is
     /// failing".
     private var trustBackstopTask: Task<Void, Never>?
+    /// One deferred refresh for local-status churn that arrived inside the
+    /// coalescing window (or during a refresh), so the last change is never
+    /// left to the trust backstop.
+    private var trailingChurnRefreshTask: Task<Void, Never>?
     private var realtimeConnection: RealtimeConnectionSnapshot?
     private var realtimeSessionIds: [String] = []
     private var pendingRealtimeProjections: [String: SessionProjection] = [:]
@@ -71,9 +81,11 @@ public final class SnapshotStore: ObservableObject {
     private var localStatusPath: String?
     private var activeRefreshReason: SnapshotRefreshReason?
     private var queuedManualRefresh = false
+    private var lastLocalStatusRefreshAtUptime: TimeInterval?
     private var presentationTimer: Timer?
     private var presentationConsumerCount = 0
     private let cacheURL: URL?
+    private var lastCachedSnapshotData: Data?
     private let transientRetryDelay: TimeInterval
     private let setupRefreshInterval: TimeInterval
     private let refreshDeadline: TimeInterval
@@ -110,8 +122,9 @@ public final class SnapshotStore: ObservableObject {
         // `refreshState` deliberately stays `.neverAttempted` here: restoring the
         // cache must not make the app believe it has current data.
         if let cachedSnapshot = Self.loadCachedSnapshot(from: self.cacheURL) {
-            snapshot = cachedSnapshot
-            appendHistorySample(for: cachedSnapshot)
+            snapshot = cachedSnapshot.snapshot
+            lastCachedSnapshotData = cachedSnapshot.data
+            appendHistorySample(for: cachedSnapshot.snapshot)
             loadError = nil
         }
         if let cliSource = source as? CLIHealthSnapshotSource {
@@ -211,6 +224,7 @@ public final class SnapshotStore: ObservableObject {
         transientRetryTask?.cancel()
         setupFollowUpTask?.cancel()
         trustBackstopTask?.cancel()
+        trailingChurnRefreshTask?.cancel()
         localStatusMonitor?.stop()
     }
 
@@ -568,11 +582,35 @@ public final class SnapshotStore: ObservableObject {
                 self.snapshot = updated
                 persistCachedSnapshot(updated)
             }
-            if projection.requiresSnapshotRefresh || currentIds != nextIds || classificationChanged {
+            if currentIds != nextIds || classificationChanged {
+                lastLocalStatusRefreshAtUptime = ProcessInfo.processInfo.systemUptime
                 refresh(reason: .background)
+            } else if projection.requiresSnapshotRefresh {
+                refreshForLocalStatusChurn()
             }
         }
         armPresentationDeadline()
+    }
+
+    private func refreshForLocalStatusChurn() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let wait = lastLocalStatusRefreshAtUptime.map {
+            Self.localStatusRefreshCoalescingSeconds - (now - $0)
+        } ?? 0
+        guard activeRefreshReason != nil || wait > 0 else {
+            lastLocalStatusRefreshAtUptime = now
+            refresh(reason: .background)
+            return
+        }
+        // Inside the window or mid-refresh: catch up once at the window's end.
+        guard trailingChurnRefreshTask == nil else { return }
+        let delay = max(wait, 0.5)
+        trailingChurnRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            self.trailingChurnRefreshTask = nil
+            self.refreshForLocalStatusChurn()
+        }
     }
 
     var isWatchingLocalStatus: Bool {
@@ -802,14 +840,13 @@ public final class SnapshotStore: ObservableObject {
             .appendingPathComponent("last-good-snapshot.json")
     }
 
-    private static func loadCachedSnapshot(from cacheURL: URL?) -> HealthSnapshot? {
-        guard let cacheURL else {
+    private static func loadCachedSnapshot(from cacheURL: URL?) -> (snapshot: HealthSnapshot, data: Data)? {
+        guard let cacheURL,
+              let data = try? Data(contentsOf: cacheURL),
+              let snapshot = try? HealthSnapshotDecoder.decode(data: data) else {
             return nil
         }
-        guard let data = try? Data(contentsOf: cacheURL) else {
-            return nil
-        }
-        return try? HealthSnapshotDecoder.decode(data: data)
+        return (snapshot, data)
     }
 
     static func loadNativeBootstrapSnapshot(
@@ -874,14 +911,19 @@ public final class SnapshotStore: ObservableObject {
             return
         }
         do {
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(snapshot)
+            // The cache is read only during cold bootstrap; identical bytes
+            // carry no new information and need no atomic disk replacement.
+            guard data != lastCachedSnapshotData else { return }
             try FileManager.default.createDirectory(
                 at: cacheURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            let encoder = JSONEncoder()
-            encoder.keyEncodingStrategy = .convertToSnakeCase
-            let data = try encoder.encode(snapshot)
             try data.write(to: cacheURL, options: [.atomic])
+            lastCachedSnapshotData = data
         } catch {
             // Cache failures should never make the menu bar look unhealthy.
         }

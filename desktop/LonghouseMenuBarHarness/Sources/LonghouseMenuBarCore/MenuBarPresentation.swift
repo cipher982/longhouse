@@ -163,17 +163,31 @@ extension HealthSnapshot {
         projectionTrust: DataTrust = .current
     ) -> MenuBarPresentation {
         let sessions = currentManagedSessions
-        let needsUser = sessions.filter { $0.explicitlyNeedsUser }.count
-        let working = sessions.filter { $0.menuBarAttentionKind == .working }.count
-        let blocked = sessions.filter { $0.menuBarAttentionKind == .blocked && !$0.explicitlyNeedsUser }.count
-        let unavailable = sessions.filter { $0.menuBarAttentionKind == .phaseUnavailable }.count
-        let unknown = sessions.filter {
-            if case .unknown = $0.menuBarAttentionKind { return true }
-            return false
-        }.count
-        let degraded = sessions.filter {
-            $0.menuBarAttentionKind == .degraded || $0.menuBarAttentionKind == .detached
-        }.count
+        var needsUser = 0
+        var working = 0
+        var blocked = 0
+        var unavailable = 0
+        var unknown = 0
+        var degraded = 0
+        for session in sessions {
+            let attention = session.menuBarAttentionKind(asOf: referenceDate)
+            let explicitlyNeedsUser = session.isExplicitlyNeedsUser(attentionKind: attention)
+            if explicitlyNeedsUser { needsUser += 1 }
+            switch attention {
+            case .working:
+                working += 1
+            case .blocked where !explicitlyNeedsUser:
+                blocked += 1
+            case .phaseUnavailable:
+                unavailable += 1
+            case .unknown:
+                unknown += 1
+            case .degraded, .detached:
+                degraded += 1
+            default:
+                break
+            }
+        }
         let idle = max(0, sessions.count - needsUser - working - blocked - degraded - unavailable - unknown)
 
         let repairReasons: Set<String> = [
@@ -629,7 +643,11 @@ extension HealthSnapshot {
 
 extension ManagedSessionSnapshot {
     var explicitlyNeedsUser: Bool {
-        if menuBarAttentionKind == .needsYou { return true }
+        isExplicitlyNeedsUser(attentionKind: menuBarAttentionKind)
+    }
+
+    func isExplicitlyNeedsUser(attentionKind: ManagedAttentionKind) -> Bool {
+        if attentionKind == .needsYou { return true }
         let normalized = phase?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         return normalized == "needs permission" || normalized == "needs user"
     }

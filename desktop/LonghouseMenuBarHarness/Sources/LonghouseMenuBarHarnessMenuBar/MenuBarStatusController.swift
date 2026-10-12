@@ -160,8 +160,19 @@ final class MenuBarStatusController: NSObject {
 
         let referenceDate = Date()
         let presentation = store.snapshot?.menuBarPresentation(relativeTo: referenceDate)
-        let attentionColor = statusItemAttentionColor(presentation: presentation, relativeTo: referenceDate)
-        let tooltip = statusItemAttentionLabel(presentation: presentation, relativeTo: referenceDate)
+        let isBrieflyRecovering = store.isBrieflyRecovering
+        let dataTrust = store.dataTrust(relativeTo: referenceDate)
+        let attentionColor = statusItemAttentionColor(
+            presentation: presentation,
+            isBrieflyRecovering: isBrieflyRecovering,
+            dataTrust: dataTrust
+        )
+        let tooltip = statusItemAttentionLabel(
+            presentation: presentation,
+            isBrieflyRecovering: isBrieflyRecovering,
+            dataTrust: dataTrust,
+            relativeTo: referenceDate
+        )
             ?? presentation?.headline
             ?? "Longhouse"
 
@@ -184,13 +195,14 @@ final class MenuBarStatusController: NSObject {
 
     private func statusItemAttentionColor(
         presentation: MenuBarPresentation?,
-        relativeTo referenceDate: Date
+        isBrieflyRecovering: Bool,
+        dataTrust: DataTrust
     ) -> NSColor? {
         // A failing producer must reach the icon whether or not a cached
         // snapshot is on screen. Gating this on `snapshot == nil` is what let a
         // stale cache hold the icon normal through eleven days of failures.
-        if !store.isBrieflyRecovering {
-            switch store.dataTrust(relativeTo: referenceDate) {
+        if !isBrieflyRecovering {
+            switch dataTrust {
             case .neverLoaded:
                 return .systemRed
             case .lastKnown:
@@ -219,12 +231,14 @@ final class MenuBarStatusController: NSObject {
 
     private func statusItemAttentionLabel(
         presentation: MenuBarPresentation?,
+        isBrieflyRecovering: Bool,
+        dataTrust: DataTrust,
         relativeTo referenceDate: Date
     ) -> String? {
-        if store.isBrieflyRecovering {
+        if isBrieflyRecovering {
             return "Longhouse is catching up"
         }
-        switch store.dataTrust(relativeTo: referenceDate) {
+        switch dataTrust {
         case .neverLoaded:
             return "Longhouse needs attention"
         case let .lastKnown(context):

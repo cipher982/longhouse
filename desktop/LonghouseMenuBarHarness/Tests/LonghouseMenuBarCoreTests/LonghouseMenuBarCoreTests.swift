@@ -1,4 +1,6 @@
 import AppKit
+import Darwin
+import Dispatch
 import Combine
 import Foundation
 import Testing
@@ -77,9 +79,11 @@ private final class CountingHealthSnapshotSource: HealthSnapshotSource, @uncheck
     private var snapshots: [HealthSnapshot]
     private var index = 0
     private var count = 0
+    let supportsLiveMonitoring: Bool
 
-    init(snapshots: [HealthSnapshot]) {
+    init(snapshots: [HealthSnapshot], supportsLiveMonitoring: Bool = true) {
         self.snapshots = snapshots
+        self.supportsLiveMonitoring = supportsLiveMonitoring
     }
 
     var loadCount: Int {
@@ -95,6 +99,51 @@ private final class CountingHealthSnapshotSource: HealthSnapshotSource, @uncheck
             index += 1
             return snapshot
         }
+    }
+}
+
+private final class DirectoryWriteCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let queue = DispatchQueue(label: "ai.longhouse.menu-bar.test-cache-writes")
+    private let source: DispatchSourceFileSystemObject
+    private var writes = 0
+    private var debounce: DispatchWorkItem?
+
+    init(directoryURL: URL) throws {
+        let descriptor = open(directoryURL.path, O_EVTONLY)
+        guard descriptor >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.write],
+            queue: queue
+        )
+        self.source = source
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.debounce?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.lock.withLock { self.writes += 1 }
+            }
+            self.debounce = item
+            self.queue.asyncAfter(deadline: .now() + .milliseconds(25), execute: item)
+        }
+        source.setCancelHandler { _ = close(descriptor) }
+        source.resume()
+    }
+
+    var value: Int {
+        lock.withLock { writes }
+    }
+
+    func stop() {
+        source.cancel()
+    }
+
+    deinit {
+        source.cancel()
     }
 }
 
@@ -188,6 +237,28 @@ private func watchingAttentionSnapshot() -> HealthSnapshot {
 }
 
 struct LonghouseMenuBarCoreTests {
+
+
+    @Test
+    func memoizedDateParsingMatchesUncachedFractionalPlainAndInvalidInputs() {
+        func parseWithoutMemo(_ value: String) -> Date? {
+            let fractional = ISO8601DateFormatter()
+            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let plain = ISO8601DateFormatter()
+            plain.formatOptions = [.withInternetDateTime]
+            return fractional.date(from: value) ?? plain.date(from: value)
+        }
+
+        for value in [
+            "2026-10-12T16:20:30.125Z",
+            "2026-10-12T16:20:30Z",
+            "not-an-iso8601-date",
+        ] {
+            let uncached = parseWithoutMemo(value)
+            #expect(ISO8601DateFormatters.parse(value) == uncached)
+            #expect(ISO8601DateFormatters.parse(value) == uncached)
+        }
+    }
 
     @Test
     func localHealthDecodesHostLinkClaimAndUnknownStartupState() throws {
@@ -1650,6 +1721,282 @@ struct LonghouseMenuBarCoreTests {
 
     @Test
     @MainActor
+    func localPhaseLedgerChurnProducerLoadCount() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-status-churn-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let statusURL = directory.appendingPathComponent("engine-status.json")
+        let cacheDirectory = directory.appendingPathComponent("cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        let cacheURL = cacheDirectory.appendingPathComponent("last-good-snapshot.json")
+        let cacheWrites = try DirectoryWriteCounter(directoryURL: cacheDirectory)
+        defer { cacheWrites.stop() }
+        let baselineCacheDirectory = directory.appendingPathComponent("baseline-cache", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: baselineCacheDirectory,
+            withIntermediateDirectories: true
+        )
+        let baselineCacheURL = baselineCacheDirectory.appendingPathComponent("last-good-snapshot.json")
+        let baselineCacheWrites = try DirectoryWriteCounter(directoryURL: baselineCacheDirectory)
+        defer { baselineCacheWrites.stop() }
+
+        func waitForCacheWrites(_ counter: DirectoryWriteCounter, _ count: Int) async throws {
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(2))
+            while counter.value < count, clock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(counter.value >= count)
+        }
+
+        func waitForLoads(
+            _ source: CountingHealthSnapshotSource,
+            _ count: Int,
+            timeout: Duration = .seconds(2)
+        ) async throws {
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: timeout)
+            while source.loadCount < count, clock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(source.loadCount >= count)
+        }
+
+        func writeStatus(phase: String) throws {
+            let timestamp = ISO8601DateFormatters.fractionalTimestamp(for: Date())
+            let payload: [String: Any] = [
+                "managed_sessions": [["session_id": "session-1"]],
+                "sessions": [["session_id": "session-1", "phase": phase, "phase_observed_at": timestamp]],
+                "phase_ledger": [["session_id": "session-1", "phase": phase, "observed_at": timestamp]],
+                "spool_pending_count": 0,
+                "spool_dead_count": 0,
+                "is_offline": false,
+                "last_updated": timestamp,
+            ]
+            try JSONSerialization.data(withJSONObject: payload).write(to: statusURL, options: .atomic)
+        }
+
+        try writeStatus(phase: "phase-initial")
+        let session = ManagedSessionSnapshot(
+            sessionId: "session-1", provider: "codex", workspaceLabel: "test",
+            branch: nil, state: "attached", phase: nil, lastActivityAt: nil,
+            bridgeStatus: nil, bridgePid: nil, bridgeHeartbeatAt: nil, reasonCodes: []
+        )
+        let snapshot = presentationSnapshot(sessions: [session])
+        let source = CountingHealthSnapshotSource(
+            snapshots: [snapshot],
+            supportsLiveMonitoring: false
+        )
+        let store = SnapshotStore(source: source, cacheURL: cacheURL)
+        let baselineSource = CountingHealthSnapshotSource(
+            snapshots: [snapshot],
+            supportsLiveMonitoring: false
+        )
+        let baselineStore = SnapshotStore(source: baselineSource, cacheURL: baselineCacheURL)
+        try await waitForCacheWrites(cacheWrites, 1)
+        try await waitForCacheWrites(baselineCacheWrites, 1)
+        let changes = ChangeCounter()
+        let monitor = LocalStatusMonitor(statusPath: statusURL.path) { projection in
+            Task { @MainActor in
+                store.ingestLocalStatus(projection)
+                baselineStore.ingestLocalStatus(
+                    LocalStatusMonitor.Projection(
+                        sessions: projection.sessions,
+                        engine: projection.engine,
+                        evidenceObservedAt: projection.evidenceObservedAt,
+                        presentationChanged: projection.presentationChanged
+                    )
+                )
+                if projection.requiresSnapshotRefresh {
+                    baselineStore.refresh(reason: .background)
+                }
+                await changes.increment(requiresSnapshotRefresh: projection.requiresSnapshotRefresh)
+            }
+        }
+        monitor.start()
+        defer { monitor.stop() }
+        #expect(try await changes.waitForChange(after: 0))
+        try await Task.sleep(for: .milliseconds(100))
+        let beforeChurnLoads = source.loadCount
+        let beforeChurnWrites = cacheWrites.value
+        let beforeBaselineLoads = baselineSource.loadCount
+        let beforeBaselineWrites = baselineCacheWrites.value
+        for index in 0..<12 {
+            let previous = await changes.value
+            try writeStatus(phase: "phase-\(index)")
+            #expect(try await changes.waitForChange(after: previous))
+            if index < 11 {
+                try await Task.sleep(for: .milliseconds(500))
+            }
+        }
+        try await waitForLoads(baselineSource, beforeBaselineLoads + 12)
+        let baselineLoadsDuringChurn = baselineSource.loadCount - beforeBaselineLoads
+        try await waitForCacheWrites(
+            baselineCacheWrites,
+            beforeBaselineWrites + baselineLoadsDuringChurn
+        )
+        let baselineWritesDuringChurn = baselineCacheWrites.value - beforeBaselineWrites
+        let loadsDuringChurn = source.loadCount - beforeChurnLoads
+        try await waitForCacheWrites(cacheWrites, beforeChurnWrites + loadsDuringChurn)
+        let writesDuringChurn = cacheWrites.value - beforeChurnWrites
+        print("LOCAL_STATUS_CHURN_BASELINE_PRODUCER_LOADS=\(baselineLoadsDuringChurn)")
+        print("LOCAL_STATUS_CHURN_BASELINE_CACHE_WRITES=\(baselineWritesDuringChurn)")
+        print("LOCAL_STATUS_CHURN_PRODUCER_LOADS=\(loadsDuringChurn)")
+        print("LOCAL_STATUS_CHURN_CACHE_WRITES=\(writesDuringChurn)")
+        #expect(baselineLoadsDuringChurn == 12)
+        #expect(baselineWritesDuringChurn == 12)
+        #expect(loadsDuringChurn <= 3)
+        #expect(writesDuringChurn <= loadsDuringChurn)
+
+        // The last churn inside a coalescing window is caught up at the
+        // window's end, not left to the 60 s trust backstop.
+        let afterChurnLoads = source.loadCount
+        try await waitForLoads(source, afterChurnLoads + 1, timeout: .seconds(7))
+    }
+
+
+
+
+
+    @Test
+    @MainActor
+    func unchangedCachedSnapshotDoesNotWriteAgain() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-cache-write-\(UUID().uuidString)")
+        let cacheDirectory = directory.appendingPathComponent("cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cacheWrites = try DirectoryWriteCounter(directoryURL: cacheDirectory)
+        defer { cacheWrites.stop() }
+        let cacheURL = cacheDirectory.appendingPathComponent("last-good-snapshot.json")
+        let source = CountingHealthSnapshotSource(
+            snapshots: [presentationSnapshot(sessions: [])],
+            supportsLiveMonitoring: false
+        )
+        let store = SnapshotStore(source: source, cacheURL: cacheURL)
+
+        let clock = ContinuousClock()
+        let cacheDeadline = clock.now.advanced(by: .seconds(2))
+        while cacheWrites.value < 1, clock.now < cacheDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(cacheWrites.value == 1)
+
+        let previousState = store.refreshState
+        store.refresh()
+        let refreshDeadline = clock.now.advanced(by: .seconds(2))
+        while store.refreshState == previousState, clock.now < refreshDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.refreshState != previousState)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(cacheWrites.value == 1)
+    }
+
+    @Test
+    @MainActor
+    func localStatusCriticalTransitionsAndSessionChangesBypassChurnCoalescing() async throws {
+        let session = ManagedSessionSnapshot(
+            sessionId: "session-1", provider: "codex", workspaceLabel: "test",
+            branch: nil, state: "attached", phase: nil, lastActivityAt: nil,
+            bridgeStatus: nil, bridgePid: nil, bridgeHeartbeatAt: nil, reasonCodes: []
+        )
+        let snapshot = presentationSnapshot(sessions: [session])
+        let base = try #require(snapshot.engineStatus?.payload)
+        let source = CountingHealthSnapshotSource(snapshots: [snapshot], supportsLiveMonitoring: false)
+        let store = SnapshotStore(source: source, cacheURL: nil)
+
+        func payload(
+            isOffline: Bool?,
+            spoolDeadCount: Int?,
+            localProjection: LocalProjectionStatus?
+        ) -> EngineStatusPayload {
+            EngineStatusPayload(
+                version: base.version,
+                daemonPid: base.daemonPid,
+                lastShipAt: base.lastShipAt,
+                spoolPendingCount: base.spoolPendingCount,
+                spoolDeadCount: spoolDeadCount,
+                archiveBacklog: base.archiveBacklog,
+                storageV2Outbox: base.storageV2Outbox,
+                parseErrorCount1H: base.parseErrorCount1H,
+                diskFreeBytes: base.diskFreeBytes,
+                isOffline: isOffline,
+                localProjection: localProjection,
+                shippingProgress: base.shippingProgress,
+                recentDeadLetters: base.recentDeadLetters,
+                lastUpdated: base.lastUpdated,
+                build: base.build
+            )
+        }
+
+        func requirePromptRefresh(_ projection: LocalStatusMonitor.Projection) async throws {
+            let previousCount = source.loadCount
+            let previousState = store.refreshState
+            store.ingestLocalStatus(projection)
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(1))
+            while (source.loadCount == previousCount || store.refreshState == previousState),
+                  clock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(source.loadCount == previousCount + 1)
+            #expect(store.refreshState != previousState)
+        }
+
+        try await requirePromptRefresh(
+            LocalStatusMonitor.Projection(
+                sessions: [LocalStatusMonitor.SessionState(sessionId: "session-2")],
+                engine: base
+            )
+        )
+        try await requirePromptRefresh(
+            LocalStatusMonitor.Projection(
+                sessions: [LocalStatusMonitor.SessionState(sessionId: "session-1")],
+                engine: payload(
+                    isOffline: true,
+                    spoolDeadCount: base.spoolDeadCount,
+                    localProjection: base.localProjection
+                )
+            )
+        )
+        try await requirePromptRefresh(
+            LocalStatusMonitor.Projection(
+                sessions: [LocalStatusMonitor.SessionState(sessionId: "session-1")],
+                engine: payload(
+                    isOffline: base.isOffline,
+                    spoolDeadCount: 1,
+                    localProjection: base.localProjection
+                )
+            )
+        )
+        let failedReconciliation = LocalProjectionStatus(
+            version: 1,
+            generatedAt: nil,
+            enginePulseAt: nil,
+            lastReconciledAt: nil,
+            reconciliation: ProjectionReconciliationStatus(
+                state: "failed",
+                reason: nil,
+                startedAt: nil,
+                failureReason: "scan failed"
+            )
+        )
+        try await requirePromptRefresh(
+            LocalStatusMonitor.Projection(
+                sessions: [LocalStatusMonitor.SessionState(sessionId: "session-1")],
+                engine: payload(
+                    isOffline: base.isOffline,
+                    spoolDeadCount: base.spoolDeadCount,
+                    localProjection: failedReconciliation
+                )
+            )
+        )
+    }
+
+    @Test
+    @MainActor
     func ageLabelsAdvanceUnderSustainedLocalUpdates() async throws {
         let store = SnapshotStore(
             source: StaticHealthSnapshotSource(snapshot: presentationSnapshot(sessions: [])),
@@ -1682,6 +2029,7 @@ struct LonghouseMenuBarCoreTests {
                 "heartbeat_transport": [
                     "state": "connected",
                     "send_metrics": ["last_send_wire_bytes": 57_000 + sends, "post_latency_sample_count": sends],
+                    "resource_usage": ["sample_count": sends],
                 ],
             ]
             try JSONSerialization.data(withJSONObject: payload).write(to: statusURL, options: .atomic)

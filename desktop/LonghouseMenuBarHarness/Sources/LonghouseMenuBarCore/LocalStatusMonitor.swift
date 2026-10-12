@@ -109,6 +109,9 @@ final class LocalStatusMonitor: @unchecked Sendable {
     private var lastPayload: EngineStatusPayload?
     private var lastSessionIds: [String]?
     private var lastEvidenceObservedAt: String?
+    /// Keep the last successful bytes so duplicate filesystem notifications
+    /// can be rejected before rebuilding the dynamic JSON presentation tree.
+    private var lastDecodedData: Data?
     private var debounce: DispatchWorkItem?
     private let watchingLock = NSLock()
     private var watching = false
@@ -207,17 +210,16 @@ final class LocalStatusMonitor: @unchecked Sendable {
     }
 
     private func readIfChanged() {
-        guard let next = readStatusFile() else {
-            // Forget what the file said, so its return is a change again.
-            if lastPayload != nil || lastSessionIds != nil {
-                presentationFingerprint = nil
-                lastPayload = nil
-                lastSessionIds = nil
-                lastEvidenceObservedAt = nil
-                onUnreadable()
-            }
+        guard let data = try? Data(contentsOf: statusURL) else {
+            forgetLastStatus()
             return
         }
+        if let lastDecodedData, data == lastDecodedData { return }
+        guard let next = try? decoder.decode(LocalStatusFileSnapshot.self, from: data) else {
+            forgetLastStatus()
+            return
+        }
+        lastDecodedData = data
         let key = next.presentationKey
         let presentationChanged = key != presentationFingerprint
         let requiresSnapshotRefresh = key.requiresSnapshotRefresh(comparedTo: presentationFingerprint)
@@ -242,11 +244,28 @@ final class LocalStatusMonitor: @unchecked Sendable {
         )
     }
 
-    private func readStatusFile() -> LocalStatusFileSnapshot? {
-        guard let data = try? Data(contentsOf: statusURL) else { return nil }
-        return try? decoder.decode(LocalStatusFileSnapshot.self, from: data)
+    private func forgetLastStatus() {
+        let hadReadableStatus = lastPayload != nil || lastSessionIds != nil
+        lastDecodedData = nil
+        guard hadReadableStatus else { return }
+        presentationFingerprint = nil
+        lastPayload = nil
+        lastSessionIds = nil
+        lastEvidenceObservedAt = nil
+        onUnreadable()
     }
+
+    private func readStatusFile() -> LocalStatusFileSnapshot? {
+        guard let data = try? Data(contentsOf: statusURL),
+              let snapshot = try? decoder.decode(LocalStatusFileSnapshot.self, from: data) else {
+            return nil
+        }
+        lastDecodedData = data
+        return snapshot
+    }
+
 }
+
 private struct LocalStatusFileSnapshot: Decodable {
     private struct MachineEvidence: Decodable {
         let observedAt: String?
@@ -499,6 +518,7 @@ private indirect enum StatusJSONValue: Decodable, Equatable {
             || compact == "validuntil"
             || compact == "lastupdated"
             || compact == "sendmetrics"
+            || compact == "resourceusage"
             || lowercased.contains("_ewma_")
             || key.contains("Ewma")
             || (rollingWindow && !isErrorCounterKey(compact))
