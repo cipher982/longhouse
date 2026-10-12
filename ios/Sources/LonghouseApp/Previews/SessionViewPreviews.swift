@@ -461,8 +461,6 @@ private struct PreviewConnectionDrop: View {
             placeholder: "Queue for next turn",
             stateFactsJSON: factsJSON(
                 mode: "console",
-                startTurnState: "available",
-                startTurnReason: nil,
                 activity: "executing",
                 tool: "Bash",
                 observedAt: isoDate(secondsAgo: 4),
@@ -470,7 +468,9 @@ private struct PreviewConnectionDrop: View {
                 primaryKey: "executing",
                 primaryLabel: "Using Bash",
                 primaryTone: "running",
-                access: ("live_control", "Live control", "success")
+                access: ("live_control", "Live control", "success"),
+                startTurnState: "available",
+                startTurnReason: nil
             )
         ),
         activity: ActivityPulseStore(),
