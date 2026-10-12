@@ -54,7 +54,9 @@ REGISTRATION = ProducerRegistration(
     # process counts as stopped before its parent collects it (live_kit.pid_dead).
     # 24: every turn is shown served by the Runtime Host, not only the first and the last: the send, the
     # follow-up, the steer, the replacement and the recalled phrase each rest on their own.
-    scenario_revision=24,
+    # 25: the tool call of the follow-up's busy turn and its result are read from OMP's own file, and the
+    # follow-up cell rests on them being a pair.
+    scenario_revision=25,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -175,6 +177,7 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
         and settlement.get("agent_settled_is_not_completion_contract") is True
     )
     convergence = _mapping(observation.get("convergence"))
+    taxonomy = _mapping(observation.get("native_taxonomy"))
     send, follow_up, steer, abort = records["send"], records["follow_up"], records["steer"], records["abort"]
     replacement, resume, stale = records["replacement"], records["cold_resume"], records["stale_owner"]
     steer_state = _mapping(steer.get("active_state"))
@@ -210,6 +213,9 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             and ack(follow_up)
             and native(follow_up)
             and served("follow_up")
+            # The busy turn ran a tool: OMP's own file holds that call with its result, and no call without one.
+            and bool(taxonomy.get("tool_pairs"))
+            and not taxonomy.get("tool_calls_without_results")
         ),
         "omp_helm_steer_active": (
             ack(steer, "active_command", "active_state")
@@ -341,6 +347,7 @@ FAMILY = Family(
     timeouts={"launch": 30, "busy": 30, "identity": 90, "replace": 60, "resume": 30, "resume_reply": 180, "resume_context": 300},
     homes=("home", "home/.longhouse"),
     channel_terminal=True,
+    tool_turn="follow_up",
     host_controls=True,
     identity_at_launch=True,
     binds_resume_prompt=True,

@@ -68,7 +68,8 @@ REGISTRATION = ProducerRegistration(
     # 22: control of the session is held to the owner's lease at launch, at cold resume and at the end, not only
     # after a reload or a replacement.
     # 23: the served events are read to their end, page by page under one generation, not as one page of 200.
-    scenario_revision=23,
+    # 24: the tool taxonomy's record says how far into the session file it was read.
+    scenario_revision=24,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -404,7 +405,6 @@ FAMILY = Family(
     is_idle=lambda state: state.get("phase") not in {"running", "thinking"},
     timeouts={"launch": 45, "busy": 10, "identity": 30, "replace": 30, "resume": 45, "resume_reply": 90, "resume_context": 90},
     homes=("provider-home", "longhouse"),
-    tool_launch=True,
     host_controls=True,
     local_controls=True,
     identity_at_launch=True,

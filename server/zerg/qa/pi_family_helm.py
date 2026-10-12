@@ -122,7 +122,9 @@ class Family:
 
     # The provider itself.
     channel_terminal: bool = False  # the extension reports the end of a turn on the channel (agent_end)
-    tool_launch: bool = False  # the first turn calls a tool, and the session's tool pairs are a cell
+    # The step whose turn calls a tool and has finished it: the session's tool calls and results are read once that
+    # step is over ("launch" where the first prompt asks for a tool, "follow_up" where the busy turn runs one).
+    tool_turn: str = "launch"
 
     # How the lifecycle runs today: coverage one provider has and the other lacks.
     host_controls: bool = False  # send, steer, abort and terminate go through the Runtime Host, not the engine's local command
@@ -2251,6 +2253,22 @@ class Lifecycle:
         self.observation["convergence"][turn] = served
         return turn
 
+    def taxonomy(self, step: str) -> None:
+        """After the step whose turn ran a tool: what the provider's own file holds of tool calls and their results.
+
+        The record says how far into the file it was read, so the same bytes can be read again from what is retained.
+        """
+
+        if self.f.tool_turn != step:
+            return
+        rows, _native_id, metadata = pi_transcript_rows(self.session_file)
+        self.observation["native_taxonomy"] = {
+            **pi_native_shadow_taxonomy(rows, metadata),
+            "after": step,
+            "source_path": str(self.session_file),
+            "source_end_offset": metadata["source_end_offset"],
+        }
+
     def identity(self, label: str, state: dict[str, Any]) -> dict[str, Any]:
         """Wait until the Runtime Host serves control of the session under this owner's lease."""
 
@@ -2305,9 +2323,7 @@ class Lifecycle:
             "marker_row": row,
             "evidence": evidence,
         }
-        if f.tool_launch:
-            rows, _native_id, metadata = pi_transcript_rows(self.session_file)
-            self.observation["native_taxonomy"] = pi_native_shadow_taxonomy(rows, metadata)
+        self.taxonomy("launch")
         settled = self.state
         if f.channel_terminal:
             settled = self.wait_state(
@@ -2436,6 +2452,7 @@ class Lifecycle:
             "evidence": evidence,
         }
         record["served"] = self.converge("follow_up", marker, row)
+        self.taxonomy("follow_up")
 
     def steer(self, *, local: bool = False) -> None:
         f = self.f

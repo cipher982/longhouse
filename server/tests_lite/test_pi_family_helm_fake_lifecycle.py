@@ -109,6 +109,9 @@ _BROKEN = [
     ("omp", "send_idle", "controls.send.command.payload.client_request_id", "another-request"),
     ("omp", "follow_up_native", "controls.follow_up.queued_not_sent", False),
     ("omp", "follow_up_native", "controls.follow_up.active_state.phase", "idle"),
+    # The busy turn's tool call has its result in OMP's own file.
+    ("omp", "follow_up_native", "native_taxonomy.tool_pairs", []),
+    ("omp", "follow_up_native", "native_taxonomy.tool_calls_without_results", ["call-without-result"]),
     ("omp", "steer_active", "steer_turn_verdict.passed", False),
     ("omp", "steer_active", "controls.steer.active_state.native_session_id", "another-session"),
     ("omp", "abort_native", "controls.abort.evidence.terminal", False),
