@@ -119,21 +119,31 @@ def _stop_process(proc: subprocess.Popen[str] | None, *, timeout: float = 10.0) 
 
 def _start_synthetic_host(run_dir: Path, env: dict[str, str]) -> tuple[subprocess.Popen[str], str]:
     port_file = run_dir / "synthetic-host.port"
-    host = _start_process(
-        [sys.executable, str(ROOT / "scripts" / "qa" / "shipper_synthetic_echo.py"), "--port-file", str(port_file)],
-        cwd=ROOT,
-        env=env,
-    )
-    deadline = time.monotonic() + 10
+    stderr_path = run_dir / "synthetic-host.stderr"
+    with stderr_path.open("w", encoding="utf-8") as stderr:
+        host = _start_process(
+            [sys.executable, str(ROOT / "scripts" / "qa" / "shipper_synthetic_echo.py"), "--port-file", str(port_file)],
+            cwd=ROOT,
+            env=env,
+            stderr=stderr,
+        )
+    started = time.monotonic()
+    deadline = started + 10
     while time.monotonic() < deadline:
         if port_file.exists():
             port = port_file.read_text(encoding="utf-8").strip()
             if port:
                 return host, f"http://127.0.0.1:{port}"
         if host.poll() is not None:
-            raise SoakError("synthetic Runtime Host exited before publishing a port")
+            raise SoakError(
+                f"synthetic Runtime Host exited ({host.returncode}) before publishing a port: "
+                f"{_process_stderr_tail(stderr_path)}"
+            )
         time.sleep(0.05)
-    raise SoakError("synthetic Runtime Host did not publish a port")
+    raise SoakError(
+        f"synthetic Runtime Host did not publish a port within {time.monotonic() - started:.1f} s "
+        f"(still running: {host.poll() is None}): {_process_stderr_tail(stderr_path)}"
+    )
 
 
 def _engine_command(engine_bin: Path, url: str) -> list[str]:
