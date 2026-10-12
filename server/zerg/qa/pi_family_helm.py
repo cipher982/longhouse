@@ -61,12 +61,15 @@ from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.model_compliance import attach
 from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
+from zerg.qa.pi_family_turn_oracle import control_made_its_observation
+from zerg.qa.pi_family_turn_oracle import control_run_assertions
 from zerg.qa.pi_family_turn_oracle import fault_name
 from zerg.qa.pi_family_turn_oracle import negative_control_verdict
 from zerg.qa.pi_family_turn_oracle import pi_family_steer_noncompliance
 from zerg.qa.pi_family_turn_oracle import provider_holds_prompt
 from zerg.qa.pi_family_turn_oracle import read_fault_receipts
 from zerg.qa.pi_family_turn_oracle import read_session_entries
+from zerg.qa.pi_family_turn_oracle import send_turn_verdict
 from zerg.qa.pi_family_turn_oracle import steer_turn_verdict
 from zerg.qa.pi_family_turn_oracle import step_task_prompt
 from zerg.qa.pi_family_turn_oracle import task_tool_boundary
@@ -1960,23 +1963,6 @@ def _redacted(value: Any, secrets: list[str]) -> Any:
     return clean(redact_state_for_evidence(value))
 
 
-def _terminate_control_made_its_observation(negative_control: str | None, observation: Mapping[str, Any], exc: BaseException) -> bool:
-    """Whether a post-terminate failure is the control's evidence, not an abort.
-
-    The terminate control injects a no-op terminate, so the owners stay alive by
-    design and every later step runs against a session that was never going to
-    stop. Once the typed verdict is recorded the control has made its whole
-    observation, and aborting past it left the factory with no result.json to
-    judge. Anything else -- a different control, a failure before the verdict,
-    or an interrupt -- still aborts.
-    """
-
-    if negative_control != "terminate" or not isinstance(exc, Exception):
-        return False
-    verdict = observation.get("terminate_verdict")
-    return isinstance(verdict, Mapping) and verdict.get("code") == "terminate_left_owners_alive"
-
-
 def _context_prompt(phrase: str, marker: str) -> str:
     # Pi's wording. A two-part "Then\n\nNew machine-check request" frame read as
     # a prompt injection to the qualification model, which refused it or went
@@ -2406,18 +2392,27 @@ class Lifecycle:
             "command": command,
             "marker_wait": {"status": "pending", "marker": marker, "source_offset": offset},
         }
-        if self.f.refused_command_ends_run and command.get("accepted") is not True:
-            # Nothing was sent, so there is no reply to wait for: the record says so and the run ends here.
-            record["marker_wait"]["status"] = "refused"
-            raise RuntimeError(f"{self.f.name} Helm {name} was not accepted, so it started no turn: {command.get('payload')}")
         try:
-            row, evidence = self.reply(marker, offset)
-        except BaseException as exc:
-            record["marker_wait"].update(
-                status="failed", source_size_after=_read_source_size(self.session_file), error=f"{type(exc).__name__}: {exc}"
+            if self.f.refused_command_ends_run and command.get("accepted") is not True:
+                # Nothing was sent, so there is no reply to wait for: the record says so and the run ends here.
+                record["marker_wait"]["status"] = "refused"
+                raise RuntimeError(f"{self.f.name} Helm {name} was not accepted, so it started no turn: {command.get('payload')}")
+            try:
+                row, evidence = self.reply(marker, offset)
+            except BaseException as exc:
+                record["marker_wait"].update(
+                    status="failed", source_size_after=_read_source_size(self.session_file), error=f"{type(exc).__name__}: {exc}"
+                )
+                raise
+            record["marker_wait"]["status"] = "answered"
+        finally:
+            # Whatever the wait came to. A send that was taken and whose prompt the provider never held started no turn.
+            self.observation[f"{name}_turn_verdict"] = send_turn_verdict(
+                self.session_file,
+                marker=marker,
+                accepted=command.get("accepted") is True,
+                answered=record["marker_wait"]["status"] == "answered",
             )
-            raise
-        record["marker_wait"]["status"] = "answered"
         record.update(marker_row=row, evidence=evidence)
         # Serving a reply does not depend on how the prompt was sent: the local command's turn is not shown served again.
         if not local:
@@ -2857,11 +2852,15 @@ class Lifecycle:
                 "last_runtime_observation": exc.last_runtime_observation,
             }
         self.write_partial(exc)
-        if _terminate_control_made_its_observation(self.negative_control, self.observation, exc):
-            # Every later step runs against a session the fault kept alive and
-            # cannot succeed, so the failure is kept as evidence and the
-            # control's verdict is still ruled on.
-            self.observation["post_terminate_control_failure"] = f"{type(exc).__name__}: {exc}"
+        if control_made_its_observation(self.negative_control, self.observation):
+            # A no-op send or terminate was injected, so the turn never comes or
+            # the owners stay alive by design, and every later step runs against
+            # that. Once the typed verdict is recorded the control has made its
+            # whole observation: the failure is kept as evidence and the verdict
+            # is still ruled on. Aborting here left the factory with no result to
+            # judge. A failure before the verdict, or under another control, is
+            # still the run's failure.
+            self.observation["failure_after_control_verdict"] = f"{type(exc).__name__}: {exc}"
             return
         self.failure = exc
 
@@ -3114,7 +3113,7 @@ class Lifecycle:
                 fault_receipts=read_fault_receipts(root / "qa-fault-receipt.jsonl"),
                 session_id=self.session_id,
             )
-            run.observation, run.assertions = observation, assertions
+            run.observation, run.assertions = observation, control_run_assertions(self.negative_control, f.provider, assertions)
             cleaned_up = f.evidence_must_be_final or cleanup.get("status") == "pass"
             run.control(verdict, status="pass" if verdict["status"] == "pass" and cleaned_up else "fail")
             return

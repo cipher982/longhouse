@@ -1,4 +1,4 @@
-"""Turn-correlated steer and abort verdicts for Pi-family session transcripts.
+"""Turn-correlated send, steer and abort verdicts for Pi-family session transcripts, and their negative controls.
 
 Pi and OMP write one JSONL session tree: every entry has an ``id`` and a
 ``parentId``, and message entries carry ``message.role`` and, for assistant
@@ -123,6 +123,24 @@ def provider_holds_prompt(session_file: Path, marker: str) -> bool:
     except OSError:
         return False
     return any(_role(entry) == "user" and marker in _text(entry) for entry in entries)
+
+
+def send_turn_verdict(session_file: Path, *, marker: str, accepted: bool, answered: bool) -> dict[str, Any]:
+    """An idle send's verdict: the send was taken, the provider held its prompt, and the turn answered.
+
+    A send that is acknowledged and never forwarded starts no turn, and the
+    provider's own file never holds the prompt: that is the silent drop, told
+    apart here from a turn that started and did not answer.
+    """
+
+    delivered = answered or provider_holds_prompt(session_file, marker)
+    if not accepted:
+        code: str | None = "send_not_accepted"
+    elif not delivered:
+        code = "send_accepted_without_a_turn"
+    else:
+        code = None if answered else "send_turn_not_answered"
+    return {"passed": code is None, "accepted": accepted, "prompt_delivered": delivered, "answered": answered, "code": code}
 
 
 def step_task_prompt(task_marker: str, done_marker: str) -> str:
@@ -288,10 +306,17 @@ NEGATIVE_CONTROLS = {
     "send": ("send_noop", "helm_send_idle", "send_turn_verdict", "send_accepted_without_a_turn"),
     "terminate": ("terminate_noop", "helm_terminate_owned", "terminate_verdict", "terminate_left_owners_alive"),
 }
-# A control whose target IS one of the healthy preconditions cannot also
-# require that precondition to hold; `send` drops itself from the list.
-_CONTROL_PRECONDITION_SUFFIXES = {
-    "send": ("helm_launch_registration",),
+# A no-op send or terminate leaves nothing after it that can run: every later
+# step sends, or needs the owners gone. Such a control has made its whole
+# observation once its typed verdict is recorded, and its run reports the
+# target and the preconditions (`control_run_assertions`).
+ENDS_AT_TARGET = frozenset({"send", "terminate"})
+_CONTROL_PRECONDITION_SUFFIXES: dict[str, tuple[str, ...]] = {
+    # The first send follows the launch, and no cell both providers decide by
+    # then exists: OMP's launch cell is the whole run's (it ANDs settlement and
+    # the last turn). The lifecycle reaches its send only once the launch turn
+    # was answered and served, so reaching the verdict is the healthy prefix.
+    "send": (),
     # A precondition must also be SATISFIABLE under the fault, or the control is
     # inconclusive by construction -- the same defect as requiring a control's
     # own target. A no-op terminate leaves the owners alive, so NOTHING that
@@ -309,6 +334,36 @@ _DEFAULT_PRECONDITION_SUFFIXES = ("helm_launch_registration", "helm_send_idle")
 
 def fault_name(provider: str, control: str) -> str:
     return f"{provider}_{NEGATIVE_CONTROLS[control][0]}"
+
+
+def control_made_its_observation(control: str | None, observation: Mapping[str, Any]) -> bool:
+    """Whether a control that ends at its target has recorded the typed verdict it was run to see."""
+
+    if control not in ENDS_AT_TARGET:
+        return False
+    _suffix, _target, verdict_key, expected_code = NEGATIVE_CONTROLS[control]
+    verdict = observation.get(verdict_key)
+    return isinstance(verdict, Mapping) and verdict.get("code") == expected_code
+
+
+def control_run_assertions(control: str, provider: str, assertions: Mapping[str, bool]) -> dict[str, bool]:
+    """What a negative-control run reports: the cells it evaluated.
+
+    A steer or abort fault leaves the rest of the lifecycle able to run, so the
+    run reports every cell and shows that only the target failed. A no-op send
+    or terminate does not: the steps after it never run or cannot succeed, and
+    a cell that ANDs cleanup or settlement is false because the fault kept the
+    owners alive. Reported, those read as other failures of the same run, and
+    the factory refuses to certify a control whose summary has one
+    (``producer_summary_disagrees``): Pi's and OMP's terminate controls were
+    inconclusive on every factory run for it. Such a run reports the target and
+    the preconditions the control's verdict is made of.
+    """
+
+    if control not in ENDS_AT_TARGET:
+        return dict(assertions)
+    kept = {f"{provider}_{suffix}" for suffix in (NEGATIVE_CONTROLS[control][1], *_CONTROL_PRECONDITION_SUFFIXES[control])}
+    return {name: held for name, held in assertions.items() if name in kept}
 
 
 def read_fault_receipts(path: Path) -> list[dict[str, Any]]:

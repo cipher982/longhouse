@@ -46,7 +46,6 @@ from zerg.qa.pi_family_helm import _runtime_control_identity_is_complete
 from zerg.qa.pi_family_helm import _runtime_events_snapshot
 from zerg.qa.pi_family_helm import _served_control_identity
 from zerg.qa.pi_family_helm import _served_projection_evidence
-from zerg.qa.pi_family_helm import _terminate_control_made_its_observation
 from zerg.qa.pi_family_helm import _wait_cleanup_receipt
 from zerg.qa.pi_family_helm import _wait_native_marker
 from zerg.qa.pi_family_helm import _wait_served_run_retirement
@@ -101,35 +100,6 @@ def _omp_state(
         "lease_generation": lease_generation,
         "updated_at": updated_at,
     }
-
-
-_OWNERS_ALIVE = {"terminate_verdict": {"code": "terminate_left_owners_alive"}}
-
-
-def test_terminate_control_keeps_its_observation_instead_of_aborting() -> None:
-    """The control's own evidence must reach the result, and only the control's.
-
-    A no-op terminate leaves the owners alive on purpose, so every later step
-    fails against a session that was never going to stop. Re-raising there left
-    the factory with no result.json and the control judged
-    no_negative_control_result, which is why OMP Interrupt could not certify.
-    """
-    failure = RuntimeError("cold resume never reached ready")
-
-    assert _terminate_control_made_its_observation("terminate", _OWNERS_ALIVE, failure) is True
-
-    # A production run with the same symptom is still the failure we want.
-    assert _terminate_control_made_its_observation(None, _OWNERS_ALIVE, failure) is False
-    assert _terminate_control_made_its_observation("steer", _OWNERS_ALIVE, failure) is False
-
-    # Failing before the typed verdict means the control observed nothing.
-    assert _terminate_control_made_its_observation("terminate", {}, failure) is False
-    assert (
-        _terminate_control_made_its_observation("terminate", {"terminate_verdict": {"code": "terminate_noop_rejected"}}, failure) is False
-    )
-
-    # The handler catches BaseException; an interrupt still aborts.
-    assert _terminate_control_made_its_observation("terminate", _OWNERS_ALIVE, KeyboardInterrupt()) is False
 
 
 def test_omp_stock_version_line_is_prefixed_for_both_release_profiles() -> None:

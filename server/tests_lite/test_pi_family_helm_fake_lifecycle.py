@@ -19,6 +19,7 @@ from tests_lite._factory_envelope import assert_result_conforms
 from zerg.qa import omp_background_producer
 from zerg.qa.failed_results import reached_only
 from zerg.qa.openrouter_routing import OPENROUTER_QUALIFICATION_ROUTING
+from zerg.qa.pi_family_turn_oracle import NEGATIVE_CONTROLS
 
 # A whole lifecycle of real waits and process exits; the suite's 60 s guard is for a hang, not for this.
 pytestmark = pytest.mark.timeout(240)
@@ -54,11 +55,11 @@ def whole(tmp_path_factory):
     return run
 
 
-def _run(provider: str, cli: Path, tmp_path: Path, monkeypatch) -> tuple[int, dict, Path]:
+def _run(provider: str, cli: Path, tmp_path: Path, monkeypatch, *arguments: str) -> tuple[int, dict, Path]:
     module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
     monkeypatch.setenv(module.FAMILY.live_env, "1")
     root = tmp_path / "evidence"
-    code = module.main(fake.producer_arguments(provider, cli, root))
+    code = module.main([*fake.producer_arguments(provider, cli, root), *arguments])
     return code, json.loads((root / "result.json").read_text(encoding="utf-8")), root
 
 
@@ -268,6 +269,63 @@ def test_a_failing_verdict_reached_before_a_late_failure_is_kept(provider, longh
     left = {entry["path"] for entry in result["artifact_manifest"]}
     missing = {role for role in module.REGISTRATION.required_artifacts if f"{role.replace('_', '-')}.json" not in left}
     assert missing == ({"native_settlement_receipt"} if provider == "omp" else set())
+
+
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_every_control_reads_a_verdict_the_lifecycle_writes(provider, whole):
+    """A control whose verdict no step writes can never decide: it would read as inconclusive on every run."""
+
+    module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
+    _code, result, _root, _left = whole(provider)
+
+    assert set(module.PRODUCER.negative_controls) == set(NEGATIVE_CONTROLS)
+    for control, (_fault, target, verdict_key, _code) in NEGATIVE_CONTROLS.items():
+        assert f"{provider}_{target}" in module.ASSERTIONS, control
+        verdict = result["observation"].get(verdict_key)
+        assert isinstance(verdict, dict) and verdict["passed"] is True, (control, verdict_key, verdict)
+
+
+# The waits a fault runs to their end, cut short here: the reply to a send that was dropped, the row of an abort
+# that was not made, owners that were never told to stop and the run they keep from being retired.
+_FAULT_WAITS = {
+    "send": {"_wait_native_marker": 8},
+    "abort": {"_wait_native_abort": 2},
+    "terminate": {
+        "_wait_recorded_owners_dead": 2,
+        "_wait_stopped": 2,
+        "_record_retirement_claim_terminal": 2,
+        "_wait_served_run_retirement": 2,
+    },
+}
+
+
+@pytest.mark.parametrize("control", sorted(NEGATIVE_CONTROLS))
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_every_registered_control_decides(provider, control, longhouse, tmp_path, monkeypatch, capsys):
+    """Each control, run as the factory runs it, against a launcher that does what the faulted engine does.
+
+    The control passes, for the code it expects. And its summary lets the factory certify it: the factory refuses a
+    control whose run reports any false cell but the target (control-plane ``negative_controls.normalize_verdict``).
+    """
+
+    cli, _isolation = longhouse
+    helm = importlib.import_module("zerg.qa.pi_family_helm")
+    for name, seconds in _FAULT_WAITS.get(control, {}).items():
+        monkeypatch.setattr(
+            helm, name, lambda *a, _wait=getattr(helm, name), _seconds=seconds, **k: _wait(*a, **{**k, "timeout": _seconds})
+        )
+    code, result, root = _run(provider, cli, tmp_path, monkeypatch, "--negative-control", control)
+    capsys.readouterr()
+
+    _fault, target, verdict_key, expected = NEGATIVE_CONTROLS[control]
+    verdict = result["negative_control"]
+    assert (code, result["status"], verdict["status"]) == (0, "pass", "pass"), verdict
+    assert verdict["fault_fired"] and verdict["preconditions_held"] and verdict["target_rejected"]
+    assert verdict["observed_code"] == result["observation"][verdict_key]["code"] == expected
+    assert [cell for cell, held in result["assertions"].items() if not held] == [f"{provider}_{target}"]
+    # The receipt is the launcher's, for this session and this fault.
+    (fired,) = {(line["fault"], line["session_id"]) for line in map(json.loads, (root / "qa-fault-receipt.jsonl").read_text().splitlines())}
+    assert fired == (verdict["fault"], result["observation"]["session_id"])
 
 
 @pytest.mark.parametrize(

@@ -40,8 +40,9 @@ BUSY_SECONDS = 2.0
 # No fake process outlives this, whatever happened to the test that started it.
 MAX_LIFETIME_SECONDS = 600
 # Faults, comma separated: ``exit_after:<n>`` kills the launcher and its provider once the n-th turn has ended;
-# ``steer_as_follow_up`` holds a steer until the turn it was sent into is over (the engine's own negative control,
-# zerg.qa.pi_family_turn_oracle: NEGATIVE_CONTROLS).
+# ``steer_as_follow_up`` holds a steer until the turn it was sent into is over. That one is an engine fault, and a
+# launcher takes it and the engine's other three from the engine's own variable too, as a producer run under
+# ``--negative-control`` sets it (zerg.qa.pi_family_turn_oracle: NEGATIVE_CONTROLS).
 FAULT_ENV = "LONGHOUSE_FAKE_HELM_FAULT"
 _REPLY = re.compile(r"reply (?:only )?with (?:exactly )?([A-Za-z0-9_]+)", re.IGNORECASE)
 _RECALL = re.compile(r"context phrase that starts with ([A-Z_]+_)\..*then ([A-Za-z0-9_]+), and nothing else", re.DOTALL)
@@ -351,6 +352,12 @@ class _Launcher:
             ):
                 return refused("stale_channel")
             kind = frame.get("kind")
+            # What an engine built with `qa-fault-injection` does here instead (same functions, and engine/src/qa_fault.rs:
+            # helm_extension_fault): it acknowledges the command, forwards nothing, and leaves a receipt that it did.
+            fault = os.environ.get("LONGHOUSE_QA_FAULT", "").removeprefix(f"{self.provider}_")
+            if (kind, fault) in {("send", "send_noop"), ("abort", "abort_noop"), ("terminate", "terminate_noop")}:
+                self._fault_fired(fault, {"forwarded": False})
+                return {"kind": "command_result", "ok": True, "status": "ended" if kind == "terminate" else "active"}
             if kind == "send":
                 # A busy provider does not take a send (engine/assets/longhouse-pi-helm.ts and longhouse-omp-helm.ts: "turn_active").
                 if self.busy:
@@ -359,7 +366,8 @@ class _Launcher:
             elif kind == "steer":
                 if not self.busy:
                     return refused("turn_ended")
-                if "steer_as_follow_up" in _faults():
+                if "steer_as_follow_up" in {fault, *_faults()}:
+                    self._fault_fired("steer_as_follow_up", {"forwarded_kind": "send"})
                     self.held_steer = str(frame.get("text") or "")
                 else:
                     self.steer = str(frame.get("text") or "")
@@ -371,6 +379,15 @@ class _Launcher:
             else:
                 return refused("bad_request")
             return {"kind": "command_result", "ok": True, "status": "active" if self.busy else "idle", self.id_key: state[self.id_key]}
+
+    def _fault_fired(self, fault: str, detail: dict[str, Any]) -> None:
+        """The line an engine fault leaves where the producer asked for it (engine/src/qa_fault.rs: record_fired_named)."""
+
+        receipt = os.environ.get("LONGHOUSE_QA_FAULT_RECEIPT")
+        if receipt:
+            line = {"schema_version": 1, "fault": f"{self.provider}_{fault}", "session_id": self.state["session_id"]}
+            with open(receipt, "a", encoding="utf-8") as file:
+                file.write(json.dumps({**line, "fired_at": _now(), "detail": detail}) + "\n")
 
     def _serve_channel(self) -> None:
         while not self.stop.is_set():

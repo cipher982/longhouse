@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from zerg.qa.model_compliance import attach
 from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
+from zerg.qa.pi_family_turn_oracle import control_made_its_observation
+from zerg.qa.pi_family_turn_oracle import control_run_assertions
 from zerg.qa.pi_family_turn_oracle import pi_family_steer_noncompliance
+from zerg.qa.pi_family_turn_oracle import send_turn_verdict
 from zerg.qa.pi_family_turn_oracle import steer_turn_verdict
 
 TASK = "TASK_abc"
@@ -162,20 +169,64 @@ def test_terminate_control_is_not_a_pass_when_the_oracle_misses_it() -> None:
     assert verdict["target_rejected"] is False
 
 
-def test_send_control_does_not_require_its_own_target_as_a_precondition() -> None:
-    # send_idle is the target, so requiring it to hold would make the control
-    # unsatisfiable - the same defect that made the OMP Console check
-    # impossible to pass.
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_send_control_requires_no_cell_its_run_cannot_decide(provider: str) -> None:
+    """The send control's run ends at the first send, and the target cannot be its own precondition.
+
+    OMP's launch cell is the whole run's (it ANDs settlement and the last turn), so a run that ends at the first send
+    never decides it, and requiring it made the control unsatisfiable for OMP.
+    """
     verdict = _control(
         "send",
-        assertions={
-            "pi_helm_launch_registration": True,
-            "pi_helm_send_idle": False,
-        },
+        provider=provider,
+        assertions={f"{provider}_helm_launch_registration": False, f"{provider}_helm_send_idle": False},
         observation={"send_turn_verdict": {"code": "send_accepted_without_a_turn"}},
     )
     assert verdict["preconditions_held"] is True, verdict
     assert verdict["status"] == "pass", verdict
+
+
+def test_a_send_that_was_taken_and_started_no_turn_is_told_from_a_turn_that_did_not_answer(tmp_path) -> None:
+    session = tmp_path / "session.jsonl"
+    session.write_text(json.dumps(_entry("u1", None, "user", text="Reply with OTHER_MARKER")) + "\n", encoding="utf-8")
+
+    def code(marker: str, *, accepted: bool = True, answered: bool = False) -> str | None:
+        return send_turn_verdict(session, marker=marker, accepted=accepted, answered=answered)["code"]
+
+    # The provider never held the prompt: the send was dropped on the way.
+    assert code("SEND_MARKER") == "send_accepted_without_a_turn"
+    # It holds the prompt and no answer: a turn started, and the model is what did not answer.
+    assert code("OTHER_MARKER") == "send_turn_not_answered"
+    assert code("OTHER_MARKER", answered=True) is None
+    assert code("SEND_MARKER", accepted=False) == "send_not_accepted"
+
+
+def test_a_control_that_ends_at_its_target_has_made_its_observation_once_its_verdict_is_typed() -> None:
+    """A no-op send or terminate is injected, so every later step fails against it. That failure is the control's
+    evidence, not an abort: re-raising left the factory with no result to judge."""
+
+    owners_alive = {"terminate_verdict": {"code": "terminate_left_owners_alive"}}
+    assert control_made_its_observation("terminate", owners_alive) is True
+    assert control_made_its_observation("send", {"send_turn_verdict": {"code": "send_accepted_without_a_turn"}}) is True
+    # A production run with the same symptom is still the failure we want, and so is one under another control.
+    assert control_made_its_observation(None, owners_alive) is False
+    assert control_made_its_observation("send", owners_alive) is False
+    # A steer or abort fault leaves the rest of the lifecycle able to run: a failure after it is a failure.
+    assert control_made_its_observation("steer", {"steer_turn_verdict": {"code": "steer_delivered_as_queued_follow_up"}}) is False
+    # Failing before the typed verdict, or with another code, means the control observed nothing.
+    assert control_made_its_observation("terminate", {}) is False
+    assert control_made_its_observation("terminate", {"terminate_verdict": {"code": "terminate_not_accepted"}}) is False
+
+
+def test_a_control_that_ends_at_its_target_reports_the_target_and_its_preconditions() -> None:
+    cells = {f"pi_helm_{name}": name != "terminate_owned" for name in ("send_idle", "follow_up_native", "steer_active", "terminate_owned")}
+    # False only because the fault kept the owners alive, or because the step was never reached.
+    unreached = {"pi_helm_abort_native": False, "pi_helm_cold_resume_exact_file": False}
+
+    assert control_run_assertions("terminate", "pi", {**cells, **unreached}) == cells
+    assert control_run_assertions("send", "pi", {**cells, **unreached}) == {"pi_helm_send_idle": True}
+    # A steer or abort fault touches its target alone, and the run says so for every cell.
+    assert control_run_assertions("abort", "pi", {**cells, **unreached}) == {**cells, **unreached}
 
 
 def test_a_control_whose_fault_never_fired_is_inconclusive_not_a_pass() -> None:
