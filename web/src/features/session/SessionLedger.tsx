@@ -71,7 +71,8 @@ export interface SessionLedgerState {
   outputAgeSeconds: number | null;
   heartbeatAgeMs: number | null;
   receiptMarks: LedgerReceiptMark[];
-  facts: Array<{ label: string; value: string }>;
+  /** `title` carries the exact value behind a relative time, shown on hover. */
+  facts: Array<{ label: string; value: string; title?: string }>;
   backgroundInspector?: SessionBackgroundInspector | null;
 }
 
@@ -136,7 +137,7 @@ function durationLabel(seconds: number): string {
   return `${Math.floor(value / 86_400)}d`;
 }
 
-function observedAgeLabel(value: string | null, nowMs: number): string {
+export function observedAgeLabel(value: string | null, nowMs: number): string {
   if (!value) return "not recorded";
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return "unparseable";
@@ -144,7 +145,7 @@ function observedAgeLabel(value: string | null, nowMs: number): string {
   return delta >= 0 ? `${durationLabel(delta / 1_000)} ago` : "in the future";
 }
 
-function expiryLabel(value: string | null, nowMs: number): string {
+export function expiryLabel(value: string | null, nowMs: number): string {
   if (!value) return "not bounded";
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return "unparseable";
@@ -306,7 +307,7 @@ export function SessionLedger({
       : "rest";
   const heartbeatDescription =
     state.heartbeatAgeMs === null
-      ? "Viewer heartbeat is scoped to updates, not provider work"
+      ? "No update heartbeat received · a heartbeat means updates are arriving, not that the agent is working"
       : `Last update heartbeat ${ageText(state.heartbeatAgeMs / 1_000)}`;
   const showElapsed = state.elapsedSeconds != null && state.tone !== "unknown";
   const inspectorNowMs = Date.now();
@@ -561,7 +562,7 @@ export function SessionLedger({
                 {state.facts.map((fact, index) => (
                   <div key={`${fact.label}-${index}`}>
                     <dt>{fact.label}</dt>
-                    <dd>{fact.value}</dd>
+                    <dd title={fact.title}>{fact.value}</dd>
                   </div>
                 ))}
               </dl>

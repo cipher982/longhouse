@@ -19,6 +19,8 @@ import {
 } from "@/shared/session/sessionStatus";
 import {
   SessionLedger,
+  expiryLabel,
+  observedAgeLabel,
   type SessionBackgroundInspector,
   type SessionBackgroundTask,
   type SessionLedgerState,
@@ -242,6 +244,31 @@ export function withObservationAge(
   return `${headline} \u00B7 ${Math.floor(seconds / 86_400)}d ago`;
 }
 
+// Ledger facts use the words the rest of the session UI already shows, never
+// the raw enum: the served label for each activity state
+// (session_state_contract._primary) and this strip's own wording for a host.
+const ACTIVITY_STATE_LABELS: Record<AgentSession["session_state"]["activity"]["state"], string> = {
+  thinking: "Thinking",
+  executing: "Running",
+  quiescent: "Idle",
+  blocked: "Blocked",
+  stalled: "Stalled",
+  unknown: "Activity unknown",
+};
+
+const HOST_STATE_LABELS: Record<AgentSession["session_state"]["host"]["state"], string> = {
+  online: "Online",
+  stale: "Stopped reporting",
+  offline: "Offline",
+  unknown: "Unknown",
+};
+
+/** "expires in 12s", "expired 3m ago", "not bounded": a claim's window as the ledger words it. */
+function evidenceWindowLabel(validUntil: string | null | undefined, nowMs: number): string {
+  const label = expiryLabel(validUntil ?? null, nowMs);
+  return validUntil && Date.parse(validUntil) >= nowMs ? `expires ${label}` : label;
+}
+
 /** Build Ledger copy strictly from canonical facts plus the viewer's stream evidence. */
 export function buildSessionLedgerState(
   session: AgentSession,
@@ -343,7 +370,7 @@ export function buildSessionLedgerState(
         ? pending
           ? "Waiting for your response"
           : hostOffline || hostStale
-            ? `Host is ${facts.host.state}`
+            ? `Host ${hostOffline ? "is offline" : "stopped reporting"}`
             : transcriptConcern
               ? "Transcript is lagging"
               : tone === "working"
@@ -370,6 +397,10 @@ export function buildSessionLedgerState(
   const primary = facts.presentation.primary;
   const host = facts.host;
   const runtimeMeta = getRuntimeMetaLabel(runtime, nowMs);
+  const primaryLabel = primary?.label ?? "Activity unknown";
+  const activityLabel = ACTIVITY_STATE_LABELS[facts.activity.state] ?? facts.activity.state;
+  // The activity axis only when it says something the served label does not.
+  const providerEvidence = activityLabel === primaryLabel ? primaryLabel : `${primaryLabel} · ${activityLabel}`;
   return {
     tone,
     headline,
@@ -393,11 +424,13 @@ export function buildSessionLedgerState(
       },
       {
         label: "Provider evidence",
-        value: `${primary?.label ?? "Activity unknown"} · ${facts.activity.state}; valid until ${facts.activity.valid_until ?? "not bounded"}`,
+        value: `${providerEvidence}; ${evidenceWindowLabel(facts.activity.valid_until, nowMs)}`,
+        title: facts.activity.valid_until ?? undefined,
       },
       {
         label: "Host",
-        value: `${host.state} · observed ${host.observed_at ?? "not recorded"}`,
+        value: `${HOST_STATE_LABELS[host.state] ?? host.state} · observed ${observedAgeLabel(host.observed_at ?? null, nowMs)}`,
+        title: host.observed_at ?? undefined,
       },
       { label: "Transcript", value: facts.transcript.convergence },
       { label: "Control", value: interaction.capabilityLabel },

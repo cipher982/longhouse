@@ -183,6 +183,74 @@ describe("SessionRuntimeStrip connection presentation", () => {
     ).toBe(true);
   });
 
+  it("words the ledger facts for a reader: relative times, no raw states", () => {
+    const stale = session("open-stale", {
+      activity: "unknown",
+      terminalAttached: true,
+      activityValidUntil: "2026-09-09T19:30:10.689173Z",
+      hostState: "stale",
+    });
+    stale.session_state.host.observed_at = "2026-09-09T19:29:55.689173Z";
+
+    const fact = (state: ReturnType<typeof buildSessionLedgerState>, label: string) =>
+      state.facts.find((entry) => entry.label === label);
+    const later = buildSessionLedgerState(
+      stale,
+      interaction,
+      Date.parse("2026-09-09T19:45:00.000Z"),
+      true,
+    );
+
+    // The served label once, not the label and the enum behind it; the exact
+    // timestamps stay available on hover.
+    expect(fact(later, "Provider evidence")).toEqual({
+      label: "Provider evidence",
+      value: "Activity unknown; expired 14m ago",
+      title: "2026-09-09T19:30:10.689173Z",
+    });
+    expect(fact(later, "Host")).toEqual({
+      label: "Host",
+      value: "Stopped reporting \u00B7 observed 15m ago",
+      title: "2026-09-09T19:29:55.689173Z",
+    });
+    expect(later.observation).toBe("Host stopped reporting");
+    for (const entry of later.facts) {
+      expect(entry.value).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+    }
+
+    const working = buildSessionLedgerState(
+      session("open-work", {
+        activity: "executing",
+        terminalAttached: true,
+        observedAt: "2026-09-09T19:00:00.000Z",
+        activityValidUntil: "2026-09-09T19:00:20.000Z",
+        hostState: "online",
+      }),
+      interaction,
+      Date.parse("2026-09-09T19:00:08.000Z"),
+      true,
+    );
+
+    // A label that names the tool keeps the activity axis beside it.
+    expect(fact(working, "Provider evidence")?.value).toBe(
+      "Using Shell \u00B7 Running; expires in 12s",
+    );
+    expect(fact(working, "Host")?.value).toBe("Online \u00B7 observed not recorded");
+
+    const idle = buildSessionLedgerState(
+      session("open-idle", { activity: "quiescent", terminalAttached: true }),
+      interaction,
+      0,
+      true,
+    );
+
+    expect(fact(idle, "Provider evidence")).toEqual({
+      label: "Provider evidence",
+      value: "Idle; not bounded",
+      title: undefined,
+    });
+  });
+
   it("keeps an open history-set session recorded when no terminal is attached", () => {
     const state = buildSessionLedgerState(
       session("open-history", { activity: "quiescent" }),
