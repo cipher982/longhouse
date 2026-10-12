@@ -139,6 +139,7 @@ PI_MESSAGE_ARMS = {
     "user": [EMPTY, STRING, "text", "image"],
     "assistant": [STRING, "text", "thinking", "image", "toolCall"],
     "toolResult": [EMPTY, STRING, "text", "image"],
+    "system": [EMPTY, STRING, "text"],
     "custom": [EMPTY, STRING, "text"],
     "custom_message": [EMPTY, STRING, "text"],
     "bashExecution": [EMPTY, STRING, "text"],
@@ -159,26 +160,33 @@ def test_pi_and_omp_catalogs_hold_every_shape_the_parser_has_a_path_for(provider
     blocks = {name for names in PI_MESSAGE_ARMS.values() for name in names} - {STRING, EMPTY}
     assert _arms(PARSER, "extract_pi_message_events") == set(PI_MESSAGE_ARMS) | blocks
 
-    # A user message with no content yields no event. Pi leaves it at that; for OMP a line that yields
-    # nothing is recorded as an unknown record (`extract_omp_events`), so there it stays a finding.
+    # A user message with no content yields no event, and neither does a system message, whatever it
+    # carries: it is the prompt and the tools the model was given. Pi leaves both at that; for OMP a line
+    # that yields nothing is recorded as an unknown record (`extract_omp_events`), so there they stay findings.
     assert "push_omp_record_event(obj, session_id, line_offset, raw_line, true, events)" in _rust_function(PARSER, "extract_omp_events")
-    user_without_content = [] if provider == "pi" else [EMPTY]
+    assert re.search(r'^\s*"system" => \{\}$', _rust_function(PARSER, "extract_pi_message_events"), re.MULTILINE)
+    without_an_event = {"user": [EMPTY], "system": PI_MESSAGE_ARMS["system"]}
     records = [{"type": line_type} for line_type in _record_rows(catalog)]
     for role, names in PI_MESSAGE_ARMS.items():
-        names = [name for name in names if not (role == "user" and name in user_without_content)]
+        names = [name for name in names if provider == "pi" or name not in without_an_event.get(role, [])]
         records += [{"type": "message", "message": {"role": role, "content": _content(combo)}} for combo in _subsets(names)]
     records.append({"type": "message", "message": {"role": "bashExecution", "command": "pwd"}})
     # An assistant message with no content is how a failed request is written.
     records.append({"type": "message", "message": {"role": "assistant", "content": [], "stopReason": "error"}})
     # user 4 (and its empty message for Pi), assistant 16, toolResult 5, the five other roles 3 each,
-    # and the empty assistant message.
-    assert _assert_all_classified(provider, records) == len(_record_rows(catalog)) + 4 + (provider == "pi") + 16 + 5 + 15 + 1
+    # the empty assistant message, and for Pi the three system messages.
+    assert _assert_all_classified(provider, records) == len(_record_rows(catalog)) + 4 + 4 * (provider == "pi") + 16 + 5 + 15 + 1
 
-    # What the parser has no arm for stays a finding.
+    # What the parser has no arm for stays a finding, and for OMP so does a message that yields no event.
     tool = _tool()
     for record in (
-        *({"type": "message", "message": {"role": "user", "content": content}} for content in ([],) if provider == "omp"),
-        {"type": "message", "message": {"role": "system", "content": "prompt sections"}},
+        *(
+            {"type": "message", "message": {"role": role, "content": _content(combo)}}
+            for role, names in without_an_event.items()
+            for combo in _subsets(names)
+            if provider == "omp"
+        ),
+        {"type": "message", "message": {"role": "developer", "content": "instructions"}},
         {"type": "message", "message": {"role": "assistant", "content": [{"type": "text"}, {"type": "video"}]}},
         {"type": "message", "message": {"role": "user", "content": [{"type": "thinking"}]}},
         {"type": "brand_new_line"},

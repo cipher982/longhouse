@@ -50,7 +50,7 @@
   "message/assistant/text": {
    "classification": "transcript:assistant",
    "first_seen_version": "0.1.0",
-   "last_seen_version": "1.0.0",
+   "last_seen_version": "1.1.0",
    "entrypoints": [],
    "keys": [
     "id",
@@ -59,6 +59,7 @@
     "message.content",
     "message.content[].text",
     "message.content[].type",
+    "message.durationMs",
     "message.model",
     "message.provider",
     "message.rawStopReason",
@@ -130,7 +131,7 @@
   "message/assistant/toolCall": {
    "classification": "transcript:assistant_tool",
    "first_seen_version": "0.99.2",
-   "last_seen_version": "0.99.2",
+   "last_seen_version": "1.1.0",
    "entrypoints": [],
    "keys": [
     "id",
@@ -141,6 +142,7 @@
     "message.content[].id",
     "message.content[].name",
     "message.content[].type",
+    "message.durationMs",
     "message.model",
     "message.provider",
     "message.rawStopReason",
@@ -163,6 +165,14 @@
    ],
    "required_keys": ["type", "message.role", "message.content", "message.content[].type", "message.content[].name", "message.content[].id", "message.content[].arguments"]
   },
+  "message/system/string": {
+   "classification": "provider_system:system_prompt",
+   "first_seen_version": "1.1.0",
+   "last_seen_version": "1.1.0",
+   "entrypoints": [],
+   "keys": ["id", "message", "message.content", "message.role", "message.sections", "message.timestamp", "message.toolsAdded", "parentId", "timestamp", "type"],
+   "required_keys": ["type", "message.role"]
+  },
   "message/toolResult/image": {
    "classification": "provider_tool:result_image",
    "first_seen_version": null,
@@ -174,7 +184,7 @@
   "message/toolResult/text": {
    "classification": "provider_tool:result",
    "first_seen_version": "0.99.2",
-   "last_seen_version": "1.0.0",
+   "last_seen_version": "1.1.0",
    "entrypoints": [],
    "keys": [
     "id",
@@ -182,6 +192,7 @@
     "message.content",
     "message.content[].text",
     "message.content[].type",
+    "message.durationMs",
     "message.isError",
     "message.role",
     "message.timestamp",
@@ -204,7 +215,7 @@
   "message/user/text": {
    "classification": "transcript:user",
    "first_seen_version": "0.1.0",
-   "last_seen_version": "1.0.0",
+   "last_seen_version": "1.1.0",
    "entrypoints": [],
    "keys": [
     "id",
@@ -316,7 +327,7 @@
      }
     }
    ],
-   "keys": ["id", "message", "message.api", "message.content", "message.model", "message.provider", "message.rawStopReason", "message.responseId", "message.role", "message.stopReason", "message.thinkingLevel", "message.timestamp", "message.usage", "message.usage.cacheRead", "message.usage.cacheWrite", "message.usage.cost", "message.usage.input", "message.usage.output", "message.usage.reasoning", "message.usage.totalTokens", "parentId", "timestamp", "type", "version"],
+   "keys": ["id", "message", "message.api", "message.content", "message.durationMs", "message.model", "message.provider", "message.rawStopReason", "message.responseId", "message.role", "message.stopReason", "message.thinkingLevel", "message.timestamp", "message.usage", "message.usage.cacheRead", "message.usage.cacheWrite", "message.usage.cost", "message.usage.input", "message.usage.output", "message.usage.reasoning", "message.usage.totalTokens", "parentId", "timestamp", "type", "version"],
    "required_keys": ["type", "message.role", "message.content"]
   },
   {
@@ -345,8 +356,29 @@
      }
     }
    ],
-   "keys": ["id", "message", "message.content", "message.isError", "message.role", "message.timestamp", "message.toolCallId", "message.toolName", "parentId", "timestamp", "type"],
+   "keys": ["id", "message", "message.content", "message.durationMs", "message.isError", "message.role", "message.timestamp", "message.toolCallId", "message.toolName", "parentId", "timestamp", "type"],
    "required_keys": ["type", "message.role", "message.toolCallId", "message.content"]
+  },
+  {
+   "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role system: the system prompt and the tool definitions, no event",
+   "segments": [
+    "message",
+    "system",
+    {
+     "?": {
+      "classification": "provider_system:system_prompt"
+     },
+     "string": {
+      "classification": "provider_system:system_prompt",
+      "keys": []
+     },
+     "text": {
+      "classification": "provider_system:system_prompt"
+     }
+    }
+   ],
+   "keys": ["id", "message", "message.content", "message.role", "message.sections", "message.timestamp", "message.toolsAdded", "parentId", "timestamp", "type"],
+   "required_keys": ["type", "message.role"]
   },
   {
    "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, the roles that are not a turn",

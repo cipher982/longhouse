@@ -3195,6 +3195,13 @@ fn extract_pi_message_events(
                 events,
             );
         }
+        // Pi records what the model was given as a message of its own: the
+        // system prompt (`content`, `sections`) and the tool definitions
+        // (`toolsAdded`), first at the head of the session and again wherever
+        // either changes. That is the provider's state, not something said in
+        // the conversation, so it makes no event. The source line stays
+        // archived, and the next message keeps this line's id as its parent.
+        "system" => {}
         _ => {}
     }
 }
@@ -6921,6 +6928,74 @@ mod tests {
             .events
             .iter()
             .all(|event| event.source_offset < path.metadata().unwrap().len()));
+    }
+
+    #[test]
+    fn pi_system_prompt_record_makes_no_event_and_stays_in_the_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = include_str!("../../tests/fixtures/golden/pi/system_prompt.jsonl");
+        let lines: Vec<&str> = fixture.lines().collect();
+        let path = make_jsonl_file(
+            dir.path(),
+            "2026-10-12T00-00-00-000Z_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jsonl",
+            &lines,
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+
+        // The conversation is what it was before Pi recorded its system prompt:
+        // the prompt, the tool call and its result, and the reply.
+        let raw_types: Vec<&str> = result
+            .events
+            .iter()
+            .map(|event| event.raw_type.as_str())
+            .collect();
+        assert_eq!(
+            raw_types,
+            [
+                "pi_model_change",
+                "pi_thinking_level_change",
+                "pi_user",
+                "pi_tool_call",
+                "pi_tool_result",
+                "pi_assistant"
+            ]
+        );
+        // Nothing of the system prompt or the tool definitions is served.
+        assert!(result
+            .events
+            .iter()
+            .all(|event| event.uuid != "system-0001"));
+        for event in &result.events {
+            for text in [
+                event.content_text.as_deref(),
+                event.tool_output_text.as_deref(),
+                event.raw_line.as_deref(),
+            ] {
+                assert!(!text.unwrap_or("").contains("PI_SYSTEM"));
+            }
+        }
+        // The first prompt keeps the parent Pi gave it, which is the system line.
+        let prompt = result
+            .events
+            .iter()
+            .find(|event| event.raw_type == "pi_user")
+            .unwrap();
+        assert_eq!(prompt.role, Role::User);
+        assert_eq!(prompt.parent_uuid.as_deref(), Some("system-0001"));
+        // The line itself is archived with every other line of the session.
+        assert_eq!(result.source_lines.len(), lines.len());
+        assert!(result
+            .source_lines
+            .iter()
+            .any(|line| line.raw_line.contains("PI_SYSTEM_PREAMBLE")));
+        // A message's own duration does not disturb what is read beside it.
+        let usage: Vec<_> = result
+            .provider_facts
+            .iter()
+            .filter(|fact| fact.kind == "turn.usage")
+            .collect();
+        assert_eq!(usage.last().unwrap().payload["output_tokens"], 5);
     }
 
     #[test]
