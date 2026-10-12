@@ -58,6 +58,9 @@ REGISTRATION = ProducerRegistration(
     # follow-up cell rests on them being a pair.
     # 26: the row in which OMP records the turn it aborted is in the abort's record (its id, where it is in the
     # file, its stop reason), and the abort cell rests on it.
+    # 27: an idle send records its verdict (taken, held by OMP's own file, answered), which the send control reads;
+    # a control whose run ends at its target (send, terminate) reports the target and its preconditions.
+    # 28: the tool taxonomy's record names the retained file it was counted in.
     scenario_revision=28,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),

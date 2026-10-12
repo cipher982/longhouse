@@ -71,6 +71,9 @@ REGISTRATION = ProducerRegistration(
     # 24: the tool taxonomy's record says how far into the session file it was read.
     # 25: the aborted row is recorded as the abort's `native_abort`, the name it has for both providers.
     # 26: a run that failed reports the verdicts of the steps it reached, a failing one as a finding, as OMP's does.
+    # 27: an idle send records its verdict (taken, held by Pi's own file, answered), which the send control reads;
+    # a control whose run ends at its target (send, terminate) reports the target and its preconditions.
+    # 28: the tool taxonomy's record names the retained file it was counted in.
     scenario_revision=28,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
