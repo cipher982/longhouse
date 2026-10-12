@@ -1463,12 +1463,7 @@ def _native_settlement(
     return {
         "status": (
             "pass"
-            if agent_end_terminal
-            and native_archive_bound
-            and bool(assistant_rows)
-            and agent_end_terminal
-            and channel_bound
-            and not malformed_source
+            if agent_end_terminal and native_archive_bound and bool(assistant_rows) and channel_bound and not malformed_source
             else "fail"
         ),
         "agent_end_terminal": agent_end_terminal,
