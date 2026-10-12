@@ -11,7 +11,6 @@ PROFILE = "cursor_release_identity_v1"
 SCENARIO_ID = "cursor_release_identity"
 ASSERTIONS = identity.ASSERTIONS
 OBSERVED_INSTALL_PROFILE = "cursor_observed_install_v1"
-OBSERVED_INSTALL_MODEL_LANE_PROFILE = "cursor_observed_install_grok_v1"
 OBSERVED_INSTALL_SCENARIO_ID = "cursor_observed_install"
 # Revision 2: Gate 0 fails an identity scenario whose launch turn the provider
 # did not complete, and the input it binds to the universal column is an
@@ -35,14 +34,6 @@ _PROFILE = identity.IdentityProfile(
 OBSERVED_INSTALL_IDENTITY = identity.IdentityProfile(
     provider="cursor",
     profile=OBSERVED_INSTALL_PROFILE,
-    scenario_id=OBSERVED_INSTALL_SCENARIO_ID,
-    version_line=VERSION_LINE,
-    oracle_source=Path(__file__),
-    version_grammar=identity.CALENDAR_BUILD,
-)
-OBSERVED_INSTALL_MODEL_LANE_IDENTITY = identity.IdentityProfile(
-    provider="cursor",
-    profile=OBSERVED_INSTALL_MODEL_LANE_PROFILE,
     scenario_id=OBSERVED_INSTALL_SCENARIO_ID,
     version_line=VERSION_LINE,
     oracle_source=Path(__file__),

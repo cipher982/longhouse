@@ -114,7 +114,6 @@ FULL_COLUMN_RELEASE_PROFILES = frozenset(
         "opencode_server_contract_v1",
         "antigravity_hook_inbox_v1",
         "cursor_observed_install_v1",
-        "cursor_observed_install_grok_v1",
     }
 )
 
@@ -142,7 +141,7 @@ DEPLOYED_RELEASE_LANE_PROFILES: dict[str, tuple[str, ...]] = {
     "claude": ("claude_real_print_v1",),
     "opencode": ("opencode_server_contract_v1",),
     "antigravity": ("antigravity_hook_inbox_v1",),
-    "cursor": ("cursor_observed_install_v1", "cursor_observed_install_grok_v1"),
+    "cursor": ("cursor_observed_install_v1",),
     "pi": ("pi_print_v1", "pi_console_tool_v1", "pi_helm_v1"),
     "omp": ("omp_print_v1", "omp_helm_v1"),
 }
@@ -290,7 +289,6 @@ CREDENTIAL_REQUIREMENT_BY_PROFILE: dict[str, tuple[str, ...]] = {
     "opencode_server_contract_v1": ("OPENROUTER_API_KEY", "LONGHOUSE_OPENCODE_LIVE", "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL"),
     "antigravity_hook_inbox_v1": ("LONGHOUSE_AGY_LIVE",),
     "cursor_observed_install_v1": ("CURSOR_API_KEY", "CURSOR_MODEL", "LONGHOUSE_CLI_BIN", "LONGHOUSE_ENGINE_BIN"),
-    "cursor_observed_install_grok_v1": ("CURSOR_API_KEY", "CURSOR_MODEL", "LONGHOUSE_CLI_BIN", "LONGHOUSE_ENGINE_BIN"),
     "pi_print_v1": ("OPENROUTER_API_KEY", "LONGHOUSE_PI_LIVE", "LONGHOUSE_PI_QUALIFICATION_MODEL"),
     "pi_console_tool_v1": (
         "OPENROUTER_API_KEY",

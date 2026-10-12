@@ -788,7 +788,6 @@ def _cursor_harness(monkeypatch, *, live: dict[str, object], interaction: dict[s
 
 
 _CURSOR_ASSERTION = "cursor_observed_install_contract_preserved"
-_CURSOR_PROFILES = [cursor_release_identity.OBSERVED_INSTALL_PROFILE, cursor_release_identity.OBSERVED_INSTALL_MODEL_LANE_PROFILE]
 _GATE0_ERRORED = {
     "status": "failed",
     "failure_code": "cursor_turn_ended_in_error",
@@ -851,13 +850,12 @@ def test_cursor_observed_install_executor_keeps_profile_verdict_separate_from_fu
     assert assertions[0].reasons == ({"stage": "interaction_semantics", "failure_code": "interaction_native_raw_evidence_missing"},)
 
 
-@pytest.mark.parametrize("profile", _CURSOR_PROFILES)
 def test_cursor_observed_install_reports_a_failed_gate0_with_its_code_and_scenario(
     tmp_path: Path,
     monkeypatch,
-    profile: str,
 ) -> None:
-    """Both Cursor profiles run the same executor, and a failed Gate 0 is the reported cause."""
+    """The registered Cursor profile reports Gate 0's code as the failure cause."""
+    profile = cursor_release_identity.OBSERVED_INSTALL_PROFILE
 
     request, _binary = _cursor_request(tmp_path, profile=profile)
     _cursor_gate0(tmp_path, monkeypatch, **_GATE0_ERRORED)
@@ -896,7 +894,7 @@ def test_cursor_gate0_failure_is_not_hidden_by_a_blocked_probe(tmp_path: Path, m
 
 
 def test_cursor_blocked_probe_carries_the_probes_own_reason(tmp_path: Path, monkeypatch) -> None:
-    request, binary = _cursor_request(tmp_path, profile=cursor_release_identity.OBSERVED_INSTALL_MODEL_LANE_PROFILE)
+    request, binary = _cursor_request(tmp_path)
     _cursor_gate0(tmp_path, monkeypatch, status="passed")
     _cursor_harness(monkeypatch, live={"status": "pass"}, interaction=_PROBE_MISMATCH)
 

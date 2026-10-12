@@ -380,12 +380,9 @@ def test_cursor_is_reachable_through_the_shared_qualification_dispatcher() -> No
     assert ("cursor", cursor_release_identity.PROFILE) in _PROFILES
 
 
-@pytest.mark.parametrize(
-    "profile",
-    [cursor_release_identity.OBSERVED_INSTALL_PROFILE, cursor_release_identity.OBSERVED_INSTALL_MODEL_LANE_PROFILE],
-)
-def test_cursor_observed_install_profiles_have_no_identity_only_runner(tmp_path: Path, profile: str) -> None:
+def test_cursor_observed_install_profile_has_no_identity_only_runner(tmp_path: Path) -> None:
     """An observed installation is qualified by the harness bridge or not at all."""
+    profile = cursor_release_identity.OBSERVED_INSTALL_PROFILE
     from zerg.qa import provider_harness_qualification
 
     assert ("cursor", profile) in provider_harness_qualification._PROFILES  # noqa: SLF001
