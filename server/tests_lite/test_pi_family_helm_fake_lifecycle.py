@@ -6,13 +6,9 @@ The fake (``_pi_family_helm_fake``) stands at the producers' process boundary: t
 
 from __future__ import annotations
 
-import contextlib
 import copy
 import importlib
 import json
-import shutil
-import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -20,9 +16,6 @@ import pytest
 from tests_lite import _pi_family_helm_fake as fake
 from tests_lite._factory_envelope import assert_result_conforms
 from zerg.qa import omp_background_producer
-from zerg.qa.live_kit import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.live_kit import RUNTIME_API_URL_ENV
-from zerg.qa.live_session_toolkit import QUALIFICATION_HOME_ENV
 from zerg.qa.openrouter_routing import OPENROUTER_QUALIFICATION_ROUTING
 
 # A whole lifecycle of real waits and process exits; the suite's 60 s guard is for a hang, not for this.
@@ -32,35 +25,10 @@ _REPO = Path(__file__).resolve().parents[2]
 _TOKEN = "fixture-agents-token"
 
 
-@contextlib.contextmanager
-def _fake_longhouse(directory: Path, monkeypatch, **host_faults):
-    """A fake Longhouse and the one directory a producer may isolate itself in.
-
-    The directory is short and under /tmp because a launcher's socket path has to fit a unix socket address.
-    It and every fake process are gone when the block ends, whatever happened in it, and that is checked.
-    """
-
-    host = fake.FakeRuntimeHost(_TOKEN, **host_faults)
-    cli = directory / "longhouse"
-    cli.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake.__file__}" "$@"\n', encoding="utf-8")
-    cli.chmod(0o755)
-    isolation = Path(tempfile.mkdtemp(prefix="lhq-", dir="/tmp"))
-    monkeypatch.setenv(RUNTIME_API_URL_ENV, host.url)
-    monkeypatch.setenv(RUNTIME_AGENTS_TOKEN_ENV, _TOKEN)
-    monkeypatch.setenv(QUALIFICATION_HOME_ENV, str(isolation))
-    monkeypatch.delenv(fake.FAULT_ENV, raising=False)
-    try:
-        yield cli, isolation
-    finally:
-        left_running = host.close()
-        shutil.rmtree(isolation, ignore_errors=True)
-    assert not left_running, f"fake processes outlived the run and were killed: {left_running}"
-    assert not isolation.exists()
-
-
 @pytest.fixture
 def longhouse(tmp_path, monkeypatch):
-    with _fake_longhouse(tmp_path, monkeypatch) as made:
+    monkeypatch.delenv(fake.FAULT_ENV, raising=False)
+    with fake.longhouse(tmp_path, monkeypatch.setenv) as made:
         yield made
 
 
@@ -72,28 +40,21 @@ def whole(tmp_path_factory):
 
     def run(provider: str) -> tuple[int, dict, Path, list[Path]]:
         if provider not in runs:
-            directory = tmp_path_factory.mktemp(provider)
-            # The first control request through the Runtime Host is refused once as a reconnecting channel.
-            faults = {"reconnecting": 1}
-            with pytest.MonkeyPatch.context() as monkeypatch, _fake_longhouse(directory, monkeypatch, **faults) as (cli, isolation):
-                runs[provider] = (*_run(provider, cli, directory, monkeypatch), list(isolation.iterdir()))
+            with pytest.MonkeyPatch.context() as monkeypatch:
+                monkeypatch.delenv(fake.FAULT_ENV, raising=False)
+                # The first control request through the Runtime Host is refused once as a reconnecting channel.
+                code, root, left = fake.run_lifecycle(provider, tmp_path_factory.mktemp(provider), monkeypatch.setenv, reconnecting=1)
+            runs[provider] = (code, json.loads((root / "result.json").read_text(encoding="utf-8")), root, left)
         return runs[provider]
 
     return run
 
 
-def _arguments(provider: str, module, cli: Path, root: Path) -> list[str]:
-    arguments = ["--variant", module.PRODUCER.variants[0], "--evidence-root", str(root), "--repo-root", str(_REPO)]
-    arguments += ["--engine", str(cli), "--longhouse-cli", str(cli), "--provider-bin", str(cli), "--provider-version", "0.0.0"]
-    arguments += ["--model", "openrouter/fake-model", "--provider", provider, "--platform", "linux", "--architecture", "x86_64"]
-    return [*arguments, "--evidence-class", "live_token", "--credential-binding", "runtime_host_control"]
-
-
 def _run(provider: str, cli: Path, tmp_path: Path, monkeypatch) -> tuple[int, dict, Path]:
     module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
-    monkeypatch.setenv(f"LONGHOUSE_{provider.upper()}_LIVE", "1")
+    monkeypatch.setenv(module.FAMILY.live_env, "1")
     root = tmp_path / "evidence"
-    code = module.main(_arguments(provider, module, cli, root))
+    code = module.main(fake.producer_arguments(provider, cli, root))
     return code, json.loads((root / "result.json").read_text(encoding="utf-8")), root
 
 
@@ -253,8 +214,8 @@ def test_a_failing_verdict_reached_before_a_late_failure_is_kept(provider, longh
 @pytest.mark.parametrize("provider", ["omp", "pi"])
 def test_a_run_that_fails_only_in_its_cleanup_keeps_everything_it_recorded(provider, tmp_path, monkeypatch, capsys):
     # Every step holds, and the session cannot be shown retired afterwards.
-    with _fake_longhouse(tmp_path, monkeypatch, never_hides=True) as (cli, _isolation):
-        code, result, root = _run(provider, cli, tmp_path, monkeypatch)
+    code, root, _left = fake.run_lifecycle(provider, tmp_path, monkeypatch.setenv, never_hides=True)
+    result = json.loads((root / "result.json").read_text(encoding="utf-8"))
     capsys.readouterr()
 
     cleanup = json.loads((root / "cleanup-receipt.json").read_text(encoding="utf-8"))
@@ -277,7 +238,7 @@ def test_the_background_scope_ends_after_its_first_turn(longhouse, tmp_path, mon
     cli, _isolation = longhouse
     module = importlib.import_module("zerg.qa.omp_helm_lifecycle")
     monkeypatch.setenv("LONGHOUSE_OMP_LIVE", "1")
-    args = module.PRODUCER.parser().parse_args(_arguments("omp", module, cli, tmp_path / "evidence"))
+    args = module.PRODUCER.parser().parse_args(fake.producer_arguments("omp", cli, tmp_path / "evidence"))
     args.background_prompt = "Start one background job and wait for it."
     result = module.run_omp_helm(args)
     capsys.readouterr()

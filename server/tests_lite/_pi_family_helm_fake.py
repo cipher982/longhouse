@@ -10,19 +10,23 @@ from, so it can be checked there. Run as a script it is both ``longhouse`` and `
 
 from __future__ import annotations
 
+import contextlib
 import http.server
 import json
 import os
 import queue
 import re
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
 import uuid
+from collections.abc import Callable
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -488,6 +492,12 @@ def main(argv: list[str]) -> int:
     if command == "local-health":
         print(json.dumps({"status": "ok", "fake": True}))
         return 0
+    if command == "lifecycle":
+        # `lifecycle <provider> <directory>`: one whole run, for a caller outside this repository's tests.
+        with contextlib.redirect_stdout(sys.stderr):
+            code, root, left = run_lifecycle(rest[0], Path(rest[1]))
+        print(json.dumps({"exit_code": code, "evidence_root": str(root), "left_isolated": [str(path) for path in left]}))
+        return 0
     print(f"the fake longhouse has no command {command!r}", file=sys.stderr)
     return 2
 
@@ -680,6 +690,73 @@ class FakeRuntimeHost:
             except ProcessLookupError:
                 pass
         return left
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# One producer run against the fake, for a test here or in the factory's own repository.
+
+
+@contextlib.contextmanager
+def longhouse(directory: Path, setenv: Callable[[str, str], object] = os.environ.__setitem__, **host_faults: Any):
+    """A fake Longhouse for one producer run: the executable to pass as CLI and engine, and the run's isolation.
+
+    The isolation is short and under /tmp because a launcher's socket path has to fit a unix socket address.
+    It and every fake process are gone when the block ends, whatever happened in it, and that is checked.
+    """
+
+    from zerg.qa.live_kit import RUNTIME_AGENTS_TOKEN_ENV
+    from zerg.qa.live_kit import RUNTIME_API_URL_ENV
+    from zerg.qa.live_session_toolkit import QUALIFICATION_HOME_ENV
+
+    host = FakeRuntimeHost("fixture-agents-token", **host_faults)
+    cli = directory / "longhouse"
+    cli.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{__file__}" "$@"\n', encoding="utf-8")
+    cli.chmod(0o755)
+    isolation = Path(tempfile.mkdtemp(prefix="lhq-", dir="/tmp"))
+    setenv(RUNTIME_API_URL_ENV, host.url)
+    setenv(RUNTIME_AGENTS_TOKEN_ENV, host.token)
+    setenv(QUALIFICATION_HOME_ENV, str(isolation))
+    try:
+        yield cli, isolation
+    finally:
+        left_running = host.close()
+        shutil.rmtree(isolation, ignore_errors=True)
+    if left_running or isolation.exists():
+        raise RuntimeError(f"the run left fake processes {left_running} or its isolation {isolation} behind")
+
+
+def producer_arguments(provider: str, cli: Path, root: Path) -> list[str]:
+    """The arguments the factory passes a Helm producer for its first cell (control-plane ``_provider_producer_argv``)."""
+
+    import importlib
+
+    module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
+    arguments = [
+        "--variant",
+        module.PRODUCER.variants[0],
+        "--evidence-root",
+        str(root),
+        "--repo-root",
+        str(Path(__file__).resolve().parents[2]),
+    ]
+    arguments += ["--engine", str(cli), "--longhouse-cli", str(cli), "--provider-bin", str(cli), "--provider-version", "0.0.0"]
+    arguments += ["--model", "openrouter/fake-model", "--provider", provider, "--platform", "linux", "--architecture", "x86_64"]
+    return [*arguments, "--evidence-class", "live_token", "--credential-binding", "runtime_host_control"]
+
+
+def run_lifecycle(
+    provider: str, directory: Path, setenv: Callable[[str, str], object] = os.environ.__setitem__, **host_faults: Any
+) -> tuple[int, Path, list[Path]]:
+    """One lifecycle through the provider's real ``main``: its exit code, its evidence root, what it left isolated."""
+
+    import importlib
+
+    module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
+    root = directory / "evidence"
+    with longhouse(directory, setenv, **host_faults) as (cli, isolation):
+        setenv(module.FAMILY.live_env, "1")
+        code = module.main(producer_arguments(provider, cli, root))
+        return code, root, list(isolation.iterdir())
 
 
 if __name__ == "__main__":
