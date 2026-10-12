@@ -966,7 +966,6 @@ def _result(provider: str, scenario: str, observation: dict[str, Any]) -> dict[s
         "provider": provider,
         "scenario": scenario,
         "evidence_class": "hermetic",
-        "scenario_revision": 1,
         "observation": observation,
         "assertions": assertions,
     }

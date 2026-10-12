@@ -3954,6 +3954,7 @@ def test_antigravity_policy_proof_has_no_registration_or_spawn(tmp_path: Path) -
     assert source["reattach"] is False
     assert source["resume_capability"]["disposition"] == "policy_disabled"
     assert source["scenario_result"]["status"] == "pass"
+    assert source["scenario_result"]["scenario_revision"] == result["scenario_revision"]
     assert json.loads((evidence / "cleanup-receipt.json").read_text())["orphan_count"] == 0
 
 

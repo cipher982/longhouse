@@ -87,7 +87,7 @@ def run_policy(args: argparse.Namespace) -> dict[str, object]:
             "provider": "antigravity",
             "scenario": "resume_unsupported",
             "evidence_class": "hermetic",
-            "scenario_revision": 1,
+            "scenario_revision": REGISTRATION.scenario_revision,
             "observation": observation,
             "assertions": assertions,
         }

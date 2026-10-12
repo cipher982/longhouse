@@ -415,7 +415,6 @@ def test_provider_generic_resume_run_preserves_factory_failure_observation(monke
     partial = {
         "status": "fail",
         "failure_code": "late_resume_boundary",
-        "scenario_revision": 4,
         "observation": {"dispatch_started": True, "resume_boundary": "provider output failed"},
         "assertions": {"resume_contract": False},
     }
@@ -423,6 +422,7 @@ def test_provider_generic_resume_run_preserves_factory_failure_observation(monke
     result = provider_generic_resume.run_generic_resume(provider="codex", scenario_id=scenario_id, root=root)
     assert result["status"] == "fail"
     assert result["failure_code"] == "late_resume_boundary"
+    assert result["scenario_revision"] == provider_generic_resume.REGISTRATION.scenario_revision
     assert result["observation"]["dispatch_started"] is True
     assert result["observation"]["generic_cleanup_verified"] is True
     assert _json(root / "generic-observation.json")["resume_boundary"] == "provider output failed"

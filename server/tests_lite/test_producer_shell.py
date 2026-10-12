@@ -8,6 +8,7 @@ and a typed failure made from that identity go through ``result_envelope_failure
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import importlib
 import json
@@ -38,6 +39,29 @@ _SHELL_BUILT = sorted(f"zerg.qa.{path.stem}" for path in _QA.glob("*.py") if "\n
 
 def test_every_registered_producer_is_built_in_the_shell():
     assert set(_MANIFEST) <= set(_SHELL_BUILT)
+
+
+def test_a_revision_is_a_number_only_where_a_registration_declares_it():
+    # A result, or a receipt embedded in one, that writes its own number drifts from the registration at the next bump.
+    literal: list[str] = []
+    for path in sorted(_QA.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        declared = {
+            id(node)
+            for call in ast.walk(tree)
+            if isinstance(call, ast.Call) and getattr(call.func, "id", None) == "ProducerRegistration"
+            for node in ast.walk(call)
+        }
+        written = [keyword.value for keyword in ast.walk(tree) if isinstance(keyword, ast.keyword) and keyword.arg == "scenario_revision"]
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Dict):
+                written += [value for key, value in zip(node.keys, node.values) if getattr(key, "value", None) == "scenario_revision"]
+        literal += [
+            f"{path.name}:{value.lineno}"
+            for value in written
+            if id(value) not in declared and any(isinstance(leaf, ast.Constant) and type(leaf.value) is int for leaf in ast.walk(value))
+        ]
+    assert not literal, f"a scenario revision written as a number outside a registration: {literal}"
 
 
 def _commands(registration: ProducerRegistration) -> list[dict]:
