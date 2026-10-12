@@ -132,7 +132,6 @@ class Family:
     terminate_proves_owners_dead: bool = False  # a terminate is over when the two recorded processes stopped, not when the state says so
     rebind_command: str = "send"  # how the first input after `/new` is sent: as an input, or as "send_live"
     identity_at_launch: bool = False  # control identity is held at launch, at cold resume and at the end, not only after a rebind
-    converges_each_turn: bool = False  # every turn is shown served, not only the first and the last
     native_abort_row: bool = False  # an abort is proven by the row the provider records, where there is no channel terminal
     binds_resume_prompt: bool = False  # the resume prompt is found as one row of the restored session
     retirement_claims: bool = False  # each run's retirement is claimed and waited for as it ends
@@ -2410,7 +2409,7 @@ class Lifecycle:
         record["marker_wait"]["status"] = "answered"
         record.update(marker_row=row, evidence=evidence)
         # Serving a reply does not depend on how the prompt was sent: the local command's turn is not shown served again.
-        if self.f.converges_each_turn and not local:
+        if not local:
             record["served"] = self.converge("send", marker, row, flush=self.flush("send"))
 
     def follow_up(self) -> None:
@@ -2436,8 +2435,7 @@ class Lifecycle:
             "marker_row": row,
             "evidence": evidence,
         }
-        if self.f.converges_each_turn:
-            record["served"] = self.converge("follow_up", marker, row)
+        record["served"] = self.converge("follow_up", marker, row)
 
     def steer(self, *, local: bool = False) -> None:
         f = self.f
@@ -2470,7 +2468,7 @@ class Lifecycle:
             "marker_row": row,
             "evidence": evidence,
         }
-        if f.converges_each_turn and not local:
+        if not local:
             record["served"] = self.converge("steer", marker, row)
 
     def abort(self, *, local: bool = False) -> None:
@@ -2641,8 +2639,7 @@ class Lifecycle:
             "context_evidence": seed,
             "control_identity": identity,
         }
-        if f.converges_each_turn:
-            record["served"] = self.converge("replacement", marker, row, flush=self.flush("replacement"))
+        record["served"] = self.converge("replacement", marker, row, flush=self.flush("replacement"))
 
     def _stopped(self, state: Mapping[str, Any], terminal: ProviderPtySession, *, owner: str, tolerate: bool = False) -> dict[str, Any]:
         """What proves the owner stopped after a terminate, as this lifecycle proves it today.
@@ -2708,8 +2705,8 @@ class Lifecycle:
             _record_retirement_claim_terminal(
                 self.api_url, self.token, self.retirement_claims, session_id=self.session_id, run_id=str(state.get("run_id") or "")
             )
-        # A lifecycle that shows every turn served ships the terminated session before it resumes it.
-        if f.converges_each_turn and self.flush("before-resume").get("status") != "pass":
+        # Every turn is shown served, so the terminated session is shipped before it is resumed.
+        if self.flush("before-resume").get("status") != "pass":
             raise RuntimeError(f"{f.name} Helm termination was not flushed before cold resume")
 
     def cold_resume(self) -> None:
@@ -2795,8 +2792,7 @@ class Lifecycle:
                 )
             )
         record["served"] = self.converge("resume", marker, row, flush=self.flush("resume"), alongside=(phrase,))
-        if f.converges_each_turn:
-            record["context_served"] = self.converge("resume_context", phrase, record["context_row"], recalled=True)
+        record["context_served"] = self.converge("resume_context", phrase, record["context_row"], recalled=True)
         final = self.state
         if f.identity_at_launch:
             final = self.wait_state(

@@ -52,7 +52,9 @@ REGISTRATION = ProducerRegistration(
     # 22: a run that held every assertion over a changing evidence tree is a typed failure.
     # 23: the lifecycle is the Pi family's one engine, and its evidence the family's one shape; an exited
     # process counts as stopped before its parent collects it (live_kit.pid_dead).
-    scenario_revision=23,
+    # 24: every turn is shown served by the Runtime Host, not only the first and the last: the send, the
+    # follow-up, the steer, the replacement and the recalled phrase each rest on their own.
+    scenario_revision=24,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -155,6 +157,11 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
         found = _mapping(record.get(evidence))
         return found.get("native_source_bound") is True and found.get("marker_count") == 1
 
+    def served(turn: str) -> bool:
+        """The Runtime Host served that turn's reply as the provider wrote it."""
+
+        return _mapping(convergence.get(turn)).get("status") == "pass"
+
     cleanup_ok = helm._helm_cleanup_ready(_mapping(observation.get("cleanup")))
     channel = _mapping(observation.get("channel_binding"))
     settlement = _mapping(observation.get("settlement"))
@@ -189,18 +196,20 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             )
             and _mapping(observation.get("shipper")).get("started") is True
             # The first turn and the last are served: the flush shipped and the Runtime Host converged on each.
-            and all(_mapping(convergence.get(turn)).get("status") == "pass" for turn in ("launch", "resume"))
+            and served("launch")
+            and served("resume")
             and helm._runtime_control_identity_is_complete(observation.get("control_identity"))
             and all(_mapping(records[name].get("command")).get("transport") == "runtime_host_agents_api" for name in _HOST_CONTROLS)
             and settlement_ok
         ),
-        "omp_helm_send_idle": ack(send) and native(send),
+        "omp_helm_send_idle": ack(send) and native(send) and served("send"),
         "omp_helm_follow_up_native": (
             _mapping(follow_up.get("active_state")).get("phase") in {"running", "thinking"}
             and ack(follow_up, "active_command", "active_state")
             and follow_up.get("queued_not_sent") is True
             and ack(follow_up)
             and native(follow_up)
+            and served("follow_up")
         ),
         "omp_helm_steer_active": (
             ack(steer, "active_command", "active_state")
@@ -209,6 +218,7 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             and _mapping(observation.get("steer_turn_verdict")).get("passed") is True
             and steer_state.get("phase") in {"running", "thinking"}
             and _mapping(steer.get("evidence")).get("native_session_id") == steer_state.get("native_session_id")
+            and served("steer")
         ),
         "omp_helm_abort_native": (
             _mapping(abort.get("command")).get("accepted") is True
@@ -234,6 +244,7 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             and _mapping(resume.get("agent_end")).get("type") == "agent_end"
             and resume_terminal.get("channel_source_bound") is True
             and resume_terminal.get("terminal") is True
+            and served("resume_context")
         ),
         "omp_helm_stale_owner_refused": (
             _mapping(stale.get("second_launcher")).get("owner_refusal_observed") is True
@@ -245,6 +256,7 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             and bool(_mapping(replacement.get("state")).get("native_session_id"))
             and _mapping(replacement.get("state")).get("native_session_id") != _mapping(replacement.get("before")).get("native_session_id")
             and native(replacement)
+            and served("replacement")
         ),
     }
 

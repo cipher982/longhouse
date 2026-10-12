@@ -121,6 +121,12 @@ _BROKEN = [
     ("omp", "stale_owner_refused", "controls.stale_owner.error_code", "bad_request"),
     ("omp", "stale_owner_refused", "controls.stale_owner.second_launcher.owner_refusal_observed", False),
     ("omp", "native_replacement_bound", "controls.replacement.evidence.native_source_bound", False),
+    # Every turn is shown served, and each cell rests on its own turn's.
+    ("omp", "send_idle", "convergence.send.status", "unproven"),
+    ("omp", "follow_up_native", "convergence.follow_up.status", "unproven"),
+    ("omp", "steer_active", "convergence.steer.status", "unproven"),
+    ("omp", "native_replacement_bound", "convergence.replacement.status", "unproven"),
+    ("omp", "cold_resume_exact_file", "convergence.resume_context.status", "unproven"),
     ("pi", "launch_registration", "convergence.launch.served_controls", False),
     ("pi", "launch_registration", "shipper.machine_name", ""),
     # Control is held to the owner's lease when the owner starts, not only after a rebind.

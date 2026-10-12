@@ -410,7 +410,6 @@ FAMILY = Family(
     identity_at_launch=True,
     terminate_proves_owners_dead=True,
     rebind_command="send_live",
-    converges_each_turn=True,
     native_abort_row=True,
     local_health=True,
     records_misses=True,
