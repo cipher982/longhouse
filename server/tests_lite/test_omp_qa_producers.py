@@ -948,15 +948,13 @@ def test_omp_runtime_control_retries_machine_agent_reconnect(monkeypatch) -> Non
     monkeypatch.setattr("urllib.request.urlopen", _urlopen)
     monkeypatch.setattr(helm.time, "sleep", lambda _seconds: None)
 
-    response = helm._runtime_post(
-        "https://runtime.test",
-        "agent-token",
-        "/api/agents/sessions/session-1/input",
-        {"text": "hello"},
-    )
+    retried: list[dict[str, object]] = []
+    response = helm._runtime_post("https://runtime.test", "agent-token", "/api/agents/sessions/session-1/input", {"text": "hello"}, retried)
 
     assert response == {"outcome": "sent"}
     assert attempts == 3
+    # Each refusal it waited out is kept: a channel that needed three tries is not one that took the command at once.
+    assert retried == [{"http_status": 409, "detail": '{"detail":"no live Longhouse control channel"}'}] * 2
 
 
 def test_omp_channel_ack_binds_real_runtime_input_response_to_channel_state() -> None:

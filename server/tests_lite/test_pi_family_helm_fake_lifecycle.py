@@ -33,14 +33,14 @@ _TOKEN = "fixture-agents-token"
 
 
 @contextlib.contextmanager
-def _fake_longhouse(directory: Path, monkeypatch):
+def _fake_longhouse(directory: Path, monkeypatch, **host_faults):
     """A fake Longhouse and the one directory a producer may isolate itself in.
 
     The directory is short and under /tmp because a launcher's socket path has to fit a unix socket address.
     It and every fake process are gone when the block ends, whatever happened in it, and that is checked.
     """
 
-    host = fake.FakeRuntimeHost(_TOKEN)
+    host = fake.FakeRuntimeHost(_TOKEN, **host_faults)
     cli = directory / "longhouse"
     cli.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake.__file__}" "$@"\n', encoding="utf-8")
     cli.chmod(0o755)
@@ -73,7 +73,9 @@ def whole(tmp_path_factory):
     def run(provider: str) -> tuple[int, dict, Path, list[Path]]:
         if provider not in runs:
             directory = tmp_path_factory.mktemp(provider)
-            with pytest.MonkeyPatch.context() as monkeypatch, _fake_longhouse(directory, monkeypatch) as (cli, isolation):
+            # The first control request through the Runtime Host is refused once as a reconnecting channel.
+            faults = {"reconnecting": 1}
+            with pytest.MonkeyPatch.context() as monkeypatch, _fake_longhouse(directory, monkeypatch, **faults) as (cli, isolation):
                 runs[provider] = (*_run(provider, cli, directory, monkeypatch), list(isolation.iterdir()))
         return runs[provider]
 
@@ -108,6 +110,15 @@ def test_a_whole_lifecycle_holds_every_cell(provider, whole):
     assert json.loads((root / "cleanup-receipt.json").read_text(encoding="utf-8"))["status"] == "pass"
     # The producer removed its own isolation; the fixture had nothing to remove.
     assert left_isolated == []
+    # The one refusal the first host request waited out is in that control's record, and nowhere else.
+    retries = {
+        name: record["command"]["retries"]["count"]
+        for name, record in result["observation"]["controls"].items()
+        if isinstance(record.get("command"), dict) and "retries" in record["command"]
+    }
+    first = "send" if provider == "omp" else "follow_up"
+    assert retries[first] == 1 and sum(retries.values()) == 1
+    assert result["observation"]["controls"][first]["command"]["retries"]["refused_with"]["http_status"] == 409
     if module.FAMILY.reached is not None:
         # Every record a cell's step is proven reached by is one the run wrote.
         assert set(module.FAMILY.reached) == set(module.ASSERTIONS)

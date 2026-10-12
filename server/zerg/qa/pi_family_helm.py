@@ -1549,7 +1549,11 @@ def _control_channel_reconnecting(status: int, detail: str) -> bool:
     )
 
 
-def _runtime_post(api_url: str, token: str, path: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _runtime_post(
+    api_url: str, token: str, path: str, payload: Mapping[str, Any] | None = None, retried: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """One control request. Each refusal it retried on (the control channel reconnecting) is appended to ``retried``."""
+
     body = None if payload is None else json.dumps(dict(payload)).encode("utf-8")
     headers = {
         "X-Agents-Token": token,
@@ -1575,6 +1579,8 @@ def _runtime_post(api_url: str, token: str, path: str, payload: Mapping[str, Any
             # to re-register; do not mistake that bounded reconnect window for
             # a failed provider control path.
             if _control_channel_reconnecting(exc.code, detail) and attempt < 59:
+                if retried is not None:
+                    retried.append({"http_status": exc.code, "detail": detail[:300]})
                 time.sleep(0.5)
                 continue
             raise RuntimeHostError(exc.code, detail[:500]) from exc
@@ -1614,7 +1620,8 @@ def _host_control(api_url: str, token: str, family: Family, command: str, sessio
     else:
         raise RuntimeError(f"unsupported {family.name} Helm control command: {command}")
 
-    response = _runtime_post(api_url, token, path, payload)
+    retried: list[dict[str, Any]] = []
+    response = _runtime_post(api_url, token, path, payload, retried)
     accepted = {
         "send": response.get("outcome") in {"sent", "queued"},
         "steer": response.get("outcome") in {"sent", "queued"},
@@ -1629,6 +1636,8 @@ def _host_control(api_url: str, token: str, family: Family, command: str, sessio
         "transport": "runtime_host_agents_api",
         "path": path,
         "request": {"method": "POST", "path": path, "payload": dict(payload) if isinstance(payload, Mapping) else None},
+        # A command the channel took only on a later try is not the same evidence as one it took at once.
+        "retries": {"count": len(retried), "refused_with": retried[-1] if retried else None},
     }
 
 
@@ -2819,6 +2828,18 @@ class Lifecycle:
                 "error": str(exc),
                 "last_runtime_observation": exc.last_runtime_observation,
             }
+        self.write_partial(exc)
+        if _terminate_control_made_its_observation(self.negative_control, self.observation, exc):
+            # Every later step runs against a session the fault kept alive and
+            # cannot succeed, so the failure is kept as evidence and the
+            # control's verdict is still ruled on.
+            self.observation["post_terminate_control_failure"] = f"{type(exc).__name__}: {exc}"
+            return
+        self.failure = exc
+
+    def write_partial(self, exc: BaseException) -> None:
+        """Leave what the run had recorded when it failed as a file of its own, whatever the result goes on to keep."""
+
         partial = {
             "schema_version": 1,
             "status": "fail",
@@ -2827,13 +2848,6 @@ class Lifecycle:
         }
         with contextlib.suppress(Exception):
             lifecycle.write_json(self.root / "partial-observation.json", partial)
-        if _terminate_control_made_its_observation(self.negative_control, self.observation, exc):
-            # Every later step runs against a session the fault kept alive and
-            # cannot succeed, so the failure is kept as evidence and the
-            # control's verdict is still ruled on.
-            self.observation["post_terminate_control_failure"] = f"{type(exc).__name__}: {exc}"
-            return
-        self.failure = exc
 
     def _redacted(self, value: Any) -> Any:
         secrets = [secret for name, secret in self.env.items() if secret and (name.endswith("_KEY") or name.endswith("_TOKEN"))]

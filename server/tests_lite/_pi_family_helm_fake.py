@@ -499,8 +499,11 @@ def main(argv: list[str]) -> int:
 class FakeRuntimeHost:
     """The agents API the producers call, over the owners the fake launchers register."""
 
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: str, *, reconnecting: int = 0) -> None:
+        """``reconnecting`` control requests are first refused as a control channel that is reconnecting."""
+
         self.token = token
+        self.reconnecting = reconnecting
         self.sessions: dict[str, dict[str, Any]] = {}
         self.processes: set[int] = set()
         self.lock = threading.RLock()
@@ -633,6 +636,11 @@ class FakeRuntimeHost:
         if action == "action":
             session["archived"] = body.get("action") == "archive"
             return 200, {"user_state": "archived" if session["archived"] else "active"}
+        if action in {"input", "send-live", "interrupt-live", "terminate-live"} and self.reconnecting > 0:
+            # What the Runtime Host answers while the Machine Agent's control channel re-registers
+            # (zerg.qa.pi_family_helm: _control_channel_reconnecting).
+            self.reconnecting -= 1
+            return 409, {"detail": "no live Longhouse control channel for this session"}
         if action == "input":
             steer = body.get("intent") == "steer"
             answer = self._command(session, "steer" if steer else "send", body.get("text"))
