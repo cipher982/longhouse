@@ -153,7 +153,8 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    scenario_revision=21,
+    # 22: the waits for a served reply read the newest events, as the steer receipt does.
+    scenario_revision=22,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -491,7 +492,9 @@ def _claim_wait_kind(claim: Mapping[str, Any] | None) -> str | None:
 def _archive_events(api_url: str, token: str, session_id: str) -> list[object]:
     # This archive endpoint contains only durable records and omits origin.
     # Served projections use the same predicate without that archive default.
-    result = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?limit=200")
+    # The newest events, for every reader: a long session's first 200 need not
+    # include the reply a wait is for, nor the rows a receipt is judged from.
+    result = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?anchor=tail&limit=200")
     return result.get("events") if isinstance(result.get("events"), list) else []
 
 
@@ -2756,8 +2759,8 @@ def _run_steer_step(
     new_runs = sorted({path.stem for path in claim_path.parent.glob("*.json")} - claims_before)
     receipt["new_runs_after_steer"] = new_runs
     receipt["no_new_turn"] = not steered.get("turn") and not new_runs
-    # The newest events: a long session's first 200 need not include the tool row.
-    events = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?anchor=tail&limit=200").get("events") or []
+    # The window the wait above read, so the receipt is judged from the events that ended it.
+    events = _archive_events(api_url, token, session_id)
     receipt["tool_ran_to_completion"] = _tool_ran_to_completion(events, tool_marker=tool_marker, first_marker=first_marker)
     if receipt["tool_ran_to_completion"]:
         receipt["tool_result_source"] = "served_events"

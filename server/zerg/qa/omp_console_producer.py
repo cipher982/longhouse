@@ -36,7 +36,8 @@ REGISTRATION = ProducerRegistration(
     # row that names it; the oracle reads `native_reply_count`.
     # 26: the oracle names the two shared-transaction facts it left to the
     # status, and a failed run's result is cell-scoped like its registration.
-    scenario_revision=26,
+    # 27: the waits for a served reply read the newest events, as the steer receipt does.
+    scenario_revision=27,
     assertion_cells=((ASSERTION_ID, None), (lifecycle.STEER_ASSERTION_ID, None)),
     providers=("omp",),
     platforms=("linux", "darwin"),

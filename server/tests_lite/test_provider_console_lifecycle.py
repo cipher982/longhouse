@@ -2131,9 +2131,22 @@ def test_a_served_time_orders_events_only_when_it_names_its_zone():
     noon = datetime(2026, 1, 1, 12, tzinfo=UTC)
     assert event_time({"timestamp": "2026-01-01T12:00:00+00:00"}) == noon == event_time({"timestamp": "2026-01-01T12:00:00Z"})
     assert event_time({"timestamp": "2026-01-01T14:00:00+02:00"}) == noon
-    for unread in ("2026-01-01T12:00:00", "2026-01-01", "noon", "", None, 1767268800):
+    # A Z that does not end the stamp is not a zone ("12:00Z:00" must not read as an offset with seconds).
+    for unread in ("2026-01-01T12:00:00", "2026-01-01", "noon", "", None, 1767268800, "2026-01-01T12:00Z:00"):
         assert event_time({"timestamp": unread}) is None, unread
     assert event_time({}) is None
+
+
+def test_every_reader_of_served_events_reads_the_newest_window(monkeypatch):
+    import inspect
+
+    asked = []
+    monkeypatch.setattr(lifecycle, "_request", lambda _url, _token, *call, **_options: asked.append(call) or {"events": [{"id": 1}]})
+    assert lifecycle._archive_events("http://host", "token", "s") == [{"id": 1}]
+    assert asked == [("GET", "/api/agents/sessions/s/events?anchor=tail&limit=200")]
+    # A steer's receipt is judged from that same read, not from a window of its own: a long
+    # session's first events need not hold the reply the wait before it was for.
+    assert "events?" not in inspect.getsource(lifecycle._run_steer_step)
 
 
 @pytest.mark.parametrize("provider", sorted(lifecycle.STEER_PROVIDERS))

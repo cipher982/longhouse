@@ -36,7 +36,8 @@ REGISTRATION = ProducerRegistration(
     # 5: the shared lifecycle adds a mid-turn steer step (its own cell).
     # 7: the native reply is the row that answers with the marker, not every
     # row that names it.
-    scenario_revision=21,
+    # 22: the waits for a served reply read the newest events, as the steer receipt does.
+    scenario_revision=22,
     assertion_cells=((ASSERTION_ID, None), (lifecycle.STEER_ASSERTION_ID, None)),
     providers=("pi",),
     platforms=("linux", "darwin"),

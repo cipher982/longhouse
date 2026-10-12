@@ -275,7 +275,8 @@ def event_time(event: Mapping[str, object]) -> datetime | None:
     this process runs. Every time returned names its zone, so any two compare.
     """
     try:
-        at = datetime.fromisoformat(str(event.get("timestamp")).replace("Z", "+00:00"))
+        # A trailing Z is the zone; fromisoformat reads it, and a Z anywhere else is not a time.
+        at = datetime.fromisoformat(str(event.get("timestamp")))
     except ValueError:
         return None
     return at if at.tzinfo is not None and at.utcoffset() is not None else None
