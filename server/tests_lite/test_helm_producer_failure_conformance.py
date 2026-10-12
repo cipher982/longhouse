@@ -200,6 +200,9 @@ def test_codex_entrypoint_retains_rollout_before_native_late_failure(monkeypatch
 
     monkeypatch.setattr(producer.bridge_canary, "_start_bridge", fake_start)
     monkeypatch.setattr(producer.bridge_canary, "_run", fake_run)
+    # The bridge state above names processes that never were. Whether the host happens to have live ones under
+    # those numbers is not this test's subject: under a parallel run it does, and the stop then reads as failed.
+    monkeypatch.setattr(producer.bridge_canary, "_pid_alive", lambda _pid: False)
     monkeypatch.setattr(
         producer.bridge_canary,
         "_stop_bridge",
