@@ -39,6 +39,8 @@ _SHELL_BUILT = sorted(f"zerg.qa.{path.stem}" for path in _QA.glob("*.py") if "\n
 
 def test_every_registered_producer_is_built_in_the_shell():
     assert set(_MANIFEST) <= set(_SHELL_BUILT)
+    # The factory's envelope has no blocked status, so none of its producers may end a run that way.
+    assert [name for name in _MANIFEST if importlib.import_module(name).PRODUCER.may_block] == []
 
 
 def test_a_revision_is_a_number_only_where_a_registration_declares_it():
@@ -313,8 +315,13 @@ def test_a_pass_whose_result_cannot_be_written_leaves_a_typed_failure_and_never_
 
 
 def test_a_blocked_run_says_so_and_a_raising_caller_gets_the_exception_and_no_artifact(tmp_path):
-    blocked = _run_fixture(tmp_path, lambda run: run.block("prerequisite_unavailable", "nothing to ask"))
+    may_block = dataclasses.replace(_FIXTURE, may_block=True)
+    blocked = may_block.execute(tmp_path / "blocked", lambda run: run.block("prerequisite_unavailable", "nothing to ask"))
     assert (blocked["status"], blocked["failure_code"], blocked["assertions"]) == ("blocked", "prerequisite_unavailable", {})
+    # A producer that did not declare it has no such ending: the call is refused where it is made.
+    refused = _run_fixture(tmp_path, lambda run: run.block("prerequisite_unavailable", "nothing to ask"))
+    assert (refused["status"], refused["failure_code"]) == ("fail", "fixture_failed")
+    assert refused["error"].startswith("ValueError: this producer does not declare may_block")
 
     def body(_run: Run) -> None:
         raise RuntimeError("the caller types this")

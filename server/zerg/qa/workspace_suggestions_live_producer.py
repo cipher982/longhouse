@@ -200,6 +200,7 @@ PRODUCER = Producer(
     artifact_kind="longhouse_workspace_suggestions_live_result",
     failure_code="workspace_suggestions_live_failed",
     variant_required=False,
+    may_block=True,
 )
 
 

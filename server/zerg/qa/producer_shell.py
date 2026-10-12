@@ -142,6 +142,7 @@ class Run:
     fields: dict[str, Any] = field(default_factory=dict)
     status: str | None = None
     controlled: bool = False
+    may_block: bool = False
     # Set by a run that caught its own failure, cleaned up and came to an end: reported like one that raised.
     failed: BaseException | None = None
 
@@ -162,11 +163,13 @@ class Run:
     def block(self, failure_code: str, error: str) -> None:
         """Say the run could not ask its question: a prerequisite was absent, which is neither a pass nor a failing verdict.
 
-        For a producer product CI runs. The factory's envelope check accepts
-        no such status, so a producer the factory runs raises instead and
-        leaves a typed failure.
+        For a producer product CI runs (``Producer.may_block``). The factory's
+        envelope check accepts no such status, so a producer the factory runs
+        raises instead and leaves a typed failure.
         """
 
+        if not self.may_block:
+            raise ValueError("this producer does not declare may_block: a result the factory reads has no blocked status")
         self.assertions = {}
         self.status = "blocked"
         self.fields.update(failure_code=failure_code, error=error)
@@ -204,6 +207,8 @@ class Producer:
     reached: Mapping[str, Sequence[str]] | None = None
     refuse: Callable[[argparse.Namespace], str | None] | None = None
     add_arguments: Callable[[argparse.ArgumentParser], None] | None = None
+    # Whether a run may end ``blocked`` (Run.block). Never for a producer the factory manifest lists.
+    may_block: bool = False
 
     def __post_init__(self) -> None:
         defined = {action.dest for action in self.parser()._actions}
@@ -296,7 +301,7 @@ class Producer:
         own end and is reported either way.
         """
 
-        run = Run(root=root.resolve())
+        run = Run(root=root.resolve(), may_block=self.may_block)
         if creates_root:
             run.root.mkdir(mode=0o700, parents=True, exist_ok=False)
         try:
