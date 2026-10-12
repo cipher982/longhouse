@@ -24,6 +24,10 @@ SESSION_READY_TIMEOUT_S = 60
 SSE_READ_TIMEOUT_S = 10.0
 
 
+# The frames this observer understands. Anything else is ignored and counted.
+_KNOWN_EVENTS = frozenset({"connected", "heartbeat", "canary_observation"})
+
+
 class _FatalCanaryError(RuntimeError):
     pass
 
@@ -109,6 +113,13 @@ def _count_ignored_event(ignored: dict[str, int], event_name: str) -> None:
             f"canary stream: ignored event {event_name!r} (count={count})",
             file=sys.stderr,
         )
+
+
+def _ignored_summary(ignored: dict[str, int]) -> str:
+    if not ignored:
+        return ""
+    counts = ", ".join(f"{name}={count}" for name, count in sorted(ignored.items()))
+    return f" (ignored events: {counts})"
 
 
 def _canary_marker(payload: str) -> tuple[int, int, int, int, int]:
@@ -249,18 +260,14 @@ def main() -> int:
                             "canary stream returned a non-SSE content type"
                         )
                     stream_established = True
-                    backoff_s = 1.0
                     for event_name, payload in _iter_sse(response):
                         if stopping:
                             break
-                        last_successful_read_at = time.monotonic()
-                        if event_name in {"connected", "heartbeat"}:
-                            continue
                         if event_name == "error":
                             raise _FatalCanaryError(
                                 f"canary stream error: {payload[:200]}"
                             )
-                        if event_name != "canary_observation":
+                        if event_name not in _KNOWN_EVENTS:
                             # Only a canary_observation is a delivery, so an
                             # event type this observer does not know cannot
                             # fake one: ignore it and keep count. A draining
@@ -268,7 +275,19 @@ def main() -> int:
                             # host_lifecycle event and ends the stream; exiting
                             # on it cost a supervisor restart mid-cutover
                             # (2026-10-11 19:41Z).
+                            #
+                            # An ignored event is not a successful read. A
+                            # host that answers every reconnect this way must
+                            # still back off and, past UNREACHABLE_TIMEOUT_S
+                            # with nothing real, hand over to the supervisor.
                             _count_ignored_event(ignored_events, event_name)
+                            continue
+                        # A frame this observer understands is the proof the
+                        # stream works: it alone refreshes the staleness clock
+                        # and resets the reconnect backoff.
+                        last_successful_read_at = time.monotonic()
+                        backoff_s = 1.0
+                        if event_name != "canary_observation":
                             continue
                         (
                             canary_seq,
@@ -311,7 +330,8 @@ def main() -> int:
                 print(f"SSE error ({exc.__class__.__name__}): {exc}", file=sys.stderr)
                 if time.monotonic() - last_successful_read_at > UNREACHABLE_TIMEOUT_S:
                     print(
-                        f"SSE unreachable > {UNREACHABLE_TIMEOUT_S}s; exiting for supervisor restart",
+                        f"SSE unreachable > {UNREACHABLE_TIMEOUT_S}s; exiting for supervisor restart"
+                        f"{_ignored_summary(ignored_events)}",
                         file=sys.stderr,
                     )
                     return 3

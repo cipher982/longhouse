@@ -110,8 +110,10 @@ def test_sse_parser_strips_leading_space_only():
     assert frames == [("workspace_changed", "{}")]
 
 
-def _run_observer(monkeypatch, tmp_path, handler):
+def _run_observer(monkeypatch, tmp_path, handler, prepare=None):
     observer = _load_observer()
+    if prepare is not None:
+        prepare(observer)
     session_file = tmp_path / "session-id"
     session_file.write_text(str(uuid4()))
     monkeypatch.setattr(observer, "SESSION_ID_FILE", session_file)
@@ -265,9 +267,101 @@ def test_unknown_stream_events_are_counted_and_never_end_the_observer(monkeypatc
 
     journal = capsys.readouterr().err
     assert "unexpected canary stream event" not in journal
-    assert "canary stream: ignored event 'host_lifecycle' (count=1)" in journal
+    # host_lifecycle arrived on two connections: the count is the observer's,
+    # not a connection's, so its first-occurrence line is journaled once.
+    assert journal.count("canary stream: ignored event 'host_lifecycle' (count=1)") == 1
     assert "canary stream: ignored event 'something_new' (count=1)" in journal
     assert "canary stream returned HTTP 401" in journal
+
+
+_LIFECYCLE_FRAME = b'event: host_lifecycle\ndata: {"state":"draining","accepting_writes":false}\n\n'
+
+
+def _fake_clock(monkeypatch, connections):
+    """Give the observer a clock that only its own sleeps advance."""
+    from types import SimpleNamespace
+
+    clock = {"now": 1000.0}
+
+    def sleep(seconds):
+        clock["now"] += seconds
+
+    def prepare(observer):
+        monkeypatch.setattr(observer, "time", SimpleNamespace(time=time.time, monotonic=lambda: clock["now"], sleep=sleep))
+
+    def stamp():
+        connections.append(clock["now"])
+
+    return prepare, stamp
+
+
+def test_a_host_that_only_ever_drains_still_backs_off_and_hands_over_to_the_supervisor(monkeypatch, tmp_path, capsys):
+    """Every reconnect gets 200, one host_lifecycle and a close.
+
+    An ignored event is not a successful read: the backoff must keep growing
+    and the staleness exit must still fire, or the observer would reconnect
+    about once a second forever with nothing delivered.
+    """
+    connections: list[float] = []
+    prepare, stamp = _fake_clock(monkeypatch, connections)
+
+    def handler(request):
+        assert request.method == "GET", "nothing was delivered, so nothing may be reported"
+        stamp()
+        if len(connections) > 100:
+            pytest.fail("the observer never gave up on a host that only drains")
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, stream=httpx.ByteStream(_LIFECYCLE_FRAME))
+
+    assert _run_observer(monkeypatch, tmp_path, handler, prepare) == 3
+
+    gaps = [later - earlier for earlier, later in zip(connections, connections[1:])]
+    assert gaps[:6] == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0]
+    assert set(gaps[6:]) <= {30.0}
+    elapsed = connections[-1] - connections[0]
+    assert 300 < elapsed <= 330
+
+    journal = capsys.readouterr().err
+    # One count across every reconnect, reported when the observer gives up.
+    assert journal.count("(count=1)") == 1
+    assert (f"SSE unreachable > 300s; exiting for supervisor restart (ignored events: host_lifecycle={len(connections)})") in journal
+
+
+def test_a_frame_the_observer_understands_resets_the_backoff(monkeypatch, tmp_path):
+    connections: list[float] = []
+    prepare, stamp = _fake_clock(monkeypatch, connections)
+    bodies = [_LIFECYCLE_FRAME, _LIFECYCLE_FRAME, b'event: connected\ndata: {"server_now_ms":1800000000000}\n\n']
+
+    def handler(request):
+        stamp()
+        if len(connections) > len(bodies):
+            return httpx.Response(401, stream=httpx.ByteStream(b"unauthorized"))
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=httpx.ByteStream(bodies[len(connections) - 1]),
+        )
+
+    assert _run_observer(monkeypatch, tmp_path, handler, prepare) == 3
+    gaps = [later - earlier for earlier, later in zip(connections, connections[1:])]
+    # Two drains back off 1 s then 2 s; the connected frame puts it back to 1 s.
+    assert gaps == [1.0, 2.0, 1.0]
+
+
+def test_an_error_event_still_ends_the_observer(monkeypatch, tmp_path, capsys):
+    """Ignoring unknown events must not soften the one event that means stop."""
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) > 1:
+            pytest.fail("a stream error must not be retried")
+        body = _LIFECYCLE_FRAME + b'event: error\ndata: {"error":"workspace_unavailable"}\n\n'
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, stream=httpx.ByteStream(body))
+
+    assert _run_observer(monkeypatch, tmp_path, handler) == 3
+    journal = capsys.readouterr().err
+    assert 'FATAL: canary stream error: {"error":"workspace_unavailable"}' in journal
+    assert "canary stream: ignored event 'host_lifecycle' (count=1)" in journal
 
 
 def test_ignored_events_are_journaled_once_and_then_every_hundredth(capsys):
