@@ -168,6 +168,27 @@ pub(super) fn build_local_status_projection(
     )
 }
 
+/// A content key for the inputs of observation-derived machine evidence.
+/// The managed snapshot is replaced from several paths without a revision
+/// that tracks its content, so the key is a hash of the inputs themselves,
+/// formatted straight into the hasher (no allocation; ~1 ms for ~1,000
+/// observations against the tens of ms it lets a phase-only rebuild skip).
+fn evidence_reuse_key(inputs: &[&dyn std::fmt::Debug]) -> u64 {
+    use std::hash::Hasher;
+    struct HashWriter(std::collections::hash_map::DefaultHasher);
+    impl std::fmt::Write for HashWriter {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            self.0.write(text.as_bytes());
+            Ok(())
+        }
+    }
+    let mut writer = HashWriter(std::collections::hash_map::DefaultHasher::new());
+    for input in inputs {
+        let _ = std::fmt::Write::write_fmt(&mut writer, format_args!("{input:?}\u{1f}"));
+    }
+    writer.0.finish()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_local_status_projection_with_omp(
     conn: &rusqlite::Connection,
@@ -307,7 +328,22 @@ pub(super) fn build_local_status_projection_with_omp(
                 )
             }
         };
-    payload.machine_evidence = Some(heartbeat::machine_evidence_from_observations_with_omp(
+    let reuse_key = evidence_reuse_key(&[
+        &machine_id,
+        &observations,
+        &antigravity_observations,
+        &claude_observations,
+        &opencode_observations,
+        &cursor_observations,
+        &pi_observations,
+        &omp_observations,
+        &unmanaged_session_bindings,
+        &continuation,
+        &managed_snapshot_complete,
+        &unmanaged_snapshot_complete,
+    ]);
+    payload.machine_evidence = Some(heartbeat::machine_evidence_reusing_observations(
+        reuse_key,
         machine_id,
         observations,
         antigravity_observations,
@@ -321,7 +357,7 @@ pub(super) fn build_local_status_projection_with_omp(
         managed_snapshot_complete,
         unmanaged_snapshot_complete,
         now,
-        Some(continuation),
+        continuation,
         current_evidence_rotation(),
     ));
     if let Some(evidence) = payload.machine_evidence.as_mut() {

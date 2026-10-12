@@ -1824,6 +1824,214 @@ pub(crate) fn machine_evidence_from_observations(
     )
 }
 
+/// Machine evidence for a status build, reusing the last build's
+/// observation-derived families while their inputs are unchanged.
+///
+/// Most rebuilds are phase changes (15 ms debounce while a session works):
+/// the managed observations are the same snapshot as the previous build, yet
+/// every run, process, control, transcript, readiness and continuation fact
+/// (~5,000 on cinder, mostly retained history) and its identity was derived
+/// again. With `reuse_key` naming that snapshot, those families are reused
+/// for up to [`MACHINE_EVIDENCE_REUSE_MAX_AGE`] and only activity (the phase
+/// rows) is rebuilt. Reused facts keep the `observed_at` of the build that
+/// derived them, which is truthful: that is when they were observed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn machine_evidence_reusing_observations(
+    reuse_key: u64,
+    machine_id: &str,
+    codex_observations: &[CodexBridgeObservation],
+    antigravity_observations: &[AntigravityHookObservation],
+    claude_observations: &[ClaudeChannelObservation],
+    opencode_observations: &[OpenCodeServerObservation],
+    cursor_observations: &[CursorHelmObservation],
+    pi_observations: &[PiHelmObservation],
+    omp_observations: &[OmpHelmObservation],
+    unmanaged_bindings: &[UnmanagedSessionBinding],
+    phase_rows: &[PhaseLedgerRow],
+    managed_snapshot_complete: bool,
+    unmanaged_snapshot_complete: bool,
+    now: DateTime<Utc>,
+    continuation_observations: &[crate::managed_resume_scan::ResumeContractObservation],
+    evidence_rotation: usize,
+) -> MachineEvidence {
+    let reused = REUSABLE_MACHINE_EVIDENCE.lock().ok().and_then(|cache| {
+        cache
+            .as_ref()
+            .filter(|cached| {
+                cached.key == reuse_key && cached.at.elapsed() < MACHINE_EVIDENCE_REUSE_MAX_AGE
+            })
+            .map(|cached| (cached.evidence.clone(), cached.families.clone()))
+    });
+    let Some((mut evidence, mut families)) = reused else {
+        let evidence = machine_evidence_from_observations_with_omp(
+            machine_id,
+            codex_observations,
+            antigravity_observations,
+            claude_observations,
+            opencode_observations,
+            cursor_observations,
+            pi_observations,
+            omp_observations,
+            unmanaged_bindings,
+            phase_rows,
+            managed_snapshot_complete,
+            unmanaged_snapshot_complete,
+            now,
+            Some(continuation_observations),
+            evidence_rotation,
+        );
+        let families = family_identities(&evidence.candidate_identities);
+        if let Ok(mut cache) = REUSABLE_MACHINE_EVIDENCE.lock() {
+            *cache = Some(ReusableMachineEvidence {
+                key: reuse_key,
+                at: Instant::now(),
+                evidence: evidence.clone(),
+                families,
+            });
+        }
+        return evidence;
+    };
+    let mut activity = activity_evidence_from_phase_rows(
+        phase_rows,
+        codex_observations,
+        claude_observations,
+        opencode_observations,
+        cursor_observations,
+        pi_observations,
+        omp_observations,
+    );
+    sort_activity_evidence(&mut activity);
+    activity.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
+    families[ACTIVITY_FAMILY] =
+        reducer_evidence_identity_families(machine_id, &[], &[], &activity, &[], &[], &[], &[])
+            [ACTIVITY_FAMILY]
+            .clone();
+    evidence.activity = activity;
+    evidence.identities =
+        select_rotating_identity_window(&families, evidence_rotation, MAX_REDUCER_EVIDENCE_FACTS);
+    evidence.candidate_identities = Arc::from(families.into_iter().flatten().collect::<Vec<_>>());
+    let envelope_observed_at = now.to_rfc3339();
+    for scope in &mut evidence.process_snapshot_scopes {
+        scope.captured_at = envelope_observed_at.clone();
+    }
+    evidence.observed_at = envelope_observed_at;
+    evidence
+}
+
+/// How long observation-derived evidence is reused. The managed observation
+/// scan runs every 5 s and starts a new snapshot (a new key); this bounds the
+/// time-dependent facts (hook liveness, readiness) to the same horizon.
+const MACHINE_EVIDENCE_REUSE_MAX_AGE: Duration = Duration::from_secs(5);
+
+/// Index of the activity family in `reducer_evidence_identity_families`.
+const ACTIVITY_FAMILY: usize = 1;
+
+const IDENTITY_FAMILY_NAMES: [&str; 7] = [
+    "process",
+    "activity",
+    "control",
+    "transcript",
+    "readiness",
+    "run",
+    "continuation",
+];
+
+struct ReusableMachineEvidence {
+    key: u64,
+    at: Instant,
+    evidence: MachineEvidence,
+    families: [Vec<EvidenceIdentity>; 7],
+}
+
+static REUSABLE_MACHINE_EVIDENCE: LazyLock<std::sync::Mutex<Option<ReusableMachineEvidence>>> =
+    LazyLock::new(Default::default);
+
+/// Regroup the flattened candidate identities into their reducer families.
+fn family_identities(candidates: &[EvidenceIdentity]) -> [Vec<EvidenceIdentity>; 7] {
+    let mut families: [Vec<EvidenceIdentity>; 7] = Default::default();
+    for identity in candidates {
+        if let Some(index) = IDENTITY_FAMILY_NAMES
+            .iter()
+            .position(|name| *name == identity.fact_family)
+        {
+            families[index].push(identity.clone());
+        }
+    }
+    families
+}
+
+fn sort_activity_evidence(activity: &mut [ActivityEvidence]) {
+    activity.sort_by(|a, b| (&a.provider, &a.session_id).cmp(&(&b.provider, &b.session_id)));
+}
+
+/// Activity facts from the phase ledger. The row's own run id is the
+/// authority: the producer observed the phase in that run, so a session that
+/// resumed cannot ship the previous run's trailing phase stamped with the new
+/// run id. A live observation is the fallback for rows whose producer could
+/// not name a run — and it vanishes the moment a launcher exits, which is why
+/// the closing `idle` of a managed session depends on the row carrying its
+/// own identity.
+fn activity_evidence_from_phase_rows(
+    phase_rows: &[PhaseLedgerRow],
+    codex_observations: &[CodexBridgeObservation],
+    claude_observations: &[ClaudeChannelObservation],
+    opencode_observations: &[OpenCodeServerObservation],
+    cursor_observations: &[CursorHelmObservation],
+    pi_observations: &[PiHelmObservation],
+    omp_observations: &[OmpHelmObservation],
+) -> Vec<ActivityEvidence> {
+    fn run_ids<'a, T>(
+        observations: &'a [T],
+        session_id: impl Fn(&'a T) -> &'a str,
+        run_id: impl Fn(&'a T) -> Option<&'a str>,
+    ) -> impl Iterator<Item = (&'a str, &'a str)> {
+        observations
+            .iter()
+            .filter_map(move |observation| Some((session_id(observation), run_id(observation)?)))
+    }
+    let managed_run_ids = run_ids(
+        codex_observations,
+        |o| &o.session_id,
+        |o| o.run_id.as_deref(),
+    )
+    .chain(run_ids(
+        claude_observations,
+        |o| &o.session_id,
+        |o| o.run_id.as_deref(),
+    ))
+    .chain(run_ids(
+        opencode_observations,
+        |o| &o.session_id,
+        |o| o.run_id.as_deref(),
+    ))
+    .chain(run_ids(
+        cursor_observations,
+        |o| &o.session_id,
+        |o| o.run_id.as_deref(),
+    ))
+    .chain(run_ids(
+        pi_observations,
+        |o| &o.session_id,
+        |o| o.run_id.as_deref(),
+    ))
+    .chain(run_ids(
+        omp_observations,
+        |o| &o.session_id,
+        |o| o.run_id.as_deref(),
+    ))
+    .collect::<HashMap<_, _>>();
+    phase_rows
+        .iter()
+        .filter_map(|row| {
+            let run_id = match row.run_id.as_deref() {
+                Some(run_id) => Some(run_id),
+                None => managed_run_ids.get(row.session_id.as_str()).copied(),
+            }?;
+            Some(activity_evidence_from_phase_row(row, Some(run_id)))
+        })
+        .collect()
+}
+
 pub(crate) fn machine_evidence_from_observations_with_omp(
     machine_id: &str,
     codex_observations: &[CodexBridgeObservation],
@@ -2591,61 +2799,15 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
         }
     }
 
-    let managed_run_ids = codex_observations
-        .iter()
-        .filter_map(|observation| {
-            observation
-                .run_id
-                .as_deref()
-                .map(|run_id| (observation.session_id.as_str(), run_id))
-        })
-        .chain(claude_observations.iter().filter_map(|observation| {
-            observation
-                .run_id
-                .as_deref()
-                .map(|run_id| (observation.session_id.as_str(), run_id))
-        }))
-        .chain(opencode_observations.iter().filter_map(|observation| {
-            observation
-                .run_id
-                .as_deref()
-                .map(|run_id| (observation.session_id.as_str(), run_id))
-        }))
-        .chain(cursor_observations.iter().filter_map(|observation| {
-            observation
-                .run_id
-                .as_deref()
-                .map(|run_id| (observation.session_id.as_str(), run_id))
-        }))
-        .chain(pi_observations.iter().filter_map(|observation| {
-            observation
-                .run_id
-                .as_deref()
-                .map(|run_id| (observation.session_id.as_str(), run_id))
-        }))
-        .chain(omp_observations.iter().filter_map(|observation| {
-            observation
-                .run_id
-                .as_deref()
-                .map(|run_id| (observation.session_id.as_str(), run_id))
-        }))
-        .collect::<HashMap<_, _>>();
-    // The row's own run id is the authority: the producer observed the phase in
-    // that run, so a session that resumed cannot ship the previous run's
-    // trailing phase stamped with the new run id. A live observation is the
-    // fallback for rows whose producer could not name a run — and it vanishes
-    // the moment a launcher exits, which is why the closing `idle` of a managed
-    // session depends on the row carrying its own identity.
-    let mut activity = phase_rows
-        .iter()
-        .filter_map(|row| {
-            let run_id = match row.run_id.as_deref() {
-                Some(run_id) => Some(run_id),
-                None => managed_run_ids.get(row.session_id.as_str()).copied(),
-            }?;
-            Some(activity_evidence_from_phase_row(row, Some(run_id)))
-        })
-        .collect::<Vec<_>>();
+    let mut activity = activity_evidence_from_phase_rows(
+        phase_rows,
+        codex_observations,
+        claude_observations,
+        opencode_observations,
+        cursor_observations,
+        pi_observations,
+        omp_observations,
+    );
 
     run.sort_by(|a, b| {
         (&a.provider, &a.session_id, &a.run_id).cmp(&(&b.provider, &b.session_id, &b.run_id))
@@ -2658,7 +2820,7 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
             b.pid,
         ))
     });
-    activity.sort_by(|a, b| (&a.provider, &a.session_id).cmp(&(&b.provider, &b.session_id)));
+    sort_activity_evidence(&mut activity);
     control.sort_by(|a, b| (&a.provider, &a.session_id).cmp(&(&b.provider, &b.session_id)));
     transcript.sort_by(|a, b| {
         (&a.provider, &a.provider_session_id).cmp(&(&b.provider, &b.provider_session_id))
@@ -6754,6 +6916,83 @@ mod tests {
 
         // last_ship_at should be omitted when None
         assert!(parsed.get("last_ship_at").is_none() || parsed["last_ship_at"].is_null());
+    }
+
+    #[test]
+    fn reused_observation_evidence_equals_a_fresh_build() {
+        let now = DateTime::parse_from_rfc3339("2026-05-08T12:00:02Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let codex = [test_observation(
+            "codex-session",
+            "ws://127.0.0.1:45681/reuse",
+        )];
+        let opencode = [test_opencode_observation(
+            "opencode-session",
+            "attached_tui",
+        )];
+        let cursor = [test_cursor_observation("cursor-session")];
+        let phase = |phase: &str, run_id: Option<&str>| PhaseLedgerRow {
+            session_id: "codex-session".to_string(),
+            provider: "codex".to_string(),
+            phase: phase.to_string(),
+            tool_name: None,
+            source: "codex_bridge".to_string(),
+            observed_at: "2026-05-08T12:00:00Z".to_string(),
+            valid_until: "2026-05-08T12:10:00Z".to_string(),
+            run_id: run_id.map(str::to_string),
+        };
+        let key = u64::from_le_bytes(*b"reusetst");
+        let build = |rows: &[PhaseLedgerRow], reuse: bool| {
+            if reuse {
+                machine_evidence_reusing_observations(
+                    key,
+                    "cinder",
+                    &codex,
+                    &[],
+                    &[],
+                    &opencode,
+                    &cursor,
+                    &[],
+                    &[],
+                    &[],
+                    rows,
+                    true,
+                    true,
+                    now,
+                    &[],
+                    3,
+                )
+            } else {
+                machine_evidence_from_observations_with_omp(
+                    "cinder",
+                    &codex,
+                    &[],
+                    &[],
+                    &opencode,
+                    &cursor,
+                    &[],
+                    &[],
+                    &[],
+                    rows,
+                    true,
+                    true,
+                    now,
+                    Some(&[]),
+                    3,
+                )
+            }
+        };
+        // Prime the reuse slot, then rebuild with only the phase rows changed
+        // (a row without a run id falls back to the observation's run).
+        build(&[phase("running", Some("run-codex-session"))], true);
+        for rows in [
+            vec![phase("thinking", Some("run-codex-session"))],
+            vec![phase("idle", None)],
+            vec![],
+        ] {
+            assert_eq!(build(&rows, true), build(&rows, false));
+        }
     }
 
     #[test]
