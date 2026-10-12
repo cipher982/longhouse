@@ -122,6 +122,15 @@ class _Fields(dict):
         for name, value in dict(*others, **named).items():
             self[name] = value
 
+    def setdefault(self, name: str, default: Any = None) -> Any:
+        if name not in self:
+            self[name] = default
+        return self[name]
+
+    def __ior__(self, other: Any) -> "_Fields":
+        self.update(other)
+        return self
+
 
 @dataclass
 class Run:

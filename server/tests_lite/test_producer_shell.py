@@ -342,11 +342,18 @@ def test_a_further_field_cannot_be_one_the_shell_reports(tmp_path, name):
         lambda: run.fields.__setitem__(name, "pass"),
         lambda: run.fields.update({name: "pass"}),
         lambda: run.fields.update(**{name: "pass"}),
+        lambda: run.fields.setdefault(name, "pass"),
+        lambda: run.fields.__ior__({name: "pass"}),
         lambda: Run(tmp_path, fields={name: "pass"}),
     ):
         with pytest.raises(ValueError, match=f"{name} is the shell's to report"):
             write()
     assert run.fields == {}
+    # Every other name is written the way a dict is.
+    assert run.fields.setdefault("session_id", "first") == run.fields.setdefault("session_id", "second") == "first"
+    run.fields |= {"code": "c"}
+    assert run.fields == {"session_id": "first", "code": "c"} and type(run.fields).__name__ == "_Fields"
+    run.fields.clear()
     # The code a failing verdict names is the producer's to say, and a status its assertions do not make is said outright.
     run.fields.update(failure_code="fixture_step_failed", session_id="s")
     run.assertions, run.status = {"held": True}, "fail"
