@@ -126,6 +126,11 @@ class Family:
 
     # How the lifecycle runs today: coverage one provider has and the other lacks.
     host_controls: bool = False  # send, steer, abort and terminate go through the Runtime Host, not the engine's local command
+    # The same controls are proven once more through the engine's local command, in steps of their own
+    # (``local=True``) and with the last terminate. Dropping that path is deleting this flag and those steps.
+    local_controls: bool = False
+    terminate_proves_owners_dead: bool = False  # a terminate is over when the two recorded processes stopped, not when the state says so
+    rebind_command: str = "send"  # how the first input after `/new` is sent: as an input, or as "send_live"
     identity_at_launch: bool = False  # control identity is held at launch, at cold resume and at the end, not only after a rebind
     paginated_events: bool = False  # the served events are read to their end, not as one page
     converges_each_turn: bool = False  # every turn is shown served, not only the first and the last
@@ -2115,10 +2120,11 @@ class Lifecycle:
         except RuntimeError:
             return {}
 
-    def control(self, command: str, text: str | None = None) -> dict[str, Any]:
-        """Dispatch a control the way this lifecycle does today (``Family.host_controls``)."""
+    def control(self, command: str, text: str | None = None, *, local: bool = False) -> dict[str, Any]:
+        """Dispatch a control: through the Runtime Host where the lifecycle's controls go there, else, or when
+        ``local``, through the engine's own command on this machine."""
 
-        if self.f.host_controls:
+        if self.f.host_controls and not local:
             return _host_control(self.api_url, self.token, self.f, command, self.session_id, text=text)
         return _local_control(self.args.engine, self.f, command, self.session_id, self.env, text=text)
 
@@ -2368,13 +2374,14 @@ class Lifecycle:
             "owner_refusal_observed": returncode != 0 and ("execution owner" in output or "already attached" in output),
         }
 
-    def send_idle(self) -> None:
-        marker = self.marker("SEND")
+    def send_idle(self, *, local: bool = False) -> None:
+        name = "local_send" if local else "send"
+        marker = self.marker(name.upper())
         offset = _read_source_size(self.session_file)
         prompt = self.prompt("send", marker)
-        command = self.control("send", prompt)
+        command = self.control("send", prompt, local=local)
         # Recorded before the reply is waited for: a send that was taken and never answered is a verdict on the send.
-        record = self.controls["send"] = {
+        record = self.controls[name] = {
             "action_label": "send",
             "prompt": prompt,
             "state": dict(self.state),
@@ -2390,7 +2397,8 @@ class Lifecycle:
             raise
         record["marker_wait"]["status"] = "answered"
         record.update(marker_row=row, evidence=evidence)
-        if self.f.converges_each_turn:
+        # Serving a reply does not depend on how the prompt was sent: the local command's turn is not shown served again.
+        if self.f.converges_each_turn and not local:
             record["served"] = self.converge("send", marker, row, flush=self.flush("send"))
 
     def follow_up(self) -> None:
@@ -2419,25 +2427,26 @@ class Lifecycle:
         if self.f.converges_each_turn:
             record["served"] = self.converge("follow_up", marker, row)
 
-    def steer(self) -> None:
+    def steer(self, *, local: bool = False) -> None:
         f = self.f
+        name = "local_steer" if local else "steer"
         if f.settles_between_turns:
             self.wait_state(f.is_idle, timeout=30)
         offset = _read_source_size(self.session_file)
-        task, done, marker = self.marker("STEER_TASK"), self.marker("STEER_TASK_DONE"), self.marker("STEER")
-        active = self.control("send", step_task_prompt(task, done))
+        task, done, marker = (self.marker(f"{name.upper()}{part}") for part in ("_TASK", "_TASK_DONE", ""))
+        active = self.control("send", step_task_prompt(task, done), local=local)
         active_state = self.busy_state()
-        self.observation["steer_tool_boundary"] = _wait_task_tool_boundary(self.session_file, task)
+        self.observation[f"{name}_tool_boundary"] = _wait_task_tool_boundary(self.session_file, task)
         prompt = self.prompt("steer", marker)
-        command = self.control("steer", prompt)
+        command = self.control("steer", prompt, local=local)
         row, evidence = self.reply(marker, offset, timeout=150)
         settled = self.settle()
         verdict = steer_turn_verdict(read_session_entries(self.session_file), task_marker=task, steer_marker=marker, task_done_marker=done)
-        self.observation["steer_turn_verdict"] = verdict
+        self.observation[f"{name}_turn_verdict"] = verdict
         noncompliance = pi_family_steer_noncompliance(verdict)
         if noncompliance is not None:
             attach(self.observation, f"{f.provider}_helm_steer_active", noncompliance)
-        record = self.controls["steer"] = {
+        record = self.controls[name] = {
             "action_label": "steer",
             "prompt": prompt,
             "state": dict(self.state),
@@ -2449,18 +2458,19 @@ class Lifecycle:
             "marker_row": row,
             "evidence": evidence,
         }
-        if f.converges_each_turn:
+        if f.converges_each_turn and not local:
             record["served"] = self.converge("steer", marker, row)
 
-    def abort(self) -> None:
+    def abort(self, *, local: bool = False) -> None:
         f = self.f
+        name = "local_abort" if local else "abort"
         idle = self.wait_state(f.is_idle, timeout=30) if f.settles_between_turns else None
-        task, done, after = self.marker("ABORT_TASK"), self.marker("ABORT_TASK_DONE"), self.marker("AFTER_ABORT")
-        active = self.control("send", step_task_prompt(task, done))
+        task, done, after = (self.marker(f"{name.upper()}{part}") for part in ("_TASK", "_TASK_DONE", "_AFTER"))
+        active = self.control("send", step_task_prompt(task, done), local=local)
         active_state = self.busy_state(after=idle)
         offset = _read_source_size(self.session_file)
-        self.observation["abort_tool_boundary"] = _wait_task_tool_boundary(self.session_file, task)
-        command = self.control("abort")
+        self.observation[f"{name}_tool_boundary"] = _wait_task_tool_boundary(self.session_file, task)
+        command = self.control("abort", local=local)
         record: dict[str, Any] = {
             "action_label": "abort",
             "state": dict(self.state),
@@ -2491,7 +2501,7 @@ class Lifecycle:
                 aborted: dict[str, Any] | None = _wait_native_abort(self.session_file, minimum_offset=offset)
             except RuntimeError as exc:
                 aborted = None
-                self.observation["abort_native_wait_error"] = f"{type(exc).__name__}: {exc}"
+                self.observation[f"{name}_native_wait_error"] = f"{type(exc).__name__}: {exc}"
             record["evidence"] = {
                 "observed": aborted is not None,
                 "source_path": str(self.session_file),
@@ -2505,20 +2515,20 @@ class Lifecycle:
         # An abort proves nothing if the session cannot take the next turn.
         self.settle()
         try:
-            after_command = self.control("send", self.prompt("after_abort", after))
+            after_command = self.control("send", self.prompt("after_abort", after), local=local)
         except RuntimeError as exc:
             after_command = {"accepted": False, "error": f"{type(exc).__name__}: {exc}"}
         try:
             _wait_native_marker(self.session_file, after, minimum_offset=offset, timeout=150)
         except RuntimeError as exc:
-            self.observation["after_abort_wait_error"] = f"{type(exc).__name__}: {exc}"
+            self.observation[f"after_{name}_wait_error"] = f"{type(exc).__name__}: {exc}"
         self.settle()
-        self.observation["abort_turn_verdict"] = {
+        self.observation[f"{name}_turn_verdict"] = {
             **abort_then_send_verdict(read_session_entries(self.session_file), task_marker=task, task_done_marker=done, after_marker=after),
             "after_send_accepted": after_command.get("accepted") is True,
         }
         record["after_command"] = after_command
-        self.controls["abort"] = record
+        self.controls[name] = record
 
     def stale_frame(self, old: Mapping[str, Any], current: Mapping[str, Any]) -> None:
         """Send a command as the owner that was current before a rebind, and record what the launcher answered."""
@@ -2602,7 +2612,7 @@ class Lifecycle:
         # The provider may reserve the path at `/new` and write the file with the first turn.
         offset = _read_source_size(self.session_file)
         prompt = _context_prompt(phrase, marker)
-        command = self.host("send" if f.host_controls else "send_live", prompt)
+        command = self.host(f.rebind_command, prompt)
         row, evidence = self.reply(marker, offset)
         seed_row, seed = self.reply(phrase, offset, role="user")
         record = self.controls["replacement"] = {
@@ -2630,7 +2640,7 @@ class Lifecycle:
         exists to make.
         """
 
-        if self.f.host_controls:
+        if not self.f.terminate_proves_owners_dead:
             try:
                 stopped = _wait_stopped(self.home, self.f, self.session_id)
             except RuntimeError as exc:
@@ -2660,7 +2670,7 @@ class Lifecycle:
         control = self.negative_control == "terminate"
         stopped = self._stopped(state, self.terminals[0], owner="replacement", tolerate=control)
         owned = command.get("accepted") is True and (
-            stopped.get("terminal_reason") == "remote_terminate" if f.host_controls else stopped.get("owners_dead") is True
+            stopped.get("owners_dead") is True if f.terminate_proves_owners_dead else stopped.get("terminal_reason") == "remote_terminate"
         )
         self.observation["terminate_verdict"] = {
             "passed": owned,
@@ -2790,7 +2800,7 @@ class Lifecycle:
             self.observation["settlement"] = _native_settlement(
                 self.session_file, channel_state=settled, native_session_id=str(state.get("native_session_id") or "")
             )
-        command = self.control("terminate")
+        command = self.control("terminate", local=f.local_controls)
         if f.refused_command_ends_run and command.get("accepted") is not True:
             raise RuntimeError(f"{f.name} cold-resume termination was not accepted")
         stopped = self._stopped(self.state, terminal, owner="cold_resume")
@@ -2856,9 +2866,10 @@ class Lifecycle:
 
         f, observation = self.f, self.observation
         dispatch: dict[str, Any] = {"status": "pass", "dispatched": False, "skipped": True}
-        if self.session_id and (self.failure is not None if not f.host_controls else not self.served_run_inventory):
+        # A lifecycle that claims each run's retirement terminates whatever it did not see retired; another, a run that failed.
+        if self.session_id and (not self.served_run_inventory if f.retirement_claims else self.failure is not None):
             try:
-                sent = self.control("terminate")
+                sent = self.control("terminate", local=f.local_controls)
                 dispatch = {
                     "status": "pass" if sent.get("accepted") else "fail",
                     "dispatched": sent.get("accepted") is True,

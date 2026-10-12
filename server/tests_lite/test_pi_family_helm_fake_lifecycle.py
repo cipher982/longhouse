@@ -77,9 +77,8 @@ def test_a_whole_lifecycle_holds_every_cell(provider, whole):
         for name, record in result["observation"]["controls"].items()
         if isinstance(record.get("command"), dict) and "retries" in record["command"]
     }
-    first = "send" if provider == "omp" else "follow_up"
-    assert retries[first] == 1 and sum(retries.values()) == 1
-    assert result["observation"]["controls"][first]["command"]["retries"]["refused_with"]["http_status"] == 409
+    assert retries["send"] == 1 and sum(retries.values()) == 1
+    assert result["observation"]["controls"]["send"]["command"]["retries"]["refused_with"]["http_status"] == 409
     # The refused stale frame carried text of this run's own, and none of it is in what the provider wrote.
     frame_text = result["observation"]["controls"]["stale_owner"]["frame_text"]
     assert f"{module.FAMILY.marker_prefix}_STALE_" in frame_text
@@ -119,6 +118,19 @@ _BROKEN = [
     ("pi", "launch_registration", "shipper.machine_name", ""),
     ("pi", "native_tool_taxonomy", "native_taxonomy.tool_calls_without_results", ["call-without-result"]),
     ("pi", "send_idle", "controls.send.command.accepted", False),
+    # Each control goes the way a remote user's does, and once more through the engine's local command: neither
+    # path stands in for the other.
+    ("pi", "send_idle", "controls.send.command.transport", "local_engine_command"),
+    ("pi", "send_idle", "controls.local_send.command.transport", "runtime_host_agents_api"),
+    ("pi", "send_idle", "controls.local_send.evidence.assistant_answer_rows", 0),
+    ("pi", "steer_active", "controls.steer.command.transport", "local_engine_command"),
+    ("pi", "steer_active", "controls.local_steer.command.accepted", False),
+    ("pi", "steer_active", "local_steer_turn_verdict.passed", False),
+    ("pi", "abort_native", "controls.abort.command.transport", "local_engine_command"),
+    ("pi", "abort_native", "controls.local_abort.evidence.observed", False),
+    ("pi", "abort_native", "local_abort_turn_verdict.after_send_accepted", False),
+    ("pi", "terminate_owned", "controls.terminate.command.transport", "local_engine_command"),
+    ("pi", "terminate_owned", "controls.final_terminate.command.transport", "runtime_host_agents_api"),
     ("pi", "send_idle", "flush.send.status", "fail"),
     ("pi", "send_idle", "convergence.send.binding.one_thread", False),
     # No busy turn was seen before the steer, or before the send that was to be queued behind one.
@@ -189,7 +201,9 @@ def test_a_provider_that_dies_mid_run_is_a_typed_failure_with_what_it_reached_ke
     assert reached["cleanup"] == cleanup
     assert (root / "partial-observation.json").is_file()
     if provider == "pi":
-        assert result["diagnostic_assertions"]["pi_helm_send_idle"] is True
+        # The launch had held. The idle send needs its second half, through the local command, which the run never reached.
+        assert result["diagnostic_assertions"]["pi_helm_launch_registration"] is True
+        assert result["diagnostic_assertions"]["pi_helm_send_idle"] is False and "local_send" not in reached["controls"]
         routing = json.loads((root / "openrouter-routing-receipt.json").read_text(encoding="utf-8"))
         assert (routing["model_id"], routing["routing"]) == ("fake-model", OPENROUTER_QUALIFICATION_ROUTING)
 

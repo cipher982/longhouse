@@ -61,7 +61,9 @@ REGISTRATION = ProducerRegistration(
     # 17: a run that raised outside its own handling leaves a complete result; --model is required.
     # 18: the lifecycle is the Pi family's one engine, and its evidence the family's one shape; an exited
     # process counts as stopped before its parent collects it (live_kit.pid_dead).
-    scenario_revision=18,
+    # 19: send, steer, abort and terminate go through the Runtime Host, as a remote user's do; the engine's local
+    # command is proven beside them, in turns of its own and with the last terminate.
+    scenario_revision=19,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -106,6 +108,7 @@ REGISTRATION = ProducerRegistration(
 )
 
 _STALE_REFUSALS = frozenset({"stale_channel", "stale_generation", "session_not_attached"})
+_HOST, _LOCAL = "runtime_host_agents_api", "local_engine_command"
 _BOUND = ("one_session", "one_thread", "provider_session_bound")
 
 
@@ -123,6 +126,9 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
         "follow_up",
         "steer",
         "abort",
+        "local_send",
+        "local_steer",
+        "local_abort",
         "reload",
         "replacement",
         "terminate",
@@ -134,6 +140,28 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
 
     def accepted(record: Mapping[str, Any], command: str = "command") -> bool:
         return _mapping(record.get(command)).get("accepted") is True
+
+    def through(transport: str, record: Mapping[str, Any], *commands: str) -> bool:
+        """Each of the record's commands was accepted, and went the way the cell says it went."""
+
+        return all(accepted(record, command) and _mapping(record.get(command)).get("transport") == transport for command in commands)
+
+    def steered(record: Mapping[str, Any], verdict: str) -> bool:
+        return busy(record) and answered(record) and _mapping(observation.get(verdict)).get("passed") is True
+
+    def aborted(record: Mapping[str, Any], verdict: str) -> bool:
+        native = _mapping(record.get("evidence"))
+        return (
+            busy(record)
+            and bool(record.get("settled_state"))
+            and _mapping(record.get("settled_state")).get("phase") not in {"running", "thinking"}
+            and native.get("observed") is True
+            and bool(native.get("retained_source_path"))
+            and isinstance(native.get("aborted_row_id"), str)
+            and isinstance(native.get("aborted_row_source_offset"), int)
+            and _mapping(observation.get(verdict)).get("passed") is True
+            and _mapping(observation.get(verdict)).get("after_send_accepted") is True
+        )
 
     def answered(record: Mapping[str, Any], evidence: str = "evidence") -> bool:
         """The turn's window of the provider's own file holds rows, and one of them answers with the marker."""
@@ -161,12 +189,12 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
     cleanup = _mapping(observation.get("cleanup"))
     cleanup_ok = helm._helm_cleanup_ready(cleanup) and cleanup.get("cleanup_errors", []) == []
     launch, send, follow_up, steer, abort = (records[name] for name in ("launch", "send", "follow_up", "steer", "abort"))
+    local_send, local_steer, local_abort = (records[name] for name in ("local_send", "local_steer", "local_abort"))
     reload, replacement, resume, stale = (records[name] for name in ("reload", "replacement", "cold_resume", "stale_owner"))
     launch_state = _mapping(launch.get("state"))
     taxonomy = _mapping(observation.get("native_taxonomy"))
     follow_request = _mapping(_mapping(follow_up.get("command")).get("request"))
     follow_native = _mapping(follow_up.get("evidence"))
-    abort_native = _mapping(abort.get("evidence"))
     reload_before, reload_after = _mapping(reload.get("before")), _mapping(reload.get("state"))
     replaced_before, replaced = _mapping(replacement.get("before")), _mapping(replacement.get("state"))
     replaced_file = _mapping(_mapping(replacement.get("evidence")).get("native_file"))
@@ -188,18 +216,25 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
             and served(launch).get("served_controls") is True
         ),
         "pi_helm_native_tool_taxonomy": bool(taxonomy.get("tool_pairs")) and not bool(taxonomy.get("tool_calls_without_results")),
-        "pi_helm_send_idle": accepted(send) and answered(send) and flushed("send") and bound(send, facts=_BOUND[:2]),
+        # Each control is proven the way a remote user's goes, through the Runtime Host, and once more through the
+        # engine's local command (the `local_*` records and the last terminate).
+        "pi_helm_send_idle": (
+            through(_HOST, send, "command")
+            and answered(send)
+            and flushed("send")
+            and bound(send, facts=_BOUND[:2])
+            and through(_LOCAL, local_send, "command")
+            and answered(local_send)
+        ),
         "pi_helm_steer_active": (
-            accepted(steer, "active_command")
-            and busy(steer)
-            and accepted(steer)
-            and answered(steer)
-            and _mapping(observation.get("steer_turn_verdict")).get("passed") is True
+            through(_HOST, steer, "active_command", "command")
+            and steered(steer, "steer_turn_verdict")
+            and through(_LOCAL, local_steer, "active_command", "command")
+            and steered(local_steer, "local_steer_turn_verdict")
         ),
         "pi_helm_follow_up_native": (
-            accepted(follow_up, "active_command")
+            through(_HOST, follow_up, "active_command", "command")
             and busy(follow_up)
-            and accepted(follow_up)
             and follow_request.get("method") == "POST"
             and str(follow_request.get("path") or "").startswith("/api/agents/sessions/")
             and str(follow_request.get("path") or "").endswith("/input")
@@ -212,22 +247,15 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
             and follow_native.get("user_marker_occurrences") == 1
         ),
         "pi_helm_abort_native": (
-            accepted(abort, "active_command")
-            and busy(abort)
-            and accepted(abort)
-            and bool(abort.get("settled_state"))
-            and _mapping(abort.get("settled_state")).get("phase") not in {"running", "thinking"}
-            and abort_native.get("observed") is True
-            and bool(abort_native.get("retained_source_path"))
-            and isinstance(abort_native.get("aborted_row_id"), str)
-            and isinstance(abort_native.get("aborted_row_source_offset"), int)
-            and _mapping(observation.get("abort_turn_verdict")).get("passed") is True
-            and _mapping(observation.get("abort_turn_verdict")).get("after_send_accepted") is True
+            through(_HOST, abort, "active_command", "command")
+            and aborted(abort, "abort_turn_verdict")
+            and through(_LOCAL, local_abort, "active_command", "command")
+            and aborted(local_abort, "local_abort_turn_verdict")
             and cleanup_ok
         ),
         "pi_helm_terminate_owned": (
-            accepted(records["terminate"])
-            and accepted(records["final_terminate"])
+            through(_HOST, records["terminate"], "command")
+            and through(_LOCAL, records["final_terminate"], "command")
             and _mapping(records["final_terminate"].get("stopped_state")).get("status") == "pass"
             and records["final_terminate"].get("terminals_exited") is True
             and cleanup.get("provider_process_dead") is True
@@ -347,6 +375,10 @@ FAMILY = Family(
     timeouts={"launch": 45, "busy": 10, "identity": 30, "replace": 30, "resume": 45, "resume_reply": 90, "resume_context": 90},
     homes=("provider-home", "longhouse"),
     tool_launch=True,
+    host_controls=True,
+    local_controls=True,
+    terminate_proves_owners_dead=True,
+    rebind_command="send_live",
     converges_each_turn=True,
     native_abort_row=True,
     local_health=True,
@@ -358,13 +390,19 @@ FAMILY = Family(
 
 
 def _steps(life: Lifecycle) -> None:
+    local = FAMILY.local_controls
     life.launch()
     life.send_idle()
     life.follow_up()
     life.steer()
+    if local:
+        life.send_idle(local=True)
+        life.steer(local=True)
     life.reload()
     life.replace(stale_frame=False)
     life.abort()
+    if local:
+        life.abort(local=True)
     life.terminate()
     life.cold_resume()
 
