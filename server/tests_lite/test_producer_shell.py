@@ -323,6 +323,20 @@ def test_a_result_carries_the_evidence_class_the_command_line_named(tmp_path, ca
     assert not (tmp_path / "unlisted").exists()
 
 
+def test_a_producer_that_needs_an_argument_its_command_line_lacks_is_refused_when_it_is_defined():
+    # A definition error, caught where the producer is built: every producer module builds its own at import.
+    with pytest.raises(
+        ValueError, match=r"fixture\.shell\.v1 needs arguments its command line does not define: \['codex_bin', 'no_such_argument'\]"
+    ):
+        Producer(
+            _REGISTRATION,
+            artifact_kind="k",
+            failure_code="f",
+            needs=("evidence_root", "no_such_argument"),
+            binaries=(("codex_bin", "codex_binary_missing"),),
+        )
+
+
 def test_a_producer_answers_to_the_factorys_name_for_its_binary_and_to_its_historical_one():
     codex = Producer(
         _REGISTRATION, artifact_kind="k", failure_code="f", provider_bin_aliases=("--codex-bin",), provider_bin_dest="codex_bin"

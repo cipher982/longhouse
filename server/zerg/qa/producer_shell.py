@@ -171,6 +171,12 @@ class Producer:
     refuse: Callable[[argparse.Namespace], str | None] | None = None
     add_arguments: Callable[[argparse.ArgumentParser], None] | None = None
 
+    def __post_init__(self) -> None:
+        defined = {action.dest for action in self.parser()._actions}
+        unknown = sorted({*self.needs, *(name for name, _code in self.binaries)} - defined)
+        if unknown:
+            raise ValueError(f"{self.registration.producer_id} needs arguments its command line does not define: {unknown}")
+
     def envelope(self, *, provider: str | None = None, variant: str | None = None, scenario_id: str | None = None) -> dict[str, Any]:
         """The fields the factory compares with its command, on every result this producer writes.
 
