@@ -117,6 +117,11 @@ _BROKEN = [
     ("omp", "native_replacement_bound", "controls.replacement.evidence.native_source_bound", False),
     ("pi", "launch_registration", "convergence.launch.served_controls", False),
     ("pi", "launch_registration", "shipper.machine_name", ""),
+    # Control is held to the owner's lease when the owner starts, not only after a rebind.
+    ("pi", "launch_registration", "control_identity.initial.control_subject_key", "connection:another:lease"),
+    ("pi", "launch_registration", "control_identity.initial.actions.send_input", "unavailable"),
+    ("pi", "cold_resume_exact_file", "control_identity.cold_resume", {}),
+    ("pi", "cold_resume_exact_file", "control_identity.final.owner_identity", ["another", "owner"]),
     ("pi", "native_tool_taxonomy", "native_taxonomy.tool_calls_without_results", ["call-without-result"]),
     ("pi", "send_idle", "controls.send.command.accepted", False),
     # Each control goes the way a remote user's does, and once more through the engine's local command: neither

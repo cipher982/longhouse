@@ -65,7 +65,9 @@ REGISTRATION = ProducerRegistration(
     # command is proven beside them, in turns of its own and with the last terminate.
     # 20: a send that is not accepted starts no turn, and the run ends there and names it, not at a later wait.
     # 21: a second launcher started against the live owner is refused, and the stale-owner cell rests on that too.
-    scenario_revision=21,
+    # 22: control of the session is held to the owner's lease at launch, at cold resume and at the end, not only
+    # after a reload or a replacement.
+    scenario_revision=22,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -185,9 +187,26 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
     def flushed(label: str) -> bool:
         return _mapping(_mapping(observation.get("flush")).get(label)).get("status") == "pass"
 
+    def control_bound(label: str) -> bool:
+        """The Runtime Host served control of this session under the lease of the owner recorded at ``label``."""
+
+        receipt = _mapping(_mapping(observation.get("control_identity")).get(label))
+        actions = _mapping(receipt.get("actions"))
+        return (
+            bool(receipt.get("expected_subject_key"))
+            and receipt.get("control_subject_key") == receipt.get("expected_subject_key")
+            and receipt.get("session_id") == observation.get("session_id")
+            and receipt.get("served_path") == "canonical_session_detail"
+            and helm._owner_identity_is_complete(receipt.get("owner_identity"))
+            # What Pi's lifecycle waits for before it uses a control: a send that is offered and a terminate that is named.
+            and actions.get("send_input") == "available"
+            and "terminate" in actions
+        )
+
     def busy(record: Mapping[str, Any]) -> bool:
         return _mapping(record.get("active_state")).get("phase") in {"running", "thinking"}
 
+    identities = _mapping(observation.get("control_identity"))
     cleanup = _mapping(observation.get("cleanup"))
     cleanup_ok = helm._helm_cleanup_ready(cleanup) and cleanup.get("cleanup_errors", []) == []
     launch, send, follow_up, steer, abort = (records[name] for name in ("launch", "send", "follow_up", "steer", "abort"))
@@ -216,6 +235,7 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
             and flushed("launch")
             and bound(launch)
             and served(launch).get("served_controls") is True
+            and control_bound("initial")
         ),
         "pi_helm_native_tool_taxonomy": bool(taxonomy.get("tool_pairs")) and not bool(taxonomy.get("tool_calls_without_results")),
         # Each control is proven the way a remote user's goes, through the Runtime Host, and once more through the
@@ -316,6 +336,10 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
             and recall_served.get("marker") == phrase
             and bool(_mapping(recall_served.get("served_projection")).get("marker_event_ids"))
             and bound(resume, "context_served")
+            # Control is the resumed owner's, when it starts and when its turn is over, and that is one owner.
+            and control_bound("cold_resume")
+            and control_bound("final")
+            and _mapping(identities.get("final")).get("owner_identity") == _mapping(identities.get("cold_resume")).get("owner_identity")
         ),
         "pi_helm_stale_owner_refused": (
             # One session has one execution owner: a second launcher is turned away while the first is live,
@@ -382,6 +406,7 @@ FAMILY = Family(
     tool_launch=True,
     host_controls=True,
     local_controls=True,
+    identity_at_launch=True,
     terminate_proves_owners_dead=True,
     rebind_command="send_live",
     converges_each_turn=True,
