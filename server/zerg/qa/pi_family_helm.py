@@ -3073,6 +3073,8 @@ class Lifecycle:
             failure = RuntimeError(
                 f"{f.name} Helm cleanup did not prove run retirement, source retention, shipper stop, and scratch removal"
             )
+            # A run that failed only in its cleanup had recorded everything: keep it, as a failed step does.
+            self.write_partial(failure)
         if self.negative_control and (failure is None or f.control_outlives_failure):
             verdict = negative_control_verdict(
                 self.negative_control,

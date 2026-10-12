@@ -250,6 +250,27 @@ def test_a_failing_verdict_reached_before_a_late_failure_is_kept(provider, longh
         assert result["diagnostic_observation"]["steer_turn_verdict"]["code"] == "steer_delivered_as_queued_follow_up"
 
 
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_a_run_that_fails_only_in_its_cleanup_keeps_everything_it_recorded(provider, tmp_path, monkeypatch, capsys):
+    # Every step holds, and the session cannot be shown retired afterwards.
+    with _fake_longhouse(tmp_path, monkeypatch, never_hides=True) as (cli, _isolation):
+        code, result, root = _run(provider, cli, tmp_path, monkeypatch)
+    capsys.readouterr()
+
+    cleanup = json.loads((root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert (code, result["status"], cleanup["status"], cleanup["canary_session_hidden"]) == (1, "fail", "fail", False)
+    if provider == "omp":
+        # OMP's cells that rest on cleanup do not hold: a verdict, with the whole observation in the result.
+        not_held = {name for name, held in result["assertions"].items() if not held}
+        assert not_held == {"omp_helm_terminate_owned"} and "controls" in result["observation"]
+    else:
+        # Pi ends the run: a typed failure that keeps the whole record, in the result and as a file of its own.
+        assert result["failure_code"] == "pi_helm_lifecycle_failed" and "assertions" not in result
+        kept = json.loads((root / "partial-observation.json").read_text(encoding="utf-8"))["observation"]
+        assert set(kept["controls"]) == set(result["diagnostic_observation"]["controls"]) >= {"launch", "cold_resume", "final_terminate"}
+        assert kept["cleanup"]["status"] == "fail"
+
+
 def test_the_background_scope_ends_after_its_first_turn(longhouse, tmp_path, monkeypatch, capsys):
     """The OMP background scenario rides this lifecycle for one turn: none of the Helm controls run."""
 

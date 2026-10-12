@@ -499,11 +499,13 @@ def main(argv: list[str]) -> int:
 class FakeRuntimeHost:
     """The agents API the producers call, over the owners the fake launchers register."""
 
-    def __init__(self, token: str, *, reconnecting: int = 0) -> None:
-        """``reconnecting`` control requests are first refused as a control channel that is reconnecting."""
+    def __init__(self, token: str, *, reconnecting: int = 0, never_hides: bool = False) -> None:
+        """``reconnecting`` control requests are first refused as a control channel that is reconnecting;
+        ``never_hides`` leaves a session visible however it is retired (a cleanup that cannot be proven)."""
 
         self.token = token
         self.reconnecting = reconnecting
+        self.never_hides = never_hides
         self.sessions: dict[str, dict[str, Any]] = {}
         self.processes: set[int] = set()
         self.lock = threading.RLock()
@@ -631,7 +633,7 @@ class FakeRuntimeHost:
             }
             return 200, {"session_id": session_id, "served_path": "canonical_session_detail", "shadow": shadow}
         if action == "timeline-visibility":
-            session["hidden"] = body.get("hidden") is True
+            session["hidden"] = body.get("hidden") is True and not self.never_hides
             return 200, {"hidden": session["hidden"]}
         if action == "action":
             session["archived"] = body.get("action") == "archive"
