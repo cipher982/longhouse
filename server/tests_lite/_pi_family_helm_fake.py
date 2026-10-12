@@ -33,11 +33,18 @@ STEP_SECONDS = 0.6
 BUSY_SECONDS = 2.0
 # No fake process outlives this, whatever happened to the test that started it.
 MAX_LIFETIME_SECONDS = 600
+# Faults, comma separated: ``exit_after:<n>`` kills the launcher and its provider once the n-th turn has ended;
+# ``steer_as_follow_up`` holds a steer until the turn it was sent into is over (the engine's own negative control,
+# zerg.qa.pi_family_turn_oracle: NEGATIVE_CONTROLS).
 FAULT_ENV = "LONGHOUSE_FAKE_HELM_FAULT"
 _REPLY = re.compile(r"reply (?:only )?with (?:exactly )?([A-Za-z0-9_]+)", re.IGNORECASE)
 _RECALL = re.compile(r"context phrase that starts with ([A-Z_]+_)\..*then ([A-Za-z0-9_]+), and nothing else", re.DOTALL)
 _STEP_TASK = re.compile(r"Task (\S+): run each")
 _ID_KEY = {"omp": "native_session_id", "pi": "provider_session_id"}
+
+
+def _faults() -> set[str]:
+    return set(os.environ.get(FAULT_ENV, "").split(","))
 
 
 def _now() -> str:
@@ -136,6 +143,7 @@ class _Launcher:
         self.stop = threading.Event()
         self.busy = False
         self.steer: str | None = None
+        self.held_steer: str | None = None
         self.abort = False
         self.terminate_requested = False
         self.turns = 0
@@ -303,12 +311,14 @@ class _Launcher:
             )
             self._publish()
         self.turns += 1
-        fault = os.environ.get(FAULT_ENV, "")
-        if fault == f"exit_after:{self.turns}":
+        if f"exit_after:{self.turns}" in _faults():
             # The provider and its launcher die with no terminal state written, as a crash leaves them.
             self.provider_process.kill()
             self.provider_process.wait()
             os._exit(70)
+        if self.held_steer is not None:
+            held, self.held_steer = self.held_steer, None
+            self._accept(held)
 
     def _accept(self, prompt: str) -> None:
         with self.lock:
@@ -343,7 +353,10 @@ class _Launcher:
             elif kind == "steer":
                 if not self.busy:
                     return refused("turn_ended")
-                self.steer = str(frame.get("text") or "")
+                if "steer_as_follow_up" in _faults():
+                    self.held_steer = str(frame.get("text") or "")
+                else:
+                    self.steer = str(frame.get("text") or "")
             elif kind == "abort":
                 self.abort = self.busy
             elif kind == "terminate":
@@ -595,6 +608,8 @@ class FakeRuntimeHost:
         session_id, action, owner = found.group(1), found.group(2), session["owner"]
         if action is None:
             return 200, {"id": session_id, "provider": owner["provider"], "provider_session_id": owner[_ID_KEY[owner["provider"]]]}
+        if action == "workspace":
+            return 200, {"session_id": session_id, "items": []}
         if action == "thread":
             return 200, {"root_session_id": session_id, "head_session_id": session_id, "sessions": [{"id": session_id}]}
         if action == "events":
