@@ -58,6 +58,7 @@ import sys
 from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
@@ -97,6 +98,10 @@ class ProducerFailure(RuntimeError):
     def __init__(self, failure_code: str, message: str) -> None:
         self.failure_code = failure_code
         super().__init__(message)
+
+
+# The evidence class of the cell this invocation runs, from the command line; a registration may list several.
+_EVIDENCE_CLASS: ContextVar[str | None] = ContextVar("producer_shell_evidence_class", default=None)
 
 
 @dataclass
@@ -172,7 +177,9 @@ class Producer:
         ``variant`` is the authored variant of the cell, which is None for a
         cell the schema gives none: the execution key the factory passes as
         ``--variant`` is not it. ``provider`` defaults to the one provider a
-        registration names.
+        registration names. The evidence class is the one the command line
+        named (``main``), or the registration's first for a caller that came
+        in another way.
         """
 
         registration = self.registration
@@ -186,7 +193,7 @@ class Producer:
             "variant": variant,
             "scenario_id": scenario_id or registration.scenario_id,
             "scenario_revision": registration.scenario_revision,
-            "evidence_class": registration.evidence_classes[0],
+            "evidence_class": _EVIDENCE_CLASS.get() or registration.evidence_classes[0],
             "generated_at": now(),
         }
         if registration.observation_scope == "scenario":
@@ -301,10 +308,11 @@ class Producer:
         """The producer's command line.
 
         ``--registration`` prints the registration and runs nothing. Otherwise
-        the arguments are parsed and, in this order, a missing needed argument, a
-        Runtime Host without its URL and token, a binary that is not an
-        executable file and the producer's own precondition are each refused
-        with a typed code and exit status 2, before anything is written.
+        the arguments are parsed and, in this order, a missing needed argument,
+        an evidence class the registration does not list, a Runtime Host
+        without its URL and token, a binary that is not an executable file and
+        the producer's own precondition are each refused with a typed code and
+        exit status 2, before anything is written.
         Then ``invoke`` runs, its result is printed, and the exit status is 0
         for a pass and 1 for anything else.
         """
@@ -317,6 +325,8 @@ class Producer:
         for name in self.needs:
             if getattr(args, name) in (None, ""):
                 return refusal(f"missing_required_argument:--{name.replace('_', '-')}")
+        if args.evidence_class and args.evidence_class not in self.registration.evidence_classes:
+            return refusal("evidence_class_not_registered")
         if self.runtime_host:
             require_disposable_runtime(args.api_url)
             if not args.api_url or not args.agents_token:
@@ -327,6 +337,10 @@ class Producer:
                 return refusal(failure_code)
         if self.refuse is not None and (failure_code := self.refuse(args)):
             return refusal(failure_code)
-        result = invoke(args)
+        evidence_class = _EVIDENCE_CLASS.set(args.evidence_class or None)
+        try:
+            result = invoke(args)
+        finally:
+            _EVIDENCE_CLASS.reset(evidence_class)
         print(json.dumps(result, sort_keys=True, default=str))
         return 0 if result.get("status") == "pass" else 1

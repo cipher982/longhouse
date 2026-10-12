@@ -8,6 +8,7 @@ and a typed failure made from that identity go through ``result_envelope_failure
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import json
 from pathlib import Path
@@ -101,9 +102,11 @@ def test_a_producer_answers_each_factory_command_with_an_envelope_the_factory_ac
     monkeypatch.setenv("LONGHOUSE_QUALIFICATION_SANDBOX", "provider-qualification-bwrap-v3")
     monkeypatch.setenv("CODEX_API_KEY", "fixture-provider-token")
     identities: list[dict] = []
+    evidence_classes: list[str] = []
 
     def execute(self, root, _body, **options):
         identities.append({name: options[name] for name in ("provider", "variant", "scenario_id") if name in options})
+        evidence_classes.append(self.envelope(**identities[-1])["evidence_class"])
         return {"status": "fail"}
 
     monkeypatch.setattr(Producer, "execute", execute)
@@ -114,6 +117,8 @@ def test_a_producer_answers_each_factory_command_with_an_envelope_the_factory_ac
         identities.clear()
         assert module.main(_factory_arguments(command, root, binary)) == 1, command
         assert len(identities) == 1, f"{module_name} did not run {command} through the shell once"
+        # The result is the evidence class the factory asked for, not whichever the registration lists first.
+        assert evidence_classes[-1] == command["evidence_class"]
         assertion_id = command["assertion_id"]
         observed = _observation_that_reached(producer, assertion_id)
         results = {
@@ -296,6 +301,26 @@ def test_a_blocked_run_says_so_and_a_raising_caller_gets_the_exception_and_no_ar
     # A producer never writes into another run's evidence.
     with pytest.raises(FileExistsError):
         _FIXTURE.execute(tmp_path / "raises", body)
+
+
+def test_a_result_carries_the_evidence_class_the_command_line_named(tmp_path, capsys):
+    two_classes = dataclasses.replace(_REGISTRATION, evidence_classes=("live_token", "hermetic"))
+    producer = Producer(two_classes, artifact_kind="fixture_result", failure_code="fixture_failed")
+
+    def run(root: Path, *extra: str) -> tuple[int, dict]:
+        code = producer.main(
+            lambda args: producer.execute(args.evidence_root, lambda _run: None), ["--variant", "v", "--evidence-root", str(root), *extra]
+        )
+        return code, json.loads(capsys.readouterr().out)
+
+    assert run(tmp_path / "named", "--evidence-class", "hermetic")[1]["evidence_class"] == "hermetic"
+    # A caller that names none (the release-identity lane, a test) gets the registration's first.
+    assert run(tmp_path / "unnamed")[1]["evidence_class"] == "live_token"
+    assert run(tmp_path / "unlisted", "--evidence-class", "live_no_token") == (
+        2,
+        {"status": "fail", "failure_code": "evidence_class_not_registered"},
+    )
+    assert not (tmp_path / "unlisted").exists()
 
 
 def test_a_producer_answers_to_the_factorys_name_for_its_binary_and_to_its_historical_one():
