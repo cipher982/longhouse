@@ -17,6 +17,7 @@ import pytest
 from tests_lite import _pi_family_helm_fake as fake
 from tests_lite._factory_envelope import assert_result_conforms
 from zerg.qa import omp_background_producer
+from zerg.qa.failed_results import reached_only
 from zerg.qa.openrouter_routing import OPENROUTER_QUALIFICATION_ROUTING
 
 # A whole lifecycle of real waits and process exits; the suite's 60 s guard is for a hang, not for this.
@@ -91,10 +92,10 @@ def test_a_whole_lifecycle_holds_every_cell(provider, whole):
     assert f"{module.FAMILY.marker_prefix}_STALE_" in frame_text
     retained = [root / item["retained_source_path"] for item in result["observation"]["sources"]]
     assert retained and not any(frame_text.encode() in path.read_bytes() for path in retained)
-    if module.FAMILY.reached is not None:
-        # Every record a cell's step is proven reached by is one the run wrote.
-        assert set(module.FAMILY.reached) == set(module.ASSERTIONS)
-        assert module.reached_assertions(result["observation"]) == result["assertions"]
+    # Every record a cell's step is proven reached by is one the run wrote.
+    assert set(module.FAMILY.reached) == set(module.ASSERTIONS)
+    reached = reached_only(module.FAMILY.cells(result["observation"]), result["observation"], module.FAMILY.reached)
+    assert reached == result["assertions"]
 
 
 # One fact of a whole lifecycle's record, broken: the cell that rests on it no longer holds. The record is the
@@ -221,15 +222,13 @@ def test_a_provider_that_dies_mid_run_is_a_typed_failure_with_what_it_reached_ke
     cleanup = json.loads((root / "cleanup-receipt.json").read_text(encoding="utf-8"))
     assert cleanup["status"] == "pass"
     # What it had reached stays as evidence: the send that held, and nothing for the follow-up that never ran.
-    # OMP's failed run keeps it as the observation it had; Pi's reports no verdict and keeps it as diagnostics.
-    reached = result["partial_observation" if provider == "omp" else "diagnostic_observation"]
+    reached = result["partial_observation"]
     assert reached["controls"]["send"]["marker_wait"]["status"] == "answered" and "follow_up" not in reached["controls"]
     assert reached["cleanup"] == cleanup
     assert (root / "partial-observation.json").is_file()
     if provider == "pi":
-        # The launch had held. The idle send needs its second half, through the local command, which the run never reached.
-        assert result["diagnostic_assertions"]["pi_helm_launch_registration"] is True
-        assert result["diagnostic_assertions"]["pi_helm_send_idle"] is False and "local_send" not in reached["controls"]
+        # The idle send's cell rests on a second send, through the local command, which the run never reached.
+        assert "local_send" not in reached["controls"]
         routing = json.loads((root / "openrouter-routing-receipt.json").read_text(encoding="utf-8"))
         assert (routing["model_id"], routing["routing"]) == ("fake-model", OPENROUTER_QUALIFICATION_ROUTING)
 
@@ -249,23 +248,20 @@ def test_events_that_cannot_be_read_to_their_end_fail_the_run_and_are_not_taken_
 @pytest.mark.parametrize("provider", ["omp", "pi"])
 def test_a_failing_verdict_reached_before_a_late_failure_is_kept(provider, longhouse, tmp_path, monkeypatch, capsys):
     cli, _isolation = longhouse
-    # The steer is held until its turn is over, which the steer cell must refuse; then the provider dies.
-    monkeypatch.setenv(fake.FAULT_ENV, "steer_as_follow_up,exit_after:6")
+    # A steer is held until its turn is over, which the steer cell must refuse; then the provider dies, once the
+    # steer cell's last turn is over (Pi's rests on a second steer, through the local command).
+    monkeypatch.setenv(fake.FAULT_ENV, f"steer_as_follow_up,exit_after:{6 if provider == 'omp' else 9}")
     code, result, _root = _run(provider, cli, tmp_path, monkeypatch)
     capsys.readouterr()
 
     _conforms(provider, result, cell="steer_active")
     assert (code, result["status"], result["failure_code"]) == (1, "fail", f"{provider}_helm_lifecycle_failed")
-    steer = f"{provider}_helm_steer_active"
-    if provider == "omp":
-        # The verdicts of the steps it reached, the failing one among them; none for a step it did not reach.
-        assert result["assertions"] == {"omp_helm_send_idle": True, "omp_helm_follow_up_native": True, steer: False}
-        assert result["observation"]["steer_turn_verdict"]["code"] == "steer_delivered_as_queued_follow_up"
-    else:
-        # Pi reports no verdict of a failed run: what it had decided is diagnostic only.
-        assert "assertions" not in result
-        assert result["diagnostic_assertions"][steer] is False
-        assert result["diagnostic_observation"]["steer_turn_verdict"]["code"] == "steer_delivered_as_queued_follow_up"
+    # The verdicts of the steps it reached, the failing one among them; none for a step it did not reach.
+    reached = {"send_idle": True, "follow_up_native": True, "steer_active": False}
+    if provider == "pi":
+        reached |= {"launch_registration": True, "native_tool_taxonomy": True}
+    assert result["assertions"] == {f"{provider}_helm_{cell}": held for cell, held in reached.items()}
+    assert result["observation"]["steer_turn_verdict"]["code"] == "steer_delivered_as_queued_follow_up"
 
 
 @pytest.mark.parametrize(
@@ -287,7 +283,7 @@ def test_a_refused_send_ends_the_run_where_it_is_refused(dies_after, refused, re
 
     assert (code, result["status"], result["failure_code"]) == (1, "fail", "pi_helm_lifecycle_failed")
     assert refused in result["error"]
-    controls = result["diagnostic_observation"]["controls"]
+    controls = result["partial_observation"]["controls"]
     assert controls["local_send"]["marker_wait"]["status"] == recorded and "local_steer" not in controls
     # Not at the end of a wait for a reply or a busy state that could never come.
     assert time.monotonic() - started < 45
@@ -302,15 +298,15 @@ def test_a_run_that_fails_only_in_its_cleanup_keeps_everything_it_recorded(provi
 
     cleanup = json.loads((root / "cleanup-receipt.json").read_text(encoding="utf-8"))
     assert (code, result["status"], cleanup["status"], cleanup["canary_session_hidden"]) == (1, "fail", "fail", False)
-    if provider == "omp":
-        # OMP's cells that rest on cleanup do not hold: a verdict, with the whole observation in the result.
-        not_held = {name for name, held in result["assertions"].items() if not held}
-        assert not_held == {"omp_helm_terminate_owned"} and "controls" in result["observation"]
-    else:
-        # Pi ends the run: a typed failure that keeps the whole record, in the result and as a file of its own.
-        assert result["failure_code"] == "pi_helm_lifecycle_failed" and "assertions" not in result
+    # The cells that rest on cleanup do not hold: a verdict, with the whole observation in the result.
+    not_held = {name for name, held in result["assertions"].items() if not held}
+    rest_on_cleanup = {"omp": {"terminate_owned"}, "pi": {"abort_native", "terminate_owned"}}[provider]
+    assert not_held == {f"{provider}_helm_{cell}" for cell in rest_on_cleanup} and "controls" in result["observation"]
+    if provider == "pi":
+        # Pi's run ends as a failure of its own, and keeps the whole record as a file as well.
+        assert result["failure_code"] == "pi_helm_lifecycle_failed"
         kept = json.loads((root / "partial-observation.json").read_text(encoding="utf-8"))["observation"]
-        assert set(kept["controls"]) == set(result["diagnostic_observation"]["controls"]) >= {"launch", "cold_resume", "final_terminate"}
+        assert set(kept["controls"]) == set(result["observation"]["controls"]) >= {"launch", "cold_resume", "final_terminate"}
         assert kept["cleanup"]["status"] == "fail"
 
 

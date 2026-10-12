@@ -70,7 +70,8 @@ REGISTRATION = ProducerRegistration(
     # 23: the served events are read to their end, page by page under one generation, not as one page of 200.
     # 24: the tool taxonomy's record says how far into the session file it was read.
     # 25: the aborted row is recorded as the abort's `native_abort`, the name it has for both providers.
-    scenario_revision=25,
+    # 26: a run that failed reports the verdicts of the steps it reached, a failing one as a finding, as OMP's does.
+    scenario_revision=26,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -115,6 +116,22 @@ REGISTRATION = ProducerRegistration(
 )
 
 _STALE_REFUSALS = frozenset({"stale_channel", "stale_generation", "session_not_attached"})
+# What proves each cell's step was reached and its verdict decided: a failed run reports a verdict only for a cell
+# whose records are all there (`failed_results.reached_only`). A cell that rests on a control's two paths is decided
+# once both have run.
+REACHED_MARKERS: dict[str, tuple[str, ...]] = {
+    "pi_helm_launch_registration": ("controls.launch", "convergence.launch", "control_identity.initial"),
+    "pi_helm_native_tool_taxonomy": ("native_taxonomy",),
+    "pi_helm_send_idle": ("controls.send", "convergence.send", "controls.local_send.evidence"),
+    "pi_helm_steer_active": ("controls.steer", "steer_turn_verdict", "controls.local_steer", "local_steer_turn_verdict"),
+    "pi_helm_follow_up_native": ("controls.follow_up", "convergence.follow_up"),
+    "pi_helm_abort_native": ("controls.abort", "abort_turn_verdict", "controls.local_abort", "local_abort_turn_verdict"),
+    "pi_helm_terminate_owned": ("controls.terminate", "controls.final_terminate"),
+    "pi_helm_reload_rebind": ("controls.reload", "convergence.reload"),
+    "pi_helm_session_replacement_rebind": ("controls.replacement", "convergence.replacement"),
+    "pi_helm_cold_resume_exact_file": ("controls.cold_resume", "convergence.resume_context", "control_identity.final"),
+    "pi_helm_stale_owner_refused": ("controls.stale_owner",),
+}
 _HOST, _LOCAL = "runtime_host_agents_api", "local_engine_command"
 _BOUND = ("one_session", "one_thread", "provider_session_bound")
 
@@ -400,7 +417,7 @@ FAMILY = Family(
         "after_abort": "Reply only with {marker}.",
     },
     cells=pi_helm_lifecycle_assertions,
-    reached=None,
+    reached=REACHED_MARKERS,
     converged=_converged,
     control_bound=helm._served_send_identity,
     is_idle=lambda state: state.get("phase") not in {"running", "thinking"},
@@ -480,8 +497,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
         run_args = _request_args(request_path, evidence_root, request=request)
         run_args.provider_bin = binary
         result = run_pi_helm_lifecycle(run_args, raises=True)
-        observation = dict(result.get("observation") or result.get("diagnostic_observation") or {})
-        assertions = dict(result.get("assertions") or result.get("diagnostic_assertions") or {})
+        observation = dict(result.get("observation") or result.get("partial_observation") or {})
+        assertions = dict(result.get("assertions") or {})
         semantic_assertions = tuple(
             semantic.SemanticAssertion(
                 assertion,
@@ -515,6 +532,8 @@ PRODUCER = Producer(
     # Anthropic model must never be routed through OpenRouter.
     needs=("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin", "provider_version", "api_url", "agents_token", "model"),
     variants=_VARIANTS,
+    # A run that raised reports verdicts only for the steps it reached.
+    reached=REACHED_MARKERS,
     model_env="LONGHOUSE_PI_QUALIFICATION_MODEL",
     negative_controls=tuple(NEGATIVE_CONTROLS),
 )

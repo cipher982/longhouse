@@ -106,10 +106,9 @@ class Family:
     launch_argv: Callable[..., list[str]]
     environment: Callable[[Path, argparse.Namespace], dict[str, str]]
     prompts: Mapping[str, str]
-    # The cells, from the finished observation; and for a failed run, which records prove a cell's step was reached
-    # (None: a failed run reports no verdict and keeps what it had decided as diagnostics).
+    # The cells, from the finished observation; and for a failed run, which records prove a cell's step was reached.
     cells: Callable[[Mapping[str, Any]], dict[str, bool]]
-    reached: Mapping[str, tuple[str, ...]] | None
+    reached: Mapping[str, tuple[str, ...]]
     # What a served page has to show, beside the answers, for a convergence wait to be over.
     converged: Callable[[Mapping[str, Any]], bool]
     # What the served diagnostic has to show for control to be bound to an owner's lease.
@@ -3127,10 +3126,6 @@ class Lifecycle:
         if failure is not None:
             # A run that failed vouches for nothing, model compliance included.
             observation.pop("model_noncompliance", None)
-            if f.reached is None:
-                run.fields.update(diagnostic_observation=observation, diagnostic_assertions=assertions)
-                run.failed = failure
-                return
             run.observation, run.assertions = observation, assertions
             raise failure
         run.observation, run.assertions = observation, assertions
