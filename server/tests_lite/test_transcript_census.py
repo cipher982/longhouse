@@ -294,7 +294,7 @@ def _census(provider: str, *paths: Path) -> dict:
     return json.loads(result.stdout)["shapes"]
 
 
-def _cursor_store(path: Path, *, message_id_bytes: int = 32, meta_encoding: str = "hex") -> Path:
+def _cursor_store(path: Path, *, message_id_bytes: int = 32, meta_encoding: str = "hex", root_tail: bytes = b"") -> Path:
     """A Cursor conversation store: root metadata, a protobuf root and JSON message blobs."""
     path.parent.mkdir(parents=True, exist_ok=True)
     messages = {
@@ -303,6 +303,7 @@ def _cursor_store(path: Path, *, message_id_bytes: int = 32, meta_encoding: str 
     }
     root = b"".join(b"\x0a" + bytes([message_id_bytes]) + bytes.fromhex(blob_id)[:message_id_bytes] for blob_id in messages)
     root += b"\x50\x01"  # field 10, a varint the reader skips
+    root += root_tail
     meta = json.dumps({"agentId": "agent-1", "latestRootBlobId": "c" * 64, "createdAt": 1, "name": "private title"})
     with sqlite3.connect(path) as connection:
         connection.executescript(
@@ -332,6 +333,28 @@ def test_cursor_store_census_names_the_meta_row_the_root_blob_and_each_message(t
 
     result = _check("cursor", store)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_cursor_root_that_lists_the_files_a_conversation_touched_is_a_known_shape(tmp_path: Path):
+    """Field 18 repeats once per file path. Both readers take the message ids from field 1 and pass over it."""
+    from zerg.services.cursor_transcript import _parse_snapshot_fields
+
+    files = [b"/workspace/README.md", b"/workspace/src/main.rs"]
+    tail = b"".join(b"\x92\x01" + bytes([len(name)]) + name for name in files)  # field 18, length-delimited
+    store = _cursor_store(tmp_path / "store.db", root_tail=tail)
+
+    shapes = _census("cursor", store)
+    assert shapes["store/root"]["keys"] == ["field1.len32", "field1.wire2", "field10.wire0", "field18.wire2"]
+    assert "README" not in json.dumps(shapes)
+    result = _check("cursor", store)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    with sqlite3.connect(store) as connection:
+        (root,) = connection.execute("SELECT data FROM blobs WHERE id = ?", ("c" * 64,)).fetchone()
+    connection.close()
+    fields = _parse_snapshot_fields(root)
+    assert [value.hex() for value in fields[1]] == ["a" * 64, "b" * 64]
+    assert fields[18] == files
 
 
 def test_cursor_root_blob_whose_message_ids_change_length_is_drift(tmp_path: Path):
