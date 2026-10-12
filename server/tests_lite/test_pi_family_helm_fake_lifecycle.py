@@ -280,7 +280,7 @@ def test_every_control_reads_a_verdict_the_lifecycle_writes(provider, whole):
     """A control whose verdict no step writes can never decide: it would read as inconclusive on every run.
 
     A steer or abort control's run is the whole lifecycle with that one verdict failing. A send or terminate control
-    ends at its target, and those runs are made in ``test_pi_family_helm_controls``.
+    ends at its target, and those runs are made in ``test_pi_family_turn_oracle``.
     """
 
     module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")

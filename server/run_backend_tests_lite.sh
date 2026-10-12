@@ -81,6 +81,9 @@ done
 
 if [ "$has_xdist_arg" -eq 0 ]; then
     # One xdist worker per guest CPU, whole files per worker (--dist=loadfile).
+    # xdist hands files out by test count, largest first, so a file of a few
+    # long tests starts last and adds its whole time to the run: put a long
+    # test in a file that has many.
     # LONGHOUSE_TEST_CPUS is the guest's --cpus, exported by the isolation
     # launcher: `-n auto` would count the Docker VM's CPUs instead (16 workers
     # in an 8-CPU guest, slower and 3x the memory). A worker costs ~0.7 GiB;
