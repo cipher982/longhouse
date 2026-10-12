@@ -10,6 +10,7 @@ import pytest
 
 from zerg.qa.provider_observed_install_qualification import observed_closure
 from zerg.qa.provider_observed_install_qualification import qualify_cursor_observed_install
+from zerg.qa.universal_agent_harness import DEFAULT_HARNESS_PROMPT
 
 
 def _fake_cursor_install(tmp_path: Path) -> tuple[Path, Path, str]:
@@ -73,7 +74,7 @@ def _gate0_artifact(tmp_path: Path, *, identity: str, active_steer: str = "passe
                         "status": active_steer if name == "active_steer" else "passed",
                         "provider_conversation_id": "cursor-session-1",
                         **(
-                            {"prompt_sha256": hashlib.sha256("LONGHOUSE UNIVERSAL HARNESS".encode("utf-8")).hexdigest()}
+                            {"prompt_sha256": hashlib.sha256(DEFAULT_HARNESS_PROMPT.encode("utf-8")).hexdigest()}
                             if name == "create_chat_resume"
                             else {}
                         ),

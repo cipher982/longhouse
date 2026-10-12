@@ -41,6 +41,8 @@ from typing import Any
 
 from zerg.qa import pi_native
 from zerg.qa.provider_build_store import GENERATED_FAKE_PROVENANCE
+from zerg.qa.universal_agent_harness import DEFAULT_HARNESS_PROMPT
+from zerg.qa.universal_agent_harness import HARNESS_REPLY_PHRASE
 from zerg.qa.universal_agent_harness import STATUS_FAIL
 from zerg.qa.universal_agent_harness import STATUS_PASS
 from zerg.qa.universal_agent_harness import EvidencePackage
@@ -507,12 +509,17 @@ class PiHarnessAdapter(UniversalProviderAdapter):
     def send_receive(self, package: EvidencePackage, prompt: str) -> dict[str, Any]:
         if not self._use_live():
             return super().send_receive(package, prompt)
-        marker = f"LONGHOUSE_PI_SEND_{os.urandom(4).hex()}"
-        # Keep the prompt single-line: the export_contains_raw assertion matches
-        # the raw user text against the exported JSONL, where embedded newlines
-        # are JSON-escaped and would break the substring check.
-        resolved_prompt = f"{prompt} Include the marker {marker} verbatim in your reply."
-        payload = self._run_pi_turn(package, resolved_prompt, marker, resume_file=self._session_file)
+        if prompt == DEFAULT_HARNESS_PROMPT:
+            # The harness's own input already asks for one exact reply, and
+            # asking for a second thing after "nothing else" contradicts it.
+            marker = HARNESS_REPLY_PHRASE
+        else:
+            marker = f"LONGHOUSE_PI_SEND_{os.urandom(4).hex()}"
+            # Keep the prompt single-line: the export_contains_raw assertion matches
+            # the raw user text against the exported JSONL, where embedded newlines
+            # are JSON-escaped and would break the substring check.
+            prompt = f"{prompt} Include the marker {marker} verbatim in your reply."
+        payload = self._run_pi_turn(package, prompt, marker, resume_file=self._session_file)
         if self._session_file is None:
             payload["status"] = STATUS_FAIL
             payload["failure_code"] = "pi_exact_resume_source_missing"

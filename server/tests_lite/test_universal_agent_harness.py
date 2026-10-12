@@ -1737,6 +1737,60 @@ def test_managed_session_scenarios_pass_for_codex_and_opencode(tmp_path: Path) -
             assert session["operation_statuses"]["launch_local"]["level"] == "live_no_token"
 
 
+def test_default_harness_input_is_one_instruction_and_the_expected_reply_is_its_phrase(tmp_path: Path) -> None:
+    """Every scenario that sends the default input sends the same instruction,
+    and what stands in for the reply is the phrase it asks for, not the prompt."""
+
+    assert uah.DEFAULT_HARNESS_PROMPT == f"Reply with exactly {uah.HARNESS_REPLY_PHRASE} and nothing else."
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("run_prompt_once", "send_receive", "managed_session_e2e"),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": _fake_bins(tmp_path)["codex"]},
+        )
+    )
+
+    assert {result["scenario"] for result in payload["results"]} == {"run_prompt_once", "send_receive", "managed_session_e2e"}
+    for result in payload["results"]:
+        evidence_root = Path(result["evidence_root"])
+        assert (evidence_root / "input" / "prompt.txt").read_text(encoding="utf-8") == uah.DEFAULT_HARNESS_PROMPT
+        if result["scenario"] == "managed_session_e2e":
+            continue
+        rows = [
+            json.loads(line) for line in (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        assert [(row["role"], row["text"]) for row in rows] == [
+            ("user", uah.DEFAULT_HARNESS_PROMPT),
+            ("assistant", uah.HARNESS_REPLY_PHRASE),
+        ]
+
+
+def test_pi_live_send_receive_never_asks_for_more_than_the_default_input_allows(monkeypatch, tmp_path: Path) -> None:
+    """The default input asks for one exact reply, so that reply is what Pi's
+    turn is judged on. Any other prompt still gets a marker of its own."""
+
+    from zerg.qa.provider_adapters.pi import PiHarnessAdapter
+
+    adapter = PiHarnessAdapter(uah.AdapterConfig(provider="pi", binary_name="pi", binary_env="LONGHOUSE_PI_BIN"))
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(adapter, "_use_live", lambda: True)
+    monkeypatch.setattr(
+        adapter,
+        "_run_pi_turn",
+        lambda _package, prompt, marker, **_kwargs: sent.append((prompt, marker)) or {"status": "pass"},
+    )
+    package = uah.EvidencePackage(root=tmp_path, provider="pi", scenario="send_receive")
+
+    adapter.send_receive(package, uah.DEFAULT_HARNESS_PROMPT)
+    adapter.send_receive(package, "Reply with the single word OK.")
+
+    assert sent[0] == (uah.DEFAULT_HARNESS_PROMPT, uah.HARNESS_REPLY_PHRASE)
+    prompt, marker = sent[1]
+    assert marker.startswith("LONGHOUSE_PI_SEND_")
+    assert prompt == f"Reply with the single word OK. Include the marker {marker} verbatim in your reply."
+
+
 def test_claude_launch_managed_session_uses_provider_live_contract_canary(tmp_path: Path) -> None:
     fake_claude = _fake_claude_provider_live(tmp_path / "bin" / "claude")
     payload = uah.run_harness(

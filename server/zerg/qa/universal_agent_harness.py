@@ -260,7 +260,11 @@ STATUS_NOT_APPLICABLE = "not_applicable"
 STATUS_BLOCKED = "blocked"
 STATUS_FLAKY = "flaky"
 STATUS_XFAIL_WITH_EXPIRY = "xfail_with_expiry"
-DEFAULT_HARNESS_PROMPT = "LONGHOUSE UNIVERSAL HARNESS"
+# The default input is an instruction with one right answer, so a provider
+# that receives it has a turn it can finish. The phrase is the reply it asks
+# for; the prompt is built from it so the two cannot drift.
+HARNESS_REPLY_PHRASE = "LONGHOUSE UNIVERSAL HARNESS"
+DEFAULT_HARNESS_PROMPT = f"Reply with exactly {HARNESS_REPLY_PHRASE} and nothing else."
 STATUSES = (
     STATUS_PASS,
     STATUS_FAIL,
@@ -3719,7 +3723,7 @@ class UniversalProviderAdapter:
             {
                 "type": "assistant",
                 "role": "assistant",
-                "text": "LONGHOUSE UNIVERSAL HARNESS",
+                "text": HARNESS_REPLY_PHRASE,
                 "session_id": self._session_id(package),
                 "synthetic": True,
             },
@@ -5756,7 +5760,7 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
 
 def run_prompt_once(adapter: AgentHarnessAdapter, package: EvidencePackage, prompt: str | None) -> ScenarioResult:
     adapter.prepare(package)
-    payload = adapter.run_prompt(package, prompt or "Reply with exactly: LONGHOUSE UNIVERSAL HARNESS")
+    payload = adapter.run_prompt(package, prompt or DEFAULT_HARNESS_PROMPT)
     adapter.cleanup(package)
     return scenario_result(
         provider=adapter.config.provider,
