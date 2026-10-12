@@ -40,9 +40,9 @@ BUSY_SECONDS = 2.0
 # No fake process outlives this, whatever happened to the test that started it.
 MAX_LIFETIME_SECONDS = 600
 # Faults, comma separated: ``exit_after:<n>`` kills the launcher and its provider once the n-th turn has ended;
-# ``steer_as_follow_up`` holds a steer until the turn it was sent into is over. That one is an engine fault, and a
-# launcher takes it and the engine's other three from the engine's own variable too, as a producer run under
-# ``--negative-control`` sets it (zerg.qa.pi_family_turn_oracle: NEGATIVE_CONTROLS).
+# ``steer_as_follow_up`` holds a steer until the turn it was sent into is over (the engine's own negative control,
+# zerg.qa.pi_family_turn_oracle: NEGATIVE_CONTROLS). The engine's two faults that end a run at their target, a send
+# and a terminate that do nothing, a launcher takes from the engine's own variable, as ``--negative-control`` sets it.
 FAULT_ENV = "LONGHOUSE_FAKE_HELM_FAULT"
 _REPLY = re.compile(r"reply (?:only )?with (?:exactly )?([A-Za-z0-9_]+)", re.IGNORECASE)
 _RECALL = re.compile(r"context phrase that starts with ([A-Z_]+_)\..*then ([A-Za-z0-9_]+), and nothing else", re.DOTALL)
@@ -355,7 +355,7 @@ class _Launcher:
             # What an engine built with `qa-fault-injection` does here instead (same functions, and engine/src/qa_fault.rs:
             # helm_extension_fault): it acknowledges the command, forwards nothing, and leaves a receipt that it did.
             fault = os.environ.get("LONGHOUSE_QA_FAULT", "").removeprefix(f"{self.provider}_")
-            if (kind, fault) in {("send", "send_noop"), ("abort", "abort_noop"), ("terminate", "terminate_noop")}:
+            if (kind, fault) in {("send", "send_noop"), ("terminate", "terminate_noop")}:
                 self._fault_fired(fault, {"forwarded": False})
                 return {"kind": "command_result", "ok": True, "status": "ended" if kind == "terminate" else "active"}
             if kind == "send":
@@ -366,8 +366,7 @@ class _Launcher:
             elif kind == "steer":
                 if not self.busy:
                     return refused("turn_ended")
-                if "steer_as_follow_up" in {fault, *_faults()}:
-                    self._fault_fired("steer_as_follow_up", {"forwarded_kind": "send"})
+                if "steer_as_follow_up" in _faults():
                     self.held_steer = str(frame.get("text") or "")
                 else:
                     self.steer = str(frame.get("text") or "")
@@ -781,9 +780,17 @@ def producer_arguments(provider: str, cli: Path, root: Path) -> list[str]:
 
 
 def run_lifecycle(
-    provider: str, directory: Path, setenv: Callable[[str, str], object] = os.environ.__setitem__, **host_faults: Any
+    provider: str,
+    directory: Path,
+    setenv: Callable[[str, str], object] = os.environ.__setitem__,
+    *,
+    arguments: tuple[str, ...] = (),
+    **host_faults: Any,
 ) -> tuple[int, Path, list[Path]]:
-    """One lifecycle through the provider's real ``main``: its exit code, its evidence root, what it left isolated."""
+    """One lifecycle through the provider's real ``main``: its exit code, its evidence root, what it left isolated.
+
+    ``arguments`` follow the factory's own, as ``--negative-control`` does.
+    """
 
     import importlib
 
@@ -791,7 +798,7 @@ def run_lifecycle(
     root = directory / "evidence"
     with longhouse(directory, setenv, **host_faults) as (cli, isolation):
         setenv(module.FAMILY.live_env, "1")
-        code = module.main(producer_arguments(provider, cli, root))
+        code = module.main([*producer_arguments(provider, cli, root), *arguments])
         return code, root, list(isolation.iterdir())
 
 
