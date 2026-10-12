@@ -24,7 +24,6 @@ import ipaddress
 import json
 import os
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -88,8 +87,8 @@ def _exited_uncollected(pid: int) -> bool:
         # The state follows the command name, which may itself hold spaces and brackets.
         return Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[-1].split()[:1] == ["Z"]
     except OSError:
-        if sys.platform.startswith("linux"):
-            return False
+        # No /proc entry to read: another platform, or a Linux container that has no /proc. Ask ps, on both.
+        pass
     try:
         state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=5, check=False).stdout
     except (OSError, subprocess.TimeoutExpired):
