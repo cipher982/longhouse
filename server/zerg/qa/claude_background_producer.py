@@ -13,7 +13,6 @@ import hashlib
 import json
 import os
 import re
-import sys
 import time
 from collections.abc import Mapping
 from datetime import datetime
@@ -26,13 +25,12 @@ from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.answer_markers import any_marker_answered
 from zerg.qa.claude_live_session_support import ScenarioError
-from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import now_iso
-from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
-from zerg.qa.live_session_toolkit import require_disposable_runtime
-from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import ProducerFailure
+from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.wait_kind import PROVIDER_TURN
@@ -56,7 +54,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.background_jobs.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=4,
+    # 5: a failed result names the requested assertion; the failure copy is gone.
+    scenario_revision=5,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     platforms=("linux",),
@@ -492,42 +491,48 @@ def _capture_background(
     return observation
 
 
-def _run_direct(args: argparse.Namespace) -> dict[str, Any]:
-    requested_assertion = _requested_assertion_id(getattr(args, "variant", None))
+def _reach(run: Run, args: argparse.Namespace) -> None:
+    root = run.root
+    fault = getattr(args, "negative_control", None)
+    # The authored variant axis (none) is what the factory compares; the execution key is kept apart.
+    run.fields.update(
+        profile=PROFILE,
+        execution_variant=getattr(args, "variant", None),
+        requested_assertion=_requested_assertion_id(getattr(args, "variant", None)),
+    )
     token = os.urandom(8).hex()
     prompt = _background_prompt(
         f"LONGHOUSE_CLAUDE_BG_PARENT_{token}",
         f"LONGHOUSE_CLAUDE_BG_CHILD_{token}",
         f"LONGHOUSE_CLAUDE_BG_SHELL_{token}",
     )
-    result = helm.run_lifecycle(
-        args,
-        registration=REGISTRATION,
-        artifact_kind=ARTIFACT_KIND,
-        scenario_prompt=prompt,
-        scenario_capture=_capture_background,
-        capture_hook_stdin=True,
-    )
-    result = dict(result)
-    result["producer"] = REGISTRATION.to_dict()
-    result["profile"] = PROFILE
-    result["scenario_id"] = SCENARIO_ID
-    result["variant"] = None
-    result["execution_variant"] = getattr(args, "variant", None)
-    result["requested_assertion"] = requested_assertion
-    root = args.evidence_root.resolve()
-    observation = result.get("observation") if isinstance(result.get("observation"), dict) else {}
+    try:
+        helm._reach(
+            run,
+            args,
+            registration=REGISTRATION,
+            scenario_prompt=prompt,
+            scenario_capture=_capture_background,
+            capture_hook_stdin=True,
+        )
+    except Exception:
+        if fault:
+            run.fields["negative_control"] = {"fault": fault, "status": "inconclusive"}
+        raise
+    # The lifecycle this scenario rides on says whether its own part held; the status is this producer's.
+    lifecycle_held = run.fields.pop("status", "pass") == "pass"
+    session_id = run.fields.get("session_id")
+    observation = run.observation if isinstance(run.observation, dict) else {}
     lifecycle = observation.get("lifecycle") if isinstance(observation.get("lifecycle"), dict) else {}
     scenario = lifecycle.get("scenario") if isinstance(lifecycle.get("scenario"), dict) else {}
     assertions = claude_background_assertions(scenario)
-    result["observation"]["background"] = scenario
-    result["assertions"] = assertions
-    fault = getattr(args, "negative_control", None)
+    observation["background"] = scenario
+    run.assertions = assertions
     if fault:
         (target,) = NEGATIVE_CONTROLS[fault]
-        receipts = _fault_receipts(root, fault, str(result.get("session_id") or ""))
+        receipts = _fault_receipts(root, fault, str(session_id or ""))
         healthy = (
-            result.get("claude_helm_process_exited", observation.get("claude_helm_process_exited")) is True
+            observation.get("claude_helm_process_exited") is True
             and isinstance(lifecycle.get("launch_registration"), Mapping)
             and lifecycle["launch_registration"].get("passed") is True
             and assertions.get("claude_background_native_source") is True
@@ -548,7 +553,7 @@ def _run_direct(args: argparse.Namespace) -> dict[str, Any]:
                 "path": str(root / "qa-fault-receipt.jsonl"),
                 "required_fields": ["schema_version", "fault", "session_id", "fired_at", "detail"],
                 "exact_fault": fault,
-                "exact_session_id": result.get("session_id"),
+                "exact_session_id": session_id,
             },
             "fault_fired": bool(receipts),
             "fault_receipts": receipts,
@@ -566,28 +571,26 @@ def _run_direct(args: argparse.Namespace) -> dict[str, Any]:
                 else "inconclusive"
             ),
         }
-        result["negative_control"] = negative
-        result["status"] = negative["status"]
-        if result["status"] != "pass":
-            result["failure_code"] = (
+        run.control(negative, status=negative["status"])
+        if negative["status"] != "pass":
+            run.fields["failure_code"] = (
                 "claude_background_negative_control_inconclusive"
-                if result["status"] == "inconclusive"
+                if negative["status"] == "inconclusive"
                 else "claude_background_negative_control_not_caught"
             )
-    else:
-        # Status follows the assertion map, as the factory validator requires;
-        # cleanup is judged from the cleanup receipt (REGISTRATION.required_cleanup).
-        result["status"] = "pass" if result.get("status") == "pass" and all(assertions.values()) else "fail"
-        if result["status"] != "pass":
-            result["failure_code"] = str(scenario.get("failure_code") or result.get("failure_code") or "claude_background_scenario_failed")
+    elif not (lifecycle_held and all(assertions.values())):
+        # Cleanup is judged from the cleanup receipt (REGISTRATION.required_cleanup), not here.
+        failure_code = str(scenario.get("failure_code") or run.fields.get("failure_code") or "claude_background_scenario_failed")
+        run.fields["failure_code"] = failure_code
+        if all(assertions.values()):
             # A run that failed while every assertion held reached no failing
             # verdict: a typed harness failure, which must name its cause.
-            if all(assertions.values()) and not isinstance(result.get("error"), str):
-                result["error"] = str(observation.get("error") or result["failure_code"])
-            settle_failed_result(result, observation=result.get("observation"), assertions=assertions)
-    result["artifact_manifest"] = artifact_manifest(root)
-    helm.write_json(root / "result.json", result)
-    return result
+            run.fields["error"] = str(observation.get("error") or failure_code)
+            run.failed = ProducerFailure(failure_code, run.fields["error"])
+
+
+def _run_direct(args: argparse.Namespace, *, raises: bool = False) -> dict[str, Any]:
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args), raises=raises)
 
 
 def _request_args(request: Mapping[str, Any], output_root: Path) -> argparse.Namespace:
@@ -615,7 +618,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     def execute(binary: Path, evidence_root: Path):
         args = _request_args(request, evidence_root)
         args.provider_bin = binary
-        result = _run_direct(args)
+        result = _run_direct(args, raises=True)
         assertions = result.get("assertions") if isinstance(result.get("assertions"), Mapping) else {}
         return (
             result,
@@ -641,82 +644,29 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     )
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(parser, variants=_VARIANTS, provider_bin_aliases=("--claude-bin",))
+def _add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project", default="zerg")
-    parser.add_argument("--model", default=os.environ.get("ANTHROPIC_MODEL"))
-    parser.add_argument("--api-url", default=os.environ.get(RUNTIME_API_URL_ENV))
-    parser.add_argument("--agents-token", default=os.environ.get(RUNTIME_AGENTS_TOKEN_ENV))
     parser.add_argument("--launch-timeout-secs", type=float, default=90.0)
     parser.add_argument("--response-timeout-secs", type=float, default=150.0)
-    parser.add_argument("--negative-control", choices=(FAULT,), default=None)
-    return parser
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind=ARTIFACT_KIND,
+    failure_code="claude_background_setup_failed",
+    needs=("evidence_root", "repo_root", "engine", "provider_bin"),
+    binaries=(("engine", "longhouse_engine_missing"), ("provider_bin", "claude_binary_missing")),
+    runtime_host=True,
+    variants=_VARIANTS,
+    provider_bin_aliases=("--claude-bin",),
+    model_env="ANTHROPIC_MODEL",
+    negative_controls=(FAULT,),
+    add_arguments=_add_arguments,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    for required in ("evidence_root", "repo_root", "engine", "provider_bin"):
-        if getattr(args, required) is None:
-            print(
-                json.dumps(
-                    {
-                        "status": "fail",
-                        "producer": REGISTRATION.to_dict(),
-                        "failure_code": f"missing_required_argument:--{required.replace('_', '-')}",
-                    }
-                )
-            )
-            return 2
-    args.api_url = args.api_url or os.environ.get(RUNTIME_API_URL_ENV, "")
-    args.agents_token = args.agents_token or os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
-    require_disposable_runtime(args.api_url)
-    if not args.api_url or not args.agents_token:
-        print(
-            json.dumps({"status": "fail", "producer": REGISTRATION.to_dict(), "failure_code": "runtime_host_control_credentials_missing"})
-        )
-        return 2
-    for path, code in ((args.engine, "longhouse_engine_missing"), (args.provider_bin, "claude_binary_missing")):
-        if not path.is_file() or not os.access(path, os.X_OK):
-            print(json.dumps({"status": "fail", "producer": REGISTRATION.to_dict(), "failure_code": code}))
-            return 2
-    try:
-        result = _run_direct(args)
-    except Exception as exc:  # noqa: BLE001 - preserve typed setup/cleanup failure
-        root = args.evidence_root.resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        result = {
-            "schema_version": 1,
-            "artifact_kind": ARTIFACT_KIND,
-            "producer": REGISTRATION.to_dict(),
-            "provider": "claude",
-            "profile": PROFILE,
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            # A scenario-scoped producer's failed result is scenario-scoped too;
-            # without this the factory masked the setup failure below.
-            "observation_scope": REGISTRATION.observation_scope,
-            "evidence_class": "live_token",
-            "generated_at": now_iso(),
-            # The authored variant axis (none) is what the factory compares; the execution key is kept apart.
-            "variant": None,
-            "execution_variant": getattr(args, "variant", None),
-            "status": "fail",
-            "failure_code": "claude_background_setup_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-        }
-        if args.negative_control:
-            result["negative_control"] = {"fault": args.negative_control, "status": "inconclusive"}
-        helm.write_json(root / "claude-background-failure.json", result)
-        result["artifact_manifest"] = artifact_manifest(root)
-        helm.write_json(root / "result.json", result)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(_run_direct, argv)
 
 
 if __name__ == "__main__":

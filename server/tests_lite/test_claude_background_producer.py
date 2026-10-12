@@ -139,17 +139,23 @@ def _lifecycle_result(tmp_path: Path, *, scenario: dict[str, Any], cleanup_ok: b
     }
 
 
+def _lifecycle_reached(monkeypatch: Any, result: dict[str, Any], receipt: dict[str, Any] | None = None) -> None:
+    """Stand in for the Helm lifecycle this scenario rides on: what it puts on the run, and the fault receipt it leaves."""
+
+    def reach(run: Any, _args: Any, **_kwargs: Any) -> None:
+        if receipt is not None:
+            (run.root / "qa-fault-receipt.jsonl").write_text(json.dumps(receipt) + "\n", encoding="utf-8")
+        run.observation = result["observation"]
+        run.fields["session_id"] = result["session_id"]
+        if result["status"] != "pass":
+            run.fields.update(status="fail", failure_code="claude_background_scenario_failed")
+
+    monkeypatch.setattr(oracle.helm, "_reach", reach)
+
+
 def _run(monkeypatch: Any, tmp_path: Path, result: dict[str, Any], *, receipt: dict[str, Any] | None = None) -> dict[str, Any]:
-    monkeypatch.setattr(oracle.helm, "run_lifecycle", lambda *_args, **_kwargs: result)
-    if receipt is not None:
-        (tmp_path / "qa-fault-receipt.jsonl").write_text(json.dumps(receipt) + "\n", encoding="utf-8")
-    return oracle._run_direct(
-        Namespace(
-            evidence_root=tmp_path,
-            variant=None,
-            negative_control=oracle.FAULT,
-        )
-    )
+    _lifecycle_reached(monkeypatch, result, receipt)
+    return oracle._run_direct(Namespace(evidence_root=tmp_path / "evidence", variant=None, negative_control=oracle.FAULT))
 
 
 def test_negative_control_requires_exact_receipt_and_healthy_unrelated_paths(monkeypatch: Any, tmp_path: Path) -> None:
@@ -345,11 +351,10 @@ def test_a_setup_failure_reports_the_authored_variant_and_keeps_the_execution_ke
         path.write_text("#!/bin/sh\n", encoding="utf-8")
         path.chmod(0o700)
 
-    def boom(_args: Any) -> dict[str, Any]:
+    def boom(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("setup exploded")
 
-    monkeypatch.setattr(oracle, "require_disposable_runtime", lambda _url: None)
-    monkeypatch.setattr(oracle, "_run_direct", boom)
+    monkeypatch.setattr(oracle.helm, "_reach", boom)
     variant = oracle._VARIANTS[0]
 
     code = oracle.main(
@@ -388,19 +393,14 @@ def test_a_setup_failure_reports_the_authored_variant_and_keeps_the_execution_ke
     assert manifest_paths == {
         path.relative_to(evidence_root).as_posix() for path in evidence_root.rglob("*") if path.is_file() and path.name != "result.json"
     }
-    failures = [
-        json.loads((evidence_root / item["path"]).read_text()) for item in result["artifact_manifest"] if item["path"].endswith(".json")
-    ]
-    assert any(isinstance(item, dict) and item.get("error") == "RuntimeError: setup exploded" for item in failures)
+    assert json.loads((evidence_root / "result.json").read_text(encoding="utf-8")) == result
     if negative_control:
         assert result["negative_control"]["status"] == "inconclusive"
 
 
 def _run_cell(monkeypatch: Any, tmp_path: Path, result: dict[str, Any]) -> dict[str, Any]:
-    # The real Helm lifecycle result is scenario-scoped (claude_helm_lifecycle).
-    result = {**result, "observation_scope": "scenario"}
-    monkeypatch.setattr(oracle.helm, "run_lifecycle", lambda *_args, **_kwargs: result)
-    return oracle._run_direct(Namespace(evidence_root=tmp_path, variant=oracle._VARIANTS[0], negative_control=None))
+    _lifecycle_reached(monkeypatch, result)
+    return oracle._run_direct(Namespace(evidence_root=tmp_path / "evidence", variant=oracle._VARIANTS[0], negative_control=None))
 
 
 def test_cleanup_failure_after_every_assertion_held_leaves_status_to_the_assertions(monkeypatch: Any, tmp_path: Path) -> None:

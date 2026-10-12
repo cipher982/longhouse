@@ -22,6 +22,8 @@ from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import ProducerFailure
 from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
+from zerg.qa.wait_kind import PROVIDER_TURN
+from zerg.qa.wait_kind import expired
 
 _REPO = Path(__file__).resolve().parents[2]
 _QA = _REPO / "server" / "zerg" / "qa"
@@ -31,17 +33,10 @@ _MANIFEST = {
 _ROWS = factory_registration.contract_rows(_REPO / "schemas" / "managed_providers.yml")
 # The producers of a product subject are registered by the factory alone, so they are found by what they declare.
 _SHELL_BUILT = sorted(f"zerg.qa.{path.stem}" for path in _QA.glob("*.py") if "\nPRODUCER = " in path.read_text(encoding="utf-8"))
-# Registered producers still written by hand. This list only shrinks.
-_NOT_YET_ON_THE_SHELL = frozenset(
-    {
-        "zerg.qa.claude_helm_lifecycle",
-        "zerg.qa.claude_background_producer",
-    }
-)
 
 
 def test_every_registered_producer_is_built_in_the_shell():
-    assert set(_MANIFEST) - set(_SHELL_BUILT) == _NOT_YET_ON_THE_SHELL
+    assert set(_MANIFEST) <= set(_SHELL_BUILT)
 
 
 def _commands(registration: ProducerRegistration) -> list[dict]:
@@ -217,6 +212,20 @@ def test_a_run_that_raises_keeps_only_a_failing_verdict(tmp_path, reached, kept)
     }
 
 
+def test_a_run_stopped_by_an_expired_wait_says_what_it_waited_on_wrapped_or_not(tmp_path):
+    def body(_run: Run) -> None:
+        try:
+            raise expired(RuntimeError("timed out waiting for the reply"), PROVIDER_TURN)
+        except RuntimeError as exc:
+            # A producer that adds what it last saw re-raises from the wait.
+            raise RuntimeError(f"{exc}; last_observation={{}}") from exc
+
+    result = _run_fixture(tmp_path, body)
+
+    assert result["waited_on"] == "provider_turn"
+    assert result["error"].startswith("RuntimeError: timed out waiting for the reply")
+
+
 def test_a_failed_run_of_several_steps_reports_verdicts_only_for_the_steps_it_reached(tmp_path):
     producer = Producer(
         _REGISTRATION, artifact_kind="fixture_result", failure_code="fixture_failed", reached={"held": ("send",), "later": ("steer",)}
@@ -287,6 +296,15 @@ def test_a_blocked_run_says_so_and_a_raising_caller_gets_the_exception_and_no_ar
     # A producer never writes into another run's evidence.
     with pytest.raises(FileExistsError):
         _FIXTURE.execute(tmp_path / "raises", body)
+
+
+def test_a_producer_answers_to_the_factorys_name_for_its_binary_and_to_its_historical_one():
+    codex = Producer(
+        _REGISTRATION, artifact_kind="k", failure_code="f", provider_bin_aliases=("--codex-bin",), provider_bin_dest="codex_bin"
+    )
+
+    for flag in ("--provider-bin", "--codex-bin"):
+        assert codex.parser().parse_args(["--variant", "v", flag, "/bin/provider"]).codex_bin == Path("/bin/provider")
 
 
 @pytest.mark.parametrize(

@@ -43,7 +43,6 @@ from zerg.qa.answer_markers import any_marker_answered
 from zerg.qa.claude_live_session_support import ScenarioError
 from zerg.qa.claude_live_session_support import api_json
 from zerg.qa.claude_live_session_support import api_json_tolerant
-from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import claude_launch_environment
 from zerg.qa.claude_live_session_support import close_session
 from zerg.qa.claude_live_session_support import failed_session_close_receipt
@@ -59,19 +58,15 @@ from zerg.qa.claude_live_session_support import user_prompt_contains as _user_pr
 from zerg.qa.claude_live_session_support import wait_until
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
-from zerg.qa.failed_results import reached_only
-from zerg.qa.failed_results import settle_failed_result
-from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import prepare_claude_profile
 from zerg.qa.live_session_toolkit import qualification_secrets
-from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import secret_scan
 from zerg.qa.live_session_toolkit import wait_pid_dead
 from zerg.qa.managed_claude_live import transcript_lookup_id
 from zerg.qa.model_compliance import attach
 from zerg.qa.model_compliance import noncompliance_entry
-from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD
@@ -1158,17 +1153,16 @@ def _drive_lifecycle(
     }
 
 
-def run_lifecycle(
+def _reach(
+    run: Run,
     args: argparse.Namespace,
     *,
     registration: ProducerRegistration = REGISTRATION,
-    artifact_kind: str | None = None,
     scenario_prompt: str | None = None,
     scenario_capture: Callable[..., dict[str, Any]] | None = None,
     capture_hook_stdin: bool = False,
-) -> dict[str, Any]:
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+) -> None:
+    root = run.root
     isolation_root = Path(tempfile.mkdtemp(prefix="lhx-claude-helm-", dir="/tmp"))
     workspace = isolation_root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -1188,10 +1182,10 @@ def run_lifecycle(
     session_id: str | None = None
     lifecycle: dict[str, Any] = {}
     error: str | None = None
+    failure: BaseException | None = None
     error_wait: dict[str, str] = {}
     close_receipt: dict[str, Any] = {"not_started": True, "alive_after_close": False}
     hook_capture_dir: Path | None = None
-    artifact_kind = artifact_kind or ("negative_control_result" if fault else _ARTIFACT_KIND)
     try:
         home, longhouse_home = isolation_paths(isolation_root)
         # The Machine Agent grants control from the provider binary it can see
@@ -1289,6 +1283,7 @@ def run_lifecycle(
                     raise ScenarioError("background scenario capture returned a non-object result")
                 lifecycle["scenario"] = scenario_result
         except Exception as exc:  # noqa: BLE001 - the report keeps partial observations
+            failure = exc
             error = f"{type(exc).__name__}: {exc}"
             error_wait = failure_fields(exc)
         finally:
@@ -1296,6 +1291,7 @@ def run_lifecycle(
             rows_path = root / "claude-transcript-rows.json"
             write_json(rows_path, _transcript_rows(transcript_lookup_id(session_id, provider_session_id), home))
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+        failure = failure or exc
         error_wait = error_wait if error else failure_fields(exc)
         error = error or f"{type(exc).__name__}: {exc}"
     finally:
@@ -1338,92 +1334,68 @@ def run_lifecycle(
     steer_noncompliance = None if error else claude_steer_noncompliance(lifecycle.get("steer_active") or {})
     if steer_noncompliance is not None:
         attach(observation, "claude_helm_steer_active", steer_noncompliance)
-    result: dict[str, Any] = {
-        "schema_version": 1,
-        "artifact_kind": artifact_kind,
-        "producer": registration.to_dict(),
-        "provider": "claude",
-        # The authored variant axis of the cells this scenario covers (none), which the factory compares
-        # with each command's variant. ``args.variant`` is the execution key ("cell:claude:...") and is
-        # not that axis: reporting it failed all five claude_helm_* cells as "malformed result".
-        "variant": None,
-        "scenario_id": registration.scenario_id,
-        "scenario_revision": registration.scenario_revision,
-        "evidence_class": "live_token",
-        "observation_scope": "scenario",
-        "generated_at": now_iso(),
-        "session_id": session_id,
-        "observation": observation,
-        "redacted_secret_files": redacted,
-    }
+    run.observation = observation
+    run.fields.update(session_id=session_id, redacted_secret_files=redacted)
     if scenario_capture is not None:
+        # A scenario riding this lifecycle is judged by its own producer; this
+        # records the lifecycle's part: whether it held, and what it waited on.
         scenario = lifecycle.get("scenario") if isinstance(lifecycle.get("scenario"), dict) else {}
         assertions = scenario.get("assertions") if isinstance(scenario.get("assertions"), dict) else {}
-        result["assertions"] = assertions
-        result["status"] = "pass" if error is None and cleanup_ok and bool(assertions) and all(assertions.values()) else "fail"
-        if result["status"] == "fail":
-            result["failure_code"] = str(scenario.get("failure_code") or "claude_background_scenario_failed")
+        run.assertions = assertions
+        if not (error is None and cleanup_ok and bool(assertions) and all(assertions.values())):
+            run.fields.update(status="fail", failure_code=str(scenario.get("failure_code") or "claude_background_scenario_failed"))
             # The scenario reports an expired wait in its own record; one
             # outside it (launch, the lease) is the lifecycle's.
             scenario_wait = scenario.get(WAITED_ON_FIELD)
-            result.update(declared_wait(scenario_wait) or error_wait)
+            run.fields.update(declared_wait(scenario_wait) or error_wait)
     elif fault:
         observed = negative_control_record(lifecycle, fault)
         verdict = negative_control_verdict(lifecycle, fault=fault, fault_receipt=observed.get("qa_fault_receipt"))
-        result.update({"status": verdict["status"], "negative_control": verdict})
-    elif error is not None:
+        run.fields["artifact_kind"] = "negative_control_result"
+        run.control(verdict, status=verdict["status"])
+    elif failure is not None:
         # An error used to fail steer, abort and terminate wholesale, even when
         # they had run and held, and to report unreached phases False: product
         # findings for steps that never ran. Judge each reached phase on its own
-        # record; a reached failure stays a verdict, and if every reached phase
-        # held the run is a typed harness failure with the observation kept.
-        result.update({"status": "fail", "failure_code": "claude_helm_lifecycle_failed", "error": str(error), **error_wait})
-        judged = lifecycle_assertions(lifecycle, completed=True, cleanup_ok=cleanup_ok)
-        settle_failed_result(result, observation=observation, assertions=reached_only(judged, observation, REACHED_MARKERS))
+        # record (the shell keeps only those, by REACHED_MARKERS); a reached
+        # failure stays a verdict, and if every reached phase held the run is a
+        # typed harness failure with the observation kept.
+        run.assertions = lifecycle_assertions(lifecycle, completed=True, cleanup_ok=cleanup_ok)
+        run.failed = failure
     else:
-        assertions = lifecycle_assertions(lifecycle, completed=True, cleanup_ok=cleanup_ok)
-        result.update({"status": "pass" if all(assertions.values()) else "fail", "assertions": assertions})
-        if result["status"] == "fail":
-            result["failure_code"] = "claude_helm_lifecycle_failed"
-    result["artifact_manifest"] = artifact_manifest(root)
-    write_json(root / "result.json", result)
-    return result
+        run.assertions = lifecycle_assertions(lifecycle, completed=True, cleanup_ok=cleanup_ok)
+        if not all(run.assertions.values()):
+            run.fields["failure_code"] = "claude_helm_lifecycle_failed"
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(parser, variants=_VARIANTS, provider_bin_aliases=("--claude-bin",))
+def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args))
+
+
+def _add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project", default="zerg")
-    parser.add_argument("--model", default=os.environ.get("ANTHROPIC_MODEL"))
     parser.add_argument("--launch-timeout-secs", type=float, default=90.0)
     parser.add_argument("--response-timeout-secs", type=float, default=150.0)
-    parser.add_argument("--negative-control", choices=tuple(NEGATIVE_CONTROLS), default=None)
-    return parser
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind=_ARTIFACT_KIND,
+    failure_code="claude_helm_lifecycle_failed",
+    needs=("evidence_root", "repo_root", "engine", "provider_bin"),
+    binaries=(("engine", "longhouse_engine_missing"), ("provider_bin", "claude_binary_missing")),
+    runtime_host=True,
+    variants=_VARIANTS,
+    provider_bin_aliases=("--claude-bin",),
+    model_env="ANTHROPIC_MODEL",
+    negative_controls=tuple(NEGATIVE_CONTROLS),
+    reached=REACHED_MARKERS,
+    add_arguments=_add_arguments,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    for required in ("evidence_root", "repo_root", "engine", "provider_bin"):
-        if getattr(args, required) is None:
-            print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{required.replace('_', '-')}"}))
-            return 2
-    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
-    require_disposable_runtime(args.api_url)
-    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
-    if not args.api_url or not args.agents_token:
-        print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
-        return 2
-    for path, code in ((args.engine, "longhouse_engine_missing"), (args.provider_bin, "claude_binary_missing")):
-        if not path.is_file() or not os.access(path, os.X_OK):
-            print(json.dumps({"status": "fail", "failure_code": code}))
-            return 2
-    result = run_lifecycle(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_lifecycle, argv)
 
 
 if __name__ == "__main__":
