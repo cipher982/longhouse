@@ -75,8 +75,6 @@ from zerg.qa.wait_kind import waited_on
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 PROVIDERS = ("codex", "claude", "opencode", "cursor")
-INTERRUPT_SUPPORTED = frozenset({"codex", "claude", "opencode", "cursor", "pi", "omp"})
-INTERRUPT_UNSUPPORTED: frozenset[str] = frozenset()
 # Only OMP's retained JSONL stream carries the terminal agent_end contract used
 # by the post-interrupt evidence check. The other supported adapters settle via
 # their own Runtime Host/claim contracts.
@@ -88,6 +86,8 @@ ASSERTION_ID = "console_adapter_release_contract_preserved"
 STEER_ASSERTION_ID = "console_turn_steer_preserved"
 STEER_PROVIDERS = frozenset({"codex", "claude", "pi", "omp", "opencode"})
 SUPPORTED_VARIANT = "interrupt_supported"
+# Every Console adapter interrupts, so no cell has this variant, the parser does not take it and nothing here runs
+# it. The name stays while the factory's Console checker still has a branch for the string.
 UNSUPPORTED_VARIANT = "interrupt_unsupported"
 SCENARIO_IDS = tuple(f"{provider}_console_adapter_lifecycle" for provider in PROVIDERS)
 
@@ -217,10 +217,6 @@ def _artifact_manifest_after_shipper_stopped(
     if shipper is not None:
         shipper.stop()
     return artifact_manifest(root)
-
-
-def _expected_variant(provider: str) -> str:
-    return SUPPORTED_VARIANT if provider in INTERRUPT_SUPPORTED else UNSUPPORTED_VARIANT
 
 
 def _interrupt_output_contract_applies(provider: str) -> bool:
@@ -2953,8 +2949,8 @@ def _observation_from_receipts(
 
 
 def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path, *, steer: bool = False) -> dict[str, Any]:
-    if variant != _expected_variant(provider):
-        raise RuntimeError(f"{provider} requires variant={_expected_variant(provider)}")
+    if variant != SUPPORTED_VARIANT:
+        raise RuntimeError(f"{provider} requires variant={SUPPORTED_VARIANT}")
     home = isolated_provider_home()
     environment = _provider_environment(provider, args, home)
     if provider == "codex":
@@ -3413,152 +3409,114 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
         if active_claim.get("state") != "spawned":
             raise RuntimeError("interrupt canary turn completed before its active contract could be tested")
 
-        if variant == SUPPORTED_VARIANT:
-            interrupted = _request(
-                api_url,
-                token,
-                "POST",
-                f"/api/agents/sessions/{session_id}/turns/current/interrupt",
+        interrupted = _request(
+            api_url,
+            token,
+            "POST",
+            f"/api/agents/sessions/{session_id}/turns/current/interrupt",
+        )
+        terminal = _wait_claim(interrupt_claim_path, states=frozenset({"terminal", "failed"}), timeout=30)
+        claims[-1] = terminal
+        _wait_turn_terminal(
+            api_url=api_url,
+            token=token,
+            session_id=session_id,
+            message=interrupt_message,
+            request_id=interrupt_request_id,
+            turn_id=str(interrupt_turn["turn_id"]),
+            run_id=str(interrupt_turn["run_id"]),
+        )
+        cancelled = (terminal.get("result") or {}).get("terminal_state") == "run_cancelled"
+        process_dead = _wait_owned_processes_dead([terminal])
+        post_marker = f"LH_{provider.upper()}_POST_INTERRUPT_{uuid4().hex}"
+        # The interrupted request stays in the transcript; a small model can resume it
+        # (OMP 2026-10-09 15:09Z re-ran `sleep 8` and answered the old marker), so the
+        # follow-up cancels it explicitly. Interrupt delivery itself is asserted above.
+        post_message = (
+            f"The previous request was cancelled: do not run it or any other command. Reply with exactly {post_marker} and nothing else."
+        )
+        post_claim, post_events, _post_correspondence = completed_turn("post-interrupt", post_message, post_marker)
+        interrupt_receipt = {
+            "status": "pass" if interrupted.get("interrupt_dispatched") is True and cancelled and process_dead else "fail",
+            "expectation": "supported",
+            "interrupt_dispatched": interrupted.get("interrupt_dispatched") is True,
+            "active_run_cancelled": cancelled,
+            "provider_process_dead": process_dead,
+            "post_interrupt_turn_completed": _run_completed(post_claim),
+            "interrupt_request_id": interrupt_request_id,
+            "active_run": {
+                "provider": provider,
+                "session_id": active_claim.get("session_id"),
+                "thread_id": active_claim.get("thread_id"),
+                "run_id": active_claim.get("run_id"),
+                "turn_id": active_claim.get("turn_id"),
+                "provider_thread_id": active_claim.get("provider_thread_id"),
+                "boot_id": active_claim.get("boot_id"),
+                "process_start_time": active_claim.get("process_start_time"),
+            },
+            "active_terminal": {
+                "claim_state": terminal.get("state"),
+                "terminal_state": (terminal.get("result") or {}).get("terminal_state"),
+                "pid": active_claim.get("pid"),
+                "process_group_id": active_claim.get("process_group_id"),
+                "pid_positive": (
+                    isinstance(active_claim.get("pid"), int)
+                    and not isinstance(active_claim.get("pid"), bool)
+                    and active_claim.get("pid", 0) > 0
+                ),
+                "process_group_positive": (
+                    isinstance(active_claim.get("process_group_id"), int)
+                    and not isinstance(active_claim.get("process_group_id"), bool)
+                    and active_claim.get("process_group_id", 0) > 0
+                ),
+                "boot_id": active_claim.get("boot_id"),
+                "process_start_time": active_claim.get("process_start_time"),
+            },
+            "cancellation_claim": {
+                "claim_state": terminal.get("state"),
+                "run_id": terminal.get("run_id"),
+                "turn_id": terminal.get("turn_id"),
+                "terminal_state": (terminal.get("result") or {}).get("terminal_state"),
+            },
+            "post_interrupt_run": {
+                "provider": provider,
+                "session_id": post_claim.get("session_id"),
+                "thread_id": post_claim.get("thread_id"),
+                "pid": post_claim.get("pid"),
+                "process_group_id": post_claim.get("process_group_id"),
+                "boot_id": post_claim.get("boot_id"),
+                "process_start_time": post_claim.get("process_start_time"),
+                "run_id": post_claim.get("run_id"),
+                "turn_id": post_claim.get("turn_id"),
+                "provider_thread_id": post_claim.get("provider_thread_id"),
+                "terminal_state": (post_claim.get("result") or {}).get("terminal_state"),
+                "marker": post_marker,
+                "marker_observed": len(post_events) == 1 and event_text(post_events[0]).count(post_marker) == 1,
+            },
+        }
+        interrupt_run_id = active_claim.get("run_id")
+        post_interrupt_run_id = post_claim.get("run_id")
+        if not (
+            isinstance(interrupt_run_id, str)
+            and interrupt_run_id
+            and isinstance(post_interrupt_run_id, str)
+            and post_interrupt_run_id
+            and len(
+                {
+                    str(first_claim.get("run_id")),
+                    str(resume_claim.get("run_id")),
+                    interrupt_run_id,
+                    post_interrupt_run_id,
+                }
             )
-            terminal = _wait_claim(interrupt_claim_path, states=frozenset({"terminal", "failed"}), timeout=30)
-            claims[-1] = terminal
-            _wait_turn_terminal(
-                api_url=api_url,
-                token=token,
-                session_id=session_id,
-                message=interrupt_message,
-                request_id=interrupt_request_id,
-                turn_id=str(interrupt_turn["turn_id"]),
-                run_id=str(interrupt_turn["run_id"]),
-            )
-            cancelled = (terminal.get("result") or {}).get("terminal_state") == "run_cancelled"
-            process_dead = _wait_owned_processes_dead([terminal])
-            post_marker = f"LH_{provider.upper()}_POST_INTERRUPT_{uuid4().hex}"
-            # The interrupted request stays in the transcript; a small model can resume it
-            # (OMP 2026-10-09 15:09Z re-ran `sleep 8` and answered the old marker), so the
-            # follow-up cancels it explicitly. Interrupt delivery itself is asserted above.
-            post_message = (
-                "The previous request was cancelled: do not run it or any other command. "
-                f"Reply with exactly {post_marker} and nothing else."
-            )
-            post_claim, post_events, _post_correspondence = completed_turn("post-interrupt", post_message, post_marker)
-            interrupt_receipt = {
-                "status": "pass" if interrupted.get("interrupt_dispatched") is True and cancelled and process_dead else "fail",
-                "expectation": "supported",
-                "interrupt_dispatched": interrupted.get("interrupt_dispatched") is True,
-                "active_run_cancelled": cancelled,
-                "provider_process_dead": process_dead,
-                "post_interrupt_turn_completed": _run_completed(post_claim),
-                "interrupt_request_id": interrupt_request_id,
-                "active_run": {
-                    "provider": provider,
-                    "session_id": active_claim.get("session_id"),
-                    "thread_id": active_claim.get("thread_id"),
-                    "run_id": active_claim.get("run_id"),
-                    "turn_id": active_claim.get("turn_id"),
-                    "provider_thread_id": active_claim.get("provider_thread_id"),
-                    "boot_id": active_claim.get("boot_id"),
-                    "process_start_time": active_claim.get("process_start_time"),
-                },
-                "active_terminal": {
-                    "claim_state": terminal.get("state"),
-                    "terminal_state": (terminal.get("result") or {}).get("terminal_state"),
-                    "pid": active_claim.get("pid"),
-                    "process_group_id": active_claim.get("process_group_id"),
-                    "pid_positive": (
-                        isinstance(active_claim.get("pid"), int)
-                        and not isinstance(active_claim.get("pid"), bool)
-                        and active_claim.get("pid", 0) > 0
-                    ),
-                    "process_group_positive": (
-                        isinstance(active_claim.get("process_group_id"), int)
-                        and not isinstance(active_claim.get("process_group_id"), bool)
-                        and active_claim.get("process_group_id", 0) > 0
-                    ),
-                    "boot_id": active_claim.get("boot_id"),
-                    "process_start_time": active_claim.get("process_start_time"),
-                },
-                "cancellation_claim": {
-                    "claim_state": terminal.get("state"),
-                    "run_id": terminal.get("run_id"),
-                    "turn_id": terminal.get("turn_id"),
-                    "terminal_state": (terminal.get("result") or {}).get("terminal_state"),
-                },
-                "post_interrupt_run": {
-                    "provider": provider,
-                    "session_id": post_claim.get("session_id"),
-                    "thread_id": post_claim.get("thread_id"),
-                    "pid": post_claim.get("pid"),
-                    "process_group_id": post_claim.get("process_group_id"),
-                    "boot_id": post_claim.get("boot_id"),
-                    "process_start_time": post_claim.get("process_start_time"),
-                    "run_id": post_claim.get("run_id"),
-                    "turn_id": post_claim.get("turn_id"),
-                    "provider_thread_id": post_claim.get("provider_thread_id"),
-                    "terminal_state": (post_claim.get("result") or {}).get("terminal_state"),
-                    "marker": post_marker,
-                    "marker_observed": len(post_events) == 1 and event_text(post_events[0]).count(post_marker) == 1,
-                },
-            }
-            interrupt_run_id = active_claim.get("run_id")
-            post_interrupt_run_id = post_claim.get("run_id")
-            if not (
-                isinstance(interrupt_run_id, str)
-                and interrupt_run_id
-                and isinstance(post_interrupt_run_id, str)
-                and post_interrupt_run_id
-                and len(
-                    {
-                        str(first_claim.get("run_id")),
-                        str(resume_claim.get("run_id")),
-                        interrupt_run_id,
-                        post_interrupt_run_id,
-                    }
-                )
-                == 4
-            ):
-                raise RuntimeError("Console Pi lifecycle reused a first, resume, interrupt, or post-interrupt run identity")
-        else:
-            refused = False
-            try:
-                _request(
-                    api_url,
-                    token,
-                    "POST",
-                    f"/api/agents/sessions/{session_id}/turns/current/interrupt",
-                )
-            except RuntimeError as exc:
-                refused = "adapter_unavailable" in str(exc) or "not supported" in str(exc) or "unsupported" in str(exc)
-            terminal = _wait_claim(interrupt_claim_path, states=frozenset({"terminal", "failed"}), timeout=60)
-            claims[-1] = terminal
-            # An adapter that cannot interrupt runs the turn to its end.
-            _require_run_completed(provider, terminal, turn="unsupported-interrupt", marker=interrupt_marker)
-            _wait_turn_terminal(
-                api_url=api_url,
-                token=token,
-                session_id=session_id,
-                message=interrupt_message,
-                request_id=interrupt_request_id,
-                turn_id=str(interrupt_turn["turn_id"]),
-                run_id=str(interrupt_turn["run_id"]),
-            )
-            flush_for_projection("console-unsupported-interrupt-turn", terminal)
-            _wait_turn_served(api_url, token, session_id, provider, terminal, interrupt_marker, turn="unsupported-interrupt", timeout=60)
-            post_marker = f"LH_{provider.upper()}_AFTER_UNSUPPORTED_{uuid4().hex}"
-            post_message = f"Reply with exactly {post_marker} and nothing else."
-            post_claim, _post_events, _post_correspondence = completed_turn("after-unsupported", post_message, post_marker)
-            interrupt_receipt = {
-                "status": "pass" if refused else "fail",
-                "expectation": "unsupported",
-                "interrupt_dispatched": False,
-                "reason": "unsupported" if refused else "unexpected_dispatch",
-                "normal_turn_completed": _run_completed(terminal) and _run_completed(post_claim),
-            }
+            == 4
+        ):
+            raise RuntimeError("Console Pi lifecycle reused a first, resume, interrupt, or post-interrupt run identity")
         write_json(root / "interrupt-contract-receipt.json", interrupt_receipt)
 
         naturally_dead = _wait_owned_processes_dead(claims)
         retained_sources = _retain_claim_sources(root, claims, environment, complete=True)
-        if variant == SUPPORTED_VARIANT and _interrupt_output_contract_applies(provider):
+        if _interrupt_output_contract_applies(provider):
             post_interrupt_output = _retained_post_interrupt_output_evidence(
                 provider,
                 post_claim,
@@ -3808,7 +3766,7 @@ def run_console_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     steer = args.variant in STEER_VARIANTS.values()
 
     def body(run: Run) -> None:
-        reached = _run_live(args.provider, _expected_variant(args.provider) if steer else args.variant, args, run.root, steer=steer)
+        reached = _run_live(args.provider, SUPPORTED_VARIANT if steer else args.variant, args, run.root, steer=steer)
         run.observation = reached.pop("observation")
         run.assertions = reached.pop("assertions")
         run.fields.update(reached)

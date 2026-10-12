@@ -120,9 +120,7 @@ def test_schema_gates_every_console_adapter_on_its_typed_release_assertion():
         if item.capability == "session.turn.start" and item.assertion_id == lifecycle.ASSERTION_ID
     }
 
-    assert assertions == {
-        (provider, lifecycle._expected_variant(provider), lifecycle._scenario_id(provider)) for provider in lifecycle.PROVIDERS
-    }
+    assert assertions == {(provider, lifecycle.SUPPORTED_VARIANT, lifecycle._scenario_id(provider)) for provider in lifecycle.PROVIDERS}
 
 
 def test_console_oracle_accepts_complete_independent_receipts():
@@ -165,22 +163,15 @@ def test_console_oracle_fails_closed_on_missing_binding_or_cleanup(receipt_index
     assert lifecycle.console_lifecycle_assertions(observation) == {lifecycle.ASSERTION_ID: False}
 
 
-@pytest.mark.parametrize(
-    ("provider", "variant"),
-    [
-        ("codex", lifecycle.SUPPORTED_VARIANT),
-        ("claude", lifecycle.SUPPORTED_VARIANT),
-        ("opencode", lifecycle.SUPPORTED_VARIANT),
-        ("cursor", lifecycle.SUPPORTED_VARIANT),
-    ],
-)
-def test_interrupt_expectation_is_provider_typed(provider: str, variant: str):
-    assert lifecycle._expected_variant(provider) == variant
+@pytest.mark.parametrize("variant", [None, lifecycle.UNSUPPORTED_VARIANT, lifecycle.STEER_VARIANTS["codex"]])
+def test_the_live_run_takes_only_the_supported_variant(tmp_path: Path, variant: str | None):
+    # Every Console adapter interrupts. A run asked for anything else stops before it reads an argument.
+    with pytest.raises(RuntimeError, match="codex requires variant=interrupt_supported"):
+        lifecycle._run_live("codex", variant, argparse.Namespace(), tmp_path)
 
 
 @pytest.mark.parametrize("provider", ["pi", "claude", "cursor", "opencode"])
 def test_interrupt_output_terminal_contract_is_omp_only(provider: str):
-    assert lifecycle._expected_variant(provider) == lifecycle.SUPPORTED_VARIANT
     assert lifecycle._interrupt_output_contract_applies(provider) is False
     evidence = lifecycle._retained_post_interrupt_output_evidence(provider, {}, "MARKER", [], Path("/tmp"))
     assert evidence["applicable"] is False
