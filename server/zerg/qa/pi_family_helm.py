@@ -2128,6 +2128,20 @@ class Lifecycle:
             return _host_control(self.api_url, self.token, self.f, command, self.session_id, text=text)
         return _local_control(self.args.engine, self.f, command, self.session_id, self.env, text=text)
 
+    def begin(self, what: str, prompt: str, *, local: bool = False) -> dict[str, Any]:
+        """Send the prompt that starts a turn.
+
+        A send that was not accepted starts no turn. Where a refused command
+        ends the run, it ends it here and says which send it was, instead of
+        at whatever later step first misses the turn.
+        """
+
+        sent = self.control("send", prompt, local=local)
+        if self.f.refused_command_ends_run and sent.get("accepted") is not True:
+            detail = sent.get("payload") or sent.get("stderr") or sent.get("error")
+            raise RuntimeError(f"{self.f.name} Helm {what} was not accepted, so it started no turn: {detail}")
+        return sent
+
     def host(self, command: str, text: str) -> dict[str, Any]:
         """Dispatch a control through the Runtime Host, whatever the lifecycle's own transport."""
 
@@ -2388,6 +2402,10 @@ class Lifecycle:
             "command": command,
             "marker_wait": {"status": "pending", "marker": marker, "source_offset": offset},
         }
+        if self.f.refused_command_ends_run and command.get("accepted") is not True:
+            # Nothing was sent, so there is no reply to wait for: the record says so and the run ends here.
+            record["marker_wait"]["status"] = "refused"
+            raise RuntimeError(f"{self.f.name} Helm {name} was not accepted, so it started no turn: {command.get('payload')}")
         try:
             row, evidence = self.reply(marker, offset)
         except BaseException as exc:
@@ -2406,7 +2424,7 @@ class Lifecycle:
 
         active_marker, marker = self.marker("ACTIVE"), self.marker("FOLLOW_UP")
         offset = _read_source_size(self.session_file)
-        active = self.control("send", self.prompt("busy", active_marker))
+        active = self.begin("busy turn's send", self.prompt("busy", active_marker))
         active_state = self.busy_state()
         prompt = self.prompt("follow_up", marker)
         command = self.host("send", prompt)
@@ -2434,7 +2452,7 @@ class Lifecycle:
             self.wait_state(f.is_idle, timeout=30)
         offset = _read_source_size(self.session_file)
         task, done, marker = (self.marker(f"{name.upper()}{part}") for part in ("_TASK", "_TASK_DONE", ""))
-        active = self.control("send", step_task_prompt(task, done), local=local)
+        active = self.begin(f"{name} turn's send", step_task_prompt(task, done), local=local)
         active_state = self.busy_state()
         self.observation[f"{name}_tool_boundary"] = _wait_task_tool_boundary(self.session_file, task)
         prompt = self.prompt("steer", marker)
@@ -2466,7 +2484,7 @@ class Lifecycle:
         name = "local_abort" if local else "abort"
         idle = self.wait_state(f.is_idle, timeout=30) if f.settles_between_turns else None
         task, done, after = (self.marker(f"{name.upper()}{part}") for part in ("_TASK", "_TASK_DONE", "_AFTER"))
-        active = self.control("send", step_task_prompt(task, done), local=local)
+        active = self.begin(f"{name} turn's send", step_task_prompt(task, done), local=local)
         active_state = self.busy_state(after=idle)
         offset = _read_source_size(self.session_file)
         self.observation[f"{name}_tool_boundary"] = _wait_task_tool_boundary(self.session_file, task)

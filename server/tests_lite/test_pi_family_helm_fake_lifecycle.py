@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import importlib
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -228,6 +229,31 @@ def test_a_failing_verdict_reached_before_a_late_failure_is_kept(provider, longh
         assert "assertions" not in result
         assert result["diagnostic_assertions"][steer] is False
         assert result["diagnostic_observation"]["steer_turn_verdict"]["code"] == "steer_delivered_as_queued_follow_up"
+
+
+@pytest.mark.parametrize(
+    ("dies_after", "refused", "recorded"),
+    [
+        # After the steered turn: the idle send through the local command is the next thing sent.
+        (5, "Pi Helm local_send was not accepted, so it started no turn", "refused"),
+        # After that send's turn: the send that was to start the busy turn for the local steer.
+        (6, "Pi Helm local_steer turn's send was not accepted, so it started no turn", "answered"),
+    ],
+)
+def test_a_refused_send_ends_the_run_where_it_is_refused(dies_after, refused, recorded, longhouse, tmp_path, monkeypatch, capsys):
+    cli, _isolation = longhouse
+    # The launcher is gone, so the engine's local command has no session to send to and says so at once.
+    monkeypatch.setenv(fake.FAULT_ENV, f"exit_after:{dies_after}")
+    started = time.monotonic()
+    code, result, _root = _run("pi", cli, tmp_path, monkeypatch)
+    capsys.readouterr()
+
+    assert (code, result["status"], result["failure_code"]) == (1, "fail", "pi_helm_lifecycle_failed")
+    assert refused in result["error"]
+    controls = result["diagnostic_observation"]["controls"]
+    assert controls["local_send"]["marker_wait"]["status"] == recorded and "local_steer" not in controls
+    # Not at the end of a wait for a reply or a busy state that could never come.
+    assert time.monotonic() - started < 45
 
 
 @pytest.mark.parametrize("provider", ["omp", "pi"])

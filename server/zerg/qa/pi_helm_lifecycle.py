@@ -63,7 +63,8 @@ REGISTRATION = ProducerRegistration(
     # process counts as stopped before its parent collects it (live_kit.pid_dead).
     # 19: send, steer, abort and terminate go through the Runtime Host, as a remote user's do; the engine's local
     # command is proven beside them, in turns of its own and with the last terminate.
-    scenario_revision=19,
+    # 20: a send that is not accepted starts no turn, and the run ends there and names it, not at a later wait.
+    scenario_revision=20,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
