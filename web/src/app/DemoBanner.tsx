@@ -1,14 +1,15 @@
 /**
- * Sticky banner shown at the top of the page in demo mode.
+ * Banner shown under the app bar in demo mode.
  * Informs visitors they're viewing a shared read-only demo.
+ *
+ * It is a row of the app shell like the host-link banner and stacks like it:
+ * above the page, below the app bar, so the menus the bar opens drop over it.
  */
 export default function DemoBanner() {
   return (
     <div
       style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 9999,
+        zIndex: 10,
         background: 'var(--color-surface-elevated)',
         color: 'var(--color-text-secondary)',
         boxShadow: 'inset 0 1px 0 rgba(233, 185, 73, 0.45), 0 1px 0 var(--color-border-subtle)',

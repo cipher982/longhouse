@@ -54,6 +54,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-tones   # one PNG per composer tone
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-background-notices   # collapsed and expanded PNGs
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-parked-close
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-demo-shell   # the read-only demo's banner under the app bar
  *   bunx tsx scripts/ui/ui-capture.ts devices --scene=devices-revoke
  *   bunx tsx scripts/ui/ui-capture.ts landing --scene=provider-certification --viewport=desktop-tall
  *   bunx tsx scripts/ui/ui-capture.ts machines
@@ -169,6 +170,7 @@ const SCENES = [
   "session-tones",
   "session-background-notices",
   "session-parked-close",
+  "session-demo-shell",
   "landing",
   "landing-search",
   "landing-session",
@@ -201,6 +203,9 @@ const FIRST_RUN_SCENE: SceneName = "first-run";
 const FIRST_RUN_MACHINE_SCENE: SceneName = "first-run-machine";
 // The self-host password sign-in, signed out, with password auth configured.
 const LOGIN_SCENE: SceneName = "login";
+// The public read-only demo's shell around the prose-idle session: its banner
+// sits under the app bar, where the bar's menus open.
+const DEMO_SHELL_SCENE: SceneName = "session-demo-shell";
 // The Devices page with a machine holding two valid tokens (each `longhouse
 // auth` mints one) and a revoked one, framed on the revoke-machine confirmation.
 const DEVICES_REVOKE_SCENE: SceneName = "devices-revoke";
@@ -238,6 +243,7 @@ const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "session-tones",
   "session-parked-close",
   "session-background-notices",
+  "session-demo-shell",
 ];
 
 const VIEWPORT_PRESETS = {
@@ -422,6 +428,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "session-tones" ||
     scene === "session-parked-close" ||
     scene === "session-background-notices" ||
+    scene === DEMO_SHELL_SCENE ||
     scene === FIRST_RUN_SCENE ||
     scene === FIRST_RUN_MACHINE_SCENE ||
     scene === LOGIN_SCENE ||
@@ -575,7 +582,7 @@ export async function installSceneMocks(
         ? buildLandingSessionFixture()
         : scene === "session-resume" || scene === "session-ended"
         ? buildSessionResumeFixture()
-        : scene === "session-prose-idle"
+        : scene === "session-prose-idle" || scene === DEMO_SHELL_SCENE
           ? buildSessionProseIdleFixture()
         : scene === "session-research-turn"
           ? buildSessionResearchTurnFixture()
@@ -728,7 +735,7 @@ export async function installSceneMocks(
         return;
       }
 
-      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && (scene === "landing-session" || scene === "session-prose-idle" || scene === "session-research-turn" || scene === "session-console")) {
+      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && (scene === "landing-session" || scene === "session-prose-idle" || scene === DEMO_SHELL_SCENE || scene === "session-research-turn" || scene === "session-console")) {
         await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
         return;
       }
@@ -1466,6 +1473,12 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
     // /login redirects to the timeline; say this is a host that requires sign-in.
     await page.addInitScript(() => {
       (window as unknown as { __APP_MODE__?: string }).__APP_MODE__ = "production";
+    });
+  }
+
+  if (scene === DEMO_SHELL_SCENE) {
+    await page.addInitScript(() => {
+      (window as unknown as { __APP_MODE__?: string }).__APP_MODE__ = "demo";
     });
   }
 
