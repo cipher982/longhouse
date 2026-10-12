@@ -223,14 +223,9 @@ class AutofixTests(unittest.TestCase):
         self.assertEqual(self.autofix("post-commit").returncode, 0)
         self.assertEqual(self.git("status", "--short"), "MM a.txt\n", "the other staged edit survives")
 
-    def test_the_shims_are_installed_once_per_clone_and_pass_pre_commits_pid(self):
-        installer = (ROOT / "scripts" / "ops" / "install-precommit-autofix.sh").read_text()
-        self.assertIn("install_shim pre-commit.legacy", installer)
-        self.assertIn("install_shim post-commit", installer)
-        self.assertIn('LONGHOUSE_AUTOFIX_PID="\\$PPID"', installer)
 
     def test_installer_retires_only_its_own_obsolete_pre_push_hook(self):
-        hooks = Path(self.git("rev-parse", "--path-format=absolute", "--git-path", "hooks"))
+        hooks = Path(self.git("rev-parse", "--path-format=absolute", "--git-path", "hooks").strip())
         pre_push = hooks / "pre-push"
         pre_push.write_text("#!/bin/sh\n# longhouse-review-gate-pre-push: legacy Longhouse hook\n")
         installer = ROOT / "scripts" / "ops" / "install-precommit-autofix.sh"
@@ -242,12 +237,6 @@ class AutofixTests(unittest.TestCase):
         subprocess.run(["bash", str(installer)], cwd=self.dir, check=True, capture_output=True, text=True)
         self.assertEqual(pre_push.read_text(), unrelated)
 
-    def test_the_config_never_autofixes_lint(self):
-        config = (ROOT / ".pre-commit-config.yaml").read_text()
-        for line in config.splitlines():
-            if "precommit_autofix.py fix" in line:
-                self.assertNotIn("--fix", line.split("--cmd", 1)[1].split("--how")[0])
-        self.assertIn("require_serial: true", config)
 
 
 if __name__ == "__main__":

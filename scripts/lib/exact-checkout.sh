@@ -7,8 +7,8 @@
 #   lh_exact_checkout_cleanup       call it from the EXIT trap; safe to call twice
 #
 # It is a linked worktree (`git worktree add --detach`), not a clone: objects are
-shared, and so is the git common dir, which holds the ring locks and release validation stamps every
-other checkout reads. It lives
+# shared, and so is the git common dir, which holds the ring locks and release
+# validation stamps every other checkout reads. It lives
 # under /tmp/agents (LONGHOUSE_EXACT_CHECKOUT_PARENT overrides), so one a crash
 # leaves behind is swept with the rest of the scratch; `git worktree prune` then
 # drops its record.
