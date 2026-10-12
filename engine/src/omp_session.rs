@@ -509,6 +509,11 @@ pub struct SessionSourceLocation {
     /// The parent's parent, when the parent itself is a bucket directory OMP
     /// made inside the launch's session directory.
     bucket_root: Option<PathBuf>,
+    /// Session directories already resolved by this location. Older OMP
+    /// launches share one session directory (248 of 274 retained states on
+    /// cinder), so one ownership check otherwise resolved the same path for
+    /// each of them.
+    resolved: std::cell::RefCell<std::collections::HashMap<PathBuf, PathBuf>>,
 }
 
 impl SessionSourceLocation {
@@ -530,6 +535,7 @@ impl SessionSourceLocation {
         Some(Self {
             parent,
             bucket_root,
+            resolved: Default::default(),
         })
     }
 
@@ -577,8 +583,11 @@ impl SessionSourceLocation {
                 return false;
             }
         }
-        let session_dir = crate::storage_v2_shipper::stable_source_path(session_dir);
-        self.parent == session_dir || self.bucket_root.as_ref() == Some(&session_dir)
+        let mut resolved = self.resolved.borrow_mut();
+        let session_dir = resolved
+            .entry(session_dir.to_path_buf())
+            .or_insert_with(|| crate::storage_v2_shipper::stable_source_path(session_dir));
+        &self.parent == session_dir || self.bucket_root.as_ref() == Some(session_dir)
     }
 }
 

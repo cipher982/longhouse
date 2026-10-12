@@ -214,39 +214,38 @@ fn list_json(dir: &Path) -> std::io::Result<Listing> {
     let mut files = Vec::new();
     let mut signature: Signature = Vec::new();
     let mut at_rest = true;
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+    for entry in read_entries(dir)? {
+        if Path::new(&entry.name)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            != Some("json")
+        {
             continue;
         }
         // A file that vanished between the listing and the stat is a change
         // like any other: leave it out and let the next call see the directory.
-        let Ok(metadata) = entry.metadata() else {
+        let Some(stat) = entry.stat else {
             at_rest = false;
             continue;
         };
         // The stat is of the link, not of what it points at, so a link's
         // signature says nothing about the content that gets read.
-        let mut rested = !metadata.file_type().is_symlink();
-        let modified = metadata.modified().ok();
+        let mut rested = !stat.is_symlink;
         // A modification time in the future is a clock we cannot reason about.
-        rested &= modified
+        rested &= stat
+            .modified
             .and_then(|modified| now.duration_since(modified).ok())
             .is_some_and(|age| age >= AT_REST_AFTER);
         at_rest &= rested;
-        let modified_nanos = modified
+        let modified_nanos = stat
+            .modified
             .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map(|elapsed| elapsed.as_nanos() as i128)
             .unwrap_or(-1);
-        #[cfg(unix)]
-        let inode = metadata.ino();
-        #[cfg(not(unix))]
-        let inode = 0;
-        let stamp = (metadata.len(), inode, modified_nanos);
-        signature.push((entry.file_name(), stamp.0, stamp.1, stamp.2));
+        let stamp = (stat.len, stat.inode, modified_nanos);
+        signature.push((entry.name.clone(), stamp.0, stamp.1, stamp.2));
         files.push(ListedFile {
-            path,
+            path: dir.join(&entry.name),
             stamp,
             rested,
         });
@@ -258,6 +257,180 @@ fn list_json(dir: &Path) -> std::io::Result<Listing> {
     })
 }
 
+struct RawEntry {
+    name: OsString,
+    /// `None` when the entry could not be stat'ed (it vanished, say).
+    stat: Option<RawStat>,
+}
+
+struct RawStat {
+    len: u64,
+    inode: u64,
+    modified: Option<SystemTime>,
+    is_symlink: bool,
+}
+
+/// Every entry of `dir` with its own (not followed) length, inode and
+/// modification time.
+#[cfg(target_os = "macos")]
+fn read_entries(dir: &Path) -> std::io::Result<Vec<RawEntry>> {
+    bulk::read_entries(dir).or_else(|_| read_entries_portable(dir))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_entries(dir: &Path) -> std::io::Result<Vec<RawEntry>> {
+    read_entries_portable(dir)
+}
+
+fn read_entries_portable(dir: &Path) -> std::io::Result<Vec<RawEntry>> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let stat = entry.metadata().ok().map(|metadata| RawStat {
+            len: metadata.len(),
+            #[cfg(unix)]
+            inode: metadata.ino(),
+            #[cfg(not(unix))]
+            inode: 0,
+            modified: metadata.modified().ok(),
+            is_symlink: metadata.file_type().is_symlink(),
+        });
+        entries.push(RawEntry {
+            name: entry.file_name(),
+            stat,
+        });
+    }
+    Ok(entries)
+}
+
+/// `getattrlistbulk(2)`: names, types, inodes, sizes and modification times
+/// of a whole directory in a few syscalls. `read_dir` plus a per-entry stat
+/// was one `fstatat` per file, and the OMP Helm state directory (hundreds of
+/// retained launches) is listed on every OMP shipping job.
+#[cfg(target_os = "macos")]
+mod bulk {
+    use super::{RawEntry, RawStat};
+    use std::ffi::{CString, OsString};
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::path::Path;
+    use std::time::{Duration, SystemTime};
+
+    const COMMON: libc::attrgroup_t = libc::ATTR_CMN_RETURNED_ATTRS
+        | libc::ATTR_CMN_NAME
+        | libc::ATTR_CMN_OBJTYPE
+        | libc::ATTR_CMN_MODTIME
+        | libc::ATTR_CMN_FILEID;
+    const FILE: libc::attrgroup_t = libc::ATTR_FILE_DATALENGTH;
+    const VREG: u32 = 1;
+    const VLNK: u32 = 5;
+
+    fn read_u32(buffer: &[u8], at: usize) -> Option<u32> {
+        Some(u32::from_ne_bytes(buffer.get(at..at + 4)?.try_into().ok()?))
+    }
+
+    fn read_u64(buffer: &[u8], at: usize) -> Option<u64> {
+        Some(u64::from_ne_bytes(buffer.get(at..at + 8)?.try_into().ok()?))
+    }
+
+    pub(super) fn read_entries(dir: &Path) -> std::io::Result<Vec<RawEntry>> {
+        let path = CString::new(dir.as_os_str().as_bytes())
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let fd = unsafe {
+            libc::open(
+                path.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        struct Fd(libc::c_int);
+        impl Drop for Fd {
+            fn drop(&mut self) {
+                unsafe { libc::close(self.0) };
+            }
+        }
+        let fd = Fd(fd);
+        let mut attributes = libc::attrlist {
+            bitmapcount: libc::ATTR_BIT_MAP_COUNT,
+            reserved: 0,
+            commonattr: COMMON,
+            volattr: 0,
+            dirattr: 0,
+            fileattr: FILE,
+            forkattr: 0,
+        };
+        let mut buffer = vec![0_u8; 64 * 1024];
+        let mut entries = Vec::new();
+        loop {
+            let count = unsafe {
+                libc::getattrlistbulk(
+                    fd.0,
+                    (&mut attributes as *mut libc::attrlist).cast(),
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len(),
+                    libc::FSOPT_PACK_INVAL_ATTRS as u64,
+                )
+            };
+            if count < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if count == 0 {
+                return Ok(entries);
+            }
+            let mut offset = 0_usize;
+            for _ in 0..count {
+                let malformed = || std::io::Error::from(std::io::ErrorKind::InvalidData);
+                let length = read_u32(&buffer, offset).ok_or_else(malformed)? as usize;
+                let entry = buffer.get(offset..offset + length).ok_or_else(malformed)?;
+                entries.push(parse_entry(entry).ok_or_else(malformed)?);
+                offset += length;
+            }
+        }
+    }
+
+    /// One packed entry: length, returned-attribute set, then the requested
+    /// attributes in bit order (FSOPT_PACK_INVAL_ATTRS keeps invalid ones as
+    /// zero-filled placeholders, so the layout is fixed).
+    fn parse_entry(entry: &[u8]) -> Option<RawEntry> {
+        let mut at = 4;
+        let returned_common = read_u32(entry, at)?;
+        let returned_file = read_u32(entry, at + 12)?;
+        at += std::mem::size_of::<libc::attribute_set_t>();
+        // attrreference_t: offset from its own position, then length.
+        let name_offset = i32::from_ne_bytes(entry.get(at..at + 4)?.try_into().ok()?);
+        let name_length = read_u32(entry, at + 4)? as usize;
+        let name_start = usize::try_from(at as i64 + name_offset as i64).ok()?;
+        let name_bytes = entry.get(name_start..name_start + name_length)?;
+        let name_bytes = name_bytes.strip_suffix(&[0]).unwrap_or(name_bytes);
+        let name = OsString::from_vec(name_bytes.to_vec());
+        at += 8;
+        let objtype = read_u32(entry, at)?;
+        at += 4;
+        let seconds = read_u64(entry, at)? as i64;
+        let nanos = read_u64(entry, at + 8)? as i64;
+        at += 16;
+        let inode = read_u64(entry, at)?;
+        at += 8;
+        let length = read_u64(entry, at)?;
+        let has = |mask: libc::attrgroup_t| returned_common & mask == mask;
+        let complete = has(libc::ATTR_CMN_OBJTYPE | libc::ATTR_CMN_MODTIME | libc::ATTR_CMN_FILEID)
+            && (objtype != VREG || returned_file & FILE == FILE);
+        let modified = (seconds >= 0 && (0..1_000_000_000).contains(&nanos))
+            .then(|| SystemTime::UNIX_EPOCH + Duration::new(seconds as u64, nanos as u32));
+        let stat = complete.then_some(RawStat {
+            // A symlink's own size is not reported in the data fork; lstat
+            // gives the target length, which a symlink's stamp never needs:
+            // a symlink is never at rest.
+            len: if objtype == VREG { length } else { 0 },
+            inode,
+            modified,
+            is_symlink: objtype == VLNK,
+        });
+        Some(RawEntry { name, stat })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +438,40 @@ mod tests {
 
     fn parse(_path: &Path, bytes: std::io::Result<Vec<u8>>) -> Option<String> {
         String::from_utf8(bytes.ok()?).ok()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bulk_listing_matches_read_dir_and_stat() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.json"), "{}").unwrap();
+        age(&dir.path().join("a.json"), 60);
+        std::os::unix::fs::symlink(dir.path().join("a.json"), dir.path().join("link.json"))
+            .unwrap();
+        fs::create_dir(dir.path().join("dir.json")).unwrap();
+        fs::write(dir.path().join("note.txt"), "x").unwrap();
+        // More entries than one bulk call tends to return.
+        for index in 0..600 {
+            fs::write(dir.path().join(format!("claim-{index:04}.json")), "{}").unwrap();
+        }
+        let mut bulk = bulk::read_entries(dir.path()).unwrap();
+        let mut portable = read_entries_portable(dir.path()).unwrap();
+        bulk.sort_by(|left, right| left.name.cmp(&right.name));
+        portable.sort_by(|left, right| left.name.cmp(&right.name));
+        assert_eq!(bulk.len(), portable.len());
+        for (bulk, portable) in bulk.iter().zip(&portable) {
+            assert_eq!(bulk.name, portable.name);
+            let (bulk, portable) = (bulk.stat.as_ref().unwrap(), portable.stat.as_ref().unwrap());
+            assert_eq!(bulk.inode, portable.inode, "{:?}", portable.modified);
+            assert_eq!(bulk.modified, portable.modified);
+            assert_eq!(bulk.is_symlink, portable.is_symlink);
+            if !bulk.is_symlink && bulk.len != 0 {
+                assert_eq!(bulk.len, portable.len);
+            }
+        }
+        // The regular file's size is reported.
+        let a = bulk.iter().find(|entry| entry.name == "a.json").unwrap();
+        assert_eq!(a.stat.as_ref().unwrap().len, 2);
     }
 
     fn files_parsed() -> usize {

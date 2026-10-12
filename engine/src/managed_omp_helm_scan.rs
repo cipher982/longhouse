@@ -90,6 +90,7 @@ fn source_ownership_in(
     // busy session's engine CPU (realpath syscalls).
     let location = crate::omp_session::SessionSourceLocation::new(path);
     let stable_path = stable(path);
+    let mut claims = None;
     let states =
         crate::dir_cache::parsed_json_dir(state_dir, parse_source_state, |left, right| {
             left.0.cmp(&right.0)
@@ -113,7 +114,20 @@ fn source_ownership_in(
         {
             continue;
         }
-        let claim = crate::managed_source_claim::read_claim(session_id)?;
+        // One read of the claims directory per check, not one file open per
+        // matching state: older launches share a session directory, so most
+        // retained states match and most have no claim at all.
+        if claims.is_none() {
+            claims = Some(crate::managed_source_claim::claims_by_session()?);
+        }
+        let claim = match claims
+            .as_ref()
+            .and_then(|claims| claims.iter().find(|(id, _)| id == session_id))
+        {
+            None => None,
+            Some((_, Ok(claim))) => Some(claim.clone()),
+            Some((_, Err(error))) => anyhow::bail!("{error}"),
+        };
         if let Some(claim) = claim.filter(|claim| {
             claim.provider == "omp"
                 && claim.state == crate::managed_source_claim::ClaimState::Bound

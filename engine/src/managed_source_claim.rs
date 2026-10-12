@@ -293,6 +293,28 @@ pub fn read_claim(session_id: &str) -> Result<Option<SourceClaim>> {
     Ok(Some(claim))
 }
 
+/// Every claim file by session id, read through the directory cache: what
+/// [`read_claim`] would return for each session, for a caller that asks
+/// about many sessions at once. An unreadable file is absent (as `read_claim`
+/// returns `Ok(None)`); an unparsable one keeps its error for the caller.
+pub fn claims_by_session(
+) -> Result<std::sync::Arc<Vec<(String, std::result::Result<SourceClaim, String>)>>> {
+    fn parse(
+        path: &std::path::Path,
+        bytes: std::io::Result<Vec<u8>>,
+    ) -> Option<(String, std::result::Result<SourceClaim, String>)> {
+        let session_id = path.file_stem()?.to_str()?.to_string();
+        let claim = serde_json::from_slice::<SourceClaim>(&bytes.ok()?)
+            .map_err(|error| format!("parsing the claim {}: {error}", path.display()));
+        Some((session_id, claim))
+    }
+    Ok(crate::dir_cache::parsed_json_dir(
+        &claims_dir()?,
+        parse,
+        |left, right| left.0.cmp(&right.0),
+    )?)
+}
+
 /// Every claim the daemon should honour, newest first.
 ///
 /// An unreadable claim is ignored rather than obeyed. Expired non-released
