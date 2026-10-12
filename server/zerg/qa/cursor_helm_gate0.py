@@ -477,6 +477,22 @@ def _stop_facts(stop: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# One code for every ending that is not `completed`, because readers of this
+# gate's result key on it. Which ending it was is the stop status: the
+# failure's message says it in words and its facts carry the status itself.
+_TURN_NOT_COMPLETED = "cursor_turn_ended_in_error"
+_STOP_ENDINGS = {
+    "error": "an error of the provider's own",
+    "aborted": "cancelled before it finished",
+    "": "its stop hook carried no status",
+}
+
+
+def _not_completed(named: str, stop_status: str) -> str:
+    ending = _STOP_ENDINGS.get(stop_status, "a status this gate does not know")
+    return f"Cursor ended {named} with stop status {stop_status!r} ({ending})"
+
+
 def _turn_ended_before(awaited_event: str, stop: dict[str, Any], *, turn: str | None) -> Gate0Failure:
     facts = {"turn": turn, "awaited_event": awaited_event, **_stop_facts(stop)}
     named = f"the {turn} turn" if turn else "the turn"
@@ -487,8 +503,8 @@ def _turn_ended_before(awaited_event: str, stop: dict[str, Any], *, turn: str | 
             **facts,
         )
     return Gate0Failure(
-        "cursor_turn_ended_in_error",
-        f"Cursor ended {named} with stop status {facts['stop_status']!r} before producing {awaited_event}",
+        _TURN_NOT_COMPLETED,
+        f"{_not_completed(named, facts['stop_status'])} before producing {awaited_event}",
         **facts,
     )
 
@@ -498,11 +514,7 @@ def _require_completed_turn(stop: dict[str, Any], *, turn: str) -> None:
 
     if stop.get("status") != "completed":
         facts = {"turn": turn, **_stop_facts(stop)}
-        raise Gate0Failure(
-            "cursor_turn_ended_in_error",
-            f"Cursor ended the {turn} turn with stop status {facts['stop_status']!r}",
-            **facts,
-        )
+        raise Gate0Failure(_TURN_NOT_COMPLETED, _not_completed(f"the {turn} turn", facts["stop_status"]), **facts)
 
 
 def _turn_generation(row: dict[str, Any], *, turn: str) -> str:

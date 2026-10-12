@@ -1105,7 +1105,31 @@ def test_gate0_report_names_a_launch_turn_that_ended_in_error(monkeypatch, tmp_p
     )
     failed = report["scenarios"]["create_chat_resume"]
     assert (failed["turn"], failed["stop_status"]) == ("launch", "error")
-    assert "launch turn" in report["error"]
+    assert report["error"] == "Cursor ended the launch turn with stop status 'error' (an error of the provider's own)"
+
+
+@pytest.mark.parametrize(
+    ("stop", "ending"),
+    [
+        ({"status": "error"}, "an error of the provider's own"),
+        ({"status": "aborted", "is_interrupt": True}, "cancelled before it finished"),
+        ({}, "its stop hook carried no status"),
+        ({"status": "paused"}, "a status this gate does not know"),
+    ],
+)
+def test_a_turn_that_did_not_complete_says_which_ending_it_was(stop: dict[str, Any], ending: str) -> None:
+    """Every ending but `completed` shares one code; the status it carried is in the message and the facts."""
+
+    with pytest.raises(gate.Gate0Failure) as failure:
+        gate._require_completed_turn(stop, turn="launch")
+    awaited = gate._turn_ended_before("afterAgentResponse", stop, turn="probe")
+
+    status = stop.get("status", "")
+    assert failure.value.failure_code == awaited.failure_code == "cursor_turn_ended_in_error"
+    assert str(failure.value) == f"Cursor ended the launch turn with stop status {status!r} ({ending})"
+    assert str(awaited) == f"Cursor ended the probe turn with stop status {status!r} ({ending}) before producing afterAgentResponse"
+    assert (failure.value.facts["stop_status"], failure.value.facts["stop_is_interrupt"]) == (status, stop.get("is_interrupt"))
+    assert awaited.facts["stop_status"] == status
 
 
 @pytest.mark.parametrize("harness_input", [True, False])
