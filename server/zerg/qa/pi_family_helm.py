@@ -3038,8 +3038,6 @@ class Lifecycle:
             {
                 "managed_transport": f"{f.provider}_helm_channel",
                 "state": redact_state_for_evidence(self.state),
-                "owners": observation["owners"],
-                "controls": observation["controls"],
                 "observation": observation,
             },
         )
