@@ -25,28 +25,17 @@ context compaction:
 from __future__ import annotations
 
 import argparse
-import shutil
-import tempfile
 import uuid
-from pathlib import Path
 from typing import Any
 
 from zerg.qa.claude_live_session_support import RuntimeHostCoordinationAuthorityUnavailable
 from zerg.qa.claude_live_session_support import await_assistant_marker
-from zerg.qa.claude_live_session_support import claude_launch_environment
-from zerg.qa.claude_live_session_support import close_session
-from zerg.qa.claude_live_session_support import failed_session_close_receipt
+from zerg.qa.claude_live_session_support import claude_qualification
 from zerg.qa.claude_live_session_support import find_compaction_boundary
 from zerg.qa.claude_live_session_support import find_tool_invocation
-from zerg.qa.claude_live_session_support import isolation_paths
-from zerg.qa.claude_live_session_support import launch_claude_session
 from zerg.qa.claude_live_session_support import mcp_bootstrap_config_paths
-from zerg.qa.claude_live_session_support import read_coordination_token
-from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_until
-from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
-from zerg.qa.live_session_toolkit import prepare_claude_profile
 from zerg.qa.managed_claude_live import transcript_line_counts
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
@@ -119,10 +108,6 @@ _ARTIFACT_KIND = "claude_coordination_awareness_post_compaction_result"
 
 def _reach(run: Run, args: argparse.Namespace) -> None:
     root = run.root
-    isolation_root = Path(tempfile.mkdtemp(prefix="lhx-claude-coord-compact-", dir="/tmp"))
-    _home, longhouse_home = isolation_paths(isolation_root)
-    workspace = isolation_root / "workspace"
-    workspace.mkdir(parents=True, exist_ok=True)
     marker_pre = f"LONGHOUSE_COORD_PRECOMPACT_{uuid.uuid4().hex[:12]}"
     marker_post = f"LONGHOUSE_COORD_POSTCOMPACT_{uuid.uuid4().hex[:12]}"
     probe_repo = f"longhouse-coordination-awareness-probe-{uuid.uuid4().hex[:12]}"
@@ -133,55 +118,21 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             f"After the tool call returns, reply with exactly {marker} and nothing else."
         )
 
-    shipper = None
-    session = None
-    close_receipt: dict[str, Any] = {"not_started": True, "alive_after_close": False}
-    try:
-        shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
-        write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
-
-        # Claude persists first-run onboarding (theme/API-key/trust) outside
-        # the Longhouse channel state. Launching the managed facade against
-        # this fresh disposable profile without completing it first leaves
-        # the session stuck at the wizard forever -- see
-        # claude_coordination_awareness_create.py's identical fix for the
-        # full rationale.
-        onboarding_home, _longhouse_home_for_onboarding = isolation_paths(isolation_root)
-        onboarding = prepare_claude_profile(
-            binary=args.provider_bin,
-            home=onboarding_home,
-            workspace=workspace,
-            environment=environment,
-            recording=root / "claude-onboarding.tty",
+    with claude_qualification(
+        run,
+        args,
+        registration=REGISTRATION,
+        prefix="lhx-claude-coord-compact-",
+        name="Longhouse coordination-awareness-post-compaction qualification",
+        coordination_authority=True,
+    ) as live:
+        session, session_id, provider_session_id, home, longhouse_home = (
+            live.session,
+            live.session_id,
+            live.provider_session_id,
+            live.home,
+            live.longhouse_home,
         )
-        write_json(root / "claude-onboarding-receipt.json", onboarding)
-
-        launch_env = claude_launch_environment(
-            environment,
-            claude_bin=args.provider_bin,
-            engine=args.engine,
-            model=args.model,
-            longhouse_home=longhouse_home,
-        )
-        session, session_id, provider_session_id = launch_claude_session(
-            workspace=workspace,
-            project=args.project,
-            name="Longhouse coordination-awareness-post-compaction qualification",
-            env=launch_env,
-            terminal_path=root / "terminal.log",
-            launch_timeout_secs=args.launch_timeout_secs,
-        )
-        coordination_authority_available = read_coordination_token(longhouse_home, session_id) is not None
-        write_json(
-            root / "session-launch-receipt.json",
-            {
-                "session_id": session_id,
-                "workspace": str(workspace),
-                "coordination_authority_available": coordination_authority_available,
-            },
-        )
-        if not coordination_authority_available:
-            raise RuntimeHostCoordinationAuthorityUnavailable("managed Claude launched without Runtime Host coordination authority")
         transcript_id = provider_session_id or session_id
 
         # These are real Helm-user turns. The coordination channel is
@@ -192,22 +143,22 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             session_id=session_id,
             marker=marker_pre,
             timeout=args.response_timeout_secs,
-            home=Path(environment["HOME"]),
+            home=home,
             provider_session_id=provider_session_id,
         )
-        pre_invocation = find_tool_invocation(transcript_id, "peers", home=Path(environment["HOME"]))
+        pre_invocation = find_tool_invocation(transcript_id, "peers", home=home)
         write_json(root / "pre-compaction-tool-invocation-evidence.json", pre_invocation or {"found": False})
 
         bootstrap_configs_before = mcp_bootstrap_config_paths(longhouse_home, session_id)
 
-        pre_compaction_line_counts = transcript_line_counts(transcript_id, home=Path(environment["HOME"]))
+        pre_compaction_line_counts = transcript_line_counts(transcript_id, home=home)
         session.submit_line("/compact")
         wait_for_terminal_quiescence(session, timeout=args.compaction_timeout_secs, minimum_bytes=1, stable_seconds=2.0)
         compaction_boundary = wait_until(
             lambda: find_compaction_boundary(
                 transcript_id,
                 after_line_counts=pre_compaction_line_counts,
-                home=Path(environment["HOME"]),
+                home=home,
             ),
             timeout=args.compaction_timeout_secs,
             description="Claude transcript compaction boundary",
@@ -221,12 +172,10 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             session_id=session_id,
             marker=marker_post,
             timeout=args.response_timeout_secs,
-            home=Path(environment["HOME"]),
+            home=home,
             provider_session_id=provider_session_id,
         )
-        post_invocation = find_tool_invocation(
-            transcript_id, "peers", after_line_counts=pre_compaction_line_counts, home=Path(environment["HOME"])
-        )
+        post_invocation = find_tool_invocation(transcript_id, "peers", after_line_counts=pre_compaction_line_counts, home=home)
         write_json(root / "post-compaction-tool-invocation-evidence.json", post_invocation or {"found": False})
 
         bootstrap_configs_after = mcp_bootstrap_config_paths(longhouse_home, session_id)
@@ -238,86 +187,37 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             },
         )
 
-        close_receipt = close_session(session)
-        session = None
-        write_json(root / "session-close-receipt.json", close_receipt)
-        if shipper is not None:
-            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
-            shipper = None
-        write_claude_cleanup_aggregate(
-            root,
-            producer_id=REGISTRATION.producer_id,
-            required_cleanup=REGISTRATION.required_cleanup,
-            outcomes={"claude_helm_process_exited": close_receipt.get("alive_after_close") is False},
-            diagnostics={"session": close_receipt},
-        )
+    pre_ok = (
+        pre_invocation is not None and pre_invocation.get("tool_result_line") is not None and pre_invocation.get("is_error") is not True
+    )
+    post_ok = (
+        post_invocation is not None and post_invocation.get("tool_result_line") is not None and post_invocation.get("is_error") is not True
+    )
+    # A confident count requires having actually found the bootstrap
+    # directory. An empty glob is ambiguous between "correctly bootstrapped
+    # once, path assumption right" and "path assumption wrong" -- do not
+    # manufacture a specific count in that case; report None (the oracle
+    # already treats None as non-duplicating) and let the raw manifest
+    # above carry the evidence for a human to check.
+    visible_bootstrap_count = len(bootstrap_configs_after) if bootstrap_configs_after or bootstrap_configs_before else None
 
-        pre_ok = (
-            pre_invocation is not None and pre_invocation.get("tool_result_line") is not None and pre_invocation.get("is_error") is not True
-        )
-        post_ok = (
-            post_invocation is not None
-            and post_invocation.get("tool_result_line") is not None
-            and post_invocation.get("is_error") is not True
-        )
-        # A confident count requires having actually found the bootstrap
-        # directory. An empty glob is ambiguous between "correctly bootstrapped
-        # once, path assumption right" and "path assumption wrong" -- do not
-        # manufacture a specific count in that case; report None (the oracle
-        # already treats None as non-duplicating) and let the raw manifest
-        # above carry the evidence for a human to check.
-        visible_bootstrap_count = len(bootstrap_configs_after) if bootstrap_configs_after or bootstrap_configs_before else None
-
-        run.observation = {
-            "session_id": session_id,
-            "probe_repo": probe_repo,
-            "pre_compaction_marker": marker_pre,
-            "post_compaction_marker": marker_post,
-            "pre_compaction_tool_call_ok": pre_ok,
-            "compaction_signal_observed": compaction_boundary is not None,
-            "coordination_instructions_model_visible_after_compaction": post_ok and compaction_boundary is not None,
-            "pre_compaction_tool_invocation": pre_invocation,
-            "post_compaction_tool_invocation": post_invocation,
-            "mcp_bootstrap_configs_before_compact": [str(path) for path in bootstrap_configs_before],
-            "mcp_bootstrap_configs_after_compact": [str(path) for path in bootstrap_configs_after],
-            "visible_bootstrap_count": visible_bootstrap_count,
-        }
-        # One live run computes every assertion of the scenario; the status is
-        # the whole map's, and the factory reads each cell from its own key.
-        run.assertions = awareness_post_compaction_assertions(run.observation)
-    except Exception:  # noqa: BLE001 - close what the run owned, then let the shell type the failure
-        if session is not None:
-            try:
-                close_receipt = close_session(session)
-            except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
-                close_receipt = failed_session_close_receipt(session, cleanup_exc)
-        if shipper is not None:
-            try:
-                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
-            except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
-                close_receipt["shipper_stop_error"] = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
-            shipper = None
-        cleanup_recording_error = None
-        try:
-            write_claude_cleanup_aggregate(
-                root,
-                producer_id=REGISTRATION.producer_id,
-                required_cleanup=REGISTRATION.required_cleanup,
-                outcomes={"claude_helm_process_exited": close_receipt.get("alive_after_close") is False},
-                diagnostics={"session": close_receipt},
-            )
-        except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
-            cleanup_recording_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
-        if cleanup_recording_error:
-            run.fields["cleanup_recording_error"] = cleanup_recording_error
-        raise
-    finally:
-        if shipper is not None:
-            try:
-                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
-            except Exception:  # noqa: BLE001 - result already retains the causal failure
-                pass
-        shutil.rmtree(isolation_root, ignore_errors=True)
+    run.observation = {
+        "session_id": session_id,
+        "probe_repo": probe_repo,
+        "pre_compaction_marker": marker_pre,
+        "post_compaction_marker": marker_post,
+        "pre_compaction_tool_call_ok": pre_ok,
+        "compaction_signal_observed": compaction_boundary is not None,
+        "coordination_instructions_model_visible_after_compaction": post_ok and compaction_boundary is not None,
+        "pre_compaction_tool_invocation": pre_invocation,
+        "post_compaction_tool_invocation": post_invocation,
+        "mcp_bootstrap_configs_before_compact": [str(path) for path in bootstrap_configs_before],
+        "mcp_bootstrap_configs_after_compact": [str(path) for path in bootstrap_configs_after],
+        "visible_bootstrap_count": visible_bootstrap_count,
+    }
+    # One live run computes every assertion of the scenario; the status is
+    # the whole map's, and the factory reads each cell from its own key.
+    run.assertions = awareness_post_compaction_assertions(run.observation)
 
 
 def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str, Any]:

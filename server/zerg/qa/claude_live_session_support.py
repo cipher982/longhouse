@@ -25,14 +25,19 @@ activity facts at all.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import os
 import re
+import shutil
+import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +46,7 @@ from zerg.qa.live_kit import poll
 from zerg.qa.live_kit import runtime_host_json as api_json
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import latest_claude_startup_prompt
+from zerg.qa.live_session_toolkit import prepare_claude_profile
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.managed_claude_live import assistant_transcript_contains
 from zerg.qa.managed_claude_live import channel_send
@@ -50,10 +56,12 @@ from zerg.qa.managed_claude_live import strip_terminal_controls
 from zerg.qa.managed_claude_live import transcript_lookup_id
 from zerg.qa.managed_claude_live import transcript_paths
 from zerg.qa.managed_claude_live import wait_for_channel_ready
+from zerg.qa.producer_shell import Run
 from zerg.qa.producer_shell import write_json as write_json
 from zerg.qa.provider_artifacts import artifact_manifest as artifact_manifest
 from zerg.qa.provider_artifacts import sha256_file as sha256_file
 from zerg.qa.pty_session import ProviderPtySession
+from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.wait_kind import PROVIDER_TURN
 
 
@@ -770,3 +778,109 @@ def close_session(session: ProviderPtySession, *, exit_command: str | None = "/e
     finally:
         session.close()
     return {"exit_code": session.process.returncode, "alive_after_close": session.alive()}
+
+
+@dataclass
+class ClaudeQualification:
+    """The managed Claude Helm session a producer drives, and what closing it left."""
+
+    session: ProviderPtySession
+    session_id: str
+    provider_session_id: str | None
+    home: Path
+    longhouse_home: Path
+    workspace: Path
+    close_receipt: dict[str, Any]
+
+
+@contextlib.contextmanager
+def claude_qualification(
+    run: Run,
+    args: Any,
+    *,
+    registration: ProducerRegistration,
+    prefix: str,
+    name: str,
+    coordination_authority: bool = False,
+) -> Iterator[ClaudeQualification]:
+    """One managed Claude Helm session in a disposable machine, for the length of a producer's work.
+
+    Starts the Machine Agent and its shipper, completes Claude's first-run
+    onboarding (a fresh profile launched without it sits at the wizard: no
+    channel, no tool surface, indistinguishable from a hang) and launches the
+    session. However the work ends, the session is closed, the shipper
+    stopped and the cleanup receipt written before the result is made; a
+    failure to record the cleanup rides on the result rather than replacing
+    the cause. ``coordination_authority`` is for a producer that speaks as the
+    session: a launch without the Runtime Host's coordination token is refused.
+    """
+
+    root = run.root
+    isolation_root = Path(tempfile.mkdtemp(prefix=prefix, dir="/tmp"))
+    workspace = isolation_root / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    shipper = None
+    session = None
+    close_receipt: dict[str, Any] = {"not_started": True, "alive_after_close": False}
+
+    def record_cleanup() -> None:
+        write_claude_cleanup_aggregate(
+            root,
+            producer_id=registration.producer_id,
+            required_cleanup=registration.required_cleanup,
+            outcomes={"claude_helm_process_exited": close_receipt.get("alive_after_close") is False},
+            diagnostics={"session": close_receipt},
+        )
+
+    try:
+        shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
+        write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
+        home, longhouse_home = isolation_paths(isolation_root)
+        onboarding = prepare_claude_profile(
+            binary=args.provider_bin, home=home, workspace=workspace, environment=environment, recording=root / "claude-onboarding.tty"
+        )
+        write_json(root / "claude-onboarding-receipt.json", onboarding)
+        session, session_id, provider_session_id = launch_claude_session(
+            workspace=workspace,
+            project=args.project,
+            name=name,
+            env=claude_launch_environment(
+                environment, claude_bin=args.provider_bin, engine=args.engine, model=args.model, longhouse_home=longhouse_home
+            ),
+            terminal_path=root / "terminal.log",
+            launch_timeout_secs=args.launch_timeout_secs,
+        )
+        launch_receipt: dict[str, Any] = {"session_id": session_id, "workspace": str(workspace)}
+        if coordination_authority:
+            launch_receipt["coordination_authority_available"] = read_coordination_token(longhouse_home, session_id) is not None
+        write_json(root / "session-launch-receipt.json", launch_receipt)
+        if launch_receipt.get("coordination_authority_available") is False:
+            raise RuntimeHostCoordinationAuthorityUnavailable("managed Claude launched without Runtime Host coordination authority")
+        live = ClaudeQualification(
+            session, session_id, provider_session_id, Path(environment["HOME"]), longhouse_home, workspace, close_receipt
+        )
+        yield live
+        live.close_receipt = close_receipt = close_session(session)
+        session = None
+        write_json(root / "session-close-receipt.json", close_receipt)
+        write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+        shipper = None
+        record_cleanup()
+    except Exception:  # noqa: BLE001 - close what the run owned; the cause is the producer's to report
+        if session is not None:
+            try:
+                close_receipt = close_session(session)
+            except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error
+                close_receipt = failed_session_close_receipt(session, cleanup_exc)
+        if shipper is not None:
+            try:
+                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error
+                close_receipt["shipper_stop_error"] = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+        try:
+            record_cleanup()
+        except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error
+            run.fields["cleanup_recording_error"] = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+        raise
+    finally:
+        shutil.rmtree(isolation_root, ignore_errors=True)

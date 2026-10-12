@@ -16,25 +16,14 @@ the model -- not just present in some config file it never reads.
 from __future__ import annotations
 
 import argparse
-import shutil
-import tempfile
 import uuid
-from pathlib import Path
 from typing import Any
 
 from zerg.qa.claude_live_session_support import RuntimeHostCoordinationAuthorityUnavailable
 from zerg.qa.claude_live_session_support import await_assistant_marker
-from zerg.qa.claude_live_session_support import claude_launch_environment
-from zerg.qa.claude_live_session_support import close_session
-from zerg.qa.claude_live_session_support import failed_session_close_receipt
+from zerg.qa.claude_live_session_support import claude_qualification
 from zerg.qa.claude_live_session_support import find_tool_invocation
-from zerg.qa.claude_live_session_support import isolation_paths
-from zerg.qa.claude_live_session_support import launch_claude_session
-from zerg.qa.claude_live_session_support import read_coordination_token
-from zerg.qa.claude_live_session_support import start_machine_and_shipper
-from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
-from zerg.qa.live_session_toolkit import prepare_claude_profile
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
@@ -90,9 +79,6 @@ _ARTIFACT_KIND = "claude_coordination_awareness_create_result"
 
 def _reach(run: Run, args: argparse.Namespace) -> None:
     root = run.root
-    isolation_root = Path(tempfile.mkdtemp(prefix="lhx-claude-coord-create-", dir="/tmp"))
-    workspace = isolation_root / "workspace"
-    workspace.mkdir(parents=True, exist_ok=True)
     marker = f"LONGHOUSE_COORD_CREATE_{uuid.uuid4().hex[:12]}"
     probe_repo = f"longhouse-coordination-awareness-probe-{uuid.uuid4().hex[:12]}"
     prompt = (
@@ -100,57 +86,15 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
         f"After the tool call returns, reply with exactly {marker} and nothing else."
     )
 
-    shipper = None
-    session = None
-    close_receipt: dict[str, Any] = {"not_started": True, "alive_after_close": False}
-    try:
-        shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
-        write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
-
-        # Claude persists first-run onboarding (theme/API-key/trust) outside
-        # the Longhouse channel state. Launching the managed facade against
-        # this fresh disposable profile without completing it first leaves
-        # the session stuck at the wizard forever -- no channel readiness,
-        # no MCP tool surface, indistinguishable from a hang. Every proven
-        # Resume producer gets this for free through provider_native_resume's
-        # shared launch path; this producer launches Claude directly, so it
-        # needs the same priming call explicitly.
-        home, longhouse_home = isolation_paths(isolation_root)
-        onboarding = prepare_claude_profile(
-            binary=args.provider_bin,
-            home=home,
-            workspace=workspace,
-            environment=environment,
-            recording=root / "claude-onboarding.tty",
-        )
-        write_json(root / "claude-onboarding-receipt.json", onboarding)
-
-        launch_env = claude_launch_environment(
-            environment,
-            claude_bin=args.provider_bin,
-            engine=args.engine,
-            model=args.model,
-            longhouse_home=longhouse_home,
-        )
-        session, session_id, provider_session_id = launch_claude_session(
-            workspace=workspace,
-            project=args.project,
-            name="Longhouse coordination-awareness-create qualification",
-            env=launch_env,
-            terminal_path=root / "terminal.log",
-            launch_timeout_secs=args.launch_timeout_secs,
-        )
-        coordination_authority_available = read_coordination_token(longhouse_home, session_id) is not None
-        write_json(
-            root / "session-launch-receipt.json",
-            {
-                "session_id": session_id,
-                "workspace": str(workspace),
-                "coordination_authority_available": coordination_authority_available,
-            },
-        )
-        if not coordination_authority_available:
-            raise RuntimeHostCoordinationAuthorityUnavailable("managed Claude launched without Runtime Host coordination authority")
+    with claude_qualification(
+        run,
+        args,
+        registration=REGISTRATION,
+        prefix="lhx-claude-coord-create-",
+        name="Longhouse coordination-awareness-create qualification",
+        coordination_authority=True,
+    ) as live:
+        session, session_id, provider_session_id, home = live.session, live.session_id, live.provider_session_id, live.home
 
         # Coordination-channel messages are attributed, untrusted peer input;
         # asking Claude to obey one as a command correctly triggers its safety
@@ -160,71 +104,24 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             session_id=session_id,
             marker=marker,
             timeout=args.response_timeout_secs,
-            home=Path(environment["HOME"]),
+            home=home,
             provider_session_id=provider_session_id,
         )
 
-        invocation = find_tool_invocation(provider_session_id or session_id, "peers", home=Path(environment["HOME"]))
+        invocation = find_tool_invocation(provider_session_id or session_id, "peers", home=home)
         write_json(root / "tool-invocation-evidence.json", invocation or {"found": False})
 
-        close_receipt = close_session(session)
-        session = None
-        write_json(root / "session-close-receipt.json", close_receipt)
-        if shipper is not None:
-            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
-            shipper = None
-        write_claude_cleanup_aggregate(
-            root,
-            producer_id=REGISTRATION.producer_id,
-            required_cleanup=REGISTRATION.required_cleanup,
-            outcomes={"claude_helm_process_exited": close_receipt.get("alive_after_close") is False},
-            diagnostics={"session": close_receipt},
-        )
-
-        tool_called_successfully = (
-            invocation is not None and invocation.get("tool_result_line") is not None and invocation.get("is_error") is not True
-        )
-        run.observation = {
-            "session_id": session_id,
-            "marker": marker,
-            "probe_repo": probe_repo,
-            "coordination_instructions_model_visible": tool_called_successfully,
-            "tool_invocation": invocation,
-        }
-        run.assertions = awareness_create_assertions(run.observation)
-    except Exception:  # noqa: BLE001 - close what the run owned, then let the shell type the failure
-        if session is not None:
-            try:
-                close_receipt = close_session(session)
-            except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
-                close_receipt = failed_session_close_receipt(session, cleanup_exc)
-        if shipper is not None:
-            try:
-                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
-            except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
-                close_receipt["shipper_stop_error"] = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
-            shipper = None
-        cleanup_recording_error = None
-        try:
-            write_claude_cleanup_aggregate(
-                root,
-                producer_id=REGISTRATION.producer_id,
-                required_cleanup=REGISTRATION.required_cleanup,
-                outcomes={"claude_helm_process_exited": close_receipt.get("alive_after_close") is False},
-                diagnostics={"session": close_receipt},
-            )
-        except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
-            cleanup_recording_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
-        if cleanup_recording_error:
-            run.fields["cleanup_recording_error"] = cleanup_recording_error
-        raise
-    finally:
-        if shipper is not None:
-            try:
-                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
-            except Exception:  # noqa: BLE001 - result already retains the causal failure
-                pass
-        shutil.rmtree(isolation_root, ignore_errors=True)
+    tool_called_successfully = (
+        invocation is not None and invocation.get("tool_result_line") is not None and invocation.get("is_error") is not True
+    )
+    run.observation = {
+        "session_id": session_id,
+        "marker": marker,
+        "probe_repo": probe_repo,
+        "coordination_instructions_model_visible": tool_called_successfully,
+        "tool_invocation": invocation,
+    }
+    run.assertions = awareness_create_assertions(run.observation)
 
 
 def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:

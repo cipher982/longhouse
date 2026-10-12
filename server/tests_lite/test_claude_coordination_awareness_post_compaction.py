@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from zerg.qa import claude_coordination_awareness_post_compaction as m
+from zerg.qa import claude_live_session_support as support
 from zerg.qa import producer_shell
 from zerg.qa.resume_assurance import execution_variant_key
 
@@ -81,10 +82,10 @@ def _install_session_fakes(
 ) -> tuple[_FakeShipper, _FakeSession]:
     fake_shipper = _FakeShipper()
     fake_session = _FakeSession()
-    monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
-    monkeypatch.setattr(m, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
-    monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
-    monkeypatch.setattr(m, "read_coordination_token", lambda *_a, **_k: "coordination-token")
+    monkeypatch.setattr(support, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
+    monkeypatch.setattr(support, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(support, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
+    monkeypatch.setattr(support, "read_coordination_token", lambda *_a, **_k: "coordination-token")
     monkeypatch.setattr(m, "await_assistant_marker", lambda **_k: ("/tmp/transcript.jsonl", 3, None))
     invocations = iter([pre_invocation, post_invocation])
     monkeypatch.setattr(m, "find_tool_invocation", lambda *_a, **_k: next(invocations))
@@ -101,7 +102,7 @@ def _install_session_fakes(
     monkeypatch.setattr(m, "transcript_line_counts", lambda *_a, **_k: {})
     monkeypatch.setattr(m, "wait_for_terminal_quiescence", lambda *_a, **_k: None)
     monkeypatch.setattr(m, "mcp_bootstrap_config_paths", lambda *_a, **_k: bootstrap_config_paths)
-    monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
+    monkeypatch.setattr(support, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
 
     real_artifact_manifest = producer_shell.artifact_manifest
 
@@ -175,7 +176,7 @@ def test_run_rejects_a_launch_without_coordination_authority_before_prompting(tm
     variant = execution_variant_key(provider="claude", assertion_id=m._ASSERTION_VISIBLE, scenario_id=m._SCENARIO_ID, variant=None)
     args = _args(tmp_path, variant)
     _shipper, fake_session = _install_session_fakes(monkeypatch, pre_invocation=None, post_invocation=None, bootstrap_config_paths=[])
-    monkeypatch.setattr(m, "read_coordination_token", lambda *_a, **_k: None)
+    monkeypatch.setattr(support, "read_coordination_token", lambda *_a, **_k: None)
 
     result = m.run_awareness_post_compaction_scenario(args)
 
@@ -221,13 +222,13 @@ def test_run_records_a_typed_failure_as_a_typed_harness_failure(tmp_path: Path, 
     variant = execution_variant_key(provider="claude", assertion_id=m._ASSERTION_VISIBLE, scenario_id=m._SCENARIO_ID, variant=None)
     args = _args(tmp_path, variant)
     fake_shipper = _FakeShipper()
-    monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
-    monkeypatch.setattr(m, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(support, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
+    monkeypatch.setattr(support, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
 
     def _boom(**_k: object) -> object:
         raise RuntimeError("longhouse claude exited before channel readiness")
 
-    monkeypatch.setattr(m, "launch_claude_session", _boom)
+    monkeypatch.setattr(support, "launch_claude_session", _boom)
 
     result = m.run_awareness_post_compaction_scenario(args)
 

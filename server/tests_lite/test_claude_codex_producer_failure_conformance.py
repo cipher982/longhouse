@@ -13,6 +13,7 @@ from zerg.qa import claude_coordination_awareness_create as claude_create
 from zerg.qa import claude_coordination_awareness_post_compaction as claude_compaction
 from zerg.qa import claude_coordination_directed_input as claude_directed
 from zerg.qa import claude_launch_helm_real_print as claude_launch
+from zerg.qa import claude_live_session_support
 from zerg.qa import claude_native_resume
 from zerg.qa import claude_turn_boundary_quiescent as claude_boundary
 from zerg.qa import claude_turn_start_real_print as claude_turn_start
@@ -93,12 +94,18 @@ def _install_claude_session_boundaries(
         sessions.append(session)
         return session, session.session_id, f"provider-{len(sessions)}"
 
-    monkeypatch.setattr(module, "start_machine_and_shipper", start_machine)
-    monkeypatch.setattr(module, "prepare_claude_profile", lambda **_kwargs: {"status": "pass"})
-    monkeypatch.setattr(module, "launch_claude_session", launch_session)
-    if hasattr(module, "read_coordination_token"):
-        monkeypatch.setattr(module, "read_coordination_token", lambda *_args: "coordination-token")
-    monkeypatch.setattr(module, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
+    # The single-session producers launch through the shared scaffold; the two-session one launches its own.
+    boundaries = {
+        "start_machine_and_shipper": start_machine,
+        "prepare_claude_profile": lambda **_kwargs: {"status": "pass"},
+        "launch_claude_session": launch_session,
+        "read_coordination_token": lambda *_args: "coordination-token",
+        "close_session": lambda _session: {"exit_code": 0, "alive_after_close": False},
+    }
+    for owner in (module, claude_live_session_support):
+        for name, boundary in boundaries.items():
+            if hasattr(owner, name):
+                monkeypatch.setattr(owner, name, boundary)
     return shipper, sessions
 
 
@@ -442,7 +449,9 @@ def test_claude_coordination_authority_unavailable_is_a_result_the_factory_accep
     # The execution variant the factory passes as --variant for this producer's cell.
     variant = getattr(producer, "_EXECUTION_VARIANT", None) or next(iter(getattr(producer, "_CELL_BY_VARIANT")))
     _install_claude_session_boundaries(producer, monkeypatch, root)
-    monkeypatch.setattr(producer, "read_coordination_token", lambda *_args, **_kwargs: None)
+    for owner in (producer, claude_live_session_support):
+        if hasattr(owner, "read_coordination_token"):
+            monkeypatch.setattr(owner, "read_coordination_token", lambda *_args, **_kwargs: None)
     result = getattr(producer, runner)(_claude_args(root, binary, variant=variant))
     persisted = _assert_persisted_failure(root, result)
     assert persisted["failure_code"] == "runtime_host_coordination_authority_unavailable"

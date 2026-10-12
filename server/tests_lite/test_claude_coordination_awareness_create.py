@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from zerg.qa import claude_coordination_awareness_create as m
+from zerg.qa import claude_live_session_support as support
 from zerg.qa import producer_shell
 
 
@@ -73,13 +74,13 @@ def test_main_registration_mode_prints_registration_json(capsys: pytest.CaptureF
 def _install_session_fakes(monkeypatch: pytest.MonkeyPatch, *, tool_invocation: dict[str, Any] | None) -> tuple[_FakeShipper, _FakeSession]:
     fake_shipper = _FakeShipper()
     fake_session = _FakeSession()
-    monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
-    monkeypatch.setattr(m, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
-    monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
-    monkeypatch.setattr(m, "read_coordination_token", lambda *_a, **_k: "coordination-token")
+    monkeypatch.setattr(support, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
+    monkeypatch.setattr(support, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(support, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
+    monkeypatch.setattr(support, "read_coordination_token", lambda *_a, **_k: "coordination-token")
     monkeypatch.setattr(m, "await_assistant_marker", lambda **_k: ("/tmp/transcript.jsonl", 3, None))
     monkeypatch.setattr(m, "find_tool_invocation", lambda *_a, **_k: tool_invocation)
-    monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
+    monkeypatch.setattr(support, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
 
     real_artifact_manifest = producer_shell.artifact_manifest
 
@@ -142,7 +143,7 @@ def test_run_awareness_create_fails_when_no_tool_call_is_observed(tmp_path: Path
 def test_run_awareness_create_rejects_a_launch_without_coordination_authority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
     _shipper, fake_session = _install_session_fakes(monkeypatch, tool_invocation=None)
-    monkeypatch.setattr(m, "read_coordination_token", lambda *_a, **_k: None)
+    monkeypatch.setattr(support, "read_coordination_token", lambda *_a, **_k: None)
 
     result = m.run_awareness_create_scenario(args)
 
@@ -182,7 +183,7 @@ def test_run_awareness_create_preserves_the_causal_error_when_cleanup_fails(tmp_
         raise RuntimeError("secondary close failure")
 
     monkeypatch.setattr(m, "await_assistant_marker", fail_during_observation)
-    monkeypatch.setattr(m, "close_session", fail_during_cleanup)
+    monkeypatch.setattr(support, "close_session", fail_during_cleanup)
 
     result = m.run_awareness_create_scenario(args)
 
