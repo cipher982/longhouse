@@ -80,6 +80,11 @@ def test_a_whole_lifecycle_holds_every_cell(provider, whole):
     first = "send" if provider == "omp" else "follow_up"
     assert retries[first] == 1 and sum(retries.values()) == 1
     assert result["observation"]["controls"][first]["command"]["retries"]["refused_with"]["http_status"] == 409
+    # The refused stale frame carried text of this run's own, and none of it is in what the provider wrote.
+    frame_text = result["observation"]["controls"]["stale_owner"]["frame_text"]
+    assert f"{module.FAMILY.marker_prefix}_STALE_" in frame_text
+    retained = [root / item["retained_source_path"] for item in result["observation"]["sources"]]
+    assert retained and not any(frame_text.encode() in path.read_bytes() for path in retained)
     if module.FAMILY.reached is not None:
         # Every record a cell's step is proven reached by is one the run wrote.
         assert set(module.FAMILY.reached) == set(module.ASSERTIONS)

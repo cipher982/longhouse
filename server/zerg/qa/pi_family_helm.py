@@ -2530,8 +2530,10 @@ class Lifecycle:
 
         old_file = Path(str(old.get("session_file") or ""))
         before = _read_source_size(old_file)
+        # Text of this run's own, so that a frame the launcher dispatched after all can be found in what the provider wrote.
+        text = f"A stale owner must be refused: {self.marker('STALE')}"
         try:
-            response = _stale_frame(old, self.f, text="a stale owner must be refused")
+            response = _stale_frame(old, self.f, text=text)
         except (OSError, RuntimeError) as exc:
             if not self.f.records_misses:
                 raise
@@ -2542,6 +2544,7 @@ class Lifecycle:
             "second_launcher": self.second_launcher_evidence,
             "old_state": dict(old),
             "new_state": dict(current),
+            "frame_text": text,
             "response": response,
             "accepted": response.get("ok") is True,
             "error_code": error.get("code"),
