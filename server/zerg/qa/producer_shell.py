@@ -132,7 +132,12 @@ class Run:
         self.fields.update(negative_control=verdict, status=status)
 
     def block(self, failure_code: str, error: str) -> None:
-        """Say the run could not ask its question: a prerequisite was absent, which is neither a pass nor a failing verdict."""
+        """Say the run could not ask its question: a prerequisite was absent, which is neither a pass nor a failing verdict.
+
+        For a producer product CI runs. The factory's envelope check accepts
+        no such status, so a producer the factory runs raises instead and
+        leaves a typed failure.
+        """
 
         self.assertions = {}
         self.fields.update(status="blocked", failure_code=failure_code, error=error)

@@ -135,6 +135,9 @@ def runtime_host_json(
 
     ``extra_headers`` is for a caller that authenticates with a session's
     coordination token and so also names the session it speaks as.
+    ``Content-Type`` goes with a body and not without one: no agents-API
+    handler this is called for reads it (the two media uploads do, and are
+    not called through here).
     """
 
     headers = {"X-Agents-Token": token, "Accept": "application/json", "User-Agent": RUNTIME_HOST_USER_AGENT}
