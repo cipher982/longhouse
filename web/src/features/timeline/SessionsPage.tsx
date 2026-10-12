@@ -22,6 +22,7 @@ import {
 import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
 import { useAmbientSessionAttentionCue } from "./useAmbientSessionAttentionCue";
 import { useTimelineSessionStream } from "./useTimelineSessionStream";
+import { plural } from "@/shared/lib/plural";
 import { useReadinessFlag } from "@/shared/lib/readiness-contract";
 import {
   type AgentSessionFilters,
@@ -371,7 +372,7 @@ export default function SessionsPage() {
     <div className="sessions-header-actions">
       {threadCards.length > 0 && (
         <span className="sessions-header-count">
-          {groupedQueryMode ? `${threadCards.length} results` : `${threadCards.length} tasks`}
+          {plural(threadCards.length, groupedQueryMode ? "result" : "task")}
         </span>
       )}
       <Button
@@ -522,7 +523,7 @@ export default function SessionsPage() {
 
         {searchIndexRebuilding && (
           <div className="sessions-llm-hint" role="status">
-            Search index rebuilding — {searchCoverage.indexed_sessions} of {searchCoverage.expected_sessions} sessions indexed
+            Search index rebuilding — {searchCoverage.indexed_sessions} of {plural(searchCoverage.expected_sessions, "session")} indexed
           </div>
         )}
 
@@ -727,7 +728,7 @@ export default function SessionsPage() {
         {/* Timeline Inbox */}
         {threadCards.length === 0 ? (
           <EmptyState
-            title={searchIndexRebuilding ? `No matches yet — search index is rebuilding (${searchCoverage.indexed_sessions} of ${searchCoverage.expected_sessions} sessions)` : "No timeline sessions found"}
+            title={searchIndexRebuilding ? `No matches yet — search index is rebuilding (${searchCoverage.indexed_sessions} of ${plural(searchCoverage.expected_sessions, "session")})` : "No timeline sessions found"}
             description={
               hasFilters
                 ? "Try adjusting your filters or search query."
@@ -757,8 +758,8 @@ export default function SessionsPage() {
           <div className="sessions-footer">
             <span className="sessions-count">
               {groupedQueryMode
-                ? `Showing ${threadCards.length} grouped results from ${total} matching sessions`
-                : `Showing ${threadCards.length} of ${total} task threads`}
+                ? `Showing ${plural(threadCards.length, "grouped result")} from ${plural(total, "matching session")}`
+                : `Showing ${threadCards.length} of ${plural(total, "task thread")}`}
             </span>
             {hasMore && (
               <Button

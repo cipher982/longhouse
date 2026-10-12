@@ -3,6 +3,7 @@ import type { AgentSession } from "@/shared/api/agents";
 import { normalizeExecutionVenueLabel } from "./sessionExecutionHome";
 import { isSessionClosed } from "@/shared/session/sessionRuntime";
 import { getBranchLabel } from "@/shared/session/sessionLabels";
+import { plural } from "@/shared/lib/plural";
 import {
   formatContinuationStamp,
   formatDuration,
@@ -94,11 +95,9 @@ export function SessionContextPane({
     session.started_at,
     isSessionClosed(session) ? session.ended_at : null,
   );
-  const toolCallLabel =
-    session.tool_calls === 1 ? "1 tool call" : `${session.tool_calls} tool calls`;
   const statsLine = [
-    `${turnCount} turns`,
-    toolCallLabel,
+    plural(turnCount, "turn"),
+    plural(session.tool_calls, "tool call"),
     durationStr,
   ].join(" \u00b7 ");
   const branchLabel = getBranchLabel(session.git_branch);

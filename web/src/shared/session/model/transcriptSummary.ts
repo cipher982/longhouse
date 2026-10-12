@@ -1,3 +1,4 @@
+import { plural } from "@/shared/lib/plural";
 import type { TimelineItem } from "./types";
 
 export interface TranscriptCounts {
@@ -36,10 +37,6 @@ export function countTimelineItems(items: TimelineItem[]): TranscriptCounts {
     }
   }
   return { messages, toolCalls };
-}
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 /**

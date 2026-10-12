@@ -10,6 +10,7 @@ import "./recall-panel.css";
 import { Link } from "react-router";
 import { useRecall, useRecallContext } from "@/shared/api/useAgentSessions";
 import { useDebouncedValue } from "@/shared/hooks/useDebouncedValue";
+import { plural } from "@/shared/lib/plural";
 import type { RecallSearchResult, RecallExpandedTurn, RecallFilters } from "@/shared/api/agents";
 import { Badge, Input, Spinner, EmptyState } from "@/shared/ui";
 
@@ -129,7 +130,7 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
   const coverage = data?.coverage;
   const searchIndexRebuilding = coverage?.complete === false && coverage.indexed_sessions !== undefined && coverage.expected_sessions !== undefined;
   const coverageSummary = searchIndexRebuilding
-    ? `Search index rebuilding — ${coverage.indexed_sessions} of ${coverage.expected_sessions} sessions indexed`
+    ? `Search index rebuilding — ${coverage.indexed_sessions} of ${plural(coverage.expected_sessions ?? 0, "session")} indexed`
     : coverage?.complete
       ? "Corpus current"
       : null;
@@ -184,7 +185,7 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
 
         {!isLoading && !error && debouncedQuery && matches.length === 0 && (
           <EmptyState
-            title={searchIndexRebuilding ? `No matches yet — search index is rebuilding (${coverage.indexed_sessions} of ${coverage.expected_sessions} sessions)` : "No matches found"}
+            title={searchIndexRebuilding ? `No matches yet — search index is rebuilding (${coverage.indexed_sessions} of ${plural(coverage.expected_sessions ?? 0, "session")})` : "No matches found"}
             description={searchIndexRebuilding ? undefined : `No conversation turns matched "${debouncedQuery}".`}
           />
         )}

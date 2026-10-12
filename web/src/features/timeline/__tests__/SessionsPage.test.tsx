@@ -736,6 +736,47 @@ describe("SessionsPage", () => {
     expect(screen.queryByRole("button", { name: "Load More" })).not.toBeInTheDocument();
   });
 
+  it("counts one result and one task in the singular", async () => {
+    const single = {
+      data: {
+        sessions: [
+          makeTimelineCard({
+            id: "session-only",
+            project: "query-only",
+            thread_root_session_id: "thread-1",
+            thread_head_session_id: "thread-1",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    };
+    mockUseAgentSessions.mockReturnValue({
+      ...single,
+      data: {
+        ...single.data,
+        query_grouping_mode: "grouped_results",
+        query_grouping_has_more: false,
+        query_grouping_source_count: 1,
+      },
+    });
+
+    const { unmount } = renderSessionsPage("/timeline?query=needle");
+
+    expect(await screen.findByText("1 result")).toBeInTheDocument();
+    expect(screen.getByText("Showing 1 grouped result from 1 matching session")).toBeInTheDocument();
+    unmount();
+
+    mockUseAgentSessions.mockReturnValue(single);
+    renderSessionsPage("/timeline");
+
+    expect(await screen.findByText("1 task")).toBeInTheDocument();
+    expect(screen.getByText("Showing 1 of 1 task thread")).toBeInTheDocument();
+  });
+
   it("keeps grouped query load-more tied to raw matching-session exhaustion", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {

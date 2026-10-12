@@ -1,4 +1,5 @@
 import type { MachineActivity } from "@/shared/api/index";
+import { plural } from "@/shared/lib/plural";
 import { getProviderLabel } from "@/shared/lib/providers";
 import { activityColor } from "./machinePresentation";
 
@@ -22,7 +23,7 @@ export function ActivityBars({
       className={`machine-bars machine-bars--${size}`}
       style={{ height }}
       role="img"
-      aria-label={`${daily.reduce((sum, day) => sum + day.total, 0)} sessions over ${daily.length} days`}
+      aria-label={`${plural(daily.reduce((sum, day) => sum + day.total, 0), "session")} over ${plural(daily.length, "day")}`}
     >
       {daily.map((day) => {
         const entries = Object.entries(day.by_provider ?? {}).sort((a, b) => b[1] - a[1]);

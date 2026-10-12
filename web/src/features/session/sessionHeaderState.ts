@@ -1,4 +1,5 @@
 import type { AgentSession } from "@/shared/api/agents";
+import { plural } from "@/shared/lib/plural";
 import { sessionHasFailedRun } from "@/shared/session/sessionRuntime";
 import {
   ACTIVITY_UNCERTAIN_LABEL,
@@ -127,10 +128,6 @@ export function getSessionHeaderState(
     return { tone: "cool", text: clock ? `Ended ${clock}` : "Ended" };
   }
   return { tone: "cool", text: clock ? `Idle since ${clock}` : "Idle" };
-}
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 /**
