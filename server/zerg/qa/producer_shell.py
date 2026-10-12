@@ -92,6 +92,25 @@ def refusal(failure_code: str, error: str | None = None) -> int:
     return 2
 
 
+def _asks_for_registration(parser: argparse.ArgumentParser, arguments: Sequence[str]) -> bool:
+    """Whether ``--registration`` is on the command line as the flag, and not where another option's value goes.
+
+    Asked for before the arguments are parsed, because it is answered whatever
+    else is missing from them.
+    """
+
+    takes_value = {option for action in parser._actions if action.nargs != 0 for option in action.option_strings}
+    value_next = False
+    for argument in arguments:
+        if value_next:
+            value_next = False
+        elif argument == "--registration":
+            return True
+        else:
+            value_next = argument in takes_value
+    return False
+
+
 class ProducerFailure(RuntimeError):
     """A failure outside the assertions that has a code of its own (a cleanup that did not verify, a refused precondition)."""
 
@@ -377,7 +396,8 @@ class Producer:
     def main(self, invoke: Callable[[argparse.Namespace], dict[str, Any]], argv: Sequence[str] | None = None) -> int:
         """The producer's command line.
 
-        ``--registration`` prints the registration and runs nothing. Otherwise
+        ``--registration``, given as the flag, prints the registration and runs
+        nothing; where another option's value goes it is that option's error. Otherwise
         the arguments are parsed and, in this order, a missing needed argument,
         an evidence class the registration does not list, a Runtime Host
         that is neither local nor named as the target, a Runtime Host
@@ -389,10 +409,11 @@ class Producer:
         """
 
         arguments = list(sys.argv[1:] if argv is None else argv)
-        if "--registration" in arguments:
+        parser = self.parser()
+        if _asks_for_registration(parser, arguments):
             print(json.dumps(self.registration.to_dict(), indent=2, sort_keys=True))
             return 0
-        args = self.parser().parse_args(arguments)
+        args = parser.parse_args(arguments)
         for name in self.needs:
             if getattr(args, name) in (None, ""):
                 return refusal(f"missing_required_argument:--{name.replace('_', '-')}")

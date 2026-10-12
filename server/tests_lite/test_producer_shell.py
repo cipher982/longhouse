@@ -476,6 +476,28 @@ def test_the_command_line_refuses_before_anything_is_written(tmp_path, capsys, a
     assert producer.main(lambda _args: pytest.fail("ran"), ["--registration", "--evidence-root", str(root)]) == 0
 
 
+def test_the_registration_is_asked_for_by_the_flag_and_not_by_a_value_that_spells_it(tmp_path, capsys):
+    root = tmp_path / "evidence"
+    command = ["--variant", "v", "--evidence-root", str(root), "--engine", "/bin/sh"]
+    ran: list[str] = []
+
+    def invoke(args) -> dict:
+        ran.append(args.model)
+        return {"status": "pass"}
+
+    # The flag, wherever it stands among the options.
+    for arguments in (["--registration"], [*command, "--registration"], ["--model", "m", "--registration", *command]):
+        assert _FIXTURE.main(lambda _args: pytest.fail("ran"), arguments) == 0
+        assert json.loads(capsys.readouterr().out) == _REGISTRATION.to_dict()
+    # Where a value goes it is not the flag: the command line is the parser's to refuse, and no registration is printed.
+    with pytest.raises(SystemExit) as refused:
+        _FIXTURE.main(invoke, [*command, "--model", "--registration"])
+    assert refused.value.code == 2 and capsys.readouterr().out == "" and not ran
+    # A value that spells it is a value, and the producer runs.
+    assert _FIXTURE.main(invoke, [*command, "--model=--registration"]) == 0
+    assert ran == ["--registration"]
+
+
 @pytest.mark.parametrize(
     ("url", "token"),
     [(None, "fixture-token"), ("http://127.0.0.1:9", None), (None, None), ("", "fixture-token"), ("http://127.0.0.1:9", "")],
