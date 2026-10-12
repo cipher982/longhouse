@@ -10,7 +10,7 @@
 //! `host_state=online`/`offline` honestly (Phase 5c) and lets Phase 6
 //! promote `lifecycle=closed` when the process is confirmed gone.
 //!
-//! Algorithm (native libproc on macOS; `ps` + `lsof` on non-macOS):
+//! Algorithm (native libproc on macOS; `/proc` on Linux; `ps` + `lsof` elsewhere):
 //!
 //!   1. Validate hook-resolved bindings first, then inspect open files for
 //!      unresolved live provider processes.
@@ -20,8 +20,8 @@
 //!      identity backend. Filter by command basename and stock Node-backed
 //!      launcher shapes; never `longhouse-*` wrappers, which have their own
 //!      lease surface.
-//!   4. Inspect candidate file descriptors through libproc or `lsof`, and look
-//!      for transcript paths.
+//!   4. Inspect candidate file descriptors through libproc or `/proc/<pid>/fd`,
+//!      and look for transcript paths.
 //!   5. Emit one [`UnmanagedSessionBinding`] per `(provider,
 //!      provider_session_id)` with `(pid, process_start_time)` as the
 //!      liveness identity.
@@ -32,7 +32,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -55,7 +55,7 @@ const MAX_BINDINGS: usize = 128;
 /// for liveness decisions.
 const TRANSCRIPT_MTIME_WINDOW: chrono::Duration = chrono::Duration::hours(24);
 /// Bound one optional process inspection so one dead provider cannot hold the
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 const LSOF_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 /// Stop starting more optional work after this cooperative per-pass budget.
 /// Expiry is non-authoritative, not an empty or complete process inventory.
@@ -323,7 +323,14 @@ fn run_lsof(pids: &[u32]) -> Result<HashMap<u32, Vec<PathBuf>>, String> {
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+fn run_lsof(pids: &[u32]) -> Result<HashMap<u32, Vec<PathBuf>>, String> {
+    crate::process_identity::try_collect_process_open_files(pids).ok_or_else(|| {
+        format!("procfs open-file inventory unavailable for unmanaged pids {pids:?}")
+    })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn run_lsof(pids: &[u32]) -> Result<HashMap<u32, Vec<PathBuf>>, String> {
     let list = pids
         .iter()
@@ -364,6 +371,7 @@ fn unmanaged_refresh_timeout() -> String {
     )
 }
 
+#[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
 fn lsof_reports_no_match(status: &std::process::ExitStatus, stderr: &[u8]) -> bool {
     if status.code() != Some(1) {
         return false;
@@ -380,6 +388,7 @@ fn lsof_reports_no_match(status: &std::process::ExitStatus, stderr: &[u8]) -> bo
 /// (and process `p<pid>` headers). We ignore headers and keep paths.
 /// Parse `lsof -F pn` records into open files per PID. A `p<pid>` line opens a
 /// process record; each `n<path>` line after it belongs to that process.
+#[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
 fn parse_lsof(text: &str) -> HashMap<u32, Vec<PathBuf>> {
     let mut out: HashMap<u32, Vec<PathBuf>> = HashMap::new();
     let mut current: Option<u32> = None;

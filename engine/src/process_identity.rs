@@ -13,20 +13,24 @@ use chrono::Utc;
 #[cfg(target_os = "macos")]
 #[path = "process_identity_macos.rs"]
 mod macos;
+#[cfg(target_os = "linux")]
+#[path = "process_identity_linux.rs"]
+mod linux;
 
 pub const PID_REUSE_TOLERANCE_SECS: i64 = 120;
 // A full process inventory can take several seconds on hosts servicing
 // hundreds of provider and helper processes.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 const PROCESS_INVENTORY_TIMEOUT: Duration = Duration::from_secs(10);
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 const TARGETED_PROCESS_INVENTORY_TIMEOUT: Duration = Duration::from_secs(1);
 pub(crate) const TARGETED_PROCESS_FACT_BATCH_MAX: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessFact {
     pub pid: u32,
-    /// Controlling terminal, e.g. `ttys000`. `??` when the process has none.
+    /// Controlling terminal (`ttys000` on macOS, `pts/3` on Linux); no terminal is
+    /// `??` on macOS or `?` on Linux.
     pub tty: String,
     /// `ps` process state field, e.g. `S+`, `Ss`, `R`. A `+` suffix means the
     /// process is in the foreground process group of its controlling terminal.
@@ -81,7 +85,12 @@ pub fn inspect_process_fact(pid: u32) -> ProcessFactLookup {
     macos::inspect_process_fact(pid)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn inspect_process_fact(pid: u32) -> ProcessFactLookup {
+    linux::inspect_process_fact(pid)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn inspect_process_fact(pid: u32) -> ProcessFactLookup {
     let output = Command::new("ps")
         .args([
@@ -123,7 +132,12 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     macos::try_collect_process_facts_by_pid()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
+    linux::try_collect_process_facts_by_pid()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     let mut command = Command::new("ps");
     command.args(["-axo", "pid=,tty=,stat=,lstart=,command="]);
@@ -143,13 +157,18 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     Some(facts)
 }
 /// Whether process group `pgid` has a member that is not a zombie. `None` when
-/// the native process scan or its non-macOS `ps` fallback is incomplete.
+/// the native process scan or platform-specific fallback is incomplete.
 #[cfg(target_os = "macos")]
 pub fn try_group_has_non_zombie(pgid: i32) -> Option<bool> {
     macos::try_group_has_non_zombie(pgid)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn try_group_has_non_zombie(pgid: i32) -> Option<bool> {
+    linux::try_group_has_non_zombie(pgid)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn try_group_has_non_zombie(pgid: i32) -> Option<bool> {
     let mut command = Command::new("ps");
     command.args(["-axo", "pgid=,stat="]);
@@ -162,6 +181,7 @@ pub fn try_group_has_non_zombie(pgid: i32) -> Option<bool> {
 
 /// The parse behind [`try_group_has_non_zombie`]: `pgid stat` lines. Any line
 /// that does not parse makes the whole pass unusable.
+#[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
 fn group_has_non_zombie_in(text: &str, pgid: i32) -> Option<bool> {
     let mut running = false;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
@@ -176,16 +196,20 @@ fn group_has_non_zombie_in(text: &str, pgid: i32) -> Option<bool> {
     Some(running)
 }
 
-/// The `ps -o lstart=` text of each requested pid that is running, from one
-/// process-table read with no argv. Absent pids are omitted; `None` is a
-/// failed read. What liveness checks compare, at a cost independent of how
-/// many pids a claim has recorded.
+/// The same fixed-width text as `ps -o lstart=` for each requested live PID,
+/// without reading argv. Absent PIDs are omitted; `None` is a failed read.
+/// Liveness checks compare these keys, with bounded work for large PID sets.
 #[cfg(target_os = "macos")]
 pub fn try_collect_process_start_keys(pids: &[u32]) -> Option<HashMap<u32, String>> {
     macos::try_collect_process_start_keys(pids)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn try_collect_process_start_keys(pids: &[u32]) -> Option<HashMap<u32, String>> {
+    linux::try_collect_process_start_keys(pids)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn try_collect_process_start_keys(pids: &[u32]) -> Option<HashMap<u32, String>> {
     let mut requested: Vec<u32> = pids.iter().copied().filter(|pid| *pid > 1).collect();
     requested.sort_unstable();
@@ -212,7 +236,12 @@ pub fn try_collect_process_facts_for_pids(pids: &[u32]) -> Option<HashMap<u32, P
     macos::try_collect_process_facts_for_pids(pids)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn try_collect_process_facts_for_pids(pids: &[u32]) -> Option<HashMap<u32, ProcessFact>> {
+    linux::try_collect_process_facts_for_pids(pids)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn try_collect_process_facts_for_pids(pids: &[u32]) -> Option<HashMap<u32, ProcessFact>> {
     if pids.len() > TARGETED_PROCESS_FACT_BATCH_MAX || pids.iter().any(|pid| *pid <= 1) {
         return None;
@@ -259,7 +288,11 @@ pub(crate) fn process_comm_and_parent(pid: u32) -> Option<(String, u32)> {
     {
         macos::process_comm_and_parent(pid)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::process_comm_and_parent(pid)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let output = Command::new("ps")
             .args(["-o", "comm=,ppid=", "-p", &pid.to_string()])
@@ -274,9 +307,21 @@ pub(crate) fn process_comm_and_parent(pid: u32) -> Option<(String, u32)> {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn try_collect_process_cwds(pids: &[u32]) -> Option<HashMap<u32, String>> {
+    linux::try_collect_process_cwds(pids)
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn try_collect_process_cwds(pids: &[u32]) -> Option<HashMap<u32, String>> {
     macos::try_collect_process_cwds(pids)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn try_collect_process_open_files(
+    pids: &[u32],
+) -> Option<HashMap<u32, Vec<std::path::PathBuf>>> {
+    linux::try_collect_process_open_files(pids)
 }
 
 #[cfg(target_os = "macos")]
@@ -421,9 +466,6 @@ pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Op
             // than execs its command leaves that child holding the stdout pipe,
             // so killing only the leader leaves the reader thread blocked on a
             // pipe nobody will close — and this "bounded" helper then waits out
-            // the full runtime of the very process it was abandoning. On Linux
-            // that made the process-inventory timeout inert: a stalled `ps`
-            // would have blocked the scan for as long as it wanted to run.
             #[cfg(unix)]
             if let Ok(pgid) = i32::try_from(child.id()) {
                 unsafe {
@@ -454,6 +496,7 @@ pub fn parse_process_fact(line: &str) -> Option<(u32, ProcessFact)> {
     parse_process_fact_impl(line, true)
 }
 
+#[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
 fn parse_process_fact_for_inventory(line: &str) -> Option<(u32, ProcessFact)> {
     parse_process_fact_impl(line, false)
 }
@@ -597,14 +640,19 @@ impl ProcessLineage {
 }
 
 /// Collect a coherent process-lineage inventory. `None` distinguishes a
-/// failed native process scan or `ps` fallback from a genuinely empty result,
-/// so callers never read a scan failure as evidence of anything.
+/// failed native process scan or platform-specific fallback from a genuinely
+/// empty result, so callers never read a scan failure as evidence of anything.
 #[cfg(target_os = "macos")]
 pub fn try_collect_process_lineage() -> Option<Vec<ProcessLineage>> {
     macos::try_collect_process_lineage()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn try_collect_process_lineage() -> Option<Vec<ProcessLineage>> {
+    linux::try_collect_process_lineage()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn try_collect_process_lineage() -> Option<Vec<ProcessLineage>> {
     let output = Command::new("ps")
         .args(["-axo", "pid=,ppid=,pgid=,stat=,command="])
@@ -682,16 +730,20 @@ impl ProcessTreeNode for ProcessTreeEntry {
     }
 }
 
-/// The whole machine's pid/ppid/pgid table. On macOS one `KERN_PROC` sysctl,
-/// with no per-process argv read: the lineage scan reads every process's
-/// argv, which a 100 ms ownership poll cannot afford (~1,150 processes on
-/// cinder). `None` is a failed scan, never an empty machine.
+/// The whole machine's pid/ppid/pgid table. macOS reads it in one `KERN_PROC`
+/// sysctl; Linux reads `/proc/<pid>/stat` without argv. `None` is a failed scan,
+/// never an empty machine.
 #[cfg(target_os = "macos")]
 pub fn try_collect_process_tree() -> Option<Vec<ProcessTreeEntry>> {
     macos::try_collect_process_tree()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn try_collect_process_tree() -> Option<Vec<ProcessTreeEntry>> {
+    linux::try_collect_process_tree()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn try_collect_process_tree() -> Option<Vec<ProcessTreeEntry>> {
     Some(
         try_collect_process_lineage()?
@@ -1266,6 +1318,151 @@ mod tests {
                 .get(&pid)
                 .is_some_and(|paths| paths.contains(&expected_path)),
             "libproc did not find the open file {expected_path:?}"
+        );
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_procfs_inventory_matches_ps() {
+        let _guard = crate::console_adapter::agent_state_guard();
+
+        fn identity_matches(actual: &ProcessFact, expected: &ProcessFact) -> bool {
+            actual.pid == expected.pid
+                && actual.tty == expected.tty
+                && actual.lstart == expected.lstart
+                && actual.command == expected.command
+        }
+
+        fn compare_identity(actual: &ProcessFact, expected: &ProcessFact) {
+            assert_eq!(actual.pid, expected.pid);
+            assert_eq!(actual.tty, expected.tty);
+            assert_eq!(actual.lstart, expected.lstart);
+            assert_eq!(actual.command, expected.command);
+        }
+
+        fn compare_stat_axes(actual: &ProcessFact, expected: &ProcessFact) {
+            assert_eq!(
+                actual.stat.starts_with('T'),
+                expected.stat.starts_with('T'),
+                "stopped state differs: procfs={actual:?}, ps={expected:?}"
+            );
+            assert_eq!(
+                actual.stat.starts_with('Z'),
+                expected.stat.starts_with('Z'),
+                "zombie state differs: procfs={actual:?}, ps={expected:?}"
+            );
+            assert_eq!(
+                actual.stat.contains('+'),
+                expected.stat.contains('+'),
+                "foreground state differs: procfs={actual:?}, ps={expected:?}"
+            );
+        }
+
+        fn read_ps_facts() -> HashMap<u32, ProcessFact> {
+            let uid = unsafe { libc::geteuid() }.to_string();
+            // procps-ng accepts `x` as a BSD option without a dash; `-x` is
+            // rejected under the POSIX personality used by the test container.
+            let output = Command::new("ps")
+                .args([
+                    "x",
+                    "-u",
+                    uid.as_str(),
+                    "-o",
+                    "pid=,tty=,stat=,lstart=,command=",
+                ])
+                .output()
+                .expect("run current-user ps oracle");
+            assert!(
+                output.status.success(),
+                "ps failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let mut facts = HashMap::new();
+            for line in String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+            {
+                let (pid, fact) = parse_process_fact(line).expect("parse ps process fact");
+                assert!(facts.insert(pid, fact).is_none(), "duplicate ps pid {pid}");
+            }
+            facts
+        }
+
+        let ps_started = Instant::now();
+        let ps_before = read_ps_facts();
+        let ps_elapsed = ps_started.elapsed();
+        let backend_started = Instant::now();
+        let inventory =
+            try_collect_process_facts_by_pid().expect("complete procfs process inventory");
+        let backend_elapsed = backend_started.elapsed();
+        eprintln!(
+            "process inventory benchmark ({} processes): procfs {:?}; ps x -u {:?}",
+            inventory.len(),
+            backend_elapsed,
+            ps_elapsed
+        );
+        let ps_after = read_ps_facts();
+        let current_pid = std::process::id();
+        assert!(inventory.contains_key(&current_pid));
+        assert!(ps_before.contains_key(&current_pid));
+        assert!(ps_after.contains_key(&current_pid));
+
+        for (pid, fact) in &inventory {
+            let before = ps_before.get(pid);
+            let after = ps_after.get(pid);
+            if before.is_none() && after.is_none() {
+                continue;
+            }
+            let oracle = before
+                .filter(|oracle| identity_matches(fact, oracle))
+                .or_else(|| after.filter(|oracle| identity_matches(fact, oracle)));
+            if let Some(oracle) = oracle {
+                compare_identity(fact, oracle);
+            } else if let (Some(before), Some(after)) = (before, after) {
+                if before.lstart == after.lstart
+                    && before.tty == after.tty
+                    && before.command == after.command
+                {
+                    panic!(
+                        "procfs identity mismatch for stable PID {pid}: procfs={fact:?}, ps={before:?}"
+                    );
+                }
+            }
+            if let (Some(before), Some(after)) = (before, after) {
+                if before.stat == after.stat && identity_matches(fact, before) {
+                    compare_stat_axes(fact, before);
+                }
+            }
+        }
+
+        for (pid, before) in &ps_before {
+            let Some(after) = ps_after.get(pid) else {
+                continue;
+            };
+            if identity_matches(before, after) {
+                assert!(
+                    inventory
+                        .get(pid)
+                        .is_some_and(|fact| identity_matches(fact, before)),
+                    "procfs omitted live current-user PID {pid}: ps={before:?}"
+                );
+            }
+        }
+        let cwd = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+        let probed_cwd = try_collect_process_cwds(&[current_pid])
+            .expect("complete procfs cwd probe")
+            .remove(&current_pid)
+            .expect("test process cwd");
+        assert_eq!(probed_cwd, cwd);
+
+        let file = tempfile::NamedTempFile::new().expect("create open-file probe");
+        let expected_path = file.path().canonicalize().expect("resolve open-file path");
+        let open_files = try_collect_process_open_files(&[current_pid])
+            .expect("complete procfs open-file inventory");
+        assert!(
+            open_files
+                .get(&current_pid)
+                .is_some_and(|paths| paths.contains(&expected_path)),
+            "procfs did not find open file {expected_path:?}"
         );
     }
 }

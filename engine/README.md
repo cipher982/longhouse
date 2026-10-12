@@ -68,9 +68,10 @@ Helm and Console ownership are revalidated together on the existing managed
 scan cadence. New exact owners resolve on the one-second status cadence through
 bounded, batched PID probes; stale or failed evidence remains unknown.
 
-On macOS, process facts and open-file/cwd paths come directly from libproc and
-`KERN_PROCARGS2`; unavailable or partial probes remain unknown. Non-macOS keeps
-the existing `ps`/`lsof` process-inspection fallback.
+On macOS, process facts and open-file/cwd paths come from libproc and
+`KERN_PROCARGS2`; Linux reads process identity, cwd and open descriptors from
+`/proc`. Non-Linux, non-macOS platforms retain the `ps`/`lsof` fallback.
+Unavailable or partial probes remain unknown.
 
 `~/.longhouse/agent/engine-status.json` is the local projection for
 `longhouse local-health` and the Desktop App. It is compact JSON, rewritten as

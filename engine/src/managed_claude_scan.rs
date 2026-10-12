@@ -243,19 +243,11 @@ struct ParsedClaudeState {
 }
 
 /// Resolve working directories with one libproc query per PID on macOS and
-/// `/proc` links on Linux.
+/// `/proc/<pid>/cwd` links on Linux.
 fn process_cwds(pids: &[u32]) -> HashMap<u32, String> {
     #[cfg(target_os = "linux")]
     {
-        pids.iter()
-            .filter_map(|pid| {
-                fs::read_link(format!("/proc/{pid}/cwd"))
-                    .ok()
-                    .map(|path| path.display().to_string())
-                    .filter(|path| !path.trim().is_empty())
-                    .map(|path| (*pid, path))
-            })
-            .collect()
+        crate::process_identity::try_collect_process_cwds(pids).unwrap_or_default()
     }
     #[cfg(target_os = "macos")]
     {

@@ -38,6 +38,10 @@ mod managed_terminal;
 mod plaintext_http;
 #[path = "warp_cli_agent.rs"]
 mod warp_cli_agent;
+#[cfg(all(target_os = "linux", not(test)))]
+#[allow(dead_code)]
+#[path = "process_identity.rs"]
+mod process_identity;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
@@ -3881,16 +3885,25 @@ fn recorded_process_exists(pid: Option<u32>, recorded_start: Option<&str>) -> bo
 }
 
 fn process_start_identity(pid: u32) -> Option<String> {
-    let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "lstart="])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        let mut starts = crate::process_identity::try_collect_process_start_keys(&[pid])?;
+        starts.remove(&pid)
     }
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!value.is_empty()).then_some(value)
+    #[cfg(not(all(target_os = "linux", not(test))))]
+    {
+        let output = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "lstart="])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (!value.is_empty()).then_some(value)
+    }
 }
+
 
 fn run_codex_tui(
     codex_bin: &str,
