@@ -5090,6 +5090,7 @@ export interface components {
             runtime_event_outbox?: {
                 [key: string]: unknown;
             } | null;
+            resource_usage?: components["schemas"]["MachineResourceUsage"] | null;
             history_import?: components["schemas"]["HistoryImportSnapshot"];
             /** Parse Errors 1H */
             parse_errors_1h: number;
@@ -5241,6 +5242,15 @@ export interface components {
             machine_name: string;
             /** Changed */
             changed: boolean;
+        };
+        /** MachineResourceUsage */
+        MachineResourceUsage: {
+            /** Window Seconds */
+            window_seconds?: number | null;
+            /** Sampled At */
+            sampled_at?: string | null;
+            engine?: components["schemas"]["ProcessResourceUsage"] | null;
+            desktop_app?: components["schemas"]["ProcessResourceUsage"] | null;
         };
         /**
          * MachineRevokeResponse
@@ -5973,6 +5983,19 @@ export interface components {
          * @enum {string}
          */
         PresenceState: "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
+        /** ProcessResourceUsage */
+        ProcessResourceUsage: {
+            /** Pid */
+            pid?: number | null;
+            /** Cpu Percent */
+            cpu_percent?: number | null;
+            /** Disk Write Bytes Per Sec */
+            disk_write_bytes_per_sec?: number | null;
+            /** Wakeups Per Sec */
+            wakeups_per_sec?: number | null;
+            /** Phys Footprint Bytes */
+            phys_footprint_bytes?: number | null;
+        };
         /** ProductHealthCheckSummaryResponse */
         ProductHealthCheckSummaryResponse: {
             /** Check */
@@ -16253,6 +16276,10 @@ export interface operations {
                     } | null;
                     /** Update */
                     update?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** Resource Usage */
+                    resource_usage?: {
                         [key: string]: unknown;
                     } | null;
                     history_import?: {

@@ -572,6 +572,62 @@ def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(l
     assert filtered_payload["machines"] == []
 
 
+def test_machine_health_route_projects_resource_usage_and_ignores_malformed_values(live_catalog, live_catalog_client, monkeypatch):
+    pinned_now = datetime(2026, 6, 2, 20, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    owner_id, headers = _enroll(live_catalog, "with-resource-usage", "without-resource-usage", "malformed-resource-usage")
+    resource_usage = {
+        "window_seconds": 600,
+        "sampled_at": "2026-06-02T20:15:00Z",
+        "engine": {
+            "pid": 123,
+            "cpu_percent": 12.5,
+            "disk_write_bytes_per_sec": 41000,
+            "wakeups_per_sec": 30.0,
+            "phys_footprint_bytes": 51200000,
+        },
+        "desktop_app": {
+            "pid": 456,
+            "cpu_percent": 1.8,
+            "disk_write_bytes_per_sec": 120,
+            "wakeups_per_sec": 4.0,
+            "phys_footprint_bytes": 90000000,
+        },
+    }
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="with-resource-usage",
+        received_at=pinned_now - timedelta(seconds=30),
+        raw_json=json.dumps({"resource_usage": resource_usage}),
+    )
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="without-resource-usage",
+        received_at=pinned_now - timedelta(seconds=30),
+    )
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="malformed-resource-usage",
+        received_at=pinned_now - timedelta(seconds=30),
+        raw_json=json.dumps({"resource_usage": {"window_seconds": "invalid", "engine": "not a process"}}),
+    )
+
+    response = live_catalog_client.get(
+        "/agents/machines/health",
+        params={"stale_after_seconds": 3600},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    machines = {item["device_id"]: item for item in response.json()["machines"]}
+    assert machines["with-resource-usage"]["resource_usage"] == resource_usage
+    assert machines["without-resource-usage"]["resource_usage"] is None
+    assert machines["malformed-resource-usage"]["resource_usage"] is None
+
+
 def test_machine_health_route_keeps_single_transient_connect_error_healthy(live_catalog, live_catalog_client, monkeypatch):
     pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)

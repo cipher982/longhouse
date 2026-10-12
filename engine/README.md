@@ -79,6 +79,9 @@ clocks (`heartbeat::StatusFileWriter`; timestamps, rates and sequence numbers
 alone do not count as a change). Its `machine_evidence` carries only the
 control facts of currently managed or attached sessions; the full evidence
 envelope goes to the Runtime Host in the heartbeat, never to the local file.
+Heartbeat `resource_usage` samples the engine and, on macOS, Longhouse.app at
+most every 30 s over a trailing window of up to 10 minutes; this volatile field
+does not force a status-file rewrite.
 
 Fresh OMP Helm and Console use native creation, not resume. OMP may report its
 exact session path before writing a JSONL header: controls can be ready while

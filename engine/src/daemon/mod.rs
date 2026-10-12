@@ -3805,6 +3805,7 @@ mod tests {
         heartbeat::HeartbeatPayload {
             version: "test".to_string(),
             daemon_pid: 123,
+            resource_usage: None,
             last_ship_at: None,
             last_ship_attempt_at: None,
             last_ship_result: None,

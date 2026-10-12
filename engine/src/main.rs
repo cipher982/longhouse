@@ -106,6 +106,7 @@ mod pty_relay;
 mod qa_fault;
 mod raw_records;
 mod report_bundle;
+mod resource_usage;
 mod scheduler;
 mod shipping;
 mod shipping_stats;

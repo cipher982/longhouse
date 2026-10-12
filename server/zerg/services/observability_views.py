@@ -49,6 +49,7 @@ def build_machine_health_item_response(item: MachineTransportHealthSummary) -> M
         archive_repair=item.archive_repair,
         runtime_event_outbox=item.runtime_event_outbox,
         history_import=item.history_import,
+        resource_usage=item.resource_usage,
         parse_errors_1h=item.parse_errors_1h,
         disk_free_bytes=item.disk_free_bytes,
         is_offline=item.is_offline,

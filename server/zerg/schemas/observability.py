@@ -16,6 +16,21 @@ ProductHealthCheckVerdict = Literal["ok", "degraded", "failing", "unknown"]
 ProductHealthCheckCoverage = Literal["full", "partial", "none"]
 
 
+class ProcessResourceUsage(UTCBaseModel):
+    pid: int | None = None
+    cpu_percent: float | None = None
+    disk_write_bytes_per_sec: float | None = None
+    wakeups_per_sec: float | None = None
+    phys_footprint_bytes: int | None = None
+
+
+class MachineResourceUsage(UTCBaseModel):
+    window_seconds: int | None = None
+    sampled_at: datetime | None = None
+    engine: ProcessResourceUsage | None = None
+    desktop_app: ProcessResourceUsage | None = None
+
+
 class MachineHealthItemResponse(UTCBaseModel):
     device_id: str
     version: str | None = None
@@ -56,6 +71,7 @@ class MachineHealthItemResponse(UTCBaseModel):
     spool_dead: int
     archive_repair: dict[str, Any] = Field(default_factory=dict)
     runtime_event_outbox: dict[str, Any] | None = None
+    resource_usage: MachineResourceUsage | None = None
     history_import: HistoryImportSnapshot = Field(default_factory=HistoryImportSnapshot.unavailable)
     parse_errors_1h: int
     disk_free_bytes: int

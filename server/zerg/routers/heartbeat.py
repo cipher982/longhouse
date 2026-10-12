@@ -202,6 +202,7 @@ _RETAINED_HEARTBEAT_MAX_BYTES = 32 * 1024
 _HEARTBEAT_READER_FIELDS = (
     "archive_backlog",
     "history_import",
+    "resource_usage",
     "shipping_progress",
     "storage_v2_outbox",
     "runtime_event_outbox",
@@ -585,6 +586,8 @@ class HeartbeatIn(BaseModel):
     # Native-pair update state. Absent from engines that predate the update
     # check; None means "this machine has not reported", never "up to date".
     update: dict[str, object] | None = None
+    # Best-effort process sample; older engines omit it.
+    resource_usage: dict[str, object] | None = None
     history_import: HistoryImportSnapshot | None = None
     parse_error_count_1h: int = 0
     ship_attempts_1h: int = 0

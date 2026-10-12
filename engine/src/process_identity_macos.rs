@@ -252,6 +252,47 @@ pub(super) fn try_collect_process_tree() -> Option<Vec<super::ProcessTreeEntry>>
         .then_some(entries)
 }
 
+/// Locate the same-user Longhouse menu bar process without reading argv.
+///
+/// A cached PID is checked directly first; the process table is enumerated only
+/// when that PID has exited or its start time no longer matches.
+pub(super) fn try_resolve_longhouse_app(cached: Option<(u32, i64)>) -> Option<(u32, i64)> {
+    let uid = unsafe { libc::getuid() };
+    if let Some((pid, start_time_micros)) = cached {
+        if let Some(info) = kinfo_for_pid(pid).ok().flatten() {
+            if longhouse_app_identity(&info, uid) == Some((pid, start_time_micros)) {
+                return cached;
+            }
+        }
+    }
+
+    list_kinfo_processes()
+        .ok()?
+        .iter()
+        .filter_map(|info| longhouse_app_identity(info, uid))
+        .min_by_key(|(pid, _)| *pid)
+}
+
+fn longhouse_app_identity(info: &KinfoProc, uid: libc::uid_t) -> Option<(u32, i64)> {
+    const LONGHOUSE_COMM: &[u8] = b"Longhouse";
+    let pid = u32::try_from(info.kp_proc.p_pid).ok()?;
+    let comm = &info.kp_proc.p_comm;
+    let name_matches = comm[..LONGHOUSE_COMM.len()]
+        .iter()
+        .zip(LONGHOUSE_COMM)
+        .all(|(byte, expected)| *byte as u8 == *expected)
+        && comm[LONGHOUSE_COMM.len()] == 0;
+    if pid == 0 || info.kp_eproc.e_ucred.uid != uid || !name_matches {
+        return None;
+    }
+    let start_time = &info.kp_proc.p_starttime;
+    let start_time_micros = u64::try_from(start_time.tv_sec)
+        .ok()?
+        .checked_mul(1_000_000)?
+        .checked_add(u64::try_from(start_time.tv_usec).ok()?)?;
+    Some((pid, i64::try_from(start_time_micros).ok()?))
+}
+
 pub(super) fn try_collect_process_lineage() -> Option<Vec<ProcessLineage>> {
     let processes = list_kinfo_processes().ok()?;
     let mut entries = Vec::with_capacity(processes.len());

@@ -75,6 +75,8 @@ pub struct RuntimeEventOutboxSnapshot {
 pub struct HeartbeatPayload {
     pub version: String,
     pub daemon_pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_usage: Option<crate::resource_usage::ResourceUsage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// RFC3339 timestamp of the last successful ship.
     pub last_ship_at: Option<String>,
@@ -1145,6 +1147,7 @@ impl HeartbeatPayload {
         HeartbeatPayload {
             version: BuildIdentity::current().qualified(),
             daemon_pid: std::process::id(),
+            resource_usage: Some(crate::resource_usage::sample()),
             last_ship_at: stats.last_ship_at.clone(),
             last_ship_attempt_at: ship_stats.last_ship_attempt_at,
             last_ship_result: ship_stats.last_ship_result,
@@ -4821,8 +4824,8 @@ impl StatusFileWriter {
 /// Keys whose values move on their own with time rather than with machine
 /// state: timestamps, validity deadlines, rates, rolling-window counters of
 /// attempts and successes, elapsed-time counters, free disk space, projection
-/// sequence numbers and heartbeat send telemetry. A change confined to these
-/// is published on the pulse, not immediately.
+/// sequence numbers, heartbeat send telemetry and resource usage. A change
+/// confined to these is published on the pulse, not immediately.
 fn is_volatile_status_key(key: &str) -> bool {
     let rolling_window = key.ends_with("_1h") || key.ends_with("_10m");
     key.ends_with("_at")
@@ -4836,6 +4839,7 @@ fn is_volatile_status_key(key: &str) -> bool {
         || key == "disk_free_bytes"
         || key == "sequence"
         || key == "sessions_sequence"
+        || key == "resource_usage"
 }
 
 /// Rolling-window failure counters feed transport health (a payload
@@ -5286,6 +5290,7 @@ mod tests {
         let payload = HeartbeatPayload {
             version: "0.1.0".to_string(),
             daemon_pid: 12345,
+            resource_usage: None,
             last_ship_at: Some("2026-02-18T10:00:00Z".to_string()),
             last_ship_attempt_at: Some("2026-02-18T10:00:01Z".to_string()),
             last_ship_result: Some("ok".to_string()),
@@ -5558,6 +5563,7 @@ mod tests {
                 "events_per_sec_ewma_10s": ewma,
                 "managed_sessions": [{"session_id": "s1", "state": "attached", "sequence": 7}],
                 "local_projection": {"engine_pulse_at": pulse, "version": 7},
+                "resource_usage": {"sampled_at": pulse, "engine": {"cpu_percent": ewma}},
             })
         };
 
@@ -5565,7 +5571,8 @@ mod tests {
         let written = std::fs::read(&path).unwrap();
         assert!(!written.contains(&b'\n'), "status file is compact JSON");
 
-        // Clocks, rates and sequence numbers alone wait for the pulse.
+        // Clocks, rates, resource usage and sequence numbers
+        // alone wait for the pulse.
         let quiet = start + Duration::from_secs(1);
         assert!(!writer.publish(&status("t1", 1, 9.0), quiet));
         let mut resequenced = status("t1", 1, 0.5);
@@ -5621,6 +5628,7 @@ mod tests {
         let payload = HeartbeatPayload {
             version: "0.1.0".to_string(),
             daemon_pid: 12345,
+            resource_usage: None,
             last_ship_at: None,
             last_ship_attempt_at: None,
             last_ship_result: None,
@@ -6882,6 +6890,7 @@ mod tests {
         let payload = HeartbeatPayload {
             version: "0.1.0".to_string(),
             daemon_pid: 1,
+            resource_usage: None,
             last_ship_at: None,
             last_ship_attempt_at: None,
             last_ship_result: None,
@@ -8701,6 +8710,7 @@ mod tests {
         HeartbeatPayload {
             version: "0.1.0".to_string(),
             daemon_pid: 1,
+            resource_usage: None,
             last_ship_at: None,
             last_ship_attempt_at: None,
             last_ship_result: None,
@@ -8911,6 +8921,7 @@ mod tests {
         let payload = HeartbeatPayload {
             version: "0.1.0".to_string(),
             daemon_pid: 42,
+            resource_usage: None,
             last_ship_at: None,
             last_ship_attempt_at: None,
             last_ship_result: None,
@@ -9016,6 +9027,7 @@ mod tests {
         HeartbeatPayload {
             version: "0.1.0".to_string(),
             daemon_pid: 42,
+            resource_usage: None,
             last_ship_at: None,
             last_ship_attempt_at: None,
             last_ship_result: None,

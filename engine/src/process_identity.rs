@@ -704,6 +704,10 @@ pub fn try_collect_process_tree() -> Option<Vec<ProcessTreeEntry>> {
             .collect(),
     )
 }
+#[cfg(target_os = "macos")]
+pub(super) fn try_resolve_longhouse_app(cached: Option<(u32, i64)>) -> Option<(u32, i64)> {
+    macos::try_resolve_longhouse_app(cached)
+}
 
 /// Transitive descendants of `root`, plus any process sharing `pgid` when one is
 /// recorded. The process-group arm is load-bearing: a wedged command can be

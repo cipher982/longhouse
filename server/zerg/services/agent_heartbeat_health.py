@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentHeartbeat
 from zerg.schemas.history_import import HistoryImportSnapshot
+from zerg.schemas.observability import MachineResourceUsage
 from zerg.services.archive_backlog import default_archive_backlog
 from zerg.services.archive_backlog import normalize_archive_backlog
 from zerg.services.transport_health import TransportHealthAssessment
@@ -141,6 +142,7 @@ class MachineTransportHealthSummary:
     archive_repair: dict[str, Any]
     runtime_event_outbox: dict[str, Any] | None
     history_import: HistoryImportSnapshot
+    resource_usage: MachineResourceUsage | None
     parse_errors_1h: int
     disk_free_bytes: int
     is_offline: bool
@@ -305,6 +307,7 @@ def build_machine_transport_health_summary(
     runtime_event_outbox = runtime_event_outbox_value if isinstance(runtime_event_outbox_value, dict) else None
     local_facts = _local_health_facts_from_heartbeat(row)
     history_import = _history_import_from_heartbeat(row)
+    resource_usage = _resource_usage_from_payload(_heartbeat_payload(row).get("resource_usage"))
     parse_errors_1h = sample.parse_errors_1h
     ship_rate_limited_1h = sample.ship_rate_limited_1h
     ship_server_errors_1h = sample.ship_server_errors_1h
@@ -388,6 +391,7 @@ def build_machine_transport_health_summary(
         spool_dead=spool_dead,
         archive_repair=archive_repair,
         history_import=history_import,
+        resource_usage=resource_usage,
         parse_errors_1h=parse_errors_1h,
         runtime_event_outbox=runtime_event_outbox,
         disk_free_bytes=disk_free_bytes,
@@ -415,6 +419,15 @@ def _heartbeat_payload(row: Any) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _resource_usage_from_payload(value: Any) -> MachineResourceUsage | None:
+    if value is None:
+        return None
+    try:
+        return MachineResourceUsage.model_validate(value)
+    except ValueError:
+        return None
 
 
 def _nonnegative_int(value: Any) -> int:
