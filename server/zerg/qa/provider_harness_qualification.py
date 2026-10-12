@@ -1324,6 +1324,7 @@ def run_cursor_observed_install(
         assertion_ids=cursor_release_identity.OBSERVED_INSTALL_ASSERTIONS,
         executor=execute,
         oracle_source=Path(semantic_oracles.__file__),
+        scenario_revision=cursor_release_identity.OBSERVED_INSTALL_SCENARIO_REVISION,
     )
 
 

@@ -1089,6 +1089,7 @@ def test_cursor_observed_install_passes_without_reasons_when_every_requirement_p
     assert result["semantic_status"] == "pass"
     coverage = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))["coverage_manifest"]
     assert coverage["profile"] == profile
+    assert coverage["scenario_revision"] == cursor_release_identity.OBSERVED_INSTALL_SCENARIO_REVISION == 2
     assert coverage["outcomes"][_CURSOR_ASSERTION] == "pass"
     assert "outcome_reasons" not in coverage
 

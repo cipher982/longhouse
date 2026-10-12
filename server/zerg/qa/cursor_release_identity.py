@@ -13,6 +13,10 @@ ASSERTIONS = identity.ASSERTIONS
 OBSERVED_INSTALL_PROFILE = "cursor_observed_install_v1"
 OBSERVED_INSTALL_MODEL_LANE_PROFILE = "cursor_observed_install_grok_v1"
 OBSERVED_INSTALL_SCENARIO_ID = "cursor_observed_install"
+# Revision 2: Gate 0 fails an identity scenario whose launch turn the provider
+# did not complete, and the input it binds to the universal column is an
+# instruction with one right reply instead of a bare phrase.
+OBSERVED_INSTALL_SCENARIO_REVISION = 2
 OBSERVED_INSTALL_ASSERTIONS = ("cursor_observed_install_contract_preserved",)
 # cursor-agent prints a bare calendar build such as 2026.07.23-e383d2b.
 VERSION_LINE = identity.CALENDAR_BUILD
