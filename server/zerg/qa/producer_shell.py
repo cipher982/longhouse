@@ -85,10 +85,10 @@ def write_json(path: Path, payload: object) -> None:
     temporary.replace(path)
 
 
-def refusal(failure_code: str) -> int:
+def refusal(failure_code: str, error: str | None = None) -> int:
     """Refuse to run: print the reason as the factory reads it, and exit 2."""
 
-    print(json.dumps({"status": "fail", "failure_code": failure_code}))
+    print(json.dumps({"status": "fail", "failure_code": failure_code, **({} if error is None else {"error": error})}))
     return 2
 
 
@@ -380,6 +380,7 @@ class Producer:
         ``--registration`` prints the registration and runs nothing. Otherwise
         the arguments are parsed and, in this order, a missing needed argument,
         an evidence class the registration does not list, a Runtime Host
+        that is neither local nor named as the target, a Runtime Host
         without its URL and token, a binary that is not an executable file and
         the producer's own precondition are each refused with a typed code and
         exit status 2, before anything is written.
@@ -398,7 +399,11 @@ class Producer:
         if args.evidence_class and args.evidence_class not in self.registration.evidence_classes:
             return refusal("evidence_class_not_registered")
         if self.runtime_host:
-            require_disposable_runtime(args.api_url)
+            try:
+                require_disposable_runtime(args.api_url)
+            except RuntimeError as exc:
+                # The error says which host, and how to name it when it is meant.
+                return refusal("runtime_host_not_disposable", str(exc))
             if not args.api_url or not args.agents_token:
                 return refusal("runtime_host_control_credentials_missing")
         for name, failure_code in self.binaries:

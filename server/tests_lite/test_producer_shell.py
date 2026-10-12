@@ -499,3 +499,28 @@ def test_a_runtime_host_producer_without_its_control_credentials_is_refused_befo
     assert ran == [("http://127.0.0.1:9", "fixture-token")]
     hostless = Producer(_REGISTRATION, artifact_kind="fixture_result", failure_code="fixture_failed", needs=("evidence_root",))
     assert hostless.main(lambda _args: {"status": "pass"}, arguments) == 0
+
+
+def test_a_runtime_host_producer_pointed_at_a_host_someone_uses_is_refused_with_a_typed_code(tmp_path, capsys, monkeypatch):
+    from zerg.qa.live_kit import HOSTED_TARGET_ENV
+
+    producer = Producer(
+        _REGISTRATION, artifact_kind="fixture_result", failure_code="fixture_failed", needs=("evidence_root",), runtime_host=True
+    )
+    root = tmp_path / "evidence"
+    hosted = "https://someone.longhouse.example"
+    arguments = ["--variant", "v", "--evidence-root", str(root), "--api-url", hosted, "--agents-token", "fixture-token"]
+    monkeypatch.delenv(HOSTED_TARGET_ENV, raising=False)
+
+    assert producer.main(lambda _args: pytest.fail("a refused command ran"), arguments) == 2
+    refused = json.loads(capsys.readouterr().out)
+    assert (refused["status"], refused["failure_code"]) == ("fail", "runtime_host_not_disposable")
+    # The refusal says which host and how to name it when it is meant.
+    assert hosted in refused["error"] and HOSTED_TARGET_ENV in refused["error"]
+    assert not root.exists()
+    # Without its token the same host is still refused as a host, before anything is asked of it.
+    assert producer.main(lambda _args: pytest.fail("a refused command ran"), arguments[:-2]) == 2
+    assert json.loads(capsys.readouterr().out)["failure_code"] == "runtime_host_not_disposable"
+    # Named as the target, it runs.
+    monkeypatch.setenv(HOSTED_TARGET_ENV, hosted)
+    assert producer.main(lambda _args: {"status": "pass"}, arguments) == 0
