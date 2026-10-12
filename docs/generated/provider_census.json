@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 320,
+  "file_count": 322,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -989,6 +989,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/_pi_family_helm_fake.py",
+      "providers": [
+        "omp",
+        "pi"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_agents_media.py",
       "providers": [
         "codex",
@@ -1523,6 +1530,13 @@
         "claude",
         "codex",
         "cursor",
+        "pi"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_pi_family_helm_fake_lifecycle.py",
+      "providers": [
+        "omp",
         "pi"
       ]
     },
