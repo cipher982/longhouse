@@ -2222,8 +2222,8 @@ class Lifecycle:
         flush: Mapping[str, Any] | None = None,
         alongside: tuple[str, ...] = (),
         recalled: bool = False,
-    ) -> dict[str, Any]:
-        """Wait until the turn's reply is served, and keep what was served for it."""
+    ) -> str:
+        """Wait until the turn's reply is served, keep what was served for it, and return the name it is kept under."""
 
         if flush is not None and self.f.flush_must_complete and not _flush_receipt_complete(flush):
             raise RuntimeError(f"{self.f.name} Helm transcript flush did not complete a bounded ship")
@@ -2241,7 +2241,7 @@ class Lifecycle:
             native_reply_id=row.get("id"),
         )
         self.observation["convergence"][turn] = served
-        return served
+        return turn
 
     def identity(self, label: str, state: dict[str, Any]) -> dict[str, Any]:
         """Wait until the Runtime Host serves control of the session under this owner's lease."""
@@ -2313,7 +2313,7 @@ class Lifecycle:
                 session_file=self.session_file,
                 minimum_turn_seq=_turn_sequence(settled),
             )
-        launch["runtime"] = self.converge("launch", marker, row, flush=self.flush("launch"))
+        launch["served"] = self.converge("launch", marker, row, flush=self.flush("launch"))
         if f.identity_at_launch:
             launch["control_identity"] = self.identity("initial", self.state)
         # Bound before any later owner exists: it reads only the first owner's state.
@@ -2396,7 +2396,7 @@ class Lifecycle:
         record["marker_wait"]["status"] = "answered"
         record.update(marker_row=row, evidence=evidence)
         if self.f.converges_each_turn:
-            record["runtime"] = self.converge("send", marker, row, flush=self.flush("send"))
+            record["served"] = self.converge("send", marker, row, flush=self.flush("send"))
 
     def follow_up(self) -> None:
         """Start a busy turn and send into it: a send made mid-turn is queued and delivered when the turn is over."""
@@ -2422,7 +2422,7 @@ class Lifecycle:
             "evidence": evidence,
         }
         if self.f.converges_each_turn:
-            record["runtime"] = self.converge("follow_up", marker, row)
+            record["served"] = self.converge("follow_up", marker, row)
 
     def steer(self) -> None:
         f = self.f
@@ -2455,7 +2455,7 @@ class Lifecycle:
             "evidence": evidence,
         }
         if f.converges_each_turn:
-            record["runtime"] = self.converge("steer", marker, row)
+            record["served"] = self.converge("steer", marker, row)
 
     def abort(self) -> None:
         f = self.f
@@ -2576,7 +2576,7 @@ class Lifecycle:
             "marker_row": row,
             "evidence": evidence,
             "control_identity": identity,
-            "runtime": self.converge("reload", marker, row, flush=self.flush("reload")),
+            "served": self.converge("reload", marker, row, flush=self.flush("reload")),
         }
 
     def replace(self, *, stale_frame: bool) -> None:
@@ -2622,7 +2622,7 @@ class Lifecycle:
             "control_identity": identity,
         }
         if f.converges_each_turn:
-            record["runtime"] = self.converge("replacement", marker, row, flush=self.flush("replacement"))
+            record["served"] = self.converge("replacement", marker, row, flush=self.flush("replacement"))
 
     def _stopped(self, state: Mapping[str, Any], terminal: ProviderPtySession, *, owner: str, tolerate: bool = False) -> dict[str, Any]:
         """What proves the owner stopped after a terminate, as this lifecycle proves it today.
@@ -2774,9 +2774,9 @@ class Lifecycle:
                     value, native_session_id=str(state.get("native_session_id") or ""), session_file=self.session_file
                 )
             )
-        record["runtime"] = self.converge("resume", marker, row, flush=self.flush("resume"), alongside=(phrase,))
+        record["served"] = self.converge("resume", marker, row, flush=self.flush("resume"), alongside=(phrase,))
         if f.converges_each_turn:
-            record["context_runtime"] = self.converge("resume_context", phrase, record["context_row"], recalled=True)
+            record["context_served"] = self.converge("resume_context", phrase, record["context_row"], recalled=True)
         final = self.state
         if f.identity_at_launch:
             final = self.wait_state(
@@ -3047,12 +3047,13 @@ class Lifecycle:
         lifecycle.write_json(root / "runtime-convergence-receipt.json", observation["convergence"])
         if observation["settlement"]:
             lifecycle.write_json(root / "native-settlement-receipt.json", observation["settlement"])
+        # The channel this lifecycle drove and the owner it ended with; what it recorded on the way is the observation.
         lifecycle.write_json(
             root / "helm-receipt.json",
             {
                 "managed_transport": f"{f.provider}_helm_channel",
+                "session_id": self.session_id,
                 "state": redact_state_for_evidence(self.state),
-                "observation": observation,
             },
         )
         lifecycle.write_json(root / "cleanup-receipt.json", cleanup)

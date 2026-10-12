@@ -141,10 +141,15 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
         found = _mapping(record.get(evidence))
         return (found.get("window_row_count") or 0) > 0 and (found.get("assistant_answer_rows") or 0) >= 1
 
-    def bound(record: Mapping[str, Any], runtime: str = "runtime", facts: tuple[str, ...] = _BOUND) -> bool:
+    def served(record: Mapping[str, Any], turn: str = "served") -> Mapping[str, Any]:
+        """What the Runtime Host served for the record's turn (the record names the convergence it is kept under)."""
+
+        return _mapping(_mapping(observation.get("convergence")).get(record.get(turn)))
+
+    def bound(record: Mapping[str, Any], turn: str = "served", facts: tuple[str, ...] = _BOUND) -> bool:
         """What is served for the turn is one session and one thread (and, where asked, the provider's own session)."""
 
-        binding = _mapping(_mapping(record.get(runtime)).get("binding"))
+        binding = _mapping(served(record, turn).get("binding"))
         return all(binding.get(fact) is True for fact in facts)
 
     def flushed(label: str) -> bool:
@@ -169,7 +174,7 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
     resume_native, recall = _mapping(resume.get("evidence")), _mapping(resume.get("context_evidence"))
     seed = _mapping(replacement.get("context_evidence"))
     phrase = resume.get("context_phrase")
-    recall_served = _mapping(resume.get("context_runtime"))
+    recall_served = served(resume, "context_served")
     return {
         "pi_helm_launch_registration": (
             bool(_mapping(observation.get("shipper")).get("machine_name"))
@@ -180,7 +185,7 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
             and bool(str(launch_state.get("native_session_id") or ""))
             and flushed("launch")
             and bound(launch)
-            and _mapping(launch.get("runtime")).get("served_controls") is True
+            and served(launch).get("served_controls") is True
         ),
         "pi_helm_native_tool_taxonomy": bool(taxonomy.get("tool_pairs")) and not bool(taxonomy.get("tool_calls_without_results")),
         "pi_helm_send_idle": accepted(send) and answered(send) and flushed("send") and bound(send, facts=_BOUND[:2]),
@@ -239,8 +244,8 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
             and accepted(reload, "send")
             and (_mapping(reload.get("evidence")).get("assistant_answer_rows") or 0) >= 1
             and bound(reload, facts=_BOUND[:2])
-            and _mapping(_mapping(reload.get("runtime")).get("binding")).get("provider") == "pi"
-            and _mapping(reload.get("runtime")).get("served_controls") is True
+            and _mapping(served(reload).get("binding")).get("provider") == "pi"
+            and served(reload).get("served_controls") is True
         ),
         "pi_helm_session_replacement_rebind": (
             bool(replaced.get("session_id"))
@@ -280,7 +285,7 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
             and recall.get("user_marker_occurrences") == 0
             and recall_served.get("marker") == phrase
             and bool(_mapping(recall_served.get("served_projection")).get("marker_event_ids"))
-            and bound(resume, "context_runtime")
+            and bound(resume, "context_served")
         ),
         "pi_helm_stale_owner_refused": (
             stale.get("accepted") is False
