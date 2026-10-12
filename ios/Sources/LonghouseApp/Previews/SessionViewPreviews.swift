@@ -450,6 +450,32 @@ private struct PreviewConnectionDrop: View {
     .preferredColorScheme(.dark)
     .emberChrome()
 }
+#Preview("Console · Stop shares input row · Dark") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "omp",
+            canQueue: true,
+            executing: true,
+            placeholder: "Queue for next turn",
+            stateFactsJSON: factsJSON(
+                mode: "console",
+                activity: "executing",
+                tool: "Bash",
+                observedAt: isoDate(secondsAgo: 4),
+                validUntil: isoDate(secondsAgo: -45),
+                primaryKey: "executing",
+                primaryLabel: "Using Bash",
+                primaryTone: "running",
+                access: ("live_control", "Live control", "success")
+            )
+        ),
+        activity: ActivityPulseStore(),
+        transcript: ["The session is running."]
+    )
+    .preferredColorScheme(.dark)
+    .emberChrome()
+}
+
 #Preview("Composer · sending · Dark") {
     SessionScreenPreview(
         detail: .mock(

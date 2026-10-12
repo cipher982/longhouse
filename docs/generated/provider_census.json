@@ -587,7 +587,8 @@
       "path": "ios/Sources/LonghouseApp/Previews/SessionViewPreviews.swift",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "omp"
       ]
     },
     {
