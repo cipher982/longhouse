@@ -29,6 +29,8 @@ from zerg.qa.cursor_helm_gate0 import find_cursor_store
 from zerg.qa.cursor_helm_gate0 import read_hook_events
 from zerg.qa.cursor_helm_gate0 import write_project_hooks
 from zerg.qa.pty_session import ProviderPtySession
+from zerg.qa.universal_agent_harness import DEFAULT_HARNESS_PROMPT
+from zerg.qa.universal_agent_harness import HARNESS_REPLY_PHRASE
 
 
 def test_decode_cursor_meta_accepts_hex_encoded_json() -> None:
@@ -1018,36 +1020,128 @@ def test_native_resume_fails_when_the_resumed_process_did_not_survive_the_turn(m
 _PROBE_PROMPT = "Reply with exactly PROBE and nothing else."
 
 
-def _run_identity_scenario(monkeypatch, tmp_path: Path, probe_turn: list[tuple[float, dict[str, Any]]]) -> dict[str, Any]:
+_LAUNCH_COMPLETED = [
+    _hook(0.0, "beforeSubmitPrompt", "gen-0"),
+    _hook(1.6, "afterAgentResponse", "gen-0"),
+    _hook(1.6, "stop", "gen-0", status="completed"),
+]
+# A launch turn the provider gave up on: it thought, retried under other
+# generations, never produced a response hook, and stopped in error.
+_LAUNCH_ERRORED = [
+    _hook(0.0, "beforeSubmitPrompt", "gen-0"),
+    _hook(15.4, "afterAgentThought", "gen-0"),
+    _hook(20.5, "afterAgentThought", "gen-retry-1"),
+    _hook(27.0, "afterAgentThought", "gen-retry-2"),
+    _hook(37.6, "afterAgentThought", "gen-retry-3"),
+    _hook(37.8, "stop", "gen-0", status="error"),
+]
+
+
+def _run_identity_scenario(
+    monkeypatch,
+    tmp_path: Path,
+    probe_turn: list[tuple[float, dict[str, Any]]],
+    *,
+    launch_turn: list[tuple[float, dict[str, Any]]] = _LAUNCH_COMPLETED,
+    probe_prompt: str = _PROBE_PROMPT,
+) -> dict[str, Any]:
     replay = _HookReplay.install(monkeypatch)
     _stub_native_store(monkeypatch, tmp_path)
-    launch_turn = [_hook(0.0, "beforeSubmitPrompt", "gen-0"), _hook(22.0, "stop", "gen-0", status="error")]
     monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, launch_turn, probe_turn))
     return gate._identity_scenario(
         name="create_chat_resume",
         provider_id="conversation-1",
         launch_args=["--resume", "conversation-1"],
-        probe_prompt=_PROBE_PROMPT,
+        probe_prompt=probe_prompt,
         **_scenario_paths(tmp_path),
     )
 
 
-def test_identity_scenario_records_an_errored_launch_turn_it_does_not_rely_on(monkeypatch, tmp_path: Path) -> None:
-    """The launch turn is a readiness barrier; the proof is the probe turn's."""
+def test_identity_scenario_fails_typed_when_the_launch_turn_ends_in_error(monkeypatch, tmp_path: Path) -> None:
+    """A launch turn the provider ended in error is the finding; no probe is sent after it."""
+
+    probe_turn = [
+        _hook(0.6, "beforeSubmitPrompt", prompt_sha256=gate._marker_digest(_PROBE_PROMPT)),
+        _hook(5.0, "afterAgentResponse", text_sha256="digest"),
+        _hook(5.0, "stop", status="completed"),
+    ]
+
+    with pytest.raises(gate.Gate0Failure) as failure:
+        _run_identity_scenario(monkeypatch, tmp_path, probe_turn, launch_turn=_LAUNCH_ERRORED)
+
+    assert failure.value.failure_code == "cursor_turn_ended_in_error"
+    assert failure.value.facts == {
+        "turn": "launch",
+        "stop_status": "error",
+        "stop_is_interrupt": None,
+        "stop_observed_at": None,
+        "provider_conversation_id": "conversation-1",
+        "generation_id": "gen-0",
+    }
+    events = read_hook_events(tmp_path / "events.ndjson")
+    assert [row["generation_id"] for row in events if row["event"] == "beforeSubmitPrompt"] == ["gen-0"]
+
+
+def test_gate0_report_names_a_launch_turn_that_ended_in_error(monkeypatch, tmp_path: Path) -> None:
+    replay = _HookReplay.install(monkeypatch)
+    _stub_native_store(monkeypatch, tmp_path)
+    binary = tmp_path / "cursor-agent"
+    binary.write_bytes(b"fixture")
+    monkeypatch.setattr(gate, "_trust_workspace", lambda **_kwargs: {"status": "passed"})
+    monkeypatch.setattr(gate, "_provider_version", lambda *_args: "0.0.0-fixture")
+    monkeypatch.setattr(gate, "_run_json", lambda *_args, **_kwargs: {"isAuthenticated": True})
+    monkeypatch.setattr(gate, "_create_chat", lambda *_args: "conversation-1")
+    monkeypatch.setattr(gate, "_git_commit", lambda: None)
+    monkeypatch.setattr(gate.CursorPtySession, "start", _FakeCursor.launcher(replay, _LAUNCH_ERRORED))
+
+    report = gate.run_gate0(
+        gate.build_parser().parse_args(
+            ["--cursor-bin", str(binary), "--artifact-root", str(tmp_path / "artifacts"), "--input-prompt", DEFAULT_HARNESS_PROMPT]
+        )
+    )
+
+    assert (report["status"], report["failed_scenario"], report["failure_code"]) == (
+        "failed",
+        "create_chat_resume",
+        "cursor_turn_ended_in_error",
+    )
+    failed = report["scenarios"]["create_chat_resume"]
+    assert (failed["turn"], failed["stop_status"]) == ("launch", "error")
+    assert "launch turn" in report["error"]
+
+
+def test_identity_scenario_passes_when_the_instruction_probe_is_answered_with_the_phrase(monkeypatch, tmp_path: Path) -> None:
+    """The harness prompt is an instruction, so a provider that follows it completes the probe turn."""
 
     result = _run_identity_scenario(
         monkeypatch,
         tmp_path,
         [
-            _hook(0.6, "beforeSubmitPrompt", prompt_sha256=gate._marker_digest(_PROBE_PROMPT)),
-            _hook(5.0, "stop", status="completed"),
-            _hook(5.0, "afterAgentResponse", text_sha256="digest"),
+            _hook(0.6, "beforeSubmitPrompt", prompt_sha256=gate._marker_digest(DEFAULT_HARNESS_PROMPT)),
+            _hook(2.2, "afterAgentThought"),
+            _hook(2.8, "stop", status="completed"),
+            _hook(2.8, "afterAgentResponse", text_sha256=gate._marker_digest(HARNESS_REPLY_PHRASE)),
         ],
+        probe_prompt=DEFAULT_HARNESS_PROMPT,
     )
 
     assert result["status"] == "passed"
     assert result["stop_status"] == "completed"
-    assert result["launch_turn"] == {"role": "readiness_barrier", "generation_id": "gen-0", "stop_status": "error"}
+    assert result["launch_generation_id"] == "gen-0"
+    assert result["prompt_sha256"] == result["expected_prompt_sha256"] == gate._marker_digest(DEFAULT_HARNESS_PROMPT)
+
+
+def test_identity_scenario_still_times_out_when_the_probe_turn_never_ends(monkeypatch, tmp_path: Path) -> None:
+    """A probe turn that keeps working past the wait, with no stop, stays a timeout."""
+
+    working = [_hook(0.6, "beforeSubmitPrompt", prompt_sha256=gate._marker_digest(DEFAULT_HARNESS_PROMPT))]
+    for step in range(1, 30):
+        working += [_hook(step * 3.0, "afterAgentThought"), _hook(step * 3.0 + 0.1, "preToolUse"), _hook(step * 3.0 + 0.3, "postToolUse")]
+
+    with pytest.raises(TimeoutError, match="afterAgentResponse") as failure:
+        _run_identity_scenario(monkeypatch, tmp_path, working, probe_prompt=DEFAULT_HARNESS_PROMPT)
+
+    assert not isinstance(failure.value, gate.Gate0Failure)
 
 
 def test_identity_scenario_fails_when_the_probe_turn_ends_in_error(monkeypatch, tmp_path: Path) -> None:
@@ -1103,7 +1197,7 @@ def test_identity_scenario_finds_a_launch_stop_that_landed_before_the_store_and_
     )
 
     assert result["status"] == "passed"
-    assert result["launch_turn"] == {"role": "readiness_barrier", "generation_id": "gen-0", "stop_status": "completed"}
+    assert result["launch_generation_id"] == "gen-0"
     assert result["probe_generation_id"] == "gen-1"
     assert replay.now < 30.0
 

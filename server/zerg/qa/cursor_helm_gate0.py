@@ -677,6 +677,11 @@ def _identity_scenario(
             generation_id=_turn_generation(launch_prompt, turn="launch"),
             timeout=timeout,
         )
+        # The probe is typed into the conversation the launch turn leaves. A
+        # launch turn the provider ended in error is the provider failing a
+        # one-line reply, and a probe sent after it would measure how the
+        # provider recovers, not a turn on a working conversation.
+        _require_completed_turn(launch_stop, turn="launch")
         probe_text = probe_prompt or f"Reply with exactly LONGHOUSE_CURSOR_GATE0_{name.upper()}_{uuid4().hex[:10]} and nothing else."
         before = len(read_hook_events(events_path))
         session.submit_idle(probe_text)
@@ -721,14 +726,7 @@ def _identity_scenario(
             "cursor_pid": session.process.pid,
             "process_alive_after_turn": session.alive(),
             "first_hook_event": first.get("event"),
-            # The launch turn only brings the TUI to an idle prompt. Every
-            # fact proven below comes from the probe turn and the native
-            # store, so the launch turn's ending is recorded, not required.
-            "launch_turn": {
-                "role": "readiness_barrier",
-                "generation_id": launch_stop.get("generation_id"),
-                "stop_status": launch_stop.get("status"),
-            },
+            "launch_generation_id": launch_stop.get("generation_id"),
             "probe_generation_id": probe_generation_id,
             "prompt_sha256": prompt.get("prompt_sha256"),
             "expected_prompt_sha256": expected_prompt_digest,
