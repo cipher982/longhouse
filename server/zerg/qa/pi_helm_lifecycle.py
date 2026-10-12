@@ -74,7 +74,10 @@ REGISTRATION = ProducerRegistration(
     # 27: an idle send records its verdict (taken, held by Pi's own file, answered), which the send control reads;
     # a control whose run ends at its target (send, terminate) reports the target and its preconditions.
     # 28: the tool taxonomy's record names the retained file it was counted in.
-    scenario_revision=28,
+    # 29: a control that ends at its target holds its run to every cell Pi has decided by then: the launch and
+    # the tool taxonomy before a send, and with them the reload, the replacement and the stale owner before a
+    # terminate.
+    scenario_revision=29,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),

@@ -311,25 +311,61 @@ NEGATIVE_CONTROLS = {
 # observation once its typed verdict is recorded, and its run reports the
 # target and the preconditions (`control_run_assertions`).
 ENDS_AT_TARGET = frozenset({"send", "terminate"})
-_CONTROL_PRECONDITION_SUFFIXES: dict[str, tuple[str, ...]] = {
-    # The first send follows the launch, and no cell both providers decide by
-    # then exists: OMP's launch cell is the whole run's (it ANDs settlement and
-    # the last turn). The lifecycle reaches its send only once the launch turn
-    # was answered and served, so reaching the verdict is the healthy prefix.
-    "send": (),
-    # A precondition must also be SATISFIABLE under the fault, or the control is
-    # inconclusive by construction -- the same defect as requiring a control's
-    # own target. A no-op terminate leaves the owners alive, so NOTHING that
-    # ANDs end-of-run cleanup or settlement can be a terminate precondition:
-    # OMP's helm_launch_registration ANDs settlement and a four-phase control
-    # identity needing the cold_resume and final receipts, and Pi's
-    # helm_abort_native ANDs cleanup_ok. Both were observed false under the
-    # fault on 2026-09-19 while the run was otherwise healthy. What remains are
-    # the pre-terminate steps that carry their own channel and native evidence
-    # and touch neither: send, follow-up and steer, for both providers.
-    "terminate": ("helm_send_idle", "helm_follow_up_native", "helm_steer_active"),
+# What a control that ends at its target holds its run to, per provider: every
+# cell the provider has decided by then and the fault leaves decidable. The run
+# reports no other cell, so one that is decided and not listed here could be
+# false and the control still certify, with nothing to show the factory.
+#
+# A precondition must be SATISFIABLE under the fault, or the control is
+# inconclusive by construction -- the same defect as requiring a control's own
+# target. So a cell that is decided only later is left out, and so is one the
+# fault itself makes false:
+# - OMP's launch cell is the whole run's: it ANDs settlement, the last turn
+#   and a control identity that needs the cold-resume and final receipts. OMP
+#   decides nothing else before its first send, so its send control has no
+#   precondition; the lifecycle reaches the send only once the launch turn was
+#   answered and served. Pi's launch cell and its tool taxonomy are decided at
+#   launch, and Pi's send control holds both.
+# - A no-op terminate leaves the owners alive, so nothing that ANDs end-of-run
+#   cleanup or settlement can be a terminate precondition: OMP's launch cell
+#   again, and Pi's abort cell, which ANDs `cleanup_ok`. Both were observed
+#   false under the fault on 2026-09-19 while the run was otherwise healthy.
+#   The cold resume follows the terminate for both.
+_CONTROL_PRECONDITION_SUFFIXES: dict[str, dict[str, tuple[str, ...]]] = {
+    "send": {
+        "omp": (),
+        "pi": ("helm_launch_registration", "helm_native_tool_taxonomy"),
+    },
+    "terminate": {
+        "omp": (
+            "helm_send_idle",
+            "helm_follow_up_native",
+            "helm_steer_active",
+            "helm_abort_native",
+            "helm_native_replacement_bound",
+            "helm_stale_owner_refused",
+        ),
+        "pi": (
+            "helm_launch_registration",
+            "helm_native_tool_taxonomy",
+            "helm_send_idle",
+            "helm_follow_up_native",
+            "helm_steer_active",
+            "helm_reload_rebind",
+            "helm_session_replacement_rebind",
+            "helm_stale_owner_refused",
+        ),
+    },
 }
+# A steer or abort fault leaves the whole lifecycle able to run, and its run reports every cell.
 _DEFAULT_PRECONDITION_SUFFIXES = ("helm_launch_registration", "helm_send_idle")
+
+
+def control_preconditions(control: str, provider: str) -> tuple[str, ...]:
+    """The cells that must hold for ``provider``'s run of ``control`` to count, by their full names."""
+
+    suffixes = _CONTROL_PRECONDITION_SUFFIXES[control][provider] if control in ENDS_AT_TARGET else _DEFAULT_PRECONDITION_SUFFIXES
+    return tuple(f"{provider}_{suffix}" for suffix in suffixes)
 
 
 def fault_name(provider: str, control: str) -> str:
@@ -362,7 +398,7 @@ def control_run_assertions(control: str, provider: str, assertions: Mapping[str,
 
     if control not in ENDS_AT_TARGET:
         return dict(assertions)
-    kept = {f"{provider}_{suffix}" for suffix in (NEGATIVE_CONTROLS[control][1], *_CONTROL_PRECONDITION_SUFFIXES[control])}
+    kept = {f"{provider}_{NEGATIVE_CONTROLS[control][1]}", *control_preconditions(control, provider)}
     return {name: held for name, held in assertions.items() if name in kept}
 
 
@@ -398,10 +434,7 @@ def negative_control_verdict(
     target = f"{provider}_{target_suffix}"
     fired = [item for item in fault_receipts if item.get("fault") == fault and item.get("session_id") == session_id]
     verdict = observation.get(verdict_key) if isinstance(observation.get(verdict_key), Mapping) else {}
-    preconditions = all(
-        assertions.get(f"{provider}_{suffix}") is True
-        for suffix in _CONTROL_PRECONDITION_SUFFIXES.get(control, _DEFAULT_PRECONDITION_SUFFIXES)
-    )
+    preconditions = all(assertions.get(name) is True for name in control_preconditions(control, provider))
     rejected = assertions.get(target) is False and verdict.get("code") == expected_code
     return {
         "control": control,

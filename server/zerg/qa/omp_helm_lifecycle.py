@@ -61,7 +61,10 @@ REGISTRATION = ProducerRegistration(
     # 27: an idle send records its verdict (taken, held by OMP's own file, answered), which the send control reads;
     # a control whose run ends at its target (send, terminate) reports the target and its preconditions.
     # 28: the tool taxonomy's record names the retained file it was counted in.
-    scenario_revision=28,
+    # 29: a control that ends at its target holds its run to every cell OMP has decided by then: none before a
+    # send (its launch cell is the whole run's), and with the send, the follow-up and the steer, the abort, the
+    # replacement and the stale owner before a terminate.
+    scenario_revision=29,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),

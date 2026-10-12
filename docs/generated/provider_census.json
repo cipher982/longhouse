@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 323,
+  "file_count": 324,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2267,6 +2267,13 @@
     },
     {
       "path": "server/zerg/qa/pi_family_helm.py",
+      "providers": [
+        "omp",
+        "pi"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/pi_family_turn_oracle.py",
       "providers": [
         "omp",
         "pi"

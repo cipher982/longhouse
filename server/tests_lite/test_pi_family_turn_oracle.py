@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import dataclasses
+import importlib
 import json
 
 import pytest
 
 from tests_lite import _pi_family_helm_fake as fake
 from zerg.qa import pi_family_helm as helm
+from zerg.qa.failed_results import reached_only
 from zerg.qa.model_compliance import attach
 from zerg.qa.pi_family_turn_oracle import ENDS_AT_TARGET
 from zerg.qa.pi_family_turn_oracle import NEGATIVE_CONTROLS
 from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
 from zerg.qa.pi_family_turn_oracle import control_made_its_observation
+from zerg.qa.pi_family_turn_oracle import control_preconditions
 from zerg.qa.pi_family_turn_oracle import control_run_assertions
 from zerg.qa.pi_family_turn_oracle import pi_family_steer_noncompliance
 from zerg.qa.pi_family_turn_oracle import send_turn_verdict
@@ -140,18 +144,21 @@ def _control(control: str, *, provider: str = "pi", assertions: dict, observatio
     )
 
 
+def _healthy(control: str, provider: str = "pi", **cells: bool) -> dict[str, bool]:
+    """A control run in which every precondition held and the target did not, but for ``cells``."""
+
+    target = f"{provider}_{NEGATIVE_CONTROLS[control][1]}"
+    held = {**dict.fromkeys(control_preconditions(control, provider), True), target: False}
+    return {**held, **{f"{provider}_helm_{name}": value for name, value in cells.items()}}
+
+
 def test_terminate_control_passes_when_the_oracle_catches_surviving_owners() -> None:
     # The terminate no-op fault: the command is accepted and the recorded
     # owners keep running. The oracle must reject terminate_owned for that
     # exact reason, or the Interrupt chip is not fail-closed.
     verdict = _control(
         "terminate",
-        assertions={
-            "pi_helm_send_idle": True,
-            "pi_helm_follow_up_native": True,
-            "pi_helm_steer_active": True,
-            "pi_helm_terminate_owned": False,
-        },
+        assertions=_healthy("terminate"),
         observation={"terminate_verdict": {"code": "terminate_left_owners_alive"}},
     )
     assert verdict["status"] == "pass", verdict
@@ -162,32 +169,39 @@ def test_terminate_control_is_not_a_pass_when_the_oracle_misses_it() -> None:
     # A weak oracle would call terminate proven while the owners survived.
     verdict = _control(
         "terminate",
-        assertions={
-            "pi_helm_launch_registration": True,
-            "pi_helm_send_idle": True,
-            "pi_helm_terminate_owned": True,
-        },
+        assertions=_healthy("terminate", terminate_owned=True),
         observation={"terminate_verdict": {"code": None}},
     )
     assert verdict["status"] != "pass", verdict
     assert verdict["target_rejected"] is False
 
 
-@pytest.mark.parametrize("provider", ["omp", "pi"])
-def test_send_control_requires_no_cell_its_run_cannot_decide(provider: str) -> None:
-    """The send control's run ends at the first send, and the target cannot be its own precondition.
+_SEND_DROPPED = {"send_turn_verdict": {"code": "send_accepted_without_a_turn"}}
 
-    OMP's launch cell is the whole run's (it ANDs settlement and the last turn), so a run that ends at the first send
-    never decides it, and requiring it made the control unsatisfiable for OMP.
+
+def test_a_pi_send_control_does_not_certify_on_a_run_whose_launch_was_broken() -> None:
+    """Pi decides its launch cell and its tool taxonomy at launch, before the first send.
+
+    With no precondition the control certified whatever the launch had been, and since its run reports only the
+    target and the preconditions the factory never saw the false cell.
     """
-    verdict = _control(
-        "send",
-        provider=provider,
-        assertions={f"{provider}_helm_launch_registration": False, f"{provider}_helm_send_idle": False},
-        observation={"send_turn_verdict": {"code": "send_accepted_without_a_turn"}},
-    )
-    assert verdict["preconditions_held"] is True, verdict
-    assert verdict["status"] == "pass", verdict
+    for broken in ("launch_registration", "native_tool_taxonomy"):
+        verdict = _control("send", assertions=_healthy("send", **{broken: False}), observation=_SEND_DROPPED)
+        assert (verdict["preconditions_held"], verdict["target_rejected"], verdict["status"]) == (False, True, "inconclusive")
+        # And the false cell is in what the run reports.
+        assert control_run_assertions("send", "pi", _healthy("send", **{broken: False}))[f"pi_helm_{broken}"] is False
+    assert _control("send", assertions=_healthy("send"), observation=_SEND_DROPPED)["status"] == "pass"
+
+
+def test_an_omp_send_control_holds_its_run_to_no_cell_because_omp_has_decided_none() -> None:
+    """OMP's launch cell is the whole run's: it ANDs settlement and the last turn, so a run that ends at the first
+    send never decides it, and requiring it would make the control unsatisfiable. The target is not its own
+    precondition either."""
+    assert control_preconditions("send", "omp") == ()
+    undecided = _healthy("send", "omp", launch_registration=False)
+    verdict = _control("send", provider="omp", assertions=undecided, observation=_SEND_DROPPED)
+    assert (verdict["preconditions_held"], verdict["status"]) == (True, "pass")
+    assert control_run_assertions("send", "omp", undecided) == {"omp_helm_send_idle": False}
 
 
 def test_a_send_that_was_taken_and_started_no_turn_is_told_from_a_turn_that_did_not_answer(tmp_path) -> None:
@@ -223,14 +237,18 @@ def test_a_control_that_ends_at_its_target_has_made_its_observation_once_its_ver
 
 
 def test_a_control_that_ends_at_its_target_reports_the_target_and_its_preconditions() -> None:
-    cells = {f"pi_helm_{name}": name != "terminate_owned" for name in ("send_idle", "follow_up_native", "steer_active", "terminate_owned")}
-    # False only because the fault kept the owners alive, or because the step was never reached.
-    unreached = {"pi_helm_abort_native": False, "pi_helm_cold_resume_exact_file": False}
+    held = _healthy("terminate")
+    # False only because the fault kept the owners alive, or because the step comes after the terminate.
+    not_held_against_it = {"pi_helm_abort_native": False, "pi_helm_cold_resume_exact_file": False}
 
-    assert control_run_assertions("terminate", "pi", {**cells, **unreached}) == cells
-    assert control_run_assertions("send", "pi", {**cells, **unreached}) == {"pi_helm_send_idle": True}
+    assert control_run_assertions("terminate", "pi", {**held, **not_held_against_it}) == held
+    assert control_run_assertions("send", "pi", {**held, **not_held_against_it}) == {
+        "pi_helm_launch_registration": True,
+        "pi_helm_native_tool_taxonomy": True,
+        "pi_helm_send_idle": True,
+    }
     # A steer or abort fault touches its target alone, and the run says so for every cell.
-    assert control_run_assertions("abort", "pi", {**cells, **unreached}) == {**cells, **unreached}
+    assert control_run_assertions("abort", "pi", {**held, **not_held_against_it}) == {**held, **not_held_against_it}
 
 
 def test_a_control_whose_fault_never_fired_is_inconclusive_not_a_pass() -> None:
@@ -247,6 +265,9 @@ def test_a_control_whose_fault_never_fired_is_inconclusive_not_a_pass() -> None:
     assert verdict["status"] == "inconclusive", verdict
 
 
+_OWNERS_ALIVE = {"terminate_verdict": {"code": "terminate_left_owners_alive"}}
+
+
 def test_terminate_control_does_not_require_evidence_the_fault_prevents() -> None:
     """OMP's launch_registration cannot be a terminate precondition.
 
@@ -256,45 +277,38 @@ def test_terminate_control_does_not_require_evidence_the_fault_prevents() -> Non
     it made the control inconclusive by construction -- fault fired, target
     rejected with the expected typed code, and still no pass (2026-09-19).
 
-    The healthy prefix is proven by the pre-terminate steps instead, which
-    already require channel binding and native evidence.
+    The healthy prefix is every cell OMP has decided by the terminate.
     """
-    verdict = _control(
-        "terminate",
-        provider="omp",
-        assertions={
-            # False only because the fault stops the run before settlement.
-            "omp_helm_launch_registration": False,
-            "omp_helm_send_idle": True,
-            "omp_helm_follow_up_native": True,
-            "omp_helm_steer_active": True,
-            "omp_helm_abort_native": True,
-            "omp_helm_terminate_owned": False,
-        },
-        observation={"terminate_verdict": {"code": "terminate_left_owners_alive"}},
-    )
+    # False only because the fault stops the run before settlement, or because the step follows the terminate.
+    prevented = _healthy("terminate", "omp", launch_registration=False, cold_resume_exact_file=False)
+    verdict = _control("terminate", provider="omp", assertions=prevented, observation=_OWNERS_ALIVE)
     assert verdict["preconditions_held"] is True, verdict
     assert verdict["status"] == "pass", verdict
 
 
-def test_terminate_control_still_needs_a_healthy_prefix() -> None:
-    # A run whose steer was already broken cannot attribute a terminate failure
-    # to the fault, so it stays inconclusive rather than certifying the chip.
-    verdict = _control(
-        "terminate",
-        provider="omp",
-        assertions={
-            "omp_helm_launch_registration": True,
-            "omp_helm_send_idle": True,
-            "omp_helm_follow_up_native": True,
-            "omp_helm_steer_active": False,
-            "omp_helm_abort_native": True,
-            "omp_helm_terminate_owned": False,
-        },
-        observation={"terminate_verdict": {"code": "terminate_left_owners_alive"}},
-    )
+@pytest.mark.parametrize(
+    ("provider", "broken"),
+    [
+        ("omp", "steer_active"),
+        # Decided before the terminate and, until the run reported them, free to be false.
+        ("omp", "abort_native"),
+        ("omp", "native_replacement_bound"),
+        ("omp", "stale_owner_refused"),
+        ("pi", "launch_registration"),
+        ("pi", "native_tool_taxonomy"),
+        ("pi", "reload_rebind"),
+        ("pi", "session_replacement_rebind"),
+        ("pi", "stale_owner_refused"),
+    ],
+)
+def test_terminate_control_needs_every_cell_the_provider_decided_before_it(provider: str, broken: str) -> None:
+    # A run in which an earlier step was already broken cannot attribute a terminate failure to the fault, so it
+    # stays inconclusive rather than certifying the chip. And the broken cell is in what the run reports.
+    assertions = _healthy("terminate", provider, **{broken: False})
+    verdict = _control("terminate", provider=provider, assertions=assertions, observation=_OWNERS_ALIVE)
     assert verdict["preconditions_held"] is False, verdict
     assert verdict["status"] == "inconclusive", verdict
+    assert control_run_assertions("terminate", provider, assertions)[f"{provider}_helm_{broken}"] is False
 
 
 def test_terminate_preconditions_exclude_anything_gated_on_cleanup() -> None:
@@ -305,19 +319,8 @@ def test_terminate_preconditions_exclude_anything_gated_on_cleanup() -> None:
     run could not clean up while the fault kept the owners alive. Same defect
     as OMP's launch_registration, which ANDs settlement.
     """
-    verdict = _control(
-        "terminate",
-        assertions={
-            "pi_helm_send_idle": True,
-            "pi_helm_follow_up_native": True,
-            "pi_helm_steer_active": True,
-            # False only because the fault keeps the owners alive.
-            "pi_helm_abort_native": False,
-            "pi_helm_launch_registration": True,
-            "pi_helm_terminate_owned": False,
-        },
-        observation={"terminate_verdict": {"code": "terminate_left_owners_alive"}},
-    )
+    # False only because the fault keeps the owners alive.
+    verdict = _control("terminate", assertions=_healthy("terminate", abort_native=False), observation=_OWNERS_ALIVE)
     assert verdict["preconditions_held"] is True, verdict
     assert verdict["status"] == "pass", verdict
 
@@ -368,6 +371,39 @@ _FAULT_WAITS = {
 }
 
 
+# Decided in the run and not held against it. Pi's abort cell ANDs the cleanup a no-op terminate prevents. Its cold
+# resume follows the terminate: against the fake the lifecycle gets that far, because the fake's launcher dies with
+# the terminal the lifecycle closes, and the run ends at the second terminate.
+_NOT_HELD_AGAINST = {("pi", "terminate"): {"pi_helm_abort_native", "pi_helm_cold_resume_exact_file"}}
+
+
+def test_a_pi_send_control_run_with_a_false_launch_cell_reports_it_and_does_not_pass(tmp_path, monkeypatch, capsys):
+    """The whole path for the control the review found unguarded: the producer's own verdict, and what it reports."""
+
+    module = importlib.import_module("zerg.qa.pi_helm_lifecycle")
+    cells = module.FAMILY.cells
+    monkeypatch.setattr(
+        module, "FAMILY", dataclasses.replace(module.FAMILY, cells=lambda seen: {**cells(seen), "pi_helm_launch_registration": False})
+    )
+    monkeypatch.delenv(fake.FAULT_ENV, raising=False)
+    wait = helm._wait_native_marker
+    monkeypatch.setattr(
+        helm, "_wait_native_marker", lambda *a, **k: wait(*a, **{**k, "timeout": _FAULT_WAITS["send"]["_wait_native_marker"]})
+    )
+    code, root, _left = fake.run_lifecycle("pi", tmp_path, monkeypatch.setenv, arguments=("--negative-control", "send"))
+    result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+    capsys.readouterr()
+
+    verdict = result["negative_control"]
+    assert (verdict["fault_fired"], verdict["target_rejected"], verdict["preconditions_held"]) == (True, True, False)
+    assert (code, result["status"], verdict["status"]) == (1, "fail", "inconclusive")
+    assert result["assertions"] == {
+        "pi_helm_launch_registration": False,
+        "pi_helm_native_tool_taxonomy": True,
+        "pi_helm_send_idle": False,
+    }
+
+
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize("control", sorted(ENDS_AT_TARGET))
 @pytest.mark.parametrize("provider", ["omp", "pi"])
@@ -397,6 +433,14 @@ def test_a_control_that_ends_at_its_target_decides(provider, control, tmp_path, 
     assert verdict["fault_fired"] and verdict["preconditions_held"] and verdict["target_rejected"]
     assert verdict["observed_code"] == result["observation"][verdict_key]["code"] == expected
     assert [cell for cell, held in result["assertions"].items() if not held] == [f"{provider}_{target}"]
+    # It reports the target and what it was held to, which is every cell the run had decided by then: a decided
+    # cell it was not held to could be false and the control still certify, with nothing to show the factory.
+    preconditions = set(control_preconditions(control, provider))
+    assert set(result["assertions"]) == {f"{provider}_{target}", *preconditions}
+    module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
+    observation = result["observation"]
+    decided = set(reached_only(module.FAMILY.cells(observation), observation, module.FAMILY.reached))
+    assert decided - {f"{provider}_{target}"} - _NOT_HELD_AGAINST.get((provider, control), set()) == preconditions
     # The failure that ended the run is kept as the control's evidence, not as the run's.
     assert result["observation"]["failure_after_control_verdict"] and "error" not in result
     # The receipt is the launcher's, for this session and this fault.
