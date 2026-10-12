@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import socketserver
 import time
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
@@ -92,12 +93,23 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
+class LoopbackHTTPServer(ThreadingHTTPServer):
+    # HTTPServer.server_bind resolves the bound address with socket.getfqdn,
+    # a reverse DNS lookup that can block; on GitHub's hosted macOS runner the
+    # server sat silent past 10 s before publishing its port. Nothing here
+    # reads server_name.
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port-file", required=True)
     args = parser.parse_args()
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
     Path(args.port_file).write_text(str(server.server_port), encoding="utf-8")
     server.serve_forever()
     return 0
