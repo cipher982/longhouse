@@ -422,3 +422,28 @@ def test_the_command_line_refuses_before_anything_is_written(tmp_path, capsys, a
     assert not root.exists()
     # Asking for the registration never runs the producer, whatever else is on the command line.
     assert producer.main(lambda _args: pytest.fail("ran"), ["--registration", "--evidence-root", str(root)]) == 0
+
+
+@pytest.mark.parametrize(
+    ("url", "token"),
+    [(None, "fixture-token"), ("http://127.0.0.1:9", None), (None, None), ("", "fixture-token"), ("http://127.0.0.1:9", "")],
+)
+def test_a_runtime_host_producer_without_its_control_credentials_is_refused_before_it_runs(tmp_path, capsys, monkeypatch, url, token):
+    producer = Producer(
+        _REGISTRATION, artifact_kind="fixture_result", failure_code="fixture_failed", needs=("evidence_root",), runtime_host=True
+    )
+    root = tmp_path / "evidence"
+    arguments = ["--variant", "v", "--evidence-root", str(root)]
+    for name, value in ((RUNTIME_API_URL_ENV, url), (RUNTIME_AGENTS_TOKEN_ENV, token)):
+        monkeypatch.delenv(name, raising=False) if value is None else monkeypatch.setenv(name, value)
+
+    assert producer.main(lambda _args: pytest.fail("a refused command ran"), arguments) == 2
+    assert json.loads(capsys.readouterr().out) == {"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}
+    assert not root.exists()
+    # Named on the command line they are credentials like any other, and a producer that drives no Runtime Host asks for none.
+    ran: list[tuple[str, str]] = []
+    named = [*arguments, "--api-url", "http://127.0.0.1:9", "--agents-token", "fixture-token"]
+    assert producer.main(lambda args: ran.append((args.api_url, args.agents_token)) or {"status": "pass"}, named) == 0
+    assert ran == [("http://127.0.0.1:9", "fixture-token")]
+    hostless = Producer(_REGISTRATION, artifact_kind="fixture_result", failure_code="fixture_failed", needs=("evidence_root",))
+    assert hostless.main(lambda _args: {"status": "pass"}, arguments) == 0
