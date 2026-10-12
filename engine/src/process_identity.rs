@@ -10,12 +10,12 @@ use std::time::{Duration, Instant};
 
 use chrono::DateTime;
 use chrono::Utc;
-#[cfg(target_os = "macos")]
-#[path = "process_identity_macos.rs"]
-mod macos;
 #[cfg(target_os = "linux")]
 #[path = "process_identity_linux.rs"]
 mod linux;
+#[cfg(target_os = "macos")]
+#[path = "process_identity_macos.rs"]
+mod macos;
 
 pub const PID_REUSE_TOLERANCE_SECS: i64 = 120;
 // A full process inventory can take several seconds on hosts servicing
@@ -127,18 +127,44 @@ pub fn inspect_process_fact(pid: u32) -> ProcessFactLookup {
 /// Collect one coherent process inventory, distinguishing a valid empty scan
 /// from an unavailable or partial observation. Callers reconciling durable
 /// state must retain their last observation when this returns `None`.
-#[cfg(target_os = "macos")]
 pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
+    if qa_process_inventory_unavailable() {
+        return None;
+    }
+    platform_process_facts_by_pid()
+}
+
+/// Negative control for the real-daemon projection-failure test
+/// (`scripts/tests/daemon-projection-failure.test.py`): while the file named by
+/// `LONGHOUSE_QA_PROCESS_INVENTORY_FAULT_FILE` reads `fail`, the inventory is
+/// unavailable. A file rather than an environment value, so one running daemon
+/// can be failed and recovered. Compiled only with `qa-fault-injection`, like
+/// `src/qa_fault.rs`; Linux and macOS read the process table in-process, so
+/// there is no `ps` left to shim.
+#[cfg(feature = "qa-fault-injection")]
+fn qa_process_inventory_unavailable() -> bool {
+    std::env::var_os("LONGHOUSE_QA_PROCESS_INVENTORY_FAULT_FILE")
+        .and_then(|path| std::fs::read(path).ok())
+        .is_some_and(|contents| contents.trim_ascii() == b"fail")
+}
+
+#[cfg(not(feature = "qa-fault-injection"))]
+fn qa_process_inventory_unavailable() -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn platform_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     macos::try_collect_process_facts_by_pid()
 }
 
 #[cfg(target_os = "linux")]
-pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
+fn platform_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     linux::try_collect_process_facts_by_pid()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
+fn platform_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     let mut command = Command::new("ps");
     command.args(["-axo", "pid=,tty=,stat=,lstart=,command="]);
     let output = output_with_timeout(command, PROCESS_INVENTORY_TIMEOUT)?;
@@ -1447,7 +1473,10 @@ mod tests {
                 );
             }
         }
-        let cwd = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+        let cwd = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let probed_cwd = try_collect_process_cwds(&[current_pid])
             .expect("complete procfs cwd probe")
             .remove(&current_pid)

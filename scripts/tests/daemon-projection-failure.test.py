@@ -1,7 +1,8 @@
-"""Exercise transport and projection failure/recovery in a real daemon.
+"""Exercise transport, inventory and projection failure/recovery in a real daemon.
 
-The Runtime Host is a loopback fixture. Process-inventory failure uses a ps
-shim only on platforms whose process backend invokes ps.
+The Runtime Host is a loopback fixture. No provider or hosted session is created;
+HOME, heartbeat rejection, process inventory failure, projection-build failure,
+phase ledger, and logs are disposable.
 """
 
 import argparse
@@ -13,7 +14,6 @@ import shutil
 import signal
 import sqlite3
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -87,7 +87,6 @@ def utc_age_seconds(value):
 
 
 def exercise(engine):
-    native_process_inventory = sys.platform in {"linux", "darwin"}
     receipt = {"engine": str(engine), "hosted_sessions_created": []}
     # macOS Unix sockets reject its long per-user temporary-directory path.
     with tempfile.TemporaryDirectory(prefix="lh-proj-", dir="/tmp") as temporary:
@@ -98,18 +97,10 @@ def exercise(engine):
         shim = root / "bin"
         shim.mkdir()
         fail_inventory = root / "inventory-mode"
-        fail_inventory.write_text("ok\n" if native_process_inventory else "fail\n")
-        ps = shim / "ps"
-        ps.write_text(
-            '#!/bin/sh\nif [ "$1" = "-axo" ] && [ -f "$PROJECTION_TEST_FAILURE" ] && '
-            '[ "$(/bin/cat "$PROJECTION_TEST_FAILURE")" = "fail" ]; then\n'
-            "  exit 1\n"
-            'fi\nexec /bin/ps "$@"\n'
-        )
-        ps.chmod(0o700)
+        fail_inventory.write_text("fail\n")
         # No ambient provider executable or credential authority: the daemon
         # otherwise prewarms an installed Codex worker in a separate group.
-        for name in ("lsof", "sysctl", "uname"):
+        for name in ("ps", "lsof", "sysctl", "uname"):
             executable = shutil.which(name, path="/usr/bin:/bin:/usr/sbin:/sbin")
             if executable is not None:
                 (shim / name).symlink_to(executable)
@@ -117,7 +108,8 @@ def exercise(engine):
             "HOME": str(home),
             "LONGHOUSE_HOME": str(longhouse),
             "PATH": str(shim),
-            "PROJECTION_TEST_FAILURE": str(fail_inventory),
+            # Read only by a `qa-fault-injection` engine (src/qa_fault.rs).
+            "LONGHOUSE_QA_PROCESS_INVENTORY_FAULT_FILE": str(fail_inventory),
             "TMPDIR": str(root),
         }
         for name in (
@@ -253,24 +245,16 @@ def exercise(engine):
                 probe.write_text("{}")
                 probe.unlink()
 
-            if native_process_inventory:
-                startup_status = wait_for(
-                    lambda projection: projection.get("reconciliation", {}).get("state")
-                    == "idle"
-                )
-                startup_projection = startup_status["local_projection"]
-                assert startup_projection.get("last_reconciled_at")
-            else:
-                startup_deadline = time.monotonic() + 60
-                while 'reason="startup"' not in daemon_logs():
-                    observe()
-                    assert time.monotonic() < startup_deadline, daemon_logs()
-                    time.sleep(0.05)
-                startup_status = observe()
-                startup_projection = startup_status.get("local_projection", {})
-                assert startup_projection.get("reconciliation", {}).get("state") != "idle"
-                assert not startup_projection.get("last_reconciled_at")
-                fail_inventory.write_text("ok\n")
+            startup_deadline = time.monotonic() + 60
+            while 'reason="startup"' not in daemon_logs():
+                observe()
+                assert time.monotonic() < startup_deadline, daemon_logs()
+                time.sleep(0.05)
+            startup_status = observe()
+            startup_projection = startup_status.get("local_projection", {})
+            assert startup_projection.get("reconciliation", {}).get("state") != "idle"
+            assert not startup_projection.get("last_reconciled_at")
+            fail_inventory.write_text("ok\n")
 
             healthy = wait_for(
                 lambda projection: projection.get("reconciliation", {}).get("state")
@@ -324,85 +308,77 @@ def exercise(engine):
             completed_at = healthy_projection["last_reconciled_at"]
             assert completed_at, "idle requires a completed full discovery receipt"
             receipt["build"] = healthy.get("build")
-            if native_process_inventory:
-                # PATH cannot make the native procfs/libproc inventory fail.
-                # The backend comparison test covers the native process table;
-                # this daemon fixture injects inventory failure only for ps.
-                recovered = healthy
-            else:
-                fail_inventory.write_text("fail\n")
-                # A process inventory failure is published either as a terminal
-                # failure or, since d0812e8c0, as a retry that stays reconciling
-                # while carrying its failure cause. Both must freeze the projection.
-                failed = wait_for(
-                    lambda projection: (
-                        projection.get("reconciliation", {}).get("state") == "failed"
-                        and projection.get("reconciliation", {}).get("reason")
-                        in {"periodic", "wake", "full_reconciliation", "startup"}
-                    )
-                    or (
-                        projection.get("reconciliation", {}).get("state") == "reconciling"
-                        and projection.get("reconciliation", {}).get("failure_reason")
-                        == "process_inventory"
-                    )
+            fail_inventory.write_text("fail\n")
+            # A process inventory failure is published either as a terminal
+            # failure or, since d0812e8c0, as a retry that stays reconciling
+            # while carrying its failure cause. Both must freeze the projection.
+            failed = wait_for(
+                lambda projection: (
+                    projection.get("reconciliation", {}).get("state") == "failed"
+                    and projection.get("reconciliation", {}).get("reason")
+                    in {"periodic", "wake", "full_reconciliation", "startup"}
                 )
-                frozen = failed["local_projection"]["generated_at"]
-                with sqlite3.connect(db, timeout=5) as connection:
-                    connection.execute(
-                        "INSERT INTO session_phase_state (session_id, provider, phase, source, observed_at, revision) VALUES (?, 'omp', 'idle', 'test', ?, 1)",
-                        (
-                            str(uuid4()),
-                            datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                        ),
-                    )
-                # An unchanged status file is rewritten for its clocks every
-                # STATUS_FILE_PULSE_INTERVAL (10 s, engine/src/heartbeat.rs), so
-                # watch the frozen projection until a pulse lands, with margin.
-                started = time.monotonic()
-                deadline = started + 13
-                projection = failed["local_projection"]
-                while time.monotonic() < deadline:
-                    status = observe()
-                    projection = status["local_projection"]
-                    assert projection["generated_at"] == frozen, (
-                        f"cached phase rebuild re-aged failed observation: {projection}"
-                    )
-                    assert projection["reconciliation"]["state"] != "idle", (
-                        f"cached phase rebuild erased observation failure: {projection}"
-                    )
-                    assert projection["last_reconciled_at"] == completed_at, (
-                        "failure advanced completion receipt"
-                    )
-                    assert projection["reconciliation"].get("failure_reason"), (
-                        "failure lost its cause"
-                    )
-                    pulsed = projection["engine_pulse_at"] != failed["local_projection"][
-                        "engine_pulse_at"
-                    ]
-                    if pulsed and time.monotonic() - started >= 3:
-                        break
-                    time.sleep(0.05)
-                assert (
-                    projection["engine_pulse_at"]
-                    != failed["local_projection"]["engine_pulse_at"]
-                ), "failure stopped engine pulses"
-                inventory_failure_health = native_health()
-                inventory_failure_receipt = assert_fresh_native_health(
-                    inventory_failure_health
+                or (
+                    projection.get("reconciliation", {}).get("state") == "reconciling"
+                    and projection.get("reconciliation", {}).get("failure_reason")
+                    == "process_inventory"
                 )
-                assert "engine_reconciliation_failed" in inventory_failure_health["reasons"]
-                receipt["inventory_failure_native_health"] = inventory_failure_receipt
-                fail_inventory.write_text("ok\n")
-                request_full_reconciliation()
-                recovered = wait_for(
-                    lambda projection: projection.get("generated_at") != frozen
-                    and projection.get("reconciliation", {}).get("state") == "idle"
-                    and projection.get("last_reconciled_at", "") > completed_at,
-                    timeout=90,
+            )
+            frozen = failed["local_projection"]["generated_at"]
+            with sqlite3.connect(db, timeout=5) as connection:
+                connection.execute(
+                    "INSERT INTO session_phase_state (session_id, provider, phase, source, observed_at, revision) VALUES (?, 'omp', 'idle', 'test', ?, 1)",
+                    (
+                        str(uuid4()),
+                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    ),
                 )
-                assert recovered["daemon_pid"] == child.pid, "recovery replaced the daemon"
-                receipt["failure_preserved_during_phase_rebuild"] = True
-                receipt["recovered_without_restart"] = True
+            # An unchanged status file is rewritten for its clocks every
+            # STATUS_FILE_PULSE_INTERVAL (10 s, engine/src/heartbeat.rs), so
+            # watch the frozen projection until a pulse lands, with margin.
+            started = time.monotonic()
+            deadline = started + 13
+            projection = failed["local_projection"]
+            while time.monotonic() < deadline:
+                status = observe()
+                projection = status["local_projection"]
+                assert projection["generated_at"] == frozen, (
+                    f"cached phase rebuild re-aged failed observation: {projection}"
+                )
+                assert projection["reconciliation"]["state"] != "idle", (
+                    f"cached phase rebuild erased observation failure: {projection}"
+                )
+                assert projection["last_reconciled_at"] == completed_at, (
+                    "failure advanced completion receipt"
+                )
+                assert projection["reconciliation"].get("failure_reason"), (
+                    "failure lost its cause"
+                )
+                pulsed = projection["engine_pulse_at"] != failed["local_projection"]["engine_pulse_at"]
+                if pulsed and time.monotonic() - started >= 3:
+                    break
+                time.sleep(0.05)
+            assert (
+                projection["engine_pulse_at"]
+                != failed["local_projection"]["engine_pulse_at"]
+            ), "failure stopped engine pulses"
+            inventory_failure_health = native_health()
+            inventory_failure_receipt = assert_fresh_native_health(
+                inventory_failure_health
+            )
+            assert "engine_reconciliation_failed" in inventory_failure_health["reasons"]
+            receipt["inventory_failure_native_health"] = inventory_failure_receipt
+            fail_inventory.write_text("ok\n")
+            request_full_reconciliation()
+            recovered = wait_for(
+                lambda projection: projection.get("generated_at") != frozen
+                and projection.get("reconciliation", {}).get("state") == "idle"
+                and projection.get("last_reconciled_at", "") > completed_at,
+                timeout=90,
+            )
+            assert recovered["daemon_pid"] == child.pid, "recovery replaced the daemon"
+            receipt["failure_preserved_during_phase_rebuild"] = True
+            receipt["recovered_without_restart"] = True
 
             # Keep a writer fd open before hiding only the main database path.
             # A directory at the pathname is unavailable even to uid 0; the

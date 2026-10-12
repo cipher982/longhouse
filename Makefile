@@ -34,6 +34,11 @@ CARGO_ARTIFACT := python3 scripts/build/cargo.py artifact
 # OOM-killed during `make release` v0.1.58 (2026-09-29). Benchmarks and perf
 # targets keep `release`; CARGO_PROFILE=<profile> still overrides.
 ENGINE_TEST_PROFILE := $(or $(CARGO_PROFILE),ci-test)
+# Test-profile engines carry the negative-control seams (engine/src/qa_fault.rs,
+# the process-inventory fault in process_identity.rs); each fires only under its
+# QA environment variable. One feature set for every ci-test build, so the
+# builds below share one artifact instead of overwriting each other's.
+ENGINE_TEST_FEATURES := --features qa-fault-injection
 
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
@@ -436,12 +441,12 @@ test-frontend: ## Frontend unit tests + type-check (ARGS="src/path.test.ts" sele
 
 test-engine: test-engine-omp-helm ## Rust engine tests (~20s)
 	@python3 scripts/build/generate_build_identity.py
-	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE)
+	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES)
 	@# The projection-failure proof (test-engine-projection-failure) spends ~30s
 	@# waiting on a real daemon, nearly idle, and the test harness takes ~40s to
 	@# compile. Overlap them: compile the harness in the background while the
 	@# proof runs, then run the suite with nothing left to build.
-	@$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(ENGINE_TEST_PROFILE) --bins --tests --no-run & harness=$$!; \
+	@$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bins --tests --no-run & harness=$$!; \
 	uv run --no-project python scripts/tests/daemon-projection-failure.test.py --engine "$$( $(CARGO_ARTIFACT) --profile $(ENGINE_TEST_PROFILE) --bin longhouse-engine )" || { status=$$?; wait $$harness; exit $$status; }; \
 	wait $$harness
 	@# --bins is load-bearing: engine/src/longhouse.rs is a second bin
@@ -457,20 +462,20 @@ test-engine: test-engine-omp-helm ## Rust engine tests (~20s)
 	@# took ~9 min on CI; engine/.config/nextest.toml bounds a hung test). A
 	@# harness that vanishes mid-run fails nextest outright, which the old
 	@# completion-summary grep existed to catch.
-	$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(ENGINE_TEST_PROFILE) --bins --tests
+	$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bins --tests
 
 test-engine-omp-helm: ## OMP and Pi Helm extension and Claude mod contract tests
 	@cd engine && bun test assets/longhouse-omp-helm.test.ts assets/longhouse-pi-helm.test.ts assets/claude-mod.test.ts
 
 test-engine-projection-failure: ## Isolated real-daemon failed-observation recovery
 	@python3 scripts/build/generate_build_identity.py
-	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) --bin longhouse-engine
+	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bin longhouse-engine
 	uv run --no-project python scripts/tests/daemon-projection-failure.test.py --engine "$$( $(CARGO_ARTIFACT) --profile $(ENGINE_TEST_PROFILE) --bin longhouse-engine )"
 
 test-engine-single: ## Exact Rust engine unit tests (TEST="module::tests::name ...")
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)
 	@python3 scripts/build/generate_build_identity.py
-	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) --bin longhouse-engine -- $(TEST) --exact --nocapture --test-threads=1
+	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bin longhouse-engine -- $(TEST) --exact --nocapture --test-threads=1
 
 test-engine-focused: test-engine-single test-engine-projection-failure ## Focused native checks sharing one isolated build (TEST required)
 
@@ -585,7 +590,7 @@ test-e2e-onboarding: ## @internal Onboarding browser ring
 
 test-shipper-e2e: ## Shipper pipeline E2E (engine → API → DB)
 	@python3 scripts/build/generate_build_identity.py
-	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE)
+	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES)
 	cd server && CARGO_PROFILE=$(ENGINE_TEST_PROFILE) LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
 		uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
 
