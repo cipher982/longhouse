@@ -163,7 +163,7 @@ def test_console_oracle_fails_closed_on_missing_binding_or_cleanup(receipt_index
     assert lifecycle.console_lifecycle_assertions(observation) == {lifecycle.ASSERTION_ID: False}
 
 
-@pytest.mark.parametrize("variant", [None, lifecycle.UNSUPPORTED_VARIANT, lifecycle.STEER_VARIANTS["codex"]])
+@pytest.mark.parametrize("variant", [None, "interrupt_unsupported", lifecycle.STEER_VARIANTS["codex"]])
 def test_the_live_run_takes_only_the_supported_variant(tmp_path: Path, variant: str | None):
     # Every Console adapter interrupts. A run asked for anything else stops before it reads an argument.
     with pytest.raises(RuntimeError, match="codex requires variant=interrupt_supported"):
@@ -1454,7 +1454,7 @@ def test_steer_cell_is_its_own_factory_invocation():
 
     base = ["--model", "m", "--provider", "codex"]
     steer = lifecycle.STEER_VARIANTS["codex"]
-    assert steer not in (lifecycle.SUPPORTED_VARIANT, lifecycle.UNSUPPORTED_VARIANT)
+    assert steer != lifecycle.SUPPORTED_VARIANT
     assert lifecycle.PRODUCER.parser().parse_args([*base, "--variant", steer]).variant == steer
     assert set(lifecycle.STEER_VARIANTS) == {"codex", "claude", "opencode"}
     for producer in (pi_console_tool_producer, omp_console_producer):

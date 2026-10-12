@@ -86,9 +86,6 @@ ASSERTION_ID = "console_adapter_release_contract_preserved"
 STEER_ASSERTION_ID = "console_turn_steer_preserved"
 STEER_PROVIDERS = frozenset({"codex", "claude", "pi", "omp", "opencode"})
 SUPPORTED_VARIANT = "interrupt_supported"
-# Every Console adapter interrupts, so no cell has this variant, the parser does not take it and nothing here runs
-# it. The name stays while the factory's Console checker still has a branch for the string.
-UNSUPPORTED_VARIANT = "interrupt_unsupported"
 SCENARIO_IDS = tuple(f"{provider}_console_adapter_lifecycle" for provider in PROVIDERS)
 
 
@@ -158,7 +155,7 @@ REGISTRATION = ProducerRegistration(
     # steer step asks for its command in the foreground, as the interrupt step does.
     scenario_revision=23,
     assertion_cells=(
-        # No provider is interrupt_unsupported since Codex gained turn/interrupt.
+        # Every Console adapter interrupts (Codex last, with turn/interrupt), so this is the cell's one variant.
         (ASSERTION_ID, SUPPORTED_VARIANT),
         (STEER_ASSERTION_ID, None),
     ),
