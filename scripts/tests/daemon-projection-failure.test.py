@@ -340,7 +340,12 @@ def exercise(engine):
                         datetime.datetime.now(datetime.timezone.utc).isoformat(),
                     ),
                 )
-            deadline = time.monotonic() + 3
+            # An unchanged status file is rewritten for its clocks every
+            # STATUS_FILE_PULSE_INTERVAL (10 s, engine/src/heartbeat.rs), so
+            # watch the frozen projection until a pulse lands, with margin.
+            started = time.monotonic()
+            deadline = started + 13
+            projection = failed["local_projection"]
             while time.monotonic() < deadline:
                 status = observe()
                 projection = status["local_projection"]
@@ -356,6 +361,9 @@ def exercise(engine):
                 assert projection["reconciliation"].get("failure_reason"), (
                     "failure lost its cause"
                 )
+                pulsed = projection["engine_pulse_at"] != failed["local_projection"]["engine_pulse_at"]
+                if pulsed and time.monotonic() - started >= 3:
+                    break
                 time.sleep(0.05)
             assert (
                 projection["engine_pulse_at"]
