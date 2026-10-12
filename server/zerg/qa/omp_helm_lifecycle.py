@@ -122,14 +122,14 @@ _PROFILE = identity.IdentityProfile(
 # answer. Tests pin that every marker is written by the run.
 REACHED_MARKERS: dict[str, tuple[str, ...]] = {
     "omp_helm_launch_registration": ("channel_binding", "control_identity", "settlement", "completed"),
-    "omp_helm_send_idle": ("controls.send",),
-    "omp_helm_follow_up_native": ("controls.follow_up",),
-    "omp_helm_steer_active": ("controls.steer", "steer_turn_verdict"),
+    "omp_helm_send_idle": ("controls.send", "convergence.send"),
+    "omp_helm_follow_up_native": ("controls.follow_up", "convergence.follow_up", "native_taxonomy"),
+    "omp_helm_steer_active": ("controls.steer", "steer_turn_verdict", "convergence.steer"),
     "omp_helm_abort_native": ("controls.abort", "abort_turn_verdict"),
     "omp_helm_terminate_owned": ("terminate_verdict", "cleanup", "settlement"),
-    "omp_helm_cold_resume_exact_file": ("controls.cold_resume",),
+    "omp_helm_cold_resume_exact_file": ("controls.cold_resume", "convergence.resume_context"),
     "omp_helm_stale_owner_refused": ("controls.stale_owner",),
-    "omp_helm_native_replacement_bound": ("controls.replacement",),
+    "omp_helm_native_replacement_bound": ("controls.replacement", "convergence.replacement"),
 }
 _HOST_CONTROLS = ("send", "follow_up", "steer", "abort", "replacement", "terminate", "final_terminate")
 
