@@ -18,6 +18,7 @@ import pytest
 
 import zerg.qa
 from zerg.qa import live_session_toolkit
+from zerg.qa import producer_shell
 from zerg.qa import provider_native_resume
 
 QA_DIR = pathlib.Path(zerg.qa.__file__).parent
@@ -151,11 +152,12 @@ def test_toolkit_exposes_the_shared_surface_publicly() -> None:
         "wait_state",
         "wait_session_tail",
         "wait_assistant_response_after_marker",
-        "write_json",
         "PtyProcess",
         "TranscriptShipper",
     ):
         assert expected in public, expected
+    # The evidence writer is the producer shell's; the toolkit hands it on under the name its siblings import.
+    assert live_session_toolkit.write_json is producer_shell.write_json
 
 
 def test_toolkit_does_not_import_the_resume_producer() -> None:
@@ -204,19 +206,6 @@ def test_toolkit_is_smaller_than_the_producer_it_was_carved_out_of() -> None:
     """A guard against the producer silently reabsorbing shared mechanics."""
     producer_lines = len((QA_DIR / "provider_native_resume.py").read_text(encoding="utf-8").splitlines())
     assert producer_lines < 2500, "shared live-session mechanics belong in live_session_toolkit"
-
-
-def test_toolkit_write_json_is_atomic() -> None:
-    """Evidence writers must not leave a torn file behind a crash."""
-    source = ast.unparse(
-        next(
-            node
-            for node in ast.parse(TOOLKIT.read_text(encoding="utf-8")).body
-            if isinstance(node, ast.FunctionDef) and node.name == "write_json"
-        )
-    )
-    assert ".tmp" in source
-    assert "replace(path)" in source
 
 
 def test_toolkit_write_json_replaces_atomically(tmp_path: pathlib.Path) -> None:
