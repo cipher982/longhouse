@@ -541,13 +541,16 @@ impl SessionSourceLocation {
         // itself a symlink (or the path has `.`/`..` parts). A session
         // directory whose name matches neither candidate, and that is not a
         // symlink, cannot resolve to either: skip the realpath, which ran
-        // for every retained Helm state on every OMP path job.
+        // for every retained Helm state on every OMP path job. Only a path
+        // already in normal form qualifies: `Path::components` hides a
+        // trailing `/` or `/.`, and lstat through either follows the link.
         let plain = session_dir.components().all(|component| {
             matches!(
                 component,
                 std::path::Component::RootDir | std::path::Component::Normal(_)
             )
-        });
+        }) && session_dir.as_os_str()
+            == session_dir.components().collect::<PathBuf>().as_os_str();
         if plain {
             // macOS volumes are usually case-insensitive and realpath reports
             // the stored case, so names compare ignoring ASCII case; anything
@@ -1027,12 +1030,20 @@ mod tests {
         let other = root.join("longhouse-other");
         std::fs::create_dir_all(&other).unwrap();
         assert!(!location.is_in(&other));
-        // Agreement with the unshortcut definition across all of them.
-        for dir in [&alias, &real, &other] {
+        // Agreement with the unshortcut definition across all of them,
+        // including spellings `Path::components` normalizes away.
+        let slash = PathBuf::from(format!("{}/", alias.display()));
+        let dot = PathBuf::from(format!("{}/.", alias.display()));
+        let doubled = PathBuf::from(format!("{}//{}", root.display(), "alias-with-another-name"));
+        assert!(location.is_in(&slash));
+        assert!(location.is_in(&dot));
+        for dir in [&alias, &real, &other, &slash, &dot, &doubled] {
             assert_eq!(
                 location.is_in(dir),
                 crate::storage_v2_shipper::stable_source_path(dir)
-                    == crate::storage_v2_shipper::stable_source_path(&real)
+                    == crate::storage_v2_shipper::stable_source_path(&real),
+                "{}",
+                dir.display()
             );
         }
     }
