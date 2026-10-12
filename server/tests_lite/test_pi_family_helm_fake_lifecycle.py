@@ -93,6 +93,10 @@ def test_a_whole_lifecycle_holds_every_cell(provider, whole):
     assert f"{module.FAMILY.marker_prefix}_STALE_" in frame_text
     retained = [root / item["retained_source_path"] for item in result["observation"]["sources"]]
     assert retained and not any(frame_text.encode() in path.read_bytes() for path in retained)
+    # The tool calls were counted in a file the run retained, and the record says which and how far into it.
+    taxonomy = result["observation"]["native_taxonomy"]
+    assert root / taxonomy["retained_source_path"] in retained
+    assert 0 < taxonomy["source_end_offset"] <= (root / taxonomy["retained_source_path"]).stat().st_size
     # Every record a cell's step is proven reached by is one the run wrote.
     assert set(module.FAMILY.reached) == set(module.ASSERTIONS)
     reached = reached_only(module.FAMILY.cells(result["observation"]), result["observation"], module.FAMILY.reached)

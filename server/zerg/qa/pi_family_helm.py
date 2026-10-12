@@ -3047,8 +3047,8 @@ class Lifecycle:
                 for child in value:
                     name_retained(child)
 
-        name_retained(self.controls)
-        name_retained(observation["sources"])
+        for records in (self.controls, observation["sources"], observation.get("native_taxonomy")):
+            name_retained(records)
         settlement = observation["settlement"]
         if settlement:
             native_source = str(settlement.get("session_file") or "")

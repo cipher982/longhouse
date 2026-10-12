@@ -58,7 +58,7 @@ REGISTRATION = ProducerRegistration(
     # follow-up cell rests on them being a pair.
     # 26: the row in which OMP records the turn it aborted is in the abort's record (its id, where it is in the
     # file, its stop reason), and the abort cell rests on it.
-    scenario_revision=27,
+    scenario_revision=28,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
