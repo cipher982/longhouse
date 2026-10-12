@@ -2,15 +2,13 @@
 # Promote one explicitly selected release to personal dogfood.
 #
 #   promote-dogfood.sh SHA               canary-qualified: a successful Deploy and Verify canary
-#                                        receipt for SHA, and every code commit since what dogfood
-#                                        serves reviewed (review-gate.sh)
+#                                        receipt for SHA.
 #   promote-dogfood.sh --fast-lane SHA   published: the Publish Runtime Image receipt for SHA is
-#                                        enough, because nothing between what dogfood serves and SHA
-#                                        touches the review blocking list (review-policy.toml). CI,
-#                                        canary, Hosted Live QA and review run in parallel; production
-#                                        still waits for all of them. Exit 3 when the range touches the
-#                                        blocking list (it needs the canary-qualified path), 0 when
-#                                        dogfood already serves SHA. Never moves dogfood backwards.
+#                                        enough only when served..SHA touches no sensitive path in
+#                                        dogfood-sensitive-paths.toml. Auth, migrations, and other
+#                                        sensitive changes always take the canary-qualified path.
+#                                        Exit 3 when the range is sensitive, 0 when dogfood already
+#                                        serves SHA. Never moves dogfood backwards.
 #
 # The Promote Rings workflow (.github/workflows/promote-rings.yml) runs both; see
 # control-plane/docs/specs/release-rings.md "Continuous promotion".
@@ -106,15 +104,15 @@ if [[ "$FAST_LANE" == "1" ]]; then
     echo "Refusing the fast lane: $SHA does not contain what $SUBDOMAIN serves ($served); it never moves dogfood backwards or sideways." >&2
     exit 1
   fi
-  # The guard: david010 holds irreplaceable history, so a range that touches the review blocking
-  # list keeps the canary-qualified, reviewed path. Exit 1 lists commits; 2 is "could not decide".
-  blocking_rc=0
-  python3 "$ROOT/scripts/ops/review_gate.py" --repo "$ROOT" blocking --base "$served" --head "$SHA" >&2 || blocking_rc=$?
-  if [[ "$blocking_rc" == "1" ]]; then
-    echo "Not fast-lane: ${served:0:12}..${SHA:0:12} touches the review blocking list (above); it needs the canary-qualified path (promote-dogfood.sh $SHA)." >&2
+  # david010 holds irreplaceable history, so sensitive paths keep this range on the
+  # canary-qualified path. Exit 1 means sensitive; 2 means the classifier could not decide.
+  sensitive_rc=0
+  python3 "$ROOT/scripts/ops/dogfood_sensitive_paths.py" --repo "$ROOT" check --base "$served" --head "$SHA" >&2 || sensitive_rc=$?
+  if [[ "$sensitive_rc" == "1" ]]; then
+    echo "Not fast-lane: ${served:0:12}..${SHA:0:12} touches sensitive paths (above); it needs the canary-qualified path (promote-dogfood.sh $SHA)." >&2
     exit 3
-  elif [[ "$blocking_rc" != "0" ]]; then
-    echo "Refusing the fast lane: the blocking-list check could not decide (above)." >&2
+  elif [[ "$sensitive_rc" != "0" ]]; then
+    echo "Refusing the fast lane: the sensitive-path check could not decide (above)." >&2
     exit 1
   fi
 
@@ -141,12 +139,8 @@ if [[ "$FAST_LANE" == "1" ]]; then
       --receipt "$receipt_path" \
       --source-sha "$SHA"
   )"
-  qualification_note="published by $PUBLISH_WORKFLOW run $publish_run_id; no blocking-list change since ${served}"
+  qualification_note="published by $PUBLISH_WORKFLOW run $publish_run_id; no sensitive-path change since ${served}"
 else
-  # Every code commit between what dogfood serves now and SHA needs a completed review.
-  . "$ROOT/scripts/lib/review-gate.sh"
-  lh_review_gate_promotion "$SHA" "$HEALTH_URL" >&2
-
   deploy_json="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --commit "$SHA" --status success --limit 20 --json headSha,databaseId,workflowName,event)"
   deploy_run_ids="$(jq -r --arg sha "$SHA" \
     '.[] | select(.headSha == $sha and (.event == "push" or .event == "workflow_dispatch")) | .databaseId' \

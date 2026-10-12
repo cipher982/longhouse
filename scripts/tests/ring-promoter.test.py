@@ -63,16 +63,18 @@ class PromoterTests(unittest.TestCase):
             setattr(promoter, name, fn)
             self.addCleanup(setattr, promoter, name, original)
 
-    def test_a_range_off_the_blocking_list_takes_the_fast_lane(self):
+    def test_a_range_without_sensitive_paths_takes_the_fast_lane(self):
         d = promoter.decide_dogfood(C, dry_run=False)
         self.assertEqual((d["action"], d["lane"], d["target"]), ("promoted", "fast-lane", C))
         self.assertEqual(self.world.calls, [["scripts/ops/promote-dogfood.sh", "--fast-lane", C]])
 
-    def test_a_blocking_range_takes_the_canary_qualified_path_and_waits_for_review(self):
-        self.world.answers["scripts/ops/promote-dogfood.sh --fast-lane"] = (3, "", "touches the review blocking list")
-        self.world.answers["scripts/ops/promote-dogfood.sh"] = (1, "", "review-gate: REFUSED promotion: no review attestation")
+    def test_a_sensitive_range_takes_the_canary_qualified_path_and_waits_for_canary(self):
+        self.world.answers["scripts/ops/promote-dogfood.sh --fast-lane"] = (3, "", "touches sensitive paths")
+        self.world.answers["scripts/ops/promote-dogfood.sh"] = (
+            1, "", "no successful Deploy and Verify run has a usable canary verification receipt"
+        )
         d = promoter.decide_dogfood(C, dry_run=False)
-        self.assertEqual((d["action"], d["lane"], d["waiting_on"]), ("waiting", "canary-qualified", ["review"]))
+        self.assertEqual((d["action"], d["lane"], d["waiting_on"]), ("waiting", "canary-qualified", ["canary"]))
         self.world.answers["scripts/ops/promote-dogfood.sh"] = (0, "Promoted", "")
         d = promoter.decide_dogfood(C, dry_run=False)
         self.assertEqual((d["action"], d["lane"]), ("promoted", "canary-qualified"))

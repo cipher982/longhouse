@@ -42,7 +42,7 @@ SOURCE_REVIEW_NOTE ?= Provider release proof invoked from Makefile.
 BASELINE_ROOT ?= .provider-release-proofs
 PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 
-.PHONY: help check-push-readiness install-push-gate dev dev-demo stop test test-backend-single test-session-state test-session-propagation-sla test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-omp-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-console-served-state-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-runner test-frontend-runner test-e2e test-e2e-core qa-landing-live hero-frames test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-web-api-routes validate-web-layout validate-codemap validate-ios-transcript generate-ios-transcript validate-ws validate-sdk validate-ios-api validate-provider-brands validate-tool-tiers validate-makefile validate-build-identity validate-build-scripts validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-phase-contract generate-phase-contract generate-managed-identity validate-managed-identity validate-qa-scripts validate-ops-scripts validate-managed-provider-contracts validate-coordination-contract validate-provider-capabilities generate-provider-capabilities validate-provider-census validate-provider-factory-plan validate-factory-registration validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary cold-open-probe session-propagation-sla managed-claude-truth-probe managed-claude-poc reprovision deploy-status launch-readiness ship-watch ship release ui-capture ui-gallery ui-sweep test-ui-sweep import-bench landing-screenshots demo-render qa-remote-scene qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e engine-compat test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-managed-launch-lifecycle test-install test-hosted-instance test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down send-timeline
+.PHONY: help check-push-readiness install-precommit-autofix dev dev-demo stop test test-backend-single test-session-state test-session-propagation-sla test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-omp-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-console-served-state-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-runner test-frontend-runner test-e2e test-e2e-core qa-landing-live hero-frames test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-web-api-routes validate-web-layout validate-codemap validate-ios-transcript generate-ios-transcript validate-ws validate-sdk validate-ios-api validate-provider-brands validate-tool-tiers validate-makefile validate-build-identity validate-build-scripts validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-phase-contract generate-phase-contract generate-managed-identity validate-managed-identity validate-qa-scripts validate-ops-scripts validate-managed-provider-contracts validate-coordination-contract validate-provider-capabilities generate-provider-capabilities validate-provider-census validate-provider-factory-plan validate-factory-registration validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary cold-open-probe session-propagation-sla managed-claude-truth-probe managed-claude-poc reprovision deploy-status launch-readiness ship-watch ship release ui-capture ui-gallery ui-sweep test-ui-sweep import-bench landing-screenshots demo-render qa-remote-scene qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e engine-compat test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-managed-launch-lifecycle test-install test-hosted-instance test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down send-timeline
 .PHONY: lint-frontend
 .PHONY: test-opencode-console-steer-live-canary
 .PHONY: test-antigravity-conversation-reset test-claude-conversation-reset test-codex-conversation-reset test-cursor-conversation-reset test-opencode-conversation-reset
@@ -62,7 +62,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: validate-host-link-contract
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
 .PHONY: validate-format validate-legacy-nouns
-.PHONY: validate-review-gate
+.PHONY: validate-dogfood-sensitive-paths validate-precommit-autofix
 .PHONY: validate-verifier-boundary
 .PHONY: provider-release-proof-universal-live-smoke provider-capability-coordination-proof
 .PHONY: test-provider-contract test-isolation
@@ -653,12 +653,11 @@ test-codex-bridge-e2e: ## Codex bridge E2E
 test-hooks: ## Hook outbox pipeline E2E (requires daemon running)
 	@./scripts/qa/test-hooks-e2e.sh
 
-check-push-readiness: ## Before pushing: stale duplicate commits on main, and blocking-list commits without a completed review (~1s)
+check-push-readiness: ## Before pushing: stale duplicate commits on main and verifier-boundary ratchet (~1s)
 	@./scripts/ops/check-push-readiness.sh
 
-install-push-gate: ## Once per clone: the pre-push review gate (which also starts reviews), the self-staging pre-commit shims, and (macOS) the review attester
-	@./scripts/ops/install-push-gate.sh
-	@./scripts/ops/install-review-attester.sh
+install-precommit-autofix: ## Once per clone: self-staging pre-commit shims; retires only its own obsolete pre-push hook
+	@./scripts/ops/install-precommit-autofix.sh
 
 test-ci: ## Broad pre-release CI check (about 7 min in the release guest; not required for every push)
 	$(MAKE) validate
@@ -749,7 +748,8 @@ dogfood-check: ## Show installed local runtime status + local health
 VALIDATE_MEMBERS := \
 	validate-codemap \
 	validate-web-api-routes \
-	validate-review-gate \
+	validate-dogfood-sensitive-paths \
+	validate-precommit-autofix \
 	validate-verifier-boundary \
 	validate-provider-cli-canaries \
 	validate-ops-scripts \
@@ -827,8 +827,10 @@ validate-format: ## @internal Backend formatting is uniform tree-wide
 validate-legacy-nouns: ## @internal Guard against pre-pivot product nouns
 	@python3 scripts/qa/legacy-nouns-check
 
-validate-review-gate: ## @internal Review gate and git hook tests (the landing rule itself runs on the host: check-push-readiness, ship.sh)
-	@python3 scripts/tests/review-gate.test.py
+validate-dogfood-sensitive-paths: ## @internal Dogfood fast-lane sensitive-path classifier contract
+	@python3 scripts/tests/dogfood-sensitive-paths.test.py
+
+validate-precommit-autofix: ## @internal Self-staging pre-commit shim tests
 	@python3 scripts/tests/precommit-autofix.test.py
 
 # The verifier (server/zerg/qa/**, the canary) and the subject import nothing from each other outside the
@@ -1275,7 +1277,7 @@ promote-rings: ## Run the ring promoter now (Promote Rings workflow): dogfood fo
 	@gh workflow run promote-rings.yml -R cipher982/longhouse --ref main && echo "Dispatched; follow it: gh run list -R cipher982/longhouse --workflow promote-rings.yml --limit 1"
 
 .PHONY: promote-dogfood
-promote-dogfood: ## By hand: promote a canary-verified runtime image to the dogfood instance (SHA=<full sha> required; FAST_LANE=1 for a published image with no blocking-list change)
+promote-dogfood: ## By hand: promote an exact image to dogfood (SHA=<full sha> required; FAST_LANE=1 skips canary only when served..SHA has no sensitive paths)
 	@$(PROMOTER_IDLE)
 	@SUBDOMAIN="$(or $(SUBDOMAIN),$(LONGHOUSE_DEFAULT_SUBDOMAIN))" ./scripts/ops/promote-dogfood.sh $(if $(FAST_LANE),--fast-lane,) $(SHA)
 

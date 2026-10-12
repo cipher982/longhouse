@@ -116,7 +116,7 @@ class AutofixTests(unittest.TestCase):
         self.assertEqual(self.autofix("snapshot", pid=1).returncode, 0)  # another process's record
         result = self.fix("a.txt")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("make install-push-gate", result.stderr)
+        self.assertIn("make install-precommit-autofix", result.stderr)
         self.assertEqual((self.dir / "a.txt").read_text(), "HELLO\n")
         self.assertEqual(self.staged("a.txt"), "hello\n", "nothing was staged without the record")
 
@@ -224,10 +224,23 @@ class AutofixTests(unittest.TestCase):
         self.assertEqual(self.git("status", "--short"), "MM a.txt\n", "the other staged edit survives")
 
     def test_the_shims_are_installed_once_per_clone_and_pass_pre_commits_pid(self):
-        installer = (ROOT / "scripts" / "ops" / "install-push-gate.sh").read_text()
+        installer = (ROOT / "scripts" / "ops" / "install-precommit-autofix.sh").read_text()
         self.assertIn("install_shim pre-commit.legacy", installer)
         self.assertIn("install_shim post-commit", installer)
         self.assertIn('LONGHOUSE_AUTOFIX_PID="\\$PPID"', installer)
+
+    def test_installer_retires_only_its_own_obsolete_pre_push_hook(self):
+        hooks = Path(self.git("rev-parse", "--path-format=absolute", "--git-path", "hooks"))
+        pre_push = hooks / "pre-push"
+        pre_push.write_text("#!/bin/sh\n# longhouse-review-gate-pre-push: legacy Longhouse hook\n")
+        installer = ROOT / "scripts" / "ops" / "install-precommit-autofix.sh"
+        subprocess.run(["bash", str(installer)], cwd=self.dir, check=True, capture_output=True, text=True)
+        self.assertFalse(pre_push.exists())
+
+        unrelated = "#!/bin/sh\n# owned by another hook\n"
+        pre_push.write_text(unrelated)
+        subprocess.run(["bash", str(installer)], cwd=self.dir, check=True, capture_output=True, text=True)
+        self.assertEqual(pre_push.read_text(), unrelated)
 
     def test_the_config_never_autofixes_lint(self):
         config = (ROOT / ".pre-commit-config.yaml").read_text()

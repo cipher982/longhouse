@@ -2,19 +2,18 @@
 """Ring promoter: move dogfood and production forward on their own, never backwards.
 
 Run by the Promote Rings workflow (.github/workflows/promote-rings.yml) after every image
-publication, archive, canary, Hosted Live QA and CI completion, every review attestation, and
-Sauron's `longhouse-ring-wake` tick while a ring trails. Each run is stateless: it reads what each ring serves and what main holds, decides,
-and calls the promote scripts, which keep every gate they had.
+publication, archive, canary, Hosted Live QA and CI completion, and Sauron's
+`longhouse-ring-wake` tick while a ring trails. Each run is stateless: it reads what each ring serves
+and what main holds, decides, and calls the promote scripts, which keep every gate they had.
 
   dogfood     target = the newest main commit whose runtime image is published.
-              - target contains what dogfood serves and served..target touches nothing on the
-                review blocking list: `promote-dogfood.sh --fast-lane` (published image is enough;
-                CI, canary, QA and review run in parallel).
-              - otherwise the canary-qualified path, `promote-dogfood.sh target`: a canary receipt for
-                target and a review attestation (review_gate.py "attestations"). Refused means waiting.
+              - target contains what dogfood serves and served..target touches no sensitive path:
+                `promote-dogfood.sh --fast-lane` (published image is enough).
+              - otherwise `promote-dogfood.sh target`: a canary receipt for target is required.
+                Refused means waiting for qualification.
   production  `promote-production.sh` for what dogfood serves, when production serves an ancestor
               of it. The contract is unchanged (dogfood digest, Hosted Live QA, previous-release engine,
-              soak, review); a refusal records which gates it is waiting on.
+              soak, archive); a refusal records which gates it is waiting on.
 
 Every decision is printed as JSON, appended to the job summary, and posted as a GitHub commit
 status (`longhouse/dogfood` on the dogfood target, `longhouse/production` on what dogfood serves),
@@ -44,7 +43,7 @@ DOGFOOD = os.environ.get("SUBDOMAIN") or os.environ.get("LONGHOUSE_DEFAULT_SUBDO
 DOGFOOD_HEALTH = os.environ.get("DOGFOOD_HEALTH_URL") or f"https://{DOGFOOD}.longhouse.ai/api/health"
 PRODUCTION_HEALTH = os.environ.get("DEMO_HEALTH_URL") or "https://longhouse.ai/api/health"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-FAST_LANE_NOT_ALLOWED = 3  # promote-dogfood.sh --fast-lane: the range touches the blocking list
+FAST_LANE_NOT_ALLOWED = 3  # promote-dogfood.sh --fast-lane: the range has sensitive paths
 
 
 def log(message: str) -> None:
@@ -123,22 +122,19 @@ def decide_dogfood(main: str, dry_run: bool) -> dict:
         return {**d, "action": "promoted", "lane": "fast-lane", "elapsed_s": elapsed, "reason": tail(out, 2)}
     if rc != FAST_LANE_NOT_ALLOWED:
         return {**d, "action": "failed", "lane": "fast-lane", "elapsed_s": elapsed, "reason": tail(err)}
-    rc, out, err, elapsed = run_script(["bash", "scripts/ops/promote-dogfood.sh", target],
-                                       {"LONGHOUSE_REVIEW_SOURCE": "attestation"})
+    rc, out, err, elapsed = run_script(["bash", "scripts/ops/promote-dogfood.sh", target])
     if rc == 0:
         return {**d, "action": "promoted", "lane": "canary-qualified", "elapsed_s": elapsed, "reason": tail(out, 2)}
-    # Refusals here are the gates saying "not yet": no canary receipt for target yet (its Deploy and
-    # Verify is still running, or a newer push superseded it) or its review is not attested yet.
+    # A missing canary verification receipt means Deploy and Verify is still running
+    # or a newer push superseded this target.
     waiting = []
-    if "review-gate: REFUSED" in err or "review attestation" in err:
-        waiting.append("review")
     if "canary verification receipt" in err:
         waiting.append("canary")
     if "could not take" in err and "lock" in err:
         waiting.append("lock")
     if waiting:
         return {**d, "action": "waiting", "lane": "canary-qualified", "waiting_on": waiting,
-                "reason": "blocking-list range: " + tail(err, 3)}
+                "reason": "sensitive-path range: " + tail(err, 3)}
     return {**d, "action": "failed", "lane": "canary-qualified", "elapsed_s": elapsed, "reason": tail(err)}
 
 
@@ -154,7 +150,7 @@ def decide_production(dry_run: bool) -> dict:
         return {**d, "action": "refused", "reason": f"production {current[:12]} is not behind {DOGFOOD} {dogfood[:12]}; never backwards"}
     with tempfile.TemporaryDirectory(prefix="ring-promoter-") as receipts:
         argv = ["bash", "scripts/ops/promote-production.sh"] + (["--check"] if dry_run else []) + [dogfood]
-        rc, out, err, elapsed = run_script(argv, {"LONGHOUSE_REVIEW_SOURCE": "attestation", "PROMOTION_RECEIPT_DIR": receipts})
+        rc, out, err, elapsed = run_script(argv, {"PROMOTION_RECEIPT_DIR": receipts})
         saved = sorted(Path(receipts).glob("production-*.json"))
         receipt = {}
         if saved:
@@ -170,8 +166,6 @@ def decide_production(dry_run: bool) -> dict:
     if refused:
         return {**d, "action": "waiting", "waiting_on": sorted(refused), "refusals": refused,
                 "reason": "; ".join(f"{k}: {v}" for k, v in sorted(refused.items()))[:600]}
-    if "review-gate: REFUSED" in err:
-        return {**d, "action": "waiting", "waiting_on": ["review"], "reason": tail(err, 2)}
     if "could not take the production lock" in err:
         return {**d, "action": "waiting", "waiting_on": ["lock"], "reason": tail(err, 2)}
     return {**d, "action": "failed", "elapsed_s": elapsed, "reason": tail(err),

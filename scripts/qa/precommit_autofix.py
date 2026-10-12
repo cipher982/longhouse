@@ -11,7 +11,7 @@ re-stage the result, but only where that is safe:
   when that file had no unstaged changes: otherwise pre-commit's restore of the stash conflicts with
   the fix and aborts. Inside the hook the stash has already hidden them, so `snapshot` records them
   first: it runs as `.git/hooks/pre-commit.legacy`, which pre-commit runs before it stashes anything
-  (installed by scripts/ops/install-push-gate.sh). Its record is trusted only by hooks of the same
+  (installed by scripts/ops/install-precommit-autofix.sh). Its record is trusted only by hooks of the same
   pre-commit process (same parent pid).
 
   fix          the hook: run a fixer, then for each file it changed
@@ -131,7 +131,7 @@ def fix(name: str, cmd: str, ok_exit: set[int], watch: list[str], how: str, file
     unstaged = unstaged_record()
     if unstaged is None:
         print(f"autofix: {name} fixed {', '.join(changed)} in the working tree. Check and `git add` them, then commit "
-              "again (`make install-push-gate` once per clone makes the hook stage such fixes itself).", file=sys.stderr)
+              "again (`make install-precommit-autofix` once per clone makes the hook stage such fixes itself).", file=sys.stderr)
         return 1
     unsafe = [p for p in changed if p in unstaged]
     safe = [p for p in changed if p not in unstaged]

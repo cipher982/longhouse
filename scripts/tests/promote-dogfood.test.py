@@ -23,13 +23,12 @@ class PromotionAuthorizationTests(unittest.TestCase):
         *,
         receipt_available: bool = True,
         receipt_sha: str = SHA,
-        gate_refuses: bool = False,
         final_attempt: int = 1,
         receipt_attempts: tuple[int, ...] = (1,),
         held_by_pid: int | None = None,
         fast_lane: bool = False,
         served: str = "d" * 40,
-        blocking_rc: int = 0,
+        sensitive_rc: int = 0,
         ancestor: bool = True,
     ):
         with tempfile.TemporaryDirectory(prefix="longhouse-promotion-test-") as directory:
@@ -71,15 +70,6 @@ class PromotionAuthorizationTests(unittest.TestCase):
                 'lh_hosted_resolve_instance() { LH_INSTANCE_ID=fixture; }\n'
                 'lh_hosted_reprovision() { printf "%s\\n" "$2" >> "$FIXTURE_ROOT/promotions";'
                 ' ls "$LONGHOUSE_RING_LOCK_DIR" | grep "\\\\.json$" >> "$FIXTURE_ROOT/locks_during" || true; }\n'
-            )
-            # The review gate has its own tests (review-gate.test.py); here it only has to be
-            # asked, with the target and the served-health URL, before anything changes.
-            (library / "review-gate.sh").write_text(
-                'lh_review_gate_promotion() {\n'
-                '  printf "%s %s\\n" "$1" "$2" >> "$FIXTURE_ROOT/gate_calls"\n'
-                '  [[ "$FIXTURE_GATE_REFUSES" != 1 ]] || { echo "review-gate: REFUSED" >&2; return 1; }\n'
-                '  echo "review-gate: promotion OK."\n'  # the real gate reports success on stdout
-                '}\n'
             )
             # External services are isolated; the real receipt verifier and
             # complete promotion entrypoint still make the authorization decision.
@@ -140,10 +130,10 @@ elif name == 'unzip':
     with zipfile.ZipFile(args[1]) as archive:
         sys.stdout.buffer.write(archive.read(args[2]))
 elif name == 'python3':
-    if 'blocking' in args:
-        with open(root/'blocking_calls', 'a') as log:
-            log.write(' '.join(args[args.index('blocking') + 1:]) + '\n')
-        sys.exit(int(os.environ['FIXTURE_BLOCKING']))
+    if args and args[0].endswith('dogfood_sensitive_paths.py'):
+        with open(root/'sensitive_calls', 'a') as log:
+            log.write(f"{args[args.index('--base') + 1]} {args[args.index('--head') + 1]}\n")
+        sys.exit(int(os.environ['FIXTURE_SENSITIVE']))
     if len(args) > 1 and args[1] == 'inspect':
         print(json.dumps({'source_sha':sha,'schema_version':1,'schema_min_reader':1,'schema_max_reader':1}))
     else:
@@ -164,12 +154,11 @@ else:
                 "FIXTURE_FINAL_ATTEMPT": str(final_attempt),
                 "FIXTURE_RECEIPT_ATTEMPTS": ",".join(str(n) for n in receipt_attempts),
                 "FIXTURE_PYTHON": sys.executable,
-                "FIXTURE_GATE_REFUSES": "1" if gate_refuses else "0",
                 "SUBDOMAIN": "fixture-owner",
                 "GH_TOKEN": "fixture-not-a-credential",
                 "LONGHOUSE_RING_LOCK_DIR": str(locks),
                 "FIXTURE_SERVED": served,
-                "FIXTURE_BLOCKING": str(blocking_rc),
+                "FIXTURE_SENSITIVE": str(sensitive_rc),
                 "FIXTURE_ANCESTOR": "1" if ancestor else "0",
             }
             result = subprocess.run(
@@ -180,36 +169,23 @@ else:
                 timeout=20,
             )
             promotions = root / "promotions"
-            gate_calls = root / "gate_calls"
             downloads = root / "downloads"
-            self.gate_calls = gate_calls.read_text().splitlines() if gate_calls.exists() else []
             self.downloaded_artifacts = downloads.read_text().splitlines() if downloads.exists() else []
             during = root / "locks_during"
             self.locks_during = during.read_text().split() if during.exists() else []
-            blocking_calls = root / "blocking_calls"
-            self.blocking_calls = blocking_calls.read_text().splitlines() if blocking_calls.exists() else []
+            sensitive_calls = root / "sensitive_calls"
+            self.sensitive_calls = sensitive_calls.read_text().splitlines() if sensitive_calls.exists() else []
             self.publish_lookups = (root / "publish_lookups").exists()
             self.locks_left = sorted(p.name for p in locks.glob("*.json")) if locks.exists() else []
             events = locks / "events.jsonl"
             self.lock_events = [json.loads(line)["event"] for line in events.read_text().splitlines()] if events.exists() else []
             return result, promotions.read_text().splitlines() if promotions.exists() else []
 
-    def test_manual_canary_receipt_survives_newer_successful_noop(self):
+    def test_canary_qualified_path_uses_its_exact_canary_receipt(self):
         result, promotions = self.run_promotion()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(promotions, [f"ghcr.io/cipher982/longhouse-runtime@{DIGEST}"])
-
-    def test_review_gate_is_asked_for_the_target_against_what_dogfood_serves(self):
-        result, _ = self.run_promotion()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.gate_calls, [f"{SHA} https://fixture-owner.longhouse.ai/api/health"])
-
-    def test_the_gates_success_line_stays_off_stdout(self):
-        # Like promote-production: stdout is for what the script produces, not the gate's chatter.
-        result, _ = self.run_promotion()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("review-gate:", result.stdout)
-        self.assertIn("review-gate: promotion OK.", result.stderr)
+        self.assertEqual(self.sensitive_calls, [])
 
     def test_the_ring_lock_is_held_while_it_promotes_and_released_after(self):
         result, promotions = self.run_promotion()
@@ -221,7 +197,7 @@ else:
     def test_a_promotion_in_flight_refuses_a_second_before_the_gates_run(self):
         result, promotions = self.run_promotion(held_by_pid=os.getpid())
         self.assertEqual(result.returncode, 1)
-        self.assertEqual((promotions, self.gate_calls), ([], []))
+        self.assertEqual((promotions, self.sensitive_calls), ([], []))
         self.assertIn("ring-lock: REFUSED: dogfood-fixture-owner held by", result.stderr)
         self.assertIn("could not take the fixture-owner promotion lock", result.stderr)
         self.assertEqual(self.locks_left, ["dogfood-fixture-owner.json"])
@@ -235,11 +211,6 @@ else:
         self.assertIn("ring-lock: reclaimed dogfood-fixture-owner from", result.stderr)
         self.assertEqual(self.lock_events, ["acquired", "reclaimed", "acquired", "released"])
 
-    def test_an_unreviewed_range_promotes_nothing(self):
-        result, promotions = self.run_promotion(gate_refuses=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(promotions, [])
-        self.assertIn("REFUSED", result.stderr)
 
     def test_receipt_from_an_earlier_attempt_counts_when_the_run_finally_succeeded(self):
         # `gh run rerun --failed` reran only the demo job: the canary receipt was uploaded by
@@ -276,35 +247,34 @@ else:
         self.assertEqual(promotions, [])
 
 
-    # --- the fast lane: a published image, no blocking-list change since what dogfood serves ---
+    # --- the fast lane: published image, no sensitive paths since what dogfood serves ---
 
-    def test_fast_lane_promotes_the_published_image_without_canary_or_review(self):
+    def test_fast_lane_promotes_the_published_image_when_the_range_is_not_sensitive(self):
         result, promotions = self.run_promotion(fast_lane=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(promotions, [f"ghcr.io/cipher982/longhouse-runtime@{DIGEST}"])
-        self.assertEqual(self.gate_calls, [])  # review runs in parallel; production still waits for it
-        self.assertEqual(self.blocking_calls, [f"--base {'d' * 40} --head {SHA}"])
+        self.assertEqual(self.sensitive_calls, [f"{'d' * 40} {SHA}"])
         self.assertEqual(self.downloaded_artifacts, ["300"])  # the publication receipt of the final attempt
         self.assertIn("(fast-lane)", result.stdout)
         self.assertEqual(self.locks_during, ["dogfood-fixture-owner.json"])
         self.assertEqual(self.locks_left, [])
 
-    def test_fast_lane_hands_a_blocking_range_to_the_qualified_path(self):
-        result, promotions = self.run_promotion(fast_lane=True, blocking_rc=1)
+    def test_fast_lane_hands_a_sensitive_range_to_the_qualified_path(self):
+        result, promotions = self.run_promotion(fast_lane=True, sensitive_rc=1)
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertEqual(promotions, [])
         self.assertFalse(self.publish_lookups)
         self.assertIn("needs the canary-qualified path", result.stderr)
 
-    def test_fast_lane_refuses_when_the_guard_cannot_decide(self):
-        result, promotions = self.run_promotion(fast_lane=True, blocking_rc=2)
+    def test_fast_lane_refuses_when_the_classifier_cannot_decide(self):
+        result, promotions = self.run_promotion(fast_lane=True, sensitive_rc=2)
         self.assertEqual((result.returncode, promotions), (1, []))
 
     def test_fast_lane_never_moves_dogfood_backwards_or_sideways(self):
         result, promotions = self.run_promotion(fast_lane=True, ancestor=False)
         self.assertEqual((result.returncode, promotions), (1, []))
         self.assertIn("never moves dogfood backwards", result.stderr)
-        self.assertEqual(self.blocking_calls, [])
+        self.assertEqual(self.sensitive_calls, [])
 
     def test_fast_lane_is_a_no_op_when_dogfood_already_serves_it(self):
         result, promotions = self.run_promotion(fast_lane=True, served=SHA)

@@ -28,7 +28,6 @@ the laptop sleeps. For durability you run the Runtime Host on an always-on box
 ```
 
 ## Core principles
-
 - **`/api/agents/*` is the canonical machine surface.** The browser, CLI, MCP,
   and iOS all sit on top of the same primitives — none is a separate source of
   truth.
@@ -266,16 +265,17 @@ Python modules stay flat by design; services group by file prefix.
 | `server/zerg/auth/`, `server/zerg/middleware/`, `server/zerg/websocket/` | Auth, middleware, WebSocket |
 | `server/tests_lite/` | Backend tests (`make test`) |
 
-### Ship, promotion and review (`scripts/`)
+### Ship and promotion (`scripts/`)
 
 | Path | What |
 | --- | --- |
-| `scripts/ops/review_gate.py`, `scripts/ops/review-policy.toml`, `scripts/lib/review-gate.sh` | Review landing rule: a commit on the blocking list needs a completed `hatch review` receipt. Asked by `make check-push-readiness`, `make ship`, `release.sh`, the pre-push hook (`scripts/ops/install-push-gate.sh`) and both promotions |
-| `scripts/ops/check-push-readiness.sh` | Pre-push check: stale duplicate commits on main, the review rule, the verifier-boundary ratchet |
+| `scripts/ops/dogfood_sensitive_paths.py`, `scripts/ops/dogfood-sensitive-paths.toml` | Dogfood fast-lane classifier: changes matching this path list require canary-qualified promotion; auth and migration paths stay out of the fast lane |
+| `scripts/ops/check-push-readiness.sh` | Pre-push check: stale duplicate commits on main and the verifier-boundary ratchet |
 | `scripts/ci/verifier_boundary.py`, `scripts/ci/verifier-boundary.allow` | Import boundary between the provider factory's verifier (`server/zerg/qa/`) and the code it judges; the allowlist only shrinks; computes the verifier digest |
 | `scripts/ops/ship.sh`, `scripts/ops/ship-monitor.py` | `make ship` and `make ship-watch`: push an exact SHA, wait for its workflows |
-| `scripts/ops/promote-dogfood.sh`, `scripts/ops/promote-production.sh`, `scripts/ops/promotion_gates.py` | Ring promotions; dogfood's fast lane takes a published image when the range is off the blocking list; production promotes the image dogfood serves once its five gates (the OCI archive among them) pass and writes the receipt |
-| `scripts/ops/ring_promoter.py`, `.github/workflows/promote-rings.yml`, `scripts/ops/install-review-attester.sh` | Continuous promotion: the Promote Rings workflow moves dogfood and production through the promote scripts on every relevant event; the review attester posts the review verdict (`review_gate.py attest`) as a commit status it reads |
+| `scripts/ops/promote-dogfood.sh`, `scripts/ops/promote-production.sh`, `scripts/ops/promotion_gates.py` | Ring promotions; dogfood's fast lane takes a published image only when the range matches no sensitive path, otherwise the canary-qualified path; production promotes dogfood's image after its five gates (including the OCI archive) pass |
+| `scripts/ops/ring_promoter.py`, `.github/workflows/promote-rings.yml` | Continuous promotion: Promote Rings reacts to image publication, archive, canary, QA and CI completion, plus the Sauron wake |
+| `scripts/ops/install-precommit-autofix.sh` | Installs the self-staging pre-commit shims and retires only its own obsolete pre-push hook |
 | `scripts/ops/release.sh`, `scripts/ops/release-artifacts.py`, `scripts/ops/launch-readiness.py` | `make release`: bump, validate, push, exact-SHA gates, GitHub release, notarization checks |
 | `scripts/ops/crunch.sh`, `scripts/ops/bench.sh` | Remote executors: heavy Docker-dispatched goals on the crunch VM, iOS build and simulator work on the bench Mac |
 | `scripts/ops/testflight.py`, `scripts/ops/testflight-ship.sh` | `make testflight` and `make testflight-status` (workflow `.github/workflows/ios-testflight.yml`) |

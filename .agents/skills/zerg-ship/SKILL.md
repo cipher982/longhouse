@@ -32,16 +32,16 @@ Do not blur these lanes:
   - `make promote-production [SHA=<full-sha>] [CHECK=1]`: moves every other
     hosted tenant, the new-tenant default and the public demo to the exact
     image dogfood serves. `SHA` is the full 40-character commit and optional
-    (omitted, it means what dogfood serves); `VERSION=` is refused. Four gates
+    (omitted, it means what dogfood serves); `VERSION=` is refused. Five gates
     must pass: dogfood serves that digest, a passed (never superseded) Hosted
     Live QA run of main's workflow file on that SHA, the previous-release
-    engine smoke, and the control plane's soak (none until the first real
-    tenant exists, then 24 h; an unreadable answer refuses). `CHECK=1` prints
-    the receipt and moves nothing. After a halted tenant wave, rerun with
-    `PROMOTION_ATTEMPT=<n+1>`.
-  - Both refuse a range holding non-exempt commits without a completed review
-    receipt or with an unresolved blocking/material finding
-    (`scripts/ops/review_gate.py`, `scripts/ops/review-policy.toml`).
+    engine smoke, the control plane's soak (none until the first real tenant
+    exists, then 24 h; an unreadable answer refuses), and the OCI archive.
+    `CHECK=1` prints the receipt and moves nothing. After a halted tenant wave,
+    rerun with `PROMOTION_ATTEMPT=<n+1>`.
+  - Dogfood's fast lane is only for ranges with no match in
+    `scripts/ops/dogfood-sensitive-paths.toml`; sensitive paths, including
+    authentication and migrations, require the canary-qualified path.
   - No tag or laptop release is involved. The control plane itself is an
     external private service, not shipped here.
 - **CLI/package release** (`make release VERSION=vX.Y.Z`; see
@@ -93,17 +93,15 @@ Before pushing, run `make affected-check BASE=<base-sha>` to see which CI
 filters match the committed and local diff, run focused tests for the changed
 behavior (not `make test-ci` for every edit; a CSS change needs a web proof, not
 backend or engine integration), then `make check-push-readiness` (~1 s). It
-reports stale duplicate commits on `main` (roll forward, never force-push),
-applies the review landing rule, and checks that the verifier/subject import
-allowlist only shrinks (`scripts/ci/verifier_boundary.py`).
+reports stale duplicate commits on `main` (roll forward, never force-push)
+and checks that the verifier/subject import allowlist only shrinks
+(`scripts/ci/verifier_boundary.py`).
 
-The landing rule (text in the workspace AGENTS.md): a commit touching the
-blocking list in `scripts/ops/review-policy.toml` needs a completed review
-receipt first. `make check-push-readiness`, `make ship`, `release.sh` and a
-pre-push hook all ask the same gate. Run `make install-push-gate` once per clone
-so a bare `git push origin HEAD:main` is asked too; the hook blocks only a real
-refusal and lets a gate crash through with the reason printed. Only the owner
-overrides it.
+`make ship` and `release.sh` retain their exact-SHA, CI, verifier-boundary and
+release-readiness checks. External model reviews are optional and are not
+prerequisites for landing, release, dogfood or production promotion. Run
+`make install-precommit-autofix` once per clone to install the self-staging
+pre-commit shims.
 
 ## Background Wait Rule
 
@@ -346,7 +344,7 @@ runtime mutation, do not claim the demo or canary changed.
 ## Definition of Done
 
 - [ ] Affected-change selection and focused behavioral proof passed before push
-- [ ] `make check-push-readiness` passed (review receipt present for blocking-list paths)
+- [ ] `make check-push-readiness` passed (stale-duplicate and verifier-boundary checks)
 - [ ] Runtime/UI launch-surface changes had a matching client/fixture proof
 - [ ] Correct deploy lane(s) used
 - [ ] If local CLI/install behavior changed, a release/upgrade path was handled separately

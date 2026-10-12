@@ -231,10 +231,6 @@ lh_ring_lock_renew 600 "$BUMP_SHA" >/dev/null || {
   exit 1
 }
 git -C "$ROOT" fetch --quiet origin main
-# Landing rule: local commits ahead of origin/main that touch the blocking list
-# (scripts/ops/review-policy.toml) need a completed review before they reach main.
-# A candidate already on origin/main has an empty range.
-python3 "$ROOT/scripts/ops/review_gate.py" --repo "$ROOT" push --base origin/main --head "$BUMP_SHA"
 if git -C "$ROOT" merge-base --is-ancestor "$BUMP_SHA" origin/main; then
   echo "Candidate ${BUMP_SHA:0:10} is already on origin/main; nothing to push."
 # Race-safe: only push if origin/main hasn't moved since the clean check above.

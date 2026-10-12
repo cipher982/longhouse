@@ -1,10 +1,9 @@
 name: Promote Rings
 
 # Continuous promotion (control-plane/docs/specs/release-rings.md "Continuous
-# promotion"): dogfood follows every published runtime image (fast lane when the
-# range touches nothing on the review blocking list, the canary-qualified and
-# reviewed path when it does), and production follows dogfood as soon as the
-# unchanged promote-production contract passes. scripts/ops/ring_promoter.py
+# promotion"): dogfood follows every published runtime image (fast lane when
+# the range matches no sensitive path, canary-qualified when it does), and
+# production follows dogfood as soon as the promote-production contract passes. scripts/ops/ring_promoter.py
 # decides; the promote scripts keep every gate. Each run is stateless, so a run
 # triggered by anything re-reads everything.
 on:
@@ -23,9 +22,6 @@ on:
   # workflow itself as its last step, passing its run id as `after_run`; the
   # `wake` job below waits for that run to complete, because the QA gate
   # accepts only a completed run.
-  # The review attester (review_gate.py attest, on the machine that holds the
-  # receipts) posts `longhouse/review-gate` statuses; the job ignores others.
-  status: {}
   # Catch-all (a soak that elapsed, a lost event, a promoter run that failed):
   # Sauron `longhouse-ring-wake` dispatches this every 10 min while a ring
   # trails and nothing has woken the promoter since a gate run completed. Not a
@@ -89,7 +85,6 @@ jobs:
     if: >-
       !cancelled() && needs.wake.result != 'failure' &&
       github.repository == 'cipher982/longhouse' &&
-      (github.event_name != 'status' || github.event.context == 'longhouse/review-gate') &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: cube-gate
     timeout-minutes: 75

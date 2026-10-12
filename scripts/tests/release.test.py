@@ -161,7 +161,6 @@ elif name == "docker":
 
 LANE_STUBS = {
     # The lane runs whatever the fixture origin holds: the real release.sh and libraries, stubs for the rest.
-    "scripts/ops/review_gate.py": "#!/usr/bin/env python3\n",
     "scripts/ops/launch-readiness.py": "#!/usr/bin/env python3\nimport sys, os\n"
                                        "open(os.environ['FIXTURE_ROOT'] + '/readiness', 'a').write(' '.join(sys.argv[1:3]) + '\\n')\n",
     "Makefile": "test-ci:\n"

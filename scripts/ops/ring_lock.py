@@ -18,12 +18,11 @@ trap. A lock nobody can be holding any more is reclaimable, and the reclaim is l
 Exit 0: done. Exit 1: refused (held by someone else; renew: this token no longer holds it).
 Exit 2: could not decide (bad arguments, unreadable store).
 
-The store is `<git common dir>/ring-locks/` (one JSON file per surface, `events.jsonl` beside it),
-next to the review receipts every promotion already reads, so every worktree and every agent on
-this machine sees the same locks. Promotion is already bound to this machine by the review gate,
-which reads receipts from that same directory; the control plane separately serializes the
-tenant-mutating part of a promotion (idempotency keys, supersede by source order), so a
-promotion started elsewhere cannot corrupt a ring, it can only race the demo pin and the gates.
+The store is `<git common dir>/ring-locks/` (one JSON file per surface, with
+`events.jsonl` beside them), so every worktree and every agent on this machine sees the same locks.
+The control plane separately serializes the tenant-mutating part of a promotion (idempotency keys,
+supersede by source order), so a deployment started elsewhere cannot corrupt tenant state; the
+promotion lock keeps local callers from racing each other.
 TTLs are chosen by the callers from measured durations (scripts/lib/ring-lock.sh and the
 promote/release scripts say which).
 """

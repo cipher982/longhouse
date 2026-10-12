@@ -64,7 +64,7 @@ repos:
       # no unstaged changes, so one `git commit` succeeds instead of failing and
       # sending the author around again. A fixer that errors still fails loudly.
       # Staging needs the pre-commit.legacy/post-commit shims that
-      # `make install-push-gate` installs once per clone; without them a fix is
+      # `make install-precommit-autofix` installs once per clone; without them a fix is
       # left in the working tree and the commit fails, as before. Lint autofix
       # (`ruff --fix`) is deliberately not here: it deletes "unused" imports.
       # require_serial: the fixers `git add`, which must not race on the index.
