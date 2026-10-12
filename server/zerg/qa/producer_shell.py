@@ -102,6 +102,9 @@ def _asks_for_registration(parser: argparse.ArgumentParser, arguments: Sequence[
     takes_value = {option for action in parser._actions if action.nargs != 0 for option in action.option_strings}
     value_next = False
     for argument in arguments:
+        if argument == "--":
+            # Nothing after the separator is an option, whatever it spells.
+            return False
         if value_next:
             value_next = False
         elif argument == "--registration":

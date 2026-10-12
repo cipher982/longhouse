@@ -493,6 +493,11 @@ def test_the_registration_is_asked_for_by_the_flag_and_not_by_a_value_that_spell
     with pytest.raises(SystemExit) as refused:
         _FIXTURE.main(invoke, [*command, "--model", "--registration"])
     assert refused.value.code == 2 and capsys.readouterr().out == "" and not ran
+    # After the separator it is an argument and no option: again the parser's to refuse, with no registration printed.
+    for arguments in ([*command, "--", "--registration"], ["--", "--registration"], [*command, "--model", "--", "--registration"]):
+        with pytest.raises(SystemExit) as refused:
+            _FIXTURE.main(invoke, arguments)
+        assert refused.value.code == 2 and capsys.readouterr().out == "" and not ran
     # A value that spells it is a value, and the producer runs.
     assert _FIXTURE.main(invoke, [*command, "--model=--registration"]) == 0
     assert ran == ["--registration"]
