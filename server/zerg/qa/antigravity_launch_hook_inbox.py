@@ -64,7 +64,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="antigravity.hook_inbox_launch.v1",
     producer_revision=1,
     scenario_id=SCENARIO_ID,
-    scenario_revision=1,
+    # 2: a failure after the binary was identified carries its receipt.
+    scenario_revision=2,
     assertion_cells=((ASSERTION_ID, _AUTHORED_VARIANT),),
     providers=("antigravity",),
     platforms=("linux",),

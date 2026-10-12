@@ -52,7 +52,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=1,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
-    scenario_revision=3,
+    # 4: a run that raised mid-session carries what its wait was waiting on.
+    scenario_revision=4,
     assertion_cells=((ASSERTION_ID, None),),
     providers=PROVIDERS,
     platforms=("linux", "darwin"),
