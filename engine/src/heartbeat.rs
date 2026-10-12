@@ -653,10 +653,27 @@ pub(crate) struct AcknowledgedEvidenceHashes {
     // Fingerprints make per-row probes allocation-free; the full identity key
     // in each bucket keeps fingerprint collisions exact.
     hashes: HashMap<u64, Vec<(EvidenceIdentityKey, String)>>,
+    last_pruned: Option<Instant>,
 }
+
+/// How often acknowledgments of rows that left the projection are dropped.
+///
+/// Pruning hashes every candidate key (~5,000) and ran on every status
+/// build. A stale acknowledgment only orders a row that left and came back
+/// with the same content after changed rows, which the host already holds;
+/// the bound keeps memory proportional to the projection.
+const ACKNOWLEDGED_PRUNE_INTERVAL: Duration = Duration::from_secs(30);
 
 impl AcknowledgedEvidenceHashes {
     pub(crate) fn prune_to_current(&mut self, candidates: &[EvidenceIdentity]) {
+        let acknowledged = self.hashes.values().map(Vec::len).sum::<usize>();
+        let due = self
+            .last_pruned
+            .is_none_or(|at| at.elapsed() >= ACKNOWLEDGED_PRUNE_INTERVAL);
+        if !due && acknowledged <= candidates.len().saturating_mul(2) {
+            return;
+        }
+        self.last_pruned = Some(Instant::now());
         let current = candidates
             .iter()
             .map(evidence_identity_key_ref)

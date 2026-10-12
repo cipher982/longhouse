@@ -222,13 +222,13 @@ enum EpochProgressRead {
 
 /// How old a cached epoch aggregate may be for [`HistoryImportSnapshot::load_recent`].
 ///
-/// The aggregate joins every current source epoch with its durable lane
-/// (~35 ms at 18k epochs on cinder) and the projection rebuilt it on every
-/// path-job and phase change: about 2-3 times a second during an active
-/// session, the largest single cost of the build. It feeds progress counters
-/// only; the periodic managed observation scan rebuilds the projection at
-/// least every 5 s, so a stale count is replaced within ~7 s at worst.
-pub const EPOCH_PROGRESS_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(2);
+/// The aggregate joins every current source epoch with its durable lane.
+/// Each status build opens its own connection, so the join reads every page
+/// cold (pread-bound; still the largest piece of a build on cinder at a 2 s
+/// age, 2026-10-12). It feeds progress counters and the importing/current
+/// label only, so ten seconds of lag is invisible next to an import, and the
+/// periodic managed observation scan keeps rebuilding within that horizon.
+pub const EPOCH_PROGRESS_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(10);
 
 type EpochProgressByProvider = BTreeMap<String, EpochProgress>;
 
