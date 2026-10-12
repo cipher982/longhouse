@@ -403,7 +403,7 @@ test.describe("Sessions Page", () => {
       searchPayload.sessions?.[0]?.head?.match_event_id ??
         searchPayload.sessions?.[0]?.match_event_id,
     ).toBeTruthy();
-    await expect(page.getByText("1 results", { exact: true })).toBeVisible();
+    await expect(page.getByText("1 result", { exact: true })).toBeVisible();
 
     const rows = page.getByTestId("session-row");
     await expect(rows).toHaveCount(1);
