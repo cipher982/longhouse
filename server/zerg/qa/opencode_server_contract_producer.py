@@ -56,15 +56,13 @@ mapping, not a gap like the sibling turn-boundary producer's.
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import sys
 from pathlib import Path
 from typing import Any
 
 from zerg.qa import opencode_server_qualification
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.services.provider_capability_proof import AssertionOutcome
@@ -73,7 +71,9 @@ REGISTRATION = ProducerRegistration(
     producer_id="opencode.server_contract.v1",
     producer_revision=1,
     scenario_id="opencode_server_contract",
-    scenario_revision=1,
+    # 2: the status is the assertion map's, and an unexpected assertion set
+    # leaves a typed failure instead of no result.
+    scenario_revision=2,
     # Neither assertion declares a "variant" key in the schema, so both
     # authored variants are None -- see the sibling turn-boundary producer's
     # REGISTRATION comment for why that is the correct value to match
@@ -123,10 +123,13 @@ REGISTRATION = ProducerRegistration(
 _KNOWN_ASSERTION_IDS = tuple(assertion_id for assertion_id, _variant in REGISTRATION.assertion_cells)
 
 
-def _write_json(path: Path, payload: object) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    temporary.replace(path)
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="direct_server_contract_result",
+    failure_code="opencode_server_contract_failed",
+    needs=("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin"),
+    binaries=(("provider_bin", "opencode_binary_missing"),),
+)
 
 
 def requested_assertion_id(variant: str) -> str:
@@ -184,116 +187,67 @@ def _no_orphan_opencode_server_processes(provider_bin: Path) -> bool:
 
 
 def run_server_contract(args: argparse.Namespace) -> dict[str, Any]:
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
-    provider_receipt = {
-        "path": str(args.provider_bin),
-        "sha256": sha256_file(args.provider_bin),
-    }
-    _write_json(root / "provider-binary-receipt.json", provider_receipt)
+    def body(run: Run) -> None:
+        # The key this call ran under names the assertion it was asked for; the
+        # result's own variant is the authored one, which neither cell has.
+        run.fields["invoked_with_execution_variant"] = args.variant
+        provider_receipt = {"path": str(args.provider_bin), "sha256": sha256_file(args.provider_bin)}
+        run.write("provider-binary-receipt.json", provider_receipt)
+        run.fields["provider_binary"] = provider_receipt
 
-    target_assertion_id = requested_assertion_id(args.variant)
+        target_assertion_id = requested_assertion_id(args.variant)
 
-    canary_evidence_root = root / "provider-live-canary"
-    observation_payload, semantic_assertions, _secrets = opencode_server_qualification._execute(args.provider_bin, canary_evidence_root)
-    _write_json(root / "provider-live-canary-artifact.json", observation_payload)
+        observation_payload, semantic_assertions, _secrets = opencode_server_qualification._execute(
+            args.provider_bin, run.root / "provider-live-canary"
+        )
+        run.write("provider-live-canary-artifact.json", observation_payload)
 
-    outcomes = {item.assertion_id: item.outcome for item in semantic_assertions}
-    assertions = {assertion_id: (outcome is AssertionOutcome.PASS) for assertion_id, outcome in outcomes.items()}
-    if set(assertions) != set(_KNOWN_ASSERTION_IDS):
-        raise RuntimeError(f"opencode_server_contract_oracle returned an unexpected assertion set: {sorted(assertions)}")
+        outcomes = {item.assertion_id: item.outcome for item in semantic_assertions}
+        assertions = {assertion_id: (outcome is AssertionOutcome.PASS) for assertion_id, outcome in outcomes.items()}
+        if set(assertions) != set(_KNOWN_ASSERTION_IDS):
+            raise RuntimeError(f"opencode_server_contract_oracle returned an unexpected assertion set: {sorted(assertions)}")
 
-    process_clean = _no_orphan_opencode_server_processes(args.provider_bin)
-    cleanup_receipt = {
-        "schema_version": 1,
-        "artifact_kind": "opencode_server_cleanup_receipt",
-        "status": "pass" if process_clean else "fail",
-        "orphan_count": 0 if process_clean else 1,
-        "required_cleanup": {
+        process_clean = _no_orphan_opencode_server_processes(args.provider_bin)
+        cleanup_receipt = {
+            "schema_version": 1,
+            "artifact_kind": "opencode_server_cleanup_receipt",
+            "status": "pass" if process_clean else "fail",
+            "orphan_count": 0 if process_clean else 1,
+            "required_cleanup": {
+                "opencode_server_process_exited": process_clean,
+                "no_orphan_provider_processes": process_clean,
+            },
             "opencode_server_process_exited": process_clean,
             "no_orphan_provider_processes": process_clean,
-        },
-        "opencode_server_process_exited": process_clean,
-        "no_orphan_provider_processes": process_clean,
-        "method": "run_opencode_live_canary_finally_stop_process_group_plus_independent_proc_scan",
-    }
-    _write_json(root / "cleanup-receipt.json", cleanup_receipt)
+            "method": "run_opencode_live_canary_finally_stop_process_group_plus_independent_proc_scan",
+        }
+        run.write("cleanup-receipt.json", cleanup_receipt)
+        run.write(
+            "server-contract-receipt.json",
+            {
+                "requested_assertion_id": target_assertion_id,
+                "outcomes": {assertion_id: outcome.value for assertion_id, outcome in outcomes.items()},
+                "canary_statuses": {
+                    name: (row or {}).get("status")
+                    for name, row in dict((observation_payload.get("provider_live_canary") or {}).get("canaries") or {}).items()
+                },
+            },
+        )
+        run.observation = {
+            "provider": "opencode",
+            "requested_assertion_id": target_assertion_id,
+            **observation_payload,
+            **cleanup_receipt,
+        }
+        run.assertions = assertions
 
-    server_contract_receipt = {
-        "requested_assertion_id": target_assertion_id,
-        "outcomes": {assertion_id: outcome.value for assertion_id, outcome in outcomes.items()},
-        "canary_statuses": {
-            name: (row or {}).get("status")
-            for name, row in dict((observation_payload.get("provider_live_canary") or {}).get("canaries") or {}).items()
-        },
-    }
-    _write_json(root / "server-contract-receipt.json", server_contract_receipt)
-
-    observation = {
-        "provider": "opencode",
-        "requested_assertion_id": target_assertion_id,
-        **observation_payload,
-        **cleanup_receipt,
-    }
-
-    result: dict[str, Any] = {
-        "schema_version": 1,
-        "artifact_kind": "direct_server_contract_result",
-        "producer": REGISTRATION.to_dict(),
-        "provider": "opencode",
-        # Neither cell has an authored variant (see REGISTRATION comment);
-        # this must equal the compiled command's "variant" field, not the
-        # synthetic --variant execution key this process was invoked with.
-        "variant": None,
-        "scenario_id": REGISTRATION.scenario_id,
-        "scenario_revision": REGISTRATION.scenario_revision,
-        "evidence_class": "live_no_token",
-        "generated_at": now(),
-        "status": "pass" if assertions[target_assertion_id] else "fail",
-        "observation": observation,
-        "assertions": assertions,
-        "invoked_with_execution_variant": args.variant,
-        "provider_binary": provider_receipt,
-        "artifact_manifest": [],
-    }
-    result["artifact_manifest"] = artifact_manifest(root)
-    _write_json(root / "result.json", result)
-    return result
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    # No authored variant exists for either cell; the sandbox still passes
-    # the synthetic execution-variant key naming which assertion_id this
-    # invocation must prove -- see requested_assertion_id().
-    parser.add_argument("--variant", required=True)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--engine", required=True, type=Path)
-    parser.add_argument("--longhouse-cli", required=True, type=Path)
-    parser.add_argument("--provider-bin", required=True, type=Path)
-    parser.add_argument("--registration", action="store_true")
-    return parser
+    return PRODUCER.execute(args.evidence_root, body)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    # --engine and --repo-root are accepted (and required) to match this
-    # producer registry's uniform native-producer calling convention (see
-    # provider_factory/assurance.py's execute_retained_plan), but this
-    # scenario's real work -- opencode_server_qualification._execute -- only
-    # needs the provider binary; the Longhouse engine and repo checkout are
-    # not otherwise exercised by this specific contract.
-    if not args.provider_bin.is_file() or not os.access(args.provider_bin, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "opencode_binary_missing"}))
-        return 2
-    result = run_server_contract(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    # --engine and --repo-root are part of the envelope every producer is
+    # passed; this contract exercises only the provider binary.
+    return PRODUCER.main(run_server_contract, argv)
 
 
 if __name__ == "__main__":

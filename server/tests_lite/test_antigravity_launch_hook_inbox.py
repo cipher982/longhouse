@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from zerg.qa import antigravity_launch_hook_inbox
+from zerg.qa import producer_shell
 from zerg.qa.provider_semantic_qualification import SemanticAssertion
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
@@ -67,7 +68,7 @@ def _run_args(
     provider_bin: Path,
     variant: str = "cell:antigravity:hook_inbox_contract_preserved:antigravity_hook_inbox",
 ):
-    return antigravity_launch_hook_inbox._parser().parse_args(
+    return antigravity_launch_hook_inbox.PRODUCER.parser().parse_args(
         [
             "--variant",
             variant,
@@ -157,7 +158,7 @@ def test_a_passing_verdict_followed_by_a_late_failure_is_a_typed_harness_failure
     binary = _fake_binary(tmp_path)
     evidence_root = tmp_path / "evidence"
     args = _run_args(tmp_path, evidence_root=evidence_root, provider_bin=binary)
-    real_write = antigravity_launch_hook_inbox._write_json
+    real_write = producer_shell.write_json
     result_writes = {"count": 0}
 
     def write_json_failing_once_on_result(path: Path, payload: object) -> None:
@@ -167,7 +168,7 @@ def test_a_passing_verdict_followed_by_a_late_failure_is_a_typed_harness_failure
                 raise OSError("evidence volume full")
         real_write(path, payload)
 
-    monkeypatch.setattr(antigravity_launch_hook_inbox, "_write_json", write_json_failing_once_on_result)
+    monkeypatch.setattr(producer_shell, "write_json", write_json_failing_once_on_result)
 
     result = antigravity_launch_hook_inbox.run_hook_inbox_launch(args)
 

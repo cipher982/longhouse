@@ -171,37 +171,45 @@ def _install_fakes(
 
 
 @pytest.mark.parametrize(
-    "assertion_id,launch_passes,reattach_passes,expected_status",
+    "assertion_id,launch_passes,reattach_passes,cell_holds",
     [
-        ("serve_session_contract_preserved", True, True, "pass"),
-        ("serve_session_contract_preserved", True, False, "pass"),
-        ("process_restart_reattach_preserved", True, False, "fail"),
-        ("process_restart_reattach_preserved", True, True, "pass"),
+        ("serve_session_contract_preserved", True, True, True),
+        ("serve_session_contract_preserved", True, False, True),
+        ("process_restart_reattach_preserved", True, False, False),
+        ("process_restart_reattach_preserved", True, True, True),
     ],
 )
-def test_run_server_contract_reports_status_for_the_requested_cell_independently(
+def test_run_server_contract_reports_each_cell_by_its_own_assertion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     assertion_id: str,
     launch_passes: bool,
     reattach_passes: bool,
-    expected_status: str,
+    cell_holds: bool,
 ) -> None:
-    """One shared run must not let the other assertion's outcome leak into this cell's status."""
+    """One shared run answers each cell by its own assertion; the status is the whole map's, as the factory checks it.
+
+    The status used to follow the requested assertion alone, so a run whose
+    sibling failed said ``pass`` beside a False and the factory refused it as
+    contradicting its assertion map.
+    """
+
+    from tests_lite._factory_envelope import assert_result_conforms
 
     _install_fakes(monkeypatch, tmp_path, launch_passes=launch_passes, reattach_passes=reattach_passes)
     args = _args(tmp_path, variant=f"cell:opencode:{assertion_id}:opencode_server_contract")
 
     result = m.run_server_contract(args)
 
-    assert result["status"] == expected_status
+    assert result["status"] == ("pass" if launch_passes and reattach_passes else "fail")
+    assert_result_conforms(m, result, variant=args.variant)
     assert result["provider"] == "opencode"
     assert result["variant"] is None
     assert result["scenario_id"] == m.REGISTRATION.scenario_id
     assert result["scenario_revision"] == m.REGISTRATION.scenario_revision
     assert result["evidence_class"] == "live_no_token"
     assert result["producer"]["producer_id"] == m.REGISTRATION.producer_id
-    assert result["assertions"][assertion_id] is (expected_status == "pass")
+    assert result["assertions"][assertion_id] is cell_holds
     assert isinstance(result["observation"], dict)
     assert isinstance(result["artifact_manifest"], list)
     assert result["artifact_manifest"]
@@ -241,8 +249,10 @@ def test_run_server_contract_rejects_an_unexpected_assertion_set(tmp_path: Path,
     monkeypatch.setattr(m.opencode_server_qualification, "_execute", fake_execute)
     args = _args(tmp_path, variant="cell:opencode:serve_session_contract_preserved:opencode_server_contract")
 
-    with pytest.raises(RuntimeError, match="unexpected assertion set"):
-        m.run_server_contract(args)
+    # The run raised nothing typed before the shell; it now leaves a typed failure artifact with the cause.
+    result = m.run_server_contract(args)
+    assert (result["status"], result["failure_code"]) == ("fail", "opencode_server_contract_failed")
+    assert "unexpected assertion set" in result["error"] and "assertions" not in result
 
 
 def test_main_requires_the_provider_binary_to_exist(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
-import sys
 import time
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
-from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import require_disposable_runtime
-from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
 
 ASSERTION_ID = "responsive_human_only_projection"
@@ -204,66 +200,36 @@ def run_live_workspace_suggestions_oracle(*, evidence_root: Path) -> dict[str, A
     }
 
 
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="longhouse_workspace_suggestions_live_result",
+    failure_code="workspace_suggestions_live_failed",
+    variant_required=False,
+)
+
+
 def run(evidence_root: Path) -> dict[str, Any]:
-    try:
+    def body(run: Run) -> None:
+        # A transport or setup failure raises out of the oracle: that is not
+        # evidence the assertion is false, and leaves the verdict unknown.
         oracle = run_live_workspace_suggestions_oracle(evidence_root=evidence_root)
-        coverage_available = oracle["coverage_available"]
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "longhouse_workspace_suggestions_live_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": None,
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "status": "pass" if oracle["passed"] is True else "fail" if coverage_available else "blocked",
-            "observation": oracle["observation"],
-            "assertions": {ASSERTION_ID: bool(oracle["passed"])} if coverage_available else {},
-        }
-        if not coverage_available:
-            result["failure_code"] = "human_workspace_prerequisite_unavailable"
-            result["error"] = "No human workspace was available to exercise the positive projection path"
-    except Exception as exc:  # noqa: BLE001 - typed failure evidence is the producer contract
-        evidence_root.mkdir(parents=True, exist_ok=True)
-        if not (evidence_root / "cleanup-receipt.json").exists():
-            _write_json(
-                evidence_root / "cleanup-receipt.json",
-                {"status": "fail", "orphan_count": 0, "owned_process_count": 0, "error_type": type(exc).__name__},
+        run.observation = oracle["observation"]
+        run.assertions = {ASSERTION_ID: bool(oracle["passed"])}
+        if not oracle["coverage_available"]:
+            run.block(
+                "human_workspace_prerequisite_unavailable", "No human workspace was available to exercise the positive projection path"
             )
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "longhouse_workspace_suggestions_live_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": None,
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "status": "fail",
-            "failure_code": "workspace_suggestions_live_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-        # Transport/setup failure is not evidence that the Longhouse assertion
-        # is false: a typed harness failure leaves the product verdict unknown.
-        settle_failed_result(result, observation=None, assertions={})
-    result["generated_at"] = datetime.now(UTC).isoformat()
-    result["artifact_manifest"] = artifact_manifest(evidence_root)
-    _write_json(evidence_root / "result.json", result)
-    return result
+
+    return PRODUCER.execute(
+        evidence_root,
+        body,
+        creates_root=False,
+        failure_cleanup={"status": "fail", "orphan_count": 0, "owned_process_count": 0},
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    args = parser.parse_args(arguments)
-    result = run(args.evidence_root)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result["status"] == "pass" else 1
+    return PRODUCER.main(lambda args: run(args.evidence_root), argv)
 
 
 if __name__ == "__main__":

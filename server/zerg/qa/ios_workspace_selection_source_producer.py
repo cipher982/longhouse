@@ -9,20 +9,16 @@ the expected brace depth.  A stale unit test cannot satisfy this assertion.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import re
-import sys
 from dataclasses import dataclass
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from typing import Callable
 
-from zerg.qa.failed_results import settle_failed_result
-from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
 
 SCENARIO_ID = "ios_workspace_selection_source_contract"
@@ -383,70 +379,29 @@ def run_ios_workspace_selection_source_oracle(*, evidence_root: Path, repo_root:
     return observation
 
 
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="longhouse_ios_workspace_selection_source_result",
+    failure_code="ios_workspace_selection_source_contract_failed",
+    variant_required=False,
+)
+
+
 def run(evidence_root: Path, *, repo_root: Path | None = None) -> dict[str, Any]:
-    try:
-        observation = run_ios_workspace_selection_source_oracle(
-            evidence_root=evidence_root,
-            repo_root=repo_root,
-        )
-        passed = bool(observation["passed"])
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "longhouse_ios_workspace_selection_source_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": None,
-            "variant": None,
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "hermetic",
-            "status": "pass" if passed else "fail",
-            "observation": observation,
-            "assertions": {ASSERTION_ID: passed},
-        }
-    except Exception as exc:  # noqa: BLE001 - typed failure evidence is the producer contract
-        evidence_root.mkdir(parents=True, exist_ok=True)
-        if not (evidence_root / "cleanup-receipt.json").exists():
-            _write_json(
-                evidence_root / "cleanup-receipt.json",
-                {
-                    "status": "pass",
-                    "owned_process_count": 0,
-                    "orphan_count": 0,
-                    "error_type": type(exc).__name__,
-                },
-            )
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "longhouse_ios_workspace_selection_source_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": None,
-            "variant": None,
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "hermetic",
-            "status": "fail",
-            "failure_code": "ios_workspace_selection_source_contract_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-        # The run stopped before the oracle returned: no verdict was reached.
-        settle_failed_result(result, observation=None, assertions={})
-    result["generated_at"] = datetime.now(UTC).isoformat()
-    result["artifact_manifest"] = artifact_manifest(evidence_root)
-    _write_json(evidence_root / "result.json", result)
-    return result
+    def body(run: Run) -> None:
+        run.observation = run_ios_workspace_selection_source_oracle(evidence_root=evidence_root, repo_root=repo_root)
+        run.assertions = {ASSERTION_ID: bool(run.observation["passed"])}
+
+    return PRODUCER.execute(
+        evidence_root,
+        body,
+        creates_root=False,
+        failure_cleanup={"status": "pass", "owned_process_count": 0, "orphan_count": 0},
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    args = parser.parse_args(arguments)
-    result = run(args.evidence_root)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result["status"] == "pass" else 1
+    return PRODUCER.main(lambda args: run(args.evidence_root), argv)
 
 
 if __name__ == "__main__":

@@ -4100,7 +4100,7 @@ def test_antigravity_policy_proof_fails_closed_when_contract_enables_resume(
     )
 
     result = json.loads((evidence / "result.json").read_text())
-    assert exit_code == 0
-    assert result["status"] == "fail"
+    assert exit_code == 1
+    assert result["status"] == "fail" and not any(result["assertions"].values())
     source = json.loads((evidence / "policy-source-receipt.json").read_text())
     assert source["scenario_result"]["failure_code"] == "resume_unsupported_oracle_failed"

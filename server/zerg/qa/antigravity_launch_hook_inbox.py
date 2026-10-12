@@ -39,21 +39,15 @@ avoid repeating.
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import sys
-from pathlib import Path
 from typing import Any
 
 from zerg.qa import antigravity_hook_qualification
 from zerg.qa import provider_release_semantic_oracles as semantic_oracles
 from zerg.qa.antigravity_hook_qualification import _NO_TOKEN_REQUIRED_CANARIES
-from zerg.qa.failed_results import settle_failed_result
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
-from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_capability_proof import AssertionOutcome
 
 SCENARIO_ID = "antigravity_hook_inbox"
@@ -103,29 +97,13 @@ REGISTRATION = ProducerRegistration(
 )
 
 
-def _write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def _base_result(*, status: str, execution_variant: str | None) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "artifact_kind": "direct_antigravity_launch_hook_inbox_result",
-        "producer": REGISTRATION.to_dict(),
-        "provider": "antigravity",
-        # Must equal the *authored* schema variant (None here), not the
-        # derived per-execution key the sandbox passes as --variant.
-        "variant": _AUTHORED_VARIANT,
-        "scenario_id": SCENARIO_ID,
-        "scenario_revision": REGISTRATION.scenario_revision,
-        "evidence_class": "live_no_token",
-        "generated_at": now(),
-        "status": status,
-        "execution_variant": execution_variant,
-    }
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="direct_antigravity_launch_hook_inbox_result",
+    failure_code="antigravity_launch_hook_inbox_failed",
+    needs=("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin"),
+    binaries=(("provider_bin", "antigravity_binary_missing"),),
+)
 
 
 def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
@@ -141,22 +119,15 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
     cell.
     """
 
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
-    binary = args.provider_bin.resolve()
-    provider_receipt = {
-        "path": str(binary),
-        "sha256": sha256_file(binary),
-    }
-    _write_json(root / "provider-binary-receipt.json", provider_receipt)
+    def body(run: Run) -> None:
+        # The authored variant (none) is what the result carries; the key this call ran under is kept apart.
+        run.fields["execution_variant"] = args.variant
+        binary = args.provider_bin.resolve()
+        provider_receipt = {"path": str(binary), "sha256": sha256_file(binary)}
+        run.write("provider-binary-receipt.json", provider_receipt)
 
-    # Evidence reached before a later step failed; a verdict stays a verdict.
-    observation: dict[str, Any] | None = None
-    passed = False
-    try:
         declared_assertion_ids = semantic_oracles.assertions_for(SCENARIO_ID)
-        canary_root = root / "semantic-evidence"
-        status_dict, assertions, _secrets = antigravity_hook_qualification._execute(binary, canary_root)
+        status_dict, assertions, _secrets = antigravity_hook_qualification._execute(binary, run.root / "semantic-evidence")
         observed_assertion_ids = tuple(item.assertion_id for item in assertions)
         if observed_assertion_ids != declared_assertion_ids:
             raise RuntimeError(
@@ -171,12 +142,12 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
 
         no_token_result = dict(status_dict.get("no_token_canary") or {})
         canaries = no_token_result.get("canaries") or {}
-        _write_json(root / "no-token-canary-result.json", no_token_result)
+        run.write("no-token-canary-result.json", no_token_result)
 
         assertion_summary = {
             item.assertion_id: {"outcome": item.outcome.value, "evidence_class": item.evidence_class.value} for item in assertions
         }
-        _write_json(root / "hook-inbox-assertions.json", assertion_summary)
+        run.write("hook-inbox-assertions.json", assertion_summary)
 
         # Every canary this scenario runs completes synchronously (short-lived
         # `agy --help`/`agy plugin ...` subprocess invocations and direct hook
@@ -190,9 +161,9 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
             "required_cleanup": {"no_orphan_provider_processes": True},
             "verified": True,
         }
-        _write_json(root / "cleanup-receipt.json", cleanup)
+        run.write("cleanup-receipt.json", cleanup)
 
-        observation = {
+        run.observation = {
             "hook_inbox_contract_preserved": passed,
             "assertion_outcome": hook_inbox_assertion.outcome.value,
             "canary_group": list(_NO_TOKEN_REQUIRED_CANARIES),
@@ -209,60 +180,14 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
             "real_print_injection_observed_outcome": assertion_summary.get("real_print_injection_observed", {}).get("outcome"),
             "no_orphan_provider_processes": cleanup["orphan_count"] == 0,
         }
+        run.assertions = {ASSERTION_ID: passed}
+        run.fields["provider_binary"] = provider_receipt
 
-        result: dict[str, Any] = {
-            **_base_result(status="pass" if passed else "fail", execution_variant=args.variant),
-            "observation": observation,
-            "assertions": {ASSERTION_ID: passed},
-            "provider_binary": provider_receipt,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        _write_json(root / "result.json", result)
-        return result
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-        failure = {
-            **_base_result(status="fail", execution_variant=getattr(args, "variant", None)),
-            "failure_code": "antigravity_launch_hook_inbox_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            "artifact_manifest": artifact_manifest(root),
-        }
-        # Keeps the verdict only if the run reached a failing one; otherwise a
-        # typed harness failure with what it observed as partial_observation.
-        settle_failed_result(failure, observation=observation, assertions={ASSERTION_ID: passed})
-        _write_json(root / "result.json", failure)
-        return failure
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    # Not choices-constrained: the trusted compiler derives this value as
-    # execution_variant_key(...), which falls back to
-    # f"cell:{provider}:{assertion_id}:{scenario_id}" whenever the schema
-    # declares no explicit variant (true for this cell today). It is a
-    # per-execution tracking/pathing key, not a small enumerated set.
-    parser.add_argument("--variant", required=True)
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--engine", required=True, type=Path)
-    parser.add_argument("--longhouse-cli", required=True, type=Path)
-    parser.add_argument("--provider-bin", required=True, type=Path)
-    parser.add_argument("--registration", action="store_true")
-    return parser
+    return PRODUCER.execute(args.evidence_root, body, variant=_AUTHORED_VARIANT)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    if not args.provider_bin.is_file() or not os.access(args.provider_bin, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "antigravity_binary_missing"}))
-        return 2
-    result = run_hook_inbox_launch(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_hook_inbox_launch, argv)
 
 
 if __name__ == "__main__":

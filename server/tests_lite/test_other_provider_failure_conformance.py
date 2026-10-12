@@ -165,9 +165,11 @@ def test_antigravity_resume_policy_persists_contract_failure_without_spawn(tmp_p
     )
 
     printed = json.loads(capsys.readouterr().out)
-    assert exit_code == 0  # This atomic policy producer reports assertion status in result.json.
+    # A contract that still reattaches has not disabled resume: the assertion is what fails,
+    # so the status and the assertion map agree, and the exit status follows the verdict.
+    assert exit_code == 1
     assert printed["status"] == "fail"
-    assert printed["assertions"]["unsupported_resume_is_typed_and_side_effect_free"] is True
+    assert printed["assertions"]["unsupported_resume_is_typed_and_side_effect_free"] is False
     assert printed["observation"]["provider_spawn_count"] == 0
     assert json.loads((evidence / "cleanup-receipt.json").read_text())["orphan_count"] == 0
     assert json.loads((evidence / "result.json").read_text()) == printed
