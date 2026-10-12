@@ -16,6 +16,8 @@ private func factsJSON(
     validUntil: String? = nil,
     controlConnection: String = "connected",
     sendInput: String = "available",
+    sendInputReason: String? = nil,
+    reattachReason: String? = "not_needed",
     primaryKey: String,
     primaryLabel: String,
     primaryTone: String,
@@ -50,10 +52,10 @@ private func factsJSON(
       "lastResultAt": null,
       "lastResultOutcome": null,
       "startTurn": { "state": "\(startTurnState)", "reason": \(q(startTurnReason)) },
-      "sendInput": { "state": "\(sendInput)", "reason": null },
+      "sendInput": { "state": "\(sendInput)", "reason": \(q(sendInputReason)) },
       "interrupt": { "state": "available", "reason": null },
       "terminate": { "state": "unavailable", "reason": "unsupported" },
-      "reattach": { "state": "unavailable", "reason": "not_needed" },
+      "reattach": { "state": "unavailable", "reason": \(q(reattachReason)) },
       "resume": { "state": "unavailable", "reason": "run_active" },
       "branch": { "state": "unavailable", "reason": "run_active" },
       "pendingInteractionKind": \(q(pendingInteractionKind)),
@@ -452,6 +454,7 @@ private struct PreviewConnectionDrop: View {
     .preferredColorScheme(.dark)
     .emberChrome()
 }
+
 #Preview("Console · Stop shares input row · Dark") {
     SessionScreenPreview(
         detail: .mock(
@@ -465,6 +468,9 @@ private struct PreviewConnectionDrop: View {
                 tool: "Bash",
                 observedAt: isoDate(secondsAgo: 4),
                 validUntil: isoDate(secondsAgo: -45),
+                sendInput: "unavailable",
+                sendInputReason: "use_start_turn",
+                reattachReason: "not_helm",
                 primaryKey: "executing",
                 primaryLabel: "Using Bash",
                 primaryTone: "running",
