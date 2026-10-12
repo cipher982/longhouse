@@ -157,6 +157,44 @@ describe("RecallPanel", () => {
     expect(screen.queryByText(/Search index rebuilding —/)).not.toBeInTheDocument();
   });
 
+  it.each([
+    { unknown: "indexed", counts: { indexed_sessions: null, expected_sessions: 9 } },
+    { unknown: "expected", counts: { indexed_sessions: 8, expected_sessions: null } },
+  ])("makes no rebuild-progress claim when the $unknown count is unknown", ({ counts }) => {
+    const current = hookMocks.useRecall();
+    const rebuilding = {
+      ...current.data.coverage,
+      complete: false,
+      lagging_sessions: 1,
+      oldest_lag_seconds: 1,
+      ...counts,
+    };
+    hookMocks.useRecall.mockReturnValue({
+      ...current,
+      data: { ...current.data, coverage: rebuilding },
+    });
+
+    const { unmount } = render(
+      <MemoryRouter>
+        <RecallPanel />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(/^1 match$/);
+    unmount();
+
+    hookMocks.useRecall.mockReturnValue({
+      ...current,
+      data: { ...current.data, total: 0, results: [], coverage: rebuilding },
+    });
+    render(
+      <MemoryRouter>
+        <RecallPanel />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("No matches found")).toBeInTheDocument();
+    expect(screen.getByTestId("recall-panel")).not.toHaveTextContent(/rebuilding|null| of 0 /);
+  });
+
   it("opens context for only the selected result", async () => {
     const user = userEvent.setup();
     render(
