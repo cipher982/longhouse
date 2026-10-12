@@ -23,14 +23,12 @@ import os
 import shutil
 import signal
 import subprocess
-import sys
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from zerg.qa import provider_console_lifecycle as lifecycle
-from zerg.qa.failed_results import settle_failed_result
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import require_disposable_runtime
@@ -44,19 +42,16 @@ from zerg.qa.omp_helm_lifecycle import _remove_isolation_after_source_retention
 from zerg.qa.omp_helm_lifecycle import _wait_cleanup_receipt
 from zerg.qa.omp_helm_lifecycle import _wait_native_marker
 from zerg.qa.omp_helm_lifecycle import _wait_state
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
-from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.qa.wait_kind import failure_fields
 
 SCENARIO_ID = "omp_coordination_awareness_create"
 ASSERTION_ID = "coordination_instructions_model_visible"
 _EXECUTION_VARIANT = execution_variant_key(provider="omp", assertion_id=ASSERTION_ID, scenario_id=SCENARIO_ID, variant=None)
-_ARTIFACT_KIND = "omp_coordination_awareness_create_result"
 
 
 def session_retirement_cleanup(retirement: object, session_id: str) -> dict[str, Any]:
@@ -162,9 +157,8 @@ def peers_invocation_evidence(rows: list[Mapping[str, Any]]) -> dict[str, Any] |
     return first_refusal
 
 
-def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
-    root = args.evidence_root.resolve()
-    root.mkdir(mode=0o700, parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace) -> None:
+    root = run.root
     if os.environ.get("LONGHOUSE_OMP_LIVE") not in {"1", "true", "yes", "on"}:
         raise RuntimeError("OMP coordination qualification requires explicit LONGHOUSE_OMP_LIVE opt-in")
     if not args.api_url or not args.agents_token:
@@ -207,8 +201,6 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
     state: dict[str, Any] = {}
     owner_records: list[dict[str, Any]] = []
     invocation: dict[str, Any] | None = None
-    failure: str | None = None
-    failure_wait: dict[str, str] = {}
     try:
         shipper = start_transcript_shipper(
             "omp", args, home=provider_home, environment=env, evidence_root=root / "shipper", longhouse_home=longhouse_home
@@ -231,9 +223,6 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
         session_file = Path(str(state["session_file"]))
         _wait_native_marker(session_file, marker, timeout=float(args.response_timeout_secs))
         invocation = peers_invocation_evidence(_native_rows(session_file))
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-        failure = f"{type(exc).__name__}: {exc}"
-        failure_wait = failure_fields(exc)
     finally:
         session_id = str(state.get("session_id") or "")
         if session_id:
@@ -278,52 +267,25 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
         cleanup["status"] = _cleanup_status(cleanup)
         cleanup = redact_state_for_evidence(cleanup)
         lifecycle.write_json(root / "cleanup-receipt.json", cleanup)
-    lifecycle.write_json(root / "tool-invocation-evidence.json", invocation or {"found": False})
-    visible = invocation is not None and invocation.get("is_error") is not True
-    observation = {
-        "session_id": str(state.get("session_id") or ""),
-        "marker": marker,
-        "probe_repo": probe_repo,
-        "coordination_instructions_model_visible": visible,
-        "tool_invocation": invocation,
-        "cleanup": cleanup,
-    }
-    assertions = awareness_create_assertions(observation)
-    result = {
-        "schema_version": 1,
-        "artifact_kind": _ARTIFACT_KIND,
-        "producer": REGISTRATION.to_dict(),
-        "provider": "omp",
-        "variant": None,
-        "scenario_id": SCENARIO_ID,
-        "scenario_revision": REGISTRATION.scenario_revision,
-        "evidence_class": "live_token",
-        "generated_at": now(),
-        # Status follows the assertion map, as the factory validator requires;
-        # cleanup is judged from the cleanup receipt (REGISTRATION.required_cleanup).
-        "status": "pass" if failure is None and assertions[ASSERTION_ID] else "fail",
-        "observation": observation,
-        "assertions": assertions,
-        **({"failure_code": "omp_coordination_awareness_failed", "error": failure, **failure_wait} if failure else {}),
-        "artifact_manifest": artifact_manifest(root),
-    }
-    if failure:
-        # An exception cannot leave a failed result with an all-true map (the
-        # factory refuses the contradiction): keep a failing verdict, otherwise
-        # a typed harness failure with the observation kept as evidence.
-        settle_failed_result(result, observation=result.get("observation"), assertions=result.get("assertions") or {})
-    lifecycle.write_json(root / "result.json", result)
-    return result
+        lifecycle.write_json(root / "tool-invocation-evidence.json", invocation or {"found": False})
+        # A run that raises keeps what it reached: the verdict when it fails,
+        # otherwise the observation as evidence beside the typed failure.
+        run.observation = {
+            "session_id": session_id,
+            "marker": marker,
+            "probe_repo": probe_repo,
+            "coordination_instructions_model_visible": invocation is not None and invocation.get("is_error") is not True,
+            "tool_invocation": invocation,
+            "cleanup": cleanup,
+        }
+        # Cleanup is judged from the cleanup receipt (REGISTRATION.required_cleanup), not here.
+        run.assertions = awareness_create_assertions(run.observation)
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(parser, variants=(_EXECUTION_VARIANT,))
-    parser.add_argument("--model", default=os.environ.get("LONGHOUSE_OMP_QUALIFICATION_MODEL", ""))
-    parser.add_argument("--api-url", default=os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
-    parser.add_argument("--agents-token", default=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"))
-    parser.add_argument("--response-timeout-secs", type=float, default=180.0)
-    return parser
+def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
+    if args.longhouse_cli is None:
+        args.longhouse_cli = Path(os.environ.get("LONGHOUSE_CLI_BIN") or "longhouse")
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args))
 
 
 def _cleanup_status(cleanup: Mapping[str, Any]) -> str:
@@ -337,40 +299,18 @@ def _cleanup_status(cleanup: Mapping[str, Any]) -> str:
     return "pass" if all(cleanup.get(key) is True for key in keys) else "fail"
 
 
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="omp_coordination_awareness_create_result",
+    failure_code="omp_coordination_awareness_failed",
+    variants=(_EXECUTION_VARIANT,),
+    model_env="LONGHOUSE_OMP_QUALIFICATION_MODEL",
+    add_arguments=lambda parser: parser.add_argument("--response-timeout-secs", type=float, default=180.0),
+)
+
+
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    if args.longhouse_cli is None:
-        args.longhouse_cli = Path(os.environ.get("LONGHOUSE_CLI_BIN") or "longhouse")
-    try:
-        result = run_scenario(args)
-    except Exception as exc:  # noqa: BLE001 - a precondition failure still writes a typed result
-        result = {
-            "schema_version": 1,
-            "artifact_kind": _ARTIFACT_KIND,
-            "producer": REGISTRATION.to_dict(),
-            "provider": "omp",
-            "variant": None,
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "omp_coordination_awareness_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-        }
-        # A precondition failure ran no session, so it reached no verdict.
-        settle_failed_result(result, observation=None, assertions={})
-        if args.evidence_root is not None:
-            args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-            result["artifact_manifest"] = artifact_manifest(args.evidence_root)
-            lifecycle.write_json(args.evidence_root / "result.json", result)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_scenario, argv)
 
 
 if __name__ == "__main__":

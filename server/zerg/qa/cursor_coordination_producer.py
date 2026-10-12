@@ -47,7 +47,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -64,8 +63,6 @@ from zerg.qa.cursor_helm_product_e2e import _canonical_state_from_diagnostics
 from zerg.qa.cursor_helm_product_e2e import _hook_rows
 from zerg.qa.cursor_helm_product_e2e import _wait_until
 from zerg.qa.cursor_helm_product_e2e import hosted_reply_waited_on
-from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import PtyProcess
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import assistant_event_digests
@@ -74,7 +71,6 @@ from zerg.qa.live_session_toolkit import cursor_bootstrap_prompt
 from zerg.qa.live_session_toolkit import initialize_cursor_workspace
 from zerg.qa.live_session_toolkit import launch_command
 from zerg.qa.live_session_toolkit import qualification_secrets
-from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import secret_scan
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import state_candidates
@@ -84,16 +80,15 @@ from zerg.qa.live_session_toolkit import wait_cursor_tui_ready
 from zerg.qa.live_session_toolkit import wait_session_tail
 from zerg.qa.live_session_toolkit import wait_state
 from zerg.qa.live_session_toolkit import write_json
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
 from zerg.qa.provider_coordination_oracles import directed_input_assertions
 from zerg.qa.provider_native_resume import SPECS
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.wait_kind import RUNTIME_HOST
-from zerg.qa.wait_kind import failure_fields
 
 _SPEC = SPECS["cursor"]
 
@@ -111,7 +106,8 @@ REGISTRATION = ProducerRegistration(
     # moves and proofs from revision 6 do not satisfy it.
     producer_revision=12,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
-    scenario_revision=11,
+    # 12: a failed result carries the binary receipt and follows the one failure rule.
+    scenario_revision=12,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
     # No `variant:` is authored for any of these three assertions in
     # schemas/managed_providers.yml, so every cell's variant is None -- not
@@ -944,149 +940,56 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
         )
 
 
-def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace, kind: str) -> None:
+    root = run.root
     provider_receipt = {
         "path": str(args.provider_bin),
         "sha256": sha256_file(args.provider_bin),
     }
     write_json(root / "provider-binary-receipt.json", provider_receipt)
-
-    dispatch = _DISPATCH.get(args.variant)
-    if dispatch is None:
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "direct_coordination_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "cursor",
-            "variant": None,
-            "scenario_id": None,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "unrecognized_execution_variant",
-            "error": f"--variant {args.variant!r} did not match any known coordination assertion cell",
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", result)
-        return result
-
-    kind, scenario_id, _assertion_id = dispatch
+    run.fields["provider_binary"] = provider_receipt
     isolation_root = Path(tempfile.mkdtemp(prefix="lhx-cursor-coord-", dir="/tmp"))
     try:
+        # One scenario, and its complete assertion map: the factory projects
+        # each compiled cell from the same map.
         if kind == "awareness_create":
             observation = _run_awareness_create(args, root, isolation_root)
             assertions = awareness_create_assertions(observation)
         else:
             observation = _run_directed_input(args, root, isolation_root)
             assertions = directed_input_assertions(observation)
-
-        redacted_secret_files = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
-        result: dict[str, Any] = {
-            "schema_version": 1,
-            "artifact_kind": "direct_coordination_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "cursor",
-            # Must equal the compiled command's raw authored `variant`, which
-            # is None for every cell this producer owns (no `variant:` field
-            # is authored for any of them) -- NOT the opaque execution_variant
-            # scheduling key received via --variant. Echoing args.variant
-            # here would fail _validate_execution_result's
-            # `result.variant == command.variant` check.
-            "variant": None,
-            "scenario_id": scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            # This producer executes one scenario and emits its complete
-            # assertion map. The process result still has to describe that
-            # complete observation truthfully; the factory then projects each
-            # compiled cell from the same assertion map.
-            "status": "pass" if all(assertions.values()) else "fail",
-            "observation_scope": "scenario",
-            "observation": observation,
-            "assertions": assertions,
-            "provider_binary": provider_receipt,
-            "redacted_secret_files": redacted_secret_files,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", result)
-        return result
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-        redacted_secret_files = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
-        failure = {
-            "schema_version": 1,
-            "artifact_kind": "direct_coordination_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "cursor",
-            "variant": None,
-            "scenario_id": scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "observation_scope": "scenario",
-            "failure_code": "direct_coordination_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            "redacted_secret_files": redacted_secret_files,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", failure)
-        return failure
+        run.observation = observation
+        run.assertions = assertions
     finally:
         shutil.rmtree(isolation_root, ignore_errors=True)
+        run.fields["redacted_secret_files"] = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    # Opaque execution-variant scheduling key from
-    # resume_assurance.execution_variant_key(); none of this producer's
-    # cells have an authored variant, so the value is always a synthetic
-    # "cell:<provider>:<assertion_id>:<scenario_id>" string. It is the only
-    # signal that tells this invocation's three possible assertion cells
-    # apart -- see _DISPATCH above -- and is never echoed into result.json.
-    parser.add_argument("--variant", required=True)
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--engine", required=True, type=Path)
-    # NOTE: the real (unmodified) provider_factory/assurance.py
-    # execute_retained_plan only passes --codex-bin for provider == "codex".
-    # Every other provider, cursor included, gets --longhouse-cli and
-    # --provider-bin. Do not rename these to --cursor-bin.
-    parser.add_argument("--longhouse-cli", required=True, type=Path)
-    parser.add_argument("--provider-bin", required=True, type=Path)
-    parser.add_argument("--live-timeout-secs", dest="live_timeout_secs", type=float, default=180.0)
-    parser.add_argument("--registration", action="store_true")
-    return parser
+def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
+    # The execution variant is the only signal that tells this producer's
+    # cells apart; none has an authored variant, so the result's is null.
+    kind, scenario_id, _assertion_id = _DISPATCH[args.variant]
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args, kind), scenario_id=scenario_id)
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="direct_coordination_result",
+    failure_code="direct_coordination_failed",
+    needs=("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin"),
+    binaries=(
+        ("engine", "longhouse_engine_missing"),
+        ("longhouse_cli", "longhouse_cli_missing"),
+        ("provider_bin", "cursor_binary_missing"),
+    ),
+    runtime_host=True,
+    variants=tuple(_DISPATCH),
+    add_arguments=lambda parser: parser.add_argument("--live-timeout-secs", dest="live_timeout_secs", type=float, default=180.0),
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
-    require_disposable_runtime(args.api_url)
-    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
-    if not args.api_url or not args.agents_token:
-        print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
-        return 2
-    if not args.engine.is_file() or not os.access(args.engine, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "longhouse_engine_missing"}))
-        return 2
-    if not args.longhouse_cli.is_file() or not os.access(args.longhouse_cli, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "longhouse_cli_missing"}))
-        return 2
-    if not args.provider_bin.is_file() or not os.access(args.provider_bin, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "cursor_binary_missing"}))
-        return 2
-    result = run_coordination(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_coordination, argv)
 
 
 if __name__ == "__main__":

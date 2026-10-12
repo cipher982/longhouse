@@ -29,7 +29,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import tempfile
 import time
 import urllib.error
@@ -41,28 +40,23 @@ from typing import Any
 from websockets.sync.client import connect as websocket_connect
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
-from zerg.qa.failed_results import settle_failed_result
-from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import qualification_secrets
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
-from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import write_json
 from zerg.qa.model_compliance import attach
 from zerg.qa.model_compliance import noncompliance_entry
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
 from zerg.qa.provider_coordination_oracles import awareness_post_compaction_assertions
 from zerg.qa.provider_coordination_oracles import directed_input_assertions
 from zerg.qa.provider_coordination_scenarios import observe_codex_post_compaction_bootstrap
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD
 from zerg.qa.wait_kind import declared as declared_wait
-from zerg.qa.wait_kind import failure_fields
 
 _SCENARIO_CREATE = "codex_coordination_awareness_create"
 _SCENARIO_POST_COMPACTION = "codex_coordination_awareness_post_compaction"
@@ -99,7 +93,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="codex.coordination_awareness.v1",
     producer_revision=9,
     scenario_id=_SCENARIO_CREATE,
-    scenario_revision=7,
+    # 8: a failed result carries the binary receipt, and a failed version probe leaves one.
+    scenario_revision=8,
     scenario_ids=(_SCENARIO_CREATE, _SCENARIO_POST_COMPACTION, _SCENARIO_DIRECTED_INPUT),
     assertion_cells=tuple((assertion_id, None) for assertion_id, _scenario_id in _CELLS),
     providers=("codex",),
@@ -835,133 +830,71 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
             observation.update(cleanup["required_cleanup"])
 
 
-def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
-    assertion_id, scenario_id = _CELL_BY_VARIANT[args.variant]
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace, scenario_id: str) -> None:
+    root = run.root
     provider_receipt = {
         "path": str(args.codex_bin),
         "sha256": sha256_file(args.codex_bin),
         "version": bridge_canary._run([str(args.codex_bin), "--version"], timeout=30).stdout.strip(),
     }
     write_json(root / "provider-binary-receipt.json", provider_receipt)
-    result: dict[str, Any] = {}
-    try:
-        if scenario_id == _SCENARIO_CREATE:
-            observation, assertions = _run_awareness_create(args, root)
-        elif scenario_id == _SCENARIO_POST_COMPACTION:
-            observation, assertions = _run_awareness_post_compaction(args, root)
-        else:
-            observation, assertions = _run_directed_input(args, root)
-        # A scenario whose turn was still open at its deadline says so beside
-        # its observation; the result carries it, the observation does not.
-        expired_wait = observation.pop(WAITED_ON_FIELD, None)
-        write_json(root / "coordination-observation.json", observation)
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "codex_coordination_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "codex",
-            "variant": None,
-            "scenario_id": scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "pass" if all(assertions.values()) else "fail",
-            **(declared_wait(expired_wait) if not all(assertions.values()) else {}),
-            "observation_scope": "scenario",
-            "observation": observation,
-            "assertions": assertions,
-            "provider_binary": provider_receipt,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", result)
-        return result
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-        # One rule for every coordination producer: a failure with evidence
-        # (the late-write case, where the helpers already returned an
-        # observation) carries it and its verdict; a crash or timeout before any
-        # observation existed reached no verdict, so it is a typed harness
-        # failure with neither. The factory accepts that shape and reports the
-        # cause as infrastructure or harness; a synthesized observation plus a
-        # false assertion would be filed as a product finding
-        # (control-plane failure_class: "an assertion evaluated False").
-        existing_observation = result.get("observation")
-        failure = {
-            **result,
-            "schema_version": 1,
-            "artifact_kind": "codex_coordination_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "codex",
-            "variant": None,
-            "scenario_id": scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "observation_scope": "scenario",
-            "failure_code": "codex_coordination_scenario_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            "artifact_manifest": artifact_manifest(root),
-        }
-        settle_failed_result(
-            failure,
-            observation=existing_observation,
-            assertions=result.get("assertions") or {},
-        )
-        write_json(root / "result.json", failure)
-        return failure
+    run.fields["provider_binary"] = provider_receipt
+    # One rule for every coordination producer: a scenario that raises before
+    # it returns an observation reached no verdict, so its failure is typed and
+    # carries neither. A synthesized observation plus a false assertion would
+    # be filed as a product finding.
+    if scenario_id == _SCENARIO_CREATE:
+        observation, assertions = _run_awareness_create(args, root)
+    elif scenario_id == _SCENARIO_POST_COMPACTION:
+        observation, assertions = _run_awareness_post_compaction(args, root)
+    else:
+        observation, assertions = _run_directed_input(args, root)
+    # A scenario whose turn was still open at its deadline says so beside
+    # its observation; the result carries it, the observation does not.
+    expired_wait = observation.pop(WAITED_ON_FIELD, None)
+    write_json(root / "coordination-observation.json", observation)
+    run.observation = observation
+    run.assertions = assertions
+    if not all(assertions.values()):
+        run.fields.update(declared_wait(expired_wait))
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", required=True, choices=tuple(_CELL_BY_VARIANT))
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--engine", required=True, type=Path)
-    parser.add_argument("--codex-bin", required=True, type=Path)
-    parser.add_argument("--model", default=os.environ.get("CODEX_MODEL"))
-    parser.add_argument("--bridge-start-timeout-secs", type=int, default=30)
-    parser.add_argument("--live-send-timeout-secs", type=int, default=120)
-    parser.add_argument("--registration", action="store_true")
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
-    require_disposable_runtime(args.api_url)
-    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
-    args.script_bin = None
-    args.timeout_bin = None
-    if not args.api_url or not args.agents_token:
-        print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
-        return 2
-    if not args.engine.is_file() or not os.access(args.engine, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "longhouse_engine_missing"}))
-        return 2
-    if not args.codex_bin.is_file() or not os.access(args.codex_bin, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "codex_binary_missing"}))
-        return 2
-    result = run_coordination(args)
-    redacted = _redact_retained_secrets(
-        args.evidence_root,
-        list(qualification_secrets(os.environ, args.agents_token)),
-    )
+def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
+    assertion_id, scenario_id = _CELL_BY_VARIANT[args.variant]
+    args.script_bin = args.timeout_bin = None
+    result = PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args, scenario_id), scenario_id=scenario_id)
+    # The finished evidence, result included, is scanned once more for the secrets this run was given.
+    redacted = _redact_retained_secrets(args.evidence_root, list(qualification_secrets(os.environ, args.agents_token)))
     if redacted and result.get("status") == "pass":
         result["status"] = "fail"
         result["failure_code"] = "finalized_artifact_secret_scan_failed"
-        assertions = result.get("assertions")
-        if isinstance(assertions, dict):
-            assertions[_CELL_BY_VARIANT[args.variant][0]] = False
+        result["assertions"][assertion_id] = False
         write_json(args.evidence_root / "result.json", result)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return result
+
+
+def _add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--bridge-start-timeout-secs", type=int, default=30)
+    parser.add_argument("--live-send-timeout-secs", type=int, default=120)
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="codex_coordination_result",
+    failure_code="codex_coordination_scenario_failed",
+    needs=("evidence_root", "repo_root", "engine", "codex_bin"),
+    binaries=(("engine", "longhouse_engine_missing"), ("codex_bin", "codex_binary_missing")),
+    runtime_host=True,
+    variants=tuple(_CELL_BY_VARIANT),
+    provider_bin_aliases=("--codex-bin",),
+    provider_bin_dest="codex_bin",
+    model_env="CODEX_MODEL",
+    add_arguments=_add_arguments,
+)
+
+
+def main(argv: list[str] | None = None) -> int:
+    return PRODUCER.main(run_coordination, argv)
 
 
 if __name__ == "__main__":

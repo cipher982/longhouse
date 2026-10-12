@@ -20,6 +20,7 @@ from zerg.qa import codex_coordination_native as codex_coordination
 from zerg.qa import codex_helm_launch_visibility as codex_launch
 from zerg.qa import codex_native_resume
 from zerg.qa import codex_turn_boundary_native as codex_boundary
+from zerg.qa import producer_shell
 from zerg.qa import provider_native_resume
 from zerg.qa.factory_registration import typed_harness_failure
 from zerg.qa.provider_semantic_qualification import AssertionOutcome
@@ -52,17 +53,22 @@ def _executable(path: Path, output: str = "test-provider 1.0") -> Path:
 
 
 def _fail_first_result_write(module: object, monkeypatch: pytest.MonkeyPatch) -> None:
-    original = module.write_json
+    """Fail the first write of ``result.json``, wherever the producer writes it from (the shell, once it is built in it)."""
+
     raised = False
+    for owner in (module, producer_shell):
+        original = getattr(owner, "write_json", None)
+        if original is None:
+            continue
 
-    def controlled_write(path: Path, payload: object) -> None:
-        nonlocal raised
-        if path.name == "result.json" and not raised:
-            raised = True
-            raise RuntimeError("controlled failure after producer judgment")
-        original(path, payload)
+        def controlled_write(path: Path, payload: object, original=original) -> None:
+            nonlocal raised
+            if path.name == "result.json" and not raised:
+                raised = True
+                raise RuntimeError("controlled failure after producer judgment")
+            original(path, payload)
 
-    monkeypatch.setattr(module, "write_json", controlled_write)
+        monkeypatch.setattr(owner, "write_json", controlled_write)
 
 
 def _assert_persisted_failure(root: Path, result: dict[str, object]) -> dict[str, object]:

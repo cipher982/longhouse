@@ -22,10 +22,7 @@ producer needs two real sessions, not one self-targeting session.
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import shutil
-import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -35,7 +32,6 @@ from zerg.qa.claude_live_session_support import RuntimeHostCoordinationAuthority
 from zerg.qa.claude_live_session_support import RuntimeHostHTTPError
 from zerg.qa.claude_live_session_support import ScenarioError
 from zerg.qa.claude_live_session_support import api_json
-from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import claude_launch_environment
 from zerg.qa.claude_live_session_support import close_session
 from zerg.qa.claude_live_session_support import failed_session_close_receipt
@@ -43,23 +39,18 @@ from zerg.qa.claude_live_session_support import isolation_paths
 from zerg.qa.claude_live_session_support import launch_claude_session
 from zerg.qa.claude_live_session_support import local_managed_control_fact
 from zerg.qa.claude_live_session_support import local_managed_control_snapshot
-from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.claude_live_session_support import read_coordination_token
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_until
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
-from zerg.qa.failed_results import settle_failed_result
-from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import prepare_claude_profile
-from zerg.qa.live_session_toolkit import require_disposable_runtime
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_coordination_oracles import directed_input_assertions
-from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.wait_kind import LONGHOUSE_ENGINE
-from zerg.qa.wait_kind import failure_fields
 
 _SCENARIO_ID = "claude_coordination_directed_input"
 _ASSERTION_SEND = "provider_input_receipt_linked"
@@ -79,7 +70,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_directed_input.v1",
     producer_revision=5,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=6,
+    # 7: the status is the assertion map's, not the requested cell's.
+    scenario_revision=7,
     assertion_cells=(
         (_ASSERTION_SEND, None),
         (_ASSERTION_RECEIVE, None),
@@ -120,10 +112,8 @@ _ARTIFACT_KIND = "claude_coordination_directed_input_result"
 _SESSION_HEADER = "X-Longhouse-Session-Id"
 
 
-def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
-    requested_assertion_id = _CELL_BY_VARIANT[args.variant]
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace) -> None:
+    root = run.root
     isolation_root = Path(tempfile.mkdtemp(prefix="lhx-claude-coord-directed-", dir="/tmp"))
     _home, longhouse_home = isolation_paths(isolation_root)
     marker = f"LONGHOUSE_DIRECTED_INPUT_{uuid.uuid4().hex}"
@@ -135,7 +125,6 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         "sender": {"not_started": True, "alive_after_close": False},
         "receiver": {"not_started": True, "alive_after_close": False},
     }
-    result: dict[str, Any] = {}
     try:
         shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
         write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
@@ -352,7 +341,7 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         )
 
         input_receipt = (receipt_record or {}).get("input_receipt")
-        observation = {
+        run.observation = {
             "sender_session_id": sender_session_id,
             "receiver_session_id": receiver_session_id,
             "directed_input_id": directed_input_id,
@@ -364,29 +353,10 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "input_visible": inbox_record is not None,
             "source_session_id": (inbox_record or {}).get("source_session_id"),
         }
-        assertions = directed_input_assertions(observation)
-        # One live run always computes both assertion keys; pass/fail here is
-        # scored on the specific assertion_id this --variant invocation is
-        # for (see claude_coordination_awareness_post_compaction.py for the
-        # identical reasoning).
-        result = {
-            "schema_version": 1,
-            "artifact_kind": _ARTIFACT_KIND,
-            "producer": REGISTRATION.to_dict(),
-            "provider": "claude",
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now_iso(),
-            "status": "pass" if assertions.get(requested_assertion_id) is True else "fail",
-            "observation": observation,
-            "assertions": assertions,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", result)
-        return result
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+        # One live run computes every assertion of the scenario; the status is
+        # the whole map's, and the factory reads each cell from its own key.
+        run.assertions = directed_input_assertions(run.observation)
+    except Exception as exc:  # noqa: BLE001 - close what the run owned, then let the shell type the failure
         if "receiver_session_id" in locals():
             diagnostic = local_managed_control_snapshot(longhouse_home, receiver_session_id)
             if diagnostic is not None:
@@ -418,43 +388,11 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             )
         except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
             cleanup_recording_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
-        error_detail = f"{type(exc).__name__}: {exc}"
         if isinstance(exc, RuntimeHostHTTPError):
-            error_detail = f"RuntimeHostHTTPError[{exc.status}]: {exc.detail}"
-        failure = {
-            **result,
-            "schema_version": 1,
-            "artifact_kind": _ARTIFACT_KIND,
-            "producer": REGISTRATION.to_dict(),
-            "provider": "claude",
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now_iso(),
-            "status": "fail",
-            "failure_code": (
-                "runtime_host_coordination_authority_unavailable"
-                if isinstance(exc, RuntimeHostCoordinationAuthorityUnavailable)
-                else "claude_coordination_directed_input_failed"
-            ),
-            "error": error_detail,
-            **failure_fields(exc),
-            **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
-            "artifact_manifest": artifact_manifest(root),
-        }
-        # A failure with evidence carries its observation and a verdict; one
-        # before any observation (no coordination authority, a launch that
-        # never came up) is a typed harness failure, with neither, so the
-        # factory reports its cause as infrastructure rather than reading a
-        # false assertion as a product or model finding.
-        settle_failed_result(
-            failure,
-            observation=result.get("observation"),
-            assertions=result.get("assertions") or {},
-        )
-        write_json(root / "result.json", failure)
-        return failure
+            run.fields["error"] = f"RuntimeHostHTTPError[{exc.status}]: {exc.detail}"
+        if cleanup_recording_error:
+            run.fields["cleanup_recording_error"] = cleanup_recording_error
+        raise
     finally:
         if shipper is not None:
             try:
@@ -464,46 +402,39 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         shutil.rmtree(isolation_root, ignore_errors=True)
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(
-        parser,
-        variants=tuple(_CELL_BY_VARIANT),
-        provider_bin_aliases=("--claude-bin",),
-    )
+def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args))
+
+
+def _add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project", default="zerg")
-    parser.add_argument("--model", default=os.environ.get("ANTHROPIC_MODEL"))
     parser.add_argument("--launch-timeout-secs", type=float, default=60.0)
     parser.add_argument("--receipt-timeout-secs", type=float, default=30.0)
     parser.add_argument("--inbox-timeout-secs", type=float, default=30.0)
-    return parser
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind=_ARTIFACT_KIND,
+    # A launch without coordination authority, or one that never came up, is
+    # typed so the factory reports infrastructure rather than a model finding.
+    failure_code=lambda exc: (
+        "runtime_host_coordination_authority_unavailable"
+        if isinstance(exc, RuntimeHostCoordinationAuthorityUnavailable)
+        else "claude_coordination_directed_input_failed"
+    ),
+    needs=("evidence_root", "repo_root", "engine", "provider_bin"),
+    binaries=(("engine", "longhouse_engine_missing"), ("provider_bin", "claude_binary_missing")),
+    runtime_host=True,
+    variants=tuple(_CELL_BY_VARIANT),
+    provider_bin_aliases=("--claude-bin",),
+    model_env="ANTHROPIC_MODEL",
+    add_arguments=_add_arguments,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    for required in ("evidence_root", "repo_root", "engine", "provider_bin"):
-        if getattr(args, required) is None:
-            print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{required.replace('_', '-')}"}))
-            return 2
-    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
-    require_disposable_runtime(args.api_url)
-    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
-    if not args.api_url or not args.agents_token:
-        print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
-        return 2
-    if not args.engine.is_file() or not os.access(args.engine, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "longhouse_engine_missing"}))
-        return 2
-    if not args.provider_bin.is_file() or not os.access(args.provider_bin, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "claude_binary_missing"}))
-        return 2
-    result = run_directed_input_scenario(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_directed_input_scenario, argv)
 
 
 if __name__ == "__main__":

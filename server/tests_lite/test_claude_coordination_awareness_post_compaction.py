@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from zerg.qa import claude_coordination_awareness_post_compaction as m
+from zerg.qa import producer_shell
 from zerg.qa.resume_assurance import execution_variant_key
 
 
@@ -102,13 +103,13 @@ def _install_session_fakes(
     monkeypatch.setattr(m, "mcp_bootstrap_config_paths", lambda *_a, **_k: bootstrap_config_paths)
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
 
-    real_artifact_manifest = m.artifact_manifest
+    real_artifact_manifest = producer_shell.artifact_manifest
 
     def stable_manifest(_root: Path) -> list[dict[str, Any]]:
         assert fake_shipper.stopped is True
         return real_artifact_manifest(_root)
 
-    monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
+    monkeypatch.setattr(producer_shell, "artifact_manifest", stable_manifest)
     return fake_shipper, fake_session
 
 

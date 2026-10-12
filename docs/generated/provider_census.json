@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 323,
+  "file_count": 322,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2246,13 +2246,6 @@
         "codex",
         "cursor",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/zerg/qa/cursor_coordination_producer.py",
-      "providers": [
-        "codex",
-        "cursor"
       ]
     },
     {

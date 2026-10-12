@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from zerg.qa import claude_coordination_directed_input as m
+from zerg.qa import producer_shell
 from zerg.qa.resume_assurance import execution_variant_key
 
 
@@ -117,13 +118,13 @@ def _install_session_and_api_fakes(
 
     monkeypatch.setattr(m, "api_json", fake_api_json)
 
-    real_artifact_manifest = m.artifact_manifest
+    real_artifact_manifest = producer_shell.artifact_manifest
 
     def stable_manifest(_root: Path) -> list[dict[str, Any]]:
         assert fake_shipper.stopped is True
         return real_artifact_manifest(_root)
 
-    monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
+    monkeypatch.setattr(producer_shell, "artifact_manifest", stable_manifest)
     return fake_shipper
 
 

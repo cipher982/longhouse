@@ -91,7 +91,7 @@ def _deterministic_wait_until(predicate, *, timeout, description):  # noqa: ANN0
 def test_registration_shape() -> None:
     assert m.REGISTRATION.providers == ("cursor",)
     assert m.REGISTRATION.producer_revision == 12
-    assert m.REGISTRATION.scenario_revision == 11
+    assert m.REGISTRATION.scenario_revision == 12
     assert m.REGISTRATION.modes == ("helm",)
     assert m.REGISTRATION.evidence_classes == ("live_token",)
     # Cursor has only 3 of the 4 coordination capabilities in
@@ -739,47 +739,14 @@ def test_aggregate_cleanup_requires_complete_zero_orphan_session_receipts(tmp_pa
     assert machine_failure["required_cleanup"]["no_orphan_provider_processes"] is False
 
 
-def test_run_coordination_reports_a_typed_failure_for_an_unrecognized_variant(tmp_path: Path, monkeypatch) -> None:
-    args = _base_args(tmp_path, evidence_root=tmp_path / "evidence-unknown")
-    args.variant = "cell:cursor:some_future_assertion:some_future_scenario"
-    monkeypatch.setattr(m, "sha256_file", lambda _p: "sha256:fake")
+def test_an_unrecognized_variant_is_refused_by_the_command_line(tmp_path: Path, capsys) -> None:
+    # The execution variant is the only signal that tells the cells apart, so one the producer does not own never runs.
+    with pytest.raises(SystemExit) as refused:
+        m.main(["--variant", "cell:cursor:some_future_assertion:some_future_scenario", "--evidence-root", str(tmp_path / "evidence")])
 
-    result = m.run_coordination(args)
-
-    assert result["status"] == "fail"
-    assert result["failure_code"] == "unrecognized_execution_variant"
-    assert result["variant"] is None
-
-
-def test_parser_accepts_the_real_execute_retained_plan_argv_shape(tmp_path: Path) -> None:
-    engine = tmp_path / "longhouse-engine"
-    engine.write_text("#!/bin/sh\n")
-    engine.chmod(0o755)
-    cli = tmp_path / "longhouse"
-    cli.write_text("#!/bin/sh\n")
-    cli.chmod(0o755)
-    provider_bin = tmp_path / "cursor-agent"
-    provider_bin.write_text("#!/bin/sh\n")
-    provider_bin.chmod(0o755)
-
-    parsed = m._parser().parse_args(
-        [
-            "--variant",
-            "cell:cursor:coordination_instructions_model_visible:cursor_coordination_awareness_create",
-            "--evidence-root",
-            str(tmp_path / "evidence"),
-            "--repo-root",
-            str(tmp_path),
-            "--engine",
-            str(engine),
-            "--longhouse-cli",
-            str(cli),
-            "--provider-bin",
-            str(provider_bin),
-        ]
-    )
-    assert parsed.longhouse_cli == cli
-    assert parsed.provider_bin == provider_bin
+    assert refused.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+    assert not (tmp_path / "evidence").exists()
 
 
 @pytest.mark.parametrize(

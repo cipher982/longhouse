@@ -124,9 +124,9 @@ class Producer:
     The command line is the envelope the factory passes (``parser``). ``needs``
     are the arguments this producer cannot run without, ``binaries`` the
     arguments that must name an executable file with the code each is refused
-    with, and ``runtime_host`` says it drives a Runtime Host and so needs the
-    host's URL and token, from ``--api-url`` and ``--agents-token`` or the
-    environment. ``refuse`` is the producer's own precondition on the parsed
+    with, and ``runtime_host`` says it cannot start without a Runtime Host's
+    URL and token (``--api-url`` and ``--agents-token``, which default to the
+    environment). ``refuse`` is the producer's own precondition on the parsed
     arguments: the code to refuse them with, or None.
     """
 
@@ -139,7 +139,9 @@ class Producer:
     runtime_host: bool = False
     variants: tuple[str, ...] | None = None
     variant_required: bool = True
+    # Other spellings of ``--provider-bin`` this producer answers to, and the attribute its work reads the binary from.
     provider_bin_aliases: tuple[str, ...] = ()
+    provider_bin_dest: str = "provider_bin"
     # The environment variable ``--model`` defaults to, and the faults ``--negative-control`` may name.
     model_env: str | None = None
     negative_controls: tuple[str, ...] = ()
@@ -253,7 +255,7 @@ class Producer:
         parser.add_argument("--variant", required=self.variant_required, choices=self.variants)
         for name in ("--evidence-root", "--repo-root", "--engine", "--longhouse-cli"):
             parser.add_argument(name, type=Path)
-        parser.add_argument("--provider-bin", *self.provider_bin_aliases, dest="provider_bin", type=Path)
+        parser.add_argument("--provider-bin", *self.provider_bin_aliases, dest=self.provider_bin_dest, type=Path)
         if self.registration.providers:  # a product subject is not asked for a provider
             parser.add_argument("--provider", choices=self.registration.providers)
         for name in ("--provider-version", "--platform", "--architecture", "--evidence-class"):
@@ -263,9 +265,8 @@ class Producer:
         parser.add_argument("--model", default=os.environ.get(self.model_env) if self.model_env else None)
         if self.negative_controls:
             parser.add_argument("--negative-control", choices=self.negative_controls)
-        if self.runtime_host:
-            parser.add_argument("--api-url")
-            parser.add_argument("--agents-token")
+        parser.add_argument("--api-url", default=os.environ.get(RUNTIME_API_URL_ENV))
+        parser.add_argument("--agents-token", default=os.environ.get(RUNTIME_AGENTS_TOKEN_ENV))
         if self.add_arguments is not None:
             self.add_arguments(parser)
         return parser
@@ -291,9 +292,7 @@ class Producer:
             if getattr(args, name) is None:
                 return refusal(f"missing_required_argument:--{name.replace('_', '-')}")
         if self.runtime_host:
-            args.api_url = args.api_url or os.environ.get(RUNTIME_API_URL_ENV, "")
             require_disposable_runtime(args.api_url)
-            args.agents_token = args.agents_token or os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
             if not args.api_url or not args.agents_token:
                 return refusal("runtime_host_control_credentials_missing")
         for name, failure_code in self.binaries:
