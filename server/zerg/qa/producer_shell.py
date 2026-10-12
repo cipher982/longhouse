@@ -104,14 +104,19 @@ class ProducerFailure(RuntimeError):
 _EVIDENCE_CLASS: ContextVar[str | None] = ContextVar("producer_shell_evidence_class", default=None)
 
 
-# What the shell says of a run: the identity the factory compares, and the verdict.
+# What the shell says of every run: the identity the factory compares, what the result is called, and the verdict.
+# A run changes these through its own attributes (``status``, ``artifact_kind``) or not at all.
+#
+# ``failure_code`` and ``error`` are deliberately not here. The shell gives them only to a run that raised, and a
+# producer's own value wins there: a failing verdict names the step that failed, and a run that caught its failure
+# and cleaned up words it as it always has, which is the wording the factory classes a failure by.
 _SHELL_FIELDS = frozenset(
-    "schema_version producer provider variant scenario_id scenario_revision evidence_class generated_at observation_scope".split()
-) | {"status", "observation", "assertions", "artifact_manifest"}
+    "schema_version artifact_kind producer provider variant scenario_id scenario_revision evidence_class generated_at".split()
+) | {"observation_scope", "status", "observation", "assertions", "artifact_manifest"}
 
 
 class _Fields(dict):
-    """A run's further result fields: any name but one the shell reports itself."""
+    """A run's further result fields: any name but one the shell reports of every run (``_SHELL_FIELDS``)."""
 
     def __setitem__(self, name: str, value: Any) -> None:
         if name in _SHELL_FIELDS:
@@ -139,10 +144,14 @@ class Run:
     ``observation`` and ``assertions`` are set as the work reaches them, so a
     failure later in the run keeps the verdict it had already reached.
     ``fields`` are further top-level fields of the result, on a verdict and on
-    a failure alike (the provider binary's receipt, a session id, the code a
-    failing verdict names); none may be a field the shell reports itself.
+    a failure alike (the provider binary's receipt, a session id); none may be
+    a field the shell reports of every run. ``failure_code`` and ``error`` may
+    be: the shell supplies them only when a run raised, and what the producer
+    says of its own failing verdict or caught failure stands.
     ``status`` is for a run whose status its assertions do not make: a
     control's, a blocked run's, a lifecycle that failed outside them.
+    ``artifact_kind`` is for a result that is not the producer's usual kind,
+    which is a negative control's.
     """
 
     root: Path
@@ -150,6 +159,7 @@ class Run:
     assertions: dict[str, bool] = field(default_factory=dict)
     fields: dict[str, Any] = field(default_factory=dict)
     status: str | None = None
+    artifact_kind: str | None = None
     controlled: bool = False
     may_block: bool = False
     # Set by a run that caught its own failure, cleaned up and came to an end: reported like one that raised.
@@ -254,11 +264,17 @@ class Producer:
             envelope["observation_scope"] = "scenario"
         return envelope
 
+    def _envelope(self, run: Run, identity: dict[str, Any]) -> dict[str, Any]:
+        envelope = self.envelope(**identity)
+        if run.artifact_kind is not None:
+            envelope["artifact_kind"] = run.artifact_kind
+        return envelope
+
     def verdict(self, run: Run, **identity: Any) -> dict[str, Any]:
         """The result of a run that reached its assertions."""
 
         return {
-            **self.envelope(**identity),
+            **self._envelope(run, identity),
             "status": run.status or ("pass" if run.assertions and all(run.assertions.values()) else "fail"),
             "observation": run.observation,
             # A control that evaluated no assertion of the scenario reports none.
@@ -272,7 +288,7 @@ class Producer:
 
         code = getattr(exc, "failure_code", None) or (self.failure_code(exc) if callable(self.failure_code) else self.failure_code)
         failure = {
-            **self.envelope(**identity),
+            **self._envelope(run, identity),
             "status": run.status or status,
             "failure_code": code,
             "error": f"{type(exc).__name__}: {exc}",

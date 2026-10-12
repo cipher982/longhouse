@@ -12,6 +12,7 @@ import ast
 import dataclasses
 import importlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -334,7 +335,7 @@ def test_a_blocked_run_says_so_and_a_raising_caller_gets_the_exception_and_no_ar
         _FIXTURE.execute(tmp_path / "raises", body)
 
 
-@pytest.mark.parametrize("name", ["status", "assertions", "observation", "scenario_revision", "provider", "artifact_manifest"])
+@pytest.mark.parametrize("name", sorted(producer_shell._SHELL_FIELDS))
 def test_a_further_field_cannot_be_one_the_shell_reports(tmp_path, name):
     # A definition error, raised where the producer writes it: a colliding field would replace the verdict in the result.
     run = Run(tmp_path)
@@ -359,6 +360,50 @@ def test_a_further_field_cannot_be_one_the_shell_reports(tmp_path, name):
     run.assertions, run.status = {"held": True}, "fail"
     result = _FIXTURE.verdict(run)
     assert (result["status"], result["failure_code"], result["assertions"]) == ("fail", "fixture_step_failed", {"held": True})
+
+
+def test_the_shell_reserves_every_field_it_reports_of_every_run_and_leaves_open_the_two_a_failure_adds(tmp_path):
+    scenario = Producer(
+        dataclasses.replace(_REGISTRATION, observation_scope="scenario"), artifact_kind="fixture_result", failure_code="fixture_failed"
+    )
+    for producer in (_FIXTURE, scenario):
+        verdict = producer.verdict(Run(tmp_path))
+        failure = producer.failure(Run(tmp_path), RuntimeError("synthetic"))
+        assert set(verdict) <= producer_shell._SHELL_FIELDS
+        # A run that raised is also given a code and an error, and those two are the producer's to word.
+        assert set(failure) - producer_shell._SHELL_FIELDS == {"failure_code", "error"}
+    worded = Run(tmp_path, fields={"failure_code": "fixture_step_failed", "error": "the step said why"})
+    failure = _FIXTURE.failure(worded, RuntimeError("synthetic"))
+    assert (failure["failure_code"], failure["error"]) == ("fixture_step_failed", "the step said why")
+
+
+def test_a_result_that_is_not_the_producers_usual_kind_is_named_on_the_run(tmp_path):
+    # A negative control's result has its own kind, on a verdict and on a failure of the control alike.
+    run = Run(tmp_path)
+    assert _FIXTURE.verdict(run)["artifact_kind"] == _FIXTURE.failure(run, RuntimeError("synthetic"))["artifact_kind"] == "fixture_result"
+    run.artifact_kind = "negative_control_result"
+    run.control({"status": "pass"}, status="pass")
+    assert (
+        _FIXTURE.verdict(run)["artifact_kind"]
+        == _FIXTURE.failure(run, RuntimeError("synthetic"))["artifact_kind"]
+        == "negative_control_result"
+    )
+    assert list(_FIXTURE.verdict(run))[:2] == ["schema_version", "artifact_kind"]
+
+
+def test_no_producer_writes_a_shell_field_as_a_further_field():
+    # The guard raises where such a line runs, which for a negative control is a live run. This finds the line unrun.
+    names = "|".join(sorted(producer_shell._SHELL_FIELDS))
+    written = re.compile(
+        rf"""fields\[["'](?:{names})["']\]\s*=[^=]|fields\.(?:update|setdefault)\((?:[^)]*\b(?:{names})\s*=|\s*["'](?:{names})["'])"""
+    )
+    found = [
+        f"{path.name}:{number}"
+        for path in sorted(_QA.glob("*.py"))
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if written.search(line)
+    ]
+    assert not found, f"a field the shell reports is written as a further field: {found}"
 
 
 def test_a_result_carries_the_evidence_class_the_command_line_named(tmp_path, capsys):

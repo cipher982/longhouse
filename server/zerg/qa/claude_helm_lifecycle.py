@@ -1352,7 +1352,7 @@ def _reach(
     elif fault:
         observed = negative_control_record(lifecycle, fault)
         verdict = negative_control_verdict(lifecycle, fault=fault, fault_receipt=observed.get("qa_fault_receipt"))
-        run.fields["artifact_kind"] = "negative_control_result"
+        run.artifact_kind = "negative_control_result"
         run.control(verdict, status=verdict["status"])
     elif failure is not None:
         # An error used to fail steer, abort and terminate wholesale, even when

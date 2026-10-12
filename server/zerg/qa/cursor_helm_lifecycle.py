@@ -216,7 +216,7 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
     write_json(root / "provider-binary-receipt.json", provider_receipt)
     run.fields["provider_binary"] = provider_receipt
     if args.negative_control:
-        run.fields["artifact_kind"] = "negative_control_result"
+        run.artifact_kind = "negative_control_result"
 
     home = isolated_provider_home()
     shipper: TranscriptShipper | None = None

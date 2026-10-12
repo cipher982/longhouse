@@ -940,7 +940,7 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             else "fail"
         )
         run.assertions = control_run_assertions(assertions, codes, control_target)
-        run.fields["artifact_kind"] = "opencode_helm_lifecycle_negative_control"
+        run.artifact_kind = "opencode_helm_lifecycle_negative_control"
         run.control(verdict, status=verdict["status"])
     secrets = list(live_session_toolkit.qualification_secrets(environment, str(args.agents_token)))
     run.fields["redacted_secret_files"] = live_session_toolkit.secret_scan(root, secrets)
