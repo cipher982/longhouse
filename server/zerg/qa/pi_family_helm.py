@@ -126,13 +126,12 @@ class Family:
     tool_turn: str = "launch"
 
     # How the lifecycle runs today: coverage one provider has and the other lacks.
-    host_controls: bool = False  # send, steer, abort and terminate go through the Runtime Host, not the engine's local command
-    # The same controls are proven once more through the engine's local command, in steps of their own
-    # (``local=True``) and with the last terminate. Dropping that path is deleting this flag and those steps.
+    # Send, steer, abort and terminate go through the Runtime Host. Where this is set they are proven once more
+    # through the engine's local command, in steps of their own (``local=True``) and with the last terminate.
+    # Dropping that path is deleting this flag and those steps.
     local_controls: bool = False
     terminate_proves_owners_dead: bool = False  # a terminate is over when the two recorded processes stopped, not when the state says so
     rebind_command: str = "send"  # how the first input after `/new` is sent: as an input, or as "send_live"
-    identity_at_launch: bool = False  # control identity is held at launch, at cold resume and at the end, not only after a rebind
     binds_resume_prompt: bool = False  # the resume prompt is found as one row of the restored session
     retirement_claims: bool = False  # each run's retirement is claimed and waited for as it ends
     local_health: bool = False  # the engine's local health is snapshotted after launch
@@ -2114,12 +2113,11 @@ class Lifecycle:
             return {}
 
     def control(self, command: str, text: str | None = None, *, local: bool = False) -> dict[str, Any]:
-        """Dispatch a control: through the Runtime Host where the lifecycle's controls go there, else, or when
-        ``local``, through the engine's own command on this machine."""
+        """Dispatch a control through the Runtime Host, or when ``local`` through the engine's own command on this machine."""
 
-        if self.f.host_controls and not local:
-            return _host_control(self.api_url, self.token, self.f, command, self.session_id, text=text)
-        return _local_control(self.args.engine, self.f, command, self.session_id, self.env, text=text)
+        if local:
+            return _local_control(self.args.engine, self.f, command, self.session_id, self.env, text=text)
+        return _host_control(self.api_url, self.token, self.f, command, self.session_id, text=text)
 
     def begin(self, what: str, prompt: str, *, local: bool = False) -> dict[str, Any]:
         """Send the prompt that starts a turn.
@@ -2336,8 +2334,7 @@ class Lifecycle:
                 minimum_turn_seq=_turn_sequence(settled),
             )
         launch["served"] = self.converge("launch", marker, row, flush=self.flush("launch"))
-        if f.identity_at_launch:
-            launch["control_identity"] = self.identity("initial", self.state)
+        launch["control_identity"] = self.identity("initial", self.state)
         # Bound before any later owner exists: it reads only the first owner's state.
         self.observation["channel_binding"] = _channel_binding_evidence(self.state)
         if f.local_health:
@@ -2760,7 +2757,7 @@ class Lifecycle:
         self.state = dict(state)
         self.session_file = Path(str(state.get("session_file") or self.session_file))
         self.own("cold_resume", state, marker=marker, controls=("cold_resume",))
-        identity = self.identity("cold_resume", self.state) if f.identity_at_launch else None
+        identity = self.identity("cold_resume", self.state)
         # The resume prompt asks for the recalled phrase and then the marker.
         # The marker is the answer and may share its line with the phrase; the
         # phrase is a recall, which the model may also put in a sentence, so
@@ -2810,17 +2807,15 @@ class Lifecycle:
             )
         record["served"] = self.converge("resume", marker, row, flush=self.flush("resume"), alongside=(phrase,))
         record["context_served"] = self.converge("resume_context", phrase, record["context_row"], recalled=True)
-        final = self.state
-        if f.identity_at_launch:
-            final = self.wait_state(
-                lambda value: (
-                    f.is_idle(value)
-                    and value.get("native_session_id") == state.get("native_session_id")
-                    and value.get("session_file") == str(self.session_file)
-                )
+        final = self.wait_state(
+            lambda value: (
+                f.is_idle(value)
+                and value.get("native_session_id") == state.get("native_session_id")
+                and value.get("session_file") == str(self.session_file)
             )
-            self.identity("final", final)
-            self.state = dict(final)
+        )
+        self.identity("final", final)
+        self.state = dict(final)
         if f.channel_terminal:
             self.observation["settlement"] = _native_settlement(
                 self.session_file, channel_state=settled, native_session_id=str(state.get("native_session_id") or "")
