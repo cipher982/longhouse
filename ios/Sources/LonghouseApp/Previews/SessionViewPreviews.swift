@@ -20,7 +20,9 @@ private func factsJSON(
     primaryLabel: String,
     primaryTone: String,
     access: (key: String, label: String, tone: String)? = nil,
-    pendingInteractionKind: String? = nil
+    pendingInteractionKind: String? = nil,
+    startTurnState: String = "unavailable",
+    startTurnReason: String? = "not_console"
 ) -> String {
     func q(_ value: String?) -> String { value.map { "\"\($0)\"" } ?? "null" }
     let accessJSON = access.map {
@@ -47,7 +49,7 @@ private func factsJSON(
       "unread": false,
       "lastResultAt": null,
       "lastResultOutcome": null,
-      "startTurn": { "state": "unavailable", "reason": "not_console" },
+      "startTurn": { "state": "\(startTurnState)", "reason": \(q(startTurnReason)) },
       "sendInput": { "state": "\(sendInput)", "reason": null },
       "interrupt": { "state": "available", "reason": null },
       "terminate": { "state": "unavailable", "reason": "unsupported" },
@@ -459,6 +461,8 @@ private struct PreviewConnectionDrop: View {
             placeholder: "Queue for next turn",
             stateFactsJSON: factsJSON(
                 mode: "console",
+                startTurnState: "available",
+                startTurnReason: nil,
                 activity: "executing",
                 tool: "Bash",
                 observedAt: isoDate(secondsAgo: 4),
