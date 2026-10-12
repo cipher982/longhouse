@@ -397,8 +397,7 @@ pub(super) fn status_owner_evidence_for_slots(
         .filter_map(|claim| claim.pid)
         .collect::<Vec<_>>();
     pids.extend(managed_status_owner_pids(&managed_scan));
-    if let Some(process_facts) = crate::process_identity::try_collect_process_facts_for_pids(&pids)
-    {
+    if let Some(process_facts) = status_owner_process_facts(&pids, &managed_scan) {
         evidence.merge(status_owner_evidence_from_claims(
             &selected_claims,
             Some(&process_facts),
@@ -416,6 +415,53 @@ pub(super) fn status_owner_evidence_for_slots(
         ));
     }
     (evidence, next_claim_cursor, next_managed_cursor)
+}
+
+/// Process facts for status owners, read as cheaply as each owner allows.
+///
+/// This runs on the 100 ms outbox tick. Only Claude owners compare a command
+/// line and a parsed start time (`claude_process_owner_state`); every other
+/// owner, and every turn claim, compares `lstart` alone
+/// (`recorded_process_owner_state`), which one process-table read answers
+/// for all of them. Claude pids get full facts on top. Either probe failing
+/// makes the whole observation unavailable: a partial inventory must never
+/// read a pid as ended.
+fn status_owner_process_facts(
+    pids: &[u32],
+    managed_scan: &ManagedObservationScanResult,
+) -> Option<HashMap<u32, crate::process_identity::ProcessFact>> {
+    let mut claude_pids = managed_scan
+        .claude_observations
+        .iter()
+        .flat_map(|observation| [observation.claude_pid, observation.bridge_pid])
+        .flatten()
+        .filter(|pid| *pid > 1)
+        .collect::<Vec<_>>();
+    claude_pids.sort_unstable();
+    claude_pids.dedup();
+    let mut facts: HashMap<u32, crate::process_identity::ProcessFact> =
+        crate::process_identity::try_collect_process_start_keys(pids)?
+            .into_iter()
+            .map(|(pid, lstart)| {
+                (
+                    pid,
+                    crate::process_identity::ProcessFact {
+                        pid,
+                        tty: String::new(),
+                        stat: String::new(),
+                        lstart,
+                        command: String::new(),
+                        start_time: None,
+                    },
+                )
+            })
+            .collect();
+    if !claude_pids.is_empty() {
+        facts.extend(crate::process_identity::try_collect_process_facts_for_pids(
+            &claude_pids,
+        )?);
+    }
+    Some(facts)
 }
 
 /// Keep only statuses backed by the exact current run owner.
