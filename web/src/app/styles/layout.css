@@ -12,8 +12,7 @@
   }
 
   /* --------------------------------------------------------- */
-  /* Application grid layout (header, tabs, content, status)   */
-  /* --------------------------------------------------------- */
+  /* Application grid layout (header, banners, content) */
 
   html {
     height: 100%;
@@ -29,7 +28,7 @@
   /* The React root acts as the application grid */
   #react-root {
     display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
     height: 100%;
     min-height: 100vh;
     min-height: 100dvh; /* modern viewport units */
@@ -63,7 +62,7 @@
 
   /* Content area - pass-through container (no scroll here) */
   #app-container {
-    grid-row: 3;
+    grid-row: 4;
     min-height: 0; /* required for grid children to respect overflow */
     display: flex;
     flex-direction: column;
@@ -90,7 +89,7 @@
 }
 @layer components {
   .host-link-banner {
-    grid-row: 2;
+    grid-row: 3;
     z-index: 10;
     display: flex;
     align-items: center;

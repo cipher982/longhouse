@@ -130,14 +130,14 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
   const coverage = data?.coverage;
   const indexedSessions = coverage?.indexed_sessions;
   const expectedSessions = coverage?.expected_sessions;
-  // A count the server did not report (absent or null) makes no progress
-  // claim: the rebuild line is left out rather than filled with a made-up number.
+  // Unknown counts hide progress, not the fact that the index is rebuilding.
+  const isRebuilding = coverage?.complete === false;
   const rebuildProgress =
-    coverage?.complete === false && indexedSessions != null && expectedSessions != null
+    isRebuilding && indexedSessions != null && expectedSessions != null
       ? `${indexedSessions} of ${plural(expectedSessions, "session")}`
       : null;
-  const coverageSummary = rebuildProgress
-    ? `Search index rebuilding — ${rebuildProgress} indexed`
+  const coverageSummary = isRebuilding
+    ? `Search index rebuilding${rebuildProgress ? ` — ${rebuildProgress} indexed` : ""}`
     : coverage?.complete
       ? "Corpus current"
       : null;
@@ -192,8 +192,14 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
 
         {!isLoading && !error && debouncedQuery && matches.length === 0 && (
           <EmptyState
-            title={rebuildProgress ? `No matches yet — search index is rebuilding (${rebuildProgress})` : "No matches found"}
-            description={rebuildProgress ? undefined : `No conversation turns matched "${debouncedQuery}".`}
+            title={
+              isRebuilding
+                ? rebuildProgress
+                  ? `No matches yet — search index is rebuilding (${rebuildProgress})`
+                  : "No matches yet — search index is rebuilding"
+                : "No matches found"
+            }
+            description={isRebuilding ? undefined : `No conversation turns matched "${debouncedQuery}".`}
           />
         )}
 

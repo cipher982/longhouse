@@ -160,7 +160,8 @@ describe("RecallPanel", () => {
   it.each([
     { unknown: "indexed", counts: { indexed_sessions: null, expected_sessions: 9 } },
     { unknown: "expected", counts: { indexed_sessions: 8, expected_sessions: null } },
-  ])("makes no rebuild-progress claim when the $unknown count is unknown", ({ counts }) => {
+    { unknown: "both", counts: { indexed_sessions: null, expected_sessions: null } },
+  ])("keeps the rebuilding status when the $unknown count is unknown", ({ counts }) => {
     const current = hookMocks.useRecall();
     const rebuilding = {
       ...current.data.coverage,
@@ -179,7 +180,8 @@ describe("RecallPanel", () => {
         <RecallPanel />
       </MemoryRouter>,
     );
-    expect(screen.getByRole("status")).toHaveTextContent(/^1 match$/);
+    expect(screen.getByRole("status")).toHaveTextContent(/1 match.*Search index rebuilding/);
+    expect(screen.getByTestId("recall-panel")).not.toHaveTextContent(/null| of \d+ sessions? indexed/);
     unmount();
 
     hookMocks.useRecall.mockReturnValue({
@@ -191,8 +193,9 @@ describe("RecallPanel", () => {
         <RecallPanel />
       </MemoryRouter>,
     );
-    expect(screen.getByText("No matches found")).toBeInTheDocument();
-    expect(screen.getByTestId("recall-panel")).not.toHaveTextContent(/rebuilding|null| of 0 /);
+    expect(screen.getByText("No matches yet — search index is rebuilding")).toBeInTheDocument();
+    expect(screen.queryByText("No matches found")).not.toBeInTheDocument();
+    expect(screen.getByTestId("recall-panel")).not.toHaveTextContent(/null| of \d+ sessions?/);
   });
 
   it("opens context for only the selected result", async () => {

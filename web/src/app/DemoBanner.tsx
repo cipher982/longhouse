@@ -10,6 +10,7 @@ export default function DemoBanner() {
     <div
       style={{
         zIndex: 10,
+        gridRow: 2,
         background: 'var(--color-surface-elevated)',
         color: 'var(--color-text-secondary)',
         boxShadow: 'inset 0 1px 0 rgba(233, 185, 73, 0.45), 0 1px 0 var(--color-border-subtle)',
