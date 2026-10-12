@@ -2664,7 +2664,8 @@ class Lifecycle:
             except RuntimeError as exc:
                 if not tolerate:
                     raise
-                stopped = {"terminal_reason": None, "status": "owners_alive_at_deadline", "detail": str(exc)[:500]}
+                # The launcher has outlived its deadline: there is no exit of the terminal's process left to wait for.
+                return {"terminal_reason": None, "status": "owners_alive_at_deadline", "detail": str(exc)[:500]}
             # A launcher that outlives an accepted terminate is the failure this exists to find.
             with contextlib.suppress(subprocess.TimeoutExpired) if tolerate else contextlib.nullcontext():
                 terminal.process.wait(timeout=15)
