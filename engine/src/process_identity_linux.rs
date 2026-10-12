@@ -52,12 +52,18 @@ pub(super) fn inspect_process_fact(pid: u32) -> ProcessFactLookup {
         return ProcessFactLookup::Unavailable;
     };
     let mut process_dir = pid_directory(pid);
-    let Some(command) =
-        read_process_command(&mut process_dir, &mut buffer, &stat.comm, stat.state)
+    let Some(command) = read_process_command(&mut process_dir, &mut buffer, &stat.comm, stat.state)
     else {
         return ProcessFactLookup::Absent;
     };
-    match process_fact(&stat, command, boot_time, ticks_per_second, true, &process_dir) {
+    match process_fact(
+        &stat,
+        command,
+        boot_time,
+        ticks_per_second,
+        true,
+        &process_dir,
+    ) {
         Some(fact) => ProcessFactLookup::Present(fact),
         None => ProcessFactLookup::Unavailable,
     }
@@ -69,10 +75,18 @@ pub(super) fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessF
     let mut facts = HashMap::new();
     let mut found_current = false;
     walk_processes(true, |pid, stat, process_dir, buffer| {
-        let Some(command) = read_process_command(process_dir, buffer, &stat.comm, stat.state) else {
+        let Some(command) = read_process_command(process_dir, buffer, &stat.comm, stat.state)
+        else {
             return Some(());
         };
-        let fact = process_fact(stat, command, boot_time, ticks_per_second, false, process_dir)?;
+        let fact = process_fact(
+            stat,
+            command,
+            boot_time,
+            ticks_per_second,
+            false,
+            process_dir,
+        )?;
         if pid == std::process::id() {
             found_current = true;
         }
@@ -161,7 +175,14 @@ pub(super) fn try_collect_process_facts_for_pids(
         };
         facts.insert(
             pid,
-            process_fact(&stat, command, boot_time, ticks_per_second, false, &process_dir)?,
+            process_fact(
+                &stat,
+                command,
+                boot_time,
+                ticks_per_second,
+                false,
+                &process_dir,
+            )?,
         );
     }
     Some(facts)
@@ -201,9 +222,7 @@ pub(super) fn try_collect_process_cwds(pids: &[u32]) -> Option<HashMap<u32, Stri
     Some(cwds)
 }
 
-pub(super) fn try_collect_process_open_files(
-    pids: &[u32],
-) -> Option<HashMap<u32, Vec<PathBuf>>> {
+pub(super) fn try_collect_process_open_files(pids: &[u32]) -> Option<HashMap<u32, Vec<PathBuf>>> {
     if pids.iter().any(|pid| *pid <= 1) {
         return None;
     }
@@ -236,7 +255,8 @@ pub(super) fn try_collect_process_lineage() -> Option<Vec<ProcessLineage>> {
     let mut entries = Vec::new();
     let mut found_current = false;
     walk_processes(true, |pid, stat, process_dir, buffer| {
-        let Some(command) = read_process_command(process_dir, buffer, &stat.comm, stat.state) else {
+        let Some(command) = read_process_command(process_dir, buffer, &stat.comm, stat.state)
+        else {
             return Some(());
         };
         found_current |= pid == std::process::id();
@@ -277,9 +297,8 @@ fn process_fact(
 ) -> Option<ProcessFact> {
     let start_epoch = start_epoch_seconds(stat, boot_time, ticks_per_second)?;
     let start_time = Utc.timestamp_opt(start_epoch, 0).single()?;
-    let start_time_for_caller = (parse_all_start_times
-        || super::command_needs_start_time(&command))
-    .then_some(start_time);
+    let start_time_for_caller =
+        (parse_all_start_times || super::command_needs_start_time(&command)).then_some(start_time);
     Some(ProcessFact {
         pid: stat.pid,
         tty: tty_name(stat.tty_nr, process_dir),
@@ -414,7 +433,11 @@ fn parse_proc_stat(bytes: &[u8], include_comm: bool) -> Option<ProcStat> {
     if close <= open {
         return None;
     }
-    let pid = std::str::from_utf8(&bytes[..open]).ok()?.trim().parse().ok()?;
+    let pid = std::str::from_utf8(&bytes[..open])
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
     let comm = if include_comm {
         String::from_utf8_lossy(&bytes[open + 1..close]).into_owned()
     } else {
@@ -535,9 +558,7 @@ fn tty_name_from_open_fd(process_dir: &Path, tty_nr: i64) -> Option<String> {
         let Ok(metadata) = fs::metadata(&fd_path) else {
             continue;
         };
-        if !metadata.file_type().is_char_device()
-            || !tty_device_matches(tty_nr, metadata.rdev())
-        {
+        if !metadata.file_type().is_char_device() || !tty_device_matches(tty_nr, metadata.rdev()) {
             continue;
         }
         let Ok(target) = fs::read_link(fd_path) else {
@@ -558,9 +579,10 @@ fn tty_name_from_open_fd(process_dir: &Path, tty_nr: i64) -> Option<String> {
 fn tty_name_from_sysfs(major: u32, minor: u32) -> Option<String> {
     let target = fs::read_link(format!("/sys/dev/char/{major}:{minor}")).ok()?;
     let name = target.file_name()?.to_str()?;
-    if let Some(number) = name.strip_prefix("pts").filter(|number| {
-        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
-    }) {
+    if let Some(number) = name
+        .strip_prefix("pts")
+        .filter(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
+    {
         Some(format!("pts/{number}"))
     } else {
         Some(name.to_string())
@@ -587,8 +609,10 @@ fn decode_tty_device(tty_nr: i64) -> (u32, u32) {
 }
 
 fn process_vanished(error: &io::Error) -> bool {
-    matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::InvalidInput)
-        || error.raw_os_error() == Some(libc::ESRCH)
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
+    ) || error.raw_os_error() == Some(libc::ESRCH)
 }
 
 fn pid_directory(pid: u32) -> PathBuf {
@@ -604,13 +628,11 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let missing_proc = temporary.path().join("proc");
         let mut visited = false;
-        assert!(
-            walk_processes_at(&missing_proc, false, |_, _, _, _| {
-                visited = true;
-                Some(())
-            })
-            .is_none()
-        );
+        assert!(walk_processes_at(&missing_proc, false, |_, _, _, _| {
+            visited = true;
+            Some(())
+        })
+        .is_none());
         assert!(!visited);
     }
 }

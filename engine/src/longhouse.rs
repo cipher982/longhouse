@@ -36,12 +36,12 @@ mod managed_launch_payload;
 mod managed_terminal;
 #[path = "plaintext_http.rs"]
 mod plaintext_http;
-#[path = "warp_cli_agent.rs"]
-mod warp_cli_agent;
 #[cfg(all(target_os = "linux", not(test)))]
 #[allow(dead_code)]
 #[path = "process_identity.rs"]
 mod process_identity;
+#[path = "warp_cli_agent.rs"]
+mod warp_cli_agent;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
@@ -3903,7 +3903,6 @@ fn process_start_identity(pid: u32) -> Option<String> {
         (!value.is_empty()).then_some(value)
     }
 }
-
 
 fn run_codex_tui(
     codex_bin: &str,
