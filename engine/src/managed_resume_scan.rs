@@ -130,11 +130,25 @@ fn scan_dir(
     validate: Validator,
     context: &mut ScanContext<'_>,
 ) {
-    let Ok(entries) = fs::read_dir(dir) else {
+    // Contracts are reread every managed scan (5 s) and almost never change;
+    // the directory cache rereads only files whose stamp moved. Validation,
+    // which checks the world each contract points at, still runs every scan.
+    fn parse_contract(
+        path: &Path,
+        bytes: std::io::Result<Vec<u8>>,
+    ) -> Option<(PathBuf, Option<Value>)> {
+        let value = bytes
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        Some((path.to_path_buf(), value))
+    }
+    let Ok(contracts) =
+        crate::dir_cache::parsed_json_dir(dir, parse_contract, |left, right| left.0.cmp(&right.0))
+    else {
         return;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for (path, parsed) in contracts.iter() {
+        let path = path.as_path();
         let Some(session_id) = path
             .file_name()
             .and_then(|value| value.to_str())
@@ -145,13 +159,10 @@ fn scan_dir(
         if session_id.ends_with(".observed-backup") || Uuid::parse_str(session_id).is_err() {
             continue;
         }
-        let parsed = fs::read(&path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
         let validation = parsed
             .as_ref()
             .ok_or("contract_invalid")
-            .and_then(|value| validate(&path, session_id, value, context));
+            .and_then(|value| validate(path, session_id, value, context));
         let (provider_session_id, cwd, contract_state, unavailable_reason) = match validation {
             Ok((provider_session_id, cwd)) => (
                 Some(provider_session_id),

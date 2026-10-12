@@ -906,7 +906,34 @@ fn tty_name(device: u32) -> String {
     }
 }
 
+/// `ps -o lstart=` text for a start time, memoized for one second.
+///
+/// `localtime_r` re-reads the time zone (an lstat of /etc/localtime) on
+/// every call, and the 100 ms Console and status-owner polls format the same
+/// few start times over and over: it was the largest leaf under process
+/// facts. The memo is dropped every second, so a time-zone change (a
+/// travelling laptop) reaches every caller within a second, as with `ps`.
 fn format_lstart(seconds: u64) -> Option<String> {
+    static MEMO: std::sync::Mutex<Option<(std::time::Instant, HashMap<u64, String>)>> =
+        std::sync::Mutex::new(None);
+    if let Ok(mut memo) = MEMO.lock() {
+        let (since, formatted) =
+            memo.get_or_insert_with(|| (std::time::Instant::now(), HashMap::new()));
+        if since.elapsed() >= std::time::Duration::from_secs(1) || formatted.len() >= 8192 {
+            *since = std::time::Instant::now();
+            formatted.clear();
+        }
+        if let Some(text) = formatted.get(&seconds) {
+            return Some(text.clone());
+        }
+        let text = format_lstart_uncached(seconds)?;
+        formatted.insert(seconds, text.clone());
+        return Some(text);
+    }
+    format_lstart_uncached(seconds)
+}
+
+fn format_lstart_uncached(seconds: u64) -> Option<String> {
     let seconds = libc::time_t::try_from(seconds).ok()?;
     let mut tm = MaybeUninit::<libc::tm>::zeroed();
     if unsafe { libc::localtime_r(&seconds, tm.as_mut_ptr()) }.is_null() {

@@ -537,6 +537,43 @@ impl SessionSourceLocation {
         if !session_dir.is_absolute() {
             return false;
         }
+        // Resolving a path keeps its last component unless that component is
+        // itself a symlink (or the path has `.`/`..` parts). A session
+        // directory whose name matches neither candidate, and that is not a
+        // symlink, cannot resolve to either: skip the realpath, which ran
+        // for every retained Helm state on every OMP path job.
+        let plain = session_dir.components().all(|component| {
+            matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        });
+        if plain {
+            // macOS volumes are usually case-insensitive and realpath reports
+            // the stored case, so names compare ignoring ASCII case; anything
+            // non-ASCII (normalization forms) always takes the full check.
+            let same_name = |left: Option<&std::ffi::OsStr>, right: Option<&std::ffi::OsStr>| match (
+                left.and_then(|v| v.to_str()),
+                right.and_then(|v| v.to_str()),
+            ) {
+                (Some(left), Some(right)) if left.is_ascii() && right.is_ascii() => {
+                    left.eq_ignore_ascii_case(right)
+                }
+                _ => true,
+            };
+            let name = session_dir.file_name();
+            let could_match = same_name(name, self.parent.file_name())
+                || self
+                    .bucket_root
+                    .as_deref()
+                    .is_some_and(|root| same_name(name, root.file_name()));
+            if !could_match
+                && !std::fs::symlink_metadata(session_dir)
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
+            {
+                return false;
+            }
+        }
         let session_dir = crate::storage_v2_shipper::stable_source_path(session_dir);
         self.parent == session_dir || self.bucket_root.as_ref() == Some(&session_dir)
     }
@@ -970,6 +1007,34 @@ mod tests {
         format!(
             r#"{{"type":"session","version":3,"id":"{id}","timestamp":"2026-09-09T00:00:00Z","cwd":"/workspace"}}"#
         )
+    }
+
+    #[test]
+    fn session_dir_match_survives_the_name_shortcut() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let real = root.join("longhouse-real");
+        std::fs::create_dir_all(&real).unwrap();
+        let source = real.join("2026-10-12_native.jsonl");
+        let location = SessionSourceLocation::new(&source).unwrap();
+
+        // Same directory under another name through a symlink: must match.
+        let alias = root.join("alias-with-another-name");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        assert!(location.is_in(&alias));
+        assert!(location.is_in(&real));
+        // A different directory, plain and differently named: no match.
+        let other = root.join("longhouse-other");
+        std::fs::create_dir_all(&other).unwrap();
+        assert!(!location.is_in(&other));
+        // Agreement with the unshortcut definition across all of them.
+        for dir in [&alias, &real, &other] {
+            assert_eq!(
+                location.is_in(dir),
+                crate::storage_v2_shipper::stable_source_path(dir)
+                    == crate::storage_v2_shipper::stable_source_path(&real)
+            );
+        }
     }
 
     #[test]
