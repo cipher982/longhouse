@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Live Pi Helm lifecycle proof through the stock Longhouse facade.
+"""Bounded Pi Helm qualification using the native extension channel.
 
-This producer never calls Pi directly.  The provider is launched by the stock
-``longhouse pi`` facade, and every control assertion is exercised through the
-paired ``longhouse-engine pi-helm`` command surface.  Native Pi JSONL and the
-Runtime Host state diagnostic are the two independent observation sources.
+The lifecycle is the Pi family's (`zerg.qa.pi_family_helm`). This module is
+what is Pi's: the registration, what differs for Pi (`FAMILY`), the order of
+its steps, and its cells.
 """
 
 from __future__ import annotations
@@ -12,64 +11,22 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
-import socket
-import subprocess
-import time
-import urllib.error
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-from urllib.request import Request
-from urllib.request import urlopen
 
-from zerg.qa import provider_console_lifecycle as console_lifecycle
+from zerg.qa import pi_family_helm as helm
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
-from zerg.qa.answer_markers import marker_answered
-from zerg.qa.console_served_state_core import StandingServedAnswerFault
-from zerg.qa.console_served_state_core import assistant_marker_events
-from zerg.qa.console_served_state_core import assistant_marker_mentions
-from zerg.qa.console_served_state_core import event_text
-from zerg.qa.console_served_state_core import served_answer_correspondence
-from zerg.qa.console_served_state_core import served_answer_fault
-from zerg.qa.live_kit import RUNTIME_HOST_USER_AGENT as _RUNTIME_HOST_USER_AGENT
-from zerg.qa.live_kit import RuntimeHostError as _RuntimeHostHTTPError
-from zerg.qa.live_kit import group_dead as _pgid_dead
-from zerg.qa.live_kit import pid_alive as _pid_alive
-from zerg.qa.live_kit import pid_dead as _pid_dead
-from zerg.qa.live_kit import poll as _wait
-from zerg.qa.live_session_toolkit import new_qualification_isolation_root
-from zerg.qa.live_session_toolkit import require_disposable_runtime
-from zerg.qa.live_session_toolkit import retire_qualification_session
-from zerg.qa.live_session_toolkit import start_transcript_shipper
-from zerg.qa.model_compliance import attach
 from zerg.qa.openrouter_routing import prepare_pi_openrouter_routing
+from zerg.qa.pi_family_helm import Family
+from zerg.qa.pi_family_helm import Lifecycle
 from zerg.qa.pi_family_turn_oracle import NEGATIVE_CONTROLS
-from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
-from zerg.qa.pi_family_turn_oracle import fault_name
-from zerg.qa.pi_family_turn_oracle import negative_control_verdict
-from zerg.qa.pi_family_turn_oracle import pi_family_steer_noncompliance
-from zerg.qa.pi_family_turn_oracle import provider_holds_prompt
-from zerg.qa.pi_family_turn_oracle import read_fault_receipts
-from zerg.qa.pi_family_turn_oracle import read_session_entries
-from zerg.qa.pi_family_turn_oracle import steer_turn_verdict
-from zerg.qa.pi_family_turn_oracle import step_task_prompt
-from zerg.qa.pi_family_turn_oracle import task_tool_boundary
-from zerg.qa.pi_native import pi_native_shadow_taxonomy
-from zerg.qa.pi_native import pi_transcript_rows
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
 from zerg.qa.producer_shell import write_json as _write_json
-from zerg.qa.provider_release_identity import sha256_file
-from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.qa.wait_kind import LONGHOUSE_ENGINE
-from zerg.qa.wait_kind import LONGHOUSE_INGEST
-from zerg.qa.wait_kind import PROVIDER_PROCESS
-from zerg.qa.wait_kind import PROVIDER_TURN
-from zerg.qa.wait_kind import RUNTIME_HOST
-from zerg.qa.wait_kind import expired
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 
@@ -82,7 +39,6 @@ _PROFILE = identity.IdentityProfile(
     version_line=identity.semver_version_line(),
     oracle_source=Path(__file__),
 )
-_PROPAGATING_HTTP_STATUSES = frozenset({404, 429, 500, 502, 503, 504})
 ASSERTIONS = (
     "pi_helm_launch_registration",
     "pi_helm_native_tool_taxonomy",
@@ -103,7 +59,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=3,
     scenario_id=SCENARIO_ID,
     # 17: a run that raised outside its own handling leaves a complete result; --model is required.
-    scenario_revision=17,
+    # 18: the lifecycle is the Pi family's one engine, and its evidence the family's one shape.
+    scenario_revision=18,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -125,14 +82,11 @@ REGISTRATION = ProducerRegistration(
     network_policy="shared_provider_egress",
     required_artifacts=(
         "provider_binary_receipt",
-        "helm_registration_receipt",
-        "native_session_receipt",
-        "native_taxonomy_receipt",
-        "control_command_receipts",
-        "reload_rebind_receipt",
-        "session_replacement_receipt",
-        "cold_resume_receipt",
-        "stale_owner_receipt",
+        "helm_receipt",
+        "transcript_flush_receipt",
+        "transcript_shipper_receipt",
+        "runtime_convergence_receipt",
+        "provider_source_retention",
         "cleanup_receipt",
     ),
     required_cleanup=(
@@ -150,2348 +104,267 @@ REGISTRATION = ProducerRegistration(
     observation_scope="scenario",
 )
 
-
-class _RuntimeConvergenceError(RuntimeError):
-    def __init__(self, marker: str, cause: BaseException, last_runtime_observation: dict[str, Any] | None) -> None:
-        self.marker = marker
-        self.cause_type = type(cause).__name__
-        self.http_status = getattr(cause, "status", None)
-        self.detail = str(cause)
-        self.last_runtime_observation = last_runtime_observation
-        super().__init__(f"Runtime Host convergence for Pi marker {marker} failed: {cause}")
+_STALE_REFUSALS = frozenset({"stale_channel", "stale_generation", "session_not_attached"})
+_BOUND = ("one_session", "one_thread", "provider_session_bound")
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"expected JSON object at {path}")
-    return value
+def _mapping(value: object) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
-def _state_paths(home: Path) -> list[Path]:
-    return sorted((home / "managed-local" / "pi-helm").glob("*.json"))
+def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bool]:
+    """Pi's cells, from the lifecycle's record."""
 
+    controls = _mapping(observation.get("controls"))
+    names = (
+        "launch",
+        "send",
+        "follow_up",
+        "steer",
+        "abort",
+        "reload",
+        "replacement",
+        "terminate",
+        "cold_resume",
+        "final_terminate",
+        "stale_owner",
+    )
+    records = {name: _mapping(controls.get(name)) for name in names}
 
-def _wait_state(home: Path, *, session_id: str | None = None, predicate=None, timeout: float = 30.0) -> dict[str, Any]:
-    def observe() -> dict[str, Any] | None:
-        for path in _state_paths(home):
-            try:
-                state = _read_json(path)
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
-            if session_id is not None and state.get("session_id") != session_id:
-                continue
-            if predicate is None or predicate(state):
-                return state
-        return None
+    def accepted(record: Mapping[str, Any], command: str = "command") -> bool:
+        return _mapping(record.get(command)).get("accepted") is True
 
-    return _wait(observe, timeout=timeout, description="Pi Helm state")
+    def answered(record: Mapping[str, Any], evidence: str = "evidence") -> bool:
+        """The turn's window of the provider's own file holds rows, and one of them answers with the marker."""
 
+        found = _mapping(record.get(evidence))
+        return (found.get("window_row_count") or 0) > 0 and (found.get("assistant_answer_rows") or 0) >= 1
 
-def _run_engine(engine: Path, kind: str, session_id: str, env: dict[str, str], *, text: str | None = None) -> dict[str, Any]:
-    command = [str(engine), "pi-helm", kind, "--session-id", session_id]
-    if text is not None:
-        command.extend(("--text", text))
-    completed = subprocess.run(command, env=env, capture_output=True, text=True, timeout=20, check=False)
-    try:
-        payload = json.loads(completed.stdout or "{}")
-    except json.JSONDecodeError:
-        payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
+    def bound(record: Mapping[str, Any], runtime: str = "runtime", facts: tuple[str, ...] = _BOUND) -> bool:
+        """What is served for the turn is one session and one thread (and, where asked, the provider's own session)."""
+
+        binding = _mapping(_mapping(record.get(runtime)).get("binding"))
+        return all(binding.get(fact) is True for fact in facts)
+
+    def flushed(label: str) -> bool:
+        return _mapping(_mapping(observation.get("flush")).get(label)).get("status") == "pass"
+
+    def busy(record: Mapping[str, Any]) -> bool:
+        return _mapping(record.get("active_state")).get("phase") in {"running", "thinking"}
+
+    cleanup = _mapping(observation.get("cleanup"))
+    cleanup_ok = helm._helm_cleanup_ready(cleanup) and cleanup.get("cleanup_errors", []) == []
+    launch, send, follow_up, steer, abort = (records[name] for name in ("launch", "send", "follow_up", "steer", "abort"))
+    reload, replacement, resume, stale = (records[name] for name in ("reload", "replacement", "cold_resume", "stale_owner"))
+    launch_state = _mapping(launch.get("state"))
+    taxonomy = _mapping(observation.get("native_taxonomy"))
+    follow_request = _mapping(_mapping(follow_up.get("command")).get("request"))
+    follow_native = _mapping(follow_up.get("evidence"))
+    abort_native = _mapping(abort.get("evidence"))
+    reload_before, reload_after = _mapping(reload.get("before")), _mapping(reload.get("state"))
+    replaced_before, replaced = _mapping(replacement.get("before")), _mapping(replacement.get("state"))
+    replaced_file = _mapping(_mapping(replacement.get("evidence")).get("native_file"))
+    resume_state, resumed_from = _mapping(resume.get("state")), _mapping(resume.get("before"))
+    resume_native, recall = _mapping(resume.get("evidence")), _mapping(resume.get("context_evidence"))
+    seed = _mapping(replacement.get("context_evidence"))
+    phrase = resume.get("context_phrase")
+    recall_served = _mapping(resume.get("context_runtime"))
     return {
-        "command": command,
-        "returncode": completed.returncode,
-        "stdout": completed.stdout[-2000:],
-        "stderr": completed.stderr[-2000:],
-        "payload": payload,
-        "accepted": completed.returncode == 0 and payload.get("ok") is True,
-    }
-
-
-def _runtime_get(url: str, token: str, path: str) -> dict[str, Any]:
-    request = Request(
-        f"{url.rstrip('/')}{path}",
-        headers={
-            "X-Agents-Token": token,
-            "Accept": "application/json",
-            "User-Agent": _RUNTIME_HOST_USER_AGENT,
-        },
-    )
-    try:
-        with urlopen(request, timeout=15) as response:
-            payload = json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        try:
-            raw_detail = exc.read(4096).decode("utf-8", "replace")
-        except OSError:
-            raw_detail = ""
-        try:
-            parsed_detail = json.loads(raw_detail)
-        except json.JSONDecodeError:
-            parsed_detail = raw_detail[:1000]
-        if isinstance(parsed_detail, dict):
-            detail = str(parsed_detail.get("detail") or parsed_detail)[:1000]
-        else:
-            detail = str(parsed_detail)[:1000]
-        raise _RuntimeHostHTTPError(exc.code, detail) from exc
-    return payload if isinstance(payload, dict) else {}
-
-
-def _runtime_diagnostic(url: str, token: str, session_id: str) -> dict[str, Any]:
-    return _runtime_get(url, token, f"/api/agents/sessions/{session_id}/state-diagnostics")
-
-
-def _runtime_snapshot(url: str, token: str, session_id: str) -> dict[str, Any]:
-    """Read the canonical served session surfaces, not a synthetic turn route."""
-
-    return {
-        "detail": _runtime_get(url, token, f"/api/agents/sessions/{session_id}"),
-        "thread": _runtime_get(url, token, f"/api/agents/sessions/{session_id}/thread"),
-        "events": _runtime_get(url, token, f"/api/agents/sessions/{session_id}/events?limit=200"),
-        "diagnostic": _runtime_diagnostic(url, token, session_id),
-    }
-
-
-def _nested_values(value: object, keys: set[str]) -> list[str]:
-    values: list[str] = []
-    if isinstance(value, dict):
-        for key, child in value.items():
-            if key in keys and child is not None and str(child).strip():
-                values.append(str(child))
-            values.extend(_nested_values(child, keys))
-    elif isinstance(value, list):
-        for child in value:
-            values.extend(_nested_values(child, keys))
-    return values
-
-
-def _runtime_binding(snapshot: dict[str, Any], *, session_id: str, provider_session_id: str) -> dict[str, Any]:
-    detail = snapshot.get("detail") if isinstance(snapshot.get("detail"), dict) else {}
-    thread = snapshot.get("thread") if isinstance(snapshot.get("thread"), dict) else {}
-    events_payload = snapshot.get("events") if isinstance(snapshot.get("events"), dict) else {}
-    events = events_payload.get("events") if isinstance(events_payload.get("events"), list) else []
-    served_session_id = str(detail.get("session_id") or detail.get("id") or "")
-    # This machine endpoint exposes the canonical continuation chain, not the
-    # internal kernel thread UUID. Keep those identities distinct.
-    root_session_id = str(thread.get("root_session_id") or "")
-    head_session_id = str(thread.get("head_session_id") or "")
-    members = thread.get("sessions") if isinstance(thread.get("sessions"), list) else []
-    member_ids = {str(member.get("id")) for member in members if isinstance(member, dict)}
-    event_session_ids = {str(event.get("session_id")) for event in events if isinstance(event, dict) and event.get("session_id")}
-    provider_ids = set(
-        _nested_values(
-            {"detail": detail, "thread": thread, "events": events},
-            {"provider_session_id", "provider_thread_id", "alias_value"},
-        )
-    )
-    return {
-        "session_id": served_session_id,
-        "thread_root_session_id": root_session_id,
-        "thread_head_session_id": head_session_id,
-        "provider": detail.get("provider"),
-        "provider_session_id": provider_session_id,
-        "provider_session_bound": provider_session_id in provider_ids,
-        "one_session": served_session_id == session_id and (not event_session_ids or event_session_ids == {session_id}),
-        "one_thread": root_session_id == head_session_id == session_id and member_ids == {session_id},
-        "event_count": len(events),
-    }
-
-
-def _served_controls(snapshot: dict[str, Any]) -> bool:
-    diagnostic = snapshot.get("diagnostic") if isinstance(snapshot.get("diagnostic"), dict) else {}
-    shadow = diagnostic.get("shadow") if isinstance(diagnostic.get("shadow"), dict) else {}
-    control = shadow.get("control") if isinstance(shadow.get("control"), dict) else {}
-    actions = control.get("actions") if isinstance(control.get("actions"), dict) else {}
-    return (
-        diagnostic.get("served_path") == "canonical_session_detail"
-        and isinstance(actions.get("send_input"), dict)
-        and actions["send_input"].get("state") == "available"
-        and isinstance(actions.get("terminate"), dict)
-    )
-
-
-def _runtime_observation_summary(
-    snapshot: dict[str, Any],
-    *,
-    session_id: str,
-    provider_session_id: str,
-    marker: str,
-    alongside: tuple[str, ...] = (),
-    recalled: bool = False,
-) -> dict[str, Any]:
-    events_payload = snapshot.get("events") if isinstance(snapshot.get("events"), dict) else {}
-    events = events_payload.get("events") if isinstance(events_payload.get("events"), list) else []
-    matches = assistant_marker_events(events, marker, default_origin="durable", alongside=alongside, recalled=recalled)
-    mentions = assistant_marker_mentions(events, marker, default_origin="durable", alongside=alongside, recalled=recalled)
-    binding = _runtime_binding(snapshot, session_id=session_id, provider_session_id=provider_session_id)
-    diagnostic = snapshot.get("diagnostic") if isinstance(snapshot.get("diagnostic"), dict) else {}
-    shadow = diagnostic.get("shadow") if isinstance(diagnostic.get("shadow"), dict) else {}
-    return {
-        "session_id": session_id,
-        "provider_session_id": provider_session_id,
-        "marker": marker,
-        "event_count": len(events),
-        "events_page_complete": events_payload.get("has_more") is False,
-        # Events that reply with the marker; one that only mentions it
-        # (narration ahead of a tool call) is counted apart and is no reply.
-        "assistant_marker_count": len(matches),
-        "assistant_marker_event_ids": [event.get("id") for event in matches],
-        "assistant_marker_mention_count": len(mentions),
-        "assistant_marker_occurrences": sum(event_text(event).count(marker) for event in matches),
-        "binding": binding,
-        "served_controls": _served_controls(snapshot),
-        "served_path": diagnostic.get("served_path"),
-        "shadow_mode": shadow.get("mode"),
-    }
-
-
-def _runtime_receipt(
-    runtime: dict[str, Any],
-    *,
-    session_id: str,
-    provider_session_id: str,
-    marker: str,
-) -> dict[str, Any]:
-    snapshot = runtime.get("snapshot") if isinstance(runtime.get("snapshot"), dict) else {}
-    return _runtime_observation_summary(
-        snapshot,
-        session_id=session_id,
-        provider_session_id=provider_session_id,
-        marker=marker,
-        alongside=tuple(runtime.get("alongside") or ()),
-        recalled=runtime.get("recalled") is True,
-    )
-
-
-def _state_identity(state: dict[str, Any]) -> dict[str, Any]:
-    keys = (
-        "session_id",
-        "provider",
-        "provider_session_id",
-        "run_id",
-        "connection_id",
-        "lease_generation",
-        "session_file",
-        "session_dir",
-        "status",
-        "ready",
-        "phase",
-        "terminal_reason",
-        "launcher_pid",
-        "launcher_process_start_time",
-        "provider_pid",
-        "provider_process_start_time",
-        "socket_path",
-    )
-    return {key: state[key] for key in keys if key in state}
-
-
-def _native_file_identity(path: Path) -> dict[str, Any]:
-    try:
-        stat = path.stat()
-    except OSError as exc:
-        return {"path": str(path), "present": False, "error": f"{type(exc).__name__}: {exc}"}
-    return {
-        "path": str(path.resolve()),
-        "present": True,
-        "device": stat.st_dev,
-        "inode": stat.st_ino,
-        "size_bytes": stat.st_size,
-    }
-
-
-def _native_model(native: dict[str, Any]) -> str | None:
-    invocation_rows = native.get("invocation_rows") if isinstance(native.get("invocation_rows"), list) else []
-    for row in reversed(invocation_rows):
-        message = row.get("message") if isinstance(row, dict) else None
-        if isinstance(message, dict) and isinstance(message.get("model"), str) and message["model"].strip():
-            return message["model"].strip()
-        if isinstance(row, dict) and isinstance(row.get("model"), str) and row["model"].strip():
-            return row["model"].strip()
-    metadata = native.get("metadata") if isinstance(native.get("metadata"), dict) else {}
-    model = metadata.get("model")
-    return model.strip() if isinstance(model, str) and model.strip() else None
-
-
-def _native_receipt(
-    native: dict[str, Any],
-    *,
-    session_id: str,
-    session_file: Path,
-    marker: str | None = None,
-) -> dict[str, Any]:
-    metadata = native.get("metadata") if isinstance(native.get("metadata"), dict) else {}
-    taxonomy = native.get("taxonomy") if isinstance(native.get("taxonomy"), dict) else {}
-    invocation_rows = native.get("invocation_rows") if isinstance(native.get("invocation_rows"), list) else []
-    receipt = {
-        "session_id": session_id,
-        "provider": "pi",
-        "provider_session_id": metadata.get("provider_session_id"),
-        "native_header_provider_session_id": metadata.get("provider_session_id"),
-        "native_model": _native_model(native),
-        "native_file": _native_file_identity(session_file),
-        "row_count": native.get("rows"),
-        "invocation_row_count": len(invocation_rows),
-        "assistant_marker_rows": native.get("assistant_marker_rows"),
-        "assistant_answer_rows": native.get("assistant_answer_rows"),
-        "assistant_reply_entry_id": native.get("assistant_reply_entry_id"),
-        "user_marker_rows": native.get("user_marker_rows"),
-        "user_marker_occurrences": native.get("user_marker_occurrences"),
-        "follow_up_delivered": native.get("user_marker_rows") == 1,
-        "minimum_source_offset": native.get("minimum_source_offset", 0),
-        "source_end_offset": native.get("source_end_offset"),
-        "taxonomy_source": taxonomy.get("source"),
-    }
-    if marker is not None:
-        receipt["marker"] = marker
-    return receipt
-
-
-def _diagnostic_receipt(diagnostic: dict[str, Any]) -> dict[str, Any]:
-    shadow = diagnostic.get("shadow") if isinstance(diagnostic.get("shadow"), dict) else {}
-    fact_sources = shadow.get("fact_sources") if isinstance(shadow.get("fact_sources"), dict) else {}
-    control = fact_sources.get("control") if isinstance(fact_sources.get("control"), dict) else {}
-    return {
-        "served_path": diagnostic.get("served_path"),
-        "shadow_mode": shadow.get("mode"),
-        "control_subject_key": control.get("subject_key"),
-    }
-
-
-def _control_receipt(
-    operation: str,
-    state: dict[str, Any],
-    *,
-    command: object,
-    accepted: bool,
-    result: object,
-    native: dict[str, Any] | None = None,
-    runtime: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    receipt: dict[str, Any] = {
-        "operation": operation,
-        "session": _state_identity(state),
-        "accepted": accepted,
-        "command": command,
-        "result": result,
-    }
-    if native is not None:
-        receipt["native"] = native
-    if runtime is not None:
-        receipt["runtime"] = runtime
-    return receipt
-
-
-def _nested_runtime_receipt(receipt: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
-    """Keep runtime binding evidence below the runtime receipt boundary."""
-    runtime = receipt.get("runtime") if isinstance(receipt.get("runtime"), dict) else {}
-    runtime = dict(runtime)
-    binding = runtime.get("binding") if isinstance(runtime.get("binding"), dict) else None
-    if binding is None:
-        binding = fallback or (receipt.get("binding") if isinstance(receipt.get("binding"), dict) else {})
-    runtime["binding"] = dict(binding)
-    return runtime
-
-
-def _write_scenario_receipts(root: Path, args: argparse.Namespace, observations: dict[str, Any], secrets: list[str]) -> None:
-    provider_binary = {
-        "schema_version": 1,
-        "artifact_kind": "pi_helm_provider_binary_receipt",
-        "provider": "pi",
-        "version": args.provider_version,
-        "path": str(args.provider_bin),
-        "sha256": observations.get("provider_binary_sha256"),
-    }
-    control_receipts = observations["control_receipts"]
-    control_complete = all(receipt.get("accepted") is True for receipt in control_receipts.values())
-    reload_rebind = dict(observations["reload_rebind_receipt"])
-    reload_rebind["runtime"] = _nested_runtime_receipt(reload_rebind, observations.get("reload_binding") or {})
-    session_replacement = dict(observations["session_replacement_receipt"])
-    session_replacement["runtime"] = _nested_runtime_receipt(
-        session_replacement,
-        observations.get("replacement_binding") or {},
-    )
-    session_replacement.pop("binding", None)
-    receipts: dict[str, dict[str, Any]] = {
-        "provider-binary-receipt.json": provider_binary,
-        "helm-registration-receipt.json": {
-            "schema_version": 1,
-            "artifact_kind": "pi_helm_registration_receipt",
-            **observations["helm_registration_receipt"],
-        },
-        "native-session-receipt.json": {
-            "schema_version": 1,
-            "artifact_kind": "pi_helm_native_session_receipt",
-            "status": "pass" if observations["native_session_receipt"].get("native_file", {}).get("present") else "fail",
-            **observations["native_session_receipt"],
-        },
-        "native-taxonomy-receipt.json": {
-            "schema_version": 1,
-            "artifact_kind": "pi_helm_native_taxonomy_receipt",
-            **observations["native_taxonomy_receipt"],
-        },
-        "control-command-receipts.json": {
-            "schema_version": 1,
-            "artifact_kind": "pi_helm_control_command_receipts",
-            "status": "pass" if control_complete else "fail",
-            "provider": "pi",
-            "session_id": observations.get("session_id"),
-            "commands": control_receipts,
-        },
-        "reload-rebind-receipt.json": {
-            "schema_version": 1,
-            "artifact_kind": "pi_helm_reload_rebind_receipt",
-            **reload_rebind,
-        },
-        "session-replacement-receipt.json": {
-            "schema_version": 1,
-            "artifact_kind": "pi_helm_session_replacement_receipt",
-            **session_replacement,
-        },
-        "cold-resume-receipt.json": {
-            "schema_version": 1,
-            "artifact_kind": "pi_helm_cold_resume_receipt",
-            **observations["cold_resume_receipt"],
-        },
-        "stale-owner-receipt.json": {
-            "schema_version": 1,
-            "artifact_kind": "pi_helm_stale_owner_receipt",
-            **observations["stale_owner_receipt"],
-        },
-    }
-    for name, receipt in receipts.items():
-        _write_json(root / name, _redact_value(receipt, secrets))
-
-
-def _runtime_failure_diagnostic(error: BaseException) -> dict[str, Any] | None:
-    if not isinstance(error, (_RuntimeHostHTTPError, _RuntimeConvergenceError)):
-        return None
-    diagnostic: dict[str, Any] = {
-        "error_type": type(error).__name__,
-        "error": str(error),
-        "http_status": getattr(error, "status", getattr(error, "http_status", None)),
-        "last_runtime_observation": getattr(error, "last_runtime_observation", None),
-    }
-    if isinstance(error, _RuntimeConvergenceError):
-        diagnostic.update({"marker": error.marker, "cause_type": error.cause_type, "cause_detail": error.detail})
-    return diagnostic
-
-
-def _wait_runtime_control_identity(url: str, token: str, session_id: str, state: dict[str, Any]) -> dict[str, Any]:
-    expected = f"connection:{state['connection_id']}:{state['lease_generation']}"
-    host_failed_the_read = False
-
-    def observe() -> dict[str, Any] | None:
-        nonlocal host_failed_the_read
-        try:
-            diagnostic = _runtime_diagnostic(url, token, session_id)
-        except _RuntimeHostHTTPError as exc:
-            if exc.status in _PROPAGATING_HTTP_STATUSES:
-                host_failed_the_read = True
-                return None
-            raise
-        host_failed_the_read = False
-        shadow = diagnostic.get("shadow") or {}
-        chosen = (shadow.get("fact_sources") or {}).get("control") or {}
-        if chosen.get("subject_key") == expected and _served_controls({"diagnostic": diagnostic}):
-            return diagnostic
-        return None
-
-    return _wait(
-        observe,
-        timeout=30,
-        description=f"served Pi control identity {expected}",
-        # A request the Runtime Host failed is the Runtime Host. A diagnostic it
-        # served without the identity does not say whether the engine has yet
-        # to register the lease or the Runtime Host to bind it.
-        waited_on=lambda: RUNTIME_HOST if host_failed_the_read else None,
-    )
-
-
-def _wait_runtime_convergence(
-    url: str,
-    token: str,
-    session_id: str,
-    provider_session_id: str,
-    marker: str,
-    *,
-    alongside: tuple[str, ...] = (),
-    recalled: bool = False,
-    reply_event_id: object = None,
-    session_file: Path,
-    timeout: float = 90,
-) -> dict[str, Any]:
-    """Wait until the Runtime Host serves what Pi answered ``marker`` with.
-
-    The served events that answer must be the entries of Pi's own transcript
-    (``session_file``) that answer, entry for entry
-    (`served_answer_correspondence`); how many there are is the provider's
-    business. ``alongside`` names the other markers the reply was asked to
-    carry; ``recalled`` is for a phrase the model brings back from restored
-    history, which it may put in a sentence. ``reply_event_id`` is the native
-    entry the native wait returned; it decides nothing about convergence,
-    which is judged against every answering entry of the transcript. It is
-    recorded beside the observation (``native_reply_served``), and having it is
-    what lets an expired wait say it was waiting on Longhouse and not on Pi's
-    turn. A complete served page with an answer the
-    transcript does not account for fails at once with a typed reason
-    (`served_answer_fault`); a page that has not reached an answering entry yet,
-    or has only its first block, is the lag this waits out. A wait that gives
-    up with a fault still on the page ends with that fault's reason, not as a
-    timeout.
-    """
-
-    last_runtime_observation: dict[str, Any] | None = None
-    refusal = StandingServedAnswerFault()
-
-    def observe() -> dict[str, Any] | None:
-        nonlocal last_runtime_observation
-        try:
-            snapshot = _runtime_snapshot(url, token, session_id)
-        except _RuntimeHostHTTPError as exc:
-            if exc.status in _PROPAGATING_HTTP_STATUSES:
-                last_runtime_observation = {"http_status": exc.status, "error": str(exc)}
-                return None
-            exc.last_runtime_observation = last_runtime_observation
-            raise
-        events_payload = snapshot.get("events") if isinstance(snapshot.get("events"), dict) else {}
-        events = events_payload.get("events") if isinstance(events_payload.get("events"), list) else []
-        matches = assistant_marker_events(events, marker, default_origin="durable", alongside=alongside, recalled=recalled)
-        binding = _runtime_binding(snapshot, session_id=session_id, provider_session_id=provider_session_id)
-        last_runtime_observation = _runtime_observation_summary(
-            snapshot,
-            session_id=session_id,
-            provider_session_id=provider_session_id,
-            marker=marker,
-            alongside=alongside,
-            recalled=recalled,
-        )
-        # Read after the page, so nothing served is newer than what is read here.
-        native_answers, native_state = console_lifecycle._native_answer_rows(
-            "pi", session_file, marker, alongside=alongside, recalled=recalled
-        )
-        native_readable = native_answers is not None
-        native_answers = native_answers or {}
-        correspondence = served_answer_correspondence(
-            events, marker, native_answers, default_origin="durable", alongside=alongside, recalled=recalled
-        )
-        correspondence["native_transcript_readable"] = native_readable
-        correspondence["native_transcript_state"] = native_state
-        last_runtime_observation["answer_correspondence"] = correspondence
-        last_runtime_observation["native_reply_served"] = reply_event_id is not None and any(
-            isinstance(event, dict) and event.get("id") == reply_event_id for event in events
-        )
-        # Without Pi's transcript read to the end there is nothing to hold the
-        # page to: no verdict either way. And a refusal has to stand
-        # (`StandingServedAnswerFault`), so an entry Pi appended between the
-        # engine shipping it and this read is seen on the next one.
-        found = (
-            served_answer_fault(events, marker, native_answers, default_origin="durable", alongside=alongside, recalled=recalled)
-            if native_readable and events_payload.get("has_more") is False
-            else None
-        )
-        if found is not None:
-            found.observation = dict(last_runtime_observation)
-        fault = refusal.standing(found)
-        if fault is not None:
-            raise fault
-        if (
-            correspondence["converged"] is True
-            and binding["one_session"]
-            and binding["one_thread"]
-            and binding["provider"] == "pi"
-            and binding["provider_session_bound"]
-            and _served_controls(snapshot)
-        ):
-            return {
-                "snapshot": snapshot,
-                "binding": binding,
-                "assistant_events": matches,
-                # The entries of Pi's transcript that answered and the served
-                # events that carry them. More than one entry is a model that
-                # answered more than once, which is recorded and decides nothing.
-                "answer_correspondence": correspondence,
-                "alongside": list(alongside),
-                "recalled": recalled,
-            }
-        return None
-
-    def stopped_on() -> str | None:
-        # The caller found the reply in Pi's own transcript before asking, so
-        # the provider's turn is not what is awaited. Without that entry this
-        # wait cannot say which side stopped.
-        if reply_event_id is None:
-            return None
-        seen = last_runtime_observation or {}
-        if "http_status" in seen:
-            return RUNTIME_HOST
-        answers = seen.get("answer_correspondence") if isinstance(seen.get("answer_correspondence"), dict) else {}
-        # Without Pi's transcript there is nothing to hold the page to.
-        if answers.get("native_transcript_readable") is False:
-            return None
-        # Pi's answers are served and the control state beside them is not yet held.
-        return RUNTIME_HOST if answers.get("converged") is True else LONGHOUSE_INGEST
-
-    try:
-        return _wait(
-            observe,
-            timeout=timeout,
-            description=f"Runtime Host convergence for Pi marker {marker}",
-            # A fault still on the page is why this never converged: say that.
-            on_timeout=lambda prefix: refusal.at_deadline() or RuntimeError(f"{prefix}: {last_runtime_observation}"),
-            waited_on=stopped_on,
-        )
-    except _RuntimeHostHTTPError:
-        raise
-    except Exception as exc:
-        raise _RuntimeConvergenceError(marker, exc, last_runtime_observation) from exc
-
-
-def _native_snapshot(session_file: Path) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
-    rows, provider_session_id, metadata = pi_transcript_rows(session_file)
-    taxonomy = pi_native_shadow_taxonomy(rows, metadata)
-    taxonomy["provider_session_id"] = provider_session_id
-    return rows, metadata, taxonomy
-
-
-def _wait_native_marker(
-    session_file: Path,
-    marker: str,
-    *,
-    minimum_source_offset: int = 0,
-    alongside: tuple[str, ...] = (),
-    recalled: bool = False,
-    timeout: float = 90.0,
-) -> dict[str, Any]:
-    """Wait for the native assistant row that replies with ``marker``.
-
-    A row replies when it answers with the marker (``zerg.qa.answer_markers``);
-    narration that quotes the marker ahead of a tool call is not the reply, and
-    returning on it ended the wait before the turn did. ``recalled`` is for a
-    phrase the model brings back from restored history: no prompt of the turn
-    contains it, so a row that carries it recalls it, in a sentence or not.
-    User rows are prompts and are counted by presence.
-    """
-
-    last: dict[str, Any] = {}
-
-    def observe() -> dict[str, Any] | None:
-        if not session_file.is_file():
-            return None
-        try:
-            rows, metadata, taxonomy = _native_snapshot(session_file)
-        except OSError:
-            return None
-        invocation_rows = [row for row in rows if int(row.get("source_offset") or 0) >= minimum_source_offset]
-        assistant_rows = [row for row in invocation_rows if row.get("role") == "assistant"]
-        naming = [row for row in assistant_rows if marker in str(row.get("text") or "")]
-        assistant = (
-            naming if recalled else [row for row in naming if marker_answered(str(row.get("text") or ""), marker, alongside=alongside)]
-        )
-        user = [row for row in invocation_rows if row.get("role") == "user" and marker in str(row.get("text") or "")]
-        last.update(
-            {
-                "assistant_rows": len(assistant_rows),
-                "rows_mentioning_marker": len(naming) - len(assistant),
-                "last_stop_reason": (assistant_rows[-1].get("message") or {}).get("stop_reason") if assistant_rows else None,
-            }
-        )
-        return (
-            {
-                "rows": len(rows),
-                "invocation_rows": invocation_rows,
-                "minimum_source_offset": minimum_source_offset,
-                "source_end_offset": metadata.get("source_end_offset"),
-                "metadata": metadata,
-                "taxonomy": taxonomy,
-                # Rows that name the marker: the factory recounts this from the
-                # retained bytes. Rows that reply with it are counted apart,
-                # and that is the count the verdicts below read.
-                "assistant_marker_rows": len(naming),
-                "assistant_answer_rows": len(assistant),
-                "assistant_reply_entry_id": assistant[0].get("entry_id"),
-                "user_marker_rows": len(user),
-                "user_marker_occurrences": sum(str(row.get("text") or "").count(marker) for row in user),
-            }
-            if assistant
-            else None
-        )
-
-    return _wait(
-        observe,
-        timeout=timeout,
-        description=f"native Pi marker {marker}",
-        on_timeout=lambda prefix: RuntimeError(f"{prefix}: {last or None}"),
-        # The assistant row that replies, in Pi's own transcript. The wait was
-        # on the model only if Pi holds the prompt it would answer: a prompt
-        # Longhouse never delivered leaves the same silence. A recalled phrase
-        # is read from a turn that has already replied, which is not a stall.
-        waited_on=(lambda: PROVIDER_TURN if provider_holds_prompt(session_file, marker) else None) if not recalled else None,
-    )
-
-
-def _stale_frame(state: dict[str, Any]) -> dict[str, Any]:
-    frame = {
-        "kind": "send",
-        "auth_token": state.get("channel_token"),
-        "session_id": state.get("session_id"),
-        "provider_session_id": state.get("provider_session_id"),
-        "connection_id": state.get("connection_id"),
-        "lease_generation": state.get("lease_generation"),
-        "text": "stale-channel-proof",
-    }
-    socket_path = str(state.get("socket_path") or "")
-    if not socket_path:
-        return {"frame": frame, "accepted": False, "error_code": "socket_missing"}
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
-            channel.settimeout(5)
-            channel.connect(socket_path)
-            channel.sendall((json.dumps(frame) + "\n").encode())
-            response = json.loads(channel.recv(8192).decode())
-    except (OSError, json.JSONDecodeError) as exc:
-        return {"frame": frame, "accepted": False, "error_code": type(exc).__name__, "error": str(exc)}
-    error = response.get("error") if isinstance(response, dict) else {}
-    return {
-        "frame": frame,
-        "accepted": response.get("ok") is True if isinstance(response, dict) else False,
-        "error_code": error.get("code") if isinstance(error, dict) else None,
-        "response": response,
-    }
-
-
-def _send_input(url: str, token: str, session_id: str, text: str, *, timeout: float = 30) -> dict[str, Any]:
-    """Submit a SEND through the durable input route, as every client does.
-
-    Revision 7: a mid-turn SEND is a durable receipt the turn-boundary drain
-    delivers; the adapter refuses it while busy rather than holding it in its
-    volatile follow-up queue. The Runtime Host answers "queued".
-    """
-
-    request = Request(
-        f"{url.rstrip('/')}/api/agents/sessions/{session_id}/input",
-        data=json.dumps({"text": text, "intent": "auto", "client_request_id": f"pi-helm-follow-up-{os.urandom(8).hex()}"}).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "X-Agents-Token": token,
-            "User-Agent": _RUNTIME_HOST_USER_AGENT,
-        },
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        try:
-            detail = exc.read(4096).decode("utf-8", "replace")[:1000]
-        except OSError:
-            detail = ""
-        raise _RuntimeHostHTTPError(exc.code, detail) from exc
-    outcome = payload.get("outcome") if isinstance(payload, dict) else None
-    if outcome not in {"queued", "sent"}:
-        raise RuntimeError(f"Runtime Host did not accept Pi follow-up: {payload}")
-    return {"accepted": True, "outcome": outcome, "queued_not_sent": outcome == "queued", "response": payload}
-
-
-def _send_live(url: str, token: str, session_id: str, text: str, *, timeout: float = 30) -> dict[str, Any]:
-    request = Request(
-        f"{url.rstrip('/')}/api/agents/sessions/{session_id}/send-live",
-        data=json.dumps({"message": text}).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "X-Agents-Token": token,
-            "User-Agent": _RUNTIME_HOST_USER_AGENT,
-        },
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        try:
-            raw_detail = exc.read(4096).decode("utf-8", "replace")
-        except OSError:
-            raw_detail = ""
-        try:
-            parsed_detail = json.loads(raw_detail)
-        except json.JSONDecodeError:
-            parsed_detail = raw_detail[:1000]
-        if isinstance(parsed_detail, dict):
-            detail = str(parsed_detail.get("detail") or parsed_detail)[:1000]
-        else:
-            detail = str(parsed_detail)[:1000]
-        raise _RuntimeHostHTTPError(exc.code, detail) from exc
-    if not isinstance(payload, dict) or payload.get("accepted") is not True:
-        raise RuntimeError(f"Runtime Host did not accept Pi follow-up: {payload}")
-    return payload
-
-
-def _wait_native_abort(
-    session_file: Path,
-    *,
-    minimum_source_offset: int,
-    timeout: float = 30,
-) -> dict[str, Any] | None:
-    def observe() -> dict[str, Any] | None:
-        if not session_file.is_file():
-            return None
-        rows, metadata, taxonomy = _native_snapshot(session_file)
-        for row in rows:
-            if int(row.get("source_offset") or 0) < minimum_source_offset:
-                continue
-            message = row.get("message") if isinstance(row.get("message"), dict) else {}
-            stop_reason = str(message.get("stop_reason") or "").strip().lower()
-            if row.get("type") == "assistant" and stop_reason in {"aborted", "cancelled", "canceled"}:
-                return {
-                    "row": row,
-                    "rows": rows,
-                    "metadata": metadata,
-                    "taxonomy": taxonomy,
-                    "source_end_offset": metadata.get("source_end_offset"),
-                }
-        return None
-
-    return _wait(observe, timeout=timeout, description="native Pi aborted message")
-
-
-def _wait_task_tool_boundary(session_file: Path, task_marker: str, *, timeout: float = 90) -> dict[str, Any]:
-    """Wait until the task turn has returned at least one tool result."""
-
-    def observe() -> dict[str, Any] | None:
-        if not session_file.is_file():
-            return None
-        boundary = task_tool_boundary(read_session_entries(session_file), task_marker)
-        return {"tool_result_id": boundary} if boundary else None
-
-    return _wait(
-        observe,
-        timeout=timeout,
-        description=f"tool boundary in task {task_marker}",
-        # The model's first tool call in a turn Pi holds the prompt for.
-        waited_on=lambda: PROVIDER_TURN if provider_holds_prompt(session_file, task_marker) else None,
-    )
-
-
-def _wait_idle(home: Path, session_id: str, *, timeout: float = 120) -> dict[str, Any]:
-    try:
-        return _wait_state(
-            home,
-            session_id=session_id,
-            predicate=lambda item: item.get("phase") not in {"running", "thinking"},
-            timeout=timeout,
-        )
-    except RuntimeError:
-        return {}
-
-
-def _process_record(pid: object, expected_birth: object, label: str) -> dict[str, Any]:
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return {"label": label, "pid": pid, "birth_matches": False, "pgid": None, "alive": False}
-    try:
-        completed = subprocess.run(
-            ["ps", "-o", "pid=", "-o", "pgid=", "-o", "lstart=", "-p", str(pid)],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        fields = completed.stdout.strip().split(None, 2)
-        pgid = int(fields[1]) if len(fields) >= 2 else None
-        birth = fields[2].strip() if len(fields) >= 3 else None
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        pgid = None
-        birth = None
-    return {
-        "label": label,
-        "pid": pid,
-        "pgid": pgid,
-        "birth": birth,
-        "expected_birth": expected_birth,
-        "birth_matches": bool(birth and expected_birth and birth == str(expected_birth)),
-        "alive": _pid_alive(pid),
-    }
-
-
-def _recorded_owner_status(record: dict[str, Any]) -> str:
-    pid = record.get("pid")
-    expected_birth = record.get("expected_birth")
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or not expected_birth:
-        return "invalid"
-    if not record["alive"]:
-        return "dead"
-    if record.get("birth") == str(expected_birth):
-        return "alive"
-    if record.get("birth"):
-        return "reused"
-    return "unknown"
-
-
-def _wait_recorded_execution_owners_dead(
-    home: Path,
-    session_id: str,
-    expected_state: dict[str, Any],
-    *,
-    timeout: float = 20.0,
-) -> dict[str, Any]:
-    expected_identities = {
-        label: {
-            "pid": expected_state.get(f"{label}_pid"),
-            "birth": expected_state.get(f"{label}_process_start_time"),
-        }
-        for label in ("launcher", "provider")
-    }
-    deadline = time.monotonic() + timeout
-    last: dict[str, Any] = {}
-    while time.monotonic() < deadline:
-        state = None
-        for path in _state_paths(home):
-            try:
-                candidate = _read_json(path)
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
-            if candidate.get("session_id") == session_id:
-                state = candidate
-                break
-        owner_records = [_process_record(identity["pid"], identity["birth"], label) for label, identity in expected_identities.items()]
-        owner_status = {record["label"]: _recorded_owner_status(record) for record in owner_records}
-        state_identity_matches = bool(state) and all(
-            state.get(f"{label}_pid") == identity["pid"] and state.get(f"{label}_process_start_time") == identity["birth"]
-            for label, identity in expected_identities.items()
-        )
-        last = {
-            "state_status": state.get("status") if state else None,
-            "terminal_reason": state.get("terminal_reason") if state else None,
-            "state_identity_matches": state_identity_matches,
-            "owner_status": owner_status,
-            "owners": owner_records,
-        }
-        if (
-            state
-            and state.get("status") == "stopped"
-            and state.get("terminal_reason") == "remote_terminate"
-            and state_identity_matches
-            and all(status in {"dead", "reused"} for status in owner_status.values())
-        ):
-            return {"status": "pass", **last}
-        time.sleep(0.2)
-    raise expired(RuntimeError(f"timed out waiting for terminated Pi Helm execution owners: {last}"), LONGHOUSE_ENGINE)
-
-
-def _cleanup_receipt(records: list[dict[str, Any]]) -> dict[str, Any]:
-    unique = {(item.get("label"), item.get("pid"), item.get("pgid"), item.get("expected_birth")): item for item in records}
-    records = list(unique.values())
-    provider_records = [item for item in records if item.get("label") == "provider"]
-    pid_dead = bool(provider_records) and all(_pid_dead(item.get("pid")) for item in provider_records)
-    groups_dead = bool(records) and all(_pgid_dead(item.get("pgid")) for item in records)
-    birth_verified = bool(records) and all(item.get("birth_matches") is True for item in records)
-    orphan_count = sum(not (_pid_dead(item.get("pid")) and _pgid_dead(item.get("pgid"))) for item in records)
-    return {
-        "status": "pass" if pid_dead and groups_dead and birth_verified and orphan_count == 0 else "fail",
-        "provider_process_dead": pid_dead,
-        "process_group_dead": groups_dead,
-        "no_orphan_provider_processes": orphan_count == 0 and birth_verified,
-        "birth_identities_verified": birth_verified,
-        "orphan_count": orphan_count,
-        "owned_processes": records,
-    }
-
-
-def _retain_source(
-    root: Path,
-    source: Path,
-    name: str,
-    secrets: list[str],
-    *,
-    require_complete: bool = False,
-) -> dict[str, Any]:
-    target = root / "source-artifacts" / name
-    try:
-        content = source.read_bytes()
-    except OSError as exc:
-        return {"source": str(source), "retained": False, "complete": False, "error": f"{type(exc).__name__}: {exc}"}
-    for secret in secrets:
-        if secret:
-            secret_bytes = secret.encode()
-            replacement = (b"<redacted>" * ((len(secret_bytes) + 9) // 10))[: len(secret_bytes)]
-            content = content.replace(secret_bytes, replacement)
-    max_bytes = 16 * 1024 * 1024
-    exceeds_bound = len(content) > max_bytes
-    truncated = exceeds_bound and not require_complete
-    if truncated:
-        content = content[:max_bytes] + b"\n[truncated by QA evidence bound]\n"
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    target.write_bytes(content)
-    return {
-        "source": str(source),
-        "path": target.relative_to(root).as_posix(),
-        "retained": True,
-        "complete": not truncated,
-        "truncated": truncated,
-        "size_exceeds_evidence_bound": exceeds_bound,
-        "bytes": len(content),
-    }
-
-
-def _redact_value(value: object, secrets: list[str]) -> object:
-    if isinstance(value, str):
-        for secret in secrets:
-            if secret:
-                value = value.replace(secret, "<redacted>")
-        return value
-    if isinstance(value, list):
-        return [_redact_value(item, secrets) for item in value]
-    if isinstance(value, dict):
-        return {key: _redact_value(item, secrets) for key, item in value.items() if key not in {"channel_token", "auth_token"}}
-    return value
-
-
-def pi_helm_lifecycle_assertions(observation: dict[str, Any]) -> dict[str, bool]:
-    controls = observation.get("control_receipts") if isinstance(observation.get("control_receipts"), dict) else {}
-    follow_receipt = controls.get("follow_up") if isinstance(controls.get("follow_up"), dict) else {}
-    follow_native = follow_receipt.get("native") if isinstance(follow_receipt.get("native"), dict) else {}
-    follow_command = follow_receipt.get("command") if isinstance(follow_receipt.get("command"), dict) else {}
-    follow_submission = follow_receipt.get("runtime") if isinstance(follow_receipt.get("runtime"), dict) else {}
-    steer_receipt = controls.get("steer") if isinstance(controls.get("steer"), dict) else {}
-    steer_native = steer_receipt.get("native") if isinstance(steer_receipt.get("native"), dict) else {}
-    steer_runtime = steer_receipt.get("runtime") if isinstance(steer_receipt.get("runtime"), dict) else {}
-    steer_active_state = steer_runtime.get("active_state") if isinstance(steer_runtime.get("active_state"), dict) else {}
-    abort_receipt = controls.get("abort") if isinstance(controls.get("abort"), dict) else {}
-    abort_native = abort_receipt.get("native") if isinstance(abort_receipt.get("native"), dict) else {}
-    follow_marker = follow_native.get("marker")
-    context_evidence = (
-        (observation.get("cold_resume_receipt") or {}).get("context_evidence")
-        if isinstance(observation.get("cold_resume_receipt"), dict)
-        else None
-    )
-    context_evidence = context_evidence if isinstance(context_evidence, dict) else {}
-    context_phrase = context_evidence.get("phrase")
-    context_pre = context_evidence.get("pre_termination") if isinstance(context_evidence.get("pre_termination"), dict) else {}
-    context_native = context_evidence.get("post_resume_native") if isinstance(context_evidence.get("post_resume_native"), dict) else {}
-    context_runtime = context_evidence.get("post_resume_runtime") if isinstance(context_evidence.get("post_resume_runtime"), dict) else {}
-    context_binding = context_runtime.get("binding") if isinstance(context_runtime.get("binding"), dict) else {}
-    cleanup = observation.get("cleanup") if isinstance(observation.get("cleanup"), dict) else {}
-    cleanup_ok = (
-        cleanup.get("status") == "pass"
-        and cleanup.get("provider_process_dead") is True
-        and cleanup.get("process_group_dead") is True
-        and cleanup.get("orphan_count") == 0
-        and cleanup.get("shipper_stop_verified") is True
-        and cleanup.get("canary_session_hidden") is True
-        and cleanup.get("scratch_removed") is True
-        and cleanup.get("source_retention_verified") is True
-        and cleanup.get("cleanup_errors", []) == []
-    )
-    return {
-        "pi_helm_launch_registration": observation.get("launch_registration") is True,
-        "pi_helm_native_tool_taxonomy": observation.get("native_tool_taxonomy") is True,
-        "pi_helm_send_idle": observation.get("send_idle") is True,
+        "pi_helm_launch_registration": (
+            bool(_mapping(observation.get("shipper")).get("machine_name"))
+            and launch_state.get("provider") == "pi"
+            and launch_state.get("ready") is True
+            and launch_state.get("status") in {"ready", "running"}
+            and bool(str(launch_state.get("session_dir") or ""))
+            and bool(str(launch_state.get("native_session_id") or ""))
+            and flushed("launch")
+            and bound(launch)
+            and _mapping(launch.get("runtime")).get("served_controls") is True
+        ),
+        "pi_helm_native_tool_taxonomy": bool(taxonomy.get("tool_pairs")) and not bool(taxonomy.get("tool_calls_without_results")),
+        "pi_helm_send_idle": accepted(send) and answered(send) and flushed("send") and bound(send, facts=_BOUND[:2]),
         "pi_helm_steer_active": (
-            observation.get("steer_active") is True
-            and steer_receipt.get("accepted") is True
-            and steer_runtime.get("active_turn_observed") is True
-            and steer_active_state.get("phase") in {"running", "thinking"}
-            and (steer_native.get("assistant_answer_rows") or 0) >= 1
-            and (observation.get("steer_turn_verdict") or {}).get("passed") is True
+            accepted(steer, "active_command")
+            and busy(steer)
+            and accepted(steer)
+            and answered(steer)
+            and _mapping(observation.get("steer_turn_verdict")).get("passed") is True
         ),
         "pi_helm_follow_up_native": (
-            observation.get("follow_up_native") is True
-            and follow_receipt.get("accepted") is True
-            and follow_command.get("method") == "POST"
-            and isinstance(follow_command.get("path"), str)
-            and follow_command["path"].startswith("/api/agents/sessions/")
-            and follow_command["path"].endswith("/input")
-            and (follow_receipt.get("result") or {}).get("queued_not_sent") is True
-            and isinstance(follow_marker, str)
-            and follow_command.get("text") == f"After this turn, reply with {follow_marker}."
+            accepted(follow_up, "active_command")
+            and busy(follow_up)
+            and accepted(follow_up)
+            and follow_request.get("method") == "POST"
+            and str(follow_request.get("path") or "").startswith("/api/agents/sessions/")
+            and str(follow_request.get("path") or "").endswith("/input")
+            and follow_up.get("queued_not_sent") is True
+            and isinstance(follow_native.get("marker"), str)
+            and _mapping(follow_request.get("payload")).get("text") == FAMILY.prompts["follow_up"].format(marker=follow_native["marker"])
+            and answered(follow_up)
+            # The queued send was delivered once, as one row.
             and follow_native.get("user_marker_rows") == 1
             and follow_native.get("user_marker_occurrences") == 1
-            and follow_native.get("follow_up_delivered") is True
-            and follow_submission.get("active_turn_observed") is True
         ),
         "pi_helm_abort_native": (
-            observation.get("abort_native") is True
-            and (observation.get("abort_turn_verdict") or {}).get("passed") is True
-            and cleanup_ok
-            and abort_receipt.get("accepted") is True
+            accepted(abort, "active_command")
+            and busy(abort)
+            and accepted(abort)
+            and bool(abort.get("settled_state"))
+            and _mapping(abort.get("settled_state")).get("phase") not in {"running", "thinking"}
             and abort_native.get("observed") is True
-            and isinstance(abort_native.get("native_file"), dict)
-            and bool(abort_native["native_file"].get("retained_path"))
+            and bool(abort_native.get("retained_source_path"))
             and isinstance(abort_native.get("aborted_row_id"), str)
             and isinstance(abort_native.get("aborted_row_source_offset"), int)
+            and _mapping(observation.get("abort_turn_verdict")).get("passed") is True
+            and _mapping(observation.get("abort_turn_verdict")).get("after_send_accepted") is True
+            and cleanup_ok
         ),
-        "pi_helm_terminate_owned": observation.get("terminate_owned") is True and cleanup_ok,
-        "pi_helm_reload_rebind": observation.get("reload_rebind") is True,
+        "pi_helm_terminate_owned": (
+            accepted(records["terminate"])
+            and accepted(records["final_terminate"])
+            and _mapping(records["final_terminate"].get("stopped_state")).get("status") == "pass"
+            and records["final_terminate"].get("terminals_exited") is True
+            and cleanup.get("provider_process_dead") is True
+            and cleanup.get("process_group_dead") is True
+            and cleanup_ok
+        ),
+        "pi_helm_reload_rebind": (
+            bool(reload_after.get("connection_id"))
+            and reload_after.get("connection_id") != reload_before.get("connection_id")
+            and bool(reload_after.get("session_id"))
+            and reload_after.get("session_id") == reload_before.get("session_id")
+            and bool(reload_after.get("lease_generation"))
+            and reload_after.get("lease_generation") != reload_before.get("lease_generation")
+            and accepted(reload, "send")
+            and (_mapping(reload.get("evidence")).get("assistant_answer_rows") or 0) >= 1
+            and bound(reload, facts=_BOUND[:2])
+            and _mapping(_mapping(reload.get("runtime")).get("binding")).get("provider") == "pi"
+            and _mapping(reload.get("runtime")).get("served_controls") is True
+        ),
         "pi_helm_session_replacement_rebind": (
-            observation.get("session_replacement_rebind") is True
-            and (observation.get("replacement_binding") or {}).get("longhouse_session_id_before")
-            == (observation.get("replacement_binding") or {}).get("longhouse_session_id_after")
-            and (observation.get("replacement_binding") or {}).get("provider_session_id_before")
-            != (observation.get("replacement_binding") or {}).get("provider_session_id_after")
-            and isinstance((observation.get("replacement_binding") or {}).get("native_file_before"), dict)
-            and isinstance((observation.get("replacement_binding") or {}).get("native_file_after"), dict)
-            and (observation.get("replacement_binding") or {}).get("native_file_before", {}).get("path")
-            != (observation.get("replacement_binding") or {}).get("native_file_after", {}).get("path")
-            and (observation.get("replacement_binding") or {}).get("native_file_present") is True
-            and (observation.get("replacement_binding") or {}).get("provider_session_id")
-            == (observation.get("replacement_binding") or {}).get("native_header_id")
-            and (observation.get("replacement_runtime") or {}).get("binding", {}).get("one_session") is True
-            and (observation.get("replacement_runtime") or {}).get("binding", {}).get("one_thread") is True
+            bool(replaced.get("session_id"))
+            and replaced.get("session_id") == replaced_before.get("session_id")
+            and bool(replaced.get("native_session_id"))
+            and replaced.get("native_session_id") != replaced_before.get("native_session_id")
+            # A new file, present, whose header names the new session.
+            and bool(_mapping(replacement.get("native_file_before")).get("path"))
+            and replaced_file.get("present") is True
+            and replaced_file.get("path") != _mapping(replacement.get("native_file_before")).get("path")
+            and _mapping(replacement.get("evidence")).get("native_header_session_id") == replaced.get("native_session_id")
+            and bound(replacement, facts=_BOUND[:2])
         ),
         "pi_helm_cold_resume_exact_file": (
-            observation.get("cold_resume_exact_file") is True
-            and isinstance(context_phrase, str)
-            and bool(context_phrase)
-            and context_evidence.get("source") == "pre_termination_replacement_turn"
-            and context_pre.get("source") == "pre_termination_replacement_turn"
-            and context_phrase in str(context_pre.get("prompt") or "")
-            and context_pre.get("native_user_marker_rows") == 1
-            and context_pre.get("native_user_marker_occurrences") == 1
-            and context_native.get("marker") == context_phrase
-            and (context_native.get("assistant_answer_rows") or 0) >= 1
-            and context_native.get("user_marker_rows") == 0
-            and context_native.get("user_marker_occurrences") == 0
-            and context_evidence.get("resume_prompt")
-            and context_phrase not in str(context_evidence["resume_prompt"])
-            and context_runtime.get("marker") == context_phrase
-            and (context_runtime.get("assistant_marker_count") or 0) >= 1
-            and all(context_binding.get(field) is True for field in ("one_session", "one_thread", "provider_session_bound"))
+            # A new run of the same native session, in the same file.
+            bool(resume_state.get("run_id"))
+            and resume_state.get("run_id") != _mapping(_mapping(observation.get("owners")).get("initial")).get("run_id")
+            and resume_state.get("native_session_id") == resumed_from.get("native_session_id")
+            and bool(_mapping(resume_native.get("native_file")).get("path"))
+            and _mapping(resume_native.get("native_file")).get("path") == _mapping(resume.get("native_file_before")).get("path")
+            and resume_native.get("native_header_session_id") == resume_state.get("native_session_id")
+            and answered(resume)
+            and flushed("resume")
+            and bound(resume)
+            # The phrase the old owner was given once comes back from the restored history: the resume prompt
+            # does not hold it, no user row of the resumed turn does, and the reply that recalls it is served.
+            and isinstance(phrase, str)
+            and bool(phrase)
+            and phrase in str(replacement.get("prompt") or "")
+            and seed.get("user_marker_rows") == 1
+            and seed.get("user_marker_occurrences") == 1
+            and bool(resume.get("prompt"))
+            and phrase not in str(resume.get("prompt"))
+            and recall.get("marker") == phrase
+            and (recall.get("assistant_answer_rows") or 0) >= 1
+            and recall.get("user_marker_rows") == 0
+            and recall.get("user_marker_occurrences") == 0
+            and recall_served.get("marker") == phrase
+            and bool(_mapping(recall_served.get("served_projection")).get("marker_event_ids"))
+            and bound(resume, "context_runtime")
         ),
-        "pi_helm_stale_owner_refused": observation.get("stale_owner_refused") is True,
+        "pi_helm_stale_owner_refused": (
+            stale.get("accepted") is False
+            and stale.get("error_code") in _STALE_REFUSALS
+            and _mapping(stale.get("native_dispatch")).get("observed") is False
+        ),
     }
+
+
+def _launch_argv(args: argparse.Namespace, *, workspace: Path, prompt: str, resume_session: str | None = None) -> list[str]:
+    argv = [str(args.longhouse_cli), "pi", "--cwd", str(workspace), "--pi-bin", str(args.provider_bin)]
+    argv += ["--provider", "openrouter", "--model", args.model]
+    if resume_session is not None:
+        argv += ["--resume-session", resume_session]
+    return [*argv, "--prompt", prompt]
+
+
+def _prepare(life: Lifecycle) -> None:
+    (life.provider_home / ".pi" / "agent" / "sessions").mkdir(mode=0o700, parents=True)
+    # The first turn reads this file with a tool, which is what the tool-pair cell is judged on.
+    life.proof_file = life.workspace / "pi-tool-proof.txt"
+    life.proof_file.write_text(life.marker("TOOL") + "\n", encoding="utf-8")
+    # One slow OpenRouter host must not stall a cell: pin the model's requests.
+    _write_json(life.root / "openrouter-routing-receipt.json", prepare_pi_openrouter_routing(life.provider_home / ".pi", life.args.model))
+
+
+def _converged(served: Mapping[str, Any]) -> bool:
+    binding = _mapping(served.get("binding"))
+    return (
+        served["answers_converged"]
+        and all(binding.get(fact) is True for fact in _BOUND)
+        and binding.get("provider") == "pi"
+        and served["served_controls"] is True
+    )
+
+
+FAMILY = Family(
+    provider="pi",
+    name="Pi",
+    marker_prefix="PI_HELM",
+    live_env="LONGHOUSE_PI_LIVE",
+    id_key="provider_session_id",
+    launch_argv=_launch_argv,
+    environment=lambda home, args: {"PI_CODING_AGENT_DIR": str(home / ".pi"), "LONGHOUSE_ENGINE_BIN": str(args.engine)},
+    prepare=_prepare,
+    prompts={
+        "launch": "Use the read tool to read {proof_file}, then reply with exactly {marker}.",
+        "send": "Reply with exactly {marker}.",
+        "busy": "Use the read tool repeatedly on {proof_file}, then reply with {marker}.",
+        "follow_up": "After this turn, reply with {marker}.",
+        "steer": "Stop: skip every remaining step and reply only with {marker}.",
+        "after_abort": "Reply only with {marker}.",
+    },
+    cells=pi_helm_lifecycle_assertions,
+    reached=None,
+    converged=_converged,
+    control_bound=helm._served_send_identity,
+    is_idle=lambda state: state.get("phase") not in {"running", "thinking"},
+    timeouts={"launch": 45, "busy": 10, "identity": 30, "replace": 30, "resume": 45, "resume_reply": 90, "resume_context": 90},
+    homes=("provider-home", "longhouse"),
+    tool_launch=True,
+    converges_each_turn=True,
+    native_abort_row=True,
+    local_health=True,
+    records_misses=True,
+    refused_command_ends_run=True,
+    strict_resume_state=True,
+    control_outlives_failure=True,
+)
+
+
+def _steps(life: Lifecycle) -> None:
+    life.launch()
+    life.send_idle()
+    life.follow_up()
+    life.steer()
+    life.reload()
+    life.replace(stale_frame=False)
+    life.abort()
+    life.terminate()
+    life.cold_resume()
 
 
 def _reach(run: Run, args: argparse.Namespace) -> None:
-    # A live provider turn spends real credentials; the factory opts in for Pi
-    # producers, ambient developer credentials never do by accident.
-    if os.environ.get("LONGHOUSE_PI_LIVE") not in {"1", "true", "yes", "on"}:
-        raise RuntimeError("Pi Helm qualification requires explicit LONGHOUSE_PI_LIVE opt-in")
-    require_disposable_runtime(args.api_url or os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
-    root = run.root
-    isolation = new_qualification_isolation_root("pi-helm")
-    provider_home = isolation / "provider-home"
-    home = isolation / "longhouse"
-    workspace = isolation / "workspace"
-    try:
-        workspace.mkdir(mode=0o700)
-        provider_home.mkdir(mode=0o700, parents=True)
-        (provider_home / ".pi" / "agent" / "sessions").mkdir(mode=0o700, parents=True)
-        proof_file = workspace / "pi-tool-proof.txt"
-        proof_marker = f"PI_HELM_TOOL_{os.urandom(8).hex()}"
-        context_phrase = f"PI_HELM_CONTEXT_{os.urandom(8).hex()}"
-        proof_file.write_text(proof_marker + "\n", encoding="utf-8")
-        env = dict(os.environ)
-        env.update(
-            {
-                "HOME": str(provider_home),
-                "LONGHOUSE_HOME": str(home),
-                "PI_CODING_AGENT_DIR": str(provider_home / ".pi"),
-                "LONGHOUSE_ENGINE_BIN": str(args.engine),
-                "LONGHOUSE_PI_BIN": str(args.provider_bin),
-                "LONGHOUSE_PI_HELM_URL": str(args.api_url or os.environ.get("LONGHOUSE_RUNTIME_API_URL") or ""),
-                "LONGHOUSE_PI_HELM_TOKEN": str(args.agents_token or os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN") or ""),
-                "LONGHOUSE_ORIGIN_KIND": "test_or_canary",
-                "LONGHOUSE_LAUNCH_ACTOR": "automation",
-                "LONGHOUSE_LAUNCH_SURFACE": "qa",
-            }
-        )
-        negative_control = getattr(args, "negative_control", None)
-        if negative_control:
-            env["LONGHOUSE_QA_FAULT"] = fault_name("pi", negative_control)
-            env["LONGHOUSE_QA_FAULT_RECEIPT"] = str(root / "qa-fault-receipt.jsonl")
-        # One slow OpenRouter host must not stall a cell: pin the model's requests.
-        _write_json(root / "openrouter-routing-receipt.json", prepare_pi_openrouter_routing(provider_home / ".pi", args.model))
-    except BaseException:
-        shutil.rmtree(isolation)
-        raise
-    observations: dict[str, Any] = {"proof_marker": proof_marker, "provider": "pi"}
-    sessions: list[ProviderPtySession] = []
-    owned_processes: list[dict[str, Any]] = []
-    retained_sources: list[dict[str, Any]] = []
-    shipper = None
-    session_id = ""
-    current_state: dict[str, Any] = {}
-    failure: Exception | None = None
-    try:
-        if not env["LONGHOUSE_PI_HELM_URL"] or not env["LONGHOUSE_PI_HELM_TOKEN"]:
-            raise RuntimeError("Runtime Host URL and token are required for Pi Helm proof")
-        if args.repo_root is None:
-            raise RuntimeError("Pi Helm proof requires the repository root for the real Machine Agent")
-        shipper = start_transcript_shipper(
-            "pi",
-            args,
-            home=provider_home,
-            environment=env,
-            evidence_root=root / "shipper",
-            longhouse_home=home,
-        )
-        observations["machine_registration"] = {
-            "status": shipper.receipt.get("status"),
-            "machine_name": shipper.receipt.get("machine_name"),
-            "authenticated": bool(shipper.receipt.get("machine_name")),
-            "receipt": shipper.receipt,
-        }
-        marker = f"PI_HELM_LAUNCH_{os.urandom(8).hex()}"
-        launch_command = [
-            str(args.longhouse_cli),
-            "pi",
-            "--cwd",
-            str(workspace),
-            "--pi-bin",
-            str(args.provider_bin),
-            "--provider",
-            "openrouter",
-            "--model",
-            args.model,
-            "--prompt",
-            f"Use the read tool to read {proof_file}, then reply with exactly {marker}.",
-        ]
-        launch = ProviderPtySession.start(
-            argv=launch_command,
-            cwd=workspace,
-            env=env,
-            terminal_path=root / "helm-terminal.raw",
-            thread_name="pi-helm-qualification-terminal-drain",
-        )
-        sessions.append(launch)
-        current_state = _wait_state(home, predicate=lambda item: item.get("ready") is True, timeout=45)
-        session_id = str(current_state.get("session_id") or "")
-        if not session_id:
-            raise RuntimeError("Pi Helm state did not contain a session id")
-        observations["session_id"] = session_id
-        observations["initial_owner_state"] = _state_identity(current_state)
-        observations["provider_binary"] = str(args.provider_bin)
-        observations["provider_version"] = args.provider_version
-        observations["provider_binary_sha256"] = sha256_file(args.provider_bin)
-        observations["provider_session_id"] = current_state.get("provider_session_id")
-        for label in ("launcher", "provider"):
-            owned_processes.append(
-                _process_record(
-                    current_state.get(f"{label}_pid"),
-                    current_state.get(f"{label}_process_start_time"),
-                    label,
-                )
-            )
-        session_file = Path(str(current_state.get("session_file") or ""))
-        if not session_file.is_file():
-            session_dir = Path(str(current_state.get("session_dir") or ""))
-            session_file = _wait(
-                lambda: next(
-                    (path for path in session_dir.rglob("*.jsonl") if path.is_file() and not path.is_symlink()),
-                    None,
-                ),
-                timeout=45,
-                description="Pi native session file",
-                waited_on=PROVIDER_PROCESS,
-            )
-        native = _wait_native_marker(session_file, marker)
-        observations["native_taxonomy"] = native["taxonomy"]
-        observations["native_tool_taxonomy"] = bool(native["taxonomy"].get("tool_pairs")) and not bool(
-            native["taxonomy"].get("tool_calls_without_results")
-        )
-        observations["session_file"] = str(session_file)
-        observations["native_session_receipt"] = _native_receipt(
-            native,
-            session_id=session_id,
-            session_file=session_file,
-            marker=marker,
-        )
-        observations["native_taxonomy_receipt"] = {
-            "session_id": session_id,
-            "provider": "pi",
-            "provider_session_id": native["metadata"].get("provider_session_id"),
-            "native_model": _native_model(native),
-            "native_file": _native_file_identity(session_file),
-            "minimum_source_offset": native.get("minimum_source_offset", 0),
-            "source_end_offset": native.get("source_end_offset"),
-            "taxonomy": native["taxonomy"],
-            "status": "pass" if observations["native_tool_taxonomy"] else "fail",
-        }
-        launch_flush = shipper.flush("pi-helm-launch")
-        runtime_launch = _wait_runtime_convergence(
-            args.api_url,
-            args.agents_token,
-            session_id,
-            str(current_state.get("provider_session_id") or ""),
-            marker,
-            reply_event_id=native.get("assistant_reply_entry_id"),
-            session_file=session_file,
-        )
-        observations["runtime_launch"] = {
-            "flush": launch_flush,
-            "binding": runtime_launch["binding"],
-            "served_controls": _served_controls(runtime_launch["snapshot"]),
-            "receipt": _runtime_receipt(
-                runtime_launch,
-                session_id=session_id,
-                provider_session_id=str(current_state.get("provider_session_id") or ""),
-                marker=marker,
-            ),
-        }
-        local_health = subprocess.run(
-            [str(args.longhouse_cli), "local-health", "--json", "--state-root", env["LONGHOUSE_HOME"]],
-            cwd=workspace,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=True,
-        )
-        (root / "local-health.json").write_text(local_health.stdout, encoding="utf-8")
-        observations["launch_registration"] = (
-            observations["machine_registration"]["authenticated"] is True
-            and current_state.get("provider") == "pi"
-            and current_state.get("ready") is True
-            and current_state.get("status") in {"ready", "running"}
-            and bool(str(current_state.get("session_dir") or ""))
-            and bool(str(current_state.get("provider_session_id") or ""))
-            and launch_flush.get("status") == "pass"
-            and runtime_launch["binding"]["one_session"]
-            and runtime_launch["binding"]["one_thread"]
-            and runtime_launch["binding"]["provider_session_bound"]
-            and _served_controls(runtime_launch["snapshot"])
-        )
-        observations["helm_registration_receipt"] = {
-            "status": "pass" if observations["launch_registration"] else "fail",
-            "provider": "pi",
-            "command": launch_command,
-            "accepted": current_state.get("ready") is True,
-            "session": _state_identity(current_state),
-            "owner_state": _state_identity(current_state),
-            "machine_registration": observations["machine_registration"],
-            "runtime": observations["runtime_launch"]["receipt"],
-        }
-        if args.api_url and args.agents_token:
-            diagnostic = _runtime_diagnostic(args.api_url, args.agents_token, session_id)
-            observations["runtime_diagnostic"] = {
-                "mode": (diagnostic.get("shadow") or {}).get("mode") if isinstance(diagnostic.get("shadow"), dict) else None,
-                "launch_actor": (diagnostic.get("explain") or {}).get("launch_actor")
-                if isinstance(diagnostic.get("explain"), dict)
-                else None,
-                "launch_surface": (diagnostic.get("explain") or {}).get("launch_surface")
-                if isinstance(diagnostic.get("explain"), dict)
-                else None,
-            }
-        send_marker = f"PI_HELM_SEND_{os.urandom(8).hex()}"
-        send_offset = session_file.stat().st_size
-        send = _run_engine(args.engine, "send", session_id, env, text=f"Reply with exactly {send_marker}.")
-        send_native = _wait_native_marker(session_file, send_marker, minimum_source_offset=send_offset)
-        send_flush = shipper.flush("pi-helm-send")
-        runtime_send = _wait_runtime_convergence(
-            args.api_url,
-            args.agents_token,
-            session_id,
-            str(current_state.get("provider_session_id") or ""),
-            send_marker,
-            reply_event_id=send_native.get("assistant_reply_entry_id"),
-            session_file=session_file,
-        )
-        observations["runtime_send"] = _runtime_receipt(
-            runtime_send,
-            session_id=session_id,
-            provider_session_id=str(current_state.get("provider_session_id") or ""),
-            marker=send_marker,
-        )
-        observations["send_idle"] = (
-            send["accepted"]
-            and bool(send_native["invocation_rows"])
-            and send_native["assistant_answer_rows"] >= 1
-            and send_flush.get("status") == "pass"
-            and runtime_send["binding"]["one_session"]
-            and runtime_send["binding"]["one_thread"]
-        )
-
-        active_marker = f"PI_HELM_ACTIVE_{os.urandom(8).hex()}"
-        active = _run_engine(
-            args.engine,
-            "send",
-            session_id,
-            env,
-            text=f"Use the read tool repeatedly on {proof_file}, then reply with {active_marker}.",
-        )
-        try:
-            active_state = _wait_state(
-                home,
-                session_id=session_id,
-                predicate=lambda item: item.get("phase") in {"running", "thinking"},
-                timeout=10,
-            )
-        except RuntimeError:
-            active_state = {}
-        follow_marker = f"PI_HELM_FOLLOW_{os.urandom(8).hex()}"
-        follow_offset = session_file.stat().st_size
-        follow_submitted_while_active = active["accepted"] and bool(active_state) and active_state.get("phase") in {"running", "thinking"}
-        follow = _send_input(
-            str(args.api_url),
-            str(args.agents_token),
-            session_id,
-            f"After this turn, reply with {follow_marker}.",
-        )
-        follow_native = _wait_native_marker(session_file, follow_marker, minimum_source_offset=follow_offset)
-        follow_runtime = _wait_runtime_convergence(
-            args.api_url,
-            args.agents_token,
-            session_id,
-            str(current_state.get("provider_session_id") or ""),
-            follow_marker,
-            reply_event_id=follow_native.get("assistant_reply_entry_id"),
-            session_file=session_file,
-        )
-        steer_task_marker = f"PI_HELM_STEER_TASK_{os.urandom(8).hex()}"
-        steer_done_marker = f"PI_HELM_STEER_TASK_DONE_{os.urandom(8).hex()}"
-        steer_active = _run_engine(
-            args.engine,
-            "send",
-            session_id,
-            env,
-            text=step_task_prompt(steer_task_marker, steer_done_marker),
-        )
-        try:
-            steer_active_state = _wait_state(
-                home,
-                session_id=session_id,
-                predicate=lambda item: item.get("phase") in {"running", "thinking"},
-                timeout=10,
-            )
-        except RuntimeError:
-            steer_active_state = {}
-        steer_marker = f"PI_HELM_STEER_{os.urandom(8).hex()}"
-        steer_offset = session_file.stat().st_size
-        observations["steer_tool_boundary"] = _wait_task_tool_boundary(session_file, steer_task_marker)
-        steer = _run_engine(
-            args.engine,
-            "steer",
-            session_id,
-            env,
-            text=f"Stop: skip every remaining step and reply only with {steer_marker}.",
-        )
-        steer_native = _wait_native_marker(session_file, steer_marker, minimum_source_offset=steer_offset, timeout=150)
-        observations["steer_settled_state"] = _state_identity(_wait_idle(home, session_id))
-        observations["steer_turn_verdict"] = steer_turn_verdict(
-            read_session_entries(session_file),
-            task_marker=steer_task_marker,
-            steer_marker=steer_marker,
-            task_done_marker=steer_done_marker,
-        )
-        steer_noncompliance = pi_family_steer_noncompliance(observations["steer_turn_verdict"])
-        if steer_noncompliance is not None:
-            attach(observations, "pi_helm_steer_active", steer_noncompliance)
-        steer_runtime = _wait_runtime_convergence(
-            args.api_url,
-            args.agents_token,
-            session_id,
-            str(current_state.get("provider_session_id") or ""),
-            steer_marker,
-            reply_event_id=steer_native.get("assistant_reply_entry_id"),
-            session_file=session_file,
-        )
-        observations["runtime_steer"] = _runtime_receipt(
-            steer_runtime,
-            session_id=session_id,
-            provider_session_id=str(current_state.get("provider_session_id") or ""),
-            marker=steer_marker,
-        )
-        observations["runtime_steer"].update(
-            {
-                "active_turn_observed": bool(steer_active_state),
-                "active_state": _state_identity(steer_active_state),
-            }
-        )
-        observations["runtime_follow_up"] = _runtime_receipt(
-            follow_runtime,
-            session_id=session_id,
-            provider_session_id=str(current_state.get("provider_session_id") or ""),
-            marker=follow_marker,
-        )
-        observations["steer_active"] = (
-            steer_active["accepted"]
-            and bool(steer_active_state)
-            and steer["accepted"]
-            and bool(steer_native["invocation_rows"])
-            and steer_native["assistant_answer_rows"] >= 1
-            and observations["steer_turn_verdict"]["passed"] is True
-        )
-        observations["follow_up_native"] = (
-            active["accepted"]
-            and follow["accepted"]
-            and bool(follow_native["invocation_rows"])
-            and follow_native["assistant_answer_rows"] >= 1
-            and follow_native["user_marker_rows"] == 1
-            and follow_native["user_marker_occurrences"] == 1
-            and follow_submitted_while_active
-        )
-        observations["follow_up_submission"] = {
-            "active_turn_observed": follow_submitted_while_active,
-            "active_state": _state_identity(active_state),
-            "active_phase": active_state.get("phase"),
-            "active_run_id": active_state.get("run_id"),
-        }
-        observations["control_receipts"] = {
-            "send": _control_receipt(
-                "send",
-                current_state,
-                command=send["command"],
-                accepted=send["accepted"],
-                result={key: send[key] for key in ("returncode", "payload", "stdout", "stderr")},
-                native=_native_receipt(send_native, session_id=session_id, session_file=session_file, marker=send_marker),
-                runtime=observations["runtime_send"],
-            ),
-            "active": _control_receipt(
-                "active",
-                current_state,
-                command=active["command"],
-                accepted=active["accepted"],
-                result={key: active[key] for key in ("returncode", "payload", "stdout", "stderr")},
-                runtime={"state": _state_identity(active_state), "observed": bool(active_state)},
-            ),
-            "steer": _control_receipt(
-                "steer",
-                current_state,
-                command=steer["command"],
-                accepted=steer["accepted"],
-                result={key: steer[key] for key in ("returncode", "payload", "stdout", "stderr")},
-                native=_native_receipt(steer_native, session_id=session_id, session_file=session_file, marker=steer_marker),
-                runtime=observations["runtime_steer"],
-            ),
-            "follow_up": _control_receipt(
-                "follow_up",
-                current_state,
-                command={
-                    "method": "POST",
-                    "path": f"/api/agents/sessions/{session_id}/input",
-                    "text": f"After this turn, reply with {follow_marker}.",
-                },
-                accepted=follow.get("accepted") is True,
-                result=follow,
-                native=_native_receipt(follow_native, session_id=session_id, session_file=session_file, marker=follow_marker),
-                runtime={
-                    **observations["runtime_follow_up"],
-                    **observations["follow_up_submission"],
-                },
-            ),
-        }
-
-        old_connection = dict(current_state)
-        launch.submit_line("/reload")
-        reloaded = _wait_state(
-            home,
-            session_id=session_id,
-            predicate=lambda item: item.get("connection_id") and item.get("connection_id") != old_connection.get("connection_id"),
-            timeout=30,
-        )
-        for label in ("launcher", "provider"):
-            owned_processes.append(
-                _process_record(
-                    reloaded.get(f"{label}_pid"),
-                    reloaded.get(f"{label}_process_start_time"),
-                    label,
-                )
-            )
-        observations["reloaded_owner_state"] = _state_identity(reloaded)
-        observations["reload_rebind"] = reloaded.get("connection_id") != old_connection.get("connection_id")
-        stale_native_offset = session_file.stat().st_size
-        stale = _stale_frame(old_connection)
-        stale_native_after_offset = session_file.stat().st_size
-        observations["stale_native_dispatch"] = stale_native_after_offset != stale_native_offset
-        observations["stale_frame"] = stale
-        observations["stale_owner_refused"] = (
-            stale.get("accepted") is False
-            and stale.get("error_code")
-            in {
-                "stale_channel",
-                "stale_generation",
-                "session_not_attached",
-            }
-            and observations["stale_native_dispatch"] is False
-        )
-        observations["stale_owner_receipt"] = {
-            "status": "pass" if observations["stale_owner_refused"] else "fail",
-            "provider": "pi",
-            "session_id": session_id,
-            "old_owner": _state_identity(old_connection),
-            "current_owner": _state_identity(reloaded),
-            "attempted_stale_frame": stale.get("frame"),
-            "rejection": {
-                "accepted": stale.get("accepted") is True,
-                "error_code": stale.get("error_code"),
-                "response": stale.get("response"),
-                "error": stale.get("error"),
-            },
-            "native_dispatch": {
-                "observed": observations["stale_native_dispatch"],
-                "source_offset_before": stale_native_offset,
-                "source_offset_after": stale_native_after_offset,
-            },
-        }
-        reload_control_identity = _wait_runtime_control_identity(args.api_url, args.agents_token, session_id, reloaded)
-        reload_marker = f"PI_HELM_RELOADED_{os.urandom(8).hex()}"
-        reload_offset = session_file.stat().st_size
-        reload_send = _send_live(args.api_url, args.agents_token, session_id, f"Reply with exactly {reload_marker}.")
-        reload_native = _wait_native_marker(session_file, reload_marker, minimum_source_offset=reload_offset)
-        reload_flush = shipper.flush("pi-helm-reload")
-        reload_snapshot = _wait_runtime_convergence(
-            args.api_url,
-            args.agents_token,
-            session_id,
-            str(reloaded.get("provider_session_id") or ""),
-            reload_marker,
-            reply_event_id=reload_native.get("assistant_reply_entry_id"),
-            session_file=session_file,
-        )["snapshot"]
-        reload_binding = _runtime_binding(
-            reload_snapshot,
-            session_id=session_id,
-            provider_session_id=str(reloaded.get("provider_session_id") or ""),
-        )
-        observations["reload_runtime"] = {
-            "send": reload_send,
-            "native": reload_native,
-            "flush": reload_flush,
-            "binding": reload_binding,
-            "served_controls": _served_controls(reload_snapshot),
-            "control_identity": _diagnostic_receipt(reload_control_identity),
-            "receipt": _runtime_receipt(
-                {
-                    "snapshot": reload_snapshot,
-                },
-                session_id=session_id,
-                provider_session_id=str(reloaded.get("provider_session_id") or ""),
-                marker=reload_marker,
-            ),
-        }
-        observations["reload_rebind"] = (
-            observations["reload_rebind"] is True
-            and reloaded.get("session_id") == old_connection.get("session_id") == session_id
-            and bool(reloaded.get("lease_generation"))
-            and reloaded.get("lease_generation") != old_connection.get("lease_generation")
-            and reload_send["accepted"]
-            and reload_native["assistant_answer_rows"] >= 1
-            and reload_binding["one_session"]
-            and reload_binding["one_thread"]
-            and reload_binding["provider"] == "pi"
-            and _served_controls(reload_snapshot)
-        )
-        observations["reload_rebind_receipt"] = {
-            "status": "pass" if observations["reload_rebind"] else "fail",
-            "provider": "pi",
-            "command": {"surface": "terminal", "text": "/reload", "submitted": True},
-            "session_id": session_id,
-            "before": _state_identity(old_connection),
-            "after": _state_identity(reloaded),
-            "accepted": reload_send.get("accepted") is True,
-            "native": _native_receipt(
-                reload_native,
-                session_id=session_id,
-                session_file=session_file,
-                marker=reload_marker,
-            ),
-            "runtime": observations["reload_runtime"],
-        }
-
-        replacement_before = str(reloaded.get("provider_session_id") or "")
-        replacement_native_file_before = _native_file_identity(session_file)
-        replacement_before_rows, replacement_before_metadata, _replacement_before_taxonomy = _native_snapshot(session_file)
-        launch.submit_line("/new")
-        replaced = _wait_state(
-            home,
-            session_id=session_id,
-            predicate=lambda item: item.get("session_file") and item.get("provider_session_id") != replacement_before,
-            timeout=30,
-        )
-        observations["session_replacement_rebind"] = (
-            replaced.get("session_id") == session_id
-            and bool(replaced.get("provider_session_id"))
-            and replaced.get("provider_session_id") != replacement_before
-        )
-        current_state = replaced
-        session_file = Path(str(replaced["session_file"]))
-        for label in ("launcher", "provider"):
-            owned_processes.append(
-                _process_record(
-                    replaced.get(f"{label}_pid"),
-                    replaced.get(f"{label}_process_start_time"),
-                    label,
-                )
-            )
-        observations["replacement_owner_state"] = _state_identity(replaced)
-        replacement_marker = f"PI_HELM_REPLACED_{os.urandom(8).hex()}"
-        # Pi reserves the path at /new and materializes it on the first turn.
-        replacement_offset = session_file.stat().st_size if session_file.is_file() else 0
-        replacement_control_identity = _wait_runtime_control_identity(args.api_url, args.agents_token, session_id, replaced)
-        replacement_prompt = f"Remember this context phrase for later: {context_phrase}. Do not read any file for it and do not repeat it now. Reply with exactly {replacement_marker} and no other text."
-        replacement_send = _send_live(args.api_url, args.agents_token, session_id, replacement_prompt)
-        replacement_native = _wait_native_marker(
-            session_file,
-            replacement_marker,
-            minimum_source_offset=replacement_offset,
-        )
-        replacement_flush = shipper.flush("pi-helm-replacement")
-        runtime_replacement = _wait_runtime_convergence(
-            args.api_url,
-            args.agents_token,
-            session_id,
-            str(replaced.get("provider_session_id") or ""),
-            replacement_marker,
-            reply_event_id=replacement_native.get("assistant_reply_entry_id"),
-            session_file=session_file,
-        )
-        observations["replacement_runtime"] = {
-            "send": replacement_send,
-            "native": replacement_native,
-            "flush": replacement_flush,
-            "binding": runtime_replacement["binding"],
-            "control_identity": _diagnostic_receipt(replacement_control_identity),
-            "receipt": _runtime_receipt(
-                runtime_replacement,
-                session_id=session_id,
-                provider_session_id=str(replaced.get("provider_session_id") or ""),
-                marker=replacement_marker,
-            ),
-        }
-        observations["replacement_binding"] = {
-            "longhouse_session_id_before": reloaded.get("session_id"),
-            "longhouse_session_id_after": replaced.get("session_id"),
-            "provider_session_id_before": replacement_before,
-            "provider_session_id_after": replaced.get("provider_session_id"),
-            "native_file_before": replacement_native_file_before,
-            "native_file_after": _native_file_identity(session_file),
-            "provider_session_id": replaced.get("provider_session_id"),
-            "native_header_id": replacement_native["metadata"].get("provider_session_id"),
-            "native_file_present": session_file.is_file(),
-            "current_invocation_rows": len(replacement_native["invocation_rows"]),
-        }
-        observations["replacement_context"] = {
-            "phrase": context_phrase,
-            "source": "pre_termination_replacement_turn",
-            "session_id": session_id,
-            "provider_session_id": replaced.get("provider_session_id"),
-            "native_header_provider_session_id": replacement_native["metadata"].get("provider_session_id"),
-            "native_model": _native_model(replacement_native),
-            "native_file": _native_file_identity(session_file),
-            "minimum_source_offset": replacement_native.get("minimum_source_offset"),
-            "source_end_offset": replacement_native.get("source_end_offset"),
-            "prompt": replacement_prompt,
-            "native_user_marker_rows": replacement_native.get("user_marker_rows"),
-            "native_user_marker_occurrences": replacement_native.get("user_marker_occurrences"),
-            "native_marker": replacement_marker,
-        }
-        observations["session_replacement_receipt"] = {
-            "status": "pass" if observations["session_replacement_rebind"] else "fail",
-            "provider": "pi",
-            "command": {"surface": "terminal", "text": "/new", "submitted": True},
-            "session_id": session_id,
-            "before": _state_identity(reloaded),
-            "after": _state_identity(replaced),
-            "accepted": replacement_send.get("accepted") is True,
-            "native": _native_receipt(
-                replacement_native,
-                session_id=session_id,
-                session_file=session_file,
-                marker=replacement_marker,
-            ),
-            "native_before": {
-                "provider": "pi",
-                "session_id": session_id,
-                "provider_session_id": replacement_before,
-                "native_header_provider_session_id": replacement_before,
-                "native_model": _native_model(
-                    {
-                        "rows": replacement_before_rows,
-                        "invocation_rows": replacement_before_rows,
-                        "metadata": replacement_before_metadata,
-                    }
-                ),
-                "native_file": replacement_native_file_before,
-                "source_end_offset": replacement_before_metadata.get("source_end_offset"),
-                "row_count": len(replacement_before_rows),
-                "invocation_row_count": len(replacement_before_rows),
-                "assistant_marker_rows": sum(row.get("role") == "assistant" for row in replacement_before_rows),
-                "minimum_source_offset": 0,
-            },
-            "runtime": observations["replacement_runtime"],
-            "binding": observations["replacement_binding"],
-        }
-
-        terminated_native_file = _native_file_identity(session_file)
-        terminated_native_header_id = replacement_native["metadata"].get("provider_session_id")
-        abort_task_marker = f"PI_HELM_ABORT_TASK_{os.urandom(8).hex()}"
-        abort_done_marker = f"PI_HELM_ABORT_TASK_DONE_{os.urandom(8).hex()}"
-        abort_after_marker = f"PI_HELM_AFTER_ABORT_{os.urandom(8).hex()}"
-        abort_started = _run_engine(
-            args.engine,
-            "send",
-            session_id,
-            env,
-            text=step_task_prompt(abort_task_marker, abort_done_marker),
-        )
-        try:
-            abort_active_state = _wait_state(
-                home,
-                session_id=session_id,
-                predicate=lambda item: item.get("phase") in {"running", "thinking"},
-                timeout=10,
-            )
-        except RuntimeError:
-            abort_active_state = {}
-        abort_offset = session_file.stat().st_size
-        observations["abort_tool_boundary"] = _wait_task_tool_boundary(session_file, abort_task_marker)
-        abort = _run_engine(args.engine, "abort", session_id, env)
-        try:
-            aborted_state = _wait_state(
-                home,
-                session_id=session_id,
-                predicate=lambda item: item.get("phase") not in {"running", "thinking"},
-                timeout=20,
-            )
-        except RuntimeError:
-            aborted_state = {}
-        try:
-            abort_native = _wait_native_abort(session_file, minimum_source_offset=abort_offset)
-        except RuntimeError as exc:
-            abort_native = None
-            observations["abort_native_wait_error"] = f"{type(exc).__name__}: {exc}"
-        observations["abort_native_evidence"] = abort_native
-        # An abort proves nothing if the session cannot take the next turn.
-        _wait_idle(home, session_id)
-        after_abort = _run_engine(args.engine, "send", session_id, env, text=f"Reply only with {abort_after_marker}.")
-        try:
-            _wait_native_marker(session_file, abort_after_marker, minimum_source_offset=abort_offset, timeout=150)
-        except RuntimeError as exc:
-            observations["after_abort_wait_error"] = f"{type(exc).__name__}: {exc}"
-        _wait_idle(home, session_id)
-        observations["abort_turn_verdict"] = {
-            **abort_then_send_verdict(
-                read_session_entries(session_file),
-                task_marker=abort_task_marker,
-                task_done_marker=abort_done_marker,
-                after_marker=abort_after_marker,
-            ),
-            "after_send_accepted": after_abort["accepted"],
-        }
-        observations["abort_native"] = (
-            abort_started["accepted"]
-            and bool(abort_active_state)
-            and abort["accepted"]
-            and bool(aborted_state)
-            and aborted_state.get("phase") not in {"running", "thinking"}
-            and abort_native is not None
-            and observations["abort_turn_verdict"]["passed"] is True
-            and observations["abort_turn_verdict"]["after_send_accepted"] is True
-        )
-        observations["control_receipts"]["abort"] = _control_receipt(
-            "abort",
-            current_state,
-            command=abort["command"],
-            accepted=abort["accepted"],
-            result={key: abort[key] for key in ("returncode", "payload", "stdout", "stderr")},
-            native=(
-                {
-                    "session_id": session_id,
-                    "provider": "pi",
-                    "provider_session_id": abort_native["metadata"].get("provider_session_id"),
-                    "native_header_provider_session_id": abort_native["metadata"].get("provider_session_id"),
-                    "native_model": _native_model(abort_native),
-                    "native_file": _native_file_identity(session_file),
-                    "minimum_source_offset": abort_offset,
-                    "source_end_offset": abort_native.get("source_end_offset"),
-                    "aborted_row_id": abort_native["row"].get("entry_id"),
-                    "aborted_row_source_offset": abort_native["row"].get("source_offset"),
-                    "stop_reason": (abort_native.get("row") or {}).get("message", {}).get("stop_reason")
-                    if isinstance((abort_native.get("row") or {}).get("message"), dict)
-                    else None,
-                    "observed": abort_native is not None,
-                }
-                if abort_native is not None
-                else {"session_id": session_id, "observed": False}
-            ),
-            runtime={"started_state": _state_identity(abort_active_state), "settled_state": _state_identity(aborted_state)},
-        )
-        terminate_state = dict(current_state)
-        terminate = _run_engine(args.engine, "terminate", session_id, env)
-        observations["terminate_owned"] = False
-        recorded_owners_dead = False
-        try:
-            termination_wait = _wait_recorded_execution_owners_dead(
-                home,
-                session_id,
-                terminate_state,
-            )
-            observations["terminate_owner_wait"] = termination_wait
-            recorded_owners_dead = True
-        except RuntimeError as exc:
-            # Owners still alive at the deadline. Under a terminate control
-            # that is the expected observation and must be recorded as a typed
-            # failure below; letting it propagate aborted the run before
-            # terminate_verdict existed, so the control read `inconclusive`
-            # with no failure code and scored the edge `fail` (2026-09-19).
-            if negative_control != "terminate":
-                raise
-            observations["terminate_owner_wait"] = {"status": "owners_alive_at_deadline", "detail": str(exc)[:500]}
-        finally:
-            # The recorded owners must be judged BEFORE this close: the facade
-            # close terminates them itself, so `launch.alive()` afterwards is
-            # false whether terminate worked or did nothing. Reading it there
-            # made this assertion unfalsifiable -- the qa-fault no-op terminate
-            # still "passed" (negative control pi_helm_terminate_owned: fail,
-            # 2026-09-19). Judge the recorded launcher/provider pids instead.
-            recorded_owners_dead = recorded_owners_dead and all(
-                _pid_dead(terminate_state.get(f"{label}_pid")) for label in ("launcher", "provider")
-            )
-            observations["terminate_recorded_owners_dead"] = recorded_owners_dead
-            # The facade is only a terminal wrapper. The recorded launcher and
-            # provider owners must be dead before this close can precede resume.
-            launch.close()
-        observations["terminate_owned"] = terminate["accepted"] and recorded_owners_dead
-        observations["terminate_verdict"] = {
-            "passed": observations["terminate_owned"],
-            "accepted": terminate["accepted"],
-            "owners_alive_after_terminate": not recorded_owners_dead,
-            "code": (
-                None
-                if observations["terminate_owned"]
-                # Accepted and the recorded owners are still running: the
-                # caller was told the session ended and it did not.
-                else "terminate_left_owners_alive"
-                if terminate["accepted"]
-                else "terminate_not_accepted"
-            ),
-        }
-        if not observations["terminate_owned"] and negative_control != "terminate":
-            raise RuntimeError("Pi Helm terminate was not proven after the recorded execution owners exited")
-        observations["control_receipts"]["terminate"] = _control_receipt(
-            "terminate",
-            terminate_state,
-            command=terminate["command"],
-            accepted=terminate["accepted"],
-            result={key: terminate[key] for key in ("returncode", "payload", "stdout", "stderr")},
-            runtime={"owner_cleanup": observations["terminate_owner_wait"]},
-        )
-
-        pre_resume_flush = shipper.flush("pi-helm-before-cold-resume")
-        if pre_resume_flush.get("status") != "pass":
-            raise RuntimeError("Pi Helm termination was not flushed before cold resume")
-
-        resume_marker = f"PI_HELM_RESUME_{os.urandom(8).hex()}"
-        resume_offset = session_file.stat().st_size
-        terminated_run_id = terminate_state.get("run_id")
-        resumed_provider_session_id = terminate_state.get("provider_session_id")
-        resumed_file = session_file.resolve()
-
-        def is_fresh_resume_state(item: dict[str, Any]) -> bool:
-            state_file = item.get("session_file")
-            try:
-                same_file = bool(state_file) and Path(str(state_file)).resolve() == resumed_file
-            except OSError:
-                same_file = False
-            return (
-                item.get("ready") is True
-                and item.get("status") in {"ready", "running"}
-                and item.get("run_id")
-                and item.get("run_id") != terminated_run_id
-                and item.get("provider_session_id") == resumed_provider_session_id
-                and same_file
-            )
-
-        resume_command = [
-            str(args.longhouse_cli),
-            "pi",
-            "--cwd",
-            str(workspace),
-            "--pi-bin",
-            str(args.provider_bin),
-            "--provider",
-            "openrouter",
-            "--model",
-            args.model,
-            "--resume-session",
-            session_id,
-            "--prompt",
-            # Name where the phrase is and what it starts with, never the phrase
-            # itself: only restored history can supply it, and an unambiguous ask
-            # leaves a cheap model no reason to decline (2026-10-10 deepseek
-            # refused the vaguer "the context you remember").
-            "Earlier in this conversation I gave you a context phrase that starts with PI_HELM_CONTEXT_. "
-            f"It is in the conversation history above. Reply with that exact phrase, then {resume_marker}, and nothing else.",
-        ]
-        resume = ProviderPtySession.start(
-            argv=resume_command,
-            cwd=workspace,
-            env=env,
-            terminal_path=root / "cold-resume-terminal.raw",
-            thread_name="pi-helm-cold-resume-terminal-drain",
-        )
-        sessions.append(resume)
-        resumed_state = _wait_state(
-            home,
-            session_id=session_id,
-            predicate=is_fresh_resume_state,
-            timeout=45,
-        )
-        for label in ("launcher", "provider"):
-            owned_processes.append(
-                _process_record(
-                    resumed_state.get(f"{label}_pid"),
-                    resumed_state.get(f"{label}_process_start_time"),
-                    label,
-                )
-            )
-        observations["resumed_owner_state"] = _state_identity(resumed_state)
-        resumed_file = Path(str(resumed_state.get("session_file") or session_file))
-        # The resume prompt asks for the recalled phrase and then the marker.
-        # The marker is the answer and may share its line with the phrase; the
-        # phrase is a recall, which the model may also put in a sentence.
-        resumed_native = _wait_native_marker(
-            resumed_file,
-            resume_marker,
-            minimum_source_offset=resume_offset,
-            alongside=(context_phrase,),
-        )
-        resumed_context_native = _wait_native_marker(
-            resumed_file,
-            context_phrase,
-            minimum_source_offset=resume_offset,
-            recalled=True,
-        )
-        resume_flush = shipper.flush("pi-helm-cold-resume")
-        runtime_resume = _wait_runtime_convergence(
-            args.api_url,
-            args.agents_token,
-            session_id,
-            str(resumed_state.get("provider_session_id") or ""),
-            resume_marker,
-            alongside=(context_phrase,),
-            reply_event_id=resumed_native.get("assistant_reply_entry_id"),
-            session_file=resumed_file,
-        )
-        runtime_resume_context = _wait_runtime_convergence(
-            args.api_url,
-            args.agents_token,
-            session_id,
-            str(resumed_state.get("provider_session_id") or ""),
-            context_phrase,
-            recalled=True,
-            reply_event_id=resumed_context_native.get("assistant_reply_entry_id"),
-            session_file=resumed_file,
-        )
-        observations["runtime_resume"] = _runtime_receipt(
-            runtime_resume,
-            session_id=session_id,
-            provider_session_id=str(resumed_state.get("provider_session_id") or ""),
-            marker=resume_marker,
-        )
-        observations["cold_resume_exact_file"] = (
-            resumed_state.get("run_id") != old_connection.get("run_id")
-            and resumed_state.get("provider_session_id") == current_state.get("provider_session_id")
-            and resumed_file.resolve() == session_file.resolve()
-            and resumed_native["metadata"].get("provider_session_id") == resumed_state.get("provider_session_id")
-            and bool(resumed_native["invocation_rows"])
-            and resumed_native["assistant_answer_rows"] > 0
-            and resumed_context_native["assistant_answer_rows"] >= 1
-            and resumed_context_native["user_marker_rows"] == 0
-            and resumed_context_native["user_marker_occurrences"] == 0
-            and resume_flush.get("status") == "pass"
-            and runtime_resume["binding"]["one_session"]
-            and runtime_resume["binding"]["one_thread"]
-            and runtime_resume["binding"]["provider_session_bound"]
-            and runtime_resume_context["binding"]["one_session"]
-            and runtime_resume_context["binding"]["one_thread"]
-            and runtime_resume_context["binding"]["provider_session_bound"]
-        )
-        resume_terminate = _run_engine(args.engine, "terminate", session_id, env)
-        try:
-            if not resume_terminate["accepted"]:
-                raise RuntimeError("Pi cold-resume termination was not accepted")
-            observations["resume_terminate_owner_wait"] = _wait_recorded_execution_owners_dead(
-                home,
-                session_id,
-                resumed_state,
-            )
-        finally:
-            resume.close()
-        observations["resume_terminate"] = resume_terminate
-        current_state = resumed_state
-        observations["cold_resume_receipt"] = {
-            "status": "pass" if observations["cold_resume_exact_file"] else "fail",
-            "provider": "pi",
-            "command": resume_command,
-            "accepted": resumed_state.get("ready") is True,
-            "session_id": session_id,
-            "initial_owner_state": _state_identity(terminate_state),
-            "resumed_owner_state": _state_identity(resumed_state),
-            "old_owner_cleanup": observations["terminate_owner_wait"],
-            "resumed_owner_cleanup": observations["resume_terminate_owner_wait"],
-            "native_file_identity_before_resume": terminated_native_file,
-            "native_file_identity_after_resume": _native_file_identity(resumed_file),
-            "native_header_provider_session_id_before_resume": terminated_native_header_id,
-            "native_header_provider_session_id_after_resume": resumed_native["metadata"].get("provider_session_id"),
-            "same_native_file": resumed_file.resolve() == session_file.resolve(),
-            "same_native_header": resumed_native["metadata"].get("provider_session_id") == terminated_native_header_id,
-            "context_evidence": {
-                "phrase": context_phrase,
-                "source": "pre_termination_replacement_turn",
-                "resume_prompt": resume_command[-1],
-                "pre_termination": observations["replacement_context"],
-                "post_resume_native": _native_receipt(
-                    resumed_context_native,
-                    session_id=session_id,
-                    session_file=resumed_file,
-                    marker=context_phrase,
-                ),
-                "post_resume_runtime": _runtime_receipt(
-                    runtime_resume_context,
-                    session_id=session_id,
-                    provider_session_id=str(resumed_state.get("provider_session_id") or ""),
-                    marker=context_phrase,
-                ),
-            },
-            "termination_boundary": {
-                "pre_termination_source_end_offset": observations["replacement_context"].get("source_end_offset"),
-                "resume_source_offset": resume_offset,
-            },
-            "post_resume_activity": {
-                "marker": resume_marker,
-                "native": _native_receipt(
-                    resumed_native,
-                    session_id=session_id,
-                    session_file=resumed_file,
-                    marker=resume_marker,
-                ),
-                "runtime": observations["runtime_resume"],
-                "flush": resume_flush,
-                "pre_resume_flush": pre_resume_flush,
-                "resume_offset": resume_offset,
-            },
-        }
-        observations["cleanup"] = _cleanup_receipt(owned_processes)
-        observations["terminate_owned"] = (
-            terminate["accepted"]
-            and resume_terminate["accepted"]
-            and observations["resume_terminate_owner_wait"]["status"] == "pass"
-            and not launch.alive()
-            and not resume.alive()
-            and observations["cleanup"]["provider_process_dead"] is True
-            and observations["cleanup"]["process_group_dead"] is True
-        )
-        observations["status"] = "pass" if observations["terminate_owned"] else "fail"
-        source_secrets = [value for name, value in env.items() if value and (name.endswith("_KEY") or name.endswith("_TOKEN"))]
-        _write_scenario_receipts(root, args, observations, source_secrets)
-    except Exception as exc:  # noqa: BLE001 - retain the real failure and cleanup evidence
-        failure = exc
-        observations["error"] = f"{type(exc).__name__}: {exc}"
-        runtime_failure = _runtime_failure_diagnostic(exc)
-        if runtime_failure is not None:
-            observations["runtime_failure"] = runtime_failure
-    finally:
-        termination_dispatch: dict[str, Any] = {"accepted": False, "skipped": True}
-        if failure is not None and session_id:
-            try:
-                termination_dispatch = _run_engine(args.engine, "terminate", session_id, env)
-            except Exception as exc:  # noqa: BLE001 - cleanup must continue and report failure
-                termination_dispatch = {
-                    "accepted": False,
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-        observations["termination_dispatch"] = termination_dispatch
-        for process in sessions:
-            try:
-                process.close()
-            except Exception as exc:  # noqa: BLE001 - cleanup evidence records the failure below
-                observations.setdefault("cleanup_errors", []).append(f"{type(exc).__name__}: {exc}")
-        cleanup_deadline = time.monotonic() + 10
-        cleanup = _cleanup_receipt(owned_processes)
-        while cleanup["birth_identities_verified"] and cleanup["status"] != "pass" and time.monotonic() < cleanup_deadline:
-            time.sleep(0.1)
-            cleanup = _cleanup_receipt(owned_processes)
-        if shipper is not None and owned_processes:
-            try:
-                # Let the real Machine Agent observe final owner exit before
-                # stopping its last path to the Runtime Host.
-                observations["cleanup_flush"] = shipper.flush("pi-helm-cleanup")
-            except Exception as exc:
-                observations.setdefault("cleanup_errors", []).append(f"{type(exc).__name__}: {exc}")
-        if shipper is not None:
-            try:
-                observations["shipper_stop"] = shipper.stop()
-            except Exception as exc:  # noqa: BLE001 - cleanup failure must remain visible
-                observations.setdefault("cleanup_errors", []).append(f"{type(exc).__name__}: {exc}")
-                observations["shipper_stop"] = {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
-        final_run_id = str(current_state.get("run_id") or "")
-        served_run_inventory = (
-            console_lifecycle._wait_served_run_retirement(
-                str(args.api_url or ""),
-                str(args.agents_token or ""),
-                session_id,
-                [{"session_id": session_id, "run_id": final_run_id, "state": "terminal"}],
-            )
-            if session_id and final_run_id
-            else {
-                "retired": False,
-                "active_run_count": None,
-                "error": "session_or_run_identity_unavailable",
-            }
-        )
-        observations["served_run_inventory"] = served_run_inventory
-        observations["session_retirement"] = retire_qualification_session(
-            args.api_url,
-            args.agents_token,
-            session_id,
-            provider="pi",
-        )
-        source_secrets = [value for name, value in env.items() if value and (name.endswith("_KEY") or name.endswith("_TOKEN"))]
-        source_paths = {
-            "terminal": root / "helm-terminal.raw",
-            "resume_terminal": root / "cold-resume-terminal.raw",
-        }
-        native_root = Path(env["PI_CODING_AGENT_DIR"]) / "sessions"
-        source_paths.update((f"native-{path.stem}", path) for path in native_root.rglob("*.jsonl"))
-        for name, source in source_paths.items():
-            if source.is_file():
-                retained_sources.append(_retain_source(root, source, f"{name}.raw", source_secrets, require_complete=True))
-        retained_by_source = {
-            str(Path(str(item["source"])).resolve()): str(item["path"])
-            for item in retained_sources
-            if (
-                item.get("retained") is True
-                and item.get("complete") is True
-                and isinstance(item.get("source"), str)
-                and isinstance(item.get("path"), str)
-            )
-        }
-
-        def attach_retained_native_paths(value: object) -> None:
-            if isinstance(value, dict):
-                native_file = value.get("native_file")
-                if isinstance(native_file, dict) and isinstance(native_file.get("path"), str):
-                    retained_path = retained_by_source.get(str(Path(native_file["path"]).resolve()))
-                    if retained_path is not None:
-                        native_file["retained_path"] = retained_path
-                for child in value.values():
-                    attach_retained_native_paths(child)
-            elif isinstance(value, list):
-                for child in value:
-                    attach_retained_native_paths(child)
-
-        attach_retained_native_paths(observations)
-        if "cold_resume_receipt" in observations:
-            _write_scenario_receipts(root, args, observations, source_secrets)
-        observations["retained_source_artifacts"] = retained_sources
-        observations["cleanup"] = _cleanup_receipt(owned_processes)
-        observations["cleanup"]["termination_dispatch"] = termination_dispatch
-        observations["cleanup"]["served_run_inventory"] = served_run_inventory
-        observations["cleanup"]["served_run_retired"] = (
-            served_run_inventory.get("retired") is True
-            and served_run_inventory.get("session_id") == session_id
-            and served_run_inventory.get("active_run_count") == 0
-        )
-        session_retirement = observations.get("session_retirement")
-        observations["cleanup"]["session_retirement"] = dict(session_retirement) if isinstance(session_retirement, dict) else None
-        observations["cleanup"]["canary_session_hidden"] = (
-            isinstance(session_retirement, dict)
-            and session_retirement.get("status") == "pass"
-            and session_retirement.get("session_id") == session_id
-            and bool(session_id)
-            and session_retirement.get("hidden") is True
-            and session_retirement.get("archived") is True
-            and session_retirement.get("present_in_served_inventory") is False
-        )
-        shipper_stop = observations.get("shipper_stop") if isinstance(observations.get("shipper_stop"), dict) else {}
-        shipper_stop_ok = (
-            shipper_stop.get("stopped") is True
-            and shipper_stop.get("process_dead") is True
-            and shipper_stop.get("process_group_dead") is True
-        )
-        observations["cleanup"]["shipper_stop"] = shipper_stop
-        observations["cleanup"]["shipper_stop_verified"] = shipper_stop_ok
-        observations["cleanup"]["scratch_removed"] = False
-        observations["process_provider_dead"] = observations["cleanup"]["provider_process_dead"]
-        observations["process_group_dead"] = observations["cleanup"]["process_group_dead"]
-        observations["no_orphan_provider_processes"] = observations["cleanup"]["no_orphan_provider_processes"]
-        source_retention_failures = [
-            item
-            for item in retained_sources
-            if item.get("retained") is not True or item.get("complete") is not True or not isinstance(item.get("path"), str)
-        ]
-        source_retention_verified = bool(retained_sources) and not source_retention_failures
-        observations["cleanup"]["retained_source_artifacts"] = retained_sources
-        observations["cleanup"]["source_retention_failures"] = source_retention_failures
-        observations["cleanup"]["source_retention_verified"] = source_retention_verified
-        isolation_removed = False
-        if source_retention_verified:
-            try:
-                shutil.rmtree(isolation)
-            except OSError as exc:
-                observations.setdefault("cleanup_errors", []).append(f"{type(exc).__name__}: {exc}")
-            isolation_removed = not isolation.exists()
-        else:
-            observations["cleanup"]["isolation_retained"] = str(isolation)
-            observations["cleanup"]["isolation_retention_reason"] = "authoritative source retention is incomplete"
-        observations["scratch_removed"] = isolation_removed
-        if not observations["scratch_removed"]:
-            observations.setdefault("cleanup_errors", []).append("scratch isolation directory remains")
-        observations["cleanup"]["scratch_removed"] = observations["scratch_removed"]
-        observations["cleanup"]["isolation_path"] = str(isolation)
-        cleanup_errors = observations.get("cleanup_errors") if isinstance(observations.get("cleanup_errors"), list) else []
-        observations["cleanup"]["cleanup_errors"] = list(cleanup_errors)
-        observations["cleanup"]["status"] = (
-            "pass"
-            if observations["cleanup"].get("status") == "pass"
-            and observations["cleanup"].get("canary_session_hidden") is True
-            and observations["cleanup"].get("served_run_retired") is True
-            and shipper_stop_ok
-            and observations["cleanup"].get("source_retention_verified") is True
-            and observations["scratch_removed"] is True
-            and not cleanup_errors
-            else "fail"
-        )
-        if failure is None and observations["cleanup"]["status"] != "pass":
-            failure = RuntimeError("Pi Helm cleanup did not prove run retirement, source retention, shipper stop, and scratch removal")
-            observations["error"] = str(failure)
-        if failure is not None:
-            _write_json(
-                root / "failure-envelope.json",
-                _redact_value(
-                    {
-                        "status": "fail",
-                        "failure_code": "pi_helm_lifecycle_failed",
-                        "error": observations.get("error"),
-                        "runtime_failure": observations.get("runtime_failure"),
-                        "cleanup": observations["cleanup"],
-                        "retained_source_artifacts": retained_sources,
-                    },
-                    source_secrets,
-                ),
-            )
-        _write_json(root / "cleanup-receipt.json", observations["cleanup"])
-    source_secrets = [value for name, value in env.items() if value and (name.endswith("_KEY") or name.endswith("_TOKEN"))]
-    observations = _redact_value(observations, source_secrets)
-    assertions = pi_helm_lifecycle_assertions(observations)
-    provider_binary = {
-        "provider": "pi",
-        "version": args.provider_version,
-        "path": str(args.provider_bin),
-        "sha256": observations.get("provider_binary_sha256"),
-    }
-    run.fields["provider_binary"] = provider_binary
-    run.observation = observations
-    run.assertions = assertions
-    if negative_control:
-        control_verdict = negative_control_verdict(
-            negative_control,
-            provider="pi",
-            assertions=assertions,
-            observation=observations,
-            fault_receipts=read_fault_receipts(root / "qa-fault-receipt.jsonl"),
-            session_id=str(observations.get("session_id") or ""),
-        )
-        cleaned_up = observations["cleanup"].get("status") == "pass"
-        run.control(control_verdict, status="pass" if control_verdict["status"] == "pass" and cleaned_up else "fail")
-    elif failure is not None:
-        # An errored run vouches for nothing, model compliance included: no
-        # verdict, and what it saw kept as diagnostics.
-        observations.pop("model_noncompliance", None)
-        run.fields.update(diagnostic_observation=observations, diagnostic_assertions=assertions)
-        run.observation, run.assertions = None, {}
-        run.failed = failure
+    helm.reach(FAMILY, _steps, run, args)
 
 
 def run_pi_helm_lifecycle(args: argparse.Namespace, *, raises: bool = False) -> dict[str, Any]:

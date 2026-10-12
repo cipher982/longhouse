@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import hashlib
 import io
 import json
@@ -10,9 +11,11 @@ from types import SimpleNamespace
 import pytest
 
 from zerg.qa import omp_helm_lifecycle
+from zerg.qa import pi_family_helm as helm
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import wait_kind
 from zerg.qa.console_served_state_core import MarkerAnswerCountError
+from zerg.qa.live_kit import RuntimeHostError
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.omp_console_producer import _PROFILE as CONSOLE_PROFILE
 from zerg.qa.omp_console_producer import _VARIANT as CONSOLE_VARIANT
@@ -23,35 +26,36 @@ from zerg.qa.omp_console_producer import omp_native_model_evidence
 from zerg.qa.omp_helm_lifecycle import _PROFILE as HELM_PROFILE
 from zerg.qa.omp_helm_lifecycle import _VARIANTS
 from zerg.qa.omp_helm_lifecycle import ASSERTIONS as HELM_ASSERTIONS
-from zerg.qa.omp_helm_lifecycle import RuntimeConvergenceTimeout
-from zerg.qa.omp_helm_lifecycle import _append_retirement_claim
-from zerg.qa.omp_helm_lifecycle import _assertion_result_status
-from zerg.qa.omp_helm_lifecycle import _channel_command_evidence
-from zerg.qa.omp_helm_lifecycle import _cleanup_receipt
-from zerg.qa.omp_helm_lifecycle import _events_page_metadata
-from zerg.qa.omp_helm_lifecycle import _exact_session_retirement
-from zerg.qa.omp_helm_lifecycle import _flush_receipt_complete
-from zerg.qa.omp_helm_lifecycle import _helm_cleanup_ready
-from zerg.qa.omp_helm_lifecycle import _manifest_is_stable
-from zerg.qa.omp_helm_lifecycle import _native_settlement
-from zerg.qa.omp_helm_lifecycle import _record_retirement_claim_terminal
-from zerg.qa.omp_helm_lifecycle import _redacted_state_snapshot
-from zerg.qa.omp_helm_lifecycle import _register_native_source
-from zerg.qa.omp_helm_lifecycle import _remove_isolation_after_source_retention
-from zerg.qa.omp_helm_lifecycle import _resume_state_is_settled
-from zerg.qa.omp_helm_lifecycle import _runtime_control_identity_is_complete
-from zerg.qa.omp_helm_lifecycle import _runtime_convergence
-from zerg.qa.omp_helm_lifecycle import _runtime_events_snapshot
-from zerg.qa.omp_helm_lifecycle import _served_control_identity
-from zerg.qa.omp_helm_lifecycle import _served_projection_evidence
-from zerg.qa.omp_helm_lifecycle import _terminate_control_made_its_observation
-from zerg.qa.omp_helm_lifecycle import _wait_cleanup_receipt
-from zerg.qa.omp_helm_lifecycle import _wait_native_marker
-from zerg.qa.omp_helm_lifecycle import _wait_runtime_control_identity
-from zerg.qa.omp_helm_lifecycle import _wait_served_run_retirement
 from zerg.qa.omp_helm_lifecycle import omp_helm_lifecycle_assertions
+from zerg.qa.pi_family_helm import RuntimeConvergenceTimeout
+from zerg.qa.pi_family_helm import _append_retirement_claim
+from zerg.qa.pi_family_helm import _channel_command_evidence
+from zerg.qa.pi_family_helm import _cleanup_receipt
+from zerg.qa.pi_family_helm import _events_page_metadata
+from zerg.qa.pi_family_helm import _exact_session_retirement
+from zerg.qa.pi_family_helm import _flush_receipt_complete
+from zerg.qa.pi_family_helm import _helm_cleanup_ready
+from zerg.qa.pi_family_helm import _manifest_is_stable
+from zerg.qa.pi_family_helm import _native_settlement
+from zerg.qa.pi_family_helm import _record_retirement_claim_terminal
+from zerg.qa.pi_family_helm import _redacted_state_snapshot
+from zerg.qa.pi_family_helm import _register_native_source
+from zerg.qa.pi_family_helm import _remove_isolation_after_source_retention
+from zerg.qa.pi_family_helm import _resume_state_is_settled
+from zerg.qa.pi_family_helm import _runtime_control_identity_is_complete
+from zerg.qa.pi_family_helm import _runtime_events_snapshot
+from zerg.qa.pi_family_helm import _served_control_identity
+from zerg.qa.pi_family_helm import _served_projection_evidence
+from zerg.qa.pi_family_helm import _terminate_control_made_its_observation
+from zerg.qa.pi_family_helm import _wait_cleanup_receipt
+from zerg.qa.pi_family_helm import _wait_native_marker
+from zerg.qa.pi_family_helm import _wait_served_run_retirement
 from zerg.qa.provider_console_lifecycle import _omp_continuation_prompt
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
+
+FAMILY = omp_helm_lifecycle.FAMILY
+_runtime_convergence = functools.partial(helm._runtime_convergence, family=FAMILY)
+_wait_runtime_control_identity = functools.partial(helm._wait_runtime_control_identity, family=FAMILY)
 
 
 def _identity_receipt(
@@ -189,15 +193,12 @@ def test_omp_helm_channel_terminal_evidence_preserves_lifecycle_field_presence(m
         "agent_end_is_terminal_present": False,
         "agent_end_will_continue_present": False,
     }
-    monkeypatch.setattr(omp_helm_lifecycle, "_read_state", lambda _path: state)
-    monkeypatch.setattr(
-        omp_helm_lifecycle,
-        "_wait",
-        lambda observe, *, timeout, description: observe(),
-    )
+    monkeypatch.setattr(helm, "_states", lambda *_args: [state])
+    monkeypatch.setattr(helm, "_wait", lambda observe, *, timeout, description: observe())
 
-    event, _ = omp_helm_lifecycle._wait_channel_terminal(
+    event, _ = helm._wait_channel_terminal(
         tmp_path,
+        FAMILY,
         session_id="session-1",
         native_session_id="native-1",
         session_file=tmp_path / "omp.jsonl",
@@ -214,8 +215,9 @@ def test_omp_helm_channel_terminal_evidence_preserves_lifecycle_field_presence(m
             "agent_end_will_continue": False,
         }
     )
-    event, _ = omp_helm_lifecycle._wait_channel_terminal(
+    event, _ = helm._wait_channel_terminal(
         tmp_path,
+        FAMILY,
         session_id="session-1",
         native_session_id="native-1",
         session_file=tmp_path / "omp.jsonl",
@@ -225,8 +227,9 @@ def test_omp_helm_channel_terminal_evidence_preserves_lifecycle_field_presence(m
     assert event["willContinue"] is False
     state["live_turn_seq"] = 2
     assert (
-        omp_helm_lifecycle._wait_channel_terminal(
+        helm._wait_channel_terminal(
             tmp_path,
+            FAMILY,
             session_id="session-1",
             native_session_id="native-1",
             session_file=tmp_path / "omp.jsonl",
@@ -292,7 +295,7 @@ def test_omp_terminal_proof_is_not_reused_after_run_becomes_active(monkeypatch) 
     diagnostic["shadow"]["run"]["lifecycle"] = "running"
     diagnostic["shadow"]["activity"]["state"] = "executing"
     clock = iter((0.0, 0.0, 1.0))
-    monkeypatch.setattr(omp_helm_lifecycle, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _seconds: None))
+    monkeypatch.setattr(helm, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _seconds: None))
     with pytest.raises(RuntimeError):
         _record_retirement_claim_terminal("https://runtime.example", "token", claims, session_id="session-1", run_id="run-1", timeout=1)
     assert lifecycle._served_run_inventory_evidence("https://runtime.example", "token", "session-1", claims)["retired"] is False
@@ -872,8 +875,6 @@ def test_omp_helm_marker_prompts_preserve_setup_instructions() -> None:
 
 
 def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None:
-    from zerg.qa.omp_helm_lifecycle import _run_engine
-
     session_id = "session-1"
     state_dir = tmp_path / "home" / "managed-local" / "omp-helm"
     state_dir.mkdir(parents=True)
@@ -899,17 +900,7 @@ def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None
         return _Response()
 
     monkeypatch.setattr("urllib.request.urlopen", _urlopen)
-    result = _run_engine(
-        Path("/unused/longhouse-engine"),
-        "steer",
-        session_id,
-        {
-            "LONGHOUSE_OMP_HELM_URL": "https://runtime.test",
-            "LONGHOUSE_OMP_HELM_TOKEN": "agent-token",
-            "LONGHOUSE_HOME": str(tmp_path / "home"),
-        },
-        text="redirect now",
-    )
+    result = helm._host_control("https://runtime.test", "agent-token", FAMILY, "steer", session_id, text="redirect now")
 
     request = seen["request"]
     assert request.get_header("X-agents-token") == "agent-token"
@@ -955,9 +946,9 @@ def test_omp_runtime_control_retries_machine_agent_reconnect(monkeypatch) -> Non
         return _Response()
 
     monkeypatch.setattr("urllib.request.urlopen", _urlopen)
-    monkeypatch.setattr(omp_helm_lifecycle.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(helm.time, "sleep", lambda _seconds: None)
 
-    response = omp_helm_lifecycle._runtime_post(
+    response = helm._runtime_post(
         "https://runtime.test",
         "agent-token",
         "/api/agents/sessions/session-1/input",
@@ -1059,7 +1050,7 @@ def test_omp_helm_zero_delta_flush_is_accepted_only_before_independent_marker_pr
     assert not _flush_receipt_complete({key: value for key, value in flush.items() if key != "events_shipped"})
 
     monkeypatch.setattr(
-        "zerg.qa.omp_helm_lifecycle._runtime_snapshot",
+        "zerg.qa.pi_family_helm._runtime_snapshot",
         lambda *_args: {
             "detail": {"id": "session-1", "provider": "omp", "provider_session_id": "native-1"},
             "thread": {
@@ -1146,7 +1137,7 @@ def test_omp_wait_runtime_control_identity_retries_until_projection_matches(monk
         ]
     )
     monkeypatch.setattr(
-        "zerg.qa.omp_helm_lifecycle._runtime_get",
+        "zerg.qa.pi_family_helm._runtime_get",
         lambda *_args: next(diagnostics),
     )
 
@@ -1165,7 +1156,7 @@ def test_omp_wait_runtime_control_identity_retries_until_projection_matches(monk
 def test_omp_wait_runtime_control_identity_retries_transient_reads(monkeypatch) -> None:
     diagnostics = iter(
         [
-            RuntimeError("Runtime Host HTTP 503"),
+            RuntimeHostError(503, ""),
             {
                 "served_path": "canonical_session_detail",
                 "shadow": {
@@ -1189,7 +1180,7 @@ def test_omp_wait_runtime_control_identity_retries_transient_reads(monkeypatch) 
         return value
 
     monkeypatch.setattr(
-        "zerg.qa.omp_helm_lifecycle._runtime_get",
+        "zerg.qa.pi_family_helm._runtime_get",
         runtime_get,
     )
 
@@ -1201,7 +1192,7 @@ def test_omp_wait_runtime_control_identity_retries_transient_reads(monkeypatch) 
         timeout=1,
     )
 
-    assert result["transient_errors"] == ["Runtime Host HTTP 503"]
+    assert result["transient_errors"] == ["Runtime Host HTTP 503: "]
 
 
 def test_omp_wait_runtime_control_identity_waits_through_reconnect_lease_rotation(monkeypatch, tmp_path) -> None:
@@ -1236,8 +1227,8 @@ def test_omp_wait_runtime_control_identity_waits_through_reconnect_lease_rotatio
     def advance_reconnect(_seconds):
         state_path.write_text(json.dumps(rotated), encoding="utf-8")
 
-    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_get", runtime_get)
-    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle.time.sleep", advance_reconnect)
+    monkeypatch.setattr("zerg.qa.pi_family_helm._runtime_get", runtime_get)
+    monkeypatch.setattr("zerg.qa.pi_family_helm.time.sleep", advance_reconnect)
 
     result = _wait_runtime_control_identity(
         "https://runtime.example",
@@ -1287,7 +1278,7 @@ def test_omp_wait_runtime_control_identity_rejects_owner_rotation(monkeypatch, t
         )
         return diagnostic
 
-    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_get", runtime_get)
+    monkeypatch.setattr("zerg.qa.pi_family_helm._runtime_get", runtime_get)
 
     with pytest.raises(RuntimeError) as error:
         _wait_runtime_control_identity(
@@ -1323,9 +1314,9 @@ def test_omp_wait_runtime_control_identity_retains_timeout_observation(monkeypat
         },
     }
     monotonic_values = iter((0.0, 0.0, 1.0))
-    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_get", lambda *_args: diagnostic)
-    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle.time.monotonic", lambda: next(monotonic_values))
-    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("zerg.qa.pi_family_helm._runtime_get", lambda *_args: diagnostic)
+    monkeypatch.setattr("zerg.qa.pi_family_helm.time.monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr("zerg.qa.pi_family_helm.time.sleep", lambda _seconds: None)
 
     with pytest.raises(RuntimeError) as error:
         _wait_runtime_control_identity(
@@ -1344,7 +1335,7 @@ def test_omp_wait_runtime_control_identity_retains_timeout_observation(monkeypat
     # A diagnostic served without the identity does not say which side has yet to act.
     assert wait_kind.waited_on(error.value) is None
     # Only what a pass observed is declared: the engine's missing state file, or a request the Runtime Host failed.
-    assert omp_helm_lifecycle._CONTROL_IDENTITY_WAITED_ON == {
+    assert helm._CONTROL_IDENTITY_WAITED_ON == {
         "local_state_unavailable": "longhouse_engine",
         "local_state_unavailable_during_read": "longhouse_engine",
         "transient_runtime_read": "runtime_host",
@@ -1412,7 +1403,7 @@ def test_omp_runtime_events_snapshot_exhausts_pages_under_one_generation(monkeyp
         requests.append(path)
         return next(pages)
 
-    monkeypatch.setattr(omp_helm_lifecycle, "_runtime_get", runtime_get)
+    monkeypatch.setattr(helm, "_runtime_get", runtime_get)
 
     snapshot = _runtime_events_snapshot("https://runtime.example", "token", "session-1")
 
@@ -1448,7 +1439,7 @@ def test_omp_runtime_events_snapshot_rejects_generation_change(monkeypatch) -> N
             },
         ]
     )
-    monkeypatch.setattr(omp_helm_lifecycle, "_runtime_get", lambda *_args: next(pages))
+    monkeypatch.setattr(helm, "_runtime_get", lambda *_args: next(pages))
 
     with pytest.raises(RuntimeError, match="changed the events generation"):
         _runtime_events_snapshot("https://runtime.example", "token", "session-1")
@@ -1482,7 +1473,7 @@ def test_omp_wait_native_marker_ignores_tool_arguments(monkeypatch, tmp_path) ->
         + "\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(omp_helm_lifecycle, "_wait", lambda observe, **_kwargs: observe())
+    monkeypatch.setattr(helm, "_wait", lambda observe, **_kwargs: observe())
 
     row = _wait_native_marker(session_file, marker)
 
@@ -1497,7 +1488,7 @@ def test_omp_wait_served_run_retirement_waits_for_terminal_fact(monkeypatch) -> 
         ]
     )
     monkeypatch.setattr(
-        omp_helm_lifecycle.lifecycle,
+        helm.lifecycle,
         "_served_run_inventory_evidence",
         lambda *_args: next(observations),
     )
@@ -1527,10 +1518,10 @@ def test_omp_wait_served_run_retirement_waits_for_terminal_fact(monkeypatch) -> 
 
 def test_omp_wait_served_run_retirement_does_not_trust_only_the_final_run(monkeypatch) -> None:
     clock = iter((0.0, 0.0, 1.0))
-    monkeypatch.setattr(omp_helm_lifecycle.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(omp_helm_lifecycle.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(helm.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(helm.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
-        omp_helm_lifecycle.lifecycle,
+        helm.lifecycle,
         "_served_run_inventory_evidence",
         lambda *_args: {"retired": True, "session_id": "session-1", "active_run_count": 0},
     )
@@ -1563,7 +1554,7 @@ def test_omp_wait_served_run_retirement_does_not_trust_only_the_final_run(monkey
 def test_omp_runtime_convergence_retains_unproven_page_metadata(monkeypatch) -> None:
     marker = "OMP_INCOMPLETE_PAGE"
     monkeypatch.setattr(
-        "zerg.qa.omp_helm_lifecycle._runtime_snapshot",
+        "zerg.qa.pi_family_helm._runtime_snapshot",
         lambda *_args: {
             "detail": {},
             "thread": {},
@@ -1599,6 +1590,7 @@ def test_omp_registers_each_native_source_before_later_cleanup() -> None:
     claims = []
     _register_native_source(
         claims,
+        provider="omp",
         label="initial",
         source_path="/omp/initial.jsonl",
         session_id="session-1",
@@ -1607,6 +1599,7 @@ def test_omp_registers_each_native_source_before_later_cleanup() -> None:
     )
     _register_native_source(
         claims,
+        provider="omp",
         label="replacement",
         source_path="/omp/replacement.jsonl",
         session_id="session-1",
@@ -1615,6 +1608,7 @@ def test_omp_registers_each_native_source_before_later_cleanup() -> None:
     )
     _register_native_source(
         claims,
+        provider="omp",
         label="duplicate",
         source_path="/omp/initial.jsonl",
         session_id="session-1",
@@ -1627,8 +1621,8 @@ def test_omp_registers_each_native_source_before_later_cleanup() -> None:
 
 
 def test_omp_cleanup_retains_generation_owner_birth_and_dead_evidence(monkeypatch) -> None:
-    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._pid_dead", lambda _pid: True)
-    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._pgid_dead", lambda _pgid: True)
+    monkeypatch.setattr("zerg.qa.pi_family_helm._pid_dead", lambda _pid: True)
+    monkeypatch.setattr("zerg.qa.pi_family_helm._pgid_dead", lambda _pgid: True)
     records = [
         {
             "owner": owner,
@@ -1666,8 +1660,8 @@ def test_omp_cleanup_waits_for_async_owner_exit(monkeypatch) -> None:
             {"status": "pass", "birth_identities_verified": True},
         ]
     )
-    monkeypatch.setattr(omp_helm_lifecycle, "_cleanup_receipt", lambda _records: next(receipts))
-    monkeypatch.setattr(omp_helm_lifecycle.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(helm, "_cleanup_receipt", lambda _records: next(receipts))
+    monkeypatch.setattr(helm.time, "sleep", lambda _seconds: None)
 
     assert _wait_cleanup_receipt(records, timeout=1) == {"status": "pass", "birth_identities_verified": True}
 
@@ -1723,14 +1717,6 @@ def test_omp_keeps_isolation_when_owned_runtime_cleanup_is_unverified(tmp_path) 
     assert cleanup["isolation_retention_reason"] == "owned runtime cleanup is incomplete"
 
 
-def test_omp_selected_assertion_status_ignores_unrelated_sibling_failures() -> None:
-    selected = _VARIANTS[0]
-    assertions = {assertion: assertion == HELM_ASSERTIONS[0] for assertion in HELM_ASSERTIONS}
-
-    assert _assertion_result_status(assertions, selected) == "pass"
-    assert _assertion_result_status(assertions, "not-a-cell") == "fail"
-
-
 def test_omp_console_settlement_and_context_recall_are_required() -> None:
     observation = {
         "runtime_host_turn_dispatch": True,
@@ -1779,121 +1765,6 @@ def test_omp_console_settlement_and_context_recall_are_required() -> None:
     assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is True
     observation["omp_settlement"]["native_reply_count"] = 0
     assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
-
-
-def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
-    observation = {
-        "observation_scope": "scenario",
-        "omp_native_extension_channel_bound": True,
-        "omp_agent_end_settlement_observed": True,
-        "omp_native_archive_bound": True,
-        "omp_transcript_shipper_started": True,
-        "omp_transcript_flush_completed": True,
-        "omp_runtime_transcript_converged": True,
-        "runtime_agents_api_controls": True,
-        "runtime_control_identity_complete": True,
-        "runtime_control_identity": {
-            "initial": _identity_receipt("connection:initial:lease-1"),
-            "replacement": _identity_receipt("connection:replacement:lease-2"),
-            "cold_resume": _identity_receipt("connection:resume:lease-3"),
-            "final": _identity_receipt("connection:resume:lease-3"),
-        },
-        "send_idle": True,
-        "follow_up_native": True,
-        "steer_active": True,
-        "steer_turn_verdict": {"passed": True, "code": "steer_changed_active_turn"},
-        "abort_native": True,
-        "abort_turn_verdict": {"passed": True, "code": "abort_stopped_turn_and_session_continued"},
-        "terminate_owned": True,
-        "cold_resume_exact_file": True,
-        "stale_owner_refused": True,
-        "native_replacement_bound": True,
-        "settlement": {
-            "status": "pass",
-            "agent_end_terminal": True,
-            "agent_end_evidence_shape": True,
-            "native_session_header_count": 1,
-            "native_terminal_after_assistant": True,
-            "malformed_source": False,
-            "native_archive_bound": True,
-            "agent_settled_is_not_completion_contract": True,
-        },
-        "cleanup": {
-            "status": "pass",
-            "provider_process_dead": True,
-            "process_group_dead": True,
-            "orphan_count": 0,
-            "shipper_stop_verified": True,
-            "canary_session_hidden": True,
-            "served_run_retired": True,
-            "source_retention_verified": True,
-            "isolation_removed": True,
-        },
-        "channel_binding": {
-            "ready": True,
-            "session_id_present": True,
-            "native_session_id_present": True,
-            "connection_id_present": True,
-            "lease_generation_present": True,
-            "session_file_present": True,
-        },
-        "send_evidence": {"native_source_bound": True, "marker_count": 1, "channel_ack_bound": True},
-        "follow_up_evidence": {
-            "native_source_bound": True,
-            "marker_count": 1,
-            "channel_ack_bound": True,
-            "queued_not_sent": True,
-        },
-        "steer_evidence": {
-            "native_source_bound": True,
-            "marker_count": 1,
-            "channel_ack_bound": True,
-            "active_command_bound": True,
-            "steer_command_bound": True,
-            "active_state": {"phase": "thinking", "native_session_id": "native-1"},
-            "native_session_id": "native-1",
-        },
-        "cold_resume_evidence": {
-            "native_source_bound": True,
-            "channel_terminal_bound": True,
-            "marker_count": 1,
-            "context_recalled": True,
-            "context_marker_count": 1,
-            "terminal": True,
-            "exact_file": True,
-        },
-        "replacement_evidence": {"native_source_bound": True, "marker_count": 1, "channel_ack_bound": True},
-        "stale_owner_evidence": {"error_code": "stale_channel"},
-        "abort_evidence": {
-            "channel_source_bound": True,
-            "terminal": True,
-            "channel_ack_bound": True,
-        },
-    }
-
-    assert set(omp_helm_lifecycle_assertions(observation)) == set(HELM_ASSERTIONS)
-    assert all(omp_helm_lifecycle_assertions(observation).values())
-    observation["cold_resume_evidence"]["context_marker_count"] = 2
-    assert omp_helm_lifecycle_assertions(observation)["omp_helm_cold_resume_exact_file"] is False
-    observation["cold_resume_evidence"]["context_marker_count"] = 1
-    cold_owner = list(observation["runtime_control_identity"]["cold_resume"]["owner_identity"])
-    observation["runtime_control_identity"]["final"] = _identity_receipt(
-        "connection:resume:lease-4",
-        owner_identity=cold_owner,
-    )
-    assert all(omp_helm_lifecycle_assertions(observation).values())
-    observation["runtime_control_identity"]["final"]["owner_identity"][1] = "native-other"
-    assert omp_helm_lifecycle_assertions(observation)["omp_helm_launch_registration"] is False
-    observation["runtime_control_identity"]["replacement"]["control_subject_key"] = "connection:wrong:lease-2"
-    assert omp_helm_lifecycle_assertions(observation)["omp_helm_launch_registration"] is False
-    observation["runtime_control_identity"] = {}
-    assert omp_helm_lifecycle_assertions(observation)["omp_helm_launch_registration"] is False
-    observation["abort_evidence"]["terminal"] = False
-    assert omp_helm_lifecycle_assertions(observation)["omp_helm_abort_native"] is False
-    # A mid-turn send the provider accepted ("sent") came from its volatile
-    # follow-up queue, not the durable receipt drain.
-    observation["follow_up_evidence"]["queued_not_sent"] = False
-    assert omp_helm_lifecycle_assertions(observation)["omp_helm_follow_up_native"] is False
 
 
 def test_omp_runtime_control_identity_rejects_missing_owner_fields() -> None:
@@ -1986,7 +1857,7 @@ def test_omp_served_projection_requires_exact_runtime_identity_and_marker_event(
 def test_omp_runtime_convergence_rejects_wrong_served_provider(monkeypatch) -> None:
     marker = "OMP_IDENTITY_MARKER"
     monkeypatch.setattr(
-        "zerg.qa.omp_helm_lifecycle._runtime_snapshot",
+        "zerg.qa.pi_family_helm._runtime_snapshot",
         lambda *_args: {
             "detail": {"id": "session-1", "provider": "codex", "provider_session_id": "native-1"},
             "thread": {
@@ -2070,7 +1941,7 @@ def _converge(
         polls[0] += 1
         return _served_events_snapshot(events(polls[0]) if callable(events) else events)
 
-    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_snapshot", snapshot)
+    monkeypatch.setattr("zerg.qa.pi_family_helm._runtime_snapshot", snapshot)
     # A refusal has to stand; these tests do not wait for the window, only for the second read.
     monkeypatch.setattr("zerg.qa.console_served_state_core.SERVED_ANSWER_SETTLE_SECONDS", kwargs.pop("settle", 0.0))
     if "native_source_path" not in kwargs:
@@ -2210,7 +2081,7 @@ def test_omp_runtime_convergence_waits_for_a_row_the_page_served_before_the_read
                 handle.write(_omp_native_row("reply", "assistant", _FINAL_REPLY) + "\n")
         return _served_events_snapshot([reply])
 
-    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_snapshot", snapshot)
+    monkeypatch.setattr("zerg.qa.pi_family_helm._runtime_snapshot", snapshot)
     convergence = _runtime_convergence(
         "https://runtime.example",
         "token",
@@ -2373,7 +2244,7 @@ def test_omp_wait_native_marker_returns_the_answer_row_not_the_narration(monkeyp
     session_file = tmp_path / "session.jsonl"
     narration = _native_message("narration", _NARRATION, stop="toolUse", tool_call=True)
     session_file.write_text(narration + "\n", encoding="utf-8")
-    monkeypatch.setattr(omp_helm_lifecycle, "_wait", lambda observe, **_kwargs: observe())
+    monkeypatch.setattr(helm, "_wait", lambda observe, **_kwargs: observe())
 
     # Marker only in narration: the turn has not answered yet.
     assert _wait_native_marker(session_file, _REPLY_MARKER) is None
@@ -2385,8 +2256,8 @@ def test_omp_wait_native_marker_returns_the_answer_row_not_the_narration(monkeyp
 def test_omp_background_first_turn_gets_the_budget_of_a_tool_turn() -> None:
     # A launch turn is one model call; the background turn runs a child agent
     # and two jobs before it answers, and healthy ones have taken over 80 s.
-    assert omp_helm_lifecycle._first_turn_timeout(background=False) == 90
-    assert omp_helm_lifecycle._first_turn_timeout(background=True) == 150
+    assert helm._first_turn_timeout(background=False) == 90
+    assert helm._first_turn_timeout(background=True) == 150
 
 
 def test_omp_wait_native_marker_timeout_says_what_the_transcript_held(tmp_path) -> None:
@@ -2397,7 +2268,7 @@ def test_omp_wait_native_marker_timeout_says_what_the_transcript_held(tmp_path) 
         _wait_native_marker(session_file, _REPLY_MARKER, timeout=0.3)
 
     message = str(raised.value)
-    assert message.startswith(f"timed out waiting for OMP native marker {_REPLY_MARKER}: ")
+    assert message.startswith(f"timed out waiting for native marker {_REPLY_MARKER}: ")
     assert "'assistant_rows': 1" in message
     assert "'rows_mentioning_marker': 1" in message
     assert "'last_stop_reason': 'toolUse'" in message
@@ -2411,19 +2282,19 @@ def test_an_omp_stalled_turn_and_an_unserved_reply_declare_different_waits(monke
     prompt = json.dumps({"type": "message", "id": "prompt", "message": {"role": "user", "content": f"Reply with exactly {_REPLY_MARKER}."}})
     narration = _native_message("narration", _NARRATION, stop="toolUse", tool_call=True)
     session_file.write_text(f"{prompt}\n{narration}\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="timed out waiting for OMP native marker") as stalled:
+    with pytest.raises(RuntimeError, match="timed out waiting for native marker") as stalled:
         _wait_native_marker(session_file, _REPLY_MARKER, timeout=0.3)
     assert waited_on(stalled.value) == "provider_turn"
 
     # The same silence without the prompt: nothing reached OMP, which is not a stalled turn.
     unprompted = tmp_path / "unprompted.jsonl"
     unprompted.write_text(narration + "\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="timed out waiting for OMP native marker") as never_prompted:
+    with pytest.raises(RuntimeError, match="timed out waiting for native marker") as never_prompted:
         _wait_native_marker(unprompted, _REPLY_MARKER, timeout=0.3)
     assert waited_on(never_prompted.value) is None
 
     # A phrase the model should bring back is read from a turn that already replied.
-    with pytest.raises(RuntimeError, match="timed out waiting for OMP native marker") as not_recalled:
+    with pytest.raises(RuntimeError, match="timed out waiting for native marker") as not_recalled:
         _wait_native_marker(session_file, "A_PHRASE_NOT_RECALLED", recalled=True, timeout=0.3)
     assert waited_on(not_recalled.value) is None
 
@@ -2431,10 +2302,10 @@ def test_an_omp_stalled_turn_and_an_unserved_reply_declare_different_waits(monke
     task = json.dumps({"type": "message", "id": "task", "message": {"role": "user", "content": "Run OMP_TASK_1 step by step."}})
     session_file.write_text(f"{task}\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="timed out waiting for tool boundary in task OMP_TASK_1") as task_stalled:
-        omp_helm_lifecycle._wait_task_tool_boundary(session_file, "OMP_TASK_1", timeout=0.3)
+        helm._wait_task_tool_boundary(session_file, "OMP_TASK_1", timeout=0.3)
     assert waited_on(task_stalled.value) == "provider_turn"
     with pytest.raises(RuntimeError, match="timed out waiting for tool boundary in task OMP_TASK_2") as task_never_sent:
-        omp_helm_lifecycle._wait_task_tool_boundary(session_file, "OMP_TASK_2", timeout=0.3)
+        helm._wait_task_tool_boundary(session_file, "OMP_TASK_2", timeout=0.3)
     assert waited_on(task_never_sent.value) is None
     session_file.write_text(f"{prompt}\n{narration}\n", encoding="utf-8")
 
@@ -2450,7 +2321,7 @@ def test_an_omp_stalled_turn_and_an_unserved_reply_declare_different_waits(monke
     assert waited_on(unknown.value) is None
 
     # The prompt arriving in OMP's transcript also needs Longhouse to deliver it.
-    with pytest.raises(RuntimeError, match="timed out waiting for OMP native marker") as prompt_row:
+    with pytest.raises(RuntimeError, match="timed out waiting for native marker") as prompt_row:
         _wait_native_marker(session_file, "A_PROMPT_NEVER_DELIVERED", role="user", timeout=0.3)
     assert waited_on(prompt_row.value) is None
 
@@ -2469,7 +2340,7 @@ def test_omp_wait_native_marker_reads_text_blocks_as_lines_and_recall_by_presenc
         },
     }
     session_file.write_text(json.dumps(row) + "\n", encoding="utf-8")
-    monkeypatch.setattr(omp_helm_lifecycle, "_wait", lambda observe, **_kwargs: observe())
+    monkeypatch.setattr(helm, "_wait", lambda observe, **_kwargs: observe())
 
     assert _wait_native_marker(session_file, resume, alongside=(phrase,))["id"] == "reply"
     # A recalled phrase may sit in a sentence; an answer may not.
@@ -2651,7 +2522,7 @@ def test_omp_native_model_evidence_binds_routed_thinking_pin_to_recorded_model(t
 
 def test_omp_helm_control_retries_only_undispatched_channel_reconnect() -> None:
     unavailable = "Managed control channel is not connected or does not advertise this capability"
-    reconnecting = omp_helm_lifecycle._control_channel_reconnecting
+    reconnecting = helm._control_channel_reconnecting
 
     # The Machine Agent restart after a transcript flush leaves a sub-second
     # window where terminate/interrupt are refused before dispatch.

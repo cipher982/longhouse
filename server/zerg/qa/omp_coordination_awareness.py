@@ -34,14 +34,15 @@ from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
-from zerg.qa.omp_helm_lifecycle import _exact_session_retirement
+from zerg.qa.omp_helm_lifecycle import FAMILY
 from zerg.qa.omp_helm_lifecycle import _launch_argv
-from zerg.qa.omp_helm_lifecycle import _native_rows
-from zerg.qa.omp_helm_lifecycle import _process_record
-from zerg.qa.omp_helm_lifecycle import _remove_isolation_after_source_retention
-from zerg.qa.omp_helm_lifecycle import _wait_cleanup_receipt
-from zerg.qa.omp_helm_lifecycle import _wait_native_marker
-from zerg.qa.omp_helm_lifecycle import _wait_state
+from zerg.qa.pi_family_helm import _exact_session_retirement
+from zerg.qa.pi_family_helm import _native_rows
+from zerg.qa.pi_family_helm import _process_record
+from zerg.qa.pi_family_helm import _remove_isolation_after_source_retention
+from zerg.qa.pi_family_helm import _wait_cleanup_receipt
+from zerg.qa.pi_family_helm import _wait_native_marker
+from zerg.qa.pi_family_helm import _wait_state
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
@@ -214,7 +215,7 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             terminal_path=root / "omp-terminal.raw",
             thread_name="omp-coordination-terminal-drain",
         )
-        state = _wait_state(longhouse_home)
+        state = _wait_state(longhouse_home, FAMILY)
         for label, pid_key, start_key in (
             ("launcher", "launcher_pid", "launcher_process_start_time"),
             ("provider", "provider_pid", "provider_process_start_time"),

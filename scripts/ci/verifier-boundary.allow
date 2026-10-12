@@ -38,10 +38,10 @@ server/zerg/qa/harness_catalog.py -> server/zerg/services/catalogd_supervisor.py
 server/zerg/qa/omp_console_producer.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/omp_console_producer.py -> server/zerg/services/provider_interaction_semantics.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/omp_helm_lifecycle.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
-server/zerg/qa/omp_helm_lifecycle.py -> server/zerg/services/provider_interaction_semantics.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/opencode_server_contract_producer.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/opencode_server_qualification.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/pi_console_tool_producer.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/pi_family_helm.py -> server/zerg/services/provider_interaction_semantics.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/pi_helm_lifecycle.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/pi_qualification.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/product_console_lifecycle.py -> server/zerg/catalogd/schema.py  # drives subject runtime internals in-process; replace with the served API or CLI

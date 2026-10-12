@@ -30,14 +30,15 @@ from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.omp_coordination_awareness import peers_invocation_evidence
 from zerg.qa.omp_coordination_awareness import session_retirement_cleanup
-from zerg.qa.omp_helm_lifecycle import _remove_isolation_after_source_retention
 from zerg.qa.openrouter_routing import prepare_pi_openrouter_routing
+from zerg.qa.pi_family_helm import _cleanup_receipt
+from zerg.qa.pi_family_helm import _process_record
+from zerg.qa.pi_family_helm import _remove_isolation_after_source_retention
+from zerg.qa.pi_family_helm import _wait
+from zerg.qa.pi_family_helm import _wait_native_marker
+from zerg.qa.pi_family_helm import _wait_state
 from zerg.qa.pi_family_turn_oracle import read_session_entries
-from zerg.qa.pi_helm_lifecycle import _cleanup_receipt
-from zerg.qa.pi_helm_lifecycle import _process_record
-from zerg.qa.pi_helm_lifecycle import _wait
-from zerg.qa.pi_helm_lifecycle import _wait_native_marker
-from zerg.qa.pi_helm_lifecycle import _wait_state
+from zerg.qa.pi_helm_lifecycle import FAMILY
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
@@ -156,9 +157,11 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             terminal_path=root / "pi-terminal.raw",
             thread_name="pi-coordination-terminal-drain",
         )
-        state = _wait_state(home, predicate=lambda item: item.get("ready") is True, timeout=45)
+        state = _wait_state(home, FAMILY, timeout=45)
         for label in ("launcher", "provider"):
-            owner_records.append(_process_record(state.get(f"{label}_pid"), state.get(f"{label}_process_start_time"), label))
+            owner_records.append(
+                _process_record(state.get(f"{label}_pid"), state.get(f"{label}_process_start_time"), label, owner="initial")
+            )
         lifecycle.write_json(root / "session-launch-receipt.json", redact_state_for_evidence(state))
         session_file = Path(str(state.get("session_file") or ""))
         if not session_file.is_file():

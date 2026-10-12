@@ -12,7 +12,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from zerg.qa import omp_helm_lifecycle as helm
+from zerg.qa import omp_helm_lifecycle
+from zerg.qa import pi_family_helm as helm
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.producer_shell import Producer
@@ -54,7 +55,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=1,
     scenario_id=SCENARIO_ID,
     # 10: every result is an omp_background_jobs_result; the failure copy is gone.
-    scenario_revision=10,
+    # 11: the Helm lifecycle it rides on records in the Pi family's one shape.
+    scenario_revision=11,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -76,7 +78,7 @@ REGISTRATION = ProducerRegistration(
     network_policy="shared_provider_egress",
     required_artifacts=(
         "provider_binary_receipt",
-        "omp_helm_receipt",
+        "helm_receipt",
         "omp_background_receipt",
         "transcript_flush_receipt",
         "transcript_shipper_receipt",
@@ -240,10 +242,13 @@ def background_run_healthy(result: Mapping[str, Any] | None) -> bool:
     observation = result.get("observation")
     if not isinstance(observation, Mapping) or observation.get("scenario_scope") != "background":
         return False
-    channel = observation.get("channel_binding")
-    channel = channel if isinstance(channel, Mapping) else {}
-    final = observation.get("final_evidence")
-    final = final if isinstance(final, Mapping) else {}
+
+    def record(name: str) -> Mapping[str, Any]:
+        value = observation.get(name)
+        return value if isinstance(value, Mapping) else {}
+
+    channel, cleanup = record("channel_binding"), record("cleanup")
+    launch_served = record("convergence").get("launch")
     return (
         all(
             channel.get(key) is True
@@ -256,12 +261,13 @@ def background_run_healthy(result: Mapping[str, Any] | None) -> bool:
                 "session_file_present",
             )
         )
-        and observation.get("omp_native_extension_channel_bound") is True
-        and observation.get("omp_transcript_shipper_started") is True
-        and observation.get("omp_transcript_flush_completed") is True
-        and observation.get("omp_native_archive_bound") is True
-        and observation.get("omp_owned_processes_dead") is True
-        and final.get("cleanup_ready") is True
+        and record("shipper").get("started") is True
+        and isinstance(launch_served, Mapping)
+        and launch_served.get("status") == "pass"
+        and record("settlement").get("native_archive_bound") is True
+        and cleanup.get("provider_process_dead") is True
+        and cleanup.get("process_group_dead") is True
+        and helm._helm_cleanup_ready(cleanup)
     )
 
 
@@ -361,7 +367,7 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             os.environ["LONGHOUSE_QA_FAULT"] = fault
             os.environ["LONGHOUSE_QA_FAULT_RECEIPT"] = str(root / "qa-fault-receipt.jsonl")
             args.negative_control = None
-        helm._reach(run, args)
+        omp_helm_lifecycle._reach(run, args)
         # The Helm run's observation is this scenario's; its verdicts are the Helm lifecycle's, not ours.
         run.assertions = {}
     except Exception:

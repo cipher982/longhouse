@@ -4,22 +4,19 @@ import json
 import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from zerg.qa import pi_console_tool_producer as pi_console
+from zerg.qa import pi_family_helm as helm
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa.console_served_state_core import MarkerAnswerCountError
+from zerg.qa.live_kit import RuntimeHostError
 from zerg.qa.pi_console_tool_producer import REGISTRATION as PI_CONSOLE_REGISTRATION
 from zerg.qa.pi_console_tool_producer import pi_console_tool_assertions
-from zerg.qa.pi_helm_lifecycle import _cleanup_receipt
-from zerg.qa.pi_helm_lifecycle import _native_snapshot
-from zerg.qa.pi_helm_lifecycle import _redact_value
-from zerg.qa.pi_helm_lifecycle import _retain_source
-from zerg.qa.pi_helm_lifecycle import _state_identity
-from zerg.qa.pi_helm_lifecycle import _write_scenario_receipts
-from zerg.qa.pi_helm_lifecycle import pi_helm_lifecycle_assertions
+from zerg.qa.pi_family_helm import RuntimeConvergenceTimeout
+from zerg.qa.pi_family_helm import _cleanup_receipt
+from zerg.qa.pi_helm_lifecycle import FAMILY as PI_FAMILY
 from zerg.qa.pi_native import pi_native_model_evidence
 from zerg.qa.pi_native import pi_native_shadow_taxonomy
 from zerg.qa.pi_native import pi_transcript_rows
@@ -51,38 +48,22 @@ def test_pi_print_runner_allocates_tty_for_stock_cli(tmp_path) -> None:
 
 
 def test_helm_retained_evidence_excludes_live_channel_authority() -> None:
-    secret = "ephemeral-control-authority"
+    secret, token = "ephemeral-control-authority", "qualification-agents-token"
     state = {"session_id": "session", "run_id": "run", "channel_token": secret}
-    retained = _redact_value({"owner": _state_identity(state), "frame": {"auth_token": secret, "session_id": "session"}}, [])
-    assert secret not in json.dumps(retained)
-    assert "channel_token" not in retained["owner"]
-    assert "auth_token" not in retained["frame"]
-
-
-def test_helm_authoritative_retention_does_not_truncate_large_source(tmp_path) -> None:
-    source = tmp_path / "native.jsonl"
-    source.write_bytes(b"x" * (16 * 1024 * 1024 + 1))
-
-    retained = _retain_source(tmp_path / "evidence", source, "native.raw", [], require_complete=True)
-
-    assert retained["retained"] is True
-    assert retained["complete"] is True
-    assert retained["truncated"] is False
-    assert retained["size_exceeds_evidence_bound"] is True
-    assert (tmp_path / "evidence" / "source-artifacts" / "native.raw").stat().st_size == source.stat().st_size
+    retained = helm._redacted(
+        {"owner": state, "frame": {"auth_token": secret, "session_id": "session"}, "error": f"refused {token}"}, [token]
+    )
+    assert secret not in json.dumps(retained) and token not in json.dumps(retained)
+    assert retained["owner"]["session_id"] == "session"
 
 
 def test_helm_auth_failure_is_not_hidden_as_a_convergence_timeout(monkeypatch) -> None:
-    from zerg.qa import pi_helm_lifecycle as helm
-
     def rejected(*args):
-        raise helm._RuntimeHostHTTPError(403, "access denied")
+        raise RuntimeHostError(403, "access denied")
 
     monkeypatch.setattr(helm, "_runtime_snapshot", rejected)
-    with pytest.raises(helm._RuntimeHostHTTPError) as error:
-        helm._wait_runtime_convergence(
-            "https://runtime.invalid", "fixture", "session", "native", "marker", session_file=Path("/native/session.jsonl"), timeout=1
-        )
+    with pytest.raises(RuntimeHostError) as error:
+        _pi_converge(monkeypatch, [], session_file=Path("/native/session.jsonl"), timeout=1, patch_snapshot=False)
     assert error.value.status == 403
 
 
@@ -109,27 +90,36 @@ def _pi_converge(
     *,
     reads: list[int] | None = None,
     native_answers: dict[str, int] | None = None,
+    patch_snapshot: bool = True,
     **kwargs: object,
 ):
-    """Converge on a fixed served page. ``native_answers`` is what Pi's own transcript
+    """Converge, as Pi's lifecycle does, on a fixed served page. ``native_answers`` is what Pi's own transcript
     answers with: entry id to count, by default the one entry ``reply``."""
-
-    from zerg.qa import pi_helm_lifecycle as helm
 
     def snapshot(*_args: object) -> dict[str, object]:
         if reads is not None:
             reads.append(1)
         return _pi_snapshot(events)
 
-    monkeypatch.setattr(helm, "_runtime_snapshot", snapshot)
+    if patch_snapshot:
+        monkeypatch.setattr(helm, "_runtime_snapshot", snapshot)
     # A refusal has to stand; these tests do not wait for the window, only for the second read.
     monkeypatch.setattr("zerg.qa.console_served_state_core.SERVED_ANSWER_SETTLE_SECONDS", kwargs.pop("settle", 0.0))
     if "session_file" not in kwargs:
         answers = {"reply": 1} if native_answers is None else native_answers
         monkeypatch.setattr("zerg.qa.provider_console_lifecycle._native_answer_rows", lambda *_a, **_k: (dict(answers), "read"))
-    arguments = {"reply_event_id": "reply", "session_file": Path("/native/session.jsonl"), "timeout": 30, **kwargs}
-    marker = str(arguments.pop("marker", _PI_MARKER))
-    return helm._wait_runtime_convergence("https://runtime.invalid", "fixture", "session-1", "native-1", marker, **arguments)
+    arguments = {"native_reply_id": "reply", "timeout": 30, **kwargs}
+    return helm._runtime_convergence(
+        "https://runtime.invalid",
+        "fixture",
+        family=PI_FAMILY,
+        session_id="session-1",
+        native_session_id="native-1",
+        marker=str(arguments.pop("marker", _PI_MARKER)),
+        flush={},
+        native_source_path=str(arguments.pop("session_file", "/native/session.jsonl")),
+        **arguments,
+    )
 
 
 def test_pi_runtime_convergence_counts_the_answer_not_the_narration_that_quotes_it(monkeypatch) -> None:
@@ -143,7 +133,7 @@ def test_pi_runtime_convergence_counts_the_answer_not_the_narration_that_quotes_
 
     runtime = _pi_converge(monkeypatch, events, reads=reads)
 
-    assert [event["id"] for event in runtime["assistant_events"]] == ["reply"]
+    assert runtime["served_projection"]["marker_event_ids"] == ["reply"]
     assert reads == [1]
 
 
@@ -157,32 +147,29 @@ def test_pi_runtime_convergence_serves_the_providers_own_answers_however_many(mo
     # Pi's transcript answers in two entries and the page serves both: converged.
     runtime = _pi_converge(monkeypatch, twice, reads=reads, native_answers={"reply": 1, "again": 1})
     assert reads == [1]
-    assert [event["id"] for event in runtime["assistant_events"]] == ["reply", "again"]
+    assert runtime["served_projection"]["marker_event_ids"] == ["reply", "again"]
     assert runtime["answer_correspondence"]["native_answer_rows"] == {"reply": 1, "again": 1}
 
 
 def test_pi_runtime_convergence_fails_at_once_on_an_answer_the_transcript_does_not_account_for(monkeypatch) -> None:
-    from zerg.qa import pi_helm_lifecycle as helm
-
     # Pi answered once, and the page carries a second answering event of no entry.
     twice = [
         {"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY},
         {"id": "again", "role": "assistant", "content_text": _PI_MARKER},
     ]
     reads: list[int] = []
-    with pytest.raises(helm._RuntimeConvergenceError) as raised:
+    with pytest.raises(MarkerAnswerCountError) as raised:
         _pi_converge(monkeypatch, twice, reads=reads)
     # Raised on the second read: the first only starts the clock.
     assert reads == [1, 1]
-    assert raised.value.cause_type == "MarkerAnswerCountError"
     assert "served_answer_without_native_row: " in str(raised.value)
     assert "has 2 answering served assistant event(s)" in str(raised.value)
     assert "timed out" not in str(raised.value)
-    assert raised.value.last_runtime_observation["assistant_marker_event_ids"] == ["reply", "again"]
+    assert raised.value.observation["served_projection"]["marker_event_ids"] == ["reply", "again"]
 
     # The one entry that answered, served twice.
     reply = {"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY}
-    with pytest.raises(helm._RuntimeConvergenceError) as raised:
+    with pytest.raises(MarkerAnswerCountError) as raised:
         _pi_converge(monkeypatch, [reply, dict(reply)])
     assert "native_answer_served_more_than_once: " in str(raised.value)
 
@@ -191,13 +178,12 @@ def test_pi_runtime_convergence_fails_at_once_on_an_answer_the_transcript_does_n
     # polls to its deadline and then says what it saw, not that it timed out.
     served_without_answer = [{"id": "reply", "role": "assistant", "content_text": _PI_NARRATION}]
     reads.clear()
-    with pytest.raises(helm._RuntimeConvergenceError) as raised:
+    with pytest.raises(MarkerAnswerCountError) as raised:
         _pi_converge(monkeypatch, served_without_answer, reads=reads, timeout=0.5)
     assert len(reads) > 2
-    assert raised.value.cause_type == "MarkerAnswerCountError"
     assert "marker_reply_served_without_answer: " in str(raised.value)
     assert "timed out" not in str(raised.value)
-    assert raised.value.last_runtime_observation["assistant_marker_mention_count"] == 1
+    assert len(raised.value.observation["served_projection"]["marker_mention_events"]) == 1
 
 
 _PI_HEADER = json.dumps({"type": "session", "id": "native-1", "version": 3, "cwd": "/workspace"})
@@ -231,25 +217,20 @@ def _pi_native_entry(entry_id: str, role: str, text: str) -> str:
 def test_pi_runtime_convergence_gives_no_verdict_on_a_transcript_it_did_not_read(monkeypatch, tmp_path, state, write) -> None:
     """A transcript that was not read to the end is unknown, not empty: the served answer is neither refused nor accepted."""
 
-    from zerg.qa import pi_helm_lifecycle as helm
-
     session_file = tmp_path / "session.jsonl"
     write(session_file)
     reply = {"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY}
     reads: list[int] = []
-    with pytest.raises(helm._RuntimeConvergenceError) as raised:
+    with pytest.raises(RuntimeConvergenceTimeout, match="timed out waiting") as raised:
         _pi_converge(monkeypatch, [reply], reads=reads, session_file=session_file, timeout=0.6)
 
     # It kept polling: an answering served page with no transcript to hold it to is not a product finding.
     assert len(reads) > 2
-    assert raised.value.cause_type != "MarkerAnswerCountError" and "timed out waiting" in str(raised.value)
-    assert raised.value.last_runtime_observation["answer_correspondence"]["native_transcript_state"] == state
+    assert raised.value.observation["answer_correspondence"]["native_transcript_state"] == state
 
 
 def test_pi_runtime_convergence_waits_for_an_entry_the_page_served_before_the_read_saw_it(monkeypatch, tmp_path) -> None:
     """Pi appends the answering entry, the engine ships it, and this process's read of the file is the last to see it."""
-
-    from zerg.qa import pi_helm_lifecycle as helm
 
     session_file = tmp_path / "session.jsonl"
     session_file.write_text(
@@ -266,16 +247,7 @@ def test_pi_runtime_convergence_waits_for_an_entry_the_page_served_before_the_re
         return _pi_snapshot([reply])
 
     monkeypatch.setattr(helm, "_runtime_snapshot", snapshot)
-    runtime = helm._wait_runtime_convergence(
-        "https://runtime.invalid",
-        "fixture",
-        "session-1",
-        "native-1",
-        _PI_MARKER,
-        reply_event_id="reply",
-        session_file=session_file,
-        timeout=30,
-    )
+    runtime = _pi_converge(monkeypatch, [reply], session_file=session_file, patch_snapshot=False)
 
     # The first read lacked the entry and refused nothing; the second read has it.
     assert len(reads) == 2
@@ -283,8 +255,6 @@ def test_pi_runtime_convergence_waits_for_an_entry_the_page_served_before_the_re
 
 
 def test_pi_runtime_convergence_refuses_a_served_answer_only_after_later_reads_still_lack_its_entry(monkeypatch, tmp_path) -> None:
-    from zerg.qa import pi_helm_lifecycle as helm
-
     session_file = tmp_path / "session.jsonl"
     session_file.write_text(
         _PI_HEADER + "\n" + _pi_native_entry("prompt", "user", f"Reply with exactly {_PI_MARKER}.") + "\n", encoding="utf-8"
@@ -292,31 +262,27 @@ def test_pi_runtime_convergence_refuses_a_served_answer_only_after_later_reads_s
     reply = {"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY}
 
     # Inside the window nothing is refused: the wait runs to its own deadline.
-    with pytest.raises(helm._RuntimeConvergenceError) as inside:
+    with pytest.raises(RuntimeConvergenceTimeout):
         _pi_converge(monkeypatch, [reply], session_file=session_file, settle=30.0, timeout=0.6)
-    assert inside.value.cause_type != "MarkerAnswerCountError"
     # Once the same fault has stood for the window, on a transcript that was read each time, it is final.
     reads: list[int] = []
-    with pytest.raises(helm._RuntimeConvergenceError) as raised:
+    with pytest.raises(MarkerAnswerCountError, match="served_answer_without_native_row: ") as raised:
         _pi_converge(monkeypatch, [reply], reads=reads, session_file=session_file, settle=0.4, timeout=30)
-    assert raised.value.cause_type == "MarkerAnswerCountError" and "served_answer_without_native_row: " in str(raised.value)
     assert len(reads) >= 3
-    assert raised.value.last_runtime_observation["answer_correspondence"]["native_transcript_state"] == "read"
+    assert raised.value.observation["answer_correspondence"]["native_transcript_state"] == "read"
 
 
 def test_pi_runtime_convergence_keeps_waiting_until_the_reply_row_is_served(monkeypatch) -> None:
-    from zerg.qa import pi_helm_lifecycle as helm
-
     only_narration = [{"id": "narration", "role": "assistant", "content_text": _PI_NARRATION}]
     reads: list[int] = []
-    with pytest.raises(helm._RuntimeConvergenceError) as raised:
+    with pytest.raises(RuntimeConvergenceTimeout) as raised:
         _pi_converge(monkeypatch, only_narration, reads=reads, timeout=0.5)
 
     assert len(reads) > 1
     assert "timed out waiting for Runtime Host convergence for Pi marker" in str(raised.value)
     # The deadline reports the last read, not None.
-    assert "'assistant_marker_count': 0" in str(raised.value)
-    assert "'assistant_marker_mention_count': 1" in str(raised.value)
+    assert "'answer_event_count': 0" in str(raised.value)
+    assert "'mention_event_count': 1" in str(raised.value)
 
 
 def test_pi_runtime_convergence_reads_a_recalled_phrase_by_presence(monkeypatch) -> None:
@@ -324,9 +290,9 @@ def test_pi_runtime_convergence_reads_a_recalled_phrase_by_presence(monkeypatch)
     events = [{"id": "reply", "role": "assistant", "content_text": f"The context phrase I was asked to remember is: {phrase}\n\n{resume}"}]
 
     # The marker is the answer; it may share a line with the phrase.
-    assert _pi_converge(monkeypatch, events, marker=resume, alongside=(phrase,))["alongside"] == [phrase]
+    assert _pi_converge(monkeypatch, events, marker=resume, alongside=(phrase,))["status"] == "pass"
     # The phrase is a recall, which a model may put in a sentence.
-    assert _pi_converge(monkeypatch, events, marker=phrase, recalled=True)["recalled"] is True
+    assert _pi_converge(monkeypatch, events, marker=phrase, recalled=True)["served_projection"]["marker_event_ids"] == ["reply"]
 
 
 def _pi_native_row(entry_id: str, text: str, *, stop: str, parent: str | None, tool_call: bool = False) -> str:
@@ -337,74 +303,7 @@ def _pi_native_row(entry_id: str, text: str, *, stop: str, parent: str | None, t
     return json.dumps({"type": "message", "id": entry_id, "parentId": parent, "timestamp": "2026-01-01T00:00:01Z", "message": message})
 
 
-def test_a_pi_stalled_turn_and_an_unserved_reply_declare_different_waits(monkeypatch, tmp_path) -> None:
-    from zerg.qa import pi_helm_lifecycle as helm
-    from zerg.qa.wait_kind import failure_fields
-    from zerg.qa.wait_kind import waited_on
-
-    # The turn stalled: Pi's own transcript holds the prompt and never the reply.
-    session_file = tmp_path / "session.jsonl"
-    header = json.dumps({"type": "session", "id": "native-1", "version": 3, "cwd": "/workspace"})
-    prompt = json.dumps(
-        {
-            "type": "message",
-            "id": "prompt",
-            "parentId": None,
-            "timestamp": "2026-01-01T00:00:00Z",
-            "message": {"role": "user", "content": [{"type": "text", "text": f"Reply with exactly {_PI_MARKER}."}]},
-        }
-    )
-    narration = _pi_native_row("narration", _PI_NARRATION, stop="toolUse", parent="prompt", tool_call=True)
-    session_file.write_text(f"{header}\n{prompt}\n{narration}\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="timed out waiting for native Pi marker") as stalled:
-        helm._wait_native_marker(session_file, _PI_MARKER, timeout=0.3)
-    assert waited_on(stalled.value) == "provider_turn"
-
-    # The same silence without the prompt: Longhouse never delivered it, which is not a stalled turn.
-    unprompted = tmp_path / "unprompted.jsonl"
-    unprompted.write_text(
-        f"{header}\n{_pi_native_row('narration', _PI_NARRATION, stop='toolUse', parent=None, tool_call=True)}\n", encoding="utf-8"
-    )
-    with pytest.raises(RuntimeError, match="timed out waiting for native Pi marker") as never_prompted:
-        helm._wait_native_marker(unprompted, _PI_MARKER, timeout=0.3)
-    assert waited_on(never_prompted.value) is None
-
-    # A phrase the model should bring back is read from a turn that already replied.
-    with pytest.raises(RuntimeError, match="timed out waiting for native Pi marker") as not_recalled:
-        helm._wait_native_marker(session_file, "A_PHRASE_NOT_RECALLED", recalled=True, timeout=0.3)
-    assert waited_on(not_recalled.value) is None
-
-    # The first tool call of a task turn, with and without the task's prompt in the transcript.
-    with pytest.raises(RuntimeError, match="timed out waiting for tool boundary in task") as task_stalled:
-        helm._wait_task_tool_boundary(session_file, _PI_MARKER, timeout=0.3)
-    assert waited_on(task_stalled.value) == "provider_turn"
-    with pytest.raises(RuntimeError, match="timed out waiting for tool boundary in task") as task_never_sent:
-        helm._wait_task_tool_boundary(unprompted, _PI_MARKER, timeout=0.3)
-    assert waited_on(task_never_sent.value) is None
-
-    # Pi answered (the caller holds the native reply entry) and the Runtime Host never serves it.
-    waiting = [{"id": "other", "role": "assistant", "content_text": "Waiting."}]
-    with pytest.raises(helm._RuntimeConvergenceError) as unserved:
-        _pi_converge(monkeypatch, waiting, timeout=0.5)
-    # The producer wraps the wait in its own error; the failure artifact still carries the kind.
-    assert failure_fields(unserved.value) == {"waited_on": "longhouse_ingest"}
-
-    # The reply is served and the control state beside it never held.
-    served = [{"id": "reply", "role": "assistant", "content_text": _PI_FINAL_REPLY}]
-    monkeypatch.setattr(helm, "_served_controls", lambda _snapshot: False)
-    with pytest.raises(helm._RuntimeConvergenceError) as controls:
-        _pi_converge(monkeypatch, served, timeout=0.5)
-    assert waited_on(controls.value) == "runtime_host"
-
-    # Without the native reply entry the convergence wait cannot say which side stopped.
-    with pytest.raises(helm._RuntimeConvergenceError) as unknown:
-        _pi_converge(monkeypatch, waiting, timeout=0.5, reply_event_id=None)
-    assert waited_on(unknown.value) is None
-
-
 def test_pi_wait_native_marker_returns_on_the_answer_and_counts_the_narration_apart(monkeypatch, tmp_path) -> None:
-    from zerg.qa import pi_helm_lifecycle as helm
-
     session_file = tmp_path / "session.jsonl"
     header = json.dumps({"type": "session", "id": "native-1", "version": 3, "cwd": "/workspace"})
     narration = _pi_native_row("narration", _PI_NARRATION, stop="toolUse", parent=None, tool_call=True)
@@ -416,12 +315,15 @@ def test_pi_wait_native_marker_returns_on_the_answer_and_counts_the_narration_ap
 
     reply = _pi_native_row("reply", _PI_FINAL_REPLY, stop="stop", parent="narration")
     session_file.write_text(f"{header}\n{narration}\n{reply}\n", encoding="utf-8")
-    native = helm._wait_native_marker(session_file, _PI_MARKER)
+    row = helm._wait_native_marker(session_file, _PI_MARKER)
+    native = helm._native_marker_evidence(row, session_file, marker=_PI_MARKER, minimum_offset=0, native_session_id="native-1")
 
+    assert (native["event_id"], native["native_source_bound"], native["marker_count"]) == ("reply", True, 1)
     assert native["assistant_answer_rows"] == 1
-    assert native["assistant_reply_entry_id"] == "reply"
     # Rows that name the marker, which the factory recounts from the retained bytes.
     assert native["assistant_marker_rows"] == 2
+    assert (native["native_header_session_id"], native["native_model"], native["user_marker_rows"]) == ("native-1", "fixture", 0)
+    assert native["native_file"]["present"] is True and native["source_end_offset"] == session_file.stat().st_size
 
 
 def test_pi_console_main_failure_retains_partial_artifact_manifest(monkeypatch, tmp_path, capsys) -> None:
@@ -767,7 +669,8 @@ def test_pi_native_snapshot_contract_keeps_metadata_and_taxonomy_distinct(tmp_pa
         encoding="utf-8",
     )
 
-    rows, metadata, taxonomy = _native_snapshot(native)
+    rows, _provider_session_id, metadata = pi_transcript_rows(native)
+    taxonomy = pi_native_shadow_taxonomy(rows, metadata)
 
     assert rows
     assert metadata["provider_session_id"] == "native-session"
@@ -869,104 +772,6 @@ def test_pi_native_thinking_plus_text_fixture_preserves_both_blocks(tmp_path) ->
     assert taxonomy["shadow_classes"]["transcript:assistant_reasoning"] == 1
 
 
-def test_pi_helm_receipts_round_trip_runtime_binding_nesting(tmp_path) -> None:
-    args = SimpleNamespace(provider_version="0.85.1", provider_bin="/opt/pi")
-    binding = {"one_session": True, "one_thread": True, "provider_session_bound": True}
-    observations = {
-        "provider_binary_sha256": "sha256:" + "a" * 64,
-        "helm_registration_receipt": {"status": "pass"},
-        "native_session_receipt": {"native_file": {"present": True}},
-        "native_taxonomy_receipt": {"status": "pass"},
-        "control_receipts": {"send": {"accepted": True}},
-        "reload_rebind_receipt": {
-            "status": "pass",
-            "runtime": {"binding": binding, "served_controls": True},
-        },
-        "session_replacement_receipt": {
-            "status": "pass",
-            "binding": {"legacy_top_level": True},
-            "runtime": {"served_controls": True},
-        },
-        "replacement_binding": binding,
-        "cold_resume_receipt": {"status": "pass"},
-        "stale_owner_receipt": {"status": "pass"},
-    }
-
-    _write_scenario_receipts(tmp_path, args, observations, [])
-
-    reload_receipt = json.loads((tmp_path / "reload-rebind-receipt.json").read_text(encoding="utf-8"))
-    replacement_receipt = json.loads((tmp_path / "session-replacement-receipt.json").read_text(encoding="utf-8"))
-    assert reload_receipt["runtime"]["binding"] == binding
-    assert replacement_receipt["runtime"]["binding"] == binding
-    assert "binding" not in replacement_receipt
-
-
-def test_pi_helm_observation_booleans_cannot_override_failed_cleanup() -> None:
-    observation = {
-        "abort_native": True,
-        "terminate_owned": True,
-        "cleanup": {
-            "status": "fail",
-            "provider_process_dead": True,
-            "process_group_dead": True,
-            "orphan_count": 1,
-        },
-    }
-
-    assertions = pi_helm_lifecycle_assertions(observation)
-
-    assert assertions["pi_helm_abort_native"] is False
-    assert assertions["pi_helm_terminate_owned"] is False
-
-
-def test_pi_helm_cleanup_stop_and_scratch_failures_block_admission() -> None:
-    observation = {
-        "abort_native": True,
-        "terminate_owned": True,
-        "cleanup": {
-            "status": "pass",
-            "provider_process_dead": True,
-            "process_group_dead": True,
-            "orphan_count": 0,
-            "shipper_stop_verified": False,
-            "scratch_removed": False,
-            "cleanup_errors": ["shipper stop failed"],
-        },
-    }
-
-    assertions = pi_helm_lifecycle_assertions(observation)
-
-    assert assertions["pi_helm_abort_native"] is False
-    assert assertions["pi_helm_terminate_owned"] is False
-
-
-def test_pi_helm_steer_oracle_requires_active_state_before_native_control() -> None:
-    observation = {
-        "steer_active": True,
-        "control_receipts": {
-            "steer": {
-                "accepted": True,
-                "native": {"assistant_marker_rows": 1, "assistant_answer_rows": 1},
-                "runtime": {
-                    "active_turn_observed": False,
-                    "active_state": {"phase": "idle"},
-                },
-            }
-        },
-    }
-
-    assert pi_helm_lifecycle_assertions(observation)["pi_helm_steer_active"] is False
-    observation["control_receipts"]["steer"]["runtime"] = {
-        "active_turn_observed": True,
-        "active_state": {"phase": "running"},
-    }
-    # A marker answered after the task turn finished is a queued follow-up.
-    observation["steer_turn_verdict"] = {"passed": False, "code": "steer_delivered_as_queued_follow_up"}
-    assert pi_helm_lifecycle_assertions(observation)["pi_helm_steer_active"] is False
-    observation["steer_turn_verdict"] = {"passed": True, "code": "steer_changed_active_turn"}
-    assert pi_helm_lifecycle_assertions(observation)["pi_helm_steer_active"] is True
-
-
 def test_pi_helm_negative_control_requires_fired_fault_and_expected_rejection() -> None:
     from zerg.qa.pi_family_turn_oracle import negative_control_verdict
 
@@ -993,80 +798,6 @@ def test_pi_helm_negative_control_requires_fired_fault_and_expected_rejection() 
         ]
         == "inconclusive"
     )
-
-
-def test_pi_helm_follow_up_oracle_requires_active_native_input_delivery() -> None:
-    observation = {
-        "follow_up_native": True,
-        "control_receipts": {
-            "follow_up": {
-                "accepted": True,
-                "command": {
-                    "method": "POST",
-                    "text": "After this turn, reply with PI_HELM_FOLLOW_fixture.",
-                },
-                "native": {
-                    "marker": "PI_HELM_FOLLOW_fixture",
-                    "user_marker_rows": 1,
-                    "user_marker_occurrences": 1,
-                    "follow_up_delivered": True,
-                },
-                "runtime": {"active_turn_observed": True},
-            }
-        },
-    }
-
-    assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is False
-    observation["control_receipts"]["follow_up"]["command"]["path"] = "/api/agents/sessions/session/input"
-    observation["control_receipts"]["follow_up"]["result"] = {"queued_not_sent": True}
-    assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is True
-
-    # Revision 7: the mid-turn send must be a durable queued receipt; the old
-    # send-live path, or a send the adapter accepted mid-turn, does not count.
-    observation["control_receipts"]["follow_up"]["result"] = {"queued_not_sent": False}
-    assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is False
-    observation["control_receipts"]["follow_up"]["result"] = {"queued_not_sent": True}
-    observation["control_receipts"]["follow_up"]["command"]["path"] = "/api/agents/sessions/session/send-live"
-    assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is False
-    observation["control_receipts"]["follow_up"]["command"]["path"] = "/api/agents/sessions/session/input"
-
-    observation["control_receipts"]["follow_up"]["native"]["user_marker_rows"] = 0
-    assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is False
-
-
-def test_pi_helm_cold_resume_oracle_requires_remembered_context_evidence() -> None:
-    observation = {
-        "cold_resume_exact_file": True,
-        "cold_resume_receipt": {
-            "context_evidence": {
-                "phrase": "PI_HELM_CONTEXT_fixture",
-                "source": "pre_termination_replacement_turn",
-                "resume_prompt": "Reply with the context you remember followed by PI_HELM_RESUME_fixture.",
-                "pre_termination": {
-                    "source": "pre_termination_replacement_turn",
-                    "prompt": "Remember PI_HELM_CONTEXT_fixture.",
-                    "native_user_marker_rows": 1,
-                    "native_user_marker_occurrences": 1,
-                },
-                "post_resume_native": {
-                    "marker": "PI_HELM_CONTEXT_fixture",
-                    "assistant_marker_rows": 1,
-                    "assistant_answer_rows": 1,
-                    "user_marker_rows": 0,
-                    "user_marker_occurrences": 0,
-                },
-                "post_resume_runtime": {
-                    "marker": "PI_HELM_CONTEXT_fixture",
-                    "assistant_marker_count": 1,
-                    "binding": {"one_session": True, "one_thread": True, "provider_session_bound": True},
-                },
-            }
-        },
-    }
-
-    assert pi_helm_lifecycle_assertions(observation)["pi_helm_cold_resume_exact_file"] is True
-    observation["cold_resume_receipt"]["context_evidence"]["source"] = "proof_file"
-    assert pi_helm_lifecycle_assertions(observation)["pi_helm_cold_resume_exact_file"] is False
 
 
 def test_pi_accounting_includes_tool_rounds_but_never_hides_a_failed_tail(tmp_path) -> None:
@@ -1119,22 +850,27 @@ def test_pi_accounting_includes_tool_rounds_but_never_hides_a_failed_tail(tmp_pa
 
 @pytest.mark.parametrize(("host_fails", "declared"), ((True, "runtime_host"), (False, None)))
 def test_pi_control_identity_wait_declares_the_runtime_host_only_for_a_read_it_failed(monkeypatch, host_fails, declared) -> None:
-    from zerg.qa import pi_helm_lifecycle as helm
     from zerg.qa import wait_kind
 
     def diagnostic(*_args):
         if host_fails:
-            raise helm._RuntimeHostHTTPError(503, "unavailable")
+            raise RuntimeHostError(503, "unavailable")
         # Served, and without the identity: the engine may not have registered the lease yet.
         return {"shadow": {"fact_sources": {"control": {"subject_key": "connection:other:lease"}}}}
 
     ticks = iter((0.0, 0.0, 31.0))
-    monkeypatch.setattr(helm, "_runtime_diagnostic", diagnostic)
+    monkeypatch.setattr(helm, "_runtime_get", diagnostic)
     monkeypatch.setattr(helm.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(helm.time, "sleep", lambda _seconds: None)
 
-    with pytest.raises(RuntimeError, match="timed out waiting for served Pi control identity") as timed_out:
+    with pytest.raises(RuntimeError, match="timed out waiting for Runtime Host managed control identity") as timed_out:
         helm._wait_runtime_control_identity(
-            "https://runtime.example", "token", "session-1", {"connection_id": "c", "lease_generation": "l"}
+            "https://runtime.example",
+            "token",
+            family=PI_FAMILY,
+            session_id="session-1",
+            state={"connection_id": "c", "lease_generation": "l"},
+            timeout=30,
+            bound=PI_FAMILY.control_bound,
         )
     assert wait_kind.waited_on(timed_out.value) == declared
