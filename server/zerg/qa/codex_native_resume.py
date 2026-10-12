@@ -46,7 +46,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=3,
     scenario_id="helm_cold_resume",
     # 7: a failed result carries the binary receipt, and its manifest binds the cleanup receipt.
-    scenario_revision=7,
+    # 8: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=8,
     assertion_cells=(
         ("native_provider_resume_proven", "clean_exit"),
         ("native_provider_resume_proven", "process_loss"),

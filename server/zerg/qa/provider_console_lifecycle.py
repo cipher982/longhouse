@@ -154,7 +154,8 @@ REGISTRATION = ProducerRegistration(
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
     # 22: the waits for a served reply read the newest events, as the steer receipt does.
-    scenario_revision=22,
+    # 23: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=23,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),

@@ -96,7 +96,8 @@ def registration_for(provider: str) -> ProducerRegistration:
         producer_revision=6 if provider == "cursor" else 5 if provider == "opencode" else 4,
         scenario_id="helm_cold_resume",
         # +1 for each: a failed result carries the binary receipt, and the result is made after teardown.
-        scenario_revision={"cursor": 11, "opencode": 7}.get(provider, 6),
+        # +1 for each: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+        scenario_revision={"cursor": 12, "opencode": 8}.get(provider, 7),
         assertion_cells=(
             ("native_provider_resume_proven", "clean_exit"),
             ("native_provider_resume_proven", "process_loss"),

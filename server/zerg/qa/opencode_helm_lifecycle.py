@@ -107,7 +107,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=1,
     scenario_id=SCENARIO_ID,
     # 4: a run that raised outside its own handling leaves a complete, written result.
-    scenario_revision=4,
+    # 5: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=5,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),  # type: ignore[arg-type]
     providers=("opencode",),
     platforms=("linux", "darwin"),

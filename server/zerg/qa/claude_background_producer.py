@@ -55,7 +55,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=1,
     scenario_id=SCENARIO_ID,
     # 5: a failed result names the requested assertion; the failure copy is gone.
-    scenario_revision=5,
+    # 6: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=6,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     platforms=("linux",),

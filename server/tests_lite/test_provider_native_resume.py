@@ -123,7 +123,7 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
         assert registration.executable is True
         assert registration.executable_module == SPECS[provider].executable_module
         assert registration.producer_revision == (6 if provider == "cursor" else 5 if provider == "opencode" else 4)
-        assert registration.scenario_revision == {"cursor": 11, "opencode": 7}.get(provider, 6)
+        assert registration.scenario_revision == {"cursor": 12, "opencode": 8}.get(provider, 7)
         assert {
             "transcript_shipper_receipt",
             "initial_seed_send",

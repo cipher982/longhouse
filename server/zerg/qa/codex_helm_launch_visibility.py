@@ -65,7 +65,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=11,
     scenario_id=SCENARIO_ID,
     # 10: a failed result carries the binary receipt.
-    scenario_revision=10,
+    # 11: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=11,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("codex",),
     platforms=("linux",),

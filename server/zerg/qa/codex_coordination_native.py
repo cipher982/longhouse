@@ -93,7 +93,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=9,
     scenario_id=_SCENARIO_CREATE,
     # 8: a failed result carries the binary receipt, and a failed version probe leaves one.
-    scenario_revision=8,
+    # 9: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=9,
     scenario_ids=(_SCENARIO_CREATE, _SCENARIO_POST_COMPACTION, _SCENARIO_DIRECTED_INPUT),
     assertion_cells=tuple((assertion_id, None) for assertion_id, _scenario_id in _CELLS),
     providers=("codex",),

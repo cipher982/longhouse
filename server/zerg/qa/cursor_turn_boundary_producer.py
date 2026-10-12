@@ -82,7 +82,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=2,
     scenario_id="cursor_turn_boundary_quiescent",
     # 4: a failed result carries the binary receipt and follows the one failure rule.
-    scenario_revision=4,
+    # 5: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=5,
     # This assertion has no authored `variant:` in schemas/managed_providers.yml,
     # so its cell's variant is None -- not an empty string -- matching how
     # provider_capability_schema.py parses an absent `variant:` field and how

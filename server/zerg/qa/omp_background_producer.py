@@ -55,7 +55,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=1,
     scenario_id=SCENARIO_ID,
     # 10: every result is an omp_background_jobs_result; the failure copy is gone.
-    # 11: the Helm lifecycle it rides on records in the Pi family's one shape.
+    # 11: the Helm lifecycle it rides on records in the Pi family's one shape; an exited process counts as
+    # stopped before its parent collects it (live_kit.pid_dead).
     scenario_revision=11,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("omp",),

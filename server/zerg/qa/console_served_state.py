@@ -62,7 +62,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=6,
     scenario_id=SCENARIO_ID,
     # 5: a failure after the vehicle was bound carries the binary receipt.
-    scenario_revision=5,
+    # 6: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=6,
     assertion_cells=((ASSERTION_LIVE, None), (ASSERTION_SETTLED, None), (ASSERTION_CAPABILITY, None)),
     # The subject under test is Longhouse, not a provider release, so this
     # declares no provider subject. Stock Codex is an exact auxiliary vehicle:

@@ -74,7 +74,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=1,
     scenario_id=SCENARIO_ID,
     # 6: an expired wait's message no longer ends in the empty value it last read.
-    scenario_revision=6,
+    # 7: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=7,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("omp",),
     platforms=("linux", "darwin"),

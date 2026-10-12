@@ -91,7 +91,7 @@ def _deterministic_wait_until(predicate, *, timeout, description):  # noqa: ANN0
 def test_registration_shape() -> None:
     assert m.REGISTRATION.providers == ("cursor",)
     assert m.REGISTRATION.producer_revision == 12
-    assert m.REGISTRATION.scenario_revision == 12
+    assert m.REGISTRATION.scenario_revision == 13
     assert m.REGISTRATION.modes == ("helm",)
     assert m.REGISTRATION.evidence_classes == ("live_token",)
     # Cursor has only 3 of the 4 coordination capabilities in

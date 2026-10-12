@@ -70,7 +70,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=1,
     scenario_id=SCENARIO_ID,
     # 2: a version probe that fails leaves a typed failure.
-    scenario_revision=2,
+    # 3: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=3,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("codex",),
     platforms=("linux", "darwin"),

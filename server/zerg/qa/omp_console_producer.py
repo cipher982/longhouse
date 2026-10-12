@@ -37,7 +37,8 @@ REGISTRATION = ProducerRegistration(
     # 26: the oracle names the two shared-transaction facts it left to the
     # status, and a failed run's result is cell-scoped like its registration.
     # 27: the waits for a served reply read the newest events, as the steer receipt does.
-    scenario_revision=27,
+    # 28: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=28,
     assertion_cells=((ASSERTION_ID, None), (lifecycle.STEER_ASSERTION_ID, None)),
     providers=("omp",),
     platforms=("linux", "darwin"),

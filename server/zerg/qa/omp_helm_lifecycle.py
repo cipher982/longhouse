@@ -50,7 +50,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=10,
     scenario_id=SCENARIO_ID,
     # 22: a run that held every assertion over a changing evidence tree is a typed failure.
-    # 23: the lifecycle is the Pi family's one engine, and its evidence the family's one shape.
+    # 23: the lifecycle is the Pi family's one engine, and its evidence the family's one shape; an exited
+    # process counts as stopped before its parent collects it (live_kit.pid_dead).
     scenario_revision=23,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),

@@ -107,7 +107,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=12,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
     # 12: a failed result carries the binary receipt and follows the one failure rule.
-    scenario_revision=12,
+    # 13: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=13,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
     # No `variant:` is authored for any of these three assertions in
     # schemas/managed_providers.yml, so every cell's variant is None -- not

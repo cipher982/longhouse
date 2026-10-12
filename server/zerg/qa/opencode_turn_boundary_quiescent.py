@@ -113,7 +113,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=4,
     scenario_id="opencode_turn_boundary_quiescent",
     # 4: a failed result carries the binary receipt and the execution variant.
-    scenario_revision=4,
+    # 5: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=5,
     # The schema declares no "variant" key for this assertion cell, so the
     # authored variant is None (zerg.qa.resume_assurance.execution_variant_key
     # only treats a non-empty *string* as an authored variant; cell.get(

@@ -59,7 +59,8 @@ REGISTRATION = ProducerRegistration(
     producer_revision=3,
     scenario_id=SCENARIO_ID,
     # 17: a run that raised outside its own handling leaves a complete result; --model is required.
-    # 18: the lifecycle is the Pi family's one engine, and its evidence the family's one shape.
+    # 18: the lifecycle is the Pi family's one engine, and its evidence the family's one shape; an exited
+    # process counts as stopped before its parent collects it (live_kit.pid_dead).
     scenario_revision=18,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),

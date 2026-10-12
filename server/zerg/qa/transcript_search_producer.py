@@ -53,7 +53,8 @@ REGISTRATION = ProducerRegistration(
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     # 4: a run that raised mid-session carries what its wait was waiting on.
-    scenario_revision=4,
+    # 5: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
+    scenario_revision=5,
     assertion_cells=((ASSERTION_ID, None),),
     providers=PROVIDERS,
     platforms=("linux", "darwin"),
