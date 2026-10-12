@@ -185,7 +185,9 @@ class ProviderPtySession:
         except (PermissionError, ProcessLookupError):
             pass
         deadline = time.monotonic() + 5
-        while self._group_alive(process_group) and time.monotonic() < deadline:
+        # Collect the child as soon as it has exited: uncollected, it holds its
+        # group, and a child that had already exited cost this the whole wait.
+        while (self.process.poll() is None or self._group_alive(process_group)) and time.monotonic() < deadline:
             time.sleep(0.1)
         if self._group_alive(process_group):
             try:
