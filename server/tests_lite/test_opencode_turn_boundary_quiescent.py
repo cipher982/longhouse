@@ -35,7 +35,7 @@ def test_registration_matches_the_schema_declared_cell_exactly() -> None:
     assert m.REGISTRATION.executable is True
     assert m.REGISTRATION.executable_module == "zerg.qa.opencode_turn_boundary_quiescent"
     assert m.REGISTRATION.producer_revision == 4
-    assert m.REGISTRATION.scenario_revision == 3
+    assert m.REGISTRATION.scenario_revision == 4
     assert "opencode_model_profile_receipt" in m.REGISTRATION.required_artifacts
     # The schema-declared oracle_source is intentionally reproduced verbatim
     # even though (per the module docstring) it does not contain this
@@ -395,64 +395,6 @@ def test_run_turn_boundary_quiescent_writes_a_typed_failure_on_exception(tmp_pat
     assert "assertions" not in result
     on_disk = json.loads((args.evidence_root / "result.json").read_text())
     assert on_disk == result
-
-
-def test_main_requires_runtime_host_credentials(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.delenv(m.RUNTIME_API_URL_ENV, raising=False)
-    monkeypatch.delenv(m.RUNTIME_AGENTS_TOKEN_ENV, raising=False)
-    exit_code = m.main(
-        [
-            "--evidence-root",
-            str(tmp_path / "evidence"),
-            "--variant",
-            "cell:opencode:activity_returns_to_quiescent_at_turn_boundary:opencode_turn_boundary_quiescent",
-            "--repo-root",
-            str(tmp_path),
-            "--engine",
-            str(tmp_path / "engine"),
-            "--longhouse-cli",
-            str(tmp_path / "longhouse"),
-            "--provider-bin",
-            str(tmp_path / "opencode"),
-        ]
-    )
-    assert exit_code == 2
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["failure_code"] == "runtime_host_control_credentials_missing"
-
-
-def test_main_requires_the_provider_binary_to_exist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setenv(m.RUNTIME_API_URL_ENV, "http://127.0.0.1:9")
-    monkeypatch.setenv(m.RUNTIME_AGENTS_TOKEN_ENV, "device-token")
-    engine = tmp_path / "engine"
-    engine.write_bytes(b"")
-    engine.chmod(0o755)
-    cli = tmp_path / "longhouse"
-    cli.write_bytes(b"")
-    cli.chmod(0o755)
-    exit_code = m.main(
-        [
-            "--evidence-root",
-            str(tmp_path / "evidence"),
-            "--variant",
-            "cell:opencode:activity_returns_to_quiescent_at_turn_boundary:opencode_turn_boundary_quiescent",
-            "--repo-root",
-            str(tmp_path),
-            "--engine",
-            str(engine),
-            "--longhouse-cli",
-            str(cli),
-            "--provider-bin",
-            str(tmp_path / "missing-opencode"),
-        ]
-    )
-    assert exit_code == 2
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["failure_code"] == "opencode_binary_missing"
 
 
 def test_run_turn_boundary_quiescent_retains_the_serve_log_without_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

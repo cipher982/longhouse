@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from zerg.qa import factory_registration
+from zerg.qa import producer_shell
 from zerg.qa.live_kit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_kit import RUNTIME_API_URL_ENV
 from zerg.qa.producer_shell import Producer
@@ -29,21 +30,10 @@ _MANIFEST = {
 }
 _ROWS = factory_registration.contract_rows(_REPO / "schemas" / "managed_providers.yml")
 # The producers of a product subject are registered by the factory alone, so they are found by what they declare.
-_SHELL_BUILT = sorted(f"zerg.qa.{path.stem}" for path in _QA.glob("*.py") if "\nPRODUCER = Producer(" in path.read_text(encoding="utf-8"))
+_SHELL_BUILT = sorted(f"zerg.qa.{path.stem}" for path in _QA.glob("*.py") if "\nPRODUCER = " in path.read_text(encoding="utf-8"))
 # Registered producers still written by hand. This list only shrinks.
 _NOT_YET_ON_THE_SHELL = frozenset(
     {
-        "zerg.qa.codex_native_resume",
-        "zerg.qa.claude_native_resume",
-        "zerg.qa.cursor_native_resume",
-        "zerg.qa.opencode_native_resume",
-        "zerg.qa.codex_turn_boundary_native",
-        "zerg.qa.claude_turn_boundary_quiescent",
-        "zerg.qa.claude_launch_helm_real_print",
-        "zerg.qa.claude_turn_start_real_print",
-        "zerg.qa.opencode_turn_boundary_quiescent",
-        "zerg.qa.cursor_turn_boundary_producer",
-        "zerg.qa.codex_helm_launch_visibility",
         "zerg.qa.pi_helm_lifecycle",
         "zerg.qa.omp_background_producer",
         "zerg.qa.omp_helm_lifecycle",
@@ -107,6 +97,7 @@ def test_a_producer_answers_each_factory_command_with_an_envelope_the_factory_ac
     monkeypatch.setenv(RUNTIME_API_URL_ENV, "http://127.0.0.1:9")
     monkeypatch.setenv(RUNTIME_AGENTS_TOKEN_ENV, "fixture-token")
     monkeypatch.setenv("LONGHOUSE_QUALIFICATION_SANDBOX", "provider-qualification-bwrap-v3")
+    monkeypatch.setenv("CODEX_API_KEY", "fixture-provider-token")
     identities: list[dict] = []
 
     def execute(self, root, _body, **options):
@@ -193,7 +184,10 @@ def test_a_run_that_raises_keeps_only_a_failing_verdict(tmp_path, reached, kept)
         run.observation = {"seen": 1}
         run.assertions = dict(reached)
         run.fields["provider_binary"] = {"version": "1"}
-        raise ProducerFailure("cleanup_unverified", "the provider outlived the run")
+        try:
+            raise ProducerFailure("cleanup_unverified", "the provider outlived the run")
+        finally:
+            run.write("written-while-unwinding.json", {})
 
     result = _run_fixture(tmp_path, body, failure_cleanup={"status": "fail"})
 
@@ -203,11 +197,38 @@ def test_a_run_that_raises_keeps_only_a_failing_verdict(tmp_path, reached, kept)
     assert ("assertions" in result, "observation" in result) == (kept, kept)
     assert kept or result["partial_observation"] == {"seen": 1}
     assert factory_registration.typed_harness_failure(result) is not kept
-    assert {entry["path"] for entry in result["artifact_manifest"]} == {"receipt.json", "cleanup-receipt.json"}
+    # The result is made after the run has unwound, so its manifest binds what cleanup wrote on the way out.
+    assert {entry["path"] for entry in result["artifact_manifest"]} == {
+        "receipt.json",
+        "written-while-unwinding.json",
+        "cleanup-receipt.json",
+    }
     assert json.loads((tmp_path / "evidence" / "cleanup-receipt.json").read_text(encoding="utf-8")) == {
         "status": "fail",
         "error_type": "ProducerFailure",
     }
+
+
+def test_a_pass_whose_result_cannot_be_written_leaves_a_typed_failure_and_never_a_pass(tmp_path, monkeypatch):
+    real_write, writes = producer_shell.write_json, []
+
+    def write(path, payload):
+        writes.append(payload.get("status"))
+        if len(writes) == 1:
+            raise OSError("filesystem race")
+        real_write(path, payload)
+
+    monkeypatch.setattr(producer_shell, "write_json", write)
+
+    def body(run: Run) -> None:
+        run.observation = {"seen": 1}
+        run.assertions = {"held": True}
+
+    result = _FIXTURE.execute(tmp_path / "evidence", body)
+
+    assert writes == ["pass", "fail"]
+    assert (result["status"], result["failure_code"], result["error"]) == ("fail", "fixture_failed", "OSError: filesystem race")
+    assert json.loads((tmp_path / "evidence" / "result.json").read_text(encoding="utf-8"))["status"] == "fail"
 
 
 def test_a_blocked_run_says_so_and_a_raising_caller_gets_the_exception_and_no_artifact(tmp_path):

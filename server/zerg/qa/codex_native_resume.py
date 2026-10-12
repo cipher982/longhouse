@@ -10,7 +10,6 @@ import re
 import shutil
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.error
@@ -20,16 +19,13 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
-from zerg.qa.failed_results import settle_failed_result
-from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import qualification_secrets
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
-from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import write_json
-from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.provider_resume_oracles import native_resume_assertions
@@ -38,7 +34,6 @@ from zerg.qa.wait_kind import FIELD as WAITED_ON_FIELD
 from zerg.qa.wait_kind import LONGHOUSE_ENGINE
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
-from zerg.qa.wait_kind import failure_fields
 
 _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 _CODEX_REMOTE_TOKEN_ENV = "CODEX_REMOTE_AUTH_TOKEN"
@@ -47,7 +42,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="codex.native_resume.v1",
     producer_revision=3,
     scenario_id="helm_cold_resume",
-    scenario_revision=6,
+    # 7: a failed result carries the binary receipt, and its manifest binds the cleanup receipt.
+    scenario_revision=7,
     assertion_cells=(
         ("native_provider_resume_proven", "clean_exit"),
         ("native_provider_resume_proven", "process_loss"),
@@ -175,11 +171,6 @@ def _redact_process_command(command: str) -> str:
         r"\1<redacted>",
         command,
     )
-
-
-def _finalize_result_manifest(root: Path, result: dict[str, Any]) -> None:
-    result["artifact_manifest"] = artifact_manifest(root)
-    write_json(root / "result.json", result)
 
 
 class _RuntimeHostHTTPError(RuntimeError):
@@ -570,15 +561,15 @@ def _require_transcript_ship(receipt: dict[str, Any], *, label: str) -> None:
     raise RuntimeError(f"{label} transcript ship failed: {reason}")
 
 
-def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace) -> None:
+    root = run.root
     provider_receipt = {
         "path": str(args.codex_bin),
         "sha256": sha256_file(args.codex_bin),
         "version": bridge_canary._run([str(args.codex_bin), "--version"], timeout=30).stdout.strip(),
     }
     write_json(root / "provider-binary-receipt.json", provider_receipt)
+    run.fields["provider_binary"] = provider_receipt
 
     isolation_root: Path | None = None
     session_id = ""
@@ -586,10 +577,6 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     final_cleanup: dict[str, Any] = {"verified": False}
     resume_contract_paths: tuple[Path, Path] | None = None
     shipper: TranscriptShipper | None = None
-    retained_result: dict[str, Any] | None = None
-    # Evidence reached before a later step failed; a reached verdict stays one.
-    observation: dict[str, Any] | None = None
-    assertions: dict[str, bool] = {}
     try:
         # Start the real Machine Agent before the detached bridge.  Engine
         # startup performs its own provider-state reconciliation; if it comes
@@ -809,31 +796,10 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "final_socket_absent": verification.get("socket_absent") is True,
             "orphan_count": orphan_count,
         }
-        assertions = native_resume_assertions(args.variant, observation)
-        result: dict[str, Any] = {
-            "schema_version": 1,
-            "artifact_kind": "direct_native_resume_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "codex",
-            "variant": args.variant,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "pass" if assertions["native_provider_resume_proven"] else "fail",
-            "observation": observation,
-            "assertions": assertions,
-            "session_id": session_id,
-            "provider_thread_id": thread_id,
-            "provider_binary": provider_receipt,
-            "seed_marker": seed_marker,
-            "post_resume_marker": post_marker,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        retained_result = result
-        write_json(root / "result.json", result)
-        return result
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+        run.observation = observation
+        run.assertions = native_resume_assertions(args.variant, observation)
+        run.fields.update(session_id=session_id, provider_thread_id=thread_id, seed_marker=seed_marker, post_resume_marker=post_marker)
+    except Exception:  # noqa: BLE001 - stop what the run owned, then let the shell type the failure
         if shipper is not None:
             write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         _remove_resume_contract_snapshot(resume_contract_paths)
@@ -841,31 +807,8 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             root,
             list(qualification_secrets(os.environ, args.agents_token)),
         )
-        failure = {
-            "schema_version": 1,
-            "artifact_kind": "direct_native_resume_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "codex",
-            "variant": args.variant,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "direct_native_resume_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            "redacted_secret_files": redacted_secret_files,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        settle_failed_result(
-            failure,
-            observation=observation,
-            assertions=assertions,
-        )
-        retained_result = failure
-        write_json(root / "result.json", failure)
-        return failure
+        run.fields["redacted_secret_files"] = redacted_secret_files
+        raise
     finally:
         if shipper is not None:
             write_json(root / "transcript-shipper-receipt.json", shipper.stop())
@@ -874,51 +817,37 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
             if not (root / "cleanup-receipt.json").exists():
                 write_json(root / "cleanup-receipt.json", cleanup)
-        if retained_result is not None:
-            # Failure cleanup happens in this finally block. Refresh the
-            # exhaustive manifest after it, otherwise a real provider finding
-            # is discarded as an unbound cleanup-receipt harness error.
-            _finalize_result_manifest(root, retained_result)
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", required=True, choices=("clean_exit", "process_loss"))
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--engine", required=True, type=Path)
-    parser.add_argument("--codex-bin", required=True, type=Path)
-    parser.add_argument("--model", default=os.environ.get("CODEX_MODEL"))
+def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
+    args.script_bin = args.timeout_bin = None
+    # The result is made after the run's cleanup, so its manifest binds the cleanup receipt a failure leaves.
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args), variant=args.variant)
+
+
+def _add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--bridge-start-timeout-secs", type=int, default=30)
     parser.add_argument("--live-send-timeout-secs", type=int, default=120)
     parser.add_argument("--tui-record-secs", type=int, default=30)
-    parser.add_argument("--registration", action="store_true")
-    return parser
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="direct_native_resume_result",
+    failure_code="direct_native_resume_failed",
+    needs=("evidence_root", "repo_root", "engine", "codex_bin"),
+    binaries=(("engine", "longhouse_engine_missing"), ("codex_bin", "codex_binary_missing")),
+    runtime_host=True,
+    variants=("clean_exit", "process_loss"),
+    provider_bin_aliases=("--codex-bin",),
+    provider_bin_dest="codex_bin",
+    model_env="CODEX_MODEL",
+    add_arguments=_add_arguments,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
-    require_disposable_runtime(args.api_url)
-    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
-    args.script_bin = None
-    args.timeout_bin = None
-    if not args.api_url or not args.agents_token:
-        print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
-        return 2
-    if not args.engine.is_file() or not os.access(args.engine, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "longhouse_engine_missing"}))
-        return 2
-    if not args.codex_bin.is_file() or not os.access(args.codex_bin, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "codex_binary_missing"}))
-        return 2
-    result = run_native_resume(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_native_resume, argv)
 
 
 if __name__ == "__main__":

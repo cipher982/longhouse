@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 322,
+  "file_count": 320,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1223,13 +1223,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_cursor_turn_boundary_producer.py",
-      "providers": [
-        "codex",
-        "cursor"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_dense_index.py",
       "providers": [
         "claude",
@@ -2246,13 +2239,6 @@
         "codex",
         "cursor",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/zerg/qa/cursor_turn_boundary_producer.py",
-      "providers": [
-        "codex",
-        "cursor"
       ]
     },
     {

@@ -27,8 +27,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import sys
 import tempfile
 import threading
 import time
@@ -37,19 +35,13 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
-from zerg.qa.failed_results import settle_failed_result
-from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
-from zerg.qa.live_session_toolkit import qualification_secrets
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
-from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import write_json
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.qa.wait_kind import failure_fields
 
 _SCENARIO_ID = "codex_turn_boundary_quiescent"
 _ASSERTION_ID = "activity_returns_to_quiescent_at_turn_boundary"
@@ -71,7 +63,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="codex.turn_boundary_quiescent.v1",
     producer_revision=1,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=2,
+    # 3: a failed result carries the binary receipt, and its manifest binds the cleanup receipt.
+    scenario_revision=3,
     assertion_cells=((_ASSERTION_ID, None),),
     providers=("codex",),
     platforms=("linux",),
@@ -175,22 +168,19 @@ def _cleanup_receipt(final_cleanup: dict[str, Any]) -> dict[str, Any]:
     return receipt
 
 
-def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace) -> None:
+    root = run.root
     provider_receipt = {
         "path": str(args.codex_bin),
         "sha256": sha256_file(args.codex_bin),
         "version": bridge_canary._run([str(args.codex_bin), "--version"], timeout=30).stdout.strip(),
     }
     write_json(root / "provider-binary-receipt.json", provider_receipt)
+    run.fields["provider_binary"] = provider_receipt
 
     isolation_root: Path | None = None
     session_id = ""
     final_cleanup: dict[str, Any] = {"verified": False}
-    # Evidence reached before a later step failed; a reached verdict stays one.
-    observation: dict[str, Any] | None = None
-    assertions: dict[str, bool] = {}
     try:
         # codex-bridge places a UUID-named Unix socket below this root. Keep
         # the prefix short enough that the complete path stays below Linux's
@@ -285,101 +275,48 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             and observation["marker_in_assistant_transcript"]
         )
         observation["no_orphan_provider_processes"] = observation["orphan_count"] == 0
-        assertions = {_ASSERTION_ID: bool(proven)}
-        result: dict[str, Any] = {
-            "schema_version": 1,
-            "artifact_kind": "codex_turn_boundary_quiescent_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "codex",
-            "variant": None,
-            "scenario_id": _SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "pass" if assertions[_ASSERTION_ID] else "fail",
+        run.observation = observation
+        run.assertions = {_ASSERTION_ID: bool(proven)}
+        run.fields.update(session_id=session_id, provider_thread_id=thread_id, marker=marker)
+        if not proven:
             # A turn still open at the deadline never reached its boundary: the
             # assertion is False because nothing was observed, not because the
             # boundary was wrong.
-            **(
-                {}
-                if assertions[_ASSERTION_ID]
-                else bridge_canary.expired_turn_wait(post_turn_state, provider_answered=marker_in_assistant_transcript)
-            ),
-            "observation": observation,
-            "assertions": assertions,
-            "session_id": session_id,
-            "provider_thread_id": thread_id,
-            "provider_binary": provider_receipt,
-            "marker": marker,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", result)
-        return result
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-        failure = {
-            "schema_version": 1,
-            "artifact_kind": "codex_turn_boundary_quiescent_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "codex",
-            "variant": None,
-            "scenario_id": _SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "codex_turn_boundary_quiescent_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            "artifact_manifest": artifact_manifest(root),
-        }
-        settle_failed_result(failure, observation=observation, assertions=assertions)
-        write_json(root / "result.json", failure)
-        return failure
+            run.fields.update(bridge_canary.expired_turn_wait(post_turn_state, provider_answered=marker_in_assistant_transcript))
     finally:
         if session_id and isolation_root and not (final_cleanup.get("verification") or {}).get("verified"):
             cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
             if not (root / "cleanup-receipt.json").exists():
                 write_json(root / "cleanup-receipt.json", _cleanup_receipt(cleanup))
-        qualification_secrets(os.environ, getattr(args, "agents_token", "") or "")
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", required=True, choices=(_EXECUTION_VARIANT,))
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--engine", required=True, type=Path)
-    parser.add_argument("--codex-bin", required=True, type=Path)
-    parser.add_argument("--model", default=os.environ.get("CODEX_MODEL"))
+def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
+    args.script_bin = args.timeout_bin = None
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args))
+
+
+def _add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--bridge-start-timeout-secs", type=int, default=30)
     parser.add_argument("--live-send-timeout-secs", type=int, default=120)
-    parser.add_argument("--registration", action="store_true")
-    return parser
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="codex_turn_boundary_quiescent_result",
+    failure_code="codex_turn_boundary_quiescent_failed",
+    needs=("evidence_root", "repo_root", "engine", "codex_bin"),
+    binaries=(("engine", "longhouse_engine_missing"), ("codex_bin", "codex_binary_missing")),
+    runtime_host=True,
+    variants=(_EXECUTION_VARIANT,),
+    provider_bin_aliases=("--codex-bin",),
+    provider_bin_dest="codex_bin",
+    model_env="CODEX_MODEL",
+    add_arguments=_add_arguments,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
-    require_disposable_runtime(args.api_url)
-    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
-    args.script_bin = None
-    args.timeout_bin = None
-    if not args.api_url or not args.agents_token:
-        print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
-        return 2
-    if not args.engine.is_file() or not os.access(args.engine, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "longhouse_engine_missing"}))
-        return 2
-    if not args.codex_bin.is_file() or not os.access(args.codex_bin, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "codex_binary_missing"}))
-        return 2
-    result = run_turn_boundary_quiescent(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_turn_boundary_quiescent, argv)
 
 
 if __name__ == "__main__":

@@ -36,31 +36,25 @@ turn boundary that never settles) raises and is surfaced here as a typed
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 from zerg.qa import cursor_helm_product_e2e
-from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import bound_terminal_recordings
 from zerg.qa.live_session_toolkit import isolated_provider_home
 from zerg.qa.live_session_toolkit import qualification_secrets
-from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import secret_scan
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import wait_pid_dead
 from zerg.qa.live_session_toolkit import wait_process_group_dead
 from zerg.qa.live_session_toolkit import write_json
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
-from zerg.qa.wait_kind import failure_fields
 
 # The default Cursor model baked into cursor_helm_product_e2e.py itself.
 # Prefer the factory's configured CURSOR_MODEL (matching how
@@ -87,7 +81,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="cursor.turn_boundary.v1",
     producer_revision=2,
     scenario_id="cursor_turn_boundary_quiescent",
-    scenario_revision=3,
+    # 4: a failed result carries the binary receipt and follows the one failure rule.
+    scenario_revision=4,
     # This assertion has no authored `variant:` in schemas/managed_providers.yml,
     # so its cell's variant is None -- not an empty string -- matching how
     # provider_capability_schema.py parses an absent `variant:` field and how
@@ -126,9 +121,8 @@ REGISTRATION = ProducerRegistration(
 )
 
 
-def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace) -> None:
+    root = run.root
     provider_receipt = {
         "path": str(args.provider_bin),
         "sha256": sha256_file(args.provider_bin),
@@ -137,6 +131,7 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
         ).stdout.strip(),
     }
     write_json(root / "provider-binary-receipt.json", provider_receipt)
+    run.fields["provider_binary"] = provider_receipt
 
     home = isolated_provider_home()
     shipper: TranscriptShipper | None = None
@@ -247,62 +242,9 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
         if shipper is not None:
             write_json(root / "transcript-shipper-receipt.json", shipper.stop())
             shipper = None
-        _bound_product_terminal_recording(root)
-        redacted_secret_files = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
-        result: dict[str, Any] = {
-            "schema_version": 1,
-            "artifact_kind": "direct_turn_boundary_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "cursor",
-            # Must equal the compiled command's raw authored `variant`, which
-            # is None for this cell (no `variant:` field authored in the
-            # schema) -- NOT the opaque execution_variant key received via
-            # --variant, which only exists to disambiguate scheduling/retry
-            # state. Echoing args.variant here would fail
-            # _validate_execution_result's `result.variant == command.variant`
-            # check.
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "pass" if native_ok else "fail",
-            "observation": observation,
-            "assertions": assertions,
-            "session_id": report.get("session_id"),
-            "provider_binary": provider_receipt,
-            "redacted_secret_files": redacted_secret_files,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", result)
-        return result
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-        if shipper is not None:
-            try:
-                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
-            except Exception:  # noqa: BLE001 - preserve the causal failure
-                pass
-        _bound_product_terminal_recording(root)
-        redacted_secret_files = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
-        failure = {
-            "schema_version": 1,
-            "artifact_kind": "direct_turn_boundary_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "cursor",
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "direct_turn_boundary_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            "redacted_secret_files": redacted_secret_files,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", failure)
-        return failure
+        run.observation = observation
+        run.assertions = assertions
+        run.fields["session_id"] = report.get("session_id")
     finally:
         if shipper is not None:
             try:
@@ -317,57 +259,36 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = previous
+        _bound_product_terminal_recording(root)
+        run.fields["redacted_secret_files"] = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    # Opaque execution-variant scheduling key from
-    # resume_assurance.execution_variant_key(); this cell has no authored
-    # variant, so the value is a synthetic "cell:<provider>:<assertion_id>:
-    # <scenario_id>" string. It is accepted (the real execute_retained_plan
-    # always passes --variant for a non-generic producer) but never echoed
-    # into result.json -- see the comment at its use site.
-    parser.add_argument("--variant", required=True)
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--engine", required=True, type=Path)
-    # NOTE: the real (unmodified) provider_factory/assurance.py
-    # execute_retained_plan only passes --codex-bin for provider == "codex".
-    # Every other provider, cursor included, gets --longhouse-cli and
-    # --provider-bin. Do not rename these to --cursor-bin.
-    parser.add_argument("--longhouse-cli", required=True, type=Path)
-    parser.add_argument("--provider-bin", required=True, type=Path)
-    parser.add_argument("--model", default=None)
+def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args))
+
+
+def _add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--timeout-secs", type=float, default=120.0)
     parser.add_argument("--max-archive-lag-secs", type=float, default=20.0)
-    parser.add_argument("--registration", action="store_true")
-    return parser
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="direct_turn_boundary_result",
+    failure_code="direct_turn_boundary_failed",
+    needs=("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin"),
+    binaries=(
+        ("engine", "longhouse_engine_missing"),
+        ("longhouse_cli", "longhouse_cli_missing"),
+        ("provider_bin", "cursor_binary_missing"),
+    ),
+    runtime_host=True,
+    add_arguments=_add_arguments,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
-    require_disposable_runtime(args.api_url)
-    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
-    if not args.api_url or not args.agents_token:
-        print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
-        return 2
-    if not args.engine.is_file() or not os.access(args.engine, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "longhouse_engine_missing"}))
-        return 2
-    if not args.longhouse_cli.is_file() or not os.access(args.longhouse_cli, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "longhouse_cli_missing"}))
-        return 2
-    if not args.provider_bin.is_file() or not os.access(args.provider_bin, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "cursor_binary_missing"}))
-        return 2
-    result = run_turn_boundary(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_turn_boundary, argv)
 
 
 if __name__ == "__main__":

@@ -48,21 +48,22 @@ from zerg.qa.live_session_toolkit import wait_cursor_tui_ready
 from zerg.qa.live_session_toolkit import wait_session_tail
 from zerg.qa.live_session_toolkit import wait_state
 from zerg.qa.live_session_toolkit import write_json as write_codex_json
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.provider_native_resume import _claude_input_prompt_visible
 from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.provider_native_resume import _cursor_bootstrap_correlation
 from zerg.qa.provider_native_resume import _cursor_idle_then_flush
 from zerg.qa.provider_native_resume import _cursor_initial_send_then_flush
-from zerg.qa.provider_native_resume import _finalize_result_payload
 from zerg.qa.provider_native_resume import _isolated_qualification_environment
 from zerg.qa.provider_native_resume import _post_resume_response_correlated
-from zerg.qa.provider_native_resume import _refresh_failure_result_manifest
 from zerg.qa.provider_native_resume import _send_initial_seed
+from zerg.qa.provider_native_resume import _settle_finalization
 from zerg.qa.provider_native_resume import _wait_claude_tui_ready
 from zerg.qa.provider_native_resume import _wait_cursor_bootstrap_hook_sequence
 from zerg.qa.provider_native_resume import _wait_cursor_hook_sequence
 from zerg.qa.provider_native_resume import _wait_cursor_initial_idle
+from zerg.qa.provider_native_resume import producer_for
 from zerg.qa.provider_native_resume import registration_for
 
 
@@ -122,7 +123,7 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
         assert registration.executable is True
         assert registration.executable_module == SPECS[provider].executable_module
         assert registration.producer_revision == (6 if provider == "cursor" else 5 if provider == "opencode" else 4)
-        assert registration.scenario_revision == {"cursor": 10, "opencode": 6}.get(provider, 5)
+        assert registration.scenario_revision == {"cursor": 11, "opencode": 7}.get(provider, 6)
         assert {
             "transcript_shipper_receipt",
             "initial_seed_send",
@@ -2439,18 +2440,6 @@ def test_codex_process_evidence_redacts_bridge_tokens() -> None:
     assert _redact_process_command(command) == "env LONGHOUSE_COORDINATION_TOKEN=<redacted> codex app-server"
 
 
-def test_codex_failure_manifest_includes_cleanup_written_during_finalization(tmp_path: Path) -> None:
-    root = tmp_path / "evidence"
-    root.mkdir()
-    result = {"status": "fail", "artifact_manifest": []}
-    write_codex_json(root / "cleanup-receipt.json", {"verification": {"verified": True}})
-
-    codex_native_resume._finalize_result_manifest(root, result)
-
-    retained = json.loads((root / "result.json").read_text())
-    assert [item["path"] for item in retained["artifact_manifest"]] == ["cleanup-receipt.json"]
-
-
 def test_codex_main_serializes_path_values_in_result_output(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -3743,27 +3732,6 @@ def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:
     assert receipt["provider_pid_errors"][0]["session_id"] == "session-without-provider-pid"
 
 
-def test_failure_manifest_is_refreshed_after_final_cleanup(tmp_path: Path) -> None:
-    evidence = tmp_path / "evidence"
-    evidence.mkdir()
-    (evidence / "cleanup-receipt.json").write_text('{"verified":true}\n')
-    (evidence / "result.json").write_text(
-        json.dumps(
-            {
-                "status": "fail",
-                "artifact_manifest": [],
-            }
-        )
-    )
-
-    _refresh_failure_result_manifest(evidence)
-
-    result = json.loads((evidence / "result.json").read_text())
-    manifest = {entry["path"]: entry for entry in result["artifact_manifest"]}
-    assert manifest["cleanup-receipt.json"]["size"] == (evidence / "cleanup-receipt.json").stat().st_size
-    assert manifest["cleanup-receipt.json"]["sha256"].startswith("sha256:")
-
-
 def test_terminal_recordings_keep_bounded_head_and_tail_with_receipt(tmp_path: Path) -> None:
     evidence = tmp_path / "evidence"
     evidence.mkdir()
@@ -3817,91 +3785,31 @@ def test_terminal_recordings_can_bound_nested_product_diagnostics_without_checkp
     assert not (evidence / "native-resume-terminal-checkpoint.json").exists()
 
 
-def test_finalized_secret_scan_downgrades_pass_and_refreshes_manifest(tmp_path: Path) -> None:
-    evidence = tmp_path / "evidence"
-    evidence.mkdir()
-    receipt = evidence / "cleanup-receipt.json"
-    receipt.write_text('{"verified":true}\n')
-    result = {
-        "status": "pass",
-        "artifact_manifest": [],
-        "observation": {"artifact_secret_scan_passed": True},
-        "assertions": {"native_provider_resume_proven": True},
-    }
-    (evidence / "result.json").write_text(json.dumps(result))
-
-    finalized = _finalize_result_payload(
-        evidence,
-        result,
-        redacted_files=["cleanup-receipt.json"],
-        finalization_errors=[],
-    )
-
-    written = json.loads((evidence / "result.json").read_text())
-    manifest = {entry["path"]: entry for entry in written["artifact_manifest"]}
-    assert finalized == written
-    assert written["status"] == "fail"
-    assert written["failure_code"] == "finalized_artifact_secret_scan_failed"
-    assert written["observation"]["artifact_secret_scan_passed"] is False
-    assert written["assertions"]["native_provider_resume_proven"] is False
-    assert manifest["cleanup-receipt.json"]["sha256"] == ("sha256:" + hashlib.sha256(receipt.read_bytes()).hexdigest())
-
-
 @pytest.mark.parametrize(
-    ("redacted_files", "failed_write_calls"),
-    (([], (2,)), (["cleanup-receipt.json"], (1, 3))),
+    ("redacted_files", "finalization_errors", "failure_code"),
+    [
+        (["cleanup-receipt.json"], [], "finalized_artifact_secret_scan_failed"),
+        ([], ["final cleanup: OSError: gone"], "finalization_failed"),
+        (["cleanup-receipt.json"], ["final cleanup: OSError: gone"], "finalization_failed"),
+    ],
 )
-def test_final_result_write_failure_removes_stale_green_evidence(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    redacted_files: list[str],
-    failed_write_calls: tuple[int, ...],
+def test_teardown_that_finds_a_secret_or_fails_downgrades_a_run_that_had_passed(
+    tmp_path: Path, redacted_files: list[str], finalization_errors: list[str], failure_code: str
 ) -> None:
-    evidence = tmp_path / "evidence"
-    evidence.mkdir()
-    (evidence / "cleanup-receipt.json").write_text('{"verified":true}\n')
-    (evidence / "result.json").write_text(
-        json.dumps(
-            {
-                "status": "pass",
-                "artifact_manifest": [],
-                "observation": {"artifact_secret_scan_passed": True},
-                "assertions": {"native_provider_resume_proven": True},
-            }
-        )
-    )
-    original_write_json = live_session_toolkit.write_json
-    write_calls = 0
+    passed = Run(tmp_path, observation={"artifact_secret_scan_passed": True}, assertions={"native_provider_resume_proven": True})
+    _settle_finalization(passed, redacted_files=redacted_files, finalization_errors=finalization_errors)
 
-    def fail_second_write(path: Path, payload: object) -> None:
-        nonlocal write_calls
-        write_calls += 1
-        if write_calls in failed_write_calls:
-            raise OSError("final result filesystem race")
-        original_write_json(path, payload)
+    result = producer_for("opencode").verdict(passed, variant="clean_exit")
+    assert (result["status"], result["failure_code"]) == ("fail", failure_code)
+    assert result["observation"]["artifact_secret_scan_passed"] is False
+    assert result["assertions"] == {"native_provider_resume_proven": False}
+    assert result.get("redacted_secret_files", []) == redacted_files
 
-    monkeypatch.setattr(live_session_toolkit, "write_json", fail_second_write)
-
-    finalized = _finalize_result_payload(
-        evidence,
-        {
-            "status": "pass",
-            "artifact_manifest": [],
-            "observation": {"artifact_secret_scan_passed": True},
-            "assertions": {"native_provider_resume_proven": True},
-        },
-        redacted_files=redacted_files,
-        finalization_errors=[],
-    )
-
-    assert write_calls == max(failed_write_calls)
-    assert finalized is not None
-    assert finalized["status"] == "fail"
-    assert finalized["failure_code"] in {
-        "finalization_failed",
-        "finalized_artifact_secret_scan_failed",
-    }
-    assert not (evidence / "result.json").exists()
+    # A run that raised reached no verdict: its failure keeps its own code and gains only the redacted files.
+    raised = Run(tmp_path, fields={"redacted_secret_files": ["result-of-the-first-scan.json"]})
+    _settle_finalization(raised, redacted_files=redacted_files, finalization_errors=finalization_errors)
+    assert set(raised.fields) == {"redacted_secret_files"}
+    assert raised.fields["redacted_secret_files"] == sorted({"result-of-the-first-scan.json", *redacted_files})
 
 
 @pytest.mark.parametrize("first_cleanup_raises", [False, True])

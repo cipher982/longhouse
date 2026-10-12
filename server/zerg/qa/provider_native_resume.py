@@ -10,13 +10,13 @@ the old owner is stopped or lost, and the same facade performs native Resume.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import os
 import re
 import signal
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -26,8 +26,9 @@ from typing import Any
 from typing import Mapping
 
 from zerg.qa import live_session_toolkit
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_console_lifecycle import _served_run_terminal_evidence
-from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.provider_resume_oracles import native_resume_assertions
@@ -38,7 +39,6 @@ from zerg.qa.wait_kind import PROVIDER_PROCESS
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
-from zerg.qa.wait_kind import failure_fields
 
 _DEFAULT_RESUME_INTENT_TIMEOUT_SECS = 45.0
 _PROCESS_LOSS_RESUME_INTENT_TIMEOUT_SECS = 180.0
@@ -95,7 +95,8 @@ def registration_for(provider: str) -> ProducerRegistration:
         producer_id=spec.producer_id,
         producer_revision=6 if provider == "cursor" else 5 if provider == "opencode" else 4,
         scenario_id="helm_cold_resume",
-        scenario_revision={"cursor": 10, "opencode": 6}.get(provider, 5),
+        # +1 for each: a failed result carries the binary receipt, and the result is made after teardown.
+        scenario_revision={"cursor": 11, "opencode": 7}.get(provider, 6),
         assertion_cells=(
             ("native_provider_resume_proven", "clean_exit"),
             ("native_provider_resume_proven", "process_loss"),
@@ -168,112 +169,26 @@ def _close_recordings(processes: tuple[live_session_toolkit.PtyProcess | None, .
             process.close()
 
 
-def _refresh_result_manifest(root: Path) -> dict[str, Any] | None:
-    """Hash result evidence after final cleanup has been written.
+def _settle_finalization(run: Run, *, redacted_files: list[str], finalization_errors: list[str]) -> None:
+    """Fold what teardown found into the run, without certifying incomplete evidence.
 
-    The failure path writes ``result.json`` before the ``finally`` block tears
-    down provider processes and records ``cleanup-receipt.json``.  Refreshing
-    the manifest after that finalization keeps failure evidence exhaustive and
-    prevents a legitimate cleanup receipt from looking like a TOCTOU mutation.
-    ``result.json`` is intentionally excluded by ``artifact_manifest``.
+    The result is made after this, so its manifest binds what teardown wrote.
+    A run that had held every assertion over evidence that could not be
+    finalized, or that still contained a qualification secret, did not pass.
     """
 
-    result_path = root / "result.json"
-    if not result_path.is_file() or result_path.is_symlink():
-        return None
-    try:
-        result = live_session_toolkit._read_json(result_path)
-    except (OSError, ValueError, TypeError):
-        return None
-    if result.get("status") not in {"fail", "pass"}:
-        return None
-    try:
-        result["artifact_manifest"] = artifact_manifest(root)
-        live_session_toolkit.write_json(result_path, result)
-    except (OSError, TypeError, ValueError):
-        return None
-    return result
-
-
-def _refresh_failure_result_manifest(root: Path) -> dict[str, Any] | None:
-    """Backward-compatible name for callers that refresh failure evidence."""
-
-    return _refresh_result_manifest(root)
-
-
-def _finalize_result_payload(
-    root: Path,
-    payload: dict[str, Any] | None,
-    *,
-    redacted_files: list[str],
-    finalization_errors: list[str],
-) -> dict[str, Any] | None:
-    """Persist a post-teardown result without certifying incomplete evidence."""
-
-    if payload is None:
-        return None
-
-    def mark_finalization_failure(reason: str) -> None:
-        if payload.get("status") != "pass":
-            return
-        payload["status"] = "fail"
-        payload["failure_code"] = "finalization_failed"
-        payload["error"] = reason
-        observation = payload.get("observation")
-        if isinstance(observation, dict):
-            observation["artifact_secret_scan_passed"] = False
-        assertions = payload.get("assertions")
-        if isinstance(assertions, dict):
-            assertions["native_provider_resume_proven"] = False
-
+    if redacted_files:
+        run.fields["redacted_secret_files"] = sorted(set(run.fields.get("redacted_secret_files", [])) | set(redacted_files))
     if finalization_errors:
-        mark_finalization_failure("; ".join(finalization_errors))
-    if redacted_files:
-        prior_redacted = payload.get("redacted_secret_files", [])
-        payload["redacted_secret_files"] = sorted(set(prior_redacted) | set(redacted_files))
-        if payload.get("status") == "pass":
-            payload["status"] = "fail"
-            payload["failure_code"] = "finalized_artifact_secret_scan_failed"
-            payload["error"] = "finalized evidence contained a qualification secret"
-            observation = payload.get("observation")
-            if isinstance(observation, dict):
-                observation["artifact_secret_scan_passed"] = False
-            assertions = payload.get("assertions")
-            if isinstance(assertions, dict):
-                assertions["native_provider_resume_proven"] = False
-
-    manifest_error: str | None = None
-    if redacted_files or finalization_errors:
-        try:
-            live_session_toolkit.write_json(root / "result.json", payload)
-        except Exception as exc:  # noqa: BLE001 - fail closed for a would-be pass
-            manifest_error = f"result write: {type(exc).__name__}: {exc}"
-    try:
-        refreshed_result = _refresh_result_manifest(root)
-        if refreshed_result is None:
-            manifest_error = manifest_error or "result manifest refresh returned no result"
-    except Exception as exc:  # noqa: BLE001 - never mask the causal result
-        refreshed_result = None
-        manifest_error = f"result manifest refresh: {type(exc).__name__}: {exc}"
-    if manifest_error:
-        mark_finalization_failure(manifest_error)
-    if refreshed_result is not None:
-        payload["artifact_manifest"] = refreshed_result["artifact_manifest"]
-    if redacted_files:
-        prior_redacted = payload.get("redacted_secret_files", [])
-        payload["redacted_secret_files"] = sorted(set(prior_redacted) | set(redacted_files))
-    try:
-        live_session_toolkit.write_json(root / "result.json", payload)
-    except OSError as exc:
-        # Never leave any previously written result behind when the final
-        # atomic write fails. Missing result evidence is rejected; stale
-        # green or stale failure evidence must not be accepted either.
-        try:
-            (root / "result.json").unlink()
-        except OSError:
-            pass
-        mark_finalization_failure(f"final result write: {type(exc).__name__}: {exc}")
-    return payload
+        failure_code, error = "finalization_failed", "; ".join(finalization_errors)
+    elif redacted_files:
+        failure_code, error = "finalized_artifact_secret_scan_failed", "finalized evidence contained a qualification secret"
+    else:
+        return
+    if run.observation is not None and run.assertions and all(run.assertions.values()):
+        run.fields.update(failure_code=failure_code, error=error)
+        run.observation["artifact_secret_scan_passed"] = False
+        run.assertions["native_provider_resume_proven"] = False
 
 
 def _wait_claude_tui_ready(process: live_session_toolkit.PtyProcess, recording: Path, *, timeout: float = 30.0) -> None:
@@ -1248,11 +1163,9 @@ def _isolated_qualification_environment(source: Mapping[str, str] | None = None)
     return environment
 
 
-def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]:
+def _reach(run: Run, provider: str, args: argparse.Namespace) -> None:
     spec = SPECS[provider]
-    registration = registration_for(provider)
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+    root = run.root
     provider_receipt = {
         "path": str(args.provider_bin),
         "sha256": sha256_file(args.provider_bin),
@@ -1261,6 +1174,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         ).stdout.strip(),
     }
     live_session_toolkit.write_json(root / "provider-binary-receipt.json", provider_receipt)
+    run.fields["provider_binary"] = provider_receipt
     home: Path | None = None
     environment = _isolated_qualification_environment()
     # Qualification providers are independent sessions, even when the harness
@@ -1282,7 +1196,6 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
     shipper: live_session_toolkit.TranscriptShipper | None = None
     states: list[dict[str, Any]] = []
     final_cleanup: dict[str, Any] = {"verified": False}
-    result_payload: dict[str, Any] | None = None
     initial_state: dict[str, Any] = {}
     resumed_state: dict[str, Any] = {}
     failure_termination: dict[str, Any] | None = None
@@ -1873,30 +1786,14 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             "final_socket_absent": final_cleanup["final_socket_absent"],
             "orphan_count": final_cleanup["orphan_count"],
         }
-        assertions = native_resume_assertions(args.variant, observation)
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "direct_native_resume_result",
-            "producer": registration.to_dict(),
-            "provider": provider,
-            "variant": args.variant,
-            "scenario_id": registration.scenario_id,
-            "scenario_revision": registration.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "pass" if assertions["native_provider_resume_proven"] else "fail",
-            "observation": observation,
-            "assertions": assertions,
-            "session_id": initial_state["session_id"],
-            "provider_thread_id": initial_state["provider_session_id"],
-            "provider_binary": provider_receipt,
-            "seed_marker": seed_marker,
-            "post_resume_marker": post_marker,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        result_payload = result
-        live_session_toolkit.write_json(root / "result.json", result)
-        return result
+        run.observation = observation
+        run.assertions = native_resume_assertions(args.variant, observation)
+        run.fields.update(
+            session_id=initial_state["session_id"],
+            provider_thread_id=initial_state["provider_session_id"],
+            seed_marker=seed_marker,
+            post_resume_marker=post_marker,
+        )
     except Exception as exc:  # noqa: BLE001 - retain the exact causal failure
         if not (root / "post-resume-response-correlation.json").exists():
             live_session_toolkit.write_json(
@@ -1977,40 +1874,15 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             )
         except OSError:
             redacted = []
-        failure_code = (
-            "runtime_host_registration_temporarily_unavailable"
-            if isinstance(exc, live_session_toolkit.RuntimeHostRegistrationTransient)
-            else "direct_native_resume_failed"
-        )
-        failure = {
-            "schema_version": 1,
-            "artifact_kind": "direct_native_resume_result",
-            "producer": registration.to_dict(),
-            "provider": provider,
-            "variant": args.variant,
-            "scenario_id": registration.scenario_id,
-            "scenario_revision": registration.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": failure_code,
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            "redacted_secret_files": redacted,
-            "artifact_manifest": artifact_manifest(root),
-        }
+        run.fields["redacted_secret_files"] = redacted
         if failure_identity:
-            failure.update(
-                {
-                    "session_id": failure_identity.get("session_id"),
-                    "provider_thread_id": failure_identity.get("provider_session_id"),
-                    "run_id": failure_identity.get("run_id"),
-                    "initial_run_id": states[0].get("run_id") if states else failure_identity.get("run_id"),
-                }
+            run.fields.update(
+                session_id=failure_identity.get("session_id"),
+                provider_thread_id=failure_identity.get("provider_session_id"),
+                run_id=failure_identity.get("run_id"),
+                initial_run_id=states[0].get("run_id") if states else failure_identity.get("run_id"),
             )
-        result_payload = failure
-        live_session_toolkit.write_json(root / "result.json", failure)
-        return failure
+        raise
     finally:
         final_redacted: list[str] = []
         finalization_errors: list[str] = []
@@ -2051,52 +1923,37 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         except OSError as exc:
             finalization_errors.append(f"final secret scan: {type(exc).__name__}: {exc}")
         finally:
-            # The result is written before this final cleanup guard runs.
-            # Refresh after the guard so teardown cannot invalidate its
-            # manifest, while keeping the in-memory return value identical.
-            _finalize_result_payload(
-                root,
-                result_payload,
-                redacted_files=final_redacted,
-                finalization_errors=finalization_errors,
-            )
+            _settle_finalization(run, redacted_files=final_redacted, finalization_errors=finalization_errors)
 
 
-def parser() -> argparse.ArgumentParser:
-    value = argparse.ArgumentParser(description=__doc__)
-    value.add_argument("--variant", required=True, choices=("clean_exit", "process_loss"))
-    value.add_argument("--evidence-root", required=True, type=Path)
-    value.add_argument("--repo-root", required=True, type=Path)
-    value.add_argument("--engine", required=True, type=Path)
-    value.add_argument("--longhouse-cli", required=True, type=Path)
-    value.add_argument("--provider-bin", required=True, type=Path)
-    value.add_argument("--live-send-timeout-secs", type=int, default=180)
-    return value
+@functools.cache
+def producer_for(provider: str) -> Producer:
+    return Producer(
+        registration_for(provider),
+        artifact_kind="direct_native_resume_result",
+        failure_code=lambda exc: (
+            "runtime_host_registration_temporarily_unavailable"
+            if isinstance(exc, live_session_toolkit.RuntimeHostRegistrationTransient)
+            else "direct_native_resume_failed"
+        ),
+        needs=("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin"),
+        binaries=(
+            ("engine", "longhouse_engine_missing"),
+            ("longhouse_cli", "longhouse_cli_missing"),
+            ("provider_bin", f"{provider}_binary_missing"),
+        ),
+        runtime_host=True,
+        variants=("clean_exit", "process_loss"),
+        add_arguments=lambda parser: parser.add_argument("--live-send-timeout-secs", type=int, default=180),
+    )
+
+
+def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]:
+    return producer_for(provider).execute(args.evidence_root, lambda run: _reach(run, provider, args), variant=args.variant)
 
 
 def main_for(provider: str, argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(registration_for(provider).to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = parser().parse_args(arguments)
-    args.api_url = os.environ.get(live_session_toolkit.RUNTIME_API_URL_ENV, "")
-    live_session_toolkit.require_disposable_runtime(args.api_url)
-    args.agents_token = os.environ.get(live_session_toolkit.RUNTIME_AGENTS_TOKEN_ENV, "")
-    if not args.api_url or not args.agents_token:
-        print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
-        return 2
-    for path, label in (
-        (args.engine, "longhouse_engine"),
-        (args.longhouse_cli, "longhouse_cli"),
-        (args.provider_bin, f"{provider}_binary"),
-    ):
-        if not path.is_file() or not os.access(path, os.X_OK):
-            print(json.dumps({"status": "fail", "failure_code": f"{label}_missing"}))
-            return 2
-    result = run_native_resume(provider, args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return producer_for(provider).main(lambda args: run_native_resume(provider, args), argv)
 
 
-__all__ = ["SPECS", "main_for", "registration_for", "run_native_resume"]
+__all__ = ["SPECS", "main_for", "producer_for", "registration_for", "run_native_resume"]

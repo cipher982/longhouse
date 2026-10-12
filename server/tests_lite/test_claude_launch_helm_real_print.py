@@ -30,7 +30,7 @@ def test_registration_matches_the_schemas_declared_cell() -> None:
     assert m.REGISTRATION.evidence_classes == ("live_no_token",)
     assert m.REGISTRATION.providers == ("claude",)
     assert m.REGISTRATION.producer_revision == 3
-    assert m.REGISTRATION.scenario_revision == 2
+    assert m.REGISTRATION.scenario_revision == 3
     assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
     assert m.REGISTRATION.required_cleanup == ("provider_live_canary_processes_exited",)
     assert m._EXECUTION_VARIANT == execution_variant_key(

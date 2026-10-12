@@ -406,7 +406,7 @@ def test_cursor_turn_boundary_failure_keeps_failure_report_and_stop_receipt(tmp_
     report = json.loads((evidence / "product-e2e-report.json").read_text())
     assert report["status"] == "failed"
     assert json.loads((evidence / "transcript-shipper-receipt.json").read_text())["status"] == "pass"
-    assert shipper.stop_calls >= 2
+    assert shipper.stop_calls == 1
     assert json.loads((evidence / "result.json").read_text()) == result
     assert_result_conforms(module, result, variant=args.variant)
 

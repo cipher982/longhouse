@@ -68,18 +68,14 @@ from __future__ import annotations
 
 import argparse
 import http.client
-import json
 import os
 import subprocess
-import sys
 import time
 import urllib.error
 import uuid
 from pathlib import Path
 from typing import Any
 
-from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import PtyProcess
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import assistant_event_digests
@@ -89,7 +85,6 @@ from zerg.qa.live_session_toolkit import opencode_session_busy
 from zerg.qa.live_session_toolkit import provider_process_pid
 from zerg.qa.live_session_toolkit import qualification_secrets
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
-from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retain_opencode_serve_log
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import stop_session
@@ -99,12 +94,11 @@ from zerg.qa.live_session_toolkit import wait_session_tail
 from zerg.qa.live_session_toolkit import wait_state
 from zerg.qa.live_session_toolkit import write_json
 from zerg.qa.opencode_qualification_profile import prepare_opencode_qualification_profile
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_native_resume import SPECS
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
-from zerg.qa.wait_kind import failure_fields
 
 _ASSERTION_ID = "activity_returns_to_quiescent_at_turn_boundary"
 # The session must read idle, continuously, for this long to count as quiescent, and
@@ -118,7 +112,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="opencode.turn_boundary_quiescent.v1",
     producer_revision=4,
     scenario_id="opencode_turn_boundary_quiescent",
-    scenario_revision=3,
+    # 4: a failed result carries the binary receipt and the execution variant.
+    scenario_revision=4,
     # The schema declares no "variant" key for this assertion cell, so the
     # authored variant is None (zerg.qa.resume_assurance.execution_variant_key
     # only treats a non-empty *string* as an authored variant; cell.get(
@@ -332,10 +327,9 @@ def _cleanup_receipt(stop_result: dict[str, Any]) -> dict[str, Any]:
     return receipt
 
 
-def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
+def _reach(run: Run, args: argparse.Namespace) -> None:
     spec = SPECS["opencode"]
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+    root = run.root
     provider_receipt = {
         "path": str(args.provider_bin),
         "sha256": sha256_file(args.provider_bin),
@@ -344,6 +338,9 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
         ).stdout.strip(),
     }
     write_json(root / "provider-binary-receipt.json", provider_receipt)
+    # No authored variant exists for this cell, so the result's is null; the
+    # execution key this process was invoked with is kept for traceability.
+    run.fields.update(provider_binary=provider_receipt, invoked_with_execution_variant=args.variant)
 
     environment = os.environ.copy()
     environment["LONGHOUSE_ENGINE_BIN"] = str(args.engine)
@@ -481,35 +478,10 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "artifact_secret_scan_passed": not redacted_secret_files,
             "serve_log": serve_log,
         }
-        assertions = turn_boundary_quiescent_assertions(observation)
-
-        result: dict[str, Any] = {
-            "schema_version": 1,
-            "artifact_kind": "direct_turn_boundary_quiescent_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "opencode",
-            # No authored variant exists for this cell (see REGISTRATION
-            # comment); this must equal the compiled command's "variant"
-            # field, not the synthetic --variant execution key this process
-            # was actually invoked with (args.variant, recorded below for
-            # traceability only).
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "pass" if assertions[_ASSERTION_ID] else "fail",
-            "observation": observation,
-            "assertions": assertions,
-            "session_id": session_id,
-            "invoked_with_execution_variant": args.variant,
-            "provider_binary": provider_receipt,
-            "artifact_manifest": [],
-        }
-        result["artifact_manifest"] = artifact_manifest(root)
-        write_json(root / "result.json", result)
-        return result
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+        run.observation = observation
+        run.assertions = turn_boundary_quiescent_assertions(observation)
+        run.fields["session_id"] = session_id
+    except Exception:  # noqa: BLE001 - stop what the run owned, then let the shell type the failure
         if shipper is not None:
             write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         if initial is not None and initial_state is not None and not stop_result.get("dead"):
@@ -529,72 +501,34 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             root,
             list(qualification_secrets(os.environ, getattr(args, "agents_token", ""))),
         )
-        failure = {
-            "schema_version": 1,
-            "artifact_kind": "direct_turn_boundary_quiescent_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "opencode",
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "direct_turn_boundary_quiescent_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            "serve_log": serve_log,
-            "redacted_secret_files": redacted_secret_files,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", failure)
-        return failure
+        run.fields.update(serve_log=serve_log, redacted_secret_files=redacted_secret_files)
+        raise
     finally:
         if initial is not None:
             initial.close()
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    # No authored variant exists for this assertion cell; the sandbox still
-    # passes the synthetic execution-variant key
-    # ("cell:opencode:activity_returns_to_quiescent_at_turn_boundary:
-    # opencode_turn_boundary_quiescent") as --variant. Accept it as an
-    # opaque string rather than a restricted choice.
-    parser.add_argument("--variant", required=True)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--engine", required=True, type=Path)
-    parser.add_argument("--longhouse-cli", required=True, type=Path)
-    parser.add_argument("--provider-bin", required=True, type=Path)
-    parser.add_argument("--live-send-timeout-secs", type=float, default=180.0)
-    parser.add_argument("--registration", action="store_true")
-    return parser
+def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args))
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="direct_turn_boundary_quiescent_result",
+    failure_code="direct_turn_boundary_quiescent_failed",
+    needs=("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin"),
+    binaries=(
+        ("engine", "longhouse_engine_missing"),
+        ("longhouse_cli", "longhouse_cli_missing"),
+        ("provider_bin", "opencode_binary_missing"),
+    ),
+    runtime_host=True,
+    add_arguments=lambda parser: parser.add_argument("--live-send-timeout-secs", type=float, default=180.0),
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
-    require_disposable_runtime(args.api_url)
-    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
-    if not args.api_url or not args.agents_token:
-        print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
-        return 2
-    for label, path in (
-        ("longhouse_engine", args.engine),
-        ("longhouse_cli", args.longhouse_cli),
-        ("opencode_binary", args.provider_bin),
-    ):
-        if not path.is_file() or not os.access(path, os.X_OK):
-            print(json.dumps({"status": "fail", "failure_code": f"{label}_missing"}))
-            return 2
-    result = run_turn_boundary_quiescent(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_turn_boundary_quiescent, argv)
 
 
 if __name__ == "__main__":

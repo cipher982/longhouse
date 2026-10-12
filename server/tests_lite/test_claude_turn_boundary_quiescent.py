@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from zerg.qa import claude_turn_boundary_quiescent as m
+from zerg.qa import producer_shell
 
 
 class _FakeShipper:
@@ -90,13 +91,13 @@ def test_run_turn_boundary_passes_when_activity_settles_to_quiescent(tmp_path: P
     )
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
 
-    real_artifact_manifest = m.artifact_manifest
+    real_artifact_manifest = producer_shell.artifact_manifest
 
     def stable_manifest(_root: Path) -> list[dict[str, Any]]:
         assert fake_shipper.stopped is True
         return real_artifact_manifest(_root)
 
-    monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
+    monkeypatch.setattr(producer_shell, "artifact_manifest", stable_manifest)
 
     result = m.run_turn_boundary_scenario(args)
 
@@ -137,13 +138,13 @@ def test_run_turn_boundary_fails_closed_when_activity_never_settles(tmp_path: Pa
     monkeypatch.setattr(m, "wait_for_served_quiescent", lambda **_k: (False, 90.0, ["thinking", "thinking"]))
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
 
-    real_artifact_manifest = m.artifact_manifest
+    real_artifact_manifest = producer_shell.artifact_manifest
 
     def stable_manifest(_root: Path) -> list[dict[str, Any]]:
         assert fake_shipper.stopped is True
         return real_artifact_manifest(_root)
 
-    monkeypatch.setattr(m, "artifact_manifest", stable_manifest)
+    monkeypatch.setattr(producer_shell, "artifact_manifest", stable_manifest)
 
     result = m.run_turn_boundary_scenario(args)
 

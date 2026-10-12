@@ -2,9 +2,15 @@
 """Direct stock-Claude Helm Resume producer."""
 
 from zerg.qa.provider_native_resume import main_for
-from zerg.qa.provider_native_resume import registration_for
+from zerg.qa.provider_native_resume import producer_for
 
-REGISTRATION = registration_for("claude")
+PRODUCER = producer_for("claude")
+REGISTRATION = PRODUCER.registration
+
+
+def main(argv: list[str] | None = None) -> int:
+    return main_for("claude", argv)
+
 
 if __name__ == "__main__":
-    raise SystemExit(main_for("claude"))
+    raise SystemExit(main())

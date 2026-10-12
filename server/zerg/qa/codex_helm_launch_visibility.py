@@ -17,7 +17,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -30,14 +29,12 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
-from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import sha256_file
 from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.codex_auth import login_with_api_key
-from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
-from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_launch_oracles import ASSERTION_ID
 from zerg.qa.provider_launch_oracles import SCENARIO_ID
 from zerg.qa.provider_launch_oracles import helm_launch_assertions
@@ -53,7 +50,6 @@ from zerg.qa.wait_kind import PROVIDER_PROCESS
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
-from zerg.qa.wait_kind import failure_fields
 from zerg.services.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 
 _EXECUTION_VARIANT = execution_variant_key(
@@ -67,7 +63,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="codex.helm_launch_visibility.v1",
     producer_revision=11,
     scenario_id=SCENARIO_ID,
-    scenario_revision=9,
+    # 10: a failed result carries the binary receipt.
+    scenario_revision=10,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("codex",),
     platforms=("linux",),
@@ -979,15 +976,15 @@ def _automation_launch(
         shutil.rmtree(isolation_root, ignore_errors=True)
 
 
-def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace) -> None:
+    root = run.root
     provider_receipt = {
         "path": str(args.codex_bin),
         "sha256": sha256_file(args.codex_bin),
         "version": bridge_canary._run([str(args.codex_bin), "--version"], timeout=30).stdout.strip(),
     }
     write_json(root / "provider-binary-receipt.json", provider_receipt)
+    run.fields["provider_binary"] = provider_receipt
     proxy = RuntimeHostRecordingProxy(args.api_url)
     proxy.start()
     try:
@@ -1052,93 +1049,43 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 "requirements": cleanup_requirements,
             },
         )
-        status = "pass" if assertions.get(ASSERTION_ID) is True else "fail"
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "codex_helm_launch_visibility_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "codex",
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": status,
-            "observation": observation,
-            "assertions": assertions,
-            "provider_binary": provider_receipt,
-            "session_id": fresh["registration"]["session_id"],
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", result)
-        return result
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-        failure = {
-            "schema_version": 1,
-            "artifact_kind": "codex_helm_launch_visibility_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "codex",
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "codex_helm_launch_visibility_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", failure)
-        return failure
+        run.observation = observation
+        run.assertions = assertions
+        run.fields["session_id"] = fresh["registration"]["session_id"]
     finally:
         proxy.close()
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", required=True, choices=(_EXECUTION_VARIANT,))
-    parser.add_argument("--evidence-root", required=True, type=Path)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--engine", required=True, type=Path)
-    parser.add_argument("--codex-bin", required=True, type=Path)
-    parser.add_argument(
-        "--longhouse-cli",
-        type=Path,
-        default=os.environ.get("LONGHOUSE_CLI_BIN") or shutil.which("longhouse"),
-    )
-    parser.add_argument("--model", default=os.environ.get("CODEX_MODEL"))
+def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
+    args.script_bin = args.timeout_bin = None
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args))
+
+
+def _add_arguments(parser: argparse.ArgumentParser) -> None:
+    longhouse_cli = os.environ.get("LONGHOUSE_CLI_BIN") or shutil.which("longhouse")
+    parser.set_defaults(longhouse_cli=Path(longhouse_cli) if longhouse_cli else None)
     parser.add_argument("--wait-ready-secs", type=float, default=45.0)
     parser.add_argument("--cleanup-timeout-secs", type=float, default=30.0)
-    parser.add_argument("--registration", action="store_true")
-    return parser
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind="codex_helm_launch_visibility_result",
+    failure_code="codex_helm_launch_visibility_failed",
+    needs=("evidence_root", "repo_root", "engine", "codex_bin"),
+    binaries=(("engine", "engine_missing"), ("codex_bin", "codex_bin_missing"), ("longhouse_cli", "longhouse_cli_missing")),
+    runtime_host=True,
+    variants=(_EXECUTION_VARIANT,),
+    provider_bin_aliases=("--codex-bin",),
+    provider_bin_dest="codex_bin",
+    model_env="CODEX_MODEL",
+    refuse=lambda _args: None if os.environ.get("CODEX_API_KEY") else "codex_provider_token_missing",
+    add_arguments=_add_arguments,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
-    require_disposable_runtime(args.api_url)
-    args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
-    args.script_bin = None
-    args.timeout_bin = None
-    if not args.api_url or not args.agents_token:
-        print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
-        return 2
-    if not os.environ.get("CODEX_API_KEY"):
-        print(json.dumps({"status": "fail", "failure_code": "codex_provider_token_missing"}))
-        return 2
-    for name in ("engine", "codex_bin", "longhouse_cli"):
-        path = getattr(args, name)
-        if path is None or not path.is_file() or not os.access(path, os.X_OK):
-            print(json.dumps({"status": "fail", "failure_code": f"{name}_missing"}))
-            return 2
-    result = run_scenario(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_scenario, argv)
 
 
 if __name__ == "__main__":

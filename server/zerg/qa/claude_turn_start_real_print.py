@@ -29,24 +29,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
-import sys
 from pathlib import Path
 from typing import Any
 
 from zerg.qa import claude_real_print_qualification as real_print_qual
-from zerg.qa.claude_live_session_support import artifact_manifest
-from zerg.qa.claude_live_session_support import now_iso
 from zerg.qa.claude_live_session_support import sha256_file
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
-from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
+from zerg.qa.producer_shell import Producer
+from zerg.qa.producer_shell import Run
 from zerg.qa.provider_semantic_qualification import _redact_value as redact_semantic_value
 from zerg.qa.provider_semantic_qualification import _scrub_tree as scrub_semantic_tree
 from zerg.qa.provider_semantic_qualification import temporary_environment
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.qa.wait_kind import failure_fields
 from zerg.services.provider_capability_proof import AssertionOutcome
 
 _SCENARIO_ID = "claude_real_print"
@@ -67,7 +63,8 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.turn_start_real_print.v1",
     producer_revision=3,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=2,
+    # 3: the status is the assertion map's, not the turn-start cell's alone.
+    scenario_revision=3,
     assertion_cells=((_ASSERTION_ID, None),),
     providers=("claude",),
     platforms=("linux",),
@@ -149,19 +146,16 @@ def _write_canary_role_receipts(root: Path, observation: dict[str, Any]) -> None
     )
 
 
-def run_turn_start_scenario(args: argparse.Namespace) -> dict[str, Any]:
-    root = args.evidence_root.resolve()
-    root.mkdir(parents=True, exist_ok=False)
+def _reach(run: Run, args: argparse.Namespace) -> None:
+    root = run.root
     try:
         provider_receipt = {"path": str(args.provider_bin), "sha256": sha256_file(args.provider_bin)}
         write_json(root / "provider-binary-receipt.json", provider_receipt)
+        run.fields["provider_binary"] = provider_receipt
 
         evidence_root = root / "semantic-evidence"
         with temporary_environment({real_print_qual.LIVE_ENABLE_ENV: "1"}):
             observation, assertions, credentials = real_print_qual._execute(args.provider_bin, evidence_root)
-
-        assertions_map = {item.assertion_id: item.outcome == AssertionOutcome.PASS for item in assertions}
-        marker_returned = assertions_map.get(_ASSERTION_ID, False)
 
         # _execute() is normally called by run_semantic_profile, which
         # redacts observed secrets from both the observation dict and the
@@ -179,25 +173,10 @@ def run_turn_start_scenario(args: argparse.Namespace) -> dict[str, Any]:
             outcomes={"real_print_process_exited": True},
             diagnostics={"execution": "bounded claude --print subprocess returned before evidence projection"},
         )
-        result: dict[str, Any] = {
-            "schema_version": 1,
-            "artifact_kind": _ARTIFACT_KIND,
-            "producer": REGISTRATION.to_dict(),
-            "provider": "claude",
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now_iso(),
-            "status": "pass" if marker_returned else "fail",
-            "observation": observation,
-            "assertions": assertions_map,
-            "provider_binary": provider_receipt,
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", result)
-        return result
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+        run.observation = observation
+        # The executor judges both real-print assertions; the status is the whole map's.
+        run.assertions = {item.assertion_id: item.outcome == AssertionOutcome.PASS for item in assertions}
+    except Exception:  # noqa: BLE001 - record the cleanup, then let the shell type the failure
         cleanup_recording_error = None
         try:
             write_claude_cleanup_aggregate(
@@ -209,53 +188,28 @@ def run_turn_start_scenario(args: argparse.Namespace) -> dict[str, Any]:
             )
         except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
             cleanup_recording_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
-        failure = {
-            "schema_version": 1,
-            "artifact_kind": _ARTIFACT_KIND,
-            "producer": REGISTRATION.to_dict(),
-            "provider": "claude",
-            "variant": None,
-            "scenario_id": REGISTRATION.scenario_id,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now_iso(),
-            "status": "fail",
-            "failure_code": "claude_turn_start_real_print_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            **failure_fields(exc),
-            **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
-            "artifact_manifest": artifact_manifest(root),
-        }
-        write_json(root / "result.json", failure)
-        return failure
+        if cleanup_recording_error:
+            run.fields["cleanup_recording_error"] = cleanup_recording_error
+        raise
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(
-        parser,
-        variants=(_EXECUTION_VARIANT,),
-        provider_bin_aliases=("--claude-bin",),
-    )
-    return parser
+def run_turn_start_scenario(args: argparse.Namespace) -> dict[str, Any]:
+    return PRODUCER.execute(args.evidence_root, lambda run: _reach(run, args))
+
+
+PRODUCER = Producer(
+    REGISTRATION,
+    artifact_kind=_ARTIFACT_KIND,
+    failure_code="claude_turn_start_real_print_failed",
+    needs=("evidence_root", "provider_bin"),
+    binaries=(("provider_bin", "claude_binary_missing"),),
+    variants=(_EXECUTION_VARIANT,),
+    provider_bin_aliases=("--claude-bin",),
+)
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = sys.argv[1:] if argv is None else argv
-    if arguments == ["--registration"]:
-        print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
-        return 0
-    args = _parser().parse_args(arguments)
-    for required in ("evidence_root", "provider_bin"):
-        if getattr(args, required) is None:
-            print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{required.replace('_', '-')}"}))
-            return 2
-    if not args.provider_bin.is_file() or not os.access(args.provider_bin, os.X_OK):
-        print(json.dumps({"status": "fail", "failure_code": "claude_binary_missing"}))
-        return 2
-    result = run_turn_start_scenario(args)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
+    return PRODUCER.main(run_turn_start_scenario, argv)
 
 
 if __name__ == "__main__":
