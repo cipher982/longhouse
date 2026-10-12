@@ -56,7 +56,9 @@ REGISTRATION = ProducerRegistration(
     # follow-up, the steer, the replacement and the recalled phrase each rest on their own.
     # 25: the tool call of the follow-up's busy turn and its result are read from OMP's own file, and the
     # follow-up cell rests on them being a pair.
-    scenario_revision=25,
+    # 26: the row in which OMP records the turn it aborted is in the abort's record (its id, where it is in the
+    # file, its stop reason), and the abort cell rests on it.
+    scenario_revision=26,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -231,6 +233,10 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             and channel.get("ready") is True
             and _mapping(abort.get("evidence")).get("channel_source_bound") is True
             and _mapping(abort.get("evidence")).get("terminal") is True
+            # OMP's own file records the aborted turn as a row.
+            and _mapping(abort.get("native_abort")).get("observed") is True
+            and isinstance(_mapping(abort.get("native_abort")).get("aborted_row_id"), str)
+            and isinstance(_mapping(abort.get("native_abort")).get("aborted_row_source_offset"), int)
             and _mapping(observation.get("abort_turn_verdict")).get("passed") is True
             and _mapping(observation.get("abort_turn_verdict")).get("after_send_accepted") is True
         ),

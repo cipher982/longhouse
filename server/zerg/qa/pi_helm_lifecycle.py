@@ -69,7 +69,8 @@ REGISTRATION = ProducerRegistration(
     # after a reload or a replacement.
     # 23: the served events are read to their end, page by page under one generation, not as one page of 200.
     # 24: the tool taxonomy's record says how far into the session file it was read.
-    scenario_revision=24,
+    # 25: the aborted row is recorded as the abort's `native_abort`, the name it has for both providers.
+    scenario_revision=25,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -156,7 +157,7 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
         return busy(record) and answered(record) and _mapping(observation.get(verdict)).get("passed") is True
 
     def aborted(record: Mapping[str, Any], verdict: str) -> bool:
-        native = _mapping(record.get("evidence"))
+        native = _mapping(record.get("native_abort"))
         return (
             busy(record)
             and bool(record.get("settled_state"))
@@ -410,7 +411,6 @@ FAMILY = Family(
     identity_at_launch=True,
     terminate_proves_owners_dead=True,
     rebind_command="send_live",
-    native_abort_row=True,
     local_health=True,
     records_misses=True,
     refused_command_ends_run=True,

@@ -134,7 +134,6 @@ class Family:
     terminate_proves_owners_dead: bool = False  # a terminate is over when the two recorded processes stopped, not when the state says so
     rebind_command: str = "send"  # how the first input after `/new` is sent: as an input, or as "send_live"
     identity_at_launch: bool = False  # control identity is held at launch, at cold resume and at the end, not only after a rebind
-    native_abort_row: bool = False  # an abort is proven by the row the provider records, where there is no channel terminal
     binds_resume_prompt: bool = False  # the resume prompt is found as one row of the restored session
     retirement_claims: bool = False  # each run's retirement is claimed and waited for as it ends
     local_health: bool = False  # the engine's local health is snapshotted after launch
@@ -2520,25 +2519,27 @@ class Lifecycle:
             record["evidence"] = _channel_terminal_evidence(
                 agent_end, channel_state, native_session_id=native_session_id, session_file=self.session_file
             )
-        if f.native_abort_row:
+        else:
+            # No channel event says the turn is over: the launcher's state leaving the turn does.
             record["settled_state"] = dict(
                 self.or_missing(lambda: self.wait_state(lambda value: value.get("phase") not in {"running", "thinking"}, timeout=20))
             )
-            try:
-                aborted: dict[str, Any] | None = _wait_native_abort(self.session_file, minimum_offset=offset)
-            except RuntimeError as exc:
-                aborted = None
-                self.observation[f"{name}_native_wait_error"] = f"{type(exc).__name__}: {exc}"
-            record["evidence"] = {
-                "observed": aborted is not None,
-                "source_path": str(self.session_file),
-                "minimum_source_offset": offset,
-                "native_session_id": native_session_id,
-                "native_file": _native_file_identity(self.session_file),
-                "aborted_row_id": aborted.get("id") if aborted else None,
-                "aborted_row_source_offset": aborted.get("_source_offset") if aborted else None,
-                "stop_reason": (aborted.get("message") or {}).get("stopReason") if aborted else None,
-            }
+        # The provider records the turn it aborted as a row of its own file, whatever else says the turn ended.
+        try:
+            aborted: dict[str, Any] | None = _wait_native_abort(self.session_file, minimum_offset=offset)
+        except RuntimeError as exc:
+            aborted = None
+            self.observation[f"{name}_native_wait_error"] = f"{type(exc).__name__}: {exc}"
+        record["native_abort"] = {
+            "observed": aborted is not None,
+            "source_path": str(self.session_file),
+            "minimum_source_offset": offset,
+            "native_session_id": native_session_id,
+            "native_file": _native_file_identity(self.session_file),
+            "aborted_row_id": aborted.get("id") if aborted else None,
+            "aborted_row_source_offset": aborted.get("_source_offset") if aborted else None,
+            "stop_reason": (aborted.get("message") or {}).get("stopReason") if aborted else None,
+        }
         # An abort proves nothing if the session cannot take the next turn.
         self.settle()
         try:
