@@ -13,7 +13,7 @@ use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -3170,7 +3170,72 @@ fn compact_evidence_family<T>(
     Ok(())
 }
 
-fn evidence_identity<T: Serialize>(
+/// Identities computed for unchanged facts, keyed by everything the
+/// identity is built from except the fact itself, holding the fact they were
+/// computed for.
+///
+/// The status projection rebuilds every machine-evidence fact (~5,000 on
+/// cinder, mostly retained history) several times a second while a session
+/// ships, and each identity is a serialize, canonicalize and two SHA-256s.
+/// An identity is a pure function of these inputs and the fact, so an equal
+/// fact reuses it. Only `fact_index` (position in this build) is fresh.
+type EvidenceIdentityMemoKey = (String, String, String, Option<String>, Option<u64>);
+
+static EVIDENCE_IDENTITY_MEMO: LazyLock<
+    std::sync::Mutex<
+        HashMap<EvidenceIdentityMemoKey, (Box<dyn std::any::Any + Send>, EvidenceIdentity)>,
+    >,
+> = LazyLock::new(Default::default);
+
+/// Entries kept at once; past this the memo restarts empty. Well above the
+/// fact count of a heavily used machine, so steady state never clears it.
+const EVIDENCE_IDENTITY_MEMO_MAX: usize = 50_000;
+
+fn evidence_identity<T: Serialize + PartialEq + Clone + Send + 'static>(
+    fact_family: &str,
+    fact_index: usize,
+    subject_key: String,
+    source: &str,
+    source_epoch: Option<String>,
+    source_seq: Option<u64>,
+    fact: &T,
+) -> EvidenceIdentity {
+    let key: EvidenceIdentityMemoKey = (
+        fact_family.to_string(),
+        subject_key,
+        source.to_string(),
+        source_epoch,
+        source_seq,
+    );
+    if let Ok(memo) = EVIDENCE_IDENTITY_MEMO.lock() {
+        if let Some((memo_fact, identity)) = memo.get(&key) {
+            if memo_fact.downcast_ref::<T>() == Some(fact) {
+                return EvidenceIdentity {
+                    fact_index,
+                    ..identity.clone()
+                };
+            }
+        }
+    }
+    let identity = compute_evidence_identity(
+        fact_family,
+        fact_index,
+        key.1.clone(),
+        source,
+        key.3.clone(),
+        source_seq,
+        fact,
+    );
+    if let Ok(mut memo) = EVIDENCE_IDENTITY_MEMO.lock() {
+        if memo.len() >= EVIDENCE_IDENTITY_MEMO_MAX && !memo.contains_key(&key) {
+            memo.clear();
+        }
+        memo.insert(key, (Box::new(fact.clone()), identity.clone()));
+    }
+    identity
+}
+
+fn compute_evidence_identity<T: Serialize>(
     fact_family: &str,
     fact_index: usize,
     subject_key: String,
@@ -5275,6 +5340,31 @@ mod tests {
         assert!(pending.pending_work);
         assert!(!pending.stalled);
         assert_eq!(pending.seconds_without_progress, 0);
+    }
+
+    #[test]
+    fn evidence_identity_memo_matches_a_fresh_computation() {
+        #[derive(Serialize, Clone, PartialEq)]
+        struct Fact {
+            state: &'static str,
+        }
+        let subject = format!("memo-test:{}", uuid::Uuid::new_v4());
+        let identity = |index, fact: &Fact| {
+            evidence_identity("control", index, subject.clone(), "test", None, None, fact)
+        };
+        let fresh = |index, fact: &Fact| {
+            compute_evidence_identity("control", index, subject.clone(), "test", None, None, fact)
+        };
+        let attached = Fact { state: "attached" };
+        let detached = Fact { state: "detached" };
+
+        assert_eq!(identity(0, &attached), fresh(0, &attached));
+        // Reused for an equal fact, at its new position.
+        assert_eq!(identity(7, &attached), fresh(7, &attached));
+        // A changed fact is never answered from the memo.
+        let changed = identity(7, &detached);
+        assert_eq!(changed, fresh(7, &detached));
+        assert_ne!(changed.evidence_hash, fresh(7, &attached).evidence_hash);
     }
 
     #[test]

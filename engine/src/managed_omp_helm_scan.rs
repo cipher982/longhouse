@@ -34,7 +34,7 @@ pub struct OmpHelmObservation {
     pub control_ready: bool,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize)]
 struct OmpHelmStateFile {
     session_id: Option<String>,
     native_session_id: Option<String>,

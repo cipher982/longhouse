@@ -32,9 +32,19 @@ const MAX_DIRECTORIES: usize = 64;
 type Signature = Vec<(OsString, u64, u64, i128)>;
 
 struct Entry {
-    signature: Signature,
+    /// The whole directory's signature when it was at rest and every file
+    /// read: an equal listing returns `parsed` without touching any file.
+    signature: Option<Signature>,
     parsed: Arc<dyn Any + Send + Sync>,
+    /// Each file's parse by path, kept only for files that were at rest when
+    /// read, with the stamp they were read at (a `Files<T>`).
+    files: Arc<dyn Any + Send + Sync>,
 }
+
+/// A file's (length, inode, modification nanos) as listed.
+type Stamp = (u64, u64, i128);
+
+type Files<T> = HashMap<PathBuf, (Stamp, Option<T>)>;
 
 #[cfg(test)]
 thread_local! {
@@ -70,13 +80,18 @@ static CACHE: LazyLock<Mutex<HashMap<CacheKey, Entry>>> =
 /// parse when none of them changed. A missing directory is an empty one.
 /// `parse` sees the file's bytes, or the error that stopped them being read,
 /// and returns `None` to leave the file out.
+///
+/// When some files changed, only those are read again: a file still at rest
+/// with the stamp it was parsed at keeps its parse. Turn-claim directories
+/// hold hundreds of settled claims while one live turn rewrites its own, and
+/// re-reading every file on each such write was a leading engine cost.
 pub(crate) fn parsed_json_dir<T>(
     dir: &Path,
     parse: fn(&Path, std::io::Result<Vec<u8>>) -> Option<T>,
     order: fn(&T, &T) -> std::cmp::Ordering,
 ) -> std::io::Result<Arc<Vec<T>>>
 where
-    T: Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     let listing = match list_json(dir) {
         Ok(listing) => listing,
@@ -94,47 +109,68 @@ where
         parse as usize,
         order as usize,
     );
-    if let Some(signature) = listing.signature.as_ref() {
-        if let Ok(cache) = CACHE.lock() {
-            if let Some(entry) = cache.get(&key) {
-                if entry.signature == *signature {
-                    if let Ok(parsed) = Arc::clone(&entry.parsed).downcast::<Vec<T>>() {
-                        return Ok(parsed);
-                    }
+    let mut previous_files: Option<Arc<Files<T>>> = None;
+    if let Ok(cache) = CACHE.lock() {
+        if let Some(entry) = cache.get(&key) {
+            if listing.signature.is_some() && entry.signature == listing.signature {
+                if let Ok(parsed) = Arc::clone(&entry.parsed).downcast::<Vec<T>>() {
+                    return Ok(parsed);
                 }
             }
+            previous_files = Arc::clone(&entry.files).downcast::<Files<T>>().ok();
         }
     }
     // A file that could not be read is left out, and asked for again next time:
     // whatever stopped the read (a permission, say) can change with no change to
     // the name, length, inode or mtime that a copy is trusted on.
     let mut every_file_read = true;
-    let mut parsed: Vec<T> = listing
-        .paths
-        .into_iter()
-        .filter_map(|path| {
-            #[cfg(test)]
-            FILES_PARSED.with(|parsed| parsed.set(parsed.get() + 1));
-            let bytes = fs::read(&path);
-            if bytes.is_err() {
-                every_file_read = false;
-                UNREAD_FILES.with(|unread| unread.set(unread.get() + 1));
+    let mut files: Files<T> = HashMap::with_capacity(listing.files.len());
+    let mut parsed: Vec<T> = Vec::with_capacity(listing.files.len());
+    for file in listing.files {
+        let reused = file
+            .rested
+            .then(|| previous_files.as_ref()?.get(&file.path))
+            .flatten()
+            .filter(|(stamp, _)| *stamp == file.stamp)
+            .map(|(_, value)| value.clone());
+        let value = match reused {
+            Some(value) => value,
+            None => {
+                #[cfg(test)]
+                FILES_PARSED.with(|parsed| parsed.set(parsed.get() + 1));
+                let bytes = fs::read(&file.path);
+                let read = bytes.is_ok();
+                if !read {
+                    every_file_read = false;
+                    UNREAD_FILES.with(|unread| unread.set(unread.get() + 1));
+                }
+                let value = parse(&file.path, bytes);
+                if !(read && file.rested) {
+                    if let Some(value) = value {
+                        parsed.push(value);
+                    }
+                    continue;
+                }
+                value
             }
-            parse(&path, bytes)
-        })
-        .collect();
+        };
+        if let Some(value) = value.clone() {
+            parsed.push(value);
+        }
+        files.insert(file.path, (file.stamp, value));
+    }
     parsed.sort_by(order);
     let parsed = Arc::new(parsed);
-    let signature = listing.signature.filter(|_| every_file_read);
-    if let (Some(signature), Ok(mut cache)) = (signature, CACHE.lock()) {
+    if let Ok(mut cache) = CACHE.lock() {
         if cache.len() >= MAX_DIRECTORIES && !cache.contains_key(&key) {
             cache.clear();
         }
         cache.insert(
             key,
             Entry {
-                signature,
+                signature: listing.signature.filter(|_| every_file_read),
                 parsed: parsed.clone(),
+                files: Arc::new(files),
             },
         );
     }
@@ -159,15 +195,23 @@ pub(crate) fn rested_signature(dir: &Path) -> Option<String> {
     }
 }
 
+struct ListedFile {
+    path: PathBuf,
+    stamp: Stamp,
+    /// Written long enough ago (and not a symlink) for its stamp to vouch
+    /// for its content.
+    rested: bool,
+}
+
 struct Listing {
-    paths: Vec<PathBuf>,
+    files: Vec<ListedFile>,
     /// `None` when something was written too recently to vouch for.
     signature: Option<Signature>,
 }
 
 fn list_json(dir: &Path) -> std::io::Result<Listing> {
     let now = SystemTime::now();
-    let mut paths = Vec::new();
+    let mut files = Vec::new();
     let mut signature: Signature = Vec::new();
     let mut at_rest = true;
     for entry in fs::read_dir(dir)? {
@@ -184,12 +228,13 @@ fn list_json(dir: &Path) -> std::io::Result<Listing> {
         };
         // The stat is of the link, not of what it points at, so a link's
         // signature says nothing about the content that gets read.
-        at_rest &= !metadata.file_type().is_symlink();
+        let mut rested = !metadata.file_type().is_symlink();
         let modified = metadata.modified().ok();
         // A modification time in the future is a clock we cannot reason about.
-        at_rest &= modified
+        rested &= modified
             .and_then(|modified| now.duration_since(modified).ok())
             .is_some_and(|age| age >= AT_REST_AFTER);
+        at_rest &= rested;
         let modified_nanos = modified
             .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map(|elapsed| elapsed.as_nanos() as i128)
@@ -198,12 +243,17 @@ fn list_json(dir: &Path) -> std::io::Result<Listing> {
         let inode = metadata.ino();
         #[cfg(not(unix))]
         let inode = 0;
-        signature.push((entry.file_name(), metadata.len(), inode, modified_nanos));
-        paths.push(path);
+        let stamp = (metadata.len(), inode, modified_nanos);
+        signature.push((entry.file_name(), stamp.0, stamp.1, stamp.2));
+        files.push(ListedFile {
+            path,
+            stamp,
+            rested,
+        });
     }
     signature.sort();
     Ok(Listing {
-        paths,
+        files,
         signature: at_rest.then_some(signature),
     })
 }
@@ -229,6 +279,34 @@ mod tests {
             .unwrap()
             .set_modified(old)
             .unwrap();
+    }
+
+    #[test]
+    fn only_the_file_that_changed_is_read_again() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.json", "b.json", "c.json"] {
+            fs::write(dir.path().join(name), name).unwrap();
+            age(&dir.path().join(name), 60);
+        }
+        let read = |dir: &Path| parsed_json_dir(dir, parse, Ord::cmp).unwrap().to_vec();
+        assert_eq!(read(dir.path()), ["a.json", "b.json", "c.json"]);
+        let before = files_parsed();
+
+        // A live writer keeps one file fresh: it is read every time, the
+        // settled ones are not, and the answer is always current.
+        let b = dir.path().join("b.json");
+        fs::write(&b, "b-1").unwrap();
+        assert_eq!(read(dir.path()), ["a.json", "b-1", "c.json"]);
+        fs::write(&b, "b-2").unwrap();
+        assert_eq!(read(dir.path()), ["a.json", "b-2", "c.json"]);
+        assert_eq!(files_parsed() - before, 2, "settled files were re-read");
+
+        // Once it rests, its parse is kept too.
+        age(&b, 60);
+        assert_eq!(read(dir.path()), ["a.json", "b-2", "c.json"]);
+        let rested = files_parsed();
+        assert_eq!(read(dir.path()), ["a.json", "b-2", "c.json"]);
+        assert_eq!(files_parsed(), rested);
     }
 
     #[test]

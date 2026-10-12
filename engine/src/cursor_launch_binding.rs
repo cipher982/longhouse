@@ -22,7 +22,7 @@ const REQUIRED_PHASES: [&str; 4] = [
     "at_exit",
 ];
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct LaunchBindingClaim {
     schema_version: u32,
     provider: String,
@@ -68,7 +68,7 @@ pub enum CursorLaunchBindingState {
     Unclaimed,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct ProbeObservation {
     phase: String,
     agent_id: Option<String>,
