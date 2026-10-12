@@ -991,6 +991,7 @@
     {
       "path": "server/tests_lite/_pi_family_helm_fake.py",
       "providers": [
+        "cursor",
         "omp",
         "pi"
       ]

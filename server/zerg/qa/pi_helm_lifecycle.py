@@ -67,7 +67,8 @@ REGISTRATION = ProducerRegistration(
     # 21: a second launcher started against the live owner is refused, and the stale-owner cell rests on that too.
     # 22: control of the session is held to the owner's lease at launch, at cold resume and at the end, not only
     # after a reload or a replacement.
-    scenario_revision=22,
+    # 23: the served events are read to their end, page by page under one generation, not as one page of 200.
+    scenario_revision=23,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),

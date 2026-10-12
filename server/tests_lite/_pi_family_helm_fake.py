@@ -24,9 +24,11 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import Callable
+from collections.abc import Mapping
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -495,7 +497,8 @@ def main(argv: list[str]) -> int:
     if command == "lifecycle":
         # `lifecycle <provider> <directory>`: one whole run, for a caller outside this repository's tests.
         with contextlib.redirect_stdout(sys.stderr):
-            code, root, left = run_lifecycle(rest[0], Path(rest[1]))
+            # In pages of a few events, so that whoever reads this run's evidence reads a page that was paged.
+            code, root, left = run_lifecycle(rest[0], Path(rest[1]), page_size=7)
         print(json.dumps({"exit_code": code, "evidence_root": str(root), "left_isolated": [str(path) for path in left]}))
         return 0
     print(f"the fake longhouse has no command {command!r}", file=sys.stderr)
@@ -509,13 +512,19 @@ def main(argv: list[str]) -> int:
 class FakeRuntimeHost:
     """The agents API the producers call, over the owners the fake launchers register."""
 
-    def __init__(self, token: str, *, reconnecting: int = 0, never_hides: bool = False) -> None:
+    def __init__(
+        self, token: str, *, reconnecting: int = 0, never_hides: bool = False, page_size: int = 0, pages_never_end: bool = False
+    ) -> None:
         """``reconnecting`` control requests are first refused as a control channel that is reconnecting;
-        ``never_hides`` leaves a session visible however it is retired (a cleanup that cannot be proven)."""
+        ``never_hides`` leaves a session visible however it is retired (a cleanup that cannot be proven);
+        ``page_size`` serves the events that many to a page; ``pages_never_end`` says there are more and gives
+        no cursor to read them with."""
 
         self.token = token
         self.reconnecting = reconnecting
         self.never_hides = never_hides
+        self.page_size = page_size
+        self.pages_never_end = pages_never_end
         self.sessions: dict[str, dict[str, Any]] = {}
         self.processes: set[int] = set()
         self.lock = threading.RLock()
@@ -537,10 +546,10 @@ class FakeRuntimeHost:
             def _handle(self) -> None:
                 length = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(length) or b"{}") if length else {}
-                path = self.path.split("?", 1)[0]
+                path, _, query = self.path.partition("?")
                 if not path.startswith("/__fake/") and self.headers.get("X-Agents-Token") != host.token:
                     return self._answer(401, {"detail": "bad token"})
-                status, payload = host.route(self.command, path, body)
+                status, payload = host.route(self.command, path, body, urllib.parse.parse_qs(query))
                 self._answer(status, payload)
 
             do_GET = do_POST = do_PATCH = _handle
@@ -601,7 +610,7 @@ class FakeRuntimeHost:
                     events.append({**event, "event_origin": "durable", "tool_name": None})
         return events
 
-    def route(self, method: str, path: str, body: dict[str, Any]) -> tuple[int, object]:
+    def route(self, method: str, path: str, body: dict[str, Any], query: Mapping[str, list[str]] | None = None) -> tuple[int, object]:
         if path == "/__fake/owner":
             self._register(body)
             return 200, {}
@@ -628,9 +637,19 @@ class FakeRuntimeHost:
         if action == "thread":
             return 200, {"root_session_id": session_id, "head_session_id": session_id, "sessions": [{"id": session_id}]}
         if action == "events":
+            # A page as the Runtime Host serves one: `limit` events from the exclusive `cursor` of the page
+            # before, with `has_more` and `next_cursor`, all under one generation
+            # (server/zerg/routers/agents_sessions.py: the session events route).
             events = self._events(session_id, session)
-            page = {"session_id": session_id, "generation_id": "fake-generation", "branch_mode": "head", "events": events}
-            return 200, {**page, "has_more": False, "next_cursor": None, "total": len(events)}
+            asked = {name: values[0] for name, values in (query or {}).items()}
+            start = int(asked.get("cursor") or 0)
+            size = min(int(asked.get("limit") or len(events) or 1), self.page_size or len(events) or 1)
+            served = events[start : start + size]
+            more = start + len(served) < len(events)
+            page = {"session_id": session_id, "generation_id": "fake-generation", "branch_mode": "head", "events": served}
+            if self.pages_never_end:
+                return 200, {**page, "has_more": True, "next_cursor": None, "total": len(events)}
+            return 200, {**page, "has_more": more, "next_cursor": str(start + len(served)) if more else None, "total": len(events)}
         if action == "state-diagnostics":
             stopped = owner["status"] == "stopped" or not _alive(owner["launcher_pid"])
             available = {"state": "available"}

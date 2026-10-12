@@ -132,7 +132,6 @@ class Family:
     terminate_proves_owners_dead: bool = False  # a terminate is over when the two recorded processes stopped, not when the state says so
     rebind_command: str = "send"  # how the first input after `/new` is sent: as an input, or as "send_live"
     identity_at_launch: bool = False  # control identity is held at launch, at cold resume and at the end, not only after a rebind
-    paginated_events: bool = False  # the served events are read to their end, not as one page
     converges_each_turn: bool = False  # every turn is shown served, not only the first and the last
     native_abort_row: bool = False  # an abort is proven by the row the provider records, where there is no channel terminal
     binds_resume_prompt: bool = False  # the resume prompt is found as one row of the restored session
@@ -176,7 +175,6 @@ _wait = functools.partial(poll, until=lambda value: value is not None)
 _RUNTIME_HOST_RETRY_STATUSES = frozenset({404, 429, 500, 502, 503, 504})
 
 _RUNTIME_EVENTS_PAGE_LIMIT = 500
-_SINGLE_PAGE_LIMIT = 200
 _RUNTIME_EVENTS_MAX_PAGES = 32
 
 
@@ -186,11 +184,9 @@ def _runtime_get(api_url: str, token: str, path: str) -> dict[str, Any]:
     return runtime_host_json(api_url, token, path.removeprefix("/api/agents/"))
 
 
-def _runtime_events_snapshot(api_url: str, token: str, session_id: str, *, paginated: bool = True) -> dict[str, Any]:
-    """The session's served events: every page under one generation, or (Pi today) the first page of 200."""
+def _runtime_events_snapshot(api_url: str, token: str, session_id: str) -> dict[str, Any]:
+    """The session's served events: every page, under one generation."""
 
-    if not paginated:
-        return _runtime_get(api_url, token, f"/api/agents/sessions/{session_id}/events?limit={_SINGLE_PAGE_LIMIT}")
     events: list[dict[str, Any]] = []
     first_page: dict[str, Any] | None = None
     generation_id: str | None = None
@@ -244,13 +240,13 @@ def _runtime_events_snapshot(api_url: str, token: str, session_id: str, *, pagin
     raise RuntimeError(f"Runtime Host events pagination exceeded {_RUNTIME_EVENTS_MAX_PAGES} pages")
 
 
-def _runtime_snapshot(api_url: str, token: str, session_id: str, paginated: bool = True) -> dict[str, Any]:
+def _runtime_snapshot(api_url: str, token: str, session_id: str) -> dict[str, Any]:
     """The canonical served surfaces of a session, not a synthetic turn route."""
 
     return {
         "detail": _runtime_get(api_url, token, f"/api/agents/sessions/{session_id}"),
         "thread": _runtime_get(api_url, token, f"/api/agents/sessions/{session_id}/thread"),
-        "events": _runtime_events_snapshot(api_url, token, session_id, paginated=paginated),
+        "events": _runtime_events_snapshot(api_url, token, session_id),
         "diagnostic": _runtime_get(api_url, token, f"/api/agents/sessions/{session_id}/state-diagnostics"),
     }
 
@@ -480,7 +476,7 @@ def _runtime_convergence(
 
     def observe() -> dict[str, Any] | None:
         try:
-            snapshot = _runtime_snapshot(api_url, token, session_id, family.paginated_events)
+            snapshot = _runtime_snapshot(api_url, token, session_id)
         except RuntimeHostError as exc:
             if exc.status in _RUNTIME_HOST_RETRY_STATUSES:
                 last["runtime_read_error"] = str(exc)
@@ -497,10 +493,9 @@ def _runtime_convergence(
             marker=marker,
             alongside=alongside,
             recalled=recalled,
-            requested_limit=_RUNTIME_EVENTS_PAGE_LIMIT if family.paginated_events else _SINGLE_PAGE_LIMIT,
         )
         events_page = served_projection["events_page"]
-        if family.paginated_events and events_page.get("complete") is not True:
+        if events_page.get("complete") is not True:
             return {
                 **record,
                 "status": "unproven",
@@ -518,10 +513,9 @@ def _runtime_convergence(
         # page to: no verdict either way. And a refusal has to stand
         # (`StandingServedAnswerFault`), so a row the provider appended between
         # the engine shipping it and this read is seen on the next one.
-        page_read_to_its_end = family.paginated_events or events_payload.get("has_more") is False
         found = (
             served_answer_fault(events, marker, native_answers, default_origin="durable", alongside=alongside, recalled=recalled)
-            if native_readable and page_read_to_its_end
+            if native_readable
             else None
         )
         correspondence = served_answer_correspondence(

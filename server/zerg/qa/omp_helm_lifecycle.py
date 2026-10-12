@@ -331,7 +331,6 @@ FAMILY = Family(
     channel_terminal=True,
     host_controls=True,
     identity_at_launch=True,
-    paginated_events=True,
     binds_resume_prompt=True,
     retirement_claims=True,
     settles_between_turns=True,

@@ -79,7 +79,15 @@ def _pi_snapshot(events: list[dict[str, object]]) -> dict[str, object]:
     return {
         "detail": {"id": "session-1", "provider": "pi", "provider_session_id": "native-1"},
         "thread": {"root_session_id": "session-1", "head_session_id": "session-1", "sessions": [{"id": "session-1"}]},
-        "events": {"events": events, "has_more": False},
+        # A page read to its end, as the Runtime Host serves one: under a generation, on the head branch, with its total.
+        "events": {
+            "events": events,
+            "has_more": False,
+            "next_cursor": None,
+            "generation_id": "generation-1",
+            "branch_mode": "head",
+            "total": len(events),
+        },
         "diagnostic": {"served_path": "canonical_session_detail", "shadow": {"control": {"actions": actions}}},
     }
 

@@ -44,7 +44,9 @@ def whole(tmp_path_factory):
             with pytest.MonkeyPatch.context() as monkeypatch:
                 monkeypatch.delenv(fake.FAULT_ENV, raising=False)
                 # The first control request through the Runtime Host is refused once as a reconnecting channel.
-                code, root, left = fake.run_lifecycle(provider, tmp_path_factory.mktemp(provider), monkeypatch.setenv, reconnecting=1)
+                code, root, left = fake.run_lifecycle(
+                    provider, tmp_path_factory.mktemp(provider), monkeypatch.setenv, reconnecting=1, page_size=5
+                )
             runs[provider] = (code, json.loads((root / "result.json").read_text(encoding="utf-8")), root, left)
         return runs[provider]
 
@@ -80,6 +82,10 @@ def test_a_whole_lifecycle_holds_every_cell(provider, whole):
     }
     assert retries["send"] == 1 and sum(retries.values()) == 1
     assert result["observation"]["controls"]["send"]["command"]["retries"]["refused_with"]["http_status"] == 409
+    # The host served its events five to a page: each served turn was read to the end of them, under one generation.
+    pages = {turn: served["served_projection"]["events_page"] for turn, served in result["observation"]["convergence"].items()}
+    assert all(page["complete"] is True and page["returned_count"] == page["total"] for page in pages.values())
+    assert pages["resume"]["pages_read"] > 2 and pages["launch"]["pages_read"] >= 1
     # The refused stale frame carried text of this run's own, and none of it is in what the provider wrote.
     frame_text = result["observation"]["controls"]["stale_owner"]["frame_text"]
     assert f"{module.FAMILY.marker_prefix}_STALE_" in frame_text
@@ -214,6 +220,18 @@ def test_a_provider_that_dies_mid_run_is_a_typed_failure_with_what_it_reached_ke
         assert result["diagnostic_assertions"]["pi_helm_send_idle"] is False and "local_send" not in reached["controls"]
         routing = json.loads((root / "openrouter-routing-receipt.json").read_text(encoding="utf-8"))
         assert (routing["model_id"], routing["routing"]) == ("fake-model", OPENROUTER_QUALIFICATION_ROUTING)
+
+
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_events_that_cannot_be_read_to_their_end_fail_the_run_and_are_not_taken_as_a_page(provider, tmp_path, monkeypatch, capsys):
+    # The host says there are more events and gives no cursor to read them with.
+    code, root, _left = fake.run_lifecycle(provider, tmp_path, monkeypatch.setenv, pages_never_end=True)
+    result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+    capsys.readouterr()
+
+    assert (code, result["status"], result["failure_code"]) == (1, "fail", f"{provider}_helm_lifecycle_failed")
+    assert "Runtime Host returned a non-exhaustible events page" in result["error"]
+    assert "assertions" not in result
 
 
 @pytest.mark.parametrize("provider", ["omp", "pi"])
