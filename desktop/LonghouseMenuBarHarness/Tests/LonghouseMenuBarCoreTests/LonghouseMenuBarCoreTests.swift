@@ -1832,22 +1832,19 @@ struct LonghouseMenuBarCoreTests {
         }
         try await waitForLoads(baselineSource, beforeBaselineLoads + 12)
         let baselineLoadsDuringChurn = baselineSource.loadCount - beforeBaselineLoads
-        try await waitForCacheWrites(
-            baselineCacheWrites,
-            beforeBaselineWrites + baselineLoadsDuringChurn
-        )
         let baselineWritesDuringChurn = baselineCacheWrites.value - beforeBaselineWrites
         let loadsDuringChurn = source.loadCount - beforeChurnLoads
-        try await waitForCacheWrites(cacheWrites, beforeChurnWrites + loadsDuringChurn)
         let writesDuringChurn = cacheWrites.value - beforeChurnWrites
         print("LOCAL_STATUS_CHURN_BASELINE_PRODUCER_LOADS=\(baselineLoadsDuringChurn)")
         print("LOCAL_STATUS_CHURN_BASELINE_CACHE_WRITES=\(baselineWritesDuringChurn)")
         print("LOCAL_STATUS_CHURN_PRODUCER_LOADS=\(loadsDuringChurn)")
         print("LOCAL_STATUS_CHURN_CACHE_WRITES=\(writesDuringChurn)")
         #expect(baselineLoadsDuringChurn == 12)
-        #expect(baselineWritesDuringChurn == 12)
         #expect(loadsDuringChurn <= 3)
-        #expect(writesDuringChurn <= loadsDuringChurn)
+        // Same headline inside the rewrite window: the cold-launch cache is
+        // not replaced, however many refreshes the churn caused.
+        #expect(baselineWritesDuringChurn == 0)
+        #expect(writesDuringChurn == 0)
 
         // The last churn inside a coalescing window is caught up at the
         // window's end, not left to the 60 s trust backstop.
@@ -1892,6 +1889,46 @@ struct LonghouseMenuBarCoreTests {
         #expect(store.refreshState != previousState)
         try await Task.sleep(for: .milliseconds(100))
         #expect(cacheWrites.value == 1)
+    }
+
+    @Test
+    @MainActor
+    func cachedSnapshotIsRewrittenAtOnceWhenHealthChanges() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-cache-health-\(UUID().uuidString)")
+        let cacheDirectory = directory.appendingPathComponent("cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cacheURL = cacheDirectory.appendingPathComponent("last-good-snapshot.json")
+        let source = CountingHealthSnapshotSource(
+            snapshots: [
+                presentationSnapshot(sessions: []),
+                presentationSnapshot(sessions: [], severity: "red"),
+            ],
+            supportsLiveMonitoring: false
+        )
+        let store = SnapshotStore(source: source, cacheURL: cacheURL)
+        let clock = ContinuousClock()
+
+        func cachedSeverity() -> String? {
+            guard let data = try? Data(contentsOf: cacheURL),
+                  let snapshot = try? HealthSnapshotDecoder.decode(data: data) else { return nil }
+            return snapshot.severity
+        }
+        func waitForSeverity(_ severity: String) async throws {
+            let deadline = clock.now.advanced(by: .seconds(2))
+            while cachedSeverity() != severity, clock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+
+        try await waitForSeverity("green")
+        #expect(cachedSeverity() == "green")
+        // Inside the minute-long rewrite window, but the health changed: a cold
+        // launch must not come up showing the old state.
+        store.refresh()
+        try await waitForSeverity("red")
+        #expect(cachedSeverity() == "red")
     }
 
     @Test

@@ -86,6 +86,8 @@ public final class SnapshotStore: ObservableObject {
     private var presentationConsumerCount = 0
     private let cacheURL: URL?
     private var lastCachedSnapshotData: Data?
+    private var lastCachedSnapshotHeadline: [String]?
+    private var lastCachedSnapshotWriteUptime: TimeInterval?
     private let transientRetryDelay: TimeInterval
     private let setupRefreshInterval: TimeInterval
     private let refreshDeadline: TimeInterval
@@ -906,8 +908,21 @@ public final class SnapshotStore: ObservableObject {
         ISO8601DateFormatters.parse(value)
     }
 
+    /// A cold launch reads the cache once and a live refresh replaces it
+    /// within ~30 ms, so a cache up to a minute old costs nothing. Every
+    /// refresh restamps `collected_at` and session ages, so without this the
+    /// 16 KB file was atomically replaced on every 5 s refresh.
+    static let cachedSnapshotMinimumRewriteSeconds: TimeInterval = 60
+
     private func persistCachedSnapshot(_ snapshot: HealthSnapshot) {
         guard let cacheURL else {
+            return
+        }
+        let headline = [snapshot.healthState, snapshot.severity, snapshot.headline]
+        let now = ProcessInfo.processInfo.systemUptime
+        if headline == lastCachedSnapshotHeadline,
+           let lastWrite = lastCachedSnapshotWriteUptime,
+           now - lastWrite < Self.cachedSnapshotMinimumRewriteSeconds {
             return
         }
         do {
@@ -915,8 +930,8 @@ public final class SnapshotStore: ObservableObject {
             encoder.keyEncodingStrategy = .convertToSnakeCase
             encoder.outputFormatting = [.sortedKeys]
             let data = try encoder.encode(snapshot)
-            // The cache is read only during cold bootstrap; identical bytes
-            // carry no new information and need no atomic disk replacement.
+            // Identical bytes carry no new information and need no atomic
+            // disk replacement.
             guard data != lastCachedSnapshotData else { return }
             try FileManager.default.createDirectory(
                 at: cacheURL.deletingLastPathComponent(),
@@ -924,6 +939,8 @@ public final class SnapshotStore: ObservableObject {
             )
             try data.write(to: cacheURL, options: [.atomic])
             lastCachedSnapshotData = data
+            lastCachedSnapshotHeadline = headline
+            lastCachedSnapshotWriteUptime = now
         } catch {
             // Cache failures should never make the menu bar look unhealthy.
         }
