@@ -148,7 +148,8 @@ def _lifecycle_reached(monkeypatch: Any, result: dict[str, Any], receipt: dict[s
         run.observation = result["observation"]
         run.fields["session_id"] = result["session_id"]
         if result["status"] != "pass":
-            run.fields.update(status="fail", failure_code="claude_background_scenario_failed")
+            run.status = "fail"
+            run.fields["failure_code"] = "claude_background_scenario_failed"
 
     monkeypatch.setattr(oracle.helm, "_reach", reach)
 

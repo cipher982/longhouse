@@ -1269,7 +1269,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             },
             {
               "id": "claude_helm_send_idle",
@@ -1280,7 +1280,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             },
             {
               "id": "claude_helm_owner_send_is_user_input",
@@ -1291,7 +1291,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             },
             {
               "id": "claude_helm_steer_active",
@@ -1302,7 +1302,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             },
             {
               "id": "claude_helm_abort_native",
@@ -1313,7 +1313,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             },
             {
               "id": "claude_helm_abort_stops_tool",
@@ -1324,7 +1324,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             },
             {
               "id": "claude_helm_terminate_owned",
@@ -1335,7 +1335,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             }
           ]
         },
@@ -1554,7 +1554,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "52665c05c808c207973e4b96c9e95b62faee21b7095d44f1de9bd528963b48d5"
+              "oracle_digest": "0de3f35b1bb9a0aacd338e5d1abe477a311f6b3a20daf8d95a4670f1bba46366"
             },
             {
               "id": "claude_background_parent_turn_boundary",
@@ -1565,7 +1565,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "52665c05c808c207973e4b96c9e95b62faee21b7095d44f1de9bd528963b48d5"
+              "oracle_digest": "0de3f35b1bb9a0aacd338e5d1abe477a311f6b3a20daf8d95a4670f1bba46366"
             },
             {
               "id": "claude_background_registry_served",
@@ -1576,7 +1576,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "52665c05c808c207973e4b96c9e95b62faee21b7095d44f1de9bd528963b48d5"
+              "oracle_digest": "0de3f35b1bb9a0aacd338e5d1abe477a311f6b3a20daf8d95a4670f1bba46366"
             },
             {
               "id": "claude_background_callbacks_scoped",
@@ -1587,7 +1587,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "52665c05c808c207973e4b96c9e95b62faee21b7095d44f1de9bd528963b48d5"
+              "oracle_digest": "0de3f35b1bb9a0aacd338e5d1abe477a311f6b3a20daf8d95a4670f1bba46366"
             },
             {
               "id": "claude_background_explicit_empty",
@@ -1598,7 +1598,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "52665c05c808c207973e4b96c9e95b62faee21b7095d44f1de9bd528963b48d5"
+              "oracle_digest": "0de3f35b1bb9a0aacd338e5d1abe477a311f6b3a20daf8d95a4670f1bba46366"
             }
           ]
         }
@@ -1625,7 +1625,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             }
           ],
           "level": "live_token",
@@ -1656,7 +1656,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             },
             {
               "id": "claude_helm_owner_send_is_user_input",
@@ -1667,7 +1667,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             }
           ],
           "level": "live_token",
@@ -1685,7 +1685,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             },
             {
               "id": "claude_helm_abort_stops_tool",
@@ -1696,7 +1696,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             }
           ],
           "level": "live_token",
@@ -1714,7 +1714,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             }
           ],
           "level": "live_token",
@@ -1739,7 +1739,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "332723299d39e233137943a051819cde28655b7b24740c3f5e5648ef73b6353e"
+              "oracle_digest": "79a1b9116933922110edb6972e8ed3a11a879ffbc2ab74c4fe1a401906fff38b"
             }
           ],
           "level": "live_token",

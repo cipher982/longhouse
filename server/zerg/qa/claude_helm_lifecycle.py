@@ -1343,7 +1343,8 @@ def _reach(
         assertions = scenario.get("assertions") if isinstance(scenario.get("assertions"), dict) else {}
         run.assertions = assertions
         if not (error is None and cleanup_ok and bool(assertions) and all(assertions.values())):
-            run.fields.update(status="fail", failure_code=str(scenario.get("failure_code") or "claude_background_scenario_failed"))
+            run.status = "fail"
+            run.fields["failure_code"] = str(scenario.get("failure_code") or "claude_background_scenario_failed")
             # The scenario reports an expired wait in its own record; one
             # outside it (launch, the lease) is the lifecycle's.
             scenario_wait = scenario.get(WAITED_ON_FIELD)

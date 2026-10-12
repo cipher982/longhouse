@@ -327,6 +327,26 @@ def test_a_blocked_run_says_so_and_a_raising_caller_gets_the_exception_and_no_ar
         _FIXTURE.execute(tmp_path / "raises", body)
 
 
+@pytest.mark.parametrize("name", ["status", "assertions", "observation", "scenario_revision", "provider", "artifact_manifest"])
+def test_a_further_field_cannot_be_one_the_shell_reports(tmp_path, name):
+    # A definition error, raised where the producer writes it: a colliding field would replace the verdict in the result.
+    run = Run(tmp_path)
+    for write in (
+        lambda: run.fields.__setitem__(name, "pass"),
+        lambda: run.fields.update({name: "pass"}),
+        lambda: run.fields.update(**{name: "pass"}),
+        lambda: Run(tmp_path, fields={name: "pass"}),
+    ):
+        with pytest.raises(ValueError, match=f"{name} is the shell's to report"):
+            write()
+    assert run.fields == {}
+    # The code a failing verdict names is the producer's to say, and a status its assertions do not make is said outright.
+    run.fields.update(failure_code="fixture_step_failed", session_id="s")
+    run.assertions, run.status = {"held": True}, "fail"
+    result = _FIXTURE.verdict(run)
+    assert (result["status"], result["failure_code"], result["assertions"]) == ("fail", "fixture_step_failed", {"held": True})
+
+
 def test_a_result_carries_the_evidence_class_the_command_line_named(tmp_path, capsys):
     two_classes = dataclasses.replace(_REGISTRATION, evidence_classes=("live_token", "hermetic"))
     producer = Producer(two_classes, artifact_kind="fixture_result", failure_code="fixture_failed")

@@ -520,7 +520,7 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             run.fields["negative_control"] = {"fault": fault, "status": "inconclusive"}
         raise
     # The lifecycle this scenario rides on says whether its own part held; the status is this producer's.
-    lifecycle_held = run.fields.pop("status", "pass") == "pass"
+    lifecycle_held, run.status = run.status is None, None
     session_id = run.fields.get("session_id")
     observation = run.observation if isinstance(run.observation, dict) else {}
     lifecycle = observation.get("lifecycle") if isinstance(observation.get("lifecycle"), dict) else {}

@@ -104,6 +104,25 @@ class ProducerFailure(RuntimeError):
 _EVIDENCE_CLASS: ContextVar[str | None] = ContextVar("producer_shell_evidence_class", default=None)
 
 
+# What the shell says of a run: the identity the factory compares, and the verdict.
+_SHELL_FIELDS = frozenset(
+    "schema_version producer provider variant scenario_id scenario_revision evidence_class generated_at observation_scope".split()
+) | {"status", "observation", "assertions", "artifact_manifest"}
+
+
+class _Fields(dict):
+    """A run's further result fields: any name but one the shell reports itself."""
+
+    def __setitem__(self, name: str, value: Any) -> None:
+        if name in _SHELL_FIELDS:
+            raise ValueError(f"{name} is the shell's to report, not a further field of a result")
+        super().__setitem__(name, value)
+
+    def update(self, *others: Any, **named: Any) -> None:
+        for name, value in dict(*others, **named).items():
+            self[name] = value
+
+
 @dataclass
 class Run:
     """What one invocation has reached so far; the shell makes the result from it.
@@ -111,16 +130,24 @@ class Run:
     ``observation`` and ``assertions`` are set as the work reaches them, so a
     failure later in the run keeps the verdict it had already reached.
     ``fields`` are further top-level fields of the result, on a verdict and on
-    a failure alike (the provider binary's receipt, a session id).
+    a failure alike (the provider binary's receipt, a session id, the code a
+    failing verdict names); none may be a field the shell reports itself.
+    ``status`` is for a run whose status its assertions do not make: a
+    control's, a blocked run's, a lifecycle that failed outside them.
     """
 
     root: Path
     observation: dict[str, Any] | None = None
     assertions: dict[str, bool] = field(default_factory=dict)
     fields: dict[str, Any] = field(default_factory=dict)
+    status: str | None = None
     controlled: bool = False
     # Set by a run that caught its own failure, cleaned up and came to an end: reported like one that raised.
     failed: BaseException | None = None
+
+    def __post_init__(self) -> None:
+        given, self.fields = self.fields, _Fields()
+        self.fields.update(given)
 
     def write(self, name: str, payload: object) -> None:
         write_json(self.root / name, payload)
@@ -129,7 +156,8 @@ class Run:
         """Report a negative control: its verdict, and a status that is the control's (``pass`` means the fault was caught)."""
 
         self.controlled = True
-        self.fields.update(negative_control=verdict, status=status)
+        self.status = status
+        self.fields["negative_control"] = verdict
 
     def block(self, failure_code: str, error: str) -> None:
         """Say the run could not ask its question: a prerequisite was absent, which is neither a pass nor a failing verdict.
@@ -140,7 +168,8 @@ class Run:
         """
 
         self.assertions = {}
-        self.fields.update(status="blocked", failure_code=failure_code, error=error)
+        self.status = "blocked"
+        self.fields.update(failure_code=failure_code, error=error)
 
 
 @dataclass(frozen=True)
@@ -216,7 +245,7 @@ class Producer:
 
         return {
             **self.envelope(**identity),
-            "status": "pass" if run.assertions and all(run.assertions.values()) else "fail",
+            "status": run.status or ("pass" if run.assertions and all(run.assertions.values()) else "fail"),
             "observation": run.observation,
             # A control that evaluated no assertion of the scenario reports none.
             **({} if run.controlled and not run.assertions else {"assertions": dict(run.assertions)}),
@@ -230,7 +259,7 @@ class Producer:
         code = getattr(exc, "failure_code", None) or (self.failure_code(exc) if callable(self.failure_code) else self.failure_code)
         failure = {
             **self.envelope(**identity),
-            "status": status,
+            "status": run.status or status,
             "failure_code": code,
             "error": f"{type(exc).__name__}: {exc}",
             **failure_fields(exc),
