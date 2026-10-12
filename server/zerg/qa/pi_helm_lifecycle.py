@@ -77,7 +77,9 @@ REGISTRATION = ProducerRegistration(
     # 29: a control that ends at its target holds its run to every cell Pi has decided by then: the launch and
     # the tool taxonomy before a send, and with them the reload, the replacement and the stale owner before a
     # terminate.
-    scenario_revision=29,
+    # 30: a control whose run raised before a verdict says so (producer_shell): whether its fault had fired, and that
+    # its preconditions were not evaluated.
+    scenario_revision=30,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),

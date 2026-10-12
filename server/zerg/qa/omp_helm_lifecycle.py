@@ -64,7 +64,9 @@ REGISTRATION = ProducerRegistration(
     # 29: a control that ends at its target holds its run to every cell OMP has decided by then: none before a
     # send (its launch cell is the whole run's), and with the send, the follow-up and the steer, the abort, the
     # replacement and the stale owner before a terminate.
-    scenario_revision=29,
+    # 30: a control whose run raised before a verdict says so (producer_shell): whether its fault had fired, and that
+    # its preconditions were not evaluated.
+    scenario_revision=30,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),

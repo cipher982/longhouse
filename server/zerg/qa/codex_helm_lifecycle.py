@@ -71,7 +71,9 @@ REGISTRATION = ProducerRegistration(
     scenario_id=SCENARIO_ID,
     # 2: a version probe that fails leaves a typed failure.
     # 3: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
-    scenario_revision=3,
+    # 4: a control whose run raised before a verdict says so (producer_shell): whether its fault had fired, and that
+    # its preconditions were not evaluated.
+    scenario_revision=4,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("codex",),
     platforms=("linux", "darwin"),

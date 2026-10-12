@@ -104,7 +104,9 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.helm_lifecycle.v1",
     producer_revision=5,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=13,
+    # 14: a control whose run raised before a verdict says so (producer_shell): whether its fault had fired, and that
+    # its preconditions were not evaluated.
+    scenario_revision=14,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     # Claude on macOS keeps credentials in the desktop Keychain; a relocated

@@ -54,7 +54,9 @@ REGISTRATION = ProducerRegistration(
     scenario_ids=SCENARIO_IDS,
     # 4: a run that raised mid-session carries what its wait was waiting on.
     # 5: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
-    scenario_revision=5,
+    # 6: a control whose run raised before a verdict says so (producer_shell): whether its fault had fired, and that
+    # its preconditions were not evaluated.
+    scenario_revision=6,
     assertion_cells=((ASSERTION_ID, None),),
     providers=PROVIDERS,
     platforms=("linux", "darwin"),

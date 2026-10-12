@@ -67,7 +67,9 @@ REGISTRATION = ProducerRegistration(
     scenario_id="cursor_helm_lifecycle",
     # 8: a failed result carries the binary receipt.
     # 9: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
-    scenario_revision=9,
+    # 10: a control whose run raised before a verdict says so (producer_shell): whether its fault had fired, and that
+    # its preconditions were not evaluated.
+    scenario_revision=10,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("cursor",),
     platforms=("linux", "darwin"),

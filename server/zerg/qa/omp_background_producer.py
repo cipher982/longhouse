@@ -57,7 +57,9 @@ REGISTRATION = ProducerRegistration(
     # 10: every result is an omp_background_jobs_result; the failure copy is gone.
     # 11: the Helm lifecycle it rides on records in the Pi family's one shape; an exited process counts as
     # stopped before its parent collects it (live_kit.pid_dead).
-    scenario_revision=11,
+    # 12: a control whose run raised before a verdict says so (producer_shell): whether its fault had fired, and that
+    # its preconditions were not evaluated.
+    scenario_revision=12,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
