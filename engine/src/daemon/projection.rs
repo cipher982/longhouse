@@ -20,6 +20,22 @@ pub(super) fn arm_phase_projection(pending: &mut bool) -> bool {
     true
 }
 
+/// When a phase-ledger write's rebuild may run: after the debounce, and no
+/// sooner than [`PHASE_PROJECTION_MIN_INTERVAL`] after the previous phase
+/// rebuild. The first change after a quiet spell still projects within the
+/// debounce; a busy turn's changes collapse into at most one rebuild (and one
+/// host snapshot) per interval, the last carrying the newest phase.
+pub(super) fn phase_projection_deadline(
+    now: tokio::time::Instant,
+    last_phase_projection: Option<tokio::time::Instant>,
+) -> tokio::time::Instant {
+    let debounced = now + PHASE_PROJECTION_DEBOUNCE;
+    match last_phase_projection {
+        Some(last) => debounced.max(last + PHASE_PROJECTION_MIN_INTERVAL),
+        None => debounced,
+    }
+}
+
 /// Highest accepted phase-ledger revision, or None if the ledger is empty.
 ///
 /// Cheap enough for the 100ms outbox tick: `session_phase_state` holds one row
@@ -592,6 +608,7 @@ impl DaemonState {
 
     pub(super) fn on_phase_projection_due(&mut self, config: &ConnectConfig) {
         self.phase_projection_pending = false;
+        self.last_phase_projection_at = Some(tokio::time::Instant::now());
         // Only after the first full projection: before that the
         // managed snapshot is empty, and projecting would ship a
         // sessionless digest that the first real scan immediately

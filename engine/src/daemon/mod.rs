@@ -203,6 +203,14 @@ const RUNTIME_SWEEP_QUIET_AFTER_NOTHING: Duration = Duration::from_secs(300);
 /// POSTs. Matched to `WATCHER_FLUSH_INTERVAL`, which solves the same burst
 /// problem for transcript appends.
 const PHASE_PROJECTION_DEBOUNCE: Duration = Duration::from_millis(15);
+/// Floor between phase-triggered projection rebuilds. One live OMP session on
+/// cinder (2026-10-12) drove 111 status-file writes a minute, each a full
+/// projection and machine-evidence rebuild, ~14% of the engine's busy samples.
+/// Live per-session phase reaches the host through status slots, not this
+/// projection, and the menu bar coalesces this churn to 5 s, so a second is
+/// below anything a reader can see while capping a busy turn at 60 rebuilds a
+/// minute.
+const PHASE_PROJECTION_MIN_INTERVAL: Duration = Duration::from_secs(1);
 
 const MANAGED_WAKE_FSEVENT_DEFER_WINDOW: Duration = Duration::from_secs(30);
 const MANAGED_WAKE_FSEVENT_FALLBACK_DELAY: Duration = Duration::from_millis(250);
@@ -798,6 +806,8 @@ struct DaemonState {
     startup_reconciliation_pending: bool,
     last_phase_watermark: Option<i64>,
     phase_projection_pending: bool,
+    /// When the last phase-triggered rebuild was scheduled; spaces the next.
+    last_phase_projection_at: Option<tokio::time::Instant>,
     update_http_client: reqwest::Client,
     update_check_timer: tokio::time::Interval,
     local_retry_timer: tokio::time::Interval,
@@ -1367,6 +1377,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         startup_reconciliation_pending,
         last_phase_watermark,
         phase_projection_pending,
+        last_phase_projection_at: None,
         update_http_client,
         update_check_timer,
         local_retry_timer,
@@ -3352,6 +3363,28 @@ mod tests {
         assert!(
             arm_phase_projection(&mut pending),
             "the next write after a rebuild opens a fresh window"
+        );
+    }
+
+    #[test]
+    fn phase_rebuilds_are_spaced_but_a_quiet_change_is_prompt() {
+        let now = tokio::time::Instant::now();
+        // First change, or one after a quiet spell: only the debounce.
+        assert_eq!(
+            super::projection::phase_projection_deadline(now, None),
+            now + PHASE_PROJECTION_DEBOUNCE
+        );
+        let long_ago = now - PHASE_PROJECTION_MIN_INTERVAL * 2;
+        assert_eq!(
+            super::projection::phase_projection_deadline(now, Some(long_ago)),
+            now + PHASE_PROJECTION_DEBOUNCE
+        );
+        // Mid-turn churn right after a rebuild waits out the interval rather
+        // than rebuilding again, and is not dropped.
+        let just_now = now - Duration::from_millis(100);
+        assert_eq!(
+            super::projection::phase_projection_deadline(now, Some(just_now)),
+            just_now + PHASE_PROJECTION_MIN_INTERVAL
         );
     }
     use super::*;

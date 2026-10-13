@@ -27,9 +27,12 @@ impl DaemonState {
                     // evidence a turn boundary produces. Arm the
                     // debounce rather than projecting per signal.
                     if arm_phase_projection(&mut self.phase_projection_pending) {
-                        phase_projection_timer
-                            .as_mut()
-                            .reset(tokio::time::Instant::now() + PHASE_PROJECTION_DEBOUNCE);
+                        phase_projection_timer.as_mut().reset(
+                            super::projection::phase_projection_deadline(
+                                tokio::time::Instant::now(),
+                                self.last_phase_projection_at,
+                            ),
+                        );
                     }
                 }
                 if !result.presence.posts.is_empty() {
@@ -404,9 +407,12 @@ impl DaemonState {
             if self.last_phase_watermark != Some(watermark) {
                 self.last_phase_watermark = Some(watermark);
                 if arm_phase_projection(&mut self.phase_projection_pending) {
-                    phase_projection_timer
-                        .as_mut()
-                        .reset(tokio::time::Instant::now() + PHASE_PROJECTION_DEBOUNCE);
+                    phase_projection_timer.as_mut().reset(
+                        super::projection::phase_projection_deadline(
+                            tokio::time::Instant::now(),
+                            self.last_phase_projection_at,
+                        ),
+                    );
                 }
             }
         }
