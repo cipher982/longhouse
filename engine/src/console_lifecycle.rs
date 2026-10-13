@@ -262,6 +262,72 @@ impl ConsoleInvocation {
             stopped_notify: tokio::sync::Notify::new(),
         }
     }
+    pub fn from_claim(
+        claim: &crate::turn_claims::TurnClaim,
+        input: Arc<dyn ConsoleInput>,
+    ) -> Result<Self> {
+        let binding = TurnBinding {
+            run_id: claim.run_id.clone(),
+            turn_id: claim.turn_id.clone(),
+            client_request_id: claim.client_request_id.clone(),
+            origin: if claim.origin.as_deref() == Some("wake") {
+                TurnOrigin::Wake
+            } else {
+                TurnOrigin::User
+            },
+        };
+        let invocation = Self::new(
+            claim.provider.clone(),
+            claim
+                .provider_thread_id
+                .as_deref()
+                .context("recovered Console claim has no provider thread id")?,
+            claim
+                .launch_id
+                .as_deref()
+                .context("recovered Console claim has no launch id")?,
+            claim
+                .pid
+                .context("recovered Console claim has no process id")?,
+            claim
+                .process_group_id
+                .context("recovered Console claim has no process group id")?,
+            binding,
+            input,
+        );
+        invocation.restore_after_restart(
+            claim.invocation_state.as_deref() == Some("parked"),
+            claim.pending_items.clone(),
+        );
+        Ok(invocation)
+    }
+
+    pub fn restore_after_restart(&self, parked: bool, pending_items: Vec<PendingItem>) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.phase = if parked {
+            InvocationState::Parked
+        } else {
+            InvocationState::Responding
+        };
+        state.current_turn = if parked {
+            None
+        } else {
+            Some(state.latest_turn.clone())
+        };
+        state.pending = pending_items
+            .into_iter()
+            .map(|item| (item.id.clone(), item))
+            .collect();
+        state.recent_items = state.pending.values().cloned().collect();
+        state.queued_turn = None;
+        state.wake_seq = 0;
+        state.pending_wake_id = None;
+        state.buffered_events.clear();
+        state.deferred_idle = None;
+        state.input_pending = false;
+        state.awaiting_input_ack = false;
+        state.closing = false;
+    }
 
     pub fn state(&self) -> InvocationState {
         self.state
@@ -927,6 +993,35 @@ pub fn unregister(launch_id: &str) {
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     registered.retain(|_, invocation| invocation.launch_id != launch_id);
+    #[cfg(test)]
+    let _ = TEST_MONITORS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(launch_id);
+}
+
+#[cfg(test)]
+static TEST_MONITORS: LazyLock<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(test)]
+pub(crate) fn track_test_monitor(launch_id: String, monitor: tokio::task::JoinHandle<()>) {
+    TEST_MONITORS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(launch_id, monitor);
+}
+
+#[cfg(test)]
+pub(crate) async fn stop_test_monitor(launch_id: &str) {
+    let monitor = TEST_MONITORS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(launch_id);
+    if let Some(monitor) = monitor {
+        monitor.abort();
+        let _ = monitor.await;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1303,6 +1398,20 @@ mod tests {
             },
             Arc::new(FakeInput),
         ))
+    }
+    #[test]
+    fn recovered_invocation_restores_parked_state_and_pending_items() {
+        let invocation = invocation();
+        let pending = PendingItem {
+            id: "job-1".to_string(),
+            kind: "shell".to_string(),
+            status: "running".to_string(),
+            description: Some("sleep".to_string()),
+        };
+        invocation.restore_after_restart(true, vec![pending.clone()]);
+
+        assert_eq!(invocation.state(), InvocationState::Parked);
+        assert_eq!(invocation.pending_items(), vec![pending]);
     }
 
     #[tokio::test]

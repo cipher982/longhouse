@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 use uuid::Uuid;
 
-use crate::console_adapter::{claim_process_liveness, stderr_tail, ClaimLiveness};
+use crate::console_adapter::{stderr_tail, ClaimLiveness};
 use crate::console_lifecycle::{
     ConsoleInvocation, IdleOutcome, IdleSignal, InvocationCloseReason, InvocationState,
     PendingItem, TurnBinding, TurnOrigin, WakeRequest,
@@ -33,7 +33,6 @@ use crate::managed_identity_contract::ManagedProvider;
 pub const OMP_PRINT_ADAPTER: &str = "omp_print";
 const OMP_RUNTIME_SOURCE: &str = "omp_console";
 const OMP_ASYNC_WORK_PLACEHOLDER_ID: &str = "omp:async-work";
-const TERMINAL_DRAIN_GRACE: Duration = Duration::from_secs(5);
 /// How a turn fails once OMP reports that it no longer saves to the bound file.
 const SESSION_MOVED: &str = "OMP stopped saving to this session's file";
 
@@ -589,7 +588,9 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     let monitor = crate::turn_claims::register_monitor(&config.run_id);
     let monitor_stderr_path = stderr_path.clone();
     let monitored_invocation = invocation.clone();
-    tokio::spawn(async move {
+    #[cfg(test)]
+    let test_monitor_launch_id = launch_id.clone();
+    let monitor_task = tokio::spawn(async move {
         // The source directory remains execution-owned while OMP's JSONL is
         // still lazy; returning the launch summary must not remove it.
         let _fresh_directory = fresh_directory;
@@ -603,6 +604,10 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         .await;
         drop(monitor);
     });
+    #[cfg(test)]
+    crate::console_lifecycle::track_test_monitor(test_monitor_launch_id, monitor_task);
+    #[cfg(not(test))]
+    drop(monitor_task);
 
     Ok(OmpPrintRunSummary {
         session_id: config.session_id,
@@ -1344,220 +1349,245 @@ pub async fn recover_omp_print_turns(
     let registry = crate::turn_claims::default_registry()?;
     let outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
     let inventory = crate::process_identity::try_collect_process_facts_by_pid();
-    let mut recovered = 0;
-    let mut closed_launch_ids = std::collections::HashSet::new();
     let claims = registry.list_all()?;
-    // A launch a spawned turn still runs in is reattached below, not stopped.
-    let running_launches = claims
-        .iter()
-        .filter(|claim| claim.state == "spawned")
-        .filter_map(|claim| claim.launch_id.clone())
-        .collect::<std::collections::HashSet<_>>();
-    for claim in claims {
-        if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER)
-            || !matches!(claim.state.as_str(), "terminal" | "failed")
-        {
+    let mut followed_launches = std::collections::HashSet::new();
+    for claim in claims.iter().rev() {
+        if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER) {
             continue;
         }
-        let liveness = crate::console_adapter::claim_liveness(&claim, inventory.as_ref());
-        // A parked invocation is recovered whatever became of its provider. Any
-        // other settled claim (terminal, or failed with its stop unverified)
-        // matters only while its provider still runs with no turn in it: the
-        // Machine Agent that owned it stopped before it stopped the provider,
-        // which would hold the session's lease for good.
-        if claim.invocation_state.as_deref() != Some("parked")
-            && !(liveness == ClaimLiveness::Live
-                && claim.process_group_is_from_this_boot()
-                && claim
-                    .launch_id
-                    .as_ref()
-                    .is_none_or(|launch_id| !running_launches.contains(launch_id)))
-        {
+        let Some(launch_id) = claim.launch_id.as_deref() else {
+            continue;
+        };
+        if crate::console_lifecycle::lookup_launch(launch_id).is_some() {
             continue;
         }
-        match liveness {
-            ClaimLiveness::Live if claim.process_group_is_from_this_boot() => {
-                if cleanup_recovered_process_group(&claim.run_id, &claim, claim.process_group_id)
-                    .await
-                {
-                    if !publish_recovered_omp_close(&registry, &outbox_dir, &claim, machine_name) {
-                        continue;
-                    }
-                    if let Err(error) = registry.record_invocation_state(
-                        &claim.run_id,
-                        "closed",
-                        claim.pending_count,
-                    ) {
-                        tracing::warn!(%error, run_id = %claim.run_id, "OMP recovery claim remains retryable");
-                        continue;
-                    }
-                    if let Some(launch_id) = claim.launch_id.as_deref() {
-                        closed_launch_ids.insert(launch_id.to_string());
-                    }
-                } else {
-                    tracing::error!(
-                        run_id = %claim.run_id,
-                        "Could not verify cleanup of orphaned OMP invocation"
-                    );
-                }
+        let active_turn = claim.state == "spawned"
+            && (claim.origin.is_some()
+                || claim.invocation_state.is_some()
+                || claim.projected_seq > 0);
+        if active_turn || claim.invocation_state.as_deref() == Some("parked") {
+            followed_launches.insert(launch_id.to_string());
+        }
+    }
+    let mut seen_launches = std::collections::HashSet::new();
+    let mut candidates = Vec::new();
+    for claim in claims.into_iter().rev() {
+        if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER) {
+            continue;
+        }
+        let Some(launch_id) = claim.launch_id.as_deref() else {
+            continue;
+        };
+        if crate::console_lifecycle::lookup_launch(launch_id).is_some() {
+            continue;
+        }
+        let followed = followed_launches.contains(launch_id);
+        let unfollowable_spawn = claim.state == "spawned"
+            && claim.origin.is_none()
+            && claim.invocation_state.is_none()
+            && claim.projected_seq == 0
+            && !followed;
+        let cleanup_only = !followed
+            && (claim.state == "failed"
+                || unfollowable_spawn
+                || (claim.state == "terminal"
+                    && claim.invocation_state.as_deref() == Some("closed")));
+        let active_turn = claim.state == "spawned"
+            && (claim.origin.is_some()
+                || claim.invocation_state.is_some()
+                || claim.projected_seq > 0);
+        if !active_turn && claim.invocation_state.as_deref() != Some("parked") && !cleanup_only {
+            continue;
+        }
+        if !seen_launches.insert(launch_id.to_string()) {
+            continue;
+        }
+        candidates.push((claim, cleanup_only));
+    }
+
+    let mut recovered = 0;
+    for (mut claim, cleanup_only) in candidates {
+        match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
+            ClaimLiveness::Unknown => {
+                tracing::warn!(
+                    run_id = %claim.run_id,
+                    "Process inventory unavailable; leaving OMP Console claim untouched"
+                );
+                continue;
             }
             ClaimLiveness::Gone => {
-                if claim.pending_count > 0
-                    && claim
-                        .process_group_id
-                        .is_some_and(crate::process_group::group_is_alive)
-                    && !cleanup_recovered_process_group(
+                if cleanup_only {
+                    continue;
+                }
+                if claim.state == "spawned" {
+                    let Some(stdout_path) = claim.stdout_path.as_deref().map(PathBuf::from) else {
+                        continue;
+                    };
+                    let stderr_path = claim
+                        .stderr_path
+                        .as_deref()
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| stdout_path.with_file_name("stderr.log"));
+                    let Some(sink) =
+                        sink_for_claim(&claim, machine_name, local_db_path.clone(), false).ok()
+                    else {
+                        continue;
+                    };
+                    settle_recovered_dead_claim(&claim, &stderr_path, &sink).await;
+                } else if claim.pending_count > 0
+                    && !publish_recovered_omp_close(&registry, &outbox_dir, &claim, machine_name)
+                {
+                    continue;
+                }
+                if let Err(error) =
+                    registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)
+                {
+                    tracing::warn!(%error, run_id = %claim.run_id, "OMP recovery claim remains retryable");
+                    continue;
+                }
+                if let Some(launch_id) = claim.launch_id.as_deref() {
+                    if let Err(error) = settle_omp_claims_for_launch(
+                        &registry,
+                        launch_id,
+                        machine_name,
+                        local_db_path.clone(),
+                        "run_cancelled",
+                        "queued OMP user turn was not started before Machine Agent recovery",
+                    )
+                    .await
+                    {
+                        tracing::warn!(%error, launch_id, "OMP recovered invocation retains unsettled claims");
+                    }
+                }
+            }
+            ClaimLiveness::Live => {
+                if cleanup_only {
+                    if !cleanup_recovered_process_group(
                         &claim.run_id,
                         &claim,
                         claim.process_group_id,
                     )
                     .await
-                {
-                    tracing::warn!(
-                        run_id = %claim.run_id,
-                        "Could not verify cleanup of recovered OMP background work"
-                    );
+                    {
+                        tracing::warn!(
+                            run_id = %claim.run_id,
+                            process_group_id = ?claim.process_group_id,
+                            "Could not clean up an OMP process left by a terminal or failed claim"
+                        );
+                    }
                     continue;
                 }
-                if !publish_recovered_omp_close(&registry, &outbox_dir, &claim, machine_name) {
+                let Some(stdout_path) = claim.stdout_path.as_deref().map(PathBuf::from) else {
+                    tracing::warn!(run_id = %claim.run_id, "Leaving live OMP Console claim without stdout path untouched");
+                    continue;
+                };
+                let stderr_path = claim
+                    .stderr_path
+                    .as_deref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| stdout_path.with_file_name("stderr.log"));
+                let session_file = claim
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.get("session_file"))
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .or_else(|| claim.source_path.as_deref().map(PathBuf::from));
+                let Some(session_file) = session_file else {
+                    tracing::warn!(run_id = %claim.run_id, "Leaving live OMP Console claim without exact session file untouched");
+                    continue;
+                };
+                let provider_thread_id = claim.provider_thread_id.clone().or_else(|| {
+                    crate::omp_session::read_session_header(&session_file)
+                        .ok()
+                        .map(|header| header.native_id)
+                });
+                let Some(provider_thread_id) =
+                    provider_thread_id.as_deref().filter(|id| !id.is_empty())
+                else {
+                    tracing::warn!(run_id = %claim.run_id, "Leaving live OMP Console claim without provider identity untouched");
+                    continue;
+                };
+                if claim.provider_thread_id.is_none() {
+                    match registry.mark_provider_binding(
+                        &claim.run_id,
+                        provider_thread_id,
+                        Some(&session_file.to_string_lossy()),
+                    ) {
+                        Ok(updated) => claim = updated,
+                        Err(error) => {
+                            tracing::warn!(%error, run_id = %claim.run_id, "Could not restore OMP provider identity");
+                            continue;
+                        }
+                    }
+                }
+                let Some(run_dir) = stdout_path.parent() else {
+                    continue;
+                };
+                let fifo = run_dir.join(crate::console_rpc::RPC_STDIN);
+                if !fifo.try_exists().unwrap_or(false) {
+                    tracing::warn!(run_id = %claim.run_id, "Leaving live OMP Console claim without input FIFO untouched");
                     continue;
                 }
-                if let Err(error) =
-                    registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)
-                {
-                    tracing::warn!(%error, run_id = %claim.run_id, "OMP recovery claim remains retryable");
+                let session_dir = claim
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.get("session_dir").and_then(Value::as_str))
+                    .map(PathBuf::from)
+                    .or_else(|| session_file.parent().map(Path::to_path_buf))
+                    .unwrap_or_else(|| PathBuf::from("."));
+                let source_start_len = claim
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.get("source_start_len"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let sink = OmpPrintSink {
+                    run: ConsoleRun {
+                        provider: &OMP_CONSOLE,
+                        session_id: claim.session_id.clone(),
+                        thread_id: claim.thread_id.clone(),
+                        turn_id: claim.turn_id.clone(),
+                        run_id: claim.run_id.clone(),
+                        client_request_id: claim.client_request_id.clone(),
+                        launch_id: claim.launch_id.clone().unwrap_or_default(),
+                        process_group_id: claim.process_group_id,
+                        machine_name: machine_name.to_string(),
+                        local_db_path: local_db_path.clone(),
+                        runtime_events_outbox_dir:
+                            crate::config::get_agent_runtime_events_outbox_dir()?,
+                    },
+                    stdout_path: stdout_path.clone(),
+                    session_dir,
+                    session_file,
+                    provider_thread_id: Some(provider_thread_id.to_string()),
+                    source_start_len,
+                    binding_emitted: false,
+                };
+                let input = Arc::new(crate::console_rpc::ConsoleRpcInput::new(fifo));
+                let invocation = match crate::console_lifecycle::ConsoleInvocation::from_claim(
+                    &claim, input,
+                ) {
+                    Ok(invocation) => Arc::new(invocation),
+                    Err(error) => {
+                        tracing::warn!(%error, run_id = %claim.run_id, "Cannot reconstruct OMP Console invocation");
+                        continue;
+                    }
+                };
+                if let Err(error) = crate::console_lifecycle::register(invocation.clone()) {
+                    tracing::warn!(%error, run_id = %claim.run_id, "Cannot register recovered OMP Console invocation");
                     continue;
                 }
-                if let Some(launch_id) = claim.launch_id.as_deref() {
-                    closed_launch_ids.insert(launch_id.to_string());
-                }
-            }
-            ClaimLiveness::Live => {
-                if claim.pending_count > 0 {
-                    tracing::warn!(
-                        run_id = %claim.run_id,
-                        "Leaving unverified live parked OMP invocation for a later recovery pass"
-                    );
-                    continue;
-                }
-                if let Err(error) =
-                    registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)
-                {
-                    tracing::warn!(%error, run_id = %claim.run_id, "OMP recovery claim remains retryable");
-                    continue;
-                }
-                if let Some(launch_id) = claim.launch_id.as_deref() {
-                    closed_launch_ids.insert(launch_id.to_string());
-                }
-            }
-            ClaimLiveness::Unknown => tracing::warn!(
-                run_id = %claim.run_id,
-                "Process inventory unavailable; leaving parked OMP invocation for a later recovery pass"
-            ),
-        }
-    }
-    for launch_id in closed_launch_ids {
-        if let Err(error) = settle_omp_claims_for_launch(
-            &registry,
-            &launch_id,
-            machine_name,
-            local_db_path.clone(),
-            "run_cancelled",
-            "queued OMP user turn was not started before Machine Agent recovery",
-        )
-        .await
-        {
-            tracing::warn!(%error, launch_id, "OMP recovered invocation retains unsettled claims");
-        }
-    }
-    // Cleanup may have killed a process even when its claim write failed.
-    // Reattach only against a fresh inventory after those shutdown attempts.
-    let inventory = crate::process_identity::try_collect_process_facts_by_pid();
-    for claim in registry.list_nonterminal()? {
-        if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER) || claim.state != "spawned" {
-            continue;
-        }
-        // A turn nothing can follow is settled below with its provider stopped:
-        // one left running would only be found at the start after this one.
-        let Some(stdout_path) = claim.stdout_path.as_deref().map(PathBuf::from) else {
-            cleanup_recovered_process_group(&claim.run_id, &claim, claim.process_group_id).await;
-            let _ = registry.mark_terminal(
-                &claim.run_id,
-                "run_failed",
-                Some("OMP Console claim has no stdout path".into()),
-            );
-            continue;
-        };
-        let stderr_path = claim
-            .stderr_path
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| stdout_path.with_file_name("stderr.log"));
-        let session_file = claim
-            .result
-            .as_ref()
-            .and_then(|result| result.get("session_file"))
-            .and_then(Value::as_str)
-            .map(PathBuf::from)
-            .or_else(|| claim.source_path.as_deref().map(PathBuf::from));
-        let Some(session_file) = session_file else {
-            cleanup_recovered_process_group(&claim.run_id, &claim, claim.process_group_id).await;
-            let _ = registry.mark_terminal(
-                &claim.run_id,
-                "run_failed",
-                Some("OMP Console claim has no exact session file".into()),
-            );
-            continue;
-        };
-        let provider_thread_id = claim.provider_thread_id.clone().or_else(|| {
-            crate::omp_session::read_session_header(&session_file)
-                .ok()
-                .map(|header| header.native_id)
-        });
-        let session_dir = claim
-            .result
-            .as_ref()
-            .and_then(|result| result.get("session_dir").and_then(Value::as_str))
-            .map(PathBuf::from)
-            .or_else(|| session_file.parent().map(Path::to_path_buf))
-            .unwrap_or_else(|| PathBuf::from("."));
-        let source_start_len = claim
-            .result
-            .as_ref()
-            .and_then(|result| result.get("source_start_len"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let sink = OmpPrintSink {
-            run: ConsoleRun {
-                provider: &OMP_CONSOLE,
-                session_id: claim.session_id.clone(),
-                thread_id: claim.thread_id.clone(),
-                turn_id: claim.turn_id.clone(),
-                run_id: claim.run_id.clone(),
-                client_request_id: claim.client_request_id.clone(),
-                launch_id: claim.launch_id.clone().unwrap_or_default(),
-                process_group_id: claim.process_group_id,
-                machine_name: machine_name.to_string(),
-                local_db_path: local_db_path.clone(),
-                runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
-            },
-            stdout_path: stdout_path.clone(),
-            session_dir,
-            session_file,
-            provider_thread_id,
-            source_start_len,
-            binding_emitted: false,
-        };
-        match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
-            ClaimLiveness::Live => {
-                tokio::spawn(
-                    async move { monitor_recovered_omp_claim(claim, stderr_path, sink).await },
-                );
+                #[cfg(test)]
+                let test_monitor_launch_id = claim.launch_id.clone().unwrap_or_default();
+                let monitor_task = tokio::spawn(async move {
+                    monitor_recovered_omp_claim(claim, stderr_path, sink, invocation).await;
+                });
+                #[cfg(test)]
+                crate::console_lifecycle::track_test_monitor(test_monitor_launch_id, monitor_task);
+                #[cfg(not(test))]
+                drop(monitor_task);
                 recovered += 1;
-            }
-            ClaimLiveness::Gone => settle_recovered_dead_claim(&claim, &stderr_path, &sink).await,
-            ClaimLiveness::Unknown => {
-                tracing::warn!(run_id = %claim.run_id, "Process inventory unavailable; leaving OMP Console turn claim for a later scan")
             }
         }
     }
@@ -2409,6 +2439,7 @@ async fn monitor_recovered_omp_claim(
     claim: crate::turn_claims::TurnClaim,
     stderr_path: PathBuf,
     mut sink: OmpPrintSink,
+    invocation: Arc<ConsoleInvocation>,
 ) {
     let mut projection = replay_projection(
         &sink.stdout_path,
@@ -2418,14 +2449,6 @@ async fn monitor_recovered_omp_claim(
     let mut offset = claim.projected_stdout_offset;
     let mut pending = Vec::new();
     let mut seq = claim.projected_seq;
-    let mut terminal_drain_deadline = None;
-    // The prompt was handed over when the claim was made, so an unacknowledged
-    // one is as old as the claim. `thinking` is posted only for a turn the
-    // provider accepted, or one still inside the time it has to accept: a
-    // restart used to re-assert Thinking for a run that never began, for ever.
-    // A claim time that cannot be read is unknown evidence, not a fresh claim:
-    // it counts as overdue, so an unacknowledged prompt fails instead of reading
-    // Thinking for ever. The engine writes the field itself, as RFC 3339.
     let claimed_age = || {
         crate::console_rpc::age_since_rfc3339(&claim.claimed_at)
             .unwrap_or(crate::console_rpc::PROMPT_ACK_DEADLINE)
@@ -2437,28 +2460,61 @@ async fn monitor_recovered_omp_claim(
         sink.post_phase("thinking", None, seq).await;
         thinking_posted = true;
     }
+    let mut observed_run = invocation.latest_turn().run_id;
+
     loop {
+        if invocation.state() == InvocationState::Closed {
+            let _ = invocation.close_input().await;
+            let latest = crate::turn_claims::default_registry()
+                .and_then(|registry| registry.read(&invocation.latest_turn().run_id))
+                .unwrap_or_else(|_| claim.clone());
+            if cleanup_recovered_process_group(&latest.run_id, &latest, sink.process_group_id).await
+            {
+                invocation.process_exited();
+                record_invocation_claim_state(&invocation);
+                crate::console_lifecycle::unregister(&invocation.launch_id);
+            } else {
+                tracing::warn!(
+                    run_id = %latest.run_id,
+                    process_group_id = invocation.process_identity().1,
+                    "Recovered OMP invocation closed but its process group was not verified"
+                );
+            }
+            return;
+        }
+        let binding = invocation.latest_turn();
+        if binding.run_id != observed_run {
+            sink = sink.for_binding(&binding);
+            sink.binding_emitted = false;
+            observed_run = binding.run_id;
+            thinking_posted = false;
+        }
         if let Err(error) = publish_stdout_growth(
             &mut sink,
+            &stderr_path,
             &mut projection,
             &mut offset,
             &mut pending,
             &mut seq,
+            Some(&invocation),
         )
         .await
         {
-            let cleanup_verified =
-                cleanup_recovered_process_group(&claim.run_id, &claim, sink.process_group_id).await;
-            let reason = if cleanup_verified {
-                error.to_string()
-            } else {
-                format!("OMP recovered process-group cleanup was not verified: {error}")
-            };
-            settle_omp_recorded_claim(&claim, &sink, "run_failed", Some(&reason), None, None).await;
-            return;
+            let outcome = invocation.idle(IdleSignal {
+                terminal_state: "run_failed".to_string(),
+                exit_code: None,
+                stderr: Some(error.to_string()),
+                terminal_reason: None,
+            });
+            if let Some(outcome) = outcome {
+                complete_idle(&invocation, &sink, outcome).await;
+            }
+            tracing::warn!(%error, run_id = %invocation.latest_turn().run_id, "Recovered OMP stream monitor failed");
         }
         if !thinking_posted && projection.prompt_acknowledged {
-            sink.post_phase("thinking", None, seq).await;
+            sink.for_binding(&invocation.latest_turn())
+                .post_phase("thinking", None, seq)
+                .await;
             thinking_posted = true;
         }
         if crate::console_rpc::prompt_ack_overdue(
@@ -2466,96 +2522,24 @@ async fn monitor_recovered_omp_claim(
             projection.rpc_rejected,
             claimed_age(),
         ) {
-            let cleanup_verified =
-                cleanup_recovered_process_group(&claim.run_id, &claim, sink.process_group_id).await;
-            let reason = crate::console_rpc::prompt_ack_overdue_reason(claimed_age());
-            let reason = if cleanup_verified {
-                reason
-            } else {
-                format!("{reason}; recovered process-group cleanup was not verified")
-            };
-            settle_omp_recorded_claim(&claim, &sink, "run_failed", Some(&reason), None, None).await;
-            return;
-        }
-        if (projection.turn_settled || projection.rpc_rejected)
-            && claim.process_group_is_from_this_boot()
-            && crate::console_adapter::claim_process_liveness(&claim)
-                == crate::console_adapter::ClaimLiveness::Live
-        {
-            crate::console_adapter::cleanup_process_group("omp-print", sink.process_group_id).await;
-        }
-        if projection.turn_settled {
-            terminal_drain_deadline.get_or_insert_with(|| Instant::now() + TERMINAL_DRAIN_GRACE);
-        } else {
-            terminal_drain_deadline = None;
-        }
-        refresh_owned_processes(&claim.run_id);
-        let liveness = crate::turn_claims::default_registry()
-            .and_then(|registry| registry.read(&claim.run_id))
-            .map(|current| claim_process_liveness(&current))
-            .unwrap_or(ClaimLiveness::Unknown);
-        if liveness == ClaimLiveness::Gone {
-            let cancel_requested = crate::turn_claims::default_registry()
-                .and_then(|registry| registry.read(&claim.run_id))
-                .ok()
-                .and_then(|current| current.cancel_requested_at)
-                .is_some();
-            let source_bound = sink.ensure_transcript_binding().await.unwrap_or(false);
-            let source_drained = sink.source_is_drained(&projection).unwrap_or(false);
-            if source_bound {
-                sink.wake_transcript_shipper().await;
+            let outcome = invocation.idle(IdleSignal {
+                terminal_state: "run_failed".to_string(),
+                exit_code: None,
+                stderr: Some(crate::console_rpc::prompt_ack_overdue_reason(claimed_age())),
+                terminal_reason: None,
+            });
+            if let Some(outcome) = outcome {
+                complete_idle(&invocation, &sink, outcome).await;
             }
-            let cleanup_verified =
-                cleanup_recovered_process_group(&claim.run_id, &claim, sink.process_group_id).await;
-            let (terminal_state, reason) = if cleanup_verified {
-                terminal_state_for_projection(
-                    &projection,
-                    None,
-                    cancel_requested,
-                    None,
-                    pending.is_empty(),
-                    source_bound,
-                    source_drained,
-                )
-            } else {
-                (
-                    "run_failed",
-                    Some("OMP recovered process-group cleanup was not verified".to_string()),
-                )
-            };
-            let terminal_reason = if terminal_state == "run_failed" {
-                reason.or_else(|| stderr_tail(&stderr_path))
-            } else {
-                reason
-            };
-            settle_omp_recorded_claim(
-                &claim,
-                &sink,
-                terminal_state,
-                terminal_reason.as_deref(),
-                None,
-                cleanup_verified
-                    .then_some(projection.auth_failure_reason)
-                    .flatten(),
-            )
-            .await;
-            return;
         }
-        if liveness == ClaimLiveness::Live
-            && terminal_drain_deadline.is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            let cleanup_verified =
-                cleanup_recovered_process_group(&claim.run_id, &claim, sink.process_group_id).await;
-            let reason = if cleanup_verified {
-                format!(
-                    "OMP recovered terminal event did not release the provider process within {}s",
-                    TERMINAL_DRAIN_GRACE.as_secs()
-                )
-            } else {
-                "OMP recovered terminal drain expired and owned process-group cleanup was not verified"
-                    .to_string()
-            };
-            settle_omp_recorded_claim(&claim, &sink, "run_failed", Some(&reason), None, None).await;
+        let latest = crate::turn_claims::default_registry()
+            .and_then(|registry| registry.read(&invocation.latest_turn().run_id))
+            .unwrap_or_else(|_| claim.clone());
+        refresh_owned_processes(&latest.run_id);
+        if crate::console_adapter::claim_process_liveness(&latest) == ClaimLiveness::Gone {
+            settle_recovered_dead_claim(&latest, &stderr_path, &sink).await;
+            invocation.process_exited();
+            crate::console_lifecycle::unregister(&invocation.launch_id);
             return;
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -2578,10 +2562,12 @@ async fn settle_recovered_dead_claim(
     let mut seq = claim.projected_seq;
     let stream_error = publish_stdout_growth(
         &mut sink,
+        stderr_path,
         &mut projection,
         &mut offset,
         &mut pending,
         &mut seq,
+        None,
     )
     .await
     .err()
@@ -3174,13 +3160,22 @@ fn terminal_state_for_projection(
 
 async fn publish_stdout_growth(
     sink: &mut OmpPrintSink,
+    stderr_path: &Path,
     projection: &mut OmpStreamProjection,
     offset: &mut u64,
     pending: &mut Vec<u8>,
     seq: &mut u64,
+    invocation: Option<&Arc<ConsoleInvocation>>,
 ) -> Result<()> {
     let lines = crate::console_adapter::read_growth(&sink.stdout_path, offset, pending)?;
     let had_lines = !lines.is_empty();
+    let mut async_work_placeholder = invocation.is_some_and(|invocation| {
+        invocation
+            .pending_items()
+            .iter()
+            .any(|item| item.id == OMP_ASYNC_WORK_PLACEHOLDER_ID)
+    });
+    let mut last_trigger = json!({"kind": "unknown", "task_ids": [], "summary": ""});
     for bytes in lines {
         *seq += 1;
         let event: Value = match serde_json::from_slice(&bytes) {
@@ -3194,16 +3189,119 @@ async fn publish_stdout_growth(
         if sink.provider_thread_id.is_none() {
             sink.provider_thread_id = projection.provider_thread_id.clone();
         }
+        let _ = sink.ensure_transcript_binding().await?;
+        let binding = invocation.map(|invocation| invocation.latest_turn());
+        let event_sink = binding
+            .as_ref()
+            .map(|binding| sink.for_binding(binding))
+            .unwrap_or_else(|| sink.clone());
         if let Some((phase, tool)) = omp_phase_from_event(&event) {
-            sink.post_phase(phase, tool, *seq).await;
+            event_sink.post_phase(phase, tool, *seq).await;
         }
-        sink.post_stream_event(*seq, &event, projection).await;
+
+        let updates = omp_async_job_updates(&event);
+        if !updates.is_empty() || is_omp_async_result(&event) {
+            projection.has_pending_async_work = None;
+        }
+        if let Some(trigger) = omp_async_trigger(&event, &updates) {
+            last_trigger = trigger;
+        }
+        if let Some(invocation) = invocation {
+            if should_replace_async_placeholder(
+                invocation.state(),
+                async_work_placeholder,
+                &updates,
+            ) {
+                async_work_placeholder =
+                    !apply_pending_placeholder_replacement(invocation, sink, updates).await;
+            } else {
+                for (item, is_pending) in updates {
+                    async_work_placeholder |=
+                        item.id == OMP_ASYNC_WORK_PLACEHOLDER_ID && is_pending;
+                    if apply_pending_update(invocation, sink, item, is_pending).await {
+                        break;
+                    }
+                }
+            }
+            if event.get("type").and_then(Value::as_str) == Some("agent_start") {
+                if let Some(wake) = invocation.response_started(last_trigger.clone()) {
+                    sink.for_binding(&invocation.latest_turn())
+                        .post_wake_signal(&wake)
+                        .await;
+                }
+            }
+            if event.get("type").and_then(Value::as_str) == Some("response")
+                && event.get("command").and_then(Value::as_str) == Some("get_state")
+                && event.get("success").and_then(Value::as_bool) == Some(true)
+            {
+                match projection.has_pending_async_work {
+                    Some(true) if invocation.pending_count() == 0 => {
+                        async_work_placeholder = true;
+                        apply_pending_update(invocation, sink, async_work_placeholder_item(), true)
+                            .await;
+                    }
+                    Some(false) => {
+                        async_work_placeholder = false;
+                        apply_pending_snapshot(invocation, sink, Vec::new(), Vec::new()).await;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(invocation) = invocation {
+            if let Some((binding, routed)) = invocation.route_stream_event(*seq, event.clone()) {
+                sink.for_binding(&binding)
+                    .post_stream_event(*seq, &routed, projection)
+                    .await;
+            }
+            if event.get("type").and_then(Value::as_str) == Some("agent_end")
+                && is_terminal_agent_end(&event)
+            {
+                let binding = invocation.latest_turn();
+                let cancel_requested = crate::turn_claims::default_registry()
+                    .and_then(|registry| registry.read(&binding.run_id))
+                    .ok()
+                    .is_some_and(|claim| claim.cancel_requested_at.is_some());
+                let mut turn_sink = sink.for_binding(&binding);
+                let source_bound = turn_sink.ensure_transcript_binding().await.unwrap_or(false);
+                let source_drained = turn_sink.source_is_drained(projection).unwrap_or(false);
+                if source_bound {
+                    turn_sink.wake_transcript_shipper().await;
+                }
+                let (terminal_state, reason) = terminal_state_for_projection(
+                    projection,
+                    Some(true),
+                    cancel_requested,
+                    None,
+                    pending.is_empty(),
+                    source_bound,
+                    source_drained,
+                );
+                if let Some(outcome) = invocation.idle(IdleSignal {
+                    terminal_state: terminal_state.to_string(),
+                    exit_code: None,
+                    stderr: reason.or_else(|| stderr_tail(stderr_path)),
+                    terminal_reason: projection.auth_failure_reason,
+                }) {
+                    complete_idle(invocation, sink, outcome).await;
+                }
+            }
+            if event.get("type").and_then(Value::as_str) == Some("session_settled") {
+                apply_pending_snapshot(invocation, sink, Vec::new(), Vec::new()).await;
+                async_work_placeholder = false;
+            }
+        } else {
+            event_sink.post_stream_event(*seq, &event, projection).await;
+        }
     }
     let _ = sink.ensure_transcript_binding().await?;
     if had_lines {
+        let run_id = invocation
+            .map(|invocation| invocation.latest_turn().run_id)
+            .unwrap_or_else(|| sink.run_id.clone());
         if let Ok(registry) = crate::turn_claims::default_registry() {
             let _ = registry.mark_projection_checkpoint(
-                &sink.run_id,
+                &run_id,
                 offset.saturating_sub(pending.len() as u64),
                 *seq,
             );
@@ -4496,6 +4594,10 @@ for line in sys.stdin:
         with open(source + ".steer.log", "a", encoding="utf-8") as stream:
             stream.write(command["message"])
         out({"id":command.get("id"),"type":"response","command":"steer","success":True})
+        if prompt == "scenario=restart-active" and active_response is not None:
+            user_message("steer: " + command["message"])
+            assistant_message("steered after restart", start=False)
+            active_response = None
     elif kind == "prompt":
         prompt = command["message"]
         out({"id":command.get("id"),"type":"response","command":"prompt","success":True})
@@ -4536,6 +4638,15 @@ for line in sys.stdin:
             assistant_message(prompt)
             out({"type":"session_settled"})
             active_response = None
+        elif prompt == "scenario=restart-active":
+            user_message(prompt)
+            start_job("job-1")
+            active_response = {"id": str(uuid.uuid4()), "text": "before restart steer"}
+            out({"type":"agent_start"})
+            out({"type":"message_start","message":{"role":"assistant","content":[]}})
+            out({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"before restart steer"}})
+            with open(source + ".active", "w", encoding="utf-8") as stream:
+                stream.write("active")
         elif pending_jobs:
             for job_id in list(pending_jobs):
                 finish_job(job_id)
@@ -4925,6 +5036,52 @@ for line in sys.stdin:
         }
     }
 
+    fn progress_text_count(events: &[Value], session_id: &str, run_id: &str, text: &str) -> usize {
+        events
+            .iter()
+            .filter(|event| {
+                event["session_id"] == session_id
+                    && event["run_id"] == run_id
+                    && event["kind"] == "progress_signal"
+                    && event["payload"]["event"]["type"] == "message_update"
+                    && event["payload"]["live_text"] == text
+            })
+            .count()
+    }
+
+    async fn wait_for_progress_text(session_id: &str, run_id: &str, text: &str) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if progress_text_count(&runtime_events(), session_id, run_id, text) > 0 {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "OMP did not emit {text:?} for run {run_id}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn wait_for_projected_stdout(run_id: &str, stdout_path: &Path) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(run_id)
+                .unwrap();
+            let file_len = std::fs::metadata(stdout_path).unwrap().len();
+            if claim.projected_stdout_offset >= file_len {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "OMP projection cursor did not reach the durable stdout end"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     fn run_omp_scenario(scenario: LifecycleScenario) -> ScenarioFuture {
         Box::pin(async move {
             match scenario {
@@ -5280,39 +5437,25 @@ for line in sys.stdin:
                     recover_omp_print_turns("omp-lifecycle-test", None)
                         .await
                         .unwrap(),
-                    0
+                    1
                 );
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-                loop {
-                    let claim = claims.read(&first_run_id).unwrap();
-                    if claim.invocation_state.as_deref() == Some("closed")
-                        && !crate::process_group::group_is_alive(first_pgid)
-                    {
-                        break;
-                    }
-                    assert!(
-                        tokio::time::Instant::now() < deadline,
-                        "orphaned parked OMP process survived recovery"
-                    );
-                    tokio::time::sleep(Duration::from_millis(25)).await;
-                }
-                let events = runtime_events()
-                    .into_iter()
-                    .filter(|event| event["session_id"] == session_id)
-                    .collect::<Vec<_>>();
-                let closed = events
-                    .iter()
-                    .find(|event| event["kind"] == "invocation_closed")
-                    .expect("OMP restart close event");
-                assert_eq!(closed["run_id"], first_run_id);
-                assert_eq!(closed["source"], OMP_RUNTIME_SOURCE);
-                assert_eq!(closed["payload"]["reason"], "machine_agent_restart");
+                assert!(
+                    crate::process_group::group_is_alive(first_pgid),
+                    "Machine Agent recovery must leave the OMP provider alive"
+                );
+                let recovered = claims.read(&first_run_id).unwrap();
+                assert_eq!(recovered.invocation_state.as_deref(), Some("parked"));
+                let invocation = crate::console_lifecycle::lookup_launch(&first.launch_id).unwrap();
+                let stopped =
+                    close_parked_omp_invocation(&recovered, invocation, "omp-lifecycle-test")
+                        .await
+                        .unwrap()
+                        .expect("Stop after recovery should close the parked invocation");
+                assert_eq!(stopped.stopped[0].id, "job-1");
+                wait_for_process_group_exit(first_pgid).await;
+                let closed = wait_for_runtime_event(&session_id, "invocation_closed").await;
+                assert_eq!(closed["payload"]["reason"], "user_stop");
                 assert_eq!(closed["payload"]["stopped"][0]["id"], "job-1");
-                assert!(events.iter().any(|event| {
-                    event["kind"] == "delegation_signal"
-                        && event["dedupe_key"] == format!("close:{}:delegation", first.launch_id)
-                        && event["payload"]["delegation"]["count"] == 0
-                }));
             }
             _ => unreachable!(),
         }
@@ -5323,6 +5466,153 @@ for line in sys.stdin:
     async fn console_lifecycle_conformance_runs_phase_one_scenarios() {
         let adapters: [(&str, ScenarioRunner); 1] = [("omp", run_omp_scenario)];
         conformance::run_phase_one(&adapters).await;
+    }
+    #[tokio::test]
+    async fn console_restart_contract() {
+        run_omp_restart_contract().await;
+    }
+
+    async fn run_omp_restart_contract() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = set_test_longhouse_home(temp.path().join("longhouse"));
+        let fake_omp = temp.path().join("omp");
+        write_fake_omp(&fake_omp);
+
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let claims = crate::turn_claims::default_registry().unwrap();
+        claims
+            .claim(&run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let started = start_omp_print_turn(lifecycle_config(
+            temp.path(),
+            &fake_omp,
+            &session_id,
+            &thread_id,
+            &run_id,
+            "scenario=restart-active",
+            None,
+            None,
+            "user",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+        wait_for_active_response(&started).await;
+        wait_for_progress_text(&session_id, &run_id, "before restart steer").await;
+        wait_for_projected_stdout(&run_id, Path::new(&started.stdout_path)).await;
+        crate::console_lifecycle::stop_test_monitor(&started.launch_id).await;
+        crate::console_lifecycle::unregister(&started.launch_id);
+        let process_group_id = started.process_group_id.unwrap();
+        assert!(crate::process_group::group_is_alive(process_group_id));
+
+        assert_eq!(
+            recover_omp_print_turns("omp-lifecycle-test", Some(temp.path().join("agent.db")),)
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(crate::process_group::group_is_alive(process_group_id));
+        steer_omp_print_turn(&run_id, &session_id, "steer after recovery")
+            .await
+            .unwrap();
+        let completed = wait_for_terminal(&run_id).await;
+        assert_eq!(
+            completed.result.as_ref().unwrap()["terminal_state"],
+            "run_completed"
+        );
+        assert_eq!(completed.invocation_state.as_deref(), Some("parked"));
+        let events = runtime_events();
+        assert_eq!(
+            progress_text_count(&events, &session_id, &run_id, "before restart steer"),
+            1,
+            "recovery must not replay output already projected by the first engine"
+        );
+        assert_eq!(
+            progress_text_count(&events, &session_id, &run_id, "steered after restart"),
+            1,
+            "the recovered engine must project output from the same provider"
+        );
+        let invocation = crate::console_lifecycle::lookup_launch(&started.launch_id).unwrap();
+        let stopped = close_parked_omp_invocation(&completed, invocation, "omp-lifecycle-test")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stopped.stopped[0].id, "job-1");
+        wait_for_process_group_exit(process_group_id).await;
+        assert!(!crate::process_group::group_is_alive(process_group_id));
+
+        let mismatch_session = Uuid::new_v4().to_string();
+        let mismatch_thread = Uuid::new_v4().to_string();
+        let mismatch_run = Uuid::new_v4().to_string();
+        claims
+            .claim(
+                &mismatch_run,
+                &mismatch_session,
+                &mismatch_thread,
+                None,
+                None,
+                "omp",
+            )
+            .unwrap();
+        let mismatch = start_omp_print_turn(lifecycle_config(
+            temp.path(),
+            &fake_omp,
+            &mismatch_session,
+            &mismatch_thread,
+            &mismatch_run,
+            "scenario=restart-active",
+            None,
+            None,
+            "user",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+        wait_for_active_response(&mismatch).await;
+        wait_for_progress_text(&mismatch_session, &mismatch_run, "before restart steer").await;
+        crate::console_lifecycle::stop_test_monitor(&mismatch.launch_id).await;
+        crate::console_lifecycle::unregister(&mismatch.launch_id);
+        let claim = claims.read(&mismatch_run).unwrap();
+        let pid = claim.pid.unwrap();
+        let process_group_id = claim.process_group_id.unwrap();
+        claims
+            .mark_spawned_invocation(
+                &claim.run_id,
+                pid,
+                process_group_id,
+                Some("reused-pid-with-a-different-start-time".to_string()),
+                OMP_PRINT_ADAPTER,
+                &mismatch.launch_id,
+                claim.provider_thread_id.as_deref(),
+                claim.stdout_path.as_deref().unwrap(),
+                claim.stderr_path.as_deref().unwrap(),
+                claim.result.clone().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            recover_omp_print_turns("omp-lifecycle-test", Some(temp.path().join("agent.db")),)
+                .await
+                .unwrap(),
+            0,
+            "a reused pid with a different start time must not be adopted"
+        );
+        assert!(
+            crate::process_group::group_is_alive(process_group_id),
+            "recovery must not signal a process whose recorded identity mismatches"
+        );
+        assert!(crate::console_lifecycle::lookup_launch(&mismatch.launch_id).is_none());
+        assert!(crate::process_group::shutdown_group(
+            process_group_id,
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await
+        .is_gone());
+        restore_test_longhouse_home(previous_home);
     }
     #[tokio::test]
     async fn async_work_placeholder_is_replaced_by_real_job_then_drains() {
@@ -5922,11 +6212,20 @@ for line in sys.stdin:
             .claim(&run_id, &session_id, &thread_id, None, None, "omp")
             .unwrap();
         let stdout_path = temp.path().join("stdout.log");
+        std::fs::write(&stdout_path, "{\"type\":\"ready\"}\n").unwrap();
+        let session_dir = temp.path().join("sessions");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let session_file = session_dir.join("session.jsonl");
         std::fs::write(
-            &stdout_path,
-            "{\"type\":\"ready\"}\n{\"id\":\"longhouse-identity\",\"type\":\"response\",\"command\":\"get_state\",\"success\":true,\"data\":{\"sessionId\":\"s\"}}\n",
+            &session_file,
+            format!(
+                "{{\"type\":\"session\",\"id\":\"native-thread\",\"cwd\":\"{}\"}}\n",
+                temp.path().display()
+            ),
         )
         .unwrap();
+        let fifo = temp.path().join(crate::console_rpc::RPC_STDIN);
+        crate::console_rpc::create_fifo(&fifo).unwrap();
         let mut provider = Command::new("sleep");
         provider.arg("30");
         unsafe {
@@ -5948,10 +6247,14 @@ for line in sys.stdin:
                 crate::turn_claims::process_start_time_for_pid(Some(pid)),
                 OMP_PRINT_ADAPTER,
                 "launch",
-                None,
+                Some("native-thread"),
                 &stdout_path.to_string_lossy(),
                 "/tmp/stderr.log",
-                json!({}),
+                json!({
+                    "session_file": session_file,
+                    "session_dir": session_dir,
+                    "source_start_len": 0,
+                }),
             )
             .unwrap();
         refresh_owned_processes(&run_id);
@@ -5971,16 +6274,23 @@ for line in sys.stdin:
                 local_db_path: Some(temp.path().join("agent.db")),
                 runtime_events_outbox_dir: temp.path().join("runtime-events"),
             },
-            stdout_path,
-            session_dir: temp.path().to_path_buf(),
-            session_file: temp.path().join("session.jsonl"),
-            provider_thread_id: None,
+            stdout_path: stdout_path.clone(),
+            session_dir,
+            session_file,
+            provider_thread_id: Some("native-thread".to_string()),
             source_start_len: 0,
             binding_emitted: true,
         };
         std::fs::create_dir_all(&sink.runtime_events_outbox_dir).unwrap();
+        let invocation = Arc::new(
+            ConsoleInvocation::from_claim(
+                &claim,
+                Arc::new(crate::console_rpc::ConsoleRpcInput::new(fifo)),
+            )
+            .unwrap(),
+        );
 
-        monitor_recovered_omp_claim(claim, temp.path().join("stderr.log"), sink).await;
+        monitor_recovered_omp_claim(claim, temp.path().join("stderr.log"), sink, invocation).await;
 
         let settled = registry.read(&run_id).unwrap();
         assert_eq!(settled.state, "terminal");
@@ -6103,6 +6413,8 @@ for line in sys.stdin:
             assert!(crate::process_group::group_has_running_member(
                 process_group_id
             ));
+            crate::console_lifecycle::stop_test_monitor(&started.launch_id).await;
+            crate::console_lifecycle::unregister(&started.launch_id);
 
             // A terminal, closed claim whose provider still runs: left by a
             // Machine Agent that died between recording one and stopping the other.

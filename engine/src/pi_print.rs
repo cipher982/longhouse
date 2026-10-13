@@ -21,7 +21,9 @@ use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
 use crate::console_adapter::{claim_process_liveness, stderr_tail, ClaimLiveness};
-use crate::console_lifecycle::{ConsoleInvocation, IdleSignal, TurnBinding, TurnOrigin};
+use crate::console_lifecycle::{
+    ConsoleInvocation, IdleSignal, InvocationCloseReason, InvocationState, TurnBinding, TurnOrigin,
+};
 use crate::console_sink::{ConsoleProvider, ConsoleRun};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
@@ -30,6 +32,7 @@ use uuid::Uuid;
 
 pub const PI_PRINT_ADAPTER: &str = "pi_print";
 pub const DEFAULT_PI_BIN: &str = "pi";
+const PI_RUNTIME_SOURCE: &str = "pi_console";
 
 #[derive(Clone, Debug)]
 pub struct PiPrintRunConfig {
@@ -296,10 +299,16 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
     let monitor = crate::turn_claims::register_monitor(&config.run_id);
     let monitor_stderr = stderr_path.clone();
     let monitored_invocation = invocation.clone();
-    tokio::spawn(async move {
+    #[cfg(test)]
+    let test_monitor_launch_id = launch_id.clone();
+    let monitor_task = tokio::spawn(async move {
         monitor_pi_print(&mut child, &monitor_stderr, sink, monitored_invocation).await;
         drop(monitor);
     });
+    #[cfg(test)]
+    crate::console_lifecycle::track_test_monitor(test_monitor_launch_id, monitor_task);
+    #[cfg(not(test))]
+    drop(monitor_task);
 
     Ok(PiPrintRunSummary {
         session_id: config.session_id,
@@ -346,20 +355,29 @@ pub async fn recover_pi_print_turns(
     local_db_path: Option<PathBuf>,
 ) -> Result<usize> {
     let registry = crate::turn_claims::default_registry()?;
-    // One coherent inventory for the pass; `None` means `ps` was unreadable,
-    // which must leave claims alone rather than settle them.
+    let outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
     let inventory = crate::process_identity::try_collect_process_facts_by_pid();
+    let mut seen_launches = std::collections::HashSet::new();
     let mut recovered = 0;
-    for claim in registry.list_nonterminal()? {
-        if claim.adapter.as_deref() != Some(PI_PRINT_ADAPTER) || claim.state != "spawned" {
+    for claim in registry.list_all()?.into_iter().rev() {
+        if claim.adapter.as_deref() != Some(PI_PRINT_ADAPTER) {
+            continue;
+        }
+        let Some(launch_id) = claim.launch_id.as_deref() else {
+            continue;
+        };
+        if !seen_launches.insert(launch_id.to_string())
+            || crate::console_lifecycle::lookup_launch(launch_id).is_some()
+        {
+            continue;
+        }
+        let active = claim.state == "spawned";
+        let parked = claim.invocation_state.as_deref() == Some("parked");
+        if !active && !parked {
             continue;
         }
         let Some(stdout_path) = claim.stdout_path.as_deref().map(PathBuf::from) else {
-            let _ = registry.mark_terminal(
-                &claim.run_id,
-                "run_failed",
-                Some("Pi Console claim has no stdout path".to_string()),
-            );
+            tracing::warn!(run_id = %claim.run_id, "Leaving Pi Console claim without stdout path untouched");
             continue;
         };
         let stderr_path = claim
@@ -367,12 +385,24 @@ pub async fn recover_pi_print_turns(
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| stdout_path.with_file_name("stderr.log"));
+        let provider_thread_id = claim.provider_thread_id.clone().unwrap_or_default();
+        if provider_thread_id.is_empty() {
+            tracing::warn!(run_id = %claim.run_id, "Leaving Pi Console claim without provider identity untouched");
+            continue;
+        }
         let session_dir = claim
             .result
             .as_ref()
             .and_then(|result| result.get("session_dir").and_then(Value::as_str))
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
+        let session_file = claim.source_path.as_deref().map(PathBuf::from).or_else(|| {
+            claim
+                .result
+                .as_ref()
+                .and_then(|result| result.get("session_file").and_then(Value::as_str))
+                .map(PathBuf::from)
+        });
         let sink = PiPrintSink {
             run: ConsoleRun {
                 provider: &PI_CONSOLE,
@@ -381,7 +411,7 @@ pub async fn recover_pi_print_turns(
                 turn_id: claim.turn_id.clone(),
                 run_id: claim.run_id.clone(),
                 client_request_id: claim.client_request_id.clone(),
-                launch_id: claim.launch_id.clone().unwrap_or_default(),
+                launch_id: launch_id.to_string(),
                 process_group_id: claim.process_group_id,
                 machine_name: machine_name.to_string(),
                 local_db_path: local_db_path.clone(),
@@ -389,28 +419,62 @@ pub async fn recover_pi_print_turns(
             },
             stdout_path: stdout_path.clone(),
             session_dir,
-            provider_thread_id: claim.provider_thread_id.clone().unwrap_or_default(),
-            session_file: claim.source_path.as_deref().map(PathBuf::from),
+            provider_thread_id: provider_thread_id.clone(),
+            session_file,
             binding_emitted: false,
         };
-        if sink.provider_thread_id.is_empty() {
-            let _ = registry.mark_terminal(
-                &claim.run_id,
-                "run_failed",
-                Some("Pi Console claim has no native provider identity".to_string()),
-            );
-            continue;
-        }
         match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
             ClaimLiveness::Live => {
-                tokio::spawn(async move {
-                    monitor_recovered_claim(claim, stdout_path, stderr_path, sink).await;
+                let Some(run_dir) = stdout_path.parent() else {
+                    continue;
+                };
+                let fifo = run_dir.join(crate::console_rpc::RPC_STDIN);
+                if !fifo.try_exists().unwrap_or(false) {
+                    tracing::warn!(run_id = %claim.run_id, "Leaving live Pi Console claim without input FIFO untouched");
+                    continue;
+                }
+                let input = Arc::new(crate::console_rpc::ConsoleRpcInput::new(fifo));
+                let invocation = match ConsoleInvocation::from_claim(&claim, input) {
+                    Ok(invocation) => Arc::new(invocation),
+                    Err(error) => {
+                        tracing::warn!(%error, run_id = %claim.run_id, "Cannot reconstruct Pi Console invocation");
+                        continue;
+                    }
+                };
+                if let Err(error) = crate::console_lifecycle::register(invocation.clone()) {
+                    tracing::warn!(%error, run_id = %claim.run_id, "Cannot register recovered Pi Console invocation");
+                    continue;
+                }
+                #[cfg(test)]
+                let test_monitor_launch_id = launch_id.to_string();
+                let monitor_task = tokio::spawn(async move {
+                    monitor_recovered_claim(claim, stdout_path, stderr_path, sink, invocation)
+                        .await;
                 });
+                #[cfg(test)]
+                crate::console_lifecycle::track_test_monitor(test_monitor_launch_id, monitor_task);
+                #[cfg(not(test))]
+                drop(monitor_task);
                 recovered += 1;
             }
-            ClaimLiveness::Gone => {
+            ClaimLiveness::Gone if active => {
                 settle_recovered_dead_claim(&claim, &stderr_path, &sink).await;
             }
+            ClaimLiveness::Gone if parked && claim.pending_count > 0 => {
+                let stopped = crate::console_lifecycle::stopped_items_for_claim(&claim);
+                crate::console_lifecycle::publish_invocation_closed(
+                    &registry,
+                    Ok(&outbox_dir),
+                    &claim,
+                    machine_name,
+                    PI_RUNTIME_SOURCE,
+                    InvocationCloseReason::MachineAgentRestart,
+                    crate::console_lifecycle::recovered_invocation_cleanup(&claim),
+                    &stopped,
+                )?;
+                registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)?;
+            }
+            ClaimLiveness::Gone => {}
             ClaimLiveness::Unknown => tracing::warn!(
                 run_id = %claim.run_id,
                 "Process inventory unavailable; leaving Pi Console turn claim for a later scan"
@@ -502,6 +566,7 @@ async fn monitor_pi_print(
             &mut offset,
             &mut pending,
             &mut seq,
+            None,
         )
         .await
         {
@@ -538,6 +603,7 @@ async fn monitor_pi_print(
                     &mut offset,
                     &mut pending,
                     &mut seq,
+                    None,
                 )
                 .await
                 .err()
@@ -623,6 +689,7 @@ async fn monitor_recovered_claim(
     stdout_path: PathBuf,
     stderr_path: PathBuf,
     mut sink: PiPrintSink,
+    invocation: Arc<ConsoleInvocation>,
 ) {
     let mut projection = replay_projection(
         &stdout_path,
@@ -634,34 +701,57 @@ async fn monitor_recovered_claim(
     let mut seq = claim.projected_seq;
     sink.post_phase("thinking", None, seq).await;
     loop {
+        if invocation.state() == InvocationState::Closed {
+            let _ = invocation.close_input().await;
+            if crate::console_adapter::claim_owns_live_process_group(&claim) {
+                cleanup_process_group(sink.process_group_id).await;
+            }
+            invocation.process_exited();
+            let _ = crate::turn_claims::default_registry().and_then(|registry| {
+                registry.record_invocation_state(
+                    &invocation.latest_turn().run_id,
+                    "closed",
+                    invocation.pending_count(),
+                )
+            });
+            crate::console_lifecycle::unregister(&invocation.launch_id);
+            return;
+        }
         if let Err(error) = publish_stdout_growth(
             &mut sink,
             &mut projection,
             &mut offset,
             &mut pending,
             &mut seq,
+            Some(&invocation),
         )
         .await
         {
-            if claim.process_group_is_from_this_boot() {
-                cleanup_process_group(sink.process_group_id).await;
+            let binding = invocation.latest_turn();
+            if let Some(outcome) = invocation.idle(IdleSignal {
+                terminal_state: "run_failed".to_string(),
+                exit_code: None,
+                stderr: Some(error.to_string()),
+                terminal_reason: None,
+            }) {
+                sink.for_binding(&binding)
+                    .post_terminal_with_lifecycle(
+                        &outcome.signal.terminal_state,
+                        outcome.signal.exit_code,
+                        outcome.signal.stderr,
+                        Some(outcome.invocation_state.as_str()),
+                        Some(outcome.pending_count),
+                    )
+                    .await;
             }
-            sink.post_terminal("run_failed", None, Some(error.to_string()))
-                .await;
-            return;
+            continue;
         }
-        if (projection.agent_settled || projection.rpc_rejected)
-            && claim.process_group_is_from_this_boot()
-            && claim_process_liveness(&claim) == ClaimLiveness::Live
-        {
-            cleanup_process_group(sink.process_group_id).await;
-        }
-        if claim_process_liveness(&claim) == ClaimLiveness::Gone {
+        if projection.agent_settled || projection.rpc_rejected {
+            let binding = invocation.latest_turn();
             let cancel_requested = crate::turn_claims::default_registry()
-                .and_then(|registry| registry.read(&claim.run_id))
+                .and_then(|registry| registry.read(&binding.run_id))
                 .ok()
-                .and_then(|current| current.cancel_requested_at)
-                .is_some();
+                .is_some_and(|current| current.cancel_requested_at.is_some());
             let source_bound = sink.ensure_transcript_binding().await.unwrap_or(false);
             if source_bound {
                 if let Some(path) = sink.session_file.as_deref() {
@@ -669,24 +759,66 @@ async fn monitor_recovered_claim(
                         .await;
                 }
             }
-            if claim.process_group_is_from_this_boot() {
-                cleanup_process_group(sink.process_group_id).await;
-            }
             let (terminal_state, reason) = terminal_state_for_projection(
                 &projection,
-                PiProcessExitEvidence::Unknown,
+                if projection.agent_settled {
+                    PiProcessExitEvidence::Succeeded
+                } else {
+                    PiProcessExitEvidence::Failed
+                },
                 cancel_requested,
                 None,
                 pending.is_empty(),
                 source_bound,
             );
-            let terminal_reason = if terminal_state == "run_failed" {
-                reason.or_else(|| stderr_tail(&stderr_path))
-            } else {
-                reason
-            };
-            sink.post_terminal(terminal_state, None, terminal_reason)
-                .await;
+            if let Some(outcome) = invocation.idle(IdleSignal {
+                terminal_state: terminal_state.to_string(),
+                exit_code: None,
+                stderr: reason.or_else(|| {
+                    (terminal_state == "run_failed")
+                        .then(|| stderr_tail(&stderr_path))
+                        .flatten()
+                }),
+                terminal_reason: None,
+            }) {
+                sink.for_binding(&outcome.binding)
+                    .post_terminal_with_lifecycle(
+                        &outcome.signal.terminal_state,
+                        outcome.signal.exit_code,
+                        outcome.signal.stderr,
+                        Some(outcome.invocation_state.as_str()),
+                        Some(outcome.pending_count),
+                    )
+                    .await;
+            }
+            if invocation.state() == InvocationState::Closed {
+                let _ = invocation.close_input().await;
+                if crate::console_adapter::claim_owns_live_process_group(&claim) {
+                    cleanup_process_group(sink.process_group_id).await;
+                }
+                invocation.process_exited();
+                let _ = crate::turn_claims::default_registry().and_then(|registry| {
+                    registry.record_invocation_state(
+                        &invocation.latest_turn().run_id,
+                        "closed",
+                        invocation.pending_count(),
+                    )
+                });
+                crate::console_lifecycle::unregister(&invocation.launch_id);
+                return;
+            }
+        }
+        if claim_process_liveness(&claim) == ClaimLiveness::Gone {
+            settle_recovered_dead_claim(&claim, &stderr_path, &sink).await;
+            invocation.process_exited();
+            crate::console_lifecycle::unregister(&invocation.launch_id);
+            let _ = crate::turn_claims::default_registry().and_then(|registry| {
+                registry.record_invocation_state(
+                    &invocation.latest_turn().run_id,
+                    "closed",
+                    invocation.pending_count(),
+                )
+            });
             return;
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -713,6 +845,7 @@ async fn settle_recovered_dead_claim(
         &mut offset,
         &mut pending,
         &mut seq,
+        None,
     )
     .await
     .err()
@@ -724,7 +857,7 @@ async fn settle_recovered_dead_claim(
                 .await;
         }
     }
-    if claim.process_group_is_from_this_boot() {
+    if crate::console_adapter::claim_owns_live_process_group(claim) {
         cleanup_process_group(sink.process_group_id).await;
     }
     let (terminal_state, reason) = terminal_state_for_projection(
@@ -742,6 +875,9 @@ async fn settle_recovered_dead_claim(
     };
     sink.post_terminal(terminal_state, None, terminal_reason)
         .await;
+    let _ = crate::turn_claims::default_registry().and_then(|registry| {
+        registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)
+    });
 }
 
 fn build_pi_args(
@@ -1012,29 +1148,46 @@ async fn publish_stdout_growth(
     offset: &mut u64,
     pending: &mut Vec<u8>,
     seq: &mut u64,
+    invocation: Option<&ConsoleInvocation>,
 ) -> Result<()> {
     let lines = crate::console_adapter::read_growth(&sink.stdout_path, offset, pending)?;
     let had_lines = !lines.is_empty();
     for bytes in lines {
         *seq += 1;
+        let mut event_sink = if let Some(invocation) = invocation {
+            let mut event_sink = sink.clone();
+            event_sink.run = sink.run.for_binding(&invocation.latest_turn());
+            event_sink.binding_emitted = sink.binding_emitted;
+            event_sink
+        } else {
+            sink.clone()
+        };
         let event: Value = match serde_json::from_slice(&bytes) {
             Ok(event) => event,
             Err(error) => {
-                sink.post_decode_gap(*seq, &error.to_string()).await;
+                event_sink.post_decode_gap(*seq, &error.to_string()).await;
                 continue;
             }
         };
+        let _ = event_sink.ensure_transcript_binding().await?;
+        sink.binding_emitted = event_sink.binding_emitted;
+        if sink.session_file.is_none() {
+            sink.session_file = event_sink.session_file.clone();
+        }
         projection.apply(&sink.provider_thread_id, &event)?;
         if let Some((phase, tool_name)) = pi_phase_from_event(&event) {
-            sink.post_phase(phase, tool_name, *seq).await;
+            event_sink.post_phase(phase, tool_name, *seq).await;
         }
-        sink.post_stream_event(*seq, &event, projection).await;
+        event_sink.post_stream_event(*seq, &event, projection).await;
     }
     let _ = sink.ensure_transcript_binding().await?;
     if had_lines {
         let complete_offset = offset.saturating_sub(pending.len() as u64);
+        let run_id = invocation
+            .map(|invocation| invocation.latest_turn().run_id)
+            .unwrap_or_else(|| sink.run_id.clone());
         if let Ok(registry) = crate::turn_claims::default_registry() {
-            let _ = registry.mark_projection_checkpoint(&sink.run_id, complete_offset, *seq);
+            let _ = registry.mark_projection_checkpoint(&run_id, complete_offset, *seq);
         }
     }
     Ok(())
@@ -1136,6 +1289,13 @@ fn persist_transcript_binding(
 }
 
 impl PiPrintSink {
+    fn for_binding(&self, binding: &TurnBinding) -> Self {
+        let mut sink = self.clone();
+        sink.run = self.run.for_binding(binding);
+        sink.binding_emitted = false;
+        sink
+    }
+
     async fn ensure_transcript_binding(&mut self) -> Result<bool> {
         if self.binding_emitted {
             return Ok(self.session_file.is_some());
@@ -1691,8 +1851,25 @@ if args[:2] == ["--mode", "rpc"]:
     sid = args[args.index("--session-id") + 1]
     path = os.path.join(session_dir, f"1723200000_{{sid}}.jsonl")
     header = {{"type": "session", "version": 3, "id": sid, "cwd": os.getcwd(), "timestamp": "2026-08-10T00:00:00Z"}}
+    prompt = ""
+    def record_assistant(text, mode):
+        with open(path, mode) as stream:
+            if mode == "w":
+                stream.write(json.dumps(header) + "\n")
+            message = {{"role": "assistant", "content": [{{"type": "text", "text": text}}], "stopReason": "stop"}}
+            entry = {{"type": "message", "id": str(uuid.uuid4()), "parentId": None, "timestamp": "2026-08-10T00:00:01Z", "message": message}}
+            stream.write(json.dumps(entry) + "\n")
     def run():
-{sleep_line}        with open(path, "w") as f:
+{sleep_line}        if prompt in ("restart-contract", "restart-stop"):
+            text = "before restart" if prompt == "restart-contract" else "before stop"
+            record_assistant(text, "w")
+            out({{"type": "message_start", "message": {{"role": "assistant", "content": []}}}})
+            out({{"type": "message_update", "assistantMessageEvent": {{"type": "text_delta", "delta": text}}}})
+            out({{"type": "message_end", "message": {{"role": "assistant", "content": [{{"type": "text", "text": text}}], "stopReason": "stop"}}}})
+            with open(path + ".active", "w") as marker:
+                marker.write("active")
+            return
+        with open(path, "w") as f:
             f.write(json.dumps(header) + "\n")
             f.write(json.dumps({{"type": "message", "id": str(uuid.uuid4()), "parentId": None, "timestamp": "2026-08-10T00:00:01Z", "message": {{"role": "assistant", "content": [{{"type": "text", "text": "fake pi reply"}}], "stopReason": "stop"}}}}) + "\n")
         for event in [
@@ -1710,6 +1887,7 @@ if args[:2] == ["--mode", "rpc"]:
         if kind == "get_state":
             out({{"id": command.get("id"), "type": "response", "command": "get_state", "success": True, "data": {{"sessionId": sid}}}})
         elif kind == "prompt":
+            prompt = command["message"]
             out({{"id": command.get("id"), "type": "response", "command": "prompt", "success": True}})
             out({{"type": "agent_start"}})
             threading.Thread(target=run, daemon=True).start()
@@ -1717,6 +1895,17 @@ if args[:2] == ["--mode", "rpc"]:
             with open(os.path.join(session_dir, "steer.log"), "a") as f:
                 f.write(command["message"])
             out({{"id": command.get("id"), "type": "response", "command": "steer", "success": True}})
+            if prompt == "restart-contract":
+                text = "steered after recovery"
+                record_assistant(text, "a")
+                for event in [
+                    {{"type": "message_start", "message": {{"role": "assistant", "content": []}}}},
+                    {{"type": "message_update", "assistantMessageEvent": {{"type": "text_delta", "delta": text}}}},
+                    {{"type": "message_end", "message": {{"role": "assistant", "content": [{{"type": "text", "text": text}}], "stopReason": "stop"}}}},
+                    {{"type": "agent_end", "messages": []}},
+                    {{"type": "agent_settled"}},
+                ]:
+                    out(event)
 "#,
                 sleep_line = sleep_line
             ),
@@ -1842,7 +2031,12 @@ if args[:2] == ["--mode", "rpc"]:
         wait_for_pi_invocation_close(&summary).await;
         assert_eq!(
             claim.result.as_ref().unwrap()["terminal_state"],
-            "run_completed"
+            "run_completed",
+            "claim={claim:?}\nnative={:?}",
+            claim
+                .source_path
+                .as_deref()
+                .and_then(|path| std::fs::read_to_string(path).ok())
         );
         assert_eq!(claim.invocation_state.as_deref(), Some("closed"));
         assert_eq!(claim.pending_count, 0);
@@ -1858,6 +2052,272 @@ if args[:2] == ["--mode", "rpc"]:
     async fn console_lifecycle_conformance_runs_supported_phase_one_scenarios() {
         let adapters: [(&str, ScenarioRunner); 1] = [("pi", run_pi_scenario)];
         conformance::run_phase_one(&adapters).await;
+    }
+
+    fn runtime_events() -> Vec<Value> {
+        let Ok(directory) = crate::config::get_agent_runtime_events_outbox_dir() else {
+            return Vec::new();
+        };
+        std::fs::read_dir(directory)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| std::fs::read(entry.ok()?.path()).ok())
+            .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
+            .collect()
+    }
+
+    fn progress_text_count(events: &[Value], session_id: &str, run_id: &str, text: &str) -> usize {
+        events
+            .iter()
+            .filter(|event| {
+                event["session_id"] == session_id
+                    && event["run_id"] == run_id
+                    && event["kind"] == "progress_signal"
+                    && event["payload"]["event"]["type"] == "message_end"
+                    && event["payload"]["event"]["message"]["content"]
+                        .as_array()
+                        .is_some_and(|content| content.iter().any(|part| part["text"] == text))
+            })
+            .count()
+    }
+
+    async fn wait_for_progress_text(session_id: &str, run_id: &str, text: &str) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if progress_text_count(&runtime_events(), session_id, run_id, text) > 0 {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Pi did not emit {text:?} for run {run_id}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn wait_for_projected_stdout(run_id: &str, stdout_path: &Path) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(run_id)
+                .unwrap();
+            let file_len = std::fs::metadata(stdout_path).unwrap().len();
+            if claim.projected_stdout_offset >= file_len {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Pi projection cursor did not reach the durable stdout end"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn wait_for_terminal(run_id: &str) -> crate::turn_claims::TurnClaim {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(run_id)
+                .unwrap();
+            if claim.state == "terminal" {
+                return claim;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Pi run {run_id} did not settle: {claim:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn console_restart_contract() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        let longhouse_home = temp.path().join("longhouse");
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", &longhouse_home);
+        }
+        std::fs::create_dir_all(longhouse_home.join("agent")).unwrap();
+        let fake_pi = temp.path().join("pi");
+        write_fake_pi(&fake_pi, 0);
+        let claims = crate::turn_claims::default_registry().unwrap();
+
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let turn_id = Uuid::new_v4().to_string();
+        let client_request_id = format!("restart-{run_id}");
+        claims
+            .claim(
+                &run_id,
+                &session_id,
+                &thread_id,
+                Some(&turn_id),
+                Some(&client_request_id),
+                "pi",
+            )
+            .unwrap();
+        let mut config = run_config(
+            fake_pi.to_str().unwrap(),
+            &session_id,
+            &thread_id,
+            &run_id,
+            temp.path(),
+            "restart-contract",
+        );
+        config.turn_id = Some(turn_id);
+        config.client_request_id = Some(client_request_id);
+        let first = start_pi_print_turn(config).await.unwrap();
+        wait_for_progress_text(&session_id, &run_id, "before restart").await;
+        wait_for_projected_stdout(&run_id, Path::new(&first.stdout_path)).await;
+        crate::console_lifecycle::stop_test_monitor(&first.launch_id).await;
+        crate::console_lifecycle::unregister(&first.launch_id);
+        assert!(crate::process_group::group_is_alive(first.process_group_id));
+
+        assert_eq!(
+            recover_pi_print_turns("pi-console-canary", None)
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(crate::process_group::group_is_alive(first.process_group_id));
+        steer_pi_print_turn(&run_id, &session_id, "steer after recovery")
+            .await
+            .unwrap();
+        let completed = wait_for_terminal(&run_id).await;
+        assert_eq!(
+            completed.result.as_ref().unwrap()["terminal_state"],
+            "run_completed"
+        );
+        let events = runtime_events();
+        assert_eq!(
+            progress_text_count(&events, &session_id, &run_id, "before restart"),
+            1,
+            "recovery must not replay output already projected by the first engine"
+        );
+        assert_eq!(
+            progress_text_count(&events, &session_id, &run_id, "steered after recovery"),
+            1,
+            "the recovered engine must project output from the same provider"
+        );
+        wait_for_pi_invocation_close(&first).await;
+
+        let stop_session = Uuid::new_v4().to_string();
+        let stop_thread = Uuid::new_v4().to_string();
+        let stop_run = Uuid::new_v4().to_string();
+        let stop_turn = Uuid::new_v4().to_string();
+        let stop_request = format!("restart-stop-{stop_run}");
+        claims
+            .claim(
+                &stop_run,
+                &stop_session,
+                &stop_thread,
+                Some(&stop_turn),
+                Some(&stop_request),
+                "pi",
+            )
+            .unwrap();
+        let mut config = run_config(
+            fake_pi.to_str().unwrap(),
+            &stop_session,
+            &stop_thread,
+            &stop_run,
+            temp.path(),
+            "restart-stop",
+        );
+        config.turn_id = Some(stop_turn.clone());
+        config.client_request_id = Some(stop_request);
+        let stop = start_pi_print_turn(config).await.unwrap();
+        wait_for_progress_text(&stop_session, &stop_run, "before stop").await;
+        wait_for_projected_stdout(&stop_run, Path::new(&stop.stdout_path)).await;
+        crate::console_lifecycle::stop_test_monitor(&stop.launch_id).await;
+        crate::console_lifecycle::unregister(&stop.launch_id);
+        assert_eq!(
+            recover_pi_print_turns("pi-console-canary", None)
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(crate::process_group::group_is_alive(stop.process_group_id));
+        interrupt_pi_print_turn(&stop_run, &stop_session, &stop_thread, &stop_turn)
+            .await
+            .unwrap();
+        wait_for_pi_invocation_close(&stop).await;
+        assert!(!crate::process_group::group_is_alive(stop.process_group_id));
+
+        let mismatch_session = Uuid::new_v4().to_string();
+        let mismatch_thread = Uuid::new_v4().to_string();
+        let mismatch_run = Uuid::new_v4().to_string();
+        let mismatch_turn = Uuid::new_v4().to_string();
+        let mismatch_request = format!("restart-mismatch-{mismatch_run}");
+        claims
+            .claim(
+                &mismatch_run,
+                &mismatch_session,
+                &mismatch_thread,
+                Some(&mismatch_turn),
+                Some(&mismatch_request),
+                "pi",
+            )
+            .unwrap();
+        let mut config = run_config(
+            fake_pi.to_str().unwrap(),
+            &mismatch_session,
+            &mismatch_thread,
+            &mismatch_run,
+            temp.path(),
+            "restart-stop",
+        );
+        config.turn_id = Some(mismatch_turn);
+        config.client_request_id = Some(mismatch_request);
+        let mismatch = start_pi_print_turn(config).await.unwrap();
+        wait_for_progress_text(&mismatch_session, &mismatch_run, "before stop").await;
+        wait_for_projected_stdout(&mismatch_run, Path::new(&mismatch.stdout_path)).await;
+        crate::console_lifecycle::stop_test_monitor(&mismatch.launch_id).await;
+        crate::console_lifecycle::unregister(&mismatch.launch_id);
+        let claim = claims.read(&mismatch_run).unwrap();
+        let pid = claim.pid.unwrap();
+        let process_group_id = claim.process_group_id.unwrap();
+        claims
+            .mark_spawned_invocation(
+                &claim.run_id,
+                pid,
+                process_group_id,
+                Some("reused-pid-with-a-different-start-time".to_string()),
+                PI_PRINT_ADAPTER,
+                &mismatch.launch_id,
+                claim.provider_thread_id.as_deref(),
+                claim.stdout_path.as_deref().unwrap(),
+                claim.stderr_path.as_deref().unwrap(),
+                claim.result.clone().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            recover_pi_print_turns("pi-console-canary", None)
+                .await
+                .unwrap(),
+            0,
+            "a reused pid with a different start time must not be adopted"
+        );
+        assert!(
+            crate::process_group::group_is_alive(process_group_id),
+            "recovery must not signal a process whose recorded identity mismatches"
+        );
+        assert!(crate::console_lifecycle::lookup_launch(&mismatch.launch_id).is_none());
+        assert!(crate::process_group::shutdown_group(
+            process_group_id,
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await
+        .is_gone());
+        match previous_home {
+            Some(home) => unsafe { std::env::set_var("LONGHOUSE_HOME", home) },
+            None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+        }
     }
 
     #[tokio::test]
@@ -1926,9 +2386,13 @@ if args[:2] == ["--mode", "rpc"]:
         assert_eq!(
             claim.result.as_ref().unwrap()["terminal_state"],
             "run_completed",
-            "stdout={}\nstderr={}",
+            "claim={claim:?}\nstdout={}\nstderr={}\nnative={:?}",
             std::fs::read_to_string(&summary.stdout_path).unwrap_or_default(),
             std::fs::read_to_string(&summary.stderr_path).unwrap_or_default(),
+            claim
+                .source_path
+                .as_deref()
+                .and_then(|path| std::fs::read_to_string(path).ok()),
         );
         let provider_session_id = claim.provider_thread_id.expect("provider binding recorded");
         assert!(std::fs::read_to_string(&summary.stderr_path)
@@ -2014,7 +2478,11 @@ if args[:2] == ["--mode", "rpc"]:
                 .read(&run_id)
                 .unwrap();
             if claim.state == "terminal" {
-                assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
+                assert_eq!(
+                    claim.result.as_ref().unwrap()["terminal_state"],
+                    "run_completed",
+                    "{claim:?}"
+                );
                 break;
             }
             assert!(

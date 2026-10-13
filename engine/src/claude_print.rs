@@ -6,6 +6,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -16,8 +17,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
-use tokio::io::AsyncWriteExt;
-use tokio::process::{Child, ChildStdin, Command};
+use tokio::process::{Child, Command};
 
 use crate::console_adapter::{read_growth, stderr_tail, ClaimLiveness};
 use crate::console_lifecycle::{
@@ -127,14 +127,12 @@ impl StreamProgress {
 }
 
 struct ClaudeInput {
-    stdin: tokio::sync::Mutex<Option<ChildStdin>>,
+    fifo: PathBuf,
 }
 
 impl ClaudeInput {
-    fn new(stdin: ChildStdin) -> Self {
-        Self {
-            stdin: tokio::sync::Mutex::new(Some(stdin)),
-        }
+    fn new(fifo: PathBuf) -> Self {
+        Self { fifo }
     }
 
     async fn write_message(&self, text: &str) -> Result<()> {
@@ -149,8 +147,6 @@ impl ConsoleInput for ClaudeInput {
         _images: &'a [PathBuf],
     ) -> crate::console_lifecycle::InputFuture<'a> {
         Box::pin(async move {
-            let mut stdin = self.stdin.lock().await;
-            let writer = stdin.as_mut().context("Claude stdin is closed")?;
             let message = json!({
                 "type": "user",
                 "message": {
@@ -158,17 +154,17 @@ impl ConsoleInput for ClaudeInput {
                     "content": [{"type": "text", "text": text}]
                 }
             });
-            writer.write_all(&serde_json::to_vec(&message)?).await?;
-            writer.write_all(b"\n").await?;
-            writer.flush().await?;
-            Ok(())
+            crate::console_rpc::write_command(&self.fifo, &message).await
         })
     }
 
     fn close_input(&self) -> crate::console_lifecycle::InputFuture<'_> {
         Box::pin(async move {
-            self.stdin.lock().await.take();
-            Ok(())
+            match std::fs::remove_file(&self.fifo) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error).context("closing the Claude Console stdin FIFO"),
+            }
         })
     }
 
@@ -280,8 +276,10 @@ pub async fn start_claude_print_turn(
     set_private_dir(&run_dir)?;
     let stdout_path = run_dir.join("stdout.jsonl");
     let stderr_path = run_dir.join("stderr.log");
+    let stdin_path = run_dir.join(crate::console_rpc::RPC_STDIN);
     let stdout_file = private_output_file(&stdout_path)?;
     let stderr_file = private_output_file(&stderr_path)?;
+    crate::console_rpc::create_fifo(&stdin_path)?;
     let (args, recorded_args) =
         build_claude_args(&provider_thread_id, is_resume, config.model.as_deref());
     let argv = std::iter::once(config.claude_bin.clone())
@@ -289,16 +287,11 @@ pub async fn start_claude_print_turn(
         .collect::<Vec<_>>();
     let registry = crate::turn_claims::default_registry()?;
     let mut sink = make_sink(&config, &provider_thread_id, &launch_id, None)?;
-    let mut child = spawn_claude(&config, &args, stdout_file, stderr_file)
+    let mut child = spawn_claude(&config, &args, &stdin_path, stdout_file, stderr_file)
         .with_context(|| format!("spawning `{}` --print", config.claude_bin))?;
     let pid = child.id().context("claude --print returned no pid")?;
     let process_group_id = i32::try_from(pid).context("Claude pid exceeds process-group range")?;
-    let input = Arc::new(ClaudeInput::new(
-        child
-            .stdin
-            .take()
-            .context("Claude stdin pipe was not created")?,
-    ));
+    let input = Arc::new(ClaudeInput::new(stdin_path.clone()));
     sink.process_group_id = Some(process_group_id);
     let result = spawn_record(
         &config,
@@ -383,6 +376,7 @@ pub async fn start_claude_print_turn(
         return Err(error).context("writing Claude Console input");
     }
     let monitor = crate::turn_claims::register_monitor(&config.run_id);
+
     let summary = ClaudePrintRunSummary {
         session_id: config.session_id.clone(),
         thread_id: config.thread_id.clone(),
@@ -395,10 +389,16 @@ pub async fn start_claude_print_turn(
         stderr_path: stderr_path.to_string_lossy().to_string(),
         argv,
     };
-    tokio::spawn(async move {
+    #[cfg(test)]
+    let test_monitor_launch_id = launch_id.clone();
+    let monitor_task = tokio::spawn(async move {
         monitor_claude_print(child, stdout_path, stderr_path, sink, invocation, lock).await;
         drop(monitor);
     });
+    #[cfg(test)]
+    crate::console_lifecycle::track_test_monitor(test_monitor_launch_id, monitor_task);
+    #[cfg(not(test))]
+    drop(monitor_task);
     Ok(summary)
 }
 fn turn_binding(config: &ClaudePrintRunConfig, origin: TurnOrigin) -> TurnBinding {
@@ -839,7 +839,7 @@ pub async fn close_parked_claude_invocation(
 
 pub async fn recover_claude_print_turns(
     machine_name: &str,
-    _local_db_path: Option<PathBuf>,
+    local_db_path: Option<PathBuf>,
 ) -> Result<usize> {
     let registry = crate::turn_claims::default_registry()?;
     let outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
@@ -847,10 +847,9 @@ pub async fn recover_claude_print_turns(
         tracing::warn!("Process inventory unavailable; leaving Claude Console claims untouched");
         return Ok(0);
     };
-    let claims = registry.list_all()?;
     let mut seen_launches = std::collections::HashSet::new();
     let mut recovered = 0;
-    for claim in claims.into_iter().rev() {
+    for claim in registry.list_all()?.into_iter().rev() {
         if claim.adapter.as_deref() != Some(CLAUDE_PRINT_ADAPTER) {
             continue;
         }
@@ -862,12 +861,12 @@ pub async fn recover_claude_print_turns(
         {
             continue;
         }
-        let parked = claim.invocation_state.as_deref() == Some("parked");
         let active = claim.state == "spawned";
-        if !parked && !active {
+        let parked = claim.invocation_state.as_deref() == Some("parked");
+        if !active && !parked {
             continue;
         }
-        let process_gone = match crate::console_adapter::claim_liveness(&claim, Some(&inventory)) {
+        match crate::console_adapter::claim_liveness(&claim, Some(&inventory)) {
             ClaimLiveness::Unknown => {
                 tracing::warn!(
                     run_id = %claim.run_id,
@@ -875,99 +874,411 @@ pub async fn recover_claude_print_turns(
                 );
                 continue;
             }
-            ClaimLiveness::Live => false,
-            ClaimLiveness::Gone => true,
-        };
-        let running_group = match claim.process_group_id {
-            Some(pgid) if crate::process_group::running_member_off_runtime(pgid).await => {
-                Some(pgid)
+            ClaimLiveness::Gone => {
+                settle_recovered_dead_claude_claim(
+                    &registry,
+                    &outbox_dir,
+                    &claim,
+                    machine_name,
+                    local_db_path.clone(),
+                )
+                .await?;
             }
-            _ => None,
-        };
-        if let Some(pgid) = running_group {
-            if !claim.process_group_is_from_this_boot()
-                || !claim.has_live_group_identity(&inventory)
-            {
-                tracing::warn!(
-                    run_id = %claim.run_id,
-                    process_group_id = pgid,
-                    "Claude process group is live but its exact identity cannot be verified"
-                );
-                if claim.pending_count > 0 || !process_gone {
-                    continue;
-                }
-            } else {
-                let outcome =
-                    crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE)
-                        .await;
-                if !outcome.is_gone() {
-                    tracing::error!(
+            ClaimLiveness::Live => {
+                let Some(stdout_path) = claim.stdout_path.as_deref().map(PathBuf::from) else {
+                    tracing::warn!(
                         run_id = %claim.run_id,
-                        process_group_id = pgid,
-                        "Claude process group survived Machine Agent recovery shutdown"
+                        "Leaving live Claude Console claim without a stdout path untouched"
+                    );
+                    continue;
+                };
+                let Some(run_dir) = stdout_path.parent() else {
+                    continue;
+                };
+                let stdin_path = run_dir.join(crate::console_rpc::RPC_STDIN);
+                if !stdin_path.try_exists().unwrap_or(false) {
+                    tracing::warn!(
+                        run_id = %claim.run_id,
+                        "Leaving live Claude Console claim without its input FIFO untouched"
                     );
                     continue;
                 }
+                let stderr_path = claim
+                    .stderr_path
+                    .as_deref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| stdout_path.with_file_name("stderr.log"));
+                let sink = claude_sink_for_claim(&claim, machine_name, local_db_path.clone())?;
+                let input = Arc::new(ClaudeInput::new(stdin_path));
+                let invocation = match ConsoleInvocation::from_claim(&claim, input) {
+                    Ok(invocation) => Arc::new(invocation),
+                    Err(error) => {
+                        tracing::warn!(%error, run_id = %claim.run_id, "Cannot adopt Claude Console invocation");
+                        continue;
+                    }
+                };
+                if let Err(error) = crate::console_lifecycle::register(invocation.clone()) {
+                    tracing::warn!(%error, run_id = %claim.run_id, "Cannot register recovered Claude Console invocation");
+                    continue;
+                }
+                let mut stream = StreamProgress {
+                    seq: claim.projected_seq,
+                    identity_confirmed: claim.provider_identity_confirmed,
+                    ..StreamProgress::default()
+                };
+                if parked {
+                    stream.begin_turn();
+                }
+                let monitor = crate::turn_claims::register_monitor(&claim.run_id);
+                #[cfg(test)]
+                let test_monitor_launch_id = launch_id.to_string();
+                let monitor_task = tokio::spawn(async move {
+                    monitor_recovered_claude_claim(
+                        claim,
+                        stdout_path,
+                        stderr_path,
+                        sink,
+                        invocation,
+                        stream,
+                    )
+                    .await;
+                    drop(monitor);
+                });
+                #[cfg(test)]
+                crate::console_lifecycle::track_test_monitor(test_monitor_launch_id, monitor_task);
+                #[cfg(not(test))]
+                drop(monitor_task);
+                recovered += 1;
             }
         }
-        if active {
-            let stdout_path = claim.stdout_path.as_deref().map(PathBuf::from);
-            let stderr_path = claim.stderr_path.as_deref().map(PathBuf::from).or_else(|| {
-                stdout_path
-                    .as_ref()
-                    .map(|path| path.with_file_name("stderr.log"))
-            });
-            let sink = ClaudePrintSink {
-                run: ConsoleRun {
-                    provider: &CLAUDE_CONSOLE,
-                    session_id: claim.session_id.clone(),
-                    thread_id: claim.thread_id.clone(),
-                    turn_id: claim.turn_id.clone(),
-                    run_id: claim.run_id.clone(),
-                    client_request_id: claim.client_request_id.clone(),
-                    launch_id: launch_id.to_string(),
-                    process_group_id: claim.process_group_id,
-                    machine_name: machine_name.to_string(),
-                    local_db_path: _local_db_path.clone(),
-                    runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir(
-                    )?,
-                },
-                provider_thread_id: claim.provider_thread_id.clone().unwrap_or_default(),
-            };
-            sink.post_terminal_with_lifecycle(
-                "run_cancelled",
-                None,
-                stderr_path.as_deref().and_then(stderr_tail),
-                Some("closed"),
-                Some(claim.pending_count),
-                Some("machine_agent_restart"),
-            )
-            .await;
-        }
-        if parked && claim.pending_count > 0 {
-            let stopped = crate::console_lifecycle::stopped_items_for_claim(&claim);
-            if let Err(error) = crate::console_lifecycle::publish_invocation_closed(
-                &registry,
-                Ok(&outbox_dir),
-                &claim,
-                machine_name,
-                CLAUDE_RUNTIME_SOURCE,
-                InvocationCloseReason::MachineAgentRestart,
-                crate::console_lifecycle::recovered_invocation_cleanup(&claim),
-                &stopped,
-            ) {
-                tracing::warn!(
-                    %error,
-                    run_id = %claim.run_id,
-                    "Failed to publish recovered Claude Console close"
-                );
-                continue;
-            }
-        }
-        let _ = registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count);
-        recovered += 1;
     }
     Ok(recovered)
+}
+
+fn claude_sink_for_claim(
+    claim: &crate::turn_claims::TurnClaim,
+    machine_name: &str,
+    local_db_path: Option<PathBuf>,
+) -> Result<ClaudePrintSink> {
+    Ok(ClaudePrintSink {
+        run: ConsoleRun {
+            provider: &CLAUDE_CONSOLE,
+            session_id: claim.session_id.clone(),
+            thread_id: claim.thread_id.clone(),
+            turn_id: claim.turn_id.clone(),
+            run_id: claim.run_id.clone(),
+            client_request_id: claim.client_request_id.clone(),
+            launch_id: claim.launch_id.clone().unwrap_or_default(),
+            process_group_id: claim.process_group_id,
+            machine_name: machine_name.to_string(),
+            local_db_path,
+            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+        },
+        provider_thread_id: claim.provider_thread_id.clone().unwrap_or_default(),
+    })
+}
+
+async fn settle_recovered_dead_claude_claim(
+    registry: &crate::turn_claims::TurnClaimRegistry,
+    outbox_dir: &Path,
+    claim: &crate::turn_claims::TurnClaim,
+    machine_name: &str,
+    local_db_path: Option<PathBuf>,
+) -> Result<()> {
+    let sink = claude_sink_for_claim(claim, machine_name, local_db_path)?;
+    let stderr_path = claim.stderr_path.as_deref().map(PathBuf::from);
+    if claim.state == "spawned" {
+        sink.post_terminal_with_lifecycle(
+            "run_cancelled",
+            None,
+            stderr_path.as_deref().and_then(stderr_tail),
+            Some("closed"),
+            Some(claim.pending_count),
+            Some("machine_agent_restart"),
+        )
+        .await;
+    } else if claim.pending_count > 0 {
+        let stopped = crate::console_lifecycle::stopped_items_for_claim(claim);
+        crate::console_lifecycle::publish_invocation_closed(
+            registry,
+            Ok(outbox_dir),
+            claim,
+            machine_name,
+            CLAUDE_RUNTIME_SOURCE,
+            InvocationCloseReason::MachineAgentRestart,
+            crate::console_lifecycle::recovered_invocation_cleanup(claim),
+            &stopped,
+        )?;
+    }
+    registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)?;
+    Ok(())
+}
+async fn monitor_recovered_claude_claim(
+    claim: crate::turn_claims::TurnClaim,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+    mut sink: ClaudePrintSink,
+    invocation: Arc<ConsoleInvocation>,
+    mut stream: StreamProgress,
+) {
+    let mut offset = claim.projected_stdout_offset;
+    let mut pending_bytes = Vec::new();
+    let mut observed_run = invocation.latest_turn().run_id;
+    let mut last_trigger = json!({"kind": "unknown", "task_ids": [], "summary": ""});
+    let mut deferred_completion: Option<RegistryUpdate> = None;
+
+    loop {
+        if invocation.state() == InvocationState::Closed {
+            let _ = invocation.close_input().await;
+            if shutdown_recovered_claude_group(&claim).await {
+                invocation.process_exited();
+                record_closed_invocation(&invocation);
+                crate::console_lifecycle::unregister(&invocation.launch_id);
+            } else {
+                tracing::warn!(
+                    run_id = %invocation.latest_turn().run_id,
+                    process_group_id = invocation.process_identity().1,
+                    "Claude invocation closed but its process group could not be verified for cleanup"
+                );
+            }
+            return;
+        }
+
+        let lines = match read_growth(&stdout_path, &mut offset, &mut pending_bytes) {
+            Ok(lines) => lines,
+            Err(error) => {
+                let binding = invocation.latest_turn();
+                sink.for_binding(&binding)
+                    .post_terminal_with_lifecycle(
+                        "run_failed",
+                        None,
+                        Some(error.to_string()),
+                        Some("closed"),
+                        Some(invocation.pending_count()),
+                        None,
+                    )
+                    .await;
+                invocation.process_exited();
+                crate::console_lifecycle::unregister(&invocation.launch_id);
+                return;
+            }
+        };
+        let had_lines = !lines.is_empty();
+        for bytes in lines {
+            stream.seq += 1;
+            let sequence = stream.seq;
+            let event = match serde_json::from_slice::<Value>(&bytes) {
+                Ok(event) => event,
+                Err(error) => {
+                    sink.for_binding(&invocation.latest_turn())
+                        .post_decode_gap(sequence, &error.to_string(), &bytes)
+                        .await;
+                    continue;
+                }
+            };
+            if let Err(error) = validate_stream_identity(&event, &invocation.provider_thread_id) {
+                let binding = invocation.latest_turn();
+                sink.for_binding(&binding)
+                    .post_terminal_with_lifecycle(
+                        "run_failed",
+                        None,
+                        Some(error.to_string()),
+                        Some("closed"),
+                        Some(invocation.pending_count()),
+                        None,
+                    )
+                    .await;
+                invocation.process_exited();
+                crate::console_lifecycle::unregister(&invocation.launch_id);
+                return;
+            }
+            if invocation.latest_turn().run_id != observed_run {
+                observed_run = invocation.latest_turn().run_id;
+                stream.begin_turn();
+            }
+            stream.observe(&event);
+            let is_result = event.get("type").and_then(Value::as_str) == Some("result");
+            if is_response_start(&event) && invocation.state() == InvocationState::Parked {
+                stream.begin_turn();
+                if let Some(wake) = invocation.response_started(last_trigger.clone()) {
+                    sink.for_binding(&invocation.latest_turn())
+                        .post_wake_signal(&wake)
+                        .await;
+                    if let Some(update) = deferred_completion.take() {
+                        if apply_registry_update(&invocation, &sink, update).await {
+                            break;
+                        }
+                    }
+                }
+            }
+            if is_replayed_user_input(&event) {
+                invocation.input_acknowledged();
+            }
+            if let Some(trigger) = task_trigger(&event) {
+                last_trigger = trigger;
+            }
+            if let Some(update) = registry_update(&event) {
+                let defer_completion = invocation.state() == InvocationState::Parked
+                    && match &update {
+                        RegistryUpdate::Item(_, pending) => {
+                            !*pending && is_task_completion_event(&event)
+                        }
+                        RegistryUpdate::Snapshot(items, _) => {
+                            items.is_empty() && deferred_completion.is_some()
+                        }
+                    };
+                if defer_completion {
+                    deferred_completion = Some(update);
+                } else if apply_registry_update(&invocation, &sink, update).await {
+                    break;
+                }
+            }
+            if let Some((binding, event)) = invocation.route_stream_event(sequence, event) {
+                sink.for_binding(&binding)
+                    .post_stream_event(sequence, event)
+                    .await;
+            }
+            if is_result && invocation.state() == InvocationState::Parked {
+                if let Some(update) = deferred_completion.take() {
+                    if apply_registry_update(&invocation, &sink, update).await {
+                        break;
+                    }
+                }
+                if invocation.state() == InvocationState::Parked {
+                    continue;
+                }
+            }
+            if is_result {
+                let latest = invocation.latest_turn();
+                let cancelled = crate::turn_claims::default_registry()
+                    .and_then(|claims| claims.read(&latest.run_id))
+                    .ok()
+                    .is_some_and(|latest_claim| latest_claim.cancel_requested_at.is_some());
+                let terminal = settle_terminal_state(
+                    cancelled,
+                    true,
+                    stream.identity_confirmed,
+                    stream.terminal_from_stream,
+                );
+                if let Some(outcome) = invocation.idle(IdleSignal {
+                    terminal_state: terminal,
+                    exit_code: None,
+                    stderr: stderr_tail(&stderr_path).or(stream.auth_failure.clone()),
+                    terminal_reason: None,
+                }) {
+                    let closed = complete_idle(&invocation, &sink, outcome).await;
+                    stream.begin_turn();
+                    if closed {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if had_lines && stream.terminal_from_stream.is_none() {
+            persist_projection_checkpoint(
+                &invocation.latest_turn().run_id,
+                offset,
+                pending_bytes.len(),
+                stream.seq,
+            );
+        }
+
+        if crate::console_adapter::claim_process_liveness(&claim) == ClaimLiveness::Gone {
+            let latest = invocation.latest_turn();
+            let latest_claim = crate::turn_claims::default_registry()
+                .and_then(|claims| claims.read(&latest.run_id))
+                .unwrap_or_else(|_| claim.clone());
+            let pending_count = invocation.pending_count();
+            if let Some(binding) = invocation.take_active_turn() {
+                let cancel_requested = crate::turn_claims::default_registry()
+                    .and_then(|claims| claims.read(&binding.run_id))
+                    .ok()
+                    .is_some_and(|latest_claim| latest_claim.cancel_requested_at.is_some());
+                sink.for_binding(&binding)
+                    .post_terminal_with_lifecycle(
+                        if cancel_requested {
+                            "run_cancelled"
+                        } else {
+                            "run_failed"
+                        },
+                        None,
+                        Some(
+                            "Claude provider process ended before its invocation closed"
+                                .to_string(),
+                        ),
+                        Some("closed"),
+                        Some(pending_count),
+                        Some("machine_agent_restart"),
+                    )
+                    .await;
+            } else if latest_claim.invocation_state.as_deref() == Some("parked")
+                && pending_count > 0
+            {
+                if let Ok(registry) = crate::turn_claims::default_registry() {
+                    let stopped = crate::console_lifecycle::stopped_items_for_claim(&latest_claim);
+                    match crate::config::get_agent_runtime_events_outbox_dir() {
+                        Ok(outbox_dir) => {
+                            if let Err(error) = crate::console_lifecycle::publish_invocation_closed(
+                                &registry,
+                                Ok(outbox_dir.as_path()),
+                                &latest_claim,
+                                &sink.machine_name,
+                                CLAUDE_RUNTIME_SOURCE,
+                                InvocationCloseReason::MachineAgentRestart,
+                                crate::console_lifecycle::recovered_invocation_cleanup(
+                                    &latest_claim,
+                                ),
+                                &stopped,
+                            ) {
+                                tracing::warn!(
+                                    %error,
+                                    run_id = %latest_claim.run_id,
+                                    "Failed to publish recovered Claude close"
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                %error,
+                                run_id = %latest_claim.run_id,
+                                "Cannot recover Claude close without the runtime event outbox"
+                            );
+                        }
+                    }
+                }
+            }
+            let _ = crate::turn_claims::default_registry().and_then(|registry| {
+                registry.record_invocation_state(&latest.run_id, "closed", pending_count)
+            });
+            invocation.process_exited();
+            crate::console_lifecycle::unregister(&invocation.launch_id);
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn shutdown_recovered_claude_group(claim: &crate::turn_claims::TurnClaim) -> bool {
+    let Some(pgid) = claim.process_group_id else {
+        return false;
+    };
+    if !crate::process_group::group_has_running_member(pgid) {
+        return true;
+    }
+    let (Some(pid), Some(expected_start)) = (claim.pid, claim.process_start_time.as_deref()) else {
+        return false;
+    };
+    if !claim.process_group_is_from_this_boot()
+        || !crate::process_identity::try_collect_process_fact(pid)
+            .is_some_and(|facts| facts.lstart == expected_start)
+        || crate::process_group::leader_group_for(pid) != Some(pgid)
+    {
+        return false;
+    }
+    crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE)
+        .await
+        .is_gone()
 }
 
 /// Enter a running Claude Console turn with `text` (see
@@ -1363,21 +1674,27 @@ fn record_closed_invocation(invocation: &ConsoleInvocation) {
 fn spawn_claude(
     config: &ClaudePrintRunConfig,
     args: &[String],
+    stdin_path: &Path,
     stdout: File,
     stderr: File,
 ) -> std::io::Result<Child> {
+    let stdin_c =
+        std::ffi::CString::new(stdin_path.as_os_str().as_bytes()).map_err(std::io::Error::other)?;
     let mut command = Command::new(&config.claude_bin);
     command
         .args(args)
         .current_dir(&config.cwd)
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     ManagedIdentity::new(ManagedProvider::Claude, &config.session_id)
         .with_run_id(&config.run_id)
         .apply(&mut command, &[]);
     #[cfg(unix)]
-    crate::console_sink::own_process_group(&mut command, || Ok(()));
+    crate::console_sink::own_process_group(&mut command, move || {
+        // SAFETY: runs in the forked child before exec; open/dup2/close only.
+        unsafe { crate::console_rpc::adopt_fifo_as_stdin(&stdin_c) }
+    });
     command.spawn()
 }
 
@@ -2315,7 +2632,23 @@ if count <= int((root / "failures").read_text()):
     emit({"type": "result", "subtype": "success", "is_error": True})
     sys.exit(1)
 
-if prompt.startswith("scenario=background") or prompt.startswith("scenario=park") or prompt.startswith("scenario=restart") or prompt.startswith("scenario=wake") or prompt.startswith("scenario=drain") or prompt.startswith("scenario=stop"):
+if prompt.startswith("scenario=restart-live"):
+    assistant("output before restart")
+    steer_dir = pathlib.Path.home() / ".claude" / "channels" / "longhouse" / "sessions"
+    deadline = time.time() + 15
+    steer_files = []
+    while not steer_files and time.time() < deadline:
+        steer_files = list(steer_dir.glob("*.steer.json"))
+        time.sleep(0.01)
+    if not steer_files:
+        sys.exit(3)
+    steer_path = steer_files[0]
+    steer = json.loads(steer_path.read_text())
+    steer_path.unlink()
+    assistant("received steer after recovery: " + steer["text"])
+    emit({"type": "system", "subtype": "background_tasks_changed", "tasks": [task]})
+    emit({"type": "result", "subtype": "success", "is_error": False})
+elif prompt.startswith("scenario=background") or prompt.startswith("scenario=park") or prompt.startswith("scenario=restart") or prompt.startswith("scenario=wake") or prompt.startswith("scenario=drain") or prompt.startswith("scenario=stop"):
     if prompt.startswith("scenario=stop"):
         background = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
         (root / "task.pid").write_text(str(background.pid))
@@ -2392,6 +2725,7 @@ for _ in sys.stdin:
         _guard: std::sync::MutexGuard<'static, ()>,
         root: tempfile::TempDir,
         previous_home: Option<std::ffi::OsString>,
+        previous_user_home: Option<std::ffi::OsString>,
         previous_config: Option<std::ffi::OsString>,
     }
 
@@ -2400,6 +2734,7 @@ for _ in sys.stdin:
             let guard = crate::console_adapter::longhouse_home_test_guard();
             let root = tempfile::tempdir().unwrap();
             let previous_home = std::env::var_os("LONGHOUSE_HOME");
+            let previous_user_home = std::env::var_os("HOME");
             let previous_config = std::env::var_os("CLAUDE_CONFIG_DIR");
             let provider_home = root.path().join("claude-home");
             std::fs::create_dir_all(&provider_home).unwrap();
@@ -2413,12 +2748,14 @@ for _ in sys.stdin:
             .unwrap();
             unsafe {
                 std::env::set_var("LONGHOUSE_HOME", root.path().join("longhouse"));
+                std::env::set_var("HOME", root.path());
                 std::env::set_var("CLAUDE_CONFIG_DIR", provider_home);
             }
             Self {
                 _guard: guard,
                 root,
                 previous_home,
+                previous_user_home,
                 previous_config,
             }
         }
@@ -2444,6 +2781,7 @@ for _ in sys.stdin:
         fn drop(&mut self) {
             for (key, previous) in [
                 ("LONGHOUSE_HOME", self.previous_home.take()),
+                ("HOME", self.previous_user_home.take()),
                 ("CLAUDE_CONFIG_DIR", self.previous_config.take()),
             ] {
                 match previous {
@@ -2535,6 +2873,53 @@ for _ in sys.stdin:
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "Claude did not post {kind} for session {session_id}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    fn progress_text_count(events: &[Value], session_id: &str, text: &str) -> usize {
+        events
+            .iter()
+            .filter(|event| {
+                event["session_id"] == session_id
+                    && event["kind"] == "progress_signal"
+                    && event["payload"]["event"]["type"] == "assistant"
+                    && event["payload"]["event"]["message"]["content"]
+                        .as_array()
+                        .is_some_and(|content| content.iter().any(|part| part["text"] == text))
+            })
+            .count()
+    }
+
+    async fn wait_for_progress_text(home: &FakeHome, session_id: &str, text: &str) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if progress_text_count(&home.events(), session_id, text) > 0 {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Claude did not emit {text:?} for session {session_id}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn wait_for_projected_stdout(run_id: &str, stdout_path: &Path) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(run_id)
+                .unwrap();
+            let file_len = std::fs::metadata(stdout_path).unwrap().len();
+            if claim.projected_stdout_offset >= file_len {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Claude projection cursor did not reach the durable stdout end"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -3077,36 +3462,29 @@ for _ in sys.stdin:
                     recover_claude_print_turns("fake-box", None).await.unwrap(),
                     1
                 );
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-                while crate::process_group::group_is_alive(first.process_group_id.unwrap())
-                    && tokio::time::Instant::now() < deadline
-                {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
+                assert!(
+                    crate::process_group::group_is_alive(first.process_group_id.unwrap()),
+                    "Machine Agent recovery must leave the Claude provider alive"
+                );
                 let recovered = crate::turn_claims::default_registry()
                     .unwrap()
                     .read(&first.run_id)
                     .unwrap();
-                assert_eq!(recovered.invocation_state.as_deref(), Some("closed"));
-                let recovered_events = home.events();
-                let closed = recovered_events
+                assert_eq!(recovered.invocation_state.as_deref(), Some("parked"));
+                let recovered_events = home
+                    .events()
+                    .into_iter()
+                    .filter(|event| event["session_id"] == session_id)
+                    .collect::<Vec<_>>();
+                assert!(!recovered_events
                     .iter()
-                    .find(|event| event["kind"] == "invocation_closed")
-                    .expect("restart close event");
-                assert_eq!(closed["run_id"], first.run_id);
-                assert_eq!(closed["provider"], "claude");
-                assert_eq!(closed["source"], CLAUDE_RUNTIME_SOURCE);
-                assert_eq!(closed["payload"]["reason"], "machine_agent_restart");
-                assert_eq!(closed["payload"]["stopped"][0]["id"], "task-1");
-                let empty = recovered_events
-                    .iter()
-                    .find(|event| {
-                        event["kind"] == "delegation_signal"
-                            && event["dedupe_key"]
-                                == format!("close:{}:delegation", first.launch_id)
-                    })
-                    .expect("empty delegation snapshot after restart close");
-                assert_eq!(empty["payload"]["delegation"]["count"], 0);
+                    .any(|event| event["kind"] == "invocation_closed"));
+                let invocation = crate::console_lifecycle::lookup_launch(&first.launch_id).unwrap();
+                let stopped = close_parked_claude_invocation(&recovered, invocation, "fake-box")
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(stopped.stopped[0].id, "task-1");
                 assert_fake_groups_gone(&fake).await;
             }
         }
@@ -3123,6 +3501,134 @@ for _ in sys.stdin:
         ] {
             assert_eq!(run_claude_scenario(scenario).await, ScenarioOutcome::Passed);
         }
+    }
+    #[tokio::test]
+    async fn console_restart_contract() {
+        run_claude_restart_contract().await;
+    }
+
+    async fn run_claude_restart_contract() {
+        let home = FakeHome::new();
+        let fake = FakeClaude::new(0);
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let first = start_fake_turn(
+            &home,
+            &fake,
+            &session_id,
+            &thread_id,
+            "scenario=restart-live",
+            None,
+            "user",
+            None,
+            None,
+        )
+        .await;
+        let first_claim = crate::turn_claims::default_registry()
+            .unwrap()
+            .read(&first.run_id)
+            .unwrap();
+        assert_eq!(first_claim.state, "spawned");
+        wait_for_progress_text(&home, &session_id, "output before restart").await;
+        wait_for_projected_stdout(&first.run_id, Path::new(&first.stdout_path)).await;
+        crate::console_lifecycle::stop_test_monitor(&first.launch_id).await;
+        crate::console_lifecycle::unregister(&first.launch_id);
+        let process_group_id = first.process_group_id.unwrap();
+        assert!(crate::process_group::group_is_alive(process_group_id));
+
+        assert_eq!(
+            recover_claude_print_turns("fake-box", None).await.unwrap(),
+            1
+        );
+        assert!(crate::process_group::group_is_alive(process_group_id));
+        assert!(
+            crate::console_lifecycle::lookup_launch(&first.launch_id).is_some(),
+            "the recovered engine must register the live invocation"
+        );
+        steer_claude_print_turn(&first.run_id, &session_id, "steer after recovery").unwrap();
+        let completed = wait_for_terminal(&first.run_id).await;
+        assert_eq!(
+            completed.result.as_ref().unwrap()["terminal_state"],
+            "run_completed"
+        );
+        assert_eq!(completed.invocation_state.as_deref(), Some("parked"));
+        let events = home.events();
+        assert_eq!(
+            progress_text_count(&events, &session_id, "output before restart"),
+            1,
+            "recovery must not replay output already projected by the first engine"
+        );
+        assert_eq!(
+            progress_text_count(
+                &events,
+                &session_id,
+                "received steer after recovery: steer after recovery"
+            ),
+            1,
+            "the recovered engine must keep streaming output from the same provider"
+        );
+
+        let invocation = crate::console_lifecycle::lookup_launch(&first.launch_id).unwrap();
+        let stopped = close_parked_claude_invocation(&completed, invocation, "fake-box")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stopped.stopped[0].id, "task-1");
+        assert_fake_groups_gone(&fake).await;
+
+        let mismatch_session = Uuid::new_v4().to_string();
+        let mismatch_thread = Uuid::new_v4().to_string();
+        let mismatch = start_fake_turn(
+            &home,
+            &fake,
+            &mismatch_session,
+            &mismatch_thread,
+            "scenario=restart-live",
+            None,
+            "user",
+            None,
+            None,
+        )
+        .await;
+        wait_for_progress_text(&home, &mismatch_session, "output before restart").await;
+        wait_for_projected_stdout(&mismatch.run_id, Path::new(&mismatch.stdout_path)).await;
+        crate::console_lifecycle::stop_test_monitor(&mismatch.launch_id).await;
+        crate::console_lifecycle::unregister(&mismatch.launch_id);
+        let claims = crate::turn_claims::default_registry().unwrap();
+        let claim = claims.read(&mismatch.run_id).unwrap();
+        let pid = claim.pid.unwrap();
+        let process_group_id = claim.process_group_id.unwrap();
+        claims
+            .mark_spawned_invocation(
+                &claim.run_id,
+                pid,
+                process_group_id,
+                Some("reused-pid-with-a-different-start-time".to_string()),
+                CLAUDE_PRINT_ADAPTER,
+                &mismatch.launch_id,
+                claim.provider_thread_id.as_deref(),
+                claim.stdout_path.as_deref().unwrap(),
+                claim.stderr_path.as_deref().unwrap(),
+                claim.result.clone().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            recover_claude_print_turns("fake-box", None).await.unwrap(),
+            0,
+            "a reused pid with a different start time must not be adopted"
+        );
+        assert!(
+            crate::process_group::group_is_alive(process_group_id),
+            "recovery must not signal a process whose recorded identity mismatches"
+        );
+        assert!(crate::console_lifecycle::lookup_launch(&mismatch.launch_id).is_none());
+        assert!(crate::process_group::shutdown_group(
+            process_group_id,
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await
+        .is_gone());
+        assert_fake_groups_gone(&fake).await;
     }
 
     /// 2026-10-07, session ca6e9d23: on `--resume` Claude ran its own orphan

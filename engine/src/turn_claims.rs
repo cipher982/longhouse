@@ -638,6 +638,28 @@ impl TurnClaimRegistry {
         self.write(&claim)?;
         Ok(claim)
     }
+    pub fn record_provider_turn_id(
+        &self,
+        run_id: &str,
+        provider_turn_id: &str,
+    ) -> Result<TurnClaim> {
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
+        if let Some(result) = claim.result.as_mut().and_then(Value::as_object_mut) {
+            result.insert(
+                "provider_turn_id".to_string(),
+                Value::String(provider_turn_id.to_string()),
+            );
+        } else if claim.result.is_none() {
+            claim.result = Some(serde_json::json!({
+                "provider_turn_id": provider_turn_id,
+            }));
+        } else {
+            anyhow::bail!("turn claim {run_id} result is not an object");
+        }
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim)
+    }
 
     pub fn mark_failed(&self, run_id: &str, error: &str) -> Result<TurnClaim> {
         let (_lock, mut claim) = self.read_for_update(run_id)?;

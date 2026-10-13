@@ -67,12 +67,26 @@ pub fn claim_liveness(
     claim: &TurnClaim,
     inventory: Option<&HashMap<u32, ProcessFact>>,
 ) -> ClaimLiveness {
+    if let Some(liveness) = claim_boot_liveness(claim) {
+        return liveness;
+    }
     let Some(inventory) = inventory else {
         return ClaimLiveness::Unknown;
     };
     claim_liveness_by_start(claim, |pid| {
         inventory.get(&pid).map(|fact| fact.lstart.as_str())
     })
+}
+
+fn claim_boot_liveness(claim: &TurnClaim) -> Option<ClaimLiveness> {
+    let Some(recorded) = claim.boot_id.as_deref() else {
+        return Some(ClaimLiveness::Unknown);
+    };
+    match crate::heartbeat::machine_boot_id().as_deref() {
+        Some(current) if current == recorded => None,
+        Some(_) => Some(ClaimLiveness::Gone),
+        None => Some(ClaimLiveness::Unknown),
+    }
 }
 
 /// `claim_liveness` over a lookup of each live pid's `ps lstart` text,
@@ -116,6 +130,9 @@ fn claim_liveness_by_start<'a>(
 /// them come from one process-table read; a per-pid argv probe of each, or a
 /// whole-machine argv scan, was the engine's largest cost.
 pub fn claim_process_liveness(claim: &TurnClaim) -> ClaimLiveness {
+    if let Some(liveness) = claim_boot_liveness(claim) {
+        return liveness;
+    }
     let pids: Vec<u32> = claim
         .owned_processes
         .iter()
@@ -126,6 +143,16 @@ pub fn claim_process_liveness(claim: &TurnClaim) -> ClaimLiveness {
         return ClaimLiveness::Unknown;
     };
     claim_liveness_by_start(claim, |pid| starts.get(&pid).map(String::as_str))
+}
+
+/// Whether a live member's boot, PID, and start time prove this process group
+/// still belongs to the recorded Console invocation.
+pub fn claim_owns_live_process_group(claim: &TurnClaim) -> bool {
+    if !claim.process_group_is_from_this_boot() {
+        return false;
+    }
+    crate::process_identity::try_collect_process_facts_by_pid()
+        .is_some_and(|inventory| claim.has_live_group_identity(&inventory))
 }
 
 /// Read whatever a provider appended to its JSONL file since `offset`, and
@@ -276,6 +303,18 @@ mod tests {
         );
 
         inventory.remove(&4242);
+        assert_eq!(
+            claim_liveness(&claim, Some(&inventory)),
+            ClaimLiveness::Gone
+        );
+    }
+    #[test]
+    fn a_reused_pid_from_another_boot_is_not_adopted() {
+        let mut claim = spawned_claim(Some(4242), Some("Mon Jan  1 00:00:00 2024"));
+        claim.boot_id = Some("previous-boot".to_string());
+        let mut inventory = HashMap::new();
+        inventory.insert(4242, fact("Mon Jan  1 00:00:00 2024"));
+
         assert_eq!(
             claim_liveness(&claim, Some(&inventory)),
             ClaimLiveness::Gone
