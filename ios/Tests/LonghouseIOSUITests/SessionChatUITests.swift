@@ -344,6 +344,7 @@ final class SessionChatUITests: XCTestCase {
             )
         }
         assertTranscriptElementsVisibleInOrder(initialOrder, in: app)
+        XCTAssertTrue(wakeNotice.label.contains("3 updates"), "three consecutive wake notices render as one counted row")
         let newestReply = app.staticTexts["Assistant fixture live update at bottom."]
         XCTAssertFalse(newestReply.exists, "The first frame must precede the fixture assistant update")
 

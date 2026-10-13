@@ -103,9 +103,10 @@ export function action(item: TranscriptItem): string {
 /// short server-authored prose whose last sentence may be the point, so it is
 /// shown whole, as the web timeline shows it.
 export function providerNotification(item: TranscriptItem): string {
+  const wakeAttribute = item.wake ? ' data-wake="true"' : "";
   if (item.origin === "longhouse") {
     return `
-        <div class="tool row notice static" data-testid="session-provider-notification" data-origin="longhouse">
+        <div class="tool row notice static" data-testid="session-provider-notification" data-origin="longhouse"${wakeAttribute}>
           <div class="tool-head"><span class="tool-title">${escapeHtml((item.body || "").trim())}</span></div>
         </div>
       `;
@@ -113,13 +114,13 @@ export function providerNotification(item: TranscriptItem): string {
   const { title, hint, body } = summarizeProviderNotice(item.body);
   if (body === null) {
     return `
-        <div class="tool row notice static" data-testid="session-provider-notification">
+        <div class="tool row notice static" data-testid="session-provider-notification"${wakeAttribute}>
           <div class="tool-head"><span class="tool-title">${escapeHtml(title)}</span></div>
         </div>
       `;
   }
   return `
-        <details class="tool row notice" data-testid="session-provider-notification" data-open-key="${escapeHtml(item.id)}">
+        <details class="tool row notice" data-testid="session-provider-notification"${wakeAttribute} data-open-key="${escapeHtml(item.id)}">
           <summary>
             <span class="tool-title">${escapeHtml(title)}</span>
             <span class="tool-subtitle">${escapeHtml(hint || "")}</span>

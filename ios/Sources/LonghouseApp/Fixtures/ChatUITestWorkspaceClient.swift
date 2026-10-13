@@ -846,6 +846,26 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 origin: "wake",
                 turnState: "completed"
             ),
+            SessionInputReceipt(
+                clientRequestId: "wake:background-completion-fixture:2",
+                intent: "auto",
+                status: "delivered",
+                createdAt: fixedTimestamp(offset: 1),
+                eventId: nil,
+                text: "Background task finished: Background command \"Run the checks\" completed (exit code 0)",
+                origin: "wake",
+                turnState: "completed"
+            ),
+            SessionInputReceipt(
+                clientRequestId: "wake:background-completion-fixture:3",
+                intent: "auto",
+                status: "delivered",
+                createdAt: fixedTimestamp(offset: 1),
+                eventId: nil,
+                text: "Background task finished: Background command \"Run the checks\" completed (exit code 0)",
+                origin: "wake",
+                turnState: "completed"
+            ),
         ]
     }
 

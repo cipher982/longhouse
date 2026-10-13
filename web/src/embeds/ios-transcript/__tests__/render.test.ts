@@ -186,6 +186,21 @@ describe("rows", () => {
       const row = root().querySelector("div.tool.notice.static")!;
       expect(row.querySelector(".tool-title")?.textContent).toBe('Background command "Run the checks" completed (exit code 0)');
     });
+    it("marks wake notices on their row", () => {
+      render({ items: [{ ...jobResult, wake: true }] });
+      expect(root().querySelector("details.tool.notice")?.getAttribute("data-wake")).toBe("true");
+
+      render({
+        items: [
+          {
+            ...notice("wake-run", 'Background command "Run the checks" completed (exit code 0) (3 updates)'),
+            wake: true,
+          },
+        ],
+      });
+      expect(root().querySelector("div.tool.notice.static")?.getAttribute("data-wake")).toBe("true");
+    });
+
 
     it("shows Longhouse's own close notice whole, even past the header length cap", () => {
       const text =

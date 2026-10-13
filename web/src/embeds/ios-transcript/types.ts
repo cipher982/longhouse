@@ -67,6 +67,8 @@ export interface TranscriptItem {
   subagents?: Subagent[] | null;
   subagentSummary?: string | null;
   turnEnd?: TurnEnd | null;
+  /** Marks a background-completion wake notice. */
+  wake?: boolean;
   /** Cursors of events a lite page sent as previews; expanding asks native for the full bodies. */
   bodyCursors?: string[] | null;
   /** "preview", "loading", "failed" or "unavailable" while bodyCursors is set. */

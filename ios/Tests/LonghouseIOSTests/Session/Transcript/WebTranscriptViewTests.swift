@@ -155,6 +155,7 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertEqual(rows.map(\.kind), ["providerNotification"])
         XCTAssertEqual(rows.first?.id, "wake:3:1", "the collapsed row stands at the latest completion")
         XCTAssertEqual(rows.first?.body, "Background task finished: build (3 updates)")
+        XCTAssertEqual(rows.first?.wake, true, "the collapsed row keeps the wake marker")
     }
 
     func testWakeAndLonghouseCloseReceiptsRenderAsProviderNotifications() {
@@ -172,6 +173,7 @@ final class WebTranscriptViewTests: XCTestCase {
         )
         XCTAssertEqual(receiptRows.map(\.kind), ["providerNotification"])
         XCTAssertNil(receiptRows.first?.role)
+        XCTAssertEqual(receiptRows.first?.wake, true)
         XCTAssertEqual(receiptRows.first?.body, wakeText)
 
         // A close that could not confirm its processes are gone carries the
@@ -192,6 +194,7 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertEqual(closeRows.map(\.kind), ["providerNotification"])
         XCTAssertNil(closeRows.first?.role)
         XCTAssertEqual(closeRows.first?.body, closeText)
+        XCTAssertNil(closeRows.first?.wake)
         XCTAssertEqual(closeRows.first?.origin, "longhouse", "the document shows Longhouse's notice whole")
         let wakeEvent = makeUserEvent(
             id: 44,
@@ -208,6 +211,7 @@ final class WebTranscriptViewTests: XCTestCase {
             submittedInputs: []
         )
         XCTAssertEqual(durableRows.map(\.kind), ["providerNotification"])
+        XCTAssertEqual(durableRows.first?.wake, true)
         XCTAssertNil(durableRows.first?.role)
     }
 
