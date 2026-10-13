@@ -112,7 +112,9 @@ def test_scripted_model_lifecycle_calls_the_profile_endpoint_for_every_turn(prov
     monkeypatch.setenv("OPENROUTER_API_KEY", model_key)
     monkeypatch.setenv("LONGHOUSE_FAKE_EXPECTED_OPENROUTER_KEY_SHA256", hashlib.sha256(model_key.encode()).hexdigest())
     monkeypatch.setenv("LONGHOUSE_FAKE_MODEL_AUTH_RECEIPT", str(auth_receipt))
-    monkeypatch.setenv(module.FAMILY.live_env, "1")
+    # A scripted run spends no real model, so it must not need the live opt-in
+    # (the factory never sets it for scripted_model; 2026-10-13 18:07Z tick).
+    monkeypatch.delenv(module.FAMILY.live_env, raising=False)
     root = tmp_path / "scripted-evidence"
     scripted_arguments = fake.scripted_model_arguments(provider, Path("/fake/longhouse"), root)
     assert [

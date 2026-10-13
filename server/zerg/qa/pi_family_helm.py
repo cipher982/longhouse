@@ -2126,7 +2126,9 @@ class Lifecycle:
         self.scripted_model_thread: threading.Thread | None = None
         self.scripted_model_script: Path | None = None
         self.scripted_model_expected_turns: frozenset[str] = frozenset()
-        if os.environ.get(family.live_env) not in {"1", "true", "yes", "on"}:
+        # The opt-in guards against spending a real model by accident; a scripted
+        # run talks only to its own loopback fixture, so it needs none.
+        if not self.scripted_model and os.environ.get(family.live_env) not in {"1", "true", "yes", "on"}:
             raise RuntimeError(f"{family.name} Helm qualification requires explicit {family.live_env} opt-in")
         self.api_url = str(args.api_url or os.environ.get(RUNTIME_API_URL_ENV) or "")
         self.token = str(args.agents_token or os.environ.get(RUNTIME_AGENTS_TOKEN_ENV) or "")
