@@ -377,6 +377,134 @@ def test_live_observation_requires_the_canonical_semantic_boundary_fixture() -> 
     assert boundary["failure_code"] == "interaction_title_boundary_fixture_mismatch"
 
 
+def test_scripted_model_observation_requires_a_served_fixture_receipt() -> None:
+    observation = generated_fake_observation("codex")
+    observation.update({"evidence_class": "scripted_model", "synthetic": False})
+
+    result = evaluate_observation("codex", observation)
+
+    receipt = next(row for row in result["assertions"] if row["probe_id"] == "scripted_model_receipt")
+    assert result["status"] != "pass"
+    assert receipt["status"] == "blocked"
+    assert receipt["failure_code"] == "scripted_model_receipt_missing"
+
+
+def test_scripted_model_receipt_requires_loopback_endpoint_and_matched_turns() -> None:
+    observation = generated_fake_observation("codex")
+    observation.update(
+        {
+            "evidence_class": "scripted_model",
+            "synthetic": False,
+            "scripted_model": {
+                "endpoint": "https://provider.example",
+                "script_sha256": "a" * 64,
+                "served_requests": 1,
+                "request_window": {"after_request_id": 0, "through_request_id": 1},
+                "matched_turns": [],
+            },
+        }
+    )
+
+    result = evaluate_observation("codex", observation)
+
+    receipt = next(row for row in result["assertions"] if row["probe_id"] == "scripted_model_receipt")
+    assert receipt["status"] == "blocked"
+    assert receipt["failure_code"] == "scripted_model_receipt_invalid"
+
+
+def test_scripted_model_receipt_accepts_a_matched_local_turn() -> None:
+    observation = generated_fake_observation("codex")
+    observation.update(
+        {
+            "evidence_class": "scripted_model",
+            "synthetic": False,
+            "scripted_model": {
+                "endpoint": "http://127.0.0.1:8123",
+                "script_sha256": "a" * 64,
+                "served_requests": 1,
+                "request_window": {"after_request_id": 0, "through_request_id": 1},
+                "matched_turns": ["codex-turn"],
+            },
+        }
+    )
+
+    result = evaluate_observation("codex", observation)
+
+    receipt = next(row for row in result["assertions"] if row["probe_id"] == "scripted_model_receipt")
+    assert receipt["status"] == "pass"
+    assert receipt["failure_code"] is None
+
+
+def test_scripted_model_receipt_rejects_a_window_with_no_invocation_request() -> None:
+    observation = generated_fake_observation("codex")
+    observation.update(
+        {
+            "evidence_class": "scripted_model",
+            "synthetic": False,
+            "scripted_model": {
+                "endpoint": "http://127.0.0.1:8123",
+                "script_sha256": "a" * 64,
+                "served_requests": 1,
+                "matched_turns": ["previous-run"],
+                "request_window": {"after_request_id": 1, "through_request_id": 1},
+            },
+        }
+    )
+
+    result = evaluate_observation("codex", observation)
+
+    receipt = next(row for row in result["assertions"] if row["probe_id"] == "scripted_model_receipt")
+    assert receipt["status"] == "blocked"
+    assert receipt["failure_code"] == "scripted_model_receipt_invalid"
+
+
+@pytest.mark.parametrize("provider", ("codex", "claude", "opencode"))
+def test_scripted_local_control_receipts_allow_no_served_request(provider: str) -> None:
+    observation = generated_fake_observation(provider)
+    observation.update(
+        {
+            "evidence_class": "scripted_model",
+            "synthetic": False,
+            "scripted_model": {
+                "endpoint": "http://127.0.0.1:8123",
+                "script_sha256": "a" * 64,
+                "served_requests": 0,
+                "matched_turns": [],
+                "request_window": {"after_request_id": 3, "through_request_id": 3},
+            },
+        }
+    )
+
+    result = evaluate_observation(provider, observation)
+
+    receipt = next(row for row in result["assertions"] if row["probe_id"] == "scripted_model_receipt")
+    assert receipt["status"] == "pass"
+    assert receipt["failure_code"] is None
+
+
+def test_scripted_prompt_probe_requires_a_served_model_request() -> None:
+    observation = generated_fake_observation("pi")
+    observation.update(
+        {
+            "evidence_class": "scripted_model",
+            "synthetic": False,
+            "scripted_model": {
+                "endpoint": "http://127.0.0.1:8123",
+                "script_sha256": "a" * 64,
+                "served_requests": 0,
+                "matched_turns": [],
+                "request_window": {"after_request_id": 3, "through_request_id": 3},
+            },
+        }
+    )
+
+    result = evaluate_observation("pi", observation)
+
+    receipt = next(row for row in result["assertions"] if row["probe_id"] == "scripted_model_receipt")
+    assert receipt["status"] == "blocked"
+    assert receipt["failure_code"] == "scripted_model_receipt_invalid"
+
+
 def test_raw_provider_fields_cannot_override_parser_semantics() -> None:
     raw = {
         "type": "user",

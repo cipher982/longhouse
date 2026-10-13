@@ -2198,7 +2198,7 @@ class UniversalProviderAdapter:
             observation = generated_fake_observation(self.config.provider)
             synthetic = True
         else:
-            if requested_evidence not in {"live_no_token", "live_token"}:
+            if requested_evidence not in {"live_no_token", "scripted_model", "live_token"}:
                 payload = {
                     "status": STATUS_BLOCKED,
                     "scenario": "interaction_semantics",

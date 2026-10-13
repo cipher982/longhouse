@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from datetime import UTC
 from datetime import datetime
@@ -49,7 +51,15 @@ def _edge(provider: str, chip: str):
     return assertions
 
 
-def _proof(assertion, *, outcome=AssertionOutcome.PASS, at: datetime, sha: str = "a" * 40, suffix: str = ""):
+def _proof(
+    assertion,
+    *,
+    outcome=AssertionOutcome.PASS,
+    at: datetime,
+    sha: str = "a" * 40,
+    suffix: str = "",
+    evidence_class: EvidenceClass = EvidenceClass.LIVE_TOKEN,
+):
     return _record(
         provider=assertion.provider,
         provider_version="1.2.3",
@@ -58,7 +68,7 @@ def _proof(assertion, *, outcome=AssertionOutcome.PASS, at: datetime, sha: str =
         assertion_id=assertion.assertion_id,
         assertion_variant=assertion.variant,
         outcome=outcome,
-        evidence_class=EvidenceClass.LIVE_TOKEN,
+        evidence_class=evidence_class,
         generated_at=at.isoformat().replace("+00:00", "Z"),
         invocation_id=f"run-{assertion.assertion_id}-{assertion.variant}-{suffix or at.timestamp()}",
         longhouse_git_sha=sha,
@@ -85,6 +95,7 @@ def test_every_edge_passing_certifies_and_rows_scope_the_claim(monkeypatch, tmp_
     assert chip["state"] == "certified"
     assert {row["assertion_id"] for row in chip["requirements"]} == {a.assertion_id for a in edge}
     assert all(row["longhouse_git_sha"] == "a" * 40 and row["provider_version"] == "1.2.3" for row in chip["requirements"])
+    assert {row["evidence_class"] for row in chip["requirements"]} == {"live_token"}
     # Nothing else was published, so every other covered chip is unverified,
     # and a chip with no edge at all is unproven -- never silently lit.
     antigravity = next(row for row in payload["providers"] if row["provider"] == "antigravity")["chips"]
@@ -92,13 +103,47 @@ def test_every_edge_passing_certifies_and_rows_scope_the_claim(monkeypatch, tmp_
     assert _chip(payload, "pi", "resume")["state"] == "unverified"
 
 
-def _verdicts(edge, *, at: datetime, failures: int, outcome: str = "infrastructure_error"):
+def test_scripted_model_proofs_never_light_a_chip(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "steerMidTurn")
+    scripted = [_proof(assertion, evidence_class=EvidenceClass.SCRIPTED_MODEL, at=NOW - timedelta(hours=1)) for assertion in edge]
+
+    chip = _chip(_payload(monkeypatch, tmp_path, scripted), "pi", "steerMidTurn")
+
+    assert chip["state"] == "unverified"
+    assert {row["evidence_class"] for row in chip["requirements"]} == {"live_token"}
+    assert {row["proof_status"] for row in chip["requirements"]} == {"never_proven"}
+
+
+def test_scripted_model_failure_does_not_revoke_a_live_chip(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "steerMidTurn")
+    passed = [_proof(assertion, at=NOW - timedelta(hours=2)) for assertion in edge]
+    scripted_failures = _verdicts(
+        edge,
+        at=NOW - timedelta(minutes=5),
+        failures=2,
+        evidence_class=EvidenceClass.SCRIPTED_MODEL,
+    )
+
+    chip = _chip(_payload_with_verdicts(monkeypatch, tmp_path, passed, scripted_failures), "pi", "steerMidTurn")
+
+    assert chip["state"] == "certified"
+
+
+def _verdicts(
+    edge,
+    *,
+    at: datetime,
+    failures: int,
+    outcome: str = "infrastructure_error",
+    evidence_class: EvidenceClass = EvidenceClass.LIVE_TOKEN,
+):
     return [
         CellVerdict(
             provider=a.provider,
             assertion_id=a.assertion_id,
             scenario_id=a.scenario_id,
             variant=a.variant,
+            evidence_class=evidence_class,
             outcome=outcome,
             observed_at=at,
             consecutive_failures=failures,
@@ -127,6 +172,27 @@ def test_two_consecutive_failures_after_a_pass_unlight_the_chip_as_unverified(mo
         assert row["proven_at"] is None
         # The row still names what the last pass ran against.
         assert row["longhouse_git_sha"] == "a" * 40
+
+
+def test_classless_legacy_failure_revokes_only_live_token_chip(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "steerMidTurn")
+    passed = [_proof(assertion, at=NOW - timedelta(hours=2)) for assertion in edge]
+    legacy = _verdicts(edge[:1], at=NOW - timedelta(minutes=5), failures=2)[0].serialize()
+    del legacy["evidence_class"]
+    legacy_key = [legacy["provider"], legacy["assertion_id"], legacy["scenario_id"], legacy["variant"]]
+    encoded_key = json.dumps(legacy_key, ensure_ascii=False, separators=(",", ":")).encode()
+    root = tmp_path / "legacy-verdicts"
+    root.mkdir()
+    file_name = f"{hashlib.sha256(encoded_key).hexdigest()}.json"
+    (root / file_name).write_text(json.dumps(legacy), encoding="utf-8")
+    store = CellVerdictStore(root)
+    monkeypatch.setattr(routes, "_cell_verdict_store", lambda: store)
+
+    chip = _chip(_payload(monkeypatch, tmp_path, passed), "pi", "steerMidTurn")
+
+    assert chip["state"] == "unverified"
+    assert {row["evidence_class"] for row in chip["requirements"]} == {"live_token"}
+    assert sorted(row["proof_status"] for row in chip["requirements"]) == sorted(["infrastructure_error"] + ["pass"] * (len(edge) - 1))
 
 
 def test_one_failure_after_a_pass_leaves_the_chip_certified(monkeypatch, tmp_path: Path) -> None:

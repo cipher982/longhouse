@@ -487,7 +487,20 @@ def test_a_result_carries_the_evidence_class_the_command_line_named(tmp_path, ca
     assert run(tmp_path / "named", "--evidence-class", "hermetic")[1]["evidence_class"] == "hermetic"
     # A caller that names none (the release-identity lane, a test) gets the registration's first.
     assert run(tmp_path / "unnamed")[1]["evidence_class"] == "live_token"
-    assert run(tmp_path / "unlisted", "--evidence-class", "live_no_token") == (
+
+    scripted_registration = dataclasses.replace(_REGISTRATION, evidence_classes=("scripted_model",))
+    scripted_producer = Producer(scripted_registration, artifact_kind="fixture_result", failure_code="fixture_failed")
+    scripted_args = ["--variant", "v", "--evidence-root", str(tmp_path / "scripted"), "--evidence-class", "scripted_model"]
+    assert (
+        scripted_producer.main(
+            lambda args: scripted_producer.execute(args.evidence_root, lambda _run: None),
+            scripted_args,
+        )
+        == 1
+    )
+    assert json.loads(capsys.readouterr().out)["evidence_class"] == "scripted_model"
+
+    assert run(tmp_path / "unlisted", "--evidence-class", "scripted_model") == (
         2,
         {"status": "fail", "failure_code": "evidence_class_not_registered"},
     )

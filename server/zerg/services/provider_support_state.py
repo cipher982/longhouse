@@ -190,6 +190,10 @@ def _effective_evidence_level(
     evidence: Mapping[str, Any],
 ) -> tuple[str, int]:
     evidence_level = str(evidence.get("level") or "").strip()
+    if target_level == "scripted_model" or evidence_level == "scripted_model":
+        # This support-state rank describes local/release provider evidence;
+        # scripted-model proof is a separate class and cannot meet either side.
+        return "scripted_model", -1
     if evidence_level in EVIDENCE_RANK:
         return evidence_level, EVIDENCE_RANK[evidence_level]
     evidence_status = str(evidence.get("status") or "").strip()

@@ -244,6 +244,14 @@ def _live_claude_interaction_data(
             "native_source_root": str(tmp_path),
         }
     )
+    if evidence_class == "scripted_model":
+        observation["scripted_model"] = {
+            "endpoint": "http://127.0.0.1:8123",
+            "script_sha256": "a" * 64,
+            "served_requests": 1,
+            "matched_turns": ["claude-scripted-turn"],
+            "request_window": {"after_request_id": 0, "through_request_id": 1},
+        }
     for index, row in enumerate(observation["probes"]):
         events = row.get("raw_events") or []
         if not events:
@@ -469,6 +477,7 @@ def test_full_column_gate_exposes_the_interaction_request_binding() -> None:
     (
         ("pass", None, "live_no_token"),
         ("pass", None, "live_token"),
+        ("pass", None, "scripted_model"),
         ("blocked", "interaction_live_probe_setup_failed", "live_no_token"),
     ),
 )
@@ -513,6 +522,89 @@ def test_full_column_gate_accepts_the_result_of_an_explicit_live_interaction_att
     assert gate["provider_status"] == ("pass" if status == "pass" else "blocked")
 
 
+def test_full_column_gate_rejects_a_scripted_observation_for_a_live_token_request(tmp_path: Path, monkeypatch) -> None:
+    payload = _passing_claude_full_column_payload()
+    digest = "sha256:" + "a" * 64
+    contract = interaction_semantics.contract_for_provider("claude")
+    assert contract is not None
+    reduced_contract = replace(contract, interaction_probes=(contract.interaction_probes[0],))
+    monkeypatch.setattr(
+        interaction_semantics,
+        "contract_for_provider",
+        lambda _provider: reduced_contract,
+    )
+    data = _live_claude_interaction_data(tmp_path, digest=digest, evidence_class="live_token")
+    observation_path = Path(str(data["raw_observation_path"]))
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    observation["evidence_class"] = "scripted_model"
+    observation_path.write_text(json.dumps(observation, sort_keys=True), encoding="utf-8")
+    interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
+    interaction["status"] = "pass"
+    interaction.pop("failure_code", None)
+    interaction["data"] = data
+    interaction["qualification_request_digest"] = digest
+
+    gate = bridge._full_column_gate(  # noqa: SLF001
+        payload,
+        provider="claude",
+        qualification_request_digest=digest,
+        interaction_evidence_class="live_token",
+    )
+
+    assert gate["status"] == "fail"
+    assert gate["provider_status"] == "fail"
+    assert gate["unexpected_results"][0]["actual_failure_code"] == "interaction_evidence_class_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("retained_digest", "failure_code"),
+    (
+        (None, "interaction_request_digest_missing"),
+        ("sha256:" + "b" * 64, "interaction_request_digest_mismatch"),
+    ),
+)
+def test_full_column_gate_rejects_a_retained_request_digest_not_bound_to_the_request(
+    retained_digest: str | None,
+    failure_code: str,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = _passing_claude_full_column_payload()
+    digest = "sha256:" + "a" * 64
+    contract = interaction_semantics.contract_for_provider("claude")
+    assert contract is not None
+    reduced_contract = replace(contract, interaction_probes=(contract.interaction_probes[0],))
+    monkeypatch.setattr(
+        interaction_semantics,
+        "contract_for_provider",
+        lambda _provider: reduced_contract,
+    )
+    data = _live_claude_interaction_data(tmp_path, digest=digest, evidence_class="live_token")
+    observation_path = Path(str(data["raw_observation_path"]))
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    if retained_digest is None:
+        observation.pop("qualification_request_digest")
+    else:
+        observation["qualification_request_digest"] = retained_digest
+    observation_path.write_text(json.dumps(observation, sort_keys=True), encoding="utf-8")
+    interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
+    interaction["status"] = "pass"
+    interaction.pop("failure_code", None)
+    interaction["data"] = data
+    interaction["qualification_request_digest"] = digest
+
+    gate = bridge._full_column_gate(  # noqa: SLF001
+        payload,
+        provider="claude",
+        qualification_request_digest=digest,
+        interaction_evidence_class="live_token",
+    )
+
+    assert gate["status"] == "fail"
+    assert gate["provider_status"] == "fail"
+    assert gate["unexpected_results"][0]["actual_failure_code"] == failure_code
+
+
 def test_full_column_gate_uses_declared_nested_native_source_root(tmp_path: Path, monkeypatch) -> None:
     payload = _passing_claude_full_column_payload()
     digest = "sha256:" + "a" * 64
@@ -555,6 +647,7 @@ def test_full_column_gate_uses_declared_nested_native_source_root(tmp_path: Path
 
 def test_full_column_gate_rejects_live_pass_without_materialized_raw_provenance(tmp_path: Path) -> None:
     payload = _passing_full_column_payload()
+    digest = "sha256:" + "a" * 64
     interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
     interaction["status"] = "pass"
     interaction.pop("failure_code", None)
@@ -562,6 +655,7 @@ def test_full_column_gate_rejects_live_pass_without_materialized_raw_provenance(
         "verification_scope": "provider_native",
         "provider_status": "pass",
         "evidence_class": "live_no_token",
+        "qualification_request_digest": digest,
         "raw_observation_path": str(tmp_path / "missing-observation.json"),
         "raw_events_path": str(tmp_path / "missing-events.jsonl"),
         "assertions": [
@@ -575,6 +669,7 @@ def test_full_column_gate_rejects_live_pass_without_materialized_raw_provenance(
 
     gate = bridge._full_column_gate(  # noqa: SLF001
         payload,
+        qualification_request_digest=digest,
         interaction_evidence_class="live_no_token",
     )
 
@@ -586,7 +681,7 @@ def test_full_column_gate_rejects_live_pass_without_materialized_raw_provenance(
             "expected_status": "blocked",
             "expected_failure_code": "interaction_live_policy_missing",
             "actual_status": "pass",
-            "actual_failure_code": "interaction_live_provenance_missing",
+            "actual_failure_code": "interaction_raw_provenance_invalid",
         }
     ]
 

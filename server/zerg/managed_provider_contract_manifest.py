@@ -117,6 +117,7 @@ _OPERATION_EVIDENCE_LEVELS = frozenset(
         "source_review",
         "hermetic",
         "live_no_token",
+        "scripted_model",
         "live_token",
     }
 )
@@ -146,12 +147,12 @@ _OPERATION_EVIDENCE_KEYS = frozenset(
     }
 )
 _CAPABILITY_ACTION_GATES = frozenset({"ceiling", "warn", "strict"})
-_CAPABILITY_EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "live_token"})
+_CAPABILITY_EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "scripted_model", "live_token"})
 _CAPABILITY_REASON_CODES = frozenset(
     {"semantic_proof_missing", "upstream_unavailable", "upstream_unknown", "longhouse_unimplemented", "policy_disabled"}
 )
 _INTERACTION_PROBE_DISPOSITIONS = frozenset({"implemented", "not_implemented", "upstream_absent", "policy_disabled"})
-_INTERACTION_PROBE_EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "live_token"})
+_INTERACTION_PROBE_EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "scripted_model", "live_token"})
 _INTERACTION_PROBE_KINDS = frozenset(
     {
         "durable_user_message",
@@ -258,7 +259,8 @@ def proof_backed_operation_evidence(assertions: list[dict[str, Any]]) -> dict[st
     accepts, because a chip is only as proven as its weakest edge.
     """
 
-    ranks = ("hermetic", "live_no_token", "live_token")
+    # Summary ordering only; proof projections and chip edges remain class-specific.
+    ranks = ("hermetic", "live_no_token", "scripted_model", "live_token")
     level = min(
         (max(assertion["acceptable_evidence"], key=ranks.index) for assertion in assertions),
         key=ranks.index,

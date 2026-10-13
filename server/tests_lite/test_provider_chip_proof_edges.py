@@ -14,6 +14,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+from zerg.services.provider_chip_edges import requirement_key
+
 REPO = Path(__file__).resolve().parents[2]
 CONTRACTS = REPO / "server" / "zerg" / "config" / "managed_provider_contracts.json"
 GENERATOR = REPO / "scripts" / "generate" / "provider_capabilities_ts.py"
@@ -68,11 +70,13 @@ def test_chip_is_never_lit_without_its_runtime_capability() -> None:
             assert provider["can_resume"], provider["provider"]
 
 
-def test_live_no_token_and_hermetic_cells_never_light_a_chip() -> None:
+def test_non_live_token_evidence_never_lights_a_chip() -> None:
     generator = _generator()
     provider = {
         "launch_local": True,
         "send_input": True,
+        "interrupt": True,
+        "terminate": True,
         "operation_evidence": {
             "launch_local": {
                 "disposition": "implemented",
@@ -82,13 +86,32 @@ def test_live_no_token_and_hermetic_cells_never_light_a_chip() -> None:
                 "disposition": "implemented",
                 "required_assertions": [{"id": "send", "acceptable_evidence": ["hermetic", "live_token"]}],
             },
+            "interrupt": {
+                "disposition": "implemented",
+                "required_assertions": [{"id": "interrupt", "acceptable_evidence": ["scripted_model"]}],
+            },
+            "terminate": {
+                "disposition": "implemented",
+                "required_assertions": [{"id": "terminate", "acceptable_evidence": ["scripted_model", "live_token"]}],
+            },
         },
     }
     assert not generator.operation_proven(provider, "launch_local")
     assert not generator.operation_proven(provider, "send_input")
+    assert not generator.operation_proven(provider, "interrupt")
+    assert not generator.operation_proven(provider, "terminate")
     provider["operation_evidence"]["launch_local"]["required_assertions"][0]["acceptable_evidence"] = ["live_token"]
     provider["operation_evidence"]["send_input"]["required_assertions"][0]["acceptable_evidence"] = ["live_token"]
+    provider["operation_evidence"]["interrupt"]["required_assertions"][0]["acceptable_evidence"] = ["live_token"]
+    provider["operation_evidence"]["terminate"]["required_assertions"][0]["acceptable_evidence"] = ["live_token"]
     assert generator.chip_states(provider)["launchAndSend"]
+    assert generator.chip_states(provider)["interrupt"]
+
+
+def test_chip_requirement_identity_is_explicitly_live_token() -> None:
+    assertion = {"scenario_id": "resume", "id": "native_resume", "variant": "clean_exit"}
+
+    assert requirement_key("codex", assertion) == ("codex", "resume", "native_resume", "clean_exit", "live_token")
 
 
 def test_generated_landing_capabilities_are_current() -> None:

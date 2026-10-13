@@ -44,8 +44,8 @@ def _live(assertion: object) -> bool:
 def _live_token_proof(assertions: object) -> bool:
     """Every required assertion demands a real provider turn.
 
-    A `live_no_token` cell proves a binary's surface, not that a user's
-    instruction produced provider work, so it cannot light a chip.
+    A `live_no_token` cell proves a binary's surface, and a `scripted_model`
+    cell proves CLI behavior against a fake model; neither lights a chip.
     """
 
     return isinstance(assertions, list) and bool(assertions) and all(_live(item) for item in assertions)
@@ -111,8 +111,8 @@ def chip_states(provider: Mapping[str, Any]) -> dict[str, bool]:
     return {chip: assertions is not None for chip, assertions in chip_edges(provider).items()}
 
 
-def requirement_key(provider: str, assertion: Mapping[str, Any]) -> tuple[str, str, str, str | None]:
-    return (provider, str(assertion["scenario_id"]), str(assertion["id"]), assertion.get("variant"))
+def requirement_key(provider: str, assertion: Mapping[str, Any]) -> tuple[str, str, str, str | None, str]:
+    return (provider, str(assertion["scenario_id"]), str(assertion["id"]), assertion.get("variant"), "live_token")
 
 
 def rollup_state(proof_statuses: Iterable[str | None]) -> str:

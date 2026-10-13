@@ -8,6 +8,8 @@ from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 from zerg.services.provider_support_state import CONTRACT_OPERATIONS
+from zerg.services.provider_support_state import EVIDENCE_RANK
+from zerg.services.provider_support_state import _effective_evidence_level
 from zerg.services.provider_support_state import collect_provider_support_state
 
 CLAUDE_LIVE_CONTROL_OPERATIONS = [
@@ -887,3 +889,16 @@ def test_support_state_surfaces_red_matching_local_live_proof_without_operation_
     assert claude["state"] == "needs_attention"
     assert claude["proof"]["state"] == "local_proof_failed"
     assert claude["proof"]["local_proof_verdict_failed"] is True
+
+
+def test_scripted_model_and_live_token_never_satisfy_each_other_by_rank() -> None:
+    assert _effective_evidence_level(
+        target_level="live_token",
+        target_rank=EVIDENCE_RANK["live_token"],
+        evidence={"level": "scripted_model", "status": "pass"},
+    ) == ("scripted_model", -1)
+    assert _effective_evidence_level(
+        target_level="scripted_model",
+        target_rank=-1,
+        evidence={"level": "live_token", "status": "pass"},
+    ) == ("scripted_model", -1)

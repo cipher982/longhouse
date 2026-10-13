@@ -29,6 +29,7 @@ PROOF_ARTIFACT_KIND = "provider_capability_assertion"
 class EvidenceClass(StrEnum):
     HERMETIC = "hermetic"
     LIVE_NO_TOKEN = "live_no_token"
+    SCRIPTED_MODEL = "scripted_model"
     LIVE_TOKEN = "live_token"
 
 
@@ -406,8 +407,11 @@ def select_proof(
     records: Iterable[ProviderCapabilityProofRecord],
     requirement: ProofRequirement,
     *,
+    evidence_class: EvidenceClass,
     observed_at: datetime,
 ) -> ProofSelection:
+    if evidence_class not in requirement.acceptable_evidence:
+        raise ValueError(f"evidence class {evidence_class.value!r} is not acceptable for this requirement")
     relevant = (
         record
         for record in records
@@ -415,6 +419,7 @@ def select_proof(
         and record.assertion_id == requirement.assertion_id
         and record.scenario_id == requirement.scenario_id
         and record.assertion_variant == requirement.assertion_variant
+        and record.evidence_class is evidence_class
     )
     ordered = sorted(relevant, key=lambda record: (_parse_timestamp(record.generated_at), record.artifact_id), reverse=True)
     latest_run = ordered[0] if ordered else None

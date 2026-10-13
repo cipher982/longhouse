@@ -904,7 +904,7 @@ def list_provider_capabilities(
     return build_capability_projection_payload()
 
 
-CHIP_CERTIFICATION_VERSION = "provider-chip-certification-v1"
+CHIP_CERTIFICATION_VERSION = "provider-chip-certification-v2"
 _CERTIFICATION_TTL_SECONDS = 60.0
 _certification_cache: tuple[float, dict[str, Any]] | None = None
 
@@ -935,7 +935,7 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
         verdicts=_cell_verdict_store().verdicts(),
         integrity_reader=read_integrity,
     )
-    by_identity = {(p.provider, p.capability, p.scenario_id, p.assertion_id, p.variant): p for p in projected}
+    by_identity = {(p.provider, p.capability, p.scenario_id, p.assertion_id, p.variant, p.evidence_class): p for p in projected}
     moment = (now or datetime.now(UTC)).astimezone(UTC)
     providers: list[dict[str, Any]] = []
     for provider in sorted(edges):
@@ -947,7 +947,14 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
             rows = []
             for assertion in assertions:
                 p = by_identity[
-                    (assertion.provider, assertion.capability, assertion.scenario_id, assertion.assertion_id, assertion.variant)
+                    (
+                        assertion.provider,
+                        assertion.capability,
+                        assertion.scenario_id,
+                        assertion.assertion_id,
+                        assertion.variant,
+                        "live_token",
+                    )
                 ]
                 rows.append(
                     {
@@ -956,6 +963,7 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
                         "assertion_id": p.assertion_id,
                         "variant": p.variant,
                         "proof_status": p.proof_status,
+                        "evidence_class": p.evidence_class,
                         "latest_outcome": p.latest_outcome,
                         "proven_at": p.generated_at if p.proof_status == "pass" else None,
                         "longhouse_git_sha": p.longhouse_git_sha,

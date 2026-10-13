@@ -12,6 +12,7 @@ from zerg.managed_provider_contract_manifest import _adapter_digest
 from zerg.managed_provider_contract_manifest import _validate_auth_probe
 from zerg.managed_provider_contract_manifest import _validate_machine_control_supports
 from zerg.managed_provider_contract_manifest import _validate_operation_evidence
+from zerg.managed_provider_contract_manifest import _validate_required_assertions
 from zerg.managed_provider_contract_manifest import managed_provider_contract_items
 from zerg.managed_provider_contract_manifest import normalize_contract_manifest
 from zerg.managed_provider_contract_manifest import proof_backed_operation_evidence
@@ -302,12 +303,26 @@ def test_operation_evidence_derives_level_and_source_from_required_assertions():
         "level": "live_token",
         "source": "factory assertions: send_idle",
     }
+    scripted = {**_LIVE_PROOF, "acceptable_evidence": ["scripted_model"]}
+    assert proof_backed_operation_evidence([scripted]) == {
+        "level": "scripted_model",
+        "source": "factory assertions: send_idle",
+    }
     pi = contract_for_provider("pi")
     assert pi is not None
     steer = pi.operation_evidence_for("steer_active_turn")
     assert steer["level"] == "live_token"
     assert steer["source"] == "factory assertions: pi_helm_steer_active"
     assert len(steer["required_assertions"][0]["oracle_digest"]) == 64
+
+
+def test_operation_evidence_accepts_scripted_model_assertions():
+    item = _manifest_item()
+    entry = _proof_backed(item)
+    entry["required_assertions"][0]["acceptable_evidence"] = ["scripted_model"]
+    entry.update(proof_backed_operation_evidence(entry["required_assertions"]))
+
+    _validate_required_assertions("test", entry["required_assertions"])
 
 
 @pytest.mark.parametrize(

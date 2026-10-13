@@ -270,8 +270,8 @@ jobs:
           owner_file="$CONSOLE_FIXTURE_ROOT/mock-llm.owner"
           log_file="$CONSOLE_FIXTURE_ROOT/mock-llm.log"
           # One process with no children: ownership is its PID, which cleanup
-          # re-checks against the script name before signalling.
-          nohup python3 "$GITHUB_WORKSPACE/scripts/qa/console-served-state-mock-llm.py" \
+          # re-checks against the module name before signalling.
+          PYTHONPATH="$GITHUB_WORKSPACE/server" nohup python3 -m zerg.qa.scripted_model_server \
             --port-file "$port_file" > "$log_file" 2>&1 < /dev/null &
           endpoint_pid=$!
           printf '%s\n' "$endpoint_pid" > "$owner_file"
@@ -498,7 +498,7 @@ jobs:
             if [[ -f "$owner_file" ]]; then
               read -r endpoint_pid < "$owner_file"
               if [[ "$endpoint_pid" =~ ^[0-9]+$ ]] &&
-                grep -qa console-served-state-mock-llm.py "/proc/$endpoint_pid/cmdline" 2>/dev/null; then
+                grep -qa 'zerg\.qa\.scripted_model_server' "/proc/$endpoint_pid/cmdline" 2>/dev/null; then
                 kill -TERM "$endpoint_pid" 2>/dev/null || true
                 for attempt in {1..20}; do
                   if ! kill -0 "$endpoint_pid" 2>/dev/null; then

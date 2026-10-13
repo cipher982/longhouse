@@ -20,7 +20,7 @@ NEVER_PROVEN = "never_proven"
 STALE = "stale"
 UNACCEPTABLE_EVIDENCE = "unacceptable_evidence"
 NEWER_CELL_FAILURE = "newer_cell_failure"
-PROJECTION_VERSION = "assurance-projection-v1"
+PROJECTION_VERSION = "assurance-projection-v2"
 
 
 @dataclass(frozen=True)
@@ -128,16 +128,17 @@ def project_capabilities(
     """Join every exact assertion variant to its currently admissible proof.
 
     A pass says a cell worked once; the chart claims it works now. So a newer
-    failed execution outranks an older, still-current pass, but only once it
-    has failed ``REVOKING_CONSECUTIVE_FAILURES`` times in a row (one flaky
-    reconnect must not unlight a chip). Proof records hold passes; the failed
-    executions arrive as ``verdicts`` (the newest failure per cell, with its
-    consecutive count). A verdict newer than the qualifying pass with that many
-    failures sets the row's status to the verdict's outcome, and
-    ``rollup_state`` renders an infrastructure error as ``unverified``, never
-    ``failing``. A newer failure below the threshold, or a record that is a
-    lone failure, stays visible through ``latest_*`` and changes nothing else.
-    A verdict older than the qualifying pass is ignored: the cell passed again.
+    failed execution in the same evidence class outranks an older, still-current
+    pass, but only once it has failed ``REVOKING_CONSECUTIVE_FAILURES`` times in a
+    row (one flaky reconnect must not unlight a chip). Proof records hold passes;
+    failed executions arrive as class-qualified ``verdicts`` (the newest failure
+    per class-qualified cell, with its consecutive count). A verdict newer than
+    the qualifying pass in that class with that many failures sets the row's
+    status to the verdict's outcome, and ``rollup_state`` renders an infrastructure
+    error as ``unverified``, never ``failing``. A newer failure below the threshold,
+    or a record that is a lone failure, stays visible through ``latest_*`` and
+    changes nothing else. A verdict older than that class's qualifying pass is
+    ignored: the cell passed again.
     """
 
     moment = (now or datetime.now(UTC)).astimezone(UTC)
@@ -145,99 +146,108 @@ def project_capabilities(
     open_cases = open_cases or {}
     baselines = baselines or {}
     verdicts = verdicts or {}
-    by_provider_assertion: dict[tuple[str, str], list[ProviderCapabilityProofRecord]] = {}
+    by_provider_assertion: dict[tuple[str, str, str, str], list[ProviderCapabilityProofRecord]] = {}
+    classes_by_cell: dict[tuple[str, str, str, str | None], list[str]] = {}
     for record in proof_records:
-        by_provider_assertion.setdefault((record.provider, record.assertion_id), []).append(record)
+        evidence_class = record.evidence_class.value
+        by_provider_assertion.setdefault((record.provider, record.assertion_id, record.scenario_id, evidence_class), []).append(record)
+        cell_key = (record.provider, record.assertion_id, record.scenario_id, record.assertion_variant)
+        classes = classes_by_cell.setdefault(cell_key, [])
+        if evidence_class not in classes:
+            classes.append(evidence_class)
 
     projections: list[CapabilityProjection] = []
     for assertion in assertions:
         key = (assertion.provider, assertion.capability, assertion.assertion_id, assertion.variant)
-        nearby = sorted(
-            by_provider_assertion.get((assertion.provider, assertion.assertion_id), []),
-            key=_record_order,
-            reverse=True,
-        )
-        exact = [record for record in nearby if record.assertion_variant == assertion.variant]
-        qualifying = None
-        for record in exact:
-            reasons = _rejection_reasons(
-                assertion,
-                record,
-                moment=moment,
-                integrity_reasons=integrity_reasons,
-                expected_longhouse_sha=expected_longhouse_sha,
-                expected_epoch_digest=expected_epoch_digest,
+        cell_key = (assertion.provider, assertion.assertion_id, assertion.scenario_id, assertion.variant)
+        evidence_classes = tuple(dict.fromkeys((*classes_by_cell.get(cell_key, ()), *assertion.acceptable_evidence)))
+        for evidence_class in evidence_classes:
+            nearby = sorted(
+                by_provider_assertion.get((assertion.provider, assertion.assertion_id, assertion.scenario_id, evidence_class), []),
+                key=_record_order,
+                reverse=True,
             )
-            if not reasons and integrity_reader is not None:
-                reasons = integrity_reader(record)
-            if not reasons:
-                qualifying = record
-                break
-        latest = exact[0] if exact else nearby[0] if nearby else None
-        verdict = verdicts.get((assertion.provider, assertion.assertion_id, assertion.scenario_id, assertion.variant))
-        latest_time = _parse_timestamp(latest.generated_at) if latest else None
-        newer_failure = verdict is not None and (latest_time is None or verdict.observed_at > latest_time)
-        latest_outcome = verdict.outcome if newer_failure else latest.outcome.value if latest else None
-        if qualifying is not None:
-            support = qualifying
-            passed_at = _parse_timestamp(qualifying.generated_at)
-            if (
-                verdict is not None
-                and verdict.consecutive_failures >= REVOKING_CONSECUTIVE_FAILURES
-                and passed_at is not None
-                and verdict.observed_at > passed_at
-            ):
-                status = verdict.outcome
-                reasons: tuple[str, ...] = (NEWER_CELL_FAILURE,)
-                qualifying = None
+            exact = [record for record in nearby if record.assertion_variant == assertion.variant]
+            qualifying = None
+            for record in exact:
+                reasons = _rejection_reasons(
+                    assertion,
+                    record,
+                    moment=moment,
+                    integrity_reasons=integrity_reasons,
+                    expected_longhouse_sha=expected_longhouse_sha,
+                    expected_epoch_digest=expected_epoch_digest,
+                )
+                if not reasons and integrity_reader is not None:
+                    reasons = integrity_reader(record)
+                if not reasons:
+                    qualifying = record
+                    break
+            latest = exact[0] if exact else nearby[0] if nearby else None
+            verdict = verdicts.get((assertion.provider, assertion.assertion_id, assertion.scenario_id, assertion.variant, evidence_class))
+            latest_time = _parse_timestamp(latest.generated_at) if latest else None
+            newer_failure = verdict is not None and (latest_time is None or verdict.observed_at > latest_time)
+            latest_outcome = verdict.outcome if newer_failure else latest.outcome.value if latest else None
+            if qualifying is not None:
+                support = qualifying
+                passed_at = _parse_timestamp(qualifying.generated_at)
+                if (
+                    verdict is not None
+                    and verdict.consecutive_failures >= REVOKING_CONSECUTIVE_FAILURES
+                    and passed_at is not None
+                    and verdict.observed_at > passed_at
+                ):
+                    status = verdict.outcome
+                    reasons: tuple[str, ...] = (NEWER_CELL_FAILURE,)
+                    qualifying = None
+                else:
+                    status = AssertionOutcome.PASS.value
+                    reasons = ()
+            elif latest is not None:
+                support = latest
+                reasons = _rejection_reasons(
+                    assertion,
+                    latest,
+                    moment=moment,
+                    integrity_reasons=integrity_reasons,
+                    expected_longhouse_sha=expected_longhouse_sha,
+                    expected_epoch_digest=expected_epoch_digest,
+                )
+                if integrity_reader is not None:
+                    reasons = tuple(dict.fromkeys((*integrity_reader(latest), *reasons)))
+                status = _status_for_rejection(latest, reasons)
             else:
-                status = AssertionOutcome.PASS.value
-                reasons = ()
-        elif latest is not None:
-            support = latest
-            reasons = _rejection_reasons(
-                assertion,
-                latest,
-                moment=moment,
-                integrity_reasons=integrity_reasons,
-                expected_longhouse_sha=expected_longhouse_sha,
-                expected_epoch_digest=expected_epoch_digest,
+                support = None
+                reasons = ("semantic_proof_missing",)
+                status = NEVER_PROVEN
+            projections.append(
+                CapabilityProjection(
+                    provider=assertion.provider,
+                    capability=assertion.capability,
+                    assertion_id=assertion.assertion_id,
+                    variant=assertion.variant,
+                    scenario_id=assertion.scenario_id,
+                    declared=True,
+                    proof_status=status,
+                    disposition=assertion.disposition,
+                    generated_at=support.generated_at if support else None,
+                    evidence_class=evidence_class,
+                    proof_artifact_id=qualifying.artifact_id if qualifying else None,
+                    latest_proof_artifact_id=latest.artifact_id if latest else None,
+                    latest_outcome=latest_outcome,
+                    admissibility_reasons=reasons,
+                    accepted_epoch_id=support.accepted_epoch_id if support else None,
+                    accepted_epoch_digest=support.accepted_epoch_digest if support else None,
+                    plan_digest=support.plan_digest if support else None,
+                    compile_report_digest=support.compile_report_digest if support else None,
+                    producer_id=support.producer_version if support else None,
+                    worker_id=support.worker_id if support else None,
+                    open_case_id=open_cases.get(key),
+                    baseline_outcome=baselines.get(key),
+                    longhouse_git_sha=support.longhouse_git_sha if support else None,
+                    provider_version=support.provider_version if support else None,
+                )
             )
-            if integrity_reader is not None:
-                reasons = tuple(dict.fromkeys((*integrity_reader(latest), *reasons)))
-            status = _status_for_rejection(latest, reasons)
-        else:
-            support = None
-            reasons = ("semantic_proof_missing",)
-            status = NEVER_PROVEN
-        projections.append(
-            CapabilityProjection(
-                provider=assertion.provider,
-                capability=assertion.capability,
-                assertion_id=assertion.assertion_id,
-                variant=assertion.variant,
-                scenario_id=assertion.scenario_id,
-                declared=True,
-                proof_status=status,
-                disposition=assertion.disposition,
-                generated_at=support.generated_at if support else None,
-                evidence_class=support.evidence_class.value if support else None,
-                proof_artifact_id=qualifying.artifact_id if qualifying else None,
-                latest_proof_artifact_id=latest.artifact_id if latest else None,
-                latest_outcome=latest_outcome,
-                admissibility_reasons=reasons,
-                accepted_epoch_id=support.accepted_epoch_id if support else None,
-                accepted_epoch_digest=support.accepted_epoch_digest if support else None,
-                plan_digest=support.plan_digest if support else None,
-                compile_report_digest=support.compile_report_digest if support else None,
-                producer_id=support.producer_version if support else None,
-                worker_id=support.worker_id if support else None,
-                open_case_id=open_cases.get(key),
-                baseline_outcome=baselines.get(key),
-                longhouse_git_sha=support.longhouse_git_sha if support else None,
-                provider_version=support.provider_version if support else None,
-            )
-        )
     return tuple(projections)
 
 

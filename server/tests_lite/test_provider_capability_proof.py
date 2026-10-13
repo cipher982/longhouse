@@ -228,6 +228,7 @@ def test_later_failure_does_not_erase_unexpired_applicable_pass() -> None:
     selection = select_proof(
         [earlier_pass, latest_failure],
         _requirement(trusted_artifact_ids=frozenset({earlier_pass.artifact_id, latest_failure.artifact_id})),
+        evidence_class=EvidenceClass.LIVE_TOKEN,
         observed_at=NOW,
     )
 
@@ -235,6 +236,41 @@ def test_later_failure_does_not_erase_unexpired_applicable_pass() -> None:
     assert selection.latest_run == latest_failure
     assert selection.latest_run_failed is True
     assert selection.rejected[0][0] == latest_failure.artifact_id
+
+
+def test_scripted_model_failure_does_not_replace_the_live_token_run() -> None:
+    live_pass = _record(generated_at="2026-07-22T15:00:00Z")
+    scripted_failure = _record(
+        evidence_class=EvidenceClass.SCRIPTED_MODEL,
+        outcome=AssertionOutcome.SEMANTIC_FAIL,
+        generated_at="2026-07-22T15:30:00Z",
+        invocation_id="scripted-run",
+    )
+    requirement = _requirement(
+        acceptable_evidence=frozenset({EvidenceClass.LIVE_TOKEN, EvidenceClass.SCRIPTED_MODEL}),
+        trusted_artifact_ids=frozenset({live_pass.artifact_id, scripted_failure.artifact_id}),
+    )
+
+    live_selection = select_proof(
+        [live_pass, scripted_failure],
+        requirement,
+        evidence_class=EvidenceClass.LIVE_TOKEN,
+        observed_at=NOW,
+    )
+    scripted_selection = select_proof(
+        [live_pass, scripted_failure],
+        requirement,
+        evidence_class=EvidenceClass.SCRIPTED_MODEL,
+        observed_at=NOW,
+    )
+
+    assert live_selection.qualifying_pass == live_pass
+    assert live_selection.latest_run == live_pass
+    assert live_selection.latest_run_failed is False
+    assert live_selection.rejected == ()
+    assert scripted_selection.qualifying_pass is None
+    assert scripted_selection.latest_run == scripted_failure
+    assert scripted_selection.latest_run_failed is True
 
 
 def test_other_assertion_failure_does_not_contaminate_selection() -> None:
@@ -246,7 +282,12 @@ def test_other_assertion_failure_does_not_contaminate_selection() -> None:
         generated_at="2026-07-22T15:30:00Z",
     )
 
-    selection = select_proof([relevant, unrelated], _requirement(), observed_at=NOW)
+    selection = select_proof(
+        [relevant, unrelated],
+        _requirement(),
+        evidence_class=EvidenceClass.LIVE_TOKEN,
+        observed_at=NOW,
+    )
 
     assert selection.latest_run == relevant
     assert selection.latest_run_failed is True
@@ -256,7 +297,12 @@ def test_other_assertion_failure_does_not_contaminate_selection() -> None:
 def test_untrusted_records_remain_visible_but_never_qualify() -> None:
     manual = _record(producer_class="manual")
 
-    selection = select_proof([manual], _requirement(), observed_at=NOW)
+    selection = select_proof(
+        [manual],
+        _requirement(),
+        evidence_class=EvidenceClass.LIVE_TOKEN,
+        observed_at=NOW,
+    )
 
     assert selection.qualifying_pass is None
     assert selection.latest_run == manual

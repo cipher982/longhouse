@@ -7,7 +7,7 @@ from zerg.qa.repo_root import default_repo_root
 
 def test_status_table_has_one_row_per_provider_per_wired_combination() -> None:
     table = render_status_table(load_facts())
-    # 4 wired trigger/provenance combinations x 5 providers, plus 2 header lines.
+    # Four wired trigger/provenance combinations per provider, plus two header lines.
     assert len(table.splitlines()) == 2 + 4 * len(ALL_PROVIDERS)
     assert "codex" in table
     assert "cursor" in table

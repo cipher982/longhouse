@@ -1,32 +1,94 @@
 #!/usr/bin/env python3
-"""Loopback-only fake LLM endpoint for the Console served-state CI proof.
+"""Loopback-only fake model endpoint used by Longhouse provider QA.
 
-This serves the upstream wire protocols used by the stock CLI fixtures. The
-served-state marker is reconstructed from the request, never embedded here.
+The endpoint serves OpenAI Chat Completions/Responses, Anthropic Messages, and
+Gemini. Optional ordered JSON scenarios match input markers; without a script,
+the Console served-state behavior remains request-derived.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 HOST = "127.0.0.1"
 INPUT_TOKENS = 32
 OUTPUT_TOKENS = 8
 TOTAL_TOKENS = INPUT_TOKENS + OUTPUT_TOKENS
-PROMPT_MARKER = re.compile(
-    r'concatenate the prefix "([^"]+)" and suffix "([^"]+)"', re.IGNORECASE
-)
-GEMINI_GENERATE = re.compile(
-    r"(?:^|/)models/(.+):(streamGenerateContent|generateContent|countTokens)$"
-)
+PROMPT_MARKER = re.compile(r'concatenate the prefix "([^"]+)" and suffix "([^"]+)"', re.IGNORECASE)
+GEMINI_GENERATE = re.compile(r"(?:^|/)models/(.+):(streamGenerateContent|generateContent|countTokens)$")
+SCRIPTED_INPUT_MARKER = re.compile(r"\bLONGHOUSE_PI_PROBE_[a-f0-9]{32}\b")
+
+
+@dataclass(frozen=True)
+class GenerationPlan:
+    text: str | None
+    tool_call: tuple[str, dict] | None
+    turn_id: str | None = None
+
+
+def load_script(path: Path) -> tuple[list[dict], str]:
+    raw = path.read_bytes()
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(f"script is not valid JSON: {path}") from exc
+    if not isinstance(value, dict) or not isinstance(value.get("turns"), list):
+        raise ValueError("script must be an object with an ordered 'turns' array")
+
+    turns = value["turns"]
+    seen_ids: set[str] = set()
+    for index, turn in enumerate(turns):
+        if not isinstance(turn, dict):
+            raise ValueError(f"turn {index} must be an object")
+        turn_id = turn.get("id")
+        marker = turn.get("match")
+        if not isinstance(turn_id, str) or not turn_id:
+            raise ValueError(f"turn {index} needs a non-empty string id")
+        if turn_id in seen_ids:
+            raise ValueError(f"duplicate turn id: {turn_id}")
+        seen_ids.add(turn_id)
+        if not isinstance(marker, str) or not marker:
+            raise ValueError(f"turn {turn_id!r} needs a non-empty match marker")
+        reply = turn.get("reply")
+        if reply is not None and not isinstance(reply, str):
+            raise ValueError(f"turn {turn_id!r} reply must be a string")
+        tool_call = turn.get("tool_call")
+        if tool_call is not None and not isinstance(tool_call, dict):
+            raise ValueError(f"turn {turn_id!r} tool_call must be an object")
+        history = turn.get("reply_from_history")
+        if history is not None:
+            if not isinstance(history, dict) or not isinstance(history.get("pattern"), str):
+                raise ValueError(f"turn {turn_id!r} reply_from_history needs a regex pattern")
+            marker = history.get("marker")
+            if marker is not None and not isinstance(marker, str):
+                raise ValueError(f"turn {turn_id!r} reply_from_history marker must be a string")
+            try:
+                pattern = re.compile(history["pattern"])
+            except re.error as exc:
+                raise ValueError(f"turn {turn_id!r} has an invalid history regex") from exc
+            group = history.get("group", 0)
+            if isinstance(group, bool) or not isinstance(group, (int, str)):
+                raise ValueError(f"turn {turn_id!r} has an invalid history group")
+            if isinstance(group, int) and group > pattern.groups:
+                raise ValueError(f"turn {turn_id!r} history group is not present")
+            if isinstance(group, str) and group not in pattern.groupindex:
+                raise ValueError(f"turn {turn_id!r} history group is not present")
+        if reply is None and tool_call is None and history is None:
+            raise ValueError(f"turn {turn_id!r} must contain a reply or tool_call")
+    return turns, hashlib.sha256(raw).hexdigest()
 
 
 def _string_leaves(value: object):
@@ -50,6 +112,61 @@ def _user_text(value: object) -> list[str]:
     elif isinstance(value, list):
         for item in value:
             found.extend(_user_text(item))
+    return found
+
+
+def _has_user_prompt(payload: dict) -> bool:
+    return any(text.strip() for text in _user_text(payload)) or (isinstance(payload.get("input"), str) and bool(payload["input"].strip()))
+
+
+def _responses_tool_result_only(payload: dict) -> bool:
+    items = payload.get("input")
+    return (
+        isinstance(items, list) and bool(items) and all(isinstance(item, dict) and item.get("type") in TOOL_RESULT_TYPES for item in items)
+    )
+
+
+def _latest_input_text(value: object) -> str:
+    found: list[str] = []
+
+    def visit(item: object) -> None:
+        if isinstance(item, dict):
+            role = item.get("role")
+            if role in ("user", "tool", "function"):
+                found.append("\n".join(_string_leaves(item.get("content", item.get("parts", item.get("output"))))))
+                return
+            if isinstance(item.get("type"), str) and item["type"] in TOOL_RESULT_TYPES:
+                found.append("\n".join(_string_leaves(item)))
+                return
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    if found:
+        return found[-1].strip()
+    if isinstance(value, dict) and isinstance(value.get("input"), str):
+        return value["input"].strip()
+    return ""
+
+
+def _assistant_history_text(value: object) -> list[str]:
+    found: list[str] = []
+
+    def visit(item: object) -> None:
+        if isinstance(item, dict):
+            if item.get("role") in ("assistant", "model"):
+                found.append("\n".join(_string_leaves(item.get("content", item.get("parts", item.get("text"))))))
+                return
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
     return found
 
 
@@ -112,9 +229,7 @@ EXIT_FIELDS = {
 }
 FAILED_STATUSES = {"error", "failed", "failure"}
 _latest: dict[str, tuple[str, float]] = {}  # marker -> (call key, issued at)
-_outcomes: dict[
-    str, str | None
-] = {}  # call key -> failure reason, None when it succeeded
+_outcomes: dict[str, str | None] = {}  # call key -> failure reason, None when it succeeded
 _lock = threading.Lock()
 
 
@@ -127,22 +242,13 @@ def _structured_failure(value: object) -> bool:
     if isinstance(value, dict):
         for key, item in value.items():
             lowered = key.lower()
-            if (
-                lowered in EXIT_FIELDS
-                and isinstance(item, (int, float))
-                and not isinstance(item, bool)
-                and item != 0
-            ):
+            if lowered in EXIT_FIELDS and isinstance(item, (int, float)) and not isinstance(item, bool) and item != 0:
                 return True
             if lowered in ("is_error", "iserror") and item is True:
                 return True
             if lowered == "error" and item:
                 return True
-            if (
-                lowered == "status"
-                and isinstance(item, str)
-                and item.lower() in FAILED_STATUSES
-            ):
+            if lowered == "status" and isinstance(item, str) and item.lower() in FAILED_STATUSES:
                 return True
             if _structured_failure(item):
                 return True
@@ -152,9 +258,7 @@ def _structured_failure(value: object) -> bool:
 
 
 def _result_failed(result: dict) -> bool:
-    return _structured_failure(result) or any(
-        NONZERO_EXIT.search(text) for text in _string_leaves(result)
-    )
+    return _structured_failure(result) or any(NONZERO_EXIT.search(text) for text in _string_leaves(result))
 
 
 def _tool_results(value: object) -> list[tuple[str, bool]]:
@@ -197,22 +301,16 @@ def _round_trip_failure(marker: str, results: list[tuple[str, bool]]) -> str | N
         if latest is None:
             return "no shell call was issued for this prompt"
         call_key, issued_at = latest
-        answering = [
-            failed for result_key, failed in results if _answers(call_key, result_key)
-        ]
+        answering = [failed for result_key, failed in results if _answers(call_key, result_key)]
         if not answering:
             return "no tool result answers the shell call issued for this prompt"
         failed = any(answering)
         if call_key not in _outcomes:
             elapsed = now - issued_at
             if failed:
-                _outcomes[call_key] = (
-                    "the shell call reported an error or a nonzero exit"
-                )
+                _outcomes[call_key] = "the shell call reported an error or a nonzero exit"
             elif elapsed < TOOL_MIN_SECONDS:
-                _outcomes[call_key] = (
-                    f"the shell call returned after {elapsed:.1f} s, before '{TOOL_COMMAND}' could finish"
-                )
+                _outcomes[call_key] = f"the shell call returned after {elapsed:.1f} s, before '{TOOL_COMMAND}' could finish"
             else:
                 _outcomes[call_key] = None
         return _outcomes[call_key]
@@ -235,46 +333,44 @@ def _declared_tools(payload: dict) -> list[tuple[str, dict]]:
             found.append((str(tool.get("name", "")), tool.get("input_schema") or {}))
         elif isinstance(tool.get("functionDeclarations"), list):  # Gemini
             for decl in tool["functionDeclarations"]:
-                schema = (
-                    decl.get("parametersJsonSchema") or decl.get("parameters") or {}
-                )
+                schema = decl.get("parametersJsonSchema") or decl.get("parameters") or {}
                 found.append((str(decl.get("name", "")), schema))
         elif tool.get("type") == "function":  # Responses
             found.append((str(tool.get("name", "")), tool.get("parameters") or {}))
     return found
 
 
-def _shell_call(payload: dict) -> tuple[str, dict]:
+def _shell_call(
+    payload: dict,
+    command: str = TOOL_COMMAND,
+    preferred_name: str | None = None,
+    overrides: dict | None = None,
+) -> tuple[str, dict]:
     tools = _declared_tools(payload)
     by_name = {name.lower(): (name, schema) for name, schema in tools}
-    for wanted in SHELL_TOOL_NAMES:
-        if wanted in by_name:
-            name, schema = by_name[wanted]
-            break
+    if preferred_name and preferred_name.lower() in by_name:
+        name, schema = by_name[preferred_name.lower()]
     else:
-        raise ValueError(f"no shell tool offered; tools: {sorted(by_name)}")
+        for wanted in SHELL_TOOL_NAMES:
+            if wanted in by_name:
+                name, schema = by_name[wanted]
+                break
+        else:
+            raise ValueError(f"no shell tool offered; tools: {sorted(by_name)}")
     props = schema.get("properties") or {}
     print(f"shell tool {name}: {json.dumps(schema, sort_keys=True)[:2000]}", flush=True)
     lowered = {k.lower(): k for k in props}
-    key = next(
-        (lowered[k] for k in ("command", "cmd", "commandline") if k in lowered), None
-    )
+    key = next((lowered[k] for k in ("command", "cmd", "commandline") if k in lowered), None)
     if key is None:
-        raise ValueError(
-            f"shell tool {name!r} has no command parameter: {sorted(props)}"
-        )
-    args: dict = {
-        key: ["bash", "-lc", TOOL_COMMAND]
-        if props[key].get("type") == "array"
-        else TOOL_COMMAND
-    }
+        raise ValueError(f"shell tool {name!r} has no command parameter: {sorted(props)}")
+    args: dict = dict(overrides or {})
+    args[key] = ["bash", "-lc", command] if props[key].get("type") == "array" else command
     for required in schema.get("required") or []:
         if required in args:
             continue
         kind = (props.get(required) or {}).get("type")
         lname = required.lower()
         if kind == "boolean":
-            # Wait for the command: anything asking to background it is off.
             args[required] = not any(word in lname for word in ("background", "async"))
         elif kind in ("integer", "number"):
             args[required] = 30_000
@@ -285,28 +381,96 @@ def _shell_call(payload: dict) -> tuple[str, dict]:
     return name, args
 
 
-def _plan(payload: dict) -> tuple[str, str | tuple[str, dict]]:
-    """("text", reply) or ("tool", (name, arguments)) for one generation request.
+def _scripted_tool_call(payload: dict, spec: dict) -> tuple[str, dict]:
+    name = spec.get("name")
+    arguments = spec.get("arguments") or {}
+    if not isinstance(arguments, dict):
+        raise ValueError("scripted tool_call arguments must be an object")
+    command = spec.get("command")
+    if command is None:
+        command = next(
+            (value for key, value in arguments.items() if key.lower() in ("command", "cmd", "commandline")),
+            None,
+        )
+    is_shell = spec.get("type") == "shell" or (
+        spec.get("type") is None and (name is None or isinstance(name, str) and name.lower() in SHELL_TOOL_NAMES)
+    )
+    if is_shell:
+        if not isinstance(command, str):
+            raise ValueError("scripted shell tool_call needs a string command")
+        overrides = {key: value for key, value in arguments.items() if key.lower() not in ("command", "cmd", "commandline")}
+        return _shell_call(
+            payload,
+            command,
+            preferred_name=name if isinstance(name, str) else None,
+            overrides=overrides,
+        )
+    offered = {tool_name for tool_name, _schema in _declared_tools(payload)}
+    if not isinstance(name, str) or name not in offered:
+        raise ValueError(f"scripted tool {name!r} is not among offered tools")
+    return name, arguments
 
-    The marker goes out only after a successful, full-length result for the
-    shell call this endpoint issued. A request offering no tools (a title or
-    summary side call) gets neutral text, never the marker.
-    """
+
+def _history_value(payload: dict, spec: dict) -> str:
+    marker = spec.get("marker")
+    pattern = re.compile(spec["pattern"])
+    group = spec.get("group", 0)
+    for text in reversed(_assistant_history_text(payload)):
+        if isinstance(marker, str) and marker not in text:
+            continue
+        match = pattern.search(text)
+        if match:
+            try:
+                return match.group(group)
+            except (IndexError, KeyError) as exc:
+                raise ValueError("reply_from_history group is not present") from exc
+    raise ValueError("reply_from_history pattern did not match assistant history")
+
+
+def _scripted_plan(payload: dict, turns: list[dict]) -> GenerationPlan | None:
+    latest = _latest_input_text(payload)
+    for turn in turns:
+        if turn["match"] not in latest:
+            continue
+        reply = turn.get("reply")
+        history = turn.get("reply_from_history")
+        if history is not None:
+            value = _history_value(payload, history)
+            reply = reply.replace("{{history}}", value) if reply is not None else value
+        if isinstance(reply, str) and "{{input_marker}}" in reply:
+            marker = SCRIPTED_INPUT_MARKER.search(latest)
+            if marker is None:
+                raise ValueError("scripted reply input-marker template has no matching marker in the latest user input")
+            reply = reply.replace("{{input_marker}}", marker.group())
+        tool_spec = turn.get("tool_call")
+        tool_call = _scripted_tool_call(payload, tool_spec) if tool_spec is not None else None
+        return GenerationPlan(reply, tool_call, turn["id"])
+    return None
+
+
+def _default_generation_plan(payload: dict) -> GenerationPlan:
+    """Reconstruct the old served-state default response from its request."""
     text = _reply_text(payload)
     if not text.startswith("LH_SERVED_"):
-        return "text", text
+        return GenerationPlan(text, None)
     if not payload.get("tools"):
-        return "text", "Console served-state check"
-    results = _tool_results(
-        {key: value for key, value in payload.items() if key != "tools"}
-    )
+        return GenerationPlan("Console served-state check", None)
+    results = _tool_results({key: value for key, value in payload.items() if key != "tools"})
     if not results:
-        return "tool", _shell_call(payload)
+        return GenerationPlan(None, _shell_call(payload))
     failure = _round_trip_failure(text, results)
     if failure:
         print(f"round trip failed: {failure}", flush=True)
-        return "text", f"LH_TOOL_ROUND_TRIP_FAILED: {failure}"
-    return "text", text
+        return GenerationPlan(f"LH_TOOL_ROUND_TRIP_FAILED: {failure}", None)
+    return GenerationPlan(text, None)
+
+
+def _plan(payload: dict) -> tuple[str, str | tuple[str, dict]]:
+    """Compatibility wrapper for the pre-script default planner."""
+    plan = _default_generation_plan(payload)
+    if plan.tool_call:
+        return "tool", plan.tool_call
+    return "text", plan.text or ""
 
 
 def _openai_usage() -> dict[str, int]:
@@ -369,36 +533,66 @@ class MockHandler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *_args: object) -> None:
         return
 
-    def _send_json(self, status: int, payload: dict) -> None:
-        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.wfile.write(body)
-        self.close_connection = True
-
-    def _send_sse(self, frames: list[tuple[str | None, dict | str]]) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self.end_headers()
+    def _send_json(self, status: int, payload: dict, *, model_request_id: int | None = None) -> None:
         try:
-            for event, data in frames:
+            body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            if model_request_id is not None:
+                if 200 <= status < 300:
+                    self.server.mark_model_request_served(model_request_id)
+                else:
+                    self.server.mark_model_request_failed(model_request_id)
+            self.wfile.write(body)
+        except Exception:
+            if model_request_id is not None:
+                self.server.mark_model_request_failed(model_request_id)
+            raise
+        finally:
+            self.close_connection = True
+
+    def _send_sse(
+        self,
+        frames: list[tuple[str | None, dict | str]],
+        *,
+        model_request_id: int | None = None,
+    ) -> None:
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            if model_request_id is not None and not frames:
+                self.server.mark_model_request_served(model_request_id)
+            for index, (event, data) in enumerate(frames):
+                if model_request_id is not None and index == len(frames) - 1:
+                    self.server.mark_model_request_served(model_request_id)
                 if event:
                     self.wfile.write(f"event: {event}\n".encode("utf-8"))
-                encoded = (
-                    data
-                    if isinstance(data, str)
-                    else json.dumps(data, separators=(",", ":"))
-                )
+                encoded = data if isinstance(data, str) else json.dumps(data, separators=(",", ":"))
                 self.wfile.write(f"data: {encoded}\n\n".encode("utf-8"))
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
-            pass
-        self.close_connection = True
+            if model_request_id is not None:
+                self.server.mark_model_request_failed(model_request_id)
+        except Exception:
+            if model_request_id is not None:
+                self.server.mark_model_request_failed(model_request_id)
+            raise
+        finally:
+            self.close_connection = True
+
+    def _send_model_json(self, payload: dict, turn_id: str | None) -> None:
+        request_id = self.server.begin_model_request(turn_id)
+        self._send_json(200, payload, model_request_id=request_id)
+
+    def _send_model_sse(self, frames: list[tuple[str | None, dict | str]], turn_id: str | None) -> None:
+        request_id = self.server.begin_model_request(turn_id)
+        self._send_sse(frames, model_request_id=request_id)
 
     def _read_json(self) -> dict:
         size = int(self.headers.get("Content-Length", "0"))
@@ -413,6 +607,14 @@ class MockHandler(BaseHTTPRequestHandler):
             raise ValueError("request body must be a JSON object")
         return payload
 
+    def _generation_plan(self, payload: dict) -> GenerationPlan:
+        plan = _scripted_plan(payload, self.server.script_turns)
+        if plan is None:
+            if self.server.script_sha256 is not None and _responses_tool_result_only(payload):
+                raise ValueError("scripted Responses tool-result continuation did not match a fixture turn")
+            plan = _default_generation_plan(payload)
+        return plan
+
     def do_HEAD(self) -> None:
         self.send_response(200)
         self.send_header("Content-Length", "0")
@@ -422,6 +624,9 @@ class MockHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
+        if path == "/_scripted_model/receipt":
+            self._send_json(200, self.server.receipt())
+            return
         if path in {"/", "/healthz", "/api/hello", "/v1/oauth/hello"}:
             self._send_json(200, {"status": "ok"})
             return
@@ -457,19 +662,13 @@ class MockHandler(BaseHTTPRequestHandler):
                 model = unquote(gemini.group(1))
                 method = gemini.group(2)
                 if method == "countTokens":
-                    self._send_json(
-                        200, {"totalTokens": INPUT_TOKENS, "cachedContentTokenCount": 0}
-                    )
+                    self._send_json(200, {"totalTokens": INPUT_TOKENS, "cachedContentTokenCount": 0})
                 else:
-                    self._gemini(
-                        payload, model, stream=method == "streamGenerateContent"
-                    )
+                    self._gemini(payload, model, stream=method == "streamGenerateContent")
                 return
         except ValueError as exc:
             print(f"POST {path} -> 400 {exc}", flush=True)
-            self._send_json(
-                400, {"error": {"message": str(exc), "type": "invalid_request_error"}}
-            )
+            self._send_json(400, {"error": {"message": str(exc), "type": "invalid_request_error"}})
             return
         self._send_json(
             404,
@@ -515,20 +714,20 @@ class MockHandler(BaseHTTPRequestHandler):
         }
 
     def _responses(self, payload: dict) -> None:
-        kind, plan = _plan(payload)
+        plan = self._generation_plan(payload)
+        kind = "tool" if plan.tool_call else "text"
         print(
-            f"POST /responses -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True
+            f"POST /responses -> {kind} {plan.tool_call[0] if plan.tool_call else ''}",
+            flush=True,
         )
-        if kind == "tool":
-            self._responses_tool(payload, *plan)
+        if plan.tool_call:
+            self._responses_tool(payload, *plan.tool_call, text=plan.text, turn_id=plan.turn_id)
             return
-        text = plan
+        text = plan.text or ""
         model = str(payload.get("model") or "mock-model")
         response_id = f"resp_{uuid4().hex}"
         if not payload.get("stream", True):
-            self._send_json(
-                200, _response_object(response_id, model, text, status="completed")
-            )
+            self._send_model_json(_response_object(response_id, model, text, status="completed"), plan.turn_id)
             return
 
         item_id = f"msg_{uuid4().hex}"
@@ -628,17 +827,19 @@ class MockHandler(BaseHTTPRequestHandler):
                 ),
             ]
         )
-        self._send_sse(frames)
+        self._send_model_sse(frames, plan.turn_id)
 
     def _anthropic(self, payload: dict) -> None:
-        kind, plan = _plan(payload)
+        plan = self._generation_plan(payload)
+        kind = "tool" if plan.tool_call else "text"
         print(
-            f"POST /messages -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True
+            f"POST /messages -> {kind} {plan.tool_call[0] if plan.tool_call else ''}",
+            flush=True,
         )
-        if kind == "tool":
-            self._anthropic_tool(payload, *plan)
+        if plan.tool_call:
+            self._anthropic_tool(payload, *plan.tool_call, text=plan.text, turn_id=plan.turn_id)
             return
-        text = plan
+        text = plan.text or ""
         model = str(payload.get("model") or "mock-model")
         message_id = f"msg_{uuid4().hex}"
         message = {
@@ -652,7 +853,7 @@ class MockHandler(BaseHTTPRequestHandler):
             "usage": {"input_tokens": INPUT_TOKENS, "output_tokens": OUTPUT_TOKENS},
         }
         if not payload.get("stream", False):
-            self._send_json(200, message)
+            self._send_model_json(message, plan.turn_id)
             return
         cut = max(1, len(text) // 2)
         chunks = [text[:cut], text[cut:]] if text[cut:] else [text]
@@ -703,24 +904,24 @@ class MockHandler(BaseHTTPRequestHandler):
                 ("message_stop", {"type": "message_stop"}),
             ]
         )
-        self._send_sse(frames)
+        self._send_model_sse(frames, plan.turn_id)
 
     def _chat_completions(self, payload: dict) -> None:
-        kind, plan = _plan(payload)
+        plan = self._generation_plan(payload)
+        kind = "tool" if plan.tool_call else "text"
         print(
-            f"POST /chat/completions -> {kind} {plan[0] if kind == 'tool' else ''}",
+            f"POST /chat/completions -> {kind} {plan.tool_call[0] if plan.tool_call else ''}",
             flush=True,
         )
-        if kind == "tool":
-            self._chat_tool(payload, *plan)
+        if plan.tool_call:
+            self._chat_tool(payload, *plan.tool_call, text=plan.text, turn_id=plan.turn_id)
             return
-        text = plan
+        text = plan.text or ""
         model = str(payload.get("model") or "mock-model")
         completion_id = f"chatcmpl_{uuid4().hex}"
         created = int(time.time())
         if not payload.get("stream", False):
-            self._send_json(
-                200,
+            self._send_model_json(
                 {
                     "id": completion_id,
                     "object": "chat.completion",
@@ -735,6 +936,7 @@ class MockHandler(BaseHTTPRequestHandler):
                     ],
                     "usage": _openai_usage(),
                 },
+                plan.turn_id,
             )
             return
         cut = max(1, len(text) // 2)
@@ -765,9 +967,7 @@ class MockHandler(BaseHTTPRequestHandler):
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": model,
-                    "choices": [
-                        {"index": 0, "delta": {"content": chunk}, "finish_reason": None}
-                    ],
+                    "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
                 },
             )
             for chunk in chunks
@@ -798,9 +998,17 @@ class MockHandler(BaseHTTPRequestHandler):
                 (None, "[DONE]"),
             ]
         )
-        self._send_sse(frames)
+        self._send_model_sse(frames, plan.turn_id)
 
-    def _responses_tool(self, payload: dict, name: str, args: dict) -> None:
+    def _responses_tool(
+        self,
+        payload: dict,
+        name: str,
+        args: dict,
+        *,
+        text: str | None = None,
+        turn_id: str | None = None,
+    ) -> None:
         model = str(payload.get("model") or "mock-model")
         response_id = f"resp_{uuid4().hex}"
         arguments = json.dumps(args)
@@ -812,26 +1020,115 @@ class MockHandler(BaseHTTPRequestHandler):
             "arguments": arguments,
             "status": "completed",
         }
-        _issue(_reply_text(payload), f"id:{call['call_id']}")
-        final = _response_object(response_id, model, "", status="completed")
-        final["output"] = [call]
+        if turn_id is None and _has_user_prompt(payload):
+            _issue(_reply_text(payload), f"id:{call['call_id']}")
+        text_item = {
+            "id": f"msg_{response_id}",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+            "status": "completed",
+        }
+        final = _response_object(response_id, model, text or "", status="completed")
+        final["output"] = ([text_item] if text is not None else []) + [call]
         if not payload.get("stream", True):
-            self._send_json(200, final)
+            self._send_model_json(final, turn_id)
             return
-        created = _response_object(response_id, model, "", status="in_progress")
-        ref = {"item_id": call["id"], "output_index": 0}
-        self._send_sse(
-            [
-                ("response.created", {"type": "response.created", "response": created}),
+
+        created = _response_object(response_id, model, text or "", status="in_progress")
+        call_index = 1 if text is not None else 0
+        frames: list[tuple[str | None, dict | str]] = [
+            ("response.created", {"type": "response.created", "response": created}),
+            (
+                "response.in_progress",
+                {"type": "response.in_progress", "response": created},
+            ),
+        ]
+        if text is not None:
+            item_id = text_item["id"]
+            message = {**text_item, "content": [], "status": "in_progress"}
+            part = {"type": "output_text", "text": "", "annotations": []}
+            cut = max(1, len(text) // 2)
+            chunks = [text[:cut], text[cut:]] if text[cut:] else [text]
+            frames.extend(
+                [
+                    (
+                        "response.output_item.added",
+                        {
+                            "type": "response.output_item.added",
+                            "output_index": 0,
+                            "item": message,
+                        },
+                    ),
+                    (
+                        "response.content_part.added",
+                        {
+                            "type": "response.content_part.added",
+                            "item_id": item_id,
+                            "output_index": 0,
+                            "content_index": 0,
+                            "part": part,
+                        },
+                    ),
+                ]
+            )
+            frames.extend(
                 (
-                    "response.in_progress",
-                    {"type": "response.in_progress", "response": created},
-                ),
+                    "response.output_text.delta",
+                    {
+                        "type": "response.output_text.delta",
+                        "item_id": item_id,
+                        "output_index": 0,
+                        "content_index": 0,
+                        "delta": chunk,
+                    },
+                )
+                for chunk in chunks
+            )
+            frames.extend(
+                [
+                    (
+                        "response.output_text.done",
+                        {
+                            "type": "response.output_text.done",
+                            "item_id": item_id,
+                            "output_index": 0,
+                            "content_index": 0,
+                            "text": text,
+                        },
+                    ),
+                    (
+                        "response.content_part.done",
+                        {
+                            "type": "response.content_part.done",
+                            "item_id": item_id,
+                            "output_index": 0,
+                            "content_index": 0,
+                            "part": {
+                                "type": "output_text",
+                                "text": text,
+                                "annotations": [],
+                            },
+                        },
+                    ),
+                    (
+                        "response.output_item.done",
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": 0,
+                            "item": text_item,
+                        },
+                    ),
+                ]
+            )
+        ref = {"item_id": call["id"], "output_index": call_index}
+        frames.extend(
+            [
                 (
                     "response.output_item.added",
                     {
                         "type": "response.output_item.added",
-                        "output_index": 0,
+                        "output_index": call_index,
                         "item": {**call, "arguments": "", "status": "in_progress"},
                     },
                 ),
@@ -855,7 +1152,7 @@ class MockHandler(BaseHTTPRequestHandler):
                     "response.output_item.done",
                     {
                         "type": "response.output_item.done",
-                        "output_index": 0,
+                        "output_index": call_index,
                         "item": call,
                     },
                 ),
@@ -865,8 +1162,17 @@ class MockHandler(BaseHTTPRequestHandler):
                 ),
             ]
         )
+        self._send_model_sse(frames, turn_id)
 
-    def _anthropic_tool(self, payload: dict, name: str, args: dict) -> None:
+    def _anthropic_tool(
+        self,
+        payload: dict,
+        name: str,
+        args: dict,
+        *,
+        text: str | None = None,
+        turn_id: str | None = None,
+    ) -> None:
         model = str(payload.get("model") or "mock-model")
         block = {
             "type": "tool_use",
@@ -874,19 +1180,21 @@ class MockHandler(BaseHTTPRequestHandler):
             "name": name,
             "input": args,
         }
-        _issue(_reply_text(payload), f"id:{block['id']}")
+        if turn_id is None and _has_user_prompt(payload):
+            _issue(_reply_text(payload), f"id:{block['id']}")
+        content = ([{"type": "text", "text": text}] if text is not None else []) + [block]
         message = {
             "id": f"msg_{uuid4().hex}",
             "type": "message",
             "role": "assistant",
-            "content": [block],
+            "content": content,
             "model": model,
             "stop_reason": "tool_use",
             "stop_sequence": None,
             "usage": {"input_tokens": INPUT_TOKENS, "output_tokens": OUTPUT_TOKENS},
         }
         if not payload.get("stream", False):
-            self._send_json(200, message)
+            self._send_model_json(message, turn_id)
             return
         start = {
             **message,
@@ -894,14 +1202,41 @@ class MockHandler(BaseHTTPRequestHandler):
             "stop_reason": None,
             "usage": {"input_tokens": INPUT_TOKENS, "output_tokens": 0},
         }
-        self._send_sse(
-            [
-                ("message_start", {"type": "message_start", "message": start}),
+        frames: list[tuple[str | None, dict | str]] = [("message_start", {"type": "message_start", "message": start})]
+        tool_index = 0
+        if text is not None:
+            cut = max(1, len(text) // 2)
+            chunks = [text[:cut], text[cut:]] if text[cut:] else [text]
+            frames.append(
                 (
                     "content_block_start",
                     {
                         "type": "content_block_start",
                         "index": 0,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                )
+            )
+            frames.extend(
+                (
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "text_delta", "text": chunk},
+                    },
+                )
+                for chunk in chunks
+            )
+            frames.append(("content_block_stop", {"type": "content_block_stop", "index": 0}))
+            tool_index = 1
+        frames.extend(
+            [
+                (
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": tool_index,
                         "content_block": {**block, "input": {}},
                     },
                 ),
@@ -909,14 +1244,17 @@ class MockHandler(BaseHTTPRequestHandler):
                     "content_block_delta",
                     {
                         "type": "content_block_delta",
-                        "index": 0,
+                        "index": tool_index,
                         "delta": {
                             "type": "input_json_delta",
                             "partial_json": json.dumps(args),
                         },
                     },
                 ),
-                ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                (
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": tool_index},
+                ),
                 (
                     "message_delta",
                     {
@@ -928,8 +1266,17 @@ class MockHandler(BaseHTTPRequestHandler):
                 ("message_stop", {"type": "message_stop"}),
             ]
         )
+        self._send_model_sse(frames, turn_id)
 
-    def _chat_tool(self, payload: dict, name: str, args: dict) -> None:
+    def _chat_tool(
+        self,
+        payload: dict,
+        name: str,
+        args: dict,
+        *,
+        text: str | None = None,
+        turn_id: str | None = None,
+    ) -> None:
         model = str(payload.get("model") or "mock-model")
         completion_id = f"chatcmpl_{uuid4().hex}"
         created = int(time.time())
@@ -938,10 +1285,10 @@ class MockHandler(BaseHTTPRequestHandler):
             "type": "function",
             "function": {"name": name, "arguments": json.dumps(args)},
         }
-        _issue(_reply_text(payload), f"id:{call['id']}")
+        if turn_id is None and _has_user_prompt(payload):
+            _issue(_reply_text(payload), f"id:{call['id']}")
         if not payload.get("stream", False):
-            self._send_json(
-                200,
+            self._send_model_json(
                 {
                     "id": completion_id,
                     "object": "chat.completion",
@@ -952,7 +1299,7 @@ class MockHandler(BaseHTTPRequestHandler):
                             "index": 0,
                             "message": {
                                 "role": "assistant",
-                                "content": None,
+                                "content": text,
                                 "tool_calls": [call],
                             },
                             "finish_reason": "tool_calls",
@@ -960,6 +1307,7 @@ class MockHandler(BaseHTTPRequestHandler):
                     ],
                     "usage": _openai_usage(),
                 },
+                turn_id,
             )
             return
         chunk = {
@@ -968,8 +1316,25 @@ class MockHandler(BaseHTTPRequestHandler):
             "created": created,
             "model": model,
         }
-        self._send_sse(
-            [
+        frames: list[tuple[str | None, dict | str]] = [
+            (
+                None,
+                {
+                    **chunk,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant"},
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+            )
+        ]
+        if text is not None:
+            cut = max(1, len(text) // 2)
+            chunks = [text[:cut], text[cut:]] if text[cut:] else [text]
+            frames.extend(
                 (
                     None,
                     {
@@ -977,12 +1342,16 @@ class MockHandler(BaseHTTPRequestHandler):
                         "choices": [
                             {
                                 "index": 0,
-                                "delta": {"role": "assistant"},
+                                "delta": {"content": content},
                                 "finish_reason": None,
                             }
                         ],
                     },
-                ),
+                )
+                for content in chunks
+            )
+        frames.extend(
+            [
                 (
                     None,
                     {
@@ -1000,28 +1369,23 @@ class MockHandler(BaseHTTPRequestHandler):
                     None,
                     {
                         **chunk,
-                        "choices": [
-                            {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
-                        ],
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
                     },
                 ),
                 (None, {**chunk, "choices": [], "usage": _openai_usage()}),
                 (None, "[DONE]"),
             ]
         )
+        self._send_model_sse(frames, turn_id)
 
-    def _gemini_payload(
-        self, text: str, model: str, *, call: tuple[str, dict] | None = None
-    ) -> dict:
+    def _gemini_payload(self, text: str | None, model: str, *, call: tuple[str, dict] | None = None) -> dict:
+        parts = [{"text": text}] if text is not None else []
+        if call:
+            parts.append({"functionCall": {"name": call[0], "args": call[1]}})
         return {
             "candidates": [
                 {
-                    "content": {
-                        "role": "model",
-                        "parts": [{"functionCall": {"name": call[0], "args": call[1]}}]
-                        if call
-                        else [{"text": text}],
-                    },
+                    "content": {"role": "model", "parts": parts},
                     "finishReason": "STOP",
                     "index": 0,
                 }
@@ -1037,39 +1401,133 @@ class MockHandler(BaseHTTPRequestHandler):
         }
 
     def _gemini(self, payload: dict, model: str, *, stream: bool) -> None:
-        kind, plan = _plan(payload)
-        print(f"POST gemini -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True)
-        if kind == "tool":
-            _issue(_reply_text(payload), f"gemini:{plan[0]}:{uuid4().hex}")
-            result = self._gemini_payload("", model, call=plan)
-        else:
-            result = self._gemini_payload(plan, model)
+        plan = self._generation_plan(payload)
+        kind = "tool" if plan.tool_call else "text"
+        print(
+            f"POST gemini -> {kind} {plan.tool_call[0] if plan.tool_call else ''}",
+            flush=True,
+        )
+        if plan.tool_call and plan.turn_id is None and _has_user_prompt(payload):
+            _issue(_reply_text(payload), f"gemini:{plan.tool_call[0]}:{uuid4().hex}")
+        result = self._gemini_payload(plan.text, model, call=plan.tool_call)
         if stream:
-            self._send_sse([(None, result)])
+            self._send_model_sse([(None, result)], plan.turn_id)
         else:
-            self._send_json(200, result)
+            self._send_model_json(result, plan.turn_id)
 
 
 class ThreadedServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
 
+    def __init__(
+        self,
+        server_address,
+        request_handler_class,
+        bind_and_activate: bool = True,
+        *,
+        script_turns: list[dict] | None = None,
+        script_sha256: str | None = None,
+        receipt_file: Path | None = None,
+    ):
+        super().__init__(server_address, request_handler_class, bind_and_activate)
+        self.script_turns = script_turns or []
+        self.script_sha256 = script_sha256
+        self.receipt_file = receipt_file
+        self.endpoint = f"http://{HOST}:{self.server_port}"
+        self._requests: list[dict] = []
+        self._receipt_lock = threading.Lock()
+        self._write_receipt_locked()
+
+    def _receipt_locked(self) -> dict:
+        return {
+            "scripted_model": {
+                "endpoint": self.endpoint,
+                "script_sha256": self.script_sha256,
+                "served_requests": sum(request["status"] == "served" for request in self._requests),
+            },
+            "requests": [dict(request) for request in self._requests],
+        }
+
+    def receipt(self) -> dict:
+        with self._receipt_lock:
+            return self._receipt_locked()
+
+    def begin_model_request(self, turn_id: str | None) -> int:
+        with self._receipt_lock:
+            request_id = len(self._requests) + 1
+            self._requests.append({"request_id": request_id, "matched_turn_id": turn_id, "status": "pending"})
+            self._write_receipt_locked()
+            return request_id
+
+    def mark_model_request_served(self, request_id: int) -> None:
+        self._set_model_request_status(request_id, "served")
+
+    def mark_model_request_failed(self, request_id: int) -> None:
+        self._set_model_request_status(request_id, "failed")
+
+    def _set_model_request_status(self, request_id: int, status: str) -> None:
+        with self._receipt_lock:
+            if request_id < 1 or request_id > len(self._requests):
+                raise RuntimeError(f"unknown scripted model request id: {request_id}")
+            request = self._requests[request_id - 1]
+            if request["status"] == "failed":
+                return
+            request["status"] = status
+            self._write_receipt_locked()
+
+    def _write_receipt_locked(self) -> None:
+        if self.receipt_file is None:
+            return
+        self.receipt_file.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.receipt_file.with_name(f".{self.receipt_file.name}.{os.getpid()}.tmp")
+        temporary.write_text(
+            json.dumps(self._receipt_locked(), separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, self.receipt_file)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port", type=int, default=0, help="listen port (0 chooses a free port)")
+    parser.add_argument("--port-file", type=Path, help="write the bound port here after listening")
     parser.add_argument(
-        "--port", type=int, default=0, help="listen port (0 chooses a free port)"
+        "--script",
+        type=Path,
+        default=os.environ.get("LONGHOUSE_SCRIPTED_MODEL_SCRIPT") or None,
+        help="ordered JSON scenario file (default: LONGHOUSE_SCRIPTED_MODEL_SCRIPT)",
     )
     parser.add_argument(
-        "--port-file", type=Path, help="write the bound port here after listening"
+        "--receipt-file",
+        type=Path,
+        default=os.environ.get("LONGHOUSE_SCRIPTED_MODEL_RECEIPT") or None,
+        help="write the current run receipt to this file",
     )
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")
 
-    server = ThreadedServer((HOST, args.port), MockHandler)
+    script_turns: list[dict] = []
+    script_sha256 = None
+    if args.script is not None:
+        try:
+            script_turns, script_sha256 = load_script(args.script)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+
+    server = ThreadedServer(
+        (HOST, args.port),
+        MockHandler,
+        script_turns=script_turns,
+        script_sha256=script_sha256,
+        receipt_file=args.receipt_file,
+    )
     if args.port_file:
-        args.port_file.write_text(f"{server.server_port}\n", encoding="ascii")
+        # Atomic: a reader polling for the file must never see it empty.
+        partial = args.port_file.with_name(args.port_file.name + ".partial")
+        partial.write_text(f"{server.server_port}\n", encoding="ascii")
+        partial.replace(args.port_file)
     print(f"Console mock LLM listening on {HOST}:{server.server_port}", flush=True)
     try:
         server.serve_forever(poll_interval=0.1)

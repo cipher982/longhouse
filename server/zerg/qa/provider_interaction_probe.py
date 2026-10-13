@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -28,6 +29,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 from typing import Mapping
+from typing import MutableMapping
+from urllib.parse import urlsplit
+from urllib.request import urlopen
 from uuid import uuid4
 
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
@@ -50,6 +54,7 @@ from zerg.qa.provider_adapters.pi import PI_LIVE_ENV
 from zerg.qa.provider_adapters.pi import PI_MODEL_ENV
 from zerg.qa.provider_adapters.pi import PI_PROVIDER
 from zerg.qa.provider_interaction_semantics import MIN_NEGATIVE_PROOF_QUIESCENCE_SECONDS
+from zerg.qa.provider_interaction_semantics import SCRIPTED_MODEL_PROMPT_PROBE_IDS
 from zerg.qa.provider_interaction_semantics import raw_event_digest
 from zerg.qa.provider_interaction_semantics import semantic_boundary_fixture
 from zerg.qa.provider_sqlite import open_readonly
@@ -67,6 +72,54 @@ _PROVIDER_VERSION_PATTERNS = {
     "cursor": cursor_release_identity.VERSION_LINE,
     "opencode": opencode_release_identity.VERSION_LINE,
     "pi": pi_qualification.PI_VERSION_GRAMMAR,
+}
+_SCRIPTED_MODEL_BASE_URL_ENV = "LONGHOUSE_SCRIPTED_MODEL_BASE_URL"
+_SCRIPTED_MODEL_ENV_PREFIX = "LONGHOUSE_SCRIPTED_MODEL_"
+_PROVIDER_ENDPOINT_ENV_NAMES = frozenset(
+    {
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_BEDROCK_BASE_URL",
+        "CODEX_API_URL",
+        "GOOGLE_GEMINI_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENAI_BASE_URL",
+    }
+)
+_PROVIDER_PROFILE_ENV_NAMES = frozenset(
+    {
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "CODEX_SQLITE_HOME",
+        "CURSOR_CONFIG_DIR",
+        "CURSOR_HOME",
+        "LONGHOUSE_OMP_CONFIG_DIR",
+        "LONGHOUSE_OMP_DATA_DIR",
+        "LONGHOUSE_OMP_SESSION_DIR",
+        "LONGHOUSE_PI_PROVIDER",
+        "OMP_AGENT_DIR",
+        "OMP_HOME",
+        "OMP_PROFILE",
+        "OPENCODE_CONFIG",
+        "OPENCODE_CONFIG_CONTENT",
+        "OPENCODE_CONFIG_DIR",
+        "PI_CODING_AGENT_DIR",
+        "PI_CONFIG_DIR",
+        "PI_CONFIG_FILES",
+        "PI_CODING_AGENT_SESSION_DIR",
+        "PI_PACKAGE_DIR",
+        "PI_PROFILE",
+    }
+)
+_SCRIPTED_MODEL_SCRIPT_ENV = "LONGHOUSE_SCRIPTED_MODEL_SCRIPT"
+_SCRIPTED_MODEL_DUMMY_KEY = "longhouse-mock-key"
+_SCRIPTED_MODEL_PROVIDER = "longhouse-mock"
+_SCRIPTED_MODEL_NAME = "mock-model"
+# OMP has no interaction-probe version grammar or execution dispatch here; keep it out of scripted evidence until both exist.
+_SCRIPTED_MODEL_API_KEY_BY_PROVIDER = {
+    "claude": "ANTHROPIC_API_KEY",
+    "codex": "CODEX_API_KEY",
+    "opencode": "OPENROUTER_API_KEY",
+    "pi": "OPENROUTER_API_KEY",
 }
 _NO_TOKEN_AUTH_ENV_NAMES = frozenset(
     {
@@ -103,63 +156,346 @@ _NO_TOKEN_AUTH_ENV_NAMES = frozenset(
 )
 _NO_TOKEN_AUTH_FLAG_ENV_NAMES = frozenset({"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"})
 _NO_TOKEN_FALSE_FLAG_VALUES = frozenset({"0", "false", "no", "off"})
-_NO_TOKEN_SCRUB_ENV_NAMES = _NO_TOKEN_AUTH_ENV_NAMES | frozenset(
-    {
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_BEDROCK_BASE_URL",
-        "ANTHROPIC_MODEL",
-        "AWS_DEFAULT_REGION",
-        "AWS_EC2_METADATA_DISABLED",
-        "AWS_REGION",
-        "CODEX_API_URL",
-        "CODEX_HOME",
-        "CODEX_MANAGED_PACKAGE_ROOT",
-        "CLAUDE_CONFIG_DIR",
-        "CURSOR_MODEL",
-        "CURSOR_CONFIG_DIR",
-        "GOOGLE_CLOUD_LOCATION",
-        "GOOGLE_CLOUD_PROJECT",
-        "GOOGLE_CLOUD_REGION",
-        "OPENAI_API_BASE",
-        "OPENAI_BASE_URL",
-        "OPENCODE_CONFIG",
-        "OPENCODE_CONFIG_DIR",
-        "VERTEXAI_LOCATION",
-        "VERTEXAI_PROJECT",
-        "LONGHOUSE_ANTIGRAVITY_QUALIFICATION_HOME",
-        "LONGHOUSE_ANTIGRAVITY_QUALIFICATION_LIVE",
-        "ANTIGRAVITY_QUALIFICATION_HOME",
-        "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE",
-        "LONGHOUSE_CLAUDE_INTERACTION_ARTIFACT",
-        "LONGHOUSE_CURSOR_GATE0_ARTIFACT",
-        "LONGHOUSE_CODEX_BIN",
-        "LONGHOUSE_ENGINE_BIN",
-        "LONGHOUSE_OPENCODE_BIN",
-        "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL",
-        "LONGHOUSE_PI_BIN",
-        "LONGHOUSE_PI_LIVE",
-        "LONGHOUSE_PI_QUALIFICATION_MODEL",
-        "LONGHOUSE_PROVIDER_INTERACTION_ARTIFACT",
-        "LONGHOUSE_PROVIDER_INTERACTION_LIVE",
-    }
+_NO_TOKEN_SCRUB_ENV_NAMES = (
+    _NO_TOKEN_AUTH_ENV_NAMES
+    | _PROVIDER_ENDPOINT_ENV_NAMES
+    | _PROVIDER_PROFILE_ENV_NAMES
+    | frozenset(
+        {
+            "ANTHROPIC_MODEL",
+            "AWS_DEFAULT_REGION",
+            "AWS_EC2_METADATA_DISABLED",
+            "AWS_REGION",
+            "CODEX_MANAGED_PACKAGE_ROOT",
+            "CODEX_MODEL",
+            "CURSOR_MODEL",
+            "GOOGLE_CLOUD_LOCATION",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_CLOUD_REGION",
+            "VERTEXAI_LOCATION",
+            "VERTEXAI_PROJECT",
+            "LONGHOUSE_ANTIGRAVITY_QUALIFICATION_HOME",
+            "LONGHOUSE_ANTIGRAVITY_QUALIFICATION_LIVE",
+            "ANTIGRAVITY_QUALIFICATION_HOME",
+            "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE",
+            "LONGHOUSE_CLAUDE_INTERACTION_ARTIFACT",
+            "LONGHOUSE_CURSOR_GATE0_ARTIFACT",
+            "LONGHOUSE_CODEX_BIN",
+            "LONGHOUSE_ENGINE_BIN",
+            "LONGHOUSE_OPENCODE_BIN",
+            "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL",
+            "LONGHOUSE_OMP_QUALIFICATION_MODEL",
+            "LONGHOUSE_PI_BIN",
+            "LONGHOUSE_PI_LIVE",
+            "LONGHOUSE_PI_QUALIFICATION_MODEL",
+            "LONGHOUSE_PROVIDER_INTERACTION_ARTIFACT",
+            "LONGHOUSE_PROVIDER_INTERACTION_LIVE",
+            _SCRIPTED_MODEL_BASE_URL_ENV,
+            _SCRIPTED_MODEL_SCRIPT_ENV,
+        }
+    )
 )
 
 
-def _no_token_environment() -> dict[str, str]:
+def _is_provider_profile_environment_name(name: str) -> bool:
+    return name in _PROVIDER_PROFILE_ENV_NAMES or name.startswith("XDG_")
+
+
+def _credential_free_environment(*, reject_ambient_credentials: bool) -> dict[str, str]:
     credentials = []
     for name in sorted(_NO_TOKEN_AUTH_ENV_NAMES):
         value = str(os.environ.get(name) or "").strip()
         if value and (name not in _NO_TOKEN_AUTH_FLAG_ENV_NAMES or value.casefold() not in _NO_TOKEN_FALSE_FLAG_VALUES):
             credentials.append(name)
-    if credentials:
+    if reject_ambient_credentials and credentials:
         raise RuntimeError("live_no_token requires a credential-free environment; found: " + ", ".join(credentials))
     environment = os.environ.copy()
-    for name in _NO_TOKEN_SCRUB_ENV_NAMES:
-        environment.pop(name, None)
+    for name in tuple(environment):
+        if name in _NO_TOKEN_SCRUB_ENV_NAMES or _is_provider_profile_environment_name(name) or name.startswith(_SCRIPTED_MODEL_ENV_PREFIX):
+            environment.pop(name, None)
     # Prevent a provider SDK from discovering an instance/container role after
     # the explicit environment has been scrubbed.
     environment["AWS_EC2_METADATA_DISABLED"] = "true"
     return environment
+
+
+def _no_token_environment() -> dict[str, str]:
+    return _credential_free_environment(reject_ambient_credentials=True)
+
+
+def _live_token_environment() -> dict[str, str]:
+    scripted_controls = sorted(
+        name
+        for name, value in os.environ.items()
+        if name.startswith(_SCRIPTED_MODEL_ENV_PREFIX) or (name in _PROVIDER_ENDPOINT_ENV_NAMES and str(value).strip())
+    )
+    if scripted_controls:
+        raise RuntimeError("live_token refuses inherited scripted-model controls or endpoint overrides: " + ", ".join(scripted_controls))
+    environment = os.environ.copy()
+    for name in tuple(environment):
+        if (
+            name.startswith(_SCRIPTED_MODEL_ENV_PREFIX)
+            or name in _PROVIDER_ENDPOINT_ENV_NAMES
+            or _is_provider_profile_environment_name(name)
+        ):
+            environment.pop(name, None)
+    return environment
+
+
+def _scripted_model_environment(provider: str) -> dict[str, str]:
+    try:
+        api_key_name = _SCRIPTED_MODEL_API_KEY_BY_PROVIDER[provider]
+    except KeyError:
+        raise ValueError(f"scripted_model interaction probes are unsupported for {provider!r}") from None
+    endpoint = str(os.environ.get(_SCRIPTED_MODEL_BASE_URL_ENV) or "").strip().rstrip("/")
+    script = str(os.environ.get(_SCRIPTED_MODEL_SCRIPT_ENV) or "").strip()
+    if not endpoint or not script or not Path(script).is_file():
+        raise RuntimeError(f"scripted_model requires a local fixture at {_SCRIPTED_MODEL_SCRIPT_ENV} and {_SCRIPTED_MODEL_BASE_URL_ENV}")
+    try:
+        parsed_endpoint = urlsplit(endpoint)
+        endpoint_address = ipaddress.ip_address(parsed_endpoint.hostname or "")
+        endpoint_port = parsed_endpoint.port
+    except ValueError as exc:
+        raise RuntimeError(f"{_SCRIPTED_MODEL_BASE_URL_ENV} must be a loopback HTTP endpoint") from exc
+    if (
+        parsed_endpoint.scheme != "http"
+        or not endpoint_address.is_loopback
+        or endpoint_port is None
+        or parsed_endpoint.username is not None
+        or parsed_endpoint.password is not None
+        or parsed_endpoint.path
+        or parsed_endpoint.query
+        or parsed_endpoint.fragment
+    ):
+        raise RuntimeError(f"{_SCRIPTED_MODEL_BASE_URL_ENV} must be a loopback HTTP endpoint")
+    environment = _credential_free_environment(reject_ambient_credentials=False)
+    environment[api_key_name] = _SCRIPTED_MODEL_DUMMY_KEY
+    environment[_SCRIPTED_MODEL_BASE_URL_ENV] = endpoint
+    environment[_SCRIPTED_MODEL_SCRIPT_ENV] = script
+    if provider == "claude":
+        environment["ANTHROPIC_BASE_URL"] = endpoint
+        environment["ANTHROPIC_MODEL"] = _SCRIPTED_MODEL_NAME
+    elif provider == "codex":
+        environment["CODEX_MODEL"] = _SCRIPTED_MODEL_NAME
+    elif provider == "opencode":
+        environment["LONGHOUSE_OPENCODE_QUALIFICATION_MODEL"] = f"{_SCRIPTED_MODEL_PROVIDER}/{_SCRIPTED_MODEL_NAME}"
+    elif provider == "pi":
+        environment[PI_LIVE_ENV] = "1"
+        environment[PI_MODEL_ENV] = _SCRIPTED_MODEL_NAME
+        environment["LONGHOUSE_PI_PROVIDER"] = _SCRIPTED_MODEL_PROVIDER
+    return environment
+
+
+def _configure_scripted_model_profile(
+    provider: str,
+    profile_root: Path,
+    environment: MutableMapping[str, str],
+) -> None:
+    """Write the shared workflow's mock endpoint configuration into an isolated profile."""
+
+    endpoint = str(environment.get(_SCRIPTED_MODEL_BASE_URL_ENV) or "").strip().rstrip("/")
+    if not endpoint:
+        raise RuntimeError(f"scripted_model profile requires {_SCRIPTED_MODEL_BASE_URL_ENV}")
+    profile_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    openai_base_url = f"{endpoint}/v1"
+    custom_model = {
+        "id": _SCRIPTED_MODEL_NAME,
+        "name": "Longhouse mock",
+        "contextWindow": 200000,
+        "maxTokens": 8192,
+    }
+
+    def write_json(path: Path, value: Mapping[str, Any]) -> None:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+        path.chmod(0o600)
+
+    if provider == "codex":
+        environment["HOME"] = str(profile_root)
+        codex_home = profile_root / ".codex"
+        codex_home.mkdir(mode=0o700, exist_ok=True)
+        environment["CODEX_HOME"] = str(codex_home)
+        environment["CODEX_MODEL"] = _SCRIPTED_MODEL_NAME
+        config = codex_home / "config.toml"
+        config.write_text(
+            f'model_provider = "openai"\nmodel = {json.dumps(_SCRIPTED_MODEL_NAME)}\nopenai_base_url = {json.dumps(openai_base_url)}\n',
+            encoding="utf-8",
+        )
+        config.chmod(0o600)
+    elif provider == "claude":
+        environment["HOME"] = str(profile_root)
+        config_dir = profile_root / ".claude"
+        config_dir.mkdir(mode=0o700, exist_ok=True)
+        environment["CLAUDE_CONFIG_DIR"] = str(config_dir)
+        environment["ANTHROPIC_BASE_URL"] = endpoint
+        environment["ANTHROPIC_MODEL"] = _SCRIPTED_MODEL_NAME
+    elif provider == "opencode":
+        environment["HOME"] = str(profile_root)
+        config_root = profile_root / ".config"
+        environment["XDG_CONFIG_HOME"] = str(config_root)
+        environment["LONGHOUSE_OPENCODE_QUALIFICATION_MODEL"] = f"{_SCRIPTED_MODEL_PROVIDER}/{_SCRIPTED_MODEL_NAME}"
+        write_json(
+            config_root / "opencode" / "opencode.json",
+            {
+                "$schema": "https://opencode.ai/config.json",
+                "provider": {
+                    _SCRIPTED_MODEL_PROVIDER: {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "name": "Longhouse mock",
+                        "options": {"baseURL": openai_base_url, "apiKey": _SCRIPTED_MODEL_DUMMY_KEY},
+                        "models": {_SCRIPTED_MODEL_NAME: {"name": "Longhouse mock"}},
+                    }
+                },
+            },
+        )
+    elif provider == "pi":
+        environment["HOME"] = str(profile_root)
+        environment["PI_CODING_AGENT_DIR"] = str(profile_root / ".pi" / "agent")
+        environment[PI_LIVE_ENV] = "1"
+        environment[PI_MODEL_ENV] = _SCRIPTED_MODEL_NAME
+        environment["LONGHOUSE_PI_PROVIDER"] = _SCRIPTED_MODEL_PROVIDER
+        write_json(
+            profile_root / ".pi" / "agent" / "models.json",
+            {
+                "providers": {
+                    _SCRIPTED_MODEL_PROVIDER: {
+                        "baseUrl": openai_base_url,
+                        "api": "openai-completions",
+                        "apiKey": _SCRIPTED_MODEL_DUMMY_KEY,
+                        "models": [custom_model],
+                    }
+                }
+            },
+        )
+    elif provider == "omp":
+        environment["HOME"] = str(profile_root)
+        environment["LONGHOUSE_OMP_QUALIFICATION_MODEL"] = f"{_SCRIPTED_MODEL_PROVIDER}/{_SCRIPTED_MODEL_NAME}"
+        models = profile_root / ".omp" / "agent" / "models.yml"
+        models.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        models.write_text(
+            "providers:\n"
+            f"  {_SCRIPTED_MODEL_PROVIDER}:\n"
+            f'    baseUrl: "{openai_base_url}"\n'
+            "    api: openai-completions\n"
+            f'    apiKey: "{_SCRIPTED_MODEL_DUMMY_KEY}"\n'
+            "    models:\n"
+            f"      - id: {_SCRIPTED_MODEL_NAME}\n"
+            "        name: Longhouse mock\n"
+            "        contextWindow: 200000\n"
+            "        maxTokens: 8192\n",
+            encoding="utf-8",
+        )
+        models.chmod(0o600)
+    else:
+        raise ValueError(f"scripted_model profiles are unsupported for {provider!r}")
+
+
+def _scripted_model_receipt_snapshot(
+    environment: Mapping[str, str],
+) -> tuple[str, str, int, list[Mapping[str, Any]]]:
+    endpoint = str(environment.get(_SCRIPTED_MODEL_BASE_URL_ENV) or "").strip().rstrip("/")
+    script = str(environment.get(_SCRIPTED_MODEL_SCRIPT_ENV) or "").strip()
+    if not endpoint or not script:
+        raise RuntimeError(f"scripted_model receipt requires {_SCRIPTED_MODEL_BASE_URL_ENV} and {_SCRIPTED_MODEL_SCRIPT_ENV}")
+    with urlopen(f"{endpoint}/_scripted_model/receipt", timeout=5) as response:
+        payload = json.loads(response.read())
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("scripted_model"), Mapping):
+        raise RuntimeError("scripted_model server returned an invalid receipt")
+    receipt = payload["scripted_model"]
+    if set(receipt) != {"endpoint", "script_sha256", "served_requests"}:
+        raise RuntimeError("scripted_model receipt fields do not match the shared contract")
+    try:
+        script_sha256 = hashlib.sha256(Path(script).read_bytes()).hexdigest()
+    except OSError as exc:
+        raise RuntimeError("scripted_model script fixture is unreadable") from exc
+    served_requests = receipt["served_requests"]
+    requests = payload.get("requests")
+    if (
+        receipt["endpoint"] != endpoint
+        or receipt["script_sha256"] != script_sha256
+        or type(served_requests) is not int
+        or served_requests < 0
+        or not isinstance(requests, list)
+    ):
+        raise RuntimeError("scripted_model receipt does not match the configured endpoint or script")
+    request_rows = []
+    for request_id, request in enumerate(requests, start=1):
+        matched_turn_id = request.get("matched_turn_id") if isinstance(request, Mapping) else None
+        if (
+            not isinstance(request, Mapping)
+            or type(request.get("request_id")) is not int
+            or request["request_id"] != request_id
+            or request.get("status") not in {"pending", "served", "failed"}
+            or (matched_turn_id is not None and (not isinstance(matched_turn_id, str) or not matched_turn_id.strip()))
+        ):
+            raise RuntimeError("scripted_model server returned an invalid request receipt")
+        request_rows.append(request)
+    if sum(request["status"] == "served" for request in request_rows) != served_requests:
+        raise RuntimeError("scripted_model served request count does not match its request statuses")
+    return endpoint, script_sha256, len(request_rows), request_rows
+
+
+def _scripted_model_receipt(
+    environment: Mapping[str, str],
+    *,
+    requests_before: int,
+    require_served_request: bool = False,
+) -> dict[str, Any]:
+    endpoint, script_sha256, total_requests, requests = _scripted_model_receipt_snapshot(environment)
+    if type(requests_before) is not int or requests_before < 0 or total_requests < requests_before:
+        raise RuntimeError("scripted_model request window is invalid for this invocation")
+    invocation_requests = requests[requests_before:]
+    if require_served_request and not invocation_requests:
+        raise RuntimeError("scripted_model prompt probe did not serve a request in this invocation")
+    matched_turns = []
+    for request in invocation_requests:
+        matched_turn_id = request.get("matched_turn_id")
+        if request["status"] != "served":
+            raise RuntimeError("scripted_model invocation request did not complete with a successful response")
+        if not isinstance(matched_turn_id, str) or not matched_turn_id.strip():
+            raise RuntimeError("scripted_model receipt did not match every invocation request to a fixture turn")
+        matched_turns.append(matched_turn_id)
+    return {
+        "endpoint": endpoint,
+        "script_sha256": script_sha256,
+        "served_requests": len(invocation_requests),
+        "matched_turns": matched_turns,
+        "request_window": {
+            "after_request_id": requests_before,
+            "through_request_id": total_requests,
+        },
+    }
+
+
+def _scrub_scripted_model_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    accounting_key_parts = ("usage", "cost", "token")
+    hash_bound_fields = {"raw_events", "native_source_rows", "capture_receipt"}
+
+    def scrub(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            cleaned = {}
+            for key, item in value.items():
+                if key in hash_bound_fields:
+                    cleaned[key] = item
+                    continue
+                if (
+                    key == "live_model_evidence"
+                    or any(part in str(key).casefold() for part in accounting_key_parts)
+                    or isinstance(item, str)
+                    and item == "live_token"
+                ):
+                    continue
+                cleaned[key] = scrub(item)
+            return cleaned
+        if isinstance(value, list):
+            return [scrub(item) for item in value if not (isinstance(item, str) and item == "live_token")]
+        if isinstance(value, tuple):
+            return [scrub(item) for item in value if not (isinstance(item, str) and item == "live_token")]
+        return value
+
+    sanitized = scrub(observation)
+    assert isinstance(sanitized, dict)
+    return sanitized
 
 
 def _looks_like_claude_auth_prompt(compact_terminal: str) -> bool:
@@ -598,11 +934,13 @@ def _opencode_database_path(data_root: Path) -> Path | None:
 
 
 def _opencode_cli_model(model: str | None) -> str | None:
-    """Translate the factory's OpenRouter API slug to OpenCode's model ID."""
+    """Resolve OpenRouter slugs and the scripted provider's native model ID."""
 
     value = str(model or "").strip()
     if not value:
         return None
+    if value.startswith(f"{_SCRIPTED_MODEL_PROVIDER}/"):
+        return value
     bare_value = value.removeprefix("openrouter/")
     vendor, separator, model_name = bare_value.partition("/")
     if vendor not in _OPENCODE_BARE_MODEL_VENDORS or not separator or not model_name:
@@ -984,9 +1322,13 @@ def _codex_model_probe(
     runtime_home = Path(tempfile.mkdtemp(prefix="longhouse-codex-interaction-"))
     home = runtime_home / "home"
     home.mkdir(mode=0o700)
-    codex_home = runtime_home / "codex-home"
-    codex_home.mkdir(mode=0o700)
-    env["CODEX_HOME"] = str(codex_home)
+    if env.get(_SCRIPTED_MODEL_SCRIPT_ENV):
+        _configure_scripted_model_profile("codex", home, env)
+        codex_home = Path(env["CODEX_HOME"])
+    else:
+        codex_home = runtime_home / "codex-home"
+        codex_home.mkdir(mode=0o700)
+        env["CODEX_HOME"] = str(codex_home)
     secrets = _secret_values(env)
     auth_receipt: dict[str, str] | None = None
     api_key = str(env.get("CODEX_API_KEY") or "").strip()
@@ -1083,6 +1425,8 @@ def _opencode_interaction_probes(
                     "XDG_CACHE_HOME": str(cache_root),
                 }
             )
+            if env.get(_SCRIPTED_MODEL_SCRIPT_ENV):
+                _configure_scripted_model_profile("opencode", home, env)
             secrets = _secret_values(env)
             model = _opencode_cli_model(env.get("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL"))
             argv = [str(binary)]
@@ -2323,7 +2667,10 @@ def _pi_model_probe(
     env = dict(environment)
     secrets = _secret_values(env)
     requested_model = str(env.get(PI_MODEL_ENV) or "").strip()
-    input_sequence = [f"pi -p <prompt> --provider openrouter --model {requested_model} --session-dir <workspace> --session-id <native-id>"]
+    model_provider = str(env.get("LONGHOUSE_PI_PROVIDER") or PI_PROVIDER)
+    input_sequence = [
+        f"pi -p <prompt> --provider {model_provider} --model {requested_model} --session-dir <workspace> --session-id <native-id>"
+    ]
     live_opted_in = str(env.get(PI_LIVE_ENV) or "").strip().lower() in {"1", "true", "yes", "on"}
     api_key = str(env.get("OPENROUTER_API_KEY") or "").strip()
     model_pinned = bool(str(env.get(PI_MODEL_ENV) or "").strip())
@@ -2354,6 +2701,9 @@ def _pi_model_probe(
             submitted_input_sequence=input_sequence,
         )
         return [row], []
+    runtime_home = Path(tempfile.mkdtemp(prefix="longhouse-pi-interaction-"))
+    env["HOME"] = str(runtime_home)
+    env["PI_CODING_AGENT_DIR"] = str(runtime_home / ".pi" / "agent")
     marker = f"LONGHOUSE_PI_PROBE_{uuid4().hex}"
     prompt = f"Reply with exactly {marker} and nothing else."
     argv = [
@@ -2361,7 +2711,7 @@ def _pi_model_probe(
         "-p",
         prompt,
         "--provider",
-        PI_PROVIDER,
+        model_provider,
         "--model",
         requested_model,
         "--session-dir",
@@ -2373,6 +2723,8 @@ def _pi_model_probe(
     stderr_path = output_root / "stderr.log"
     terminal_path = output_root / "terminal.raw"
     try:
+        if env.get(_SCRIPTED_MODEL_SCRIPT_ENV):
+            _configure_scripted_model_profile("pi", runtime_home, env)
         result = subprocess.run(
             argv,
             cwd=workspace,
@@ -2389,6 +2741,8 @@ def _pi_model_probe(
             stdout=(exc.stdout or "") if isinstance(exc.stdout, str) else "",
             stderr=(exc.stderr or "") if isinstance(exc.stderr, str) else "",
         )
+    finally:
+        shutil.rmtree(runtime_home, ignore_errors=True)
     safe_stdout = _redact_bytes((result.stdout or "").encode("utf-8"), secrets=secrets).decode("utf-8", errors="replace")
     safe_stderr = _redact_bytes((result.stderr or "").encode("utf-8"), secrets=secrets).decode("utf-8", errors="replace")
     stdout_path.write_text(safe_stdout, encoding="utf-8")
@@ -2515,8 +2869,10 @@ def produce_live_observation(
 ) -> dict[str, Any]:
     """Run provider probes with the evidence class declared by the request."""
 
-    if evidence_class not in {"live_no_token", "live_token"}:
-        raise ValueError(f"unsupported live interaction evidence class: {evidence_class}")
+    if evidence_class not in {"live_no_token", "scripted_model", "live_token"}:
+        raise ValueError(f"unsupported interaction evidence class: {evidence_class}")
+    if evidence_class == "scripted_model" and provider not in _SCRIPTED_MODEL_API_KEY_BY_PROVIDER:
+        raise ValueError(f"scripted_model interaction probes are unsupported for {provider!r}")
 
     contract = contract_for_provider(provider)
     if contract is None:
@@ -2536,7 +2892,16 @@ def produce_live_observation(
         }
 
     binary = _resolve_binary(provider, provider_bin)
-    probe_environment = _no_token_environment() if evidence_class == "live_no_token" else os.environ.copy()
+    probe_environment = (
+        _no_token_environment()
+        if evidence_class == "live_no_token"
+        else _scripted_model_environment(provider)
+        if evidence_class == "scripted_model"
+        else _live_token_environment()
+    )
+    scripted_request_start = None
+    if evidence_class == "scripted_model":
+        scripted_request_start = _scripted_model_receipt_snapshot(probe_environment)[2]
     observation: dict[str, Any] = {
         "schema_version": 1,
         "artifact_kind": "provider_interaction_semantics_observation",
@@ -2662,9 +3027,23 @@ def produce_live_observation(
         )
         if evidence is not None:
             observation["live_model_evidence"] = evidence
+    if evidence_class == "scripted_model":
+        assert scripted_request_start is not None
+        observation["scripted_model"] = _scripted_model_receipt(
+            probe_environment,
+            requests_before=scripted_request_start,
+            require_served_request=any(
+                isinstance(row, Mapping)
+                and row.get("probe_id") in SCRIPTED_MODEL_PROMPT_PROBE_IDS
+                and row.get("disposition") not in {"policy_disabled", "upstream_absent"}
+                for row in observation.get("probes") or []
+            ),
+        )
     for row in observation.get("probes") or []:
         if isinstance(row, dict) and row.get("native_source_rows"):
             row["native_source_root"] = str(artifact_root.resolve())
+    if evidence_class == "scripted_model":
+        observation = _scrub_scripted_model_observation(observation)
     return observation
 
 
@@ -2674,7 +3053,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider-bin")
     parser.add_argument("--artifact-root", required=True, type=Path)
     parser.add_argument("--timeout", type=float, default=_DEFAULT_TIMEOUT_SECONDS)
-    parser.add_argument("--evidence-class", choices=("live_no_token", "live_token"), default="live_no_token")
+    parser.add_argument("--evidence-class", choices=("live_no_token", "scripted_model", "live_token"), default="live_no_token")
     return parser
 
 

@@ -686,7 +686,7 @@ def test_capability_projection_joins_a_real_proof_and_labels_the_unproven_rest(m
     assert response.status_code == 200
     payload = response.json()
     assert payload["artifact_kind"] == "provider_capability_projection"
-    assert payload["projection_version"] == "assurance-projection-v1"
+    assert payload["projection_version"] == "assurance-projection-v2"
     assert payload["subject_fence"]["configured"] is False
     # assertion_id is not globally unique across providers -- e.g. both codex
     # and cursor declare "coordination_instructions_model_visible" for their

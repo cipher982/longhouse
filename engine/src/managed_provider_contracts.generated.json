@@ -5058,6 +5058,7 @@
     "live_no_token",
     "live_token",
     "none",
+    "scripted_model",
     "source_review"
   ]
 }

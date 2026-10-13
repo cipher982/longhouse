@@ -1,0 +1,48 @@
+{
+  "turns": [
+    {
+      "id": "plain-reply",
+      "match": "SCRIPT_PLAIN",
+      "reply": "SCRIPT_PLAIN_REPLY"
+    },
+    {
+      "id": "tool-start",
+      "match": "SCRIPT_TOOL_START",
+      "reply": "SCRIPT_TOOL_REQUESTED",
+      "tool_call": {
+        "type": "shell",
+        "name": "shell",
+        "command": "sleep 30 && echo TOOL_RESULT_MARKER"
+      }
+    },
+    {
+      "id": "tool-result-reply",
+      "match": "TOOL_RESULT_MARKER",
+      "reply": "SCRIPT_TOOL_FINAL"
+    },
+    {
+      "id": "steer-initial",
+      "match": "SCRIPT_STEER_INITIAL",
+      "reply": "SCRIPT_BEFORE_STEER"
+    },
+    {
+      "id": "steer-result",
+      "match": "SCRIPT_STEERED",
+      "reply": "SCRIPT_AFTER_STEER"
+    },
+    {
+      "id": "resume-plant",
+      "match": "SCRIPT_RESUME_PLANT",
+      "reply": "PLANTED_VALUE=blue-42"
+    },
+    {
+      "id": "resume-echo",
+      "match": "SCRIPT_RESUME_NOW",
+      "reply_from_history": {
+        "marker": "PLANTED_VALUE=",
+        "pattern": "PLANTED_VALUE=([A-Za-z0-9_-]+)",
+        "group": 1
+      }
+    }
+  ]
+}

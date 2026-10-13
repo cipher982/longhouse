@@ -11,12 +11,14 @@ from typing import Mapping
 
 SCHEMA_VERSION = 2
 KIND = "provider_qualification"
-EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "live_token"})
+EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "scripted_model", "live_token"})
 AUTH_MODES = frozenset({"none", "isolated_profile", "factory_token"})
+# Request-summary precedence only; proof admission always compares exact classes.
 EVIDENCE_PRIORITY = {
     "hermetic": 0,
     "live_no_token": 1,
-    "live_token": 2,
+    "scripted_model": 2,
+    "live_token": 3,
 }
 SEMANTIC_KEYS = (
     "auth_mode",
@@ -184,6 +186,8 @@ def validate(
         raise QualificationRequestError("unsupported evidence_class")
     if request["auth_mode"] not in AUTH_MODES:
         raise QualificationRequestError("unsupported auth_mode")
+    if "scripted_model" in scenario_evidence.values() and request["auth_mode"] != "none":
+        raise QualificationRequestError("scripted_model evidence requires auth_mode none")
     if request["auth_mode"] == "factory_token" and "live_no_token" in scenario_evidence.values():
         raise QualificationRequestError("live_no_token evidence cannot run with factory credentials")
     if "live_token" in scenario_evidence.values() and request["auth_mode"] != "factory_token":

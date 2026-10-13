@@ -72,6 +72,22 @@ def test_v2_request_rejects_unknown_keys_and_token_mismatch() -> None:
         validate(request)
 
 
+def test_scripted_model_request_requires_auth_mode_none() -> None:
+    request = _request()
+    request["scenario_evidence"] = {scenario: "scripted_model" for scenario in request["scenario_ids"]}
+    request["evidence_class"] = "scripted_model"
+    request["auth_mode"] = "none"
+    request["semantic_digest"] = semantic_digest(request)
+
+    assert validate(request) == request
+
+    for auth_mode in ("isolated_profile", "factory_token"):
+        request["auth_mode"] = auth_mode
+        request["semantic_digest"] = semantic_digest(request)
+        with pytest.raises(QualificationRequestError, match="scripted_model evidence requires auth_mode none"):
+            validate(request)
+
+
 def test_v2_request_rejects_unknown_build_granularity() -> None:
     request = _request()
     request["expected_provider_build_granularity"] = "unknown"

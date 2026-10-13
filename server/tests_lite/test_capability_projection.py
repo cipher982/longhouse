@@ -184,6 +184,32 @@ def test_wrong_evidence_class_applies_even_to_a_failing_outcome():
     assert projections[0].proof_status == UNACCEPTABLE_EVIDENCE
 
 
+def test_acceptable_classes_project_with_independent_latest_outcomes() -> None:
+    assertion = replace(_assertion(), acceptable_evidence=("live_token", "scripted_model"))
+    live_pass = _record(
+        evidence_class=EvidenceClass.LIVE_TOKEN,
+        generated_at="2026-07-29T00:00:00+00:00",
+    )
+    scripted_failure = _record(
+        evidence_class=EvidenceClass.SCRIPTED_MODEL,
+        outcome=AssertionOutcome.SEMANTIC_FAIL,
+        generated_at="2026-07-29T00:04:00+00:00",
+    )
+
+    projections = project_capabilities(
+        (assertion,),
+        [live_pass, scripted_failure],
+        now=datetime(2026, 7, 29, 0, 5, 0, tzinfo=UTC),
+    )
+    by_class = {projection.evidence_class: projection for projection in projections}
+
+    assert set(by_class) == {"live_token", "scripted_model"}
+    assert by_class["live_token"].proof_status == "pass"
+    assert by_class["live_token"].generated_at == live_pass.generated_at
+    assert by_class["scripted_model"].proof_status == "semantic_fail"
+    assert by_class["scripted_model"].generated_at == scripted_failure.generated_at
+
+
 def test_unparseable_timestamp_fails_safe_to_stale_not_eternally_fresh():
     # Review 2026-07-29: an unparseable generated_at produced age_seconds is
     # None, which the original join treated as "not stale" -- a proof with a

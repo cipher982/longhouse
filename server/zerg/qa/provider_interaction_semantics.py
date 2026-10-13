@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
+import re
 import sqlite3
 from collections.abc import Iterable
 from collections.abc import Mapping
 from contextlib import closing
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from zerg.qa.provider_event_digest import raw_event_digest
 from zerg.qa.provider_sqlite import open_readonly
@@ -23,6 +26,7 @@ STATUS_FAIL = "fail"
 STATUS_NOT_APPLICABLE = "not_applicable"
 STATUS_BLOCKED = "blocked"
 MIN_NEGATIVE_PROOF_QUIESCENCE_SECONDS = 1.5
+SCRIPTED_MODEL_PROMPT_PROBE_IDS = frozenset({"pi_print_model"})
 
 
 def _claude_command_content(command: str) -> str:
@@ -321,6 +325,64 @@ def _live_raw_provenance(
     return STATUS_PASS, None
 
 
+def _scripted_model_receipt_failure_code(observation: Mapping[str, Any]) -> str | None:
+    receipt = observation.get("scripted_model")
+    if not isinstance(receipt, Mapping):
+        return "scripted_model_receipt_missing"
+    if set(receipt) != {"endpoint", "script_sha256", "served_requests", "matched_turns", "request_window"}:
+        return "scripted_model_receipt_invalid"
+    endpoint = receipt.get("endpoint")
+    try:
+        parsed_endpoint = urlsplit(endpoint) if isinstance(endpoint, str) else None
+        endpoint_address = ipaddress.ip_address(parsed_endpoint.hostname or "") if parsed_endpoint is not None else None
+        endpoint_port = parsed_endpoint.port if parsed_endpoint is not None else None
+    except ValueError:
+        return "scripted_model_receipt_invalid"
+    if (
+        parsed_endpoint is None
+        or parsed_endpoint.scheme != "http"
+        or endpoint_address is None
+        or not endpoint_address.is_loopback
+        or endpoint_port is None
+        or parsed_endpoint.username is not None
+        or parsed_endpoint.password is not None
+        or parsed_endpoint.path
+        or parsed_endpoint.query
+        or parsed_endpoint.fragment
+    ):
+        return "scripted_model_receipt_invalid"
+    if not isinstance(receipt.get("script_sha256"), str) or re.fullmatch(r"[0-9a-f]{64}", receipt["script_sha256"]) is None:
+        return "scripted_model_receipt_invalid"
+    request_window = receipt.get("request_window")
+    if not isinstance(request_window, Mapping) or set(request_window) != {"after_request_id", "through_request_id"}:
+        return "scripted_model_receipt_invalid"
+    after_request_id = request_window.get("after_request_id")
+    through_request_id = request_window.get("through_request_id")
+    served_requests = receipt.get("served_requests")
+    matched_turns = receipt.get("matched_turns")
+    probes = observation.get("probes")
+    requires_model_request = isinstance(probes, list) and any(
+        isinstance(row, Mapping)
+        and row.get("probe_id") in SCRIPTED_MODEL_PROMPT_PROBE_IDS
+        and row.get("disposition") not in {"policy_disabled", "upstream_absent"}
+        for row in probes
+    )
+    if (
+        type(served_requests) is not int
+        or served_requests < (1 if requires_model_request else 0)
+        or type(after_request_id) is not int
+        or after_request_id < 0
+        or type(through_request_id) is not int
+        or through_request_id < after_request_id
+        or through_request_id - after_request_id != served_requests
+        or not isinstance(matched_turns, list)
+        or len(matched_turns) != served_requests
+        or not all(isinstance(turn, str) and turn.strip() for turn in matched_turns)
+    ):
+        return "scripted_model_receipt_invalid"
+    return None
+
+
 def _negative_store_inventory(
     source_rows: list[Any],
     *,
@@ -559,7 +621,19 @@ def evaluate_observation(
 
     assertion_rows: list[dict[str, Any]] = []
     observed_by_id: dict[str, Mapping[str, Any]] = {}
-    live_evidence = observation.get("evidence_class") in {"live_no_token", "live_token"} and observation.get("synthetic") is not True
+    live_evidence = (
+        observation.get("evidence_class") in {"live_no_token", "scripted_model", "live_token"} and observation.get("synthetic") is not True
+    )
+    if observation.get("evidence_class") == "scripted_model" and observation.get("synthetic") is not True:
+        receipt_failure = _scripted_model_receipt_failure_code(observation)
+        assertion_rows.append(
+            {
+                "probe_id": "scripted_model_receipt",
+                "status": STATUS_BLOCKED if receipt_failure else STATUS_PASS,
+                "failure_code": receipt_failure,
+                "evidence_basis": "scripted_model_receipt",
+            }
+        )
     for row in observed:
         if not isinstance(row, Mapping):
             assertion_rows.append({"status": STATUS_FAIL, "failure_code": "interaction_probe_row_invalid"})

@@ -361,38 +361,58 @@ def _strict_outcomes(strict_result: dict[str, Any], *, required_keys: frozenset[
 def _validated_live_interaction_artifacts(
     provider: str,
     data: Mapping[str, Any],
-) -> bool:
-    """Re-evaluate live evidence from the materialized files named by a result.
+    *,
+    expected_evidence_class: str | None,
+    expected_request_digest: str | None,
+) -> str | None:
+    """Re-evaluate materialized native evidence and bind it to this request."""
 
-    The harness result is a projection and may be hand-assembled by a caller.
-    A path string and ``raw_provenance=pass`` are therefore insufficient on
-    their own. Re-read both files, bind the JSONL to the observation, and run
-    the provider-native oracle again so the full-column gate is grounded in
-    the actual artifact bytes.
-    """
+    if not isinstance(expected_evidence_class, str) or not expected_evidence_class:
+        return "interaction_evidence_class_missing"
+    data_evidence_class = data.get("evidence_class")
+    if not isinstance(data_evidence_class, str) or not data_evidence_class:
+        return "interaction_evidence_class_missing"
+    if data_evidence_class != expected_evidence_class:
+        return "interaction_evidence_class_mismatch"
+    if not isinstance(expected_request_digest, str) or not expected_request_digest.strip():
+        return "interaction_request_digest_missing"
+    data_request_digest = data.get("qualification_request_digest")
+    if not isinstance(data_request_digest, str) or not data_request_digest.strip():
+        return "interaction_request_digest_missing"
+    if data_request_digest != expected_request_digest:
+        return "interaction_request_digest_mismatch"
 
     observation_path_value = data.get("raw_observation_path")
     events_path_value = data.get("raw_events_path")
     if not isinstance(observation_path_value, str) or not observation_path_value.strip():
-        return False
+        return "interaction_raw_provenance_invalid"
     if not isinstance(events_path_value, str) or not events_path_value.strip():
-        return False
+        return "interaction_raw_provenance_invalid"
     try:
         observation_path = Path(observation_path_value).expanduser().resolve()
         events_path = Path(events_path_value).expanduser().resolve()
         observation = json.loads(observation_path.read_text(encoding="utf-8"))
         events_text = events_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return False
+        return "interaction_raw_provenance_invalid"
     if not isinstance(observation, Mapping):
-        return False
+        return "interaction_raw_provenance_invalid"
+    observation_evidence_class = observation.get("evidence_class")
+    if not isinstance(observation_evidence_class, str) or not observation_evidence_class:
+        return "interaction_evidence_class_missing"
+    if observation_evidence_class != expected_evidence_class:
+        return "interaction_evidence_class_mismatch"
+    observation_request_digest = observation.get("qualification_request_digest")
+    if not isinstance(observation_request_digest, str) or not observation_request_digest.strip():
+        return "interaction_request_digest_missing"
+    if observation_request_digest != expected_request_digest:
+        return "interaction_request_digest_mismatch"
     if (
         observation.get("provider") != provider
-        or observation.get("evidence_class") not in {"live_no_token", "live_token"}
         or observation.get("synthetic") is not False
         or events_text != interaction_semantics.jsonl_events(observation)
     ):
-        return False
+        return "interaction_raw_provenance_invalid"
     try:
         evidence_root = observation_path.parent.parent.resolve(strict=True)
         declared_source_root = observation.get("native_source_root")
@@ -407,16 +427,14 @@ def _validated_live_interaction_artifacts(
             source_root=str(materialized_root),
         )
     except Exception:  # noqa: BLE001 - an invalid evidence file fails closed
-        return False
+        return "interaction_raw_provenance_invalid"
     if independent.get("status") != "pass" or independent.get("provider_status") != "pass":
-        return False
-    if data.get("evidence_class") != observation.get("evidence_class"):
-        return False
+        return "interaction_raw_provenance_invalid"
     if data.get("provider_status") != independent.get("provider_status"):
-        return False
+        return "interaction_raw_provenance_invalid"
     if data.get("assertions") != independent.get("assertions"):
-        return False
-    return True
+        return "interaction_raw_provenance_invalid"
+    return None
 
 
 def _full_column_gate(
@@ -464,9 +482,11 @@ def _full_column_gate(
         expected = expected_limits.get(scenario, ("pass", None))
         live_interaction_attempted = scenario == "interaction_semantics" and interaction_evidence_class in {
             "live_no_token",
+            "scripted_model",
             "live_token",
         }
         live_pass_provenance = False
+        live_pass_failure_code: str | None = None
         if live_interaction_attempted and actual == ("pass", None):
             data = result.get("data")
             assertions = data.get("assertions") if isinstance(data, Mapping) else None
@@ -475,16 +495,27 @@ def _full_column_gate(
                 if isinstance(assertions, list)
                 else []
             )
+            artifact_failure_code = (
+                _validated_live_interaction_artifacts(
+                    provider,
+                    data,
+                    expected_evidence_class=interaction_evidence_class,
+                    expected_request_digest=qualification_request_digest,
+                )
+                if isinstance(data, Mapping)
+                else "interaction_live_provenance_missing"
+            )
             live_pass_provenance = (
                 isinstance(data, Mapping)
                 and data.get("verification_scope") == "provider_native"
                 and data.get("provider_status") == "pass"
-                and data.get("evidence_class") in {"live_no_token", "live_token"}
                 and bool(probe_assertions)
                 and any(row.get("probe_id") == "shared_title_boundary" for row in probe_assertions)
                 and all(row.get("status") == "pass" for row in probe_assertions)
-                and _validated_live_interaction_artifacts(provider, data)
+                and artifact_failure_code is None
             )
+            if not live_pass_provenance:
+                live_pass_failure_code = artifact_failure_code or "interaction_live_provenance_missing"
             if live_interaction_attempted:
                 interaction_live_pass_provenance = live_pass_provenance
         actual_is_allowed_live_result = live_interaction_attempted and (
@@ -499,7 +530,7 @@ def _full_column_gate(
                     "expected_failure_code": expected[1],
                     "actual_status": actual[0],
                     "actual_failure_code": (
-                        "interaction_live_provenance_missing"
+                        (live_pass_failure_code or "interaction_live_provenance_missing")
                         if live_interaction_attempted and actual == ("pass", None) and not live_pass_provenance
                         else actual[1]
                     ),
@@ -514,7 +545,7 @@ def _full_column_gate(
     coverage_complete = isinstance(missing_actions, list) and not missing_actions
     interaction_matches = by_scenario.get("interaction_semantics", [])
     provider_status = "not_applicable"
-    if interaction_evidence_class in {"live_no_token", "live_token"}:
+    if interaction_evidence_class in {"live_no_token", "scripted_model", "live_token"}:
         if len(interaction_matches) != 1:
             provider_status = "fail"
         else:
@@ -538,7 +569,14 @@ def _full_column_gate(
         if isinstance(observed_digest, str):
             interaction_digests.add(observed_digest)
     observed_request_digest = next(iter(interaction_digests), None) if len(interaction_digests) == 1 else None
-    request_binding_ok = qualification_request_digest is None or observed_request_digest == qualification_request_digest
+    live_request = interaction_evidence_class in {"live_no_token", "scripted_model", "live_token"}
+    request_binding_ok = (
+        isinstance(qualification_request_digest, str)
+        and bool(qualification_request_digest.strip())
+        and observed_request_digest == qualification_request_digest
+        if live_request
+        else qualification_request_digest is None or observed_request_digest == qualification_request_digest
+    )
     passed = not cardinality_errors and not unexpected_results and not unexpected_gap_kinds and coverage_complete and request_binding_ok
     return {
         "status": "pass" if passed else "fail",
@@ -1268,6 +1306,7 @@ def _cursor_observed_install_executor(
     evidence_class = {
         "hermetic": EvidenceClass.HERMETIC,
         "live_no_token": EvidenceClass.LIVE_NO_TOKEN,
+        "scripted_model": EvidenceClass.SCRIPTED_MODEL,
         "live_token": EvidenceClass.LIVE_TOKEN,
     }.get(interaction_evidence_class, EvidenceClass.LIVE_TOKEN)
     assertion = semantic.SemanticAssertion(

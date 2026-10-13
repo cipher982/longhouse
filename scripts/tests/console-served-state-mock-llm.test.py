@@ -4,19 +4,17 @@ really ran: a failed, early, or unrelated tool result must never produce it."""
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
+import sys
 import threading
 import time
 import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-spec = importlib.util.spec_from_file_location(
-    "mock_llm", ROOT / "scripts" / "qa" / "console-served-state-mock-llm.py"
-)
-mock = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mock)
+sys.path.insert(0, str(ROOT / "server"))
+mock = importlib.import_module("zerg.qa.scripted_model_server")
 mock.TOOL_MIN_SECONDS = 0.3
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from datetime import UTC
 from datetime import datetime
@@ -30,16 +32,18 @@ from zerg.services.provider_capability_cell_verdicts import verdict_from_mapping
 
 URL = "/api/internal/provider-capability-proofs"
 T1 = datetime(2026, 9, 29, 6, 0, tzinfo=UTC)
-CELL = ("cursor", "first_reply_received", "cursor_helm_launch_send", "default")
+CELL = ("cursor", "first_reply_received", "cursor_helm_launch_send", "default", "live_token")
+SCRIPTED_CELL = ("cursor", "first_reply_received", "cursor_helm_launch_send", "default", "scripted_model")
 
 
 def _row(*, at: datetime = T1, failures: int = 2, outcome: str = "infrastructure_error", cell=CELL) -> dict:
-    provider, assertion_id, scenario_id, variant = cell
+    provider, assertion_id, scenario_id, variant, evidence_class = cell
     return {
         "provider": provider,
         "assertion_id": assertion_id,
         "scenario_id": scenario_id,
         "variant": variant,
+        "evidence_class": evidence_class,
         "outcome": outcome,
         "observed_at": at.isoformat().replace("+00:00", "Z"),
         "consecutive_failures": failures,
@@ -47,7 +51,7 @@ def _row(*, at: datetime = T1, failures: int = 2, outcome: str = "infrastructure
 
 
 def _bundle_of(*rows: dict) -> dict:
-    return {"schema_version": 1, "artifact_kind": VERDICT_BUNDLE_KIND, "verdicts": list(rows)}
+    return {"schema_version": 2, "artifact_kind": VERDICT_BUNDLE_KIND, "verdicts": list(rows)}
 
 
 def _post(client, payload: dict, *, headers: dict[str, str] | None = None):
@@ -70,17 +74,18 @@ def test_publication_needs_the_factory_token(monkeypatch, tmp_path: Path) -> Non
     assert _stored(tmp_path) == {}
 
 
-def test_publish_stores_the_cell_and_reports_what_applied(monkeypatch, tmp_path: Path) -> None:
+def test_publish_stores_each_evidence_class_as_an_independent_cell(monkeypatch, tmp_path: Path) -> None:
     client = _client(monkeypatch, tmp_path)
     try:
-        response = _post(client, _bundle_of(_row(), _row(cell=("cursor", "other", "cursor_helm_launch_send", None))))
+        response = _post(client, _bundle_of(_row(), _row(cell=SCRIPTED_CELL, outcome="semantic_fail")))
     finally:
         api_app.dependency_overrides.clear()
     assert response.status_code == 201
-    assert response.json() == {"schema_version": 1, "accepted": 2, "applied": 2}
+    assert response.json() == {"schema_version": 2, "accepted": 2, "applied": 2}
     stored = _stored(tmp_path)
-    assert set(stored) == {CELL, ("cursor", "other", "cursor_helm_launch_send", None)}
+    assert set(stored) == {CELL, SCRIPTED_CELL}
     assert stored[CELL] == _row()
+    assert stored[SCRIPTED_CELL] == _row(cell=SCRIPTED_CELL, outcome="semantic_fail")
 
 
 def test_older_observation_never_overwrites_a_newer_one(monkeypatch, tmp_path: Path) -> None:
@@ -97,7 +102,7 @@ def test_older_observation_never_overwrites_a_newer_one(monkeypatch, tmp_path: P
         # Newest wins inside one bundle regardless of order, and a strictly newer one replaces.
         latest = _row(at=T1 + timedelta(hours=3), failures=1)
         mixed = _post(client, _bundle_of(latest, _row(at=T1 + timedelta(hours=2, minutes=30), failures=5)))
-        assert mixed.json() == {"schema_version": 1, "accepted": 2, "applied": 1}
+        assert mixed.json() == {"schema_version": 2, "accepted": 2, "applied": 1}
         assert _stored(tmp_path)[CELL] == latest
     finally:
         api_app.dependency_overrides.clear()
@@ -108,7 +113,7 @@ def test_a_pass_is_a_proof_not_a_verdict(monkeypatch, tmp_path: Path) -> None:
     try:
         refused = _post(client, _bundle_of(_row(outcome="pass")))
         # Whole bundle or nothing: one bad row must not half-apply.
-        half = _post(client, _bundle_of(_row(cell=("cursor", "x", "s", None)), _row(outcome="pass")))
+        half = _post(client, _bundle_of(_row(cell=("cursor", "x", "s", None, "live_token")), _row(outcome="pass")))
     finally:
         api_app.dependency_overrides.clear()
     assert refused.status_code == half.status_code == 422
@@ -129,6 +134,7 @@ def test_a_pass_is_a_proof_not_a_verdict(monkeypatch, tmp_path: Path) -> None:
         {"provider": ""},
         {"variant": 3},
         {"extra": 1},
+        {"evidence_class": "live_token_not_scripted"},
     ],
 )
 def test_malformed_verdicts_are_refused(monkeypatch, tmp_path: Path, change: dict) -> None:
@@ -141,14 +147,14 @@ def test_malformed_verdicts_are_refused(monkeypatch, tmp_path: Path, change: dic
     assert _stored(tmp_path) == {}
 
 
-def test_missing_field_and_bad_envelope_are_refused(monkeypatch, tmp_path: Path) -> None:
-    incomplete = _row()
-    del incomplete["scenario_id"]
+def test_missing_class_and_v1_envelopes_are_refused(monkeypatch, tmp_path: Path) -> None:
+    missing_class = _row()
+    del missing_class["evidence_class"]
     client = _client(monkeypatch, tmp_path)
     try:
-        assert _post(client, _bundle_of(incomplete)).status_code == 422
+        assert _post(client, _bundle_of(missing_class)).status_code == 422
         assert _post(client, _bundle_of()).status_code == 422
-        assert _post(client, {**_bundle_of(_row()), "schema_version": 2}).status_code == 422
+        assert _post(client, {**_bundle_of(_row()), "schema_version": 1}).status_code == 422
         assert _post(client, {**_bundle_of(_row()), "records": []}).status_code == 422
     finally:
         api_app.dependency_overrides.clear()
@@ -211,8 +217,26 @@ def test_missing_store_is_empty_not_an_error(tmp_path: Path) -> None:
     assert CellVerdictStore(tmp_path / "never-written").verdicts() == {}
 
 
-def test_verdict_is_scoped_to_the_exact_cell() -> None:
+def test_classless_legacy_failure_maps_to_live_token_only_for_revocation(tmp_path: Path) -> None:
+    root = tmp_path / "cell-verdicts"
+    root.mkdir()
+    legacy = _row()
+    del legacy["evidence_class"]
+    legacy_key = [legacy["provider"], legacy["assertion_id"], legacy["scenario_id"], legacy["variant"]]
+    encoded_key = json.dumps(legacy_key, ensure_ascii=False, separators=(",", ":")).encode()
+    file_name = f"{hashlib.sha256(encoded_key).hexdigest()}.json"
+    (root / file_name).write_text(json.dumps(legacy), encoding="utf-8")
+
+    verdicts = CellVerdictStore(root).verdicts()
+
+    assert set(verdicts) == {CELL}
+    assert verdicts[CELL].evidence_class.value == "live_token"
+    assert verdicts[CELL].outcome == legacy["outcome"]
+
+
+def test_verdict_is_scoped_to_the_exact_evidence_class() -> None:
     verdict = verdict_from_mapping(_row())
     assert isinstance(verdict, CellVerdict)
     assert verdict.key == CELL
+    assert verdict.evidence_class.value == "live_token"
     assert verdict.observed_at == T1
