@@ -71,12 +71,13 @@ def create_managed_active_fixture(
     launcher_pid: int,
     launcher_process_start_time: str,
     boot_id: str,
+    index: int = 0,
 ) -> dict[str, Any]:
     """Turn one representative OMP Helm fixture into a live session."""
-    session_id = _fixture_uuid("omp-session", 0)
-    run_id = _fixture_uuid("managed-active-run", 0)
-    native_session_id = f"omp-{_fixture_uuid('omp-native', 0)}"
-    thread_id = _fixture_uuid("managed-active-thread", 0)
+    session_id = _fixture_uuid("omp-session", index)
+    run_id = _fixture_uuid("managed-active-run", index)
+    native_session_id = f"omp-{_fixture_uuid('omp-native', index)}"
+    thread_id = _fixture_uuid("managed-active-thread", index)
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     workspace_path = str(workspace.resolve())
     session_file = home / ".omp" / "agent" / "sessions" / f"{native_session_id}.jsonl"
@@ -85,7 +86,7 @@ def create_managed_active_fixture(
         {"type": "session", "version": 3, "id": native_session_id, "cwd": workspace_path},
     )
     state_path = longhouse_home / "managed-local" / "omp-helm" / f"{session_id}.json"
-    socket_path = longhouse_home / "agent" / "managed-active-omp.sock"
+    socket_path = longhouse_home / "agent" / f"managed-active-omp-{index}.sock"
     socket_path.parent.mkdir(parents=True, exist_ok=True)
     socket_path.touch()
     source_claim_path = longhouse_home / "managed-local" / "claims" / f"{session_id}.json"
@@ -118,9 +119,9 @@ def create_managed_active_fixture(
         "provider_binary": str(provider_binary),
         "provider_binary_sha256": provider_binary_sha256,
         "socket_path": str(socket_path),
-        "channel_token": _fixture_uuid("managed-active-channel", 0),
-        "connection_id": _fixture_uuid("managed-active-connection", 0),
-        "lease_generation": _fixture_uuid("managed-active-generation", 0),
+        "channel_token": _fixture_uuid("managed-active-channel", index),
+        "connection_id": _fixture_uuid("managed-active-connection", index),
+        "lease_generation": _fixture_uuid("managed-active-generation", index),
         "launcher_pid": launcher_pid,
         "launcher_process_start_time": launcher_process_start_time,
         "provider_pid": provider_pid,
@@ -154,7 +155,7 @@ def create_managed_active_fixture(
         "run_id": run_id,
         "session_id": session_id,
         "thread_id": thread_id,
-        "turn_id": _fixture_uuid("managed-active-turn", 0),
+        "turn_id": _fixture_uuid("managed-active-turn", index),
         "client_request_id": None,
         "provider_thread_id": native_session_id,
         "provider_identity_confirmed": True,
@@ -168,7 +169,7 @@ def create_managed_active_fixture(
         "boot_id": boot_id,
         "process_start_time": provider_process_start_time,
         "adapter": "omp_helm",
-        "launch_id": _fixture_uuid("managed-active-launch", 0),
+        "launch_id": _fixture_uuid("managed-active-launch", index),
         "invocation_state": "running",
         "pending_count": 0,
         "pending_items": [],
@@ -213,7 +214,7 @@ def create_managed_active_fixture(
         "observed_at": now,
         "payload": {"execution_lifetime": "interactive"},
         "preview": None,
-        "producer_epoch": _fixture_uuid("managed-active-status-epoch", 0),
+        "producer_epoch": _fixture_uuid("managed-active-status-epoch", index),
         "seq": 1,
     }
     _write_json(status_slot_path, status_slot)

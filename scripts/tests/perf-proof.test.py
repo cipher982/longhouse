@@ -247,18 +247,42 @@ def test_soak_budget_and_baseline_regression_rules() -> None:
 
 def test_soak_managed_active_status_gate() -> None:
     soak = _soak_module()
-    session_id = "managed-omp-session"
+    session_ids = ["managed-omp-session-1", "managed-omp-session-2"]
     attached = {
         "managed_sessions": [
             {"session_id": session_id, "provider": "omp", "state": "attached"}
+            for session_id in session_ids
         ]
     }
-    assert soak._live_managed_omp_session(attached, session_id) == attached["managed_sessions"][0]
+    assert soak._live_managed_omp_session(attached, session_ids[0]) == attached["managed_sessions"][0]
     assert soak._live_managed_omp_session(
-        {"managed_sessions": [{"session_id": session_id, "provider": "omp", "state": "detached"}]},
-        session_id,
+        {"managed_sessions": [{"session_id": session_ids[0], "provider": "omp", "state": "detached"}]},
+        session_ids[0],
     ) is None
     assert soak._live_managed_omp_session(attached, "another-session") is None
+    with tempfile.TemporaryDirectory() as temporary:
+        status_path = Path(temporary) / "engine-status.json"
+        status_path.write_text(json.dumps(attached), encoding="utf-8")
+        assert set(soak._read_live_managed_omp_sessions(status_path, session_ids)) == set(session_ids)
+        assert soak._read_live_managed_omp_sessions(status_path, [*session_ids, "missing"]) == {
+            session_id: attached["managed_sessions"][index]
+            for index, session_id in enumerate(session_ids)
+        }
+
+
+def test_managed_session_count_argument() -> None:
+    soak = _soak_module()
+    default = soak.parse_args(["--engine-bin", "/tmp/longhouse-engine"])
+    assert default.managed_sessions == 1
+    assert soak.parse_args(
+        ["--engine-bin", "/tmp/longhouse-engine", "--managed-sessions", "6"]
+    ).managed_sessions == 6
+    try:
+        soak.parse_args(["--engine-bin", "/tmp/longhouse-engine", "--managed-sessions", "0"])
+    except SystemExit as error:
+        assert error.code == "--managed-sessions must be positive"
+    else:
+        raise AssertionError("zero managed sessions should be rejected")
 
 
 def test_managed_active_provider_script_compiles() -> None:
@@ -383,6 +407,22 @@ def test_cinder_fixture_generator_writes_reader_shaped_state() -> None:
         assert json.loads(Path(managed["session_file"]).read_text(encoding="utf-8").splitlines()[0])["id"] == (
             managed["native_session_id"]
         )
+        second = fixtures.create_managed_active_fixture(
+            home,
+            longhouse_home,
+            workspace,
+            state_target_bytes=int(shape["managed_local_omp_helm"]["median_bytes"]),
+            provider_binary=Path(fixture["fake_provider_bin"]["omp"]),
+            provider_binary_sha256=fixture["omp_binary_sha256"],
+            provider_pid=421,
+            provider_process_start_time="Thu Jun 30 00:00:00 2026",
+            launcher_pid=422,
+            launcher_process_start_time="Thu Jun 30 00:00:01 2026",
+            boot_id="fixture:boot",
+            index=1,
+        )
+        assert second["session_id"] != managed["session_id"]
+        assert second["session_file"] != managed["session_file"]
 
 
 def main() -> int:
@@ -400,6 +440,7 @@ def main() -> int:
         test_soak_linux_wakeups_are_unavailable_not_zero,
         test_soak_darwin_rusage_info_v4_layout,
         test_soak_managed_active_status_gate,
+        test_managed_session_count_argument,
         test_managed_active_provider_script_compiles,
         test_cinder_fixture_generator_writes_reader_shaped_state,
     ]

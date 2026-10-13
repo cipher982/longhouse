@@ -634,7 +634,8 @@ def _start_fake_omp_launcher(
     run_dir: Path, env: dict[str, str]
 ) -> subprocess.Popen[str]:
     script = run_dir / "fake-omp-helm-launcher.py"
-    _write_fake_omp_launcher_script(script)
+    if not script.is_file():
+        _write_fake_omp_launcher_script(script)
     return _start_process(
         [sys.executable, "-u", str(script)],
         cwd=run_dir,
@@ -797,7 +798,8 @@ def _start_fake_managed_provider(
     run_dir: Path, env: dict[str, str], config_path: Path, db_path: Path
 ) -> subprocess.Popen[str]:
     script = run_dir / "fake-omp-managed-provider.py"
-    _write_fake_managed_provider_script(script)
+    if not script.is_file():
+        _write_fake_managed_provider_script(script)
     return _start_process(
         [sys.executable, "-u", str(script), str(config_path), str(db_path)],
         cwd=run_dir,
@@ -822,20 +824,29 @@ def _live_managed_omp_session(status: Any, session_id: str) -> dict[str, Any] | 
     return None
 
 
-def _wait_for_live_managed_omp_session(
-    status_path: Path, session_id: str, timeout: float
-) -> dict[str, Any] | None:
-    deadline = time.monotonic() + timeout
-    while True:
-        try:
-            status = json.loads(status_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            status = None
+def _read_live_managed_omp_sessions(
+    status_path: Path, session_ids: Sequence[str]
+) -> dict[str, dict[str, Any]]:
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    live_sessions = {}
+    for session_id in session_ids:
         session = _live_managed_omp_session(status, session_id)
         if session is not None:
-            return session
-        if time.monotonic() >= deadline:
-            return None
+            live_sessions[session_id] = session
+    return live_sessions
+
+
+def _wait_for_live_managed_omp_sessions(
+    status_path: Path, session_ids: Sequence[str], timeout: float
+) -> dict[str, dict[str, Any]]:
+    deadline = time.monotonic() + timeout
+    while True:
+        live_sessions = _read_live_managed_omp_sessions(status_path, session_ids)
+        if len(live_sessions) == len(session_ids) or time.monotonic() >= deadline:
+            return live_sessions
         time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
 
 
@@ -1237,7 +1248,7 @@ def _write_summary(artifact: dict[str, Any], path: Path) -> str:
         ((artifact.get("scenarios") or {}).get("managed_active") or {}).get("managed_session_check") or {}
     )
     managed_session_summary = (
-        f"{managed_check.get('seen_live', False)} for `{managed_check.get('session_id', 'unknown')}`"
+        f"{managed_check.get('seen_live_count', 0)}/{managed_check.get('session_count', 0)} sessions seen live"
         if managed_check
         else "not measured"
     )
@@ -1392,7 +1403,8 @@ def run_soak(args: argparse.Namespace) -> dict[str, Any]:
         server: subprocess.Popen[str] | None = None
         bootstrap_engine: subprocess.Popen[str] | None = None
         engine: subprocess.Popen[str] | None = None
-        managed_launcher: subprocess.Popen[str] | None = None
+        managed_launchers: list[subprocess.Popen[str]] = []
+        managed_providers: list[subprocess.Popen[str]] = []
         provider: subprocess.Popen[str] | None = None
         desktop_app: subprocess.Popen[str] | None = None
         desktop_core_worker: subprocess.Popen[str] | None = None
@@ -1543,51 +1555,73 @@ def run_soak(args: argparse.Namespace) -> dict[str, Any]:
             _stop_process(provider)
             print("soak: active fake provider stopped", flush=True)
             provider = None
-            managed_launcher = _start_fake_omp_launcher(run_dir, env)
-            if managed_launcher.poll() is not None:
-                raise SoakError("fake OMP Helm launcher exited before managed_active")
-            launcher_start_time = _process_start_time(managed_launcher.pid)
-            managed_config_path = run_dir / "managed-active-provider.json"
-            provider = _start_fake_managed_provider(run_dir, env, managed_config_path, db_path)
-            provider_start_time = _process_start_time(provider.pid)
-            managed_fixture = perf_soak_fixtures.create_managed_active_fixture(
-                home,
-                longhouse_home,
-                workspace,
-                state_target_bytes=int(fixture["shape"]["managed_local_omp_helm"]["median_bytes"]),
-                provider_binary=Path(fixture["fake_provider_bin"]["omp"]),
-                provider_binary_sha256=fixture["omp_binary_sha256"],
-                provider_pid=provider.pid,
-                provider_process_start_time=provider_start_time,
-                launcher_pid=managed_launcher.pid,
-                launcher_process_start_time=launcher_start_time,
-                boot_id=_machine_boot_id(),
-            )
-            fixture["managed_active"] = managed_fixture
-            managed_config_path.write_text(
-                json.dumps(
-                    {
-                        "session_id": managed_fixture["session_id"],
-                        "session_file": managed_fixture["session_file"],
-                        "state_file": managed_fixture["state_file"],
-                        "status_slot_file": managed_fixture["status_slot_file"],
-                        "native_session_id": managed_fixture["native_session_id"],
-                        "transcript_wake_socket": str(
-                            longhouse_home / "agent" / "transcript-wake.sock"
-                        ),
-                        "workspace": managed_fixture["workspace"],
-                    }
+            managed_session_fixtures: list[dict[str, Any]] = []
+            boot_id = _machine_boot_id()
+            for index in range(args.managed_sessions):
+                managed_launcher = _start_fake_omp_launcher(run_dir, env)
+                managed_launchers.append(managed_launcher)
+                launcher_start_time = _process_start_time(managed_launcher.pid)
+                managed_config_path = run_dir / f"managed-active-provider-{index}.json"
+                managed_provider = _start_fake_managed_provider(
+                    run_dir, env, managed_config_path, db_path
                 )
-                + "\n",
-                encoding="utf-8",
-            )
+                managed_providers.append(managed_provider)
+                provider_start_time = _process_start_time(managed_provider.pid)
+                managed_fixture = perf_soak_fixtures.create_managed_active_fixture(
+                    home,
+                    longhouse_home,
+                    workspace,
+                    state_target_bytes=int(
+                        fixture["shape"]["managed_local_omp_helm"]["median_bytes"]
+                    ),
+                    provider_binary=Path(fixture["fake_provider_bin"]["omp"]),
+                    provider_binary_sha256=fixture["omp_binary_sha256"],
+                    provider_pid=managed_provider.pid,
+                    provider_process_start_time=provider_start_time,
+                    launcher_pid=managed_launcher.pid,
+                    launcher_process_start_time=launcher_start_time,
+                    boot_id=boot_id,
+                    index=index,
+                )
+                managed_session_fixtures.append(managed_fixture)
+                managed_config_path.write_text(
+                    json.dumps(
+                        {
+                            "session_id": managed_fixture["session_id"],
+                            "session_file": managed_fixture["session_file"],
+                            "state_file": managed_fixture["state_file"],
+                            "status_slot_file": managed_fixture["status_slot_file"],
+                            "native_session_id": managed_fixture["native_session_id"],
+                            "transcript_wake_socket": str(
+                                longhouse_home / "agent" / "transcript-wake.sock"
+                            ),
+                            "workspace": managed_fixture["workspace"],
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+            fixture["managed_active"] = {
+                "session_count": len(managed_session_fixtures),
+                "sessions": managed_session_fixtures,
+            }
             time.sleep(1)
-            if provider.poll() is not None or managed_launcher.poll() is not None:
-                raise SoakError("fake OMP managed session process exited before managed_active")
-            managed_start_status = _wait_for_live_managed_omp_session(
-                status_path, managed_fixture["session_id"], timeout=10
+            if any(
+                process.poll() is not None
+                for process in (*managed_providers, *managed_launchers)
+            ):
+                raise SoakError("a fake OMP managed session process exited before managed_active")
+            managed_session_ids = [
+                managed_fixture["session_id"] for managed_fixture in managed_session_fixtures
+            ]
+            managed_start_statuses = _wait_for_live_managed_omp_sessions(
+                status_path, managed_session_ids, timeout=10
             )
-            print("soak: fake managed OMP Helm session active", flush=True)
+            print(
+                "soak: fake managed OMP Helm sessions active "
+                f"({len(managed_start_statuses)}/{len(managed_session_ids)} attached)",
+                flush=True,
+            )
             if platform_name == "macOS" and not args.skip_desktop:
                 churn_stop, churn_thread = _start_desktop_churner(
                     desktop_fixture_status,
@@ -1611,31 +1645,56 @@ def run_soak(args: argparse.Namespace) -> dict[str, Any]:
                 os_name=os_name,
                 engine_status_path=status_path,
             )
-            managed_end_status = _wait_for_live_managed_omp_session(
-                status_path, managed_fixture["session_id"], timeout=2
+            managed_end_statuses = _wait_for_live_managed_omp_sessions(
+                status_path, managed_session_ids, timeout=2
             )
             if desktop_core_worker is not None and managed_core_result is not None:
                 managed_active["desktop_core_renderer"] = _desktop_core_result(
                     desktop_core_worker, managed_core_result, args.active_seconds
                 )
                 desktop_core_worker = None
+            managed_session_checks = []
+            for index, managed_fixture in enumerate(managed_session_fixtures):
+                session_id = managed_fixture["session_id"]
+                start_status = managed_start_statuses.get(session_id)
+                end_status = managed_end_statuses.get(session_id)
+                managed_session_checks.append(
+                    {
+                        "session_id": session_id,
+                        "provider": "omp",
+                        "expected_live_state": "attached",
+                        "seen_live": start_status is not None or end_status is not None,
+                        "live_at_start": start_status is not None,
+                        "live_at_end": end_status is not None,
+                        "start_status": start_status,
+                        "end_status": end_status,
+                        "provider_alive_at_end": managed_providers[index].poll() is None,
+                        "launcher_alive_at_end": managed_launchers[index].poll() is None,
+                    }
+                )
             managed_active["workload"] = {
-                "provider_pid": provider.pid,
-                "launcher_pid": managed_launcher.pid,
-                "transcript_lines_per_second": 2,
-                "phase_writes_per_second": 3,
-                "child_spawns_per_minute": 30,
-                "transcript_wakes_per_second": 5,
+                "managed_session_count": len(managed_session_fixtures),
+                "provider_pids": [process.pid for process in managed_providers],
+                "launcher_pids": [process.pid for process in managed_launchers],
+                "transcript_lines_per_second_per_session": 2,
+                "total_transcript_lines_per_second": 2 * len(managed_session_fixtures),
+                "phase_writes_per_second_per_session": 3,
+                "total_phase_writes_per_second": 3 * len(managed_session_fixtures),
+                "child_spawns_per_minute_per_session": 30,
+                "total_child_spawns_per_minute": 30 * len(managed_session_fixtures),
+                "transcript_wakes_per_second_per_session": 5,
+                "total_transcript_wakes_per_second": 5 * len(managed_session_fixtures),
             }
             managed_active["managed_session_check"] = {
-                "session_id": managed_fixture["session_id"],
-                "provider": "omp",
-                "expected_live_state": "attached",
-                "seen_live": managed_start_status is not None or managed_end_status is not None,
-                "live_at_start": managed_start_status is not None,
-                "live_at_end": managed_end_status is not None,
-                "start_status": managed_start_status,
-                "end_status": managed_end_status,
+                "session_count": len(managed_session_checks),
+                "seen_live_count": sum(check["seen_live"] for check in managed_session_checks),
+                "seen_live": all(check["seen_live"] for check in managed_session_checks),
+                "session_ids": managed_session_ids,
+                "sessions": managed_session_checks,
+                "workers_alive_at_end": all(
+                    check["provider_alive_at_end"] and check["launcher_alive_at_end"]
+                    for check in managed_session_checks
+                ),
                 "engine_status_file": str(status_path),
             }
             managed_active["top_functions"] = _profile_engine(
@@ -1647,10 +1706,12 @@ def run_soak(args: argparse.Namespace) -> dict[str, Any]:
                 churn_thread.join(timeout=2)
                 churn_stop = None
                 churn_thread = None
-            _stop_process(provider)
-            provider = None
-            _stop_process(managed_launcher)
-            managed_launcher = None
+            for managed_provider in managed_providers:
+                _stop_process(managed_provider)
+            managed_providers.clear()
+            for managed_launcher in managed_launchers:
+                _stop_process(managed_launcher)
+            managed_launchers.clear()
 
             scenarios = {"idle": idle, "active": active, "managed_active": managed_active}
             previous, previous_run = _previous_baseline(args, platform_name, run_dir)
@@ -1660,17 +1721,40 @@ def run_soak(args: argparse.Namespace) -> dict[str, Any]:
                 previous,
                 desktop_app_measured=desktop_app is not None,
             )
-            if not managed_active["managed_session_check"]["seen_live"]:
+            managed_check = managed_active["managed_session_check"]
+            missing_sessions = [
+                session["session_id"] for session in managed_check["sessions"] if not session["seen_live"]
+            ]
+            if missing_sessions:
                 failures.append(
                     {
                         "scenario": "managed_active",
                         "metric": "managed_session.live",
-                        "value": 0,
-                        "limit": 1,
-                        "unit": "session",
+                        "value": managed_check["seen_live_count"],
+                        "limit": managed_check["session_count"],
+                        "unit": "sessions",
                         "regression": (
-                            "engine-status.json never listed managed OMP session "
-                            f"{managed_fixture['session_id']} in attached state"
+                            "engine-status.json never listed these managed OMP sessions in attached state: "
+                            + ", ".join(missing_sessions)
+                        ),
+                    }
+                )
+            if not managed_check["workers_alive_at_end"]:
+                exited_sessions = [
+                    session["session_id"]
+                    for session in managed_check["sessions"]
+                    if not session["provider_alive_at_end"] or not session["launcher_alive_at_end"]
+                ]
+                failures.append(
+                    {
+                        "scenario": "managed_active",
+                        "metric": "managed_session.workers_live",
+                        "value": len(managed_check["sessions"]) - len(exited_sessions),
+                        "limit": managed_check["session_count"],
+                        "unit": "sessions",
+                        "regression": (
+                            "fake managed provider or launcher exited during the measurement: "
+                            + ", ".join(exited_sessions)
                         ),
                     }
                 )
@@ -1719,7 +1803,10 @@ def run_soak(args: argparse.Namespace) -> dict[str, Any]:
             if churn_thread is not None:
                 churn_thread.join(timeout=2)
             _stop_process(provider)
-            _stop_process(managed_launcher)
+            for managed_provider in managed_providers:
+                _stop_process(managed_provider)
+            for managed_launcher in managed_launchers:
+                _stop_process(managed_launcher)
             _stop_process(desktop_core_worker)
             _stop_process(desktop_app)
             print("soak: terminating engine", flush=True)
@@ -1737,6 +1824,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--baseline", type=Path, default=None)
     parser.add_argument("--idle-seconds", type=float, default=120.0)
     parser.add_argument("--active-seconds", type=float, default=60.0)
+    parser.add_argument(
+        "--managed-sessions",
+        type=int,
+        default=1,
+        help="number of live fake OMP Helm sessions during managed_active",
+    )
     parser.add_argument("--warmup-seconds", type=float, default=15.0)
     parser.add_argument("--profile-seconds", type=float, default=5.0)
     parser.add_argument("--skip-desktop", action="store_true")
@@ -1745,6 +1838,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     for name in ("idle_seconds", "active_seconds", "warmup_seconds", "profile_seconds"):
         if getattr(args, name) < 0 or (name != "warmup_seconds" and getattr(args, name) == 0):
             raise SystemExit(f"--{name.replace('_', '-')} must be positive")
+    if args.managed_sessions < 1:
+        raise SystemExit("--managed-sessions must be positive")
     if args.engine_bin is None:
         args.engine_bin = default_engine_path()
     return args
