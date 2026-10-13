@@ -1,5 +1,6 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
+use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -8,14 +9,17 @@ use std::sync::{LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
 use std::io::Write as _;
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::io::{AsyncWriteExt, Lines};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use crate::codex_app_server_rpc::{self as jsonrpc, RequestIds};
@@ -25,7 +29,7 @@ use crate::console_lifecycle::{
 };
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::process::Child;
 use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use walkdir::WalkDir;
 
@@ -330,8 +334,12 @@ async fn console_control_within(
 }
 
 struct AppServerRpc {
-    stdin: ChildStdin,
-    lines: Lines<BufReader<ChildStdout>>,
+    fifo_path: PathBuf,
+    stdout: tokio::fs::File,
+    stdout_path: PathBuf,
+    read_offset: u64,
+    pending_bytes: Vec<u8>,
+    checkpoint_run_id: Option<String>,
     ids: RequestIds,
     seq: u64,
 }
@@ -339,8 +347,10 @@ struct AppServerRpc {
 struct InitializedCodexWorker {
     child: Child,
     rpc: AppServerRpc,
-    stderr_tail: Arc<Mutex<VecDeque<String>>>,
-    stderr_task: Option<tokio::task::JoinHandle<()>>,
+    run_dir: PathBuf,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+    fifo_path: PathBuf,
     pid: Option<u32>,
     pgid: Option<i32>,
     argv: Vec<String>,
