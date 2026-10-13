@@ -17,6 +17,7 @@ import pytest
 
 from zerg.qa import provider_interaction_probe
 from zerg.qa import provider_interaction_semantics
+from zerg.qa import scripted_model_profiles
 from zerg.qa import scripted_model_server
 from zerg.qa.provider_interaction_semantics import evaluate_observation
 
@@ -80,26 +81,26 @@ def test_no_token_environment_rejects_ambient_provider_credentials(monkeypatch, 
     monkeypatch.setenv(name, "ambient-credential")
 
     with pytest.raises(RuntimeError, match="credential-free environment"):
-        provider_interaction_probe._no_token_environment()  # noqa: SLF001
+        scripted_model_profiles.no_token_environment()
 
 
 @pytest.mark.parametrize("name", ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"))
 def test_no_token_environment_allows_explicitly_disabled_provider_flags(monkeypatch, name: str) -> None:
-    for auth_name in provider_interaction_probe._NO_TOKEN_AUTH_ENV_NAMES:  # noqa: SLF001
+    for auth_name in scripted_model_profiles.NO_TOKEN_AUTH_ENV_NAMES:
         monkeypatch.delenv(auth_name, raising=False)
     monkeypatch.setenv(name, "0")
 
-    environment = provider_interaction_probe._no_token_environment()  # noqa: SLF001
+    environment = scripted_model_profiles.no_token_environment()
 
     assert name not in environment
 
 
 def test_no_token_environment_scrubs_provider_controls_and_configuration(monkeypatch) -> None:
-    for name in provider_interaction_probe._NO_TOKEN_AUTH_ENV_NAMES:  # noqa: SLF001
+    for name in scripted_model_profiles.NO_TOKEN_AUTH_ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
     profile_names = (
-        provider_interaction_probe._PROVIDER_PROFILE_ENV_NAMES  # noqa: SLF001
-        | provider_interaction_probe._PROVIDER_ENDPOINT_ENV_NAMES  # noqa: SLF001
+        scripted_model_profiles.PROVIDER_PROFILE_ENV_NAMES
+        | scripted_model_profiles.PROVIDER_ENDPOINT_ENV_NAMES
         | {"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"}
     )
     for name in profile_names:
@@ -110,7 +111,7 @@ def test_no_token_environment_scrubs_provider_controls_and_configuration(monkeyp
     monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "openrouter/model")
     monkeypatch.setenv("ANTHROPIC_MODEL", "claude-model")
 
-    environment = provider_interaction_probe._no_token_environment()  # noqa: SLF001
+    environment = scripted_model_profiles.no_token_environment()
 
     assert "LONGHOUSE_PROVIDER_INTERACTION_LIVE" not in environment
     assert "LONGHOUSE_CLAUDE_INTERACTION_ARTIFACT" not in environment
@@ -136,7 +137,7 @@ def test_no_token_environment_scrubs_provider_controls_and_configuration(monkeyp
     ),
 )
 def test_live_token_probe_refuses_scripted_controls_and_endpoint_overrides(monkeypatch, tmp_path: Path, name: str) -> None:
-    for control in provider_interaction_probe._PROVIDER_PROFILE_ENV_NAMES | provider_interaction_probe._PROVIDER_ENDPOINT_ENV_NAMES:  # noqa: SLF001
+    for control in scripted_model_profiles.PROVIDER_PROFILE_ENV_NAMES | scripted_model_profiles.PROVIDER_ENDPOINT_ENV_NAMES:
         monkeypatch.delenv(control, raising=False)
     for control in (
         "XDG_CONFIG_HOME",
@@ -180,7 +181,7 @@ def test_live_pi_probe_uses_a_fresh_home_instead_of_an_inherited_script_profile(
     monkeypatch.setenv("OPENROUTER_API_KEY", "live-token")
     monkeypatch.setenv(provider_interaction_probe.PI_LIVE_ENV, "1")
     monkeypatch.setenv(provider_interaction_probe.PI_MODEL_ENV, "deepseek/model")
-    for control in provider_interaction_probe._PROVIDER_PROFILE_ENV_NAMES | provider_interaction_probe._PROVIDER_ENDPOINT_ENV_NAMES:  # noqa: SLF001
+    for control in scripted_model_profiles.PROVIDER_PROFILE_ENV_NAMES | scripted_model_profiles.PROVIDER_ENDPOINT_ENV_NAMES:
         monkeypatch.delenv(control, raising=False)
     for control in (
         "XDG_CONFIG_HOME",
@@ -188,8 +189,8 @@ def test_live_pi_probe_uses_a_fresh_home_instead_of_an_inherited_script_profile(
         "XDG_CACHE_HOME",
         "XDG_STATE_HOME",
         "XDG_RUNTIME_DIR",
-        provider_interaction_probe._SCRIPTED_MODEL_BASE_URL_ENV,  # noqa: SLF001
-        provider_interaction_probe._SCRIPTED_MODEL_SCRIPT_ENV,  # noqa: SLF001
+        scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV,
+        scripted_model_profiles.SCRIPTED_MODEL_SCRIPT_ENV,
         "LONGHOUSE_SCRIPTED_MODEL_INVOCATION_ID",
     ):
         monkeypatch.delenv(control, raising=False)
@@ -267,23 +268,19 @@ def test_scripted_model_receipt_window_excludes_requests_before_local_probe(monk
     script = tmp_path / "scenario.json"
     script.write_text('{"turns":[{"id":"plain","match":"MARKER","reply":"OK"}]}', encoding="utf-8")
     endpoint = "http://127.0.0.1:8123"
-    monkeypatch.setenv(provider_interaction_probe._SCRIPTED_MODEL_BASE_URL_ENV, endpoint)  # noqa: SLF001
-    monkeypatch.setenv(provider_interaction_probe._SCRIPTED_MODEL_SCRIPT_ENV, str(script))  # noqa: SLF001
-    for name in provider_interaction_probe._NO_TOKEN_AUTH_ENV_NAMES:  # noqa: SLF001
+    monkeypatch.setenv(scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV, endpoint)
+    monkeypatch.setenv(scripted_model_profiles.SCRIPTED_MODEL_SCRIPT_ENV, str(script))
+    for name in scripted_model_profiles.NO_TOKEN_AUTH_ENV_NAMES:
         monkeypatch.setenv(name, f"ambient-{name}")
 
     monkeypatch.setattr(provider_interaction_probe, "_resolve_binary", lambda *_args, **_kwargs: binary)
     monkeypatch.setattr(provider_interaction_probe, "_provider_version", lambda *_args, **_kwargs: "fixture")
 
     def fake_probe(*, environment, **_kwargs):
-        credentials = {
-            name: environment[name]
-            for name in provider_interaction_probe._NO_TOKEN_AUTH_ENV_NAMES  # noqa: SLF001
-            if name in environment
-        }
+        credentials = {name: environment[name] for name in scripted_model_profiles.NO_TOKEN_AUTH_ENV_NAMES if name in environment}
         assert credentials == {"CODEX_API_KEY": "longhouse-mock-key"}
-        assert environment[provider_interaction_probe._SCRIPTED_MODEL_BASE_URL_ENV] == endpoint  # noqa: SLF001
-        assert environment[provider_interaction_probe._SCRIPTED_MODEL_SCRIPT_ENV] == str(script)  # noqa: SLF001
+        assert environment[scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV] == endpoint
+        assert environment[scripted_model_profiles.SCRIPTED_MODEL_SCRIPT_ENV] == str(script)
         contract = provider_interaction_probe.contract_for_provider("codex")
         assert contract is not None
         rows = [
@@ -324,7 +321,7 @@ def test_scripted_model_receipt_window_excludes_requests_before_local_probe(monk
         return FakeResponse()
 
     monkeypatch.setattr(provider_interaction_probe, "_codex_model_probe", fake_probe)
-    monkeypatch.setattr(provider_interaction_probe, "urlopen", fake_urlopen)
+    monkeypatch.setattr(scripted_model_profiles, "urlopen", fake_urlopen)
 
     observation = provider_interaction_probe.produce_live_observation(
         "codex",
@@ -350,8 +347,8 @@ def test_scripted_model_receipt_binds_new_requests_after_the_snapshot(monkeypatc
     script = tmp_path / "scenario.json"
     script.write_text('{"turns":[{"id":"current","match":"CURRENT","reply":"OK"}]}', encoding="utf-8")
     environment = {
-        provider_interaction_probe._SCRIPTED_MODEL_BASE_URL_ENV: endpoint,  # noqa: SLF001
-        provider_interaction_probe._SCRIPTED_MODEL_SCRIPT_ENV: str(script),  # noqa: SLF001
+        scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV: endpoint,
+        scripted_model_profiles.SCRIPTED_MODEL_SCRIPT_ENV: str(script),
     }
     digest = hashlib.sha256(script.read_bytes()).hexdigest()
     earlier = [{"request_id": 1, "matched_turn_id": "previous-run", "status": "served"}]
@@ -376,10 +373,10 @@ def test_scripted_model_receipt_binds_new_requests_after_the_snapshot(monkeypatc
         assert timeout == 5
         return FakeResponse()
 
-    monkeypatch.setattr(provider_interaction_probe, "urlopen", fake_urlopen)
+    monkeypatch.setattr(scripted_model_profiles, "urlopen", fake_urlopen)
 
-    request_start = provider_interaction_probe._scripted_model_receipt_snapshot(environment)[2]  # noqa: SLF001
-    receipt = provider_interaction_probe._scripted_model_receipt(  # noqa: SLF001
+    request_start = scripted_model_profiles.scripted_model_receipt_snapshot(environment)[2]
+    receipt = scripted_model_profiles.scripted_model_receipt(
         environment,
         requests_before=request_start,
     )
@@ -393,8 +390,8 @@ def test_pi_scripted_probe_rejects_a_prior_request_without_a_current_prompt_requ
     endpoint = "http://127.0.0.1:8123"
     script = tmp_path / "scenario.json"
     script.write_text('{"turns":[{"id":"pi-turn","match":"MARKER","reply":"OK"}]}', encoding="utf-8")
-    monkeypatch.setenv(provider_interaction_probe._SCRIPTED_MODEL_BASE_URL_ENV, endpoint)  # noqa: SLF001
-    monkeypatch.setenv(provider_interaction_probe._SCRIPTED_MODEL_SCRIPT_ENV, str(script))  # noqa: SLF001
+    monkeypatch.setenv(scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV, endpoint)
+    monkeypatch.setenv(scripted_model_profiles.SCRIPTED_MODEL_SCRIPT_ENV, str(script))
     binary = tmp_path / "fake-pi"
     binary.write_text("fake Pi binary", encoding="utf-8")
     monkeypatch.setattr(provider_interaction_probe, "_resolve_binary", lambda *_args, **_kwargs: binary)
@@ -427,7 +424,7 @@ def test_pi_scripted_probe_rejects_a_prior_request_without_a_current_prompt_requ
             return json.dumps(receipt_payload).encode()
 
     monkeypatch.setattr(
-        provider_interaction_probe,
+        scripted_model_profiles,
         "urlopen",
         lambda url, *, timeout: FakeResponse(),
     )
@@ -466,8 +463,8 @@ def test_scripted_profiles_route_fake_provider_binaries_to_loopback_endpoint(mon
     monkeypatch.setenv("HOME", str(inherited_home))
     script = tmp_path / "scenario.json"
     script.write_text('{"turns":[{"id":"plain","match":"FAKE_MODEL_INVOCATION","reply":"OK"}]}', encoding="utf-8")
-    monkeypatch.setenv(provider_interaction_probe._SCRIPTED_MODEL_BASE_URL_ENV, endpoint)  # noqa: SLF001
-    monkeypatch.setenv(provider_interaction_probe._SCRIPTED_MODEL_SCRIPT_ENV, str(script))  # noqa: SLF001
+    monkeypatch.setenv(scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV, endpoint)
+    monkeypatch.setenv(scripted_model_profiles.SCRIPTED_MODEL_SCRIPT_ENV, str(script))
     monkeypatch.setenv(
         "OPENCODE_CONFIG_CONTENT",
         json.dumps(
@@ -483,18 +480,16 @@ def test_scripted_profiles_route_fake_provider_binaries_to_loopback_endpoint(mon
     ):
         monkeypatch.setenv(name, f"inherited-{name}")
     if provider == "omp":
-        environment = provider_interaction_probe._credential_free_environment(  # noqa: SLF001
-            reject_ambient_credentials=False
-        )
-        environment[provider_interaction_probe._SCRIPTED_MODEL_BASE_URL_ENV] = endpoint  # noqa: SLF001
-        environment[provider_interaction_probe._SCRIPTED_MODEL_SCRIPT_ENV] = str(script)  # noqa: SLF001
+        environment = scripted_model_profiles.credential_free_environment(reject_ambient_credentials=False)
+        environment[scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV] = endpoint
+        environment[scripted_model_profiles.SCRIPTED_MODEL_SCRIPT_ENV] = str(script)
     else:
-        environment = provider_interaction_probe._scripted_model_environment(provider)  # noqa: SLF001
+        environment = scripted_model_profiles.scripted_model_environment(provider)
     environment["FAKE_PROVIDER"] = provider
     environment["FAKE_INHERITED_HOME"] = str(inherited_home)
     profile_root = tmp_path / f"{provider}-profile"
     if provider != "pi":
-        provider_interaction_probe._configure_scripted_model_profile(  # noqa: SLF001
+        scripted_model_profiles.configure_scripted_model_profile(
             provider,
             profile_root,
             environment,
@@ -614,8 +609,8 @@ def test_scripted_pi_persisted_observation_scrubs_nested_live_accounting(monkeyp
     )
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    monkeypatch.setenv(provider_interaction_probe._SCRIPTED_MODEL_BASE_URL_ENV, server.endpoint)  # noqa: SLF001
-    monkeypatch.setenv(provider_interaction_probe._SCRIPTED_MODEL_SCRIPT_ENV, str(script))  # noqa: SLF001
+    monkeypatch.setenv(scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV, server.endpoint)
+    monkeypatch.setenv(scripted_model_profiles.SCRIPTED_MODEL_SCRIPT_ENV, str(script))
     monkeypatch.setattr(provider_interaction_probe, "_provider_version", lambda *_args, **_kwargs: "fixture")
 
     binary = tmp_path / "fake-pi"
@@ -717,7 +712,7 @@ def test_scripted_pi_persisted_observation_scrubs_nested_live_accounting(monkeyp
 
 def test_omp_scripted_model_is_rejected_without_version_and_probe_support() -> None:
     with pytest.raises(ValueError, match="scripted_model interaction probes are unsupported for 'omp'"):
-        provider_interaction_probe._scripted_model_environment("omp")  # noqa: SLF001
+        scripted_model_profiles.scripted_model_environment("omp")
 
 
 @pytest.mark.parametrize(
@@ -1080,7 +1075,7 @@ def test_live_producer_dispatches_one_adapter_for_every_managed_provider(monkeyp
     binary.write_text("fixture", encoding="utf-8")
     monkeypatch.setattr(provider_interaction_probe, "_resolve_binary", lambda *_args, **_kwargs: binary)
     monkeypatch.setattr(provider_interaction_probe, "_provider_version", lambda *_args, **_kwargs: "fixture")
-    monkeypatch.setattr(provider_interaction_probe, "_no_token_environment", lambda: {})
+    monkeypatch.setattr(scripted_model_profiles, "no_token_environment", lambda: {})
 
     def fake_adapter(provider: str):
         def produce(*, artifact_root, **_kwargs):

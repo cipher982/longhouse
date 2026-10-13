@@ -39,7 +39,7 @@ from typing import Any
 from urllib.parse import quote
 
 from zerg.qa import provider_console_lifecycle as lifecycle
-from zerg.qa import provider_interaction_probe
+from zerg.qa import scripted_model_profiles
 from zerg.qa import scripted_model_server
 from zerg.qa.answer_markers import marker_answered
 from zerg.qa.console_served_state_core import MarkerAnswerCountError
@@ -2149,7 +2149,7 @@ class Lifecycle:
             upper = family.provider.upper()
             self.env = dict(os.environ)
             if self.scripted_model:
-                self.env = provider_interaction_probe._credential_free_environment(reject_ambient_credentials=False)
+                self.env = scripted_model_profiles.credential_free_environment(reject_ambient_credentials=False)
             self.env.update(
                 {
                     "HOME": str(self.provider_home),
@@ -2226,14 +2226,14 @@ class Lifecycle:
                 time.sleep(0.01)
         self.scripted_model_expected_turns = expected
         self.scripted_model_script = script
-        self.env[provider_interaction_probe._SCRIPTED_MODEL_BASE_URL_ENV] = server.endpoint
-        self.env[provider_interaction_probe._SCRIPTED_MODEL_SCRIPT_ENV] = str(script)
-        provider_interaction_probe._configure_scripted_model_profile(self.f.provider, self.provider_home, self.env)
+        self.env[scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV] = server.endpoint
+        self.env[scripted_model_profiles.SCRIPTED_MODEL_SCRIPT_ENV] = str(script)
+        scripted_model_profiles.configure_scripted_model_profile(self.f.provider, self.provider_home, self.env)
         if self.f.provider == "omp":
-            self.args.model = f"{provider_interaction_probe._SCRIPTED_MODEL_PROVIDER}/{provider_interaction_probe._SCRIPTED_MODEL_NAME}"
+            self.args.model = f"{scripted_model_profiles.SCRIPTED_MODEL_PROVIDER}/{scripted_model_profiles.SCRIPTED_MODEL_NAME}"
         else:
-            self.args.model_provider = provider_interaction_probe._SCRIPTED_MODEL_PROVIDER
-            self.args.model = provider_interaction_probe._SCRIPTED_MODEL_NAME
+            self.args.model_provider = scripted_model_profiles.SCRIPTED_MODEL_PROVIDER
+            self.args.model = scripted_model_profiles.SCRIPTED_MODEL_NAME
 
     def _close_scripted_model_server(self) -> None:
         server = self.scripted_model_server
@@ -2252,7 +2252,7 @@ class Lifecycle:
         if not self.scripted_model:
             return
         try:
-            receipt = provider_interaction_probe._scripted_model_receipt(
+            receipt = scripted_model_profiles.scripted_model_receipt(
                 self.env,
                 requests_before=0,
                 require_served_request=True,
@@ -2264,7 +2264,7 @@ class Lifecycle:
         except Exception as exc:  # noqa: BLE001 - a missing or failed fixture request is scripted-lane evidence
             receipt = {
                 "status": "fail",
-                "endpoint": self.env.get(provider_interaction_probe._SCRIPTED_MODEL_BASE_URL_ENV),
+                "endpoint": self.env.get(scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV),
                 "script_sha256": sha256_file(self.scripted_model_script) if self.scripted_model_script is not None else None,
                 "error": f"{type(exc).__name__}: {exc}",
             }

@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 329,
+  "file_count": 330,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2362,7 +2362,6 @@
         "claude",
         "codex",
         "cursor",
-        "omp",
         "opencode",
         "pi"
       ]
@@ -2403,6 +2402,16 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/scripted_model_profiles.py",
+      "providers": [
+        "claude",
+        "codex",
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {
