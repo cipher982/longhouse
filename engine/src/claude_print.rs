@@ -3081,10 +3081,23 @@ for _ in sys.stdin:
                 assert!(started.elapsed() >= crate::console_lifecycle::USER_STOP_INPUT_GRACE);
                 assert_eq!(stopped.stopped.len(), 1);
                 assert_eq!(stopped.stopped[0].id, "task-1");
-                assert!(!crate::process_group::group_is_alive(process_group_id));
+                // Close reports complete once only unreaped zombies remain; the
+                // monitor reaps the leader on its next poll, so allow that poll.
                 assert!(
-                    crate::process_identity::try_collect_process_fact(background_pid).is_none()
+                    crate::process_group::wait_for_group_exit(
+                        process_group_id,
+                        Duration::from_secs(3)
+                    )
+                    .await
                 );
+                let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                while crate::process_identity::try_collect_process_fact(background_pid).is_some() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "background task {background_pid} outlived the Stop close"
+                    );
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
                 let events = home.events();
                 let closed = events
                     .iter()
