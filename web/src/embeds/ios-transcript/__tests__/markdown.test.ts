@@ -45,14 +45,13 @@ describe("markdownToHtml", () => {
     );
   });
 
-  it("marks a column of sentences as prose by the text it shows", () => {
+  it("marks a long bold first-column cell as prose in a four-column table", () => {
     const html = markdownToHtml(
-      "| # | Work | Ref |\n|---|---|--:|\n| 1 | **Record today's findings in the repo** | [spec](https://example.com/a/long/address/nobody/sees) |",
+      "| Work | Status | Owner | Duration |\n|---|---|---|--:|\n| **Record today's findings in the repo** | In progress | David | 4m 12s |",
     );
     expect(html).toBe(
-      '<div class="table-wrap"><table><thead><tr><th>#</th><th class="prose">Work</th><th align="right">Ref</th></tr></thead>' +
-        '<tbody><tr><td>1</td><td class="prose"><strong>Record today&#39;s findings in the repo</strong></td>' +
-        '<td align="right"><a href="https://example.com/a/long/address/nobody/sees">spec</a></td></tr></tbody></table></div>',
+      '<div class="table-wrap"><table><thead><tr><th class="prose">Work</th><th>Status</th><th>Owner</th><th align="right">Duration</th></tr></thead>' +
+        '<tbody><tr><td class="prose"><strong>Record today&#39;s findings in the repo</strong></td><td>In progress</td><td>David</td><td align="right">4m 12s</td></tr></tbody></table></div>',
     );
   });
 
