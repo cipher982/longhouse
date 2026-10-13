@@ -14,6 +14,7 @@ from zerg.services.machine_status import machine_status
 
 def _machine(**launch_overrides):
     online = launch_overrides.pop("online", True)
+    provider_readiness = launch_overrides.pop("provider_readiness", {})
     launch = {
         "providers": [{"provider": "claude"}],
         "default_provider": "claude",
@@ -27,6 +28,7 @@ def _machine(**launch_overrides):
             "machine_name": "cinder",
             "online": online,
             "control_channel_status": "connected" if online else "disconnected",
+            "provider_readiness": provider_readiness,
             "launch": launch,
         }
     )
@@ -63,6 +65,30 @@ def test_a_signed_out_provider_asks_for_sign_in():
     assert (status.tone, status.label, status.hint) == ("attention", "Codex signed out", "Run codex login")
 
 
+def test_a_provider_auth_refusal_overrides_a_ready_probe_in_machine_status():
+    machine = _machine(
+        providers=[{"provider": "codex"}],
+        default_provider="codex",
+        provider_readiness={
+            "codex": {
+                "state": "auth_failed",
+                "probe_state": "ready",
+                "auth_failure_reason": "provider_auth_invalid",
+                "remediation": "Run codex login on this machine",
+            }
+        },
+    )
+    status = machine_status(machine, activity=_activity())
+
+    assert (status.tone, status.label, status.hint) == (
+        "attention",
+        "Codex auth failed",
+        "Run codex login on this machine",
+    )
+    # It remains an explicit user-retry target; this is not a silent retry.
+    assert [item.provider for item in machine.launch.providers] == ["codex"]
+
+
 def test_a_cli_the_machine_never_had_is_not_a_nag_while_others_run():
     machine = _machine(unavailable_providers=[{"provider": "antigravity", "reason": "cli_missing", "remediation": None}])
     status = machine_status(machine, activity=_activity())
@@ -76,6 +102,14 @@ def test_a_missing_cli_is_named_when_nothing_else_can_start_a_session():
         unavailable_providers=[{"provider": "claude", "reason": "cli_missing", "remediation": None}],
     )
     assert machine_status(machine, activity=_activity()).label == "Claude not installed"
+
+
+def test_providers_not_ready_has_its_own_status_without_unavailable_details():
+    machine = _machine(providers=[], blocked_by="providers_not_ready", unavailable_providers=[])
+
+    status = machine_status(machine, activity=_activity())
+
+    assert (status.tone, status.label) == ("attention", "Providers not ready")
 
 
 def test_red_is_reserved_for_faults_that_need_repair():

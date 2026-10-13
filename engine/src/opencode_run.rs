@@ -187,7 +187,7 @@ enum TurnOutcome {
     /// Idle with work unfinished. Not yet a failure: it must persist for
     /// `STALL_GRACE`, so a gap between steps is not mistaken for the end.
     Stalled(String),
-    Failed(String),
+    AuthFailed(String),
 }
 
 fn parse_messages(list: &Value) -> Vec<MessageView> {
@@ -286,6 +286,13 @@ fn turn_outcome(messages: &[MessageView], submitted: &[String], busy: bool) -> T
     if let Some((name, message)) = answers.iter().find_map(|message| message.error.as_ref()) {
         return if name == "MessageAbortedError" {
             TurnOutcome::Cancelled
+        } else if name == "ProviderAuthError" {
+            let reason = if message.is_empty() {
+                format!("OpenCode provider error: {name}")
+            } else {
+                format!("OpenCode provider error: {name}: {message}")
+            };
+            TurnOutcome::AuthFailed(reason)
         } else if message.is_empty() {
             TurnOutcome::Failed(format!("OpenCode provider error: {name}"))
         } else {
@@ -304,6 +311,29 @@ fn turn_outcome(messages: &[MessageView], submitted: &[String], busy: bool) -> T
         Some(Some(other)) => {
             TurnOutcome::Failed(format!("OpenCode ended the turn with finish={other}"))
         }
+    }
+}
+
+fn terminal_outcome(
+    outcome: TurnOutcome,
+    cancel_requested: bool,
+) -> (&'static str, Option<String>, &'static str) {
+    match outcome {
+        TurnOutcome::Completed => ("run_completed", None, "run_completed"),
+        TurnOutcome::Cancelled => ("run_cancelled", None, "run_cancelled"),
+        TurnOutcome::Failed(_) if cancel_requested => ("run_cancelled", None, "run_cancelled"),
+        TurnOutcome::AuthFailed(_) if cancel_requested => ("run_cancelled", None, "run_cancelled"),
+        TurnOutcome::Failed(reason) => ("run_failed", Some(reason), "run_failed"),
+        TurnOutcome::AuthFailed(reason) => (
+            "run_failed",
+            Some(reason),
+            crate::provider_auth::AUTH_REQUIRED,
+        ),
+        TurnOutcome::Running | TurnOutcome::Stalled(_) => (
+            "run_failed",
+            Some("OpenCode turn ended without an outcome".to_string()),
+            "run_failed",
+        ),
     }
 }
 
@@ -1395,16 +1425,7 @@ async fn finish_turn(
         .ok()
         .and_then(|claim| claim.cancel_requested_at)
         .is_some();
-    let (terminal, error) = match outcome {
-        TurnOutcome::Completed => ("run_completed", None),
-        TurnOutcome::Cancelled => ("run_cancelled", None),
-        TurnOutcome::Failed(_) if cancel_requested => ("run_cancelled", None),
-        TurnOutcome::Failed(reason) => ("run_failed", Some(reason)),
-        TurnOutcome::Running | TurnOutcome::Stalled(_) => (
-            "run_failed",
-            Some("OpenCode turn ended without an outcome".to_string()),
-        ),
-    };
+    let (terminal, error, terminal_reason) = terminal_outcome(outcome, cancel_requested);
     let error = error.map(|reason| {
         // A server that died leaves its reason on stderr.
         match stderr_tail(&run_dir.join("stderr.log")) {
@@ -1412,7 +1433,7 @@ async fn finish_turn(
             _ => reason,
         }
     });
-    sink.post_terminal(terminal, None, error, provider_session_id)
+    sink.post_terminal_with_reason(terminal, terminal_reason, None, error, provider_session_id)
         .await;
     forget_steer_gate(&sink.run_id);
 }
@@ -1801,7 +1822,7 @@ fn classify_steer(
 fn turn_is_over(messages: &[MessageView], submitted: &[String], busy: bool) -> bool {
     matches!(
         turn_outcome(messages, submitted, busy),
-        TurnOutcome::Completed | TurnOutcome::Cancelled | TurnOutcome::Failed(_)
+        TurnOutcome::Completed | TurnOutcome::Cancelled | TurnOutcome::Failed(_) | TurnOutcome::AuthFailed(_)
     )
 }
 
@@ -2415,18 +2436,34 @@ impl OpenCodeRunSink {
         error: Option<String>,
         provider_thread_id: Option<&str>,
     ) {
-        crate::turn_claims::mark_terminal(
-            &self.run_id,
+        self.post_terminal_with_reason(
             terminal_state,
-            (terminal_state == "run_failed")
-                .then(|| error.clone())
-                .flatten(),
-        );
+            terminal_state,
+            exit_code,
+            error,
+            provider_thread_id,
+        )
+        .await;
+    }
+
+    async fn post_terminal_with_reason(
+        &self,
+        terminal_state: &str,
+        terminal_reason: &str,
+        exit_code: Option<i32>,
+        error: Option<String>,
+        provider_thread_id: Option<&str>,
+    ) {
         self.persist_local_phase("finished", None, Utc::now());
         let mut payload =
-            self.terminal_payload(terminal_state, terminal_state, exit_code, error.as_deref());
+            self.terminal_payload(terminal_state, terminal_reason, exit_code, error.as_deref());
         payload["provider_thread_id"] = json!(provider_thread_id);
-        self.post_event(&self.run_event("terminal_signal", "terminal", payload));
+        let terminal_event = self.run_event("terminal_signal", "terminal", payload);
+        let terminal_error = (terminal_state == "run_failed")
+            .then(|| error.clone())
+            .flatten();
+        self.run
+            .hand_off_terminal(terminal_state, terminal_error, terminal_event);
     }
 }
 
@@ -2581,6 +2618,25 @@ mod tests {
             turn_outcome(&[user, failed], &ids(&["msg_u1"]), true),
             TurnOutcome::Failed("OpenCode provider error: APIError: rate limited".to_string())
         );
+    }
+
+    #[test]
+    fn provider_auth_error_fixture_becomes_a_typed_failed_turn() {
+        let messages: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/provider_auth/opencode-provider-auth-error.json"
+        ))
+        .unwrap();
+        let outcome = turn_outcome(&parse_messages(&messages), &ids(&["msg-user"]), true);
+        assert_eq!(
+            outcome,
+            TurnOutcome::AuthFailed(
+                "OpenCode provider error: ProviderAuthError: Authentication required for provider openai"
+                    .to_string()
+            )
+        );
+        let (state, _error, reason) = terminal_outcome(outcome, false);
+        assert_eq!(state, "run_failed");
+        assert_eq!(reason, crate::provider_auth::AUTH_REQUIRED);
     }
 
     #[test]

@@ -266,6 +266,10 @@ impl ConsoleRun {
         terminal_error: Option<String>,
         terminal_event: Value,
     ) {
+        let auth_failure = terminal_event
+            .pointer("/payload/terminal_reason")
+            .and_then(Value::as_str)
+            .is_some_and(crate::provider_auth::is_auth_failure_reason);
         let tag = self.provider.tag;
         let handoff = crate::turn_claims::default_registry().and_then(|registry| {
             crate::outbox::retain_and_enqueue_terminal_event(
@@ -295,6 +299,9 @@ impl ConsoleRun {
                 );
                 self.post_event(&terminal_event);
             }
+        }
+        if auth_failure {
+            crate::sign_in::readiness_refresh_now().notify_one();
         }
     }
 

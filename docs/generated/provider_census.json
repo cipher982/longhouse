@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 326,
+  "file_count": 327,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2474,6 +2474,14 @@
       ]
     },
     {
+      "path": "server/zerg/services/console_turn_failures.py",
+      "providers": [
+        "codex",
+        "omp",
+        "opencode"
+      ]
+    },
+    {
       "path": "server/zerg/services/console_turns.py",
       "providers": [
         "omp",
@@ -2775,7 +2783,8 @@
       "providers": [
         "claude",
         "codex",
-        "cursor"
+        "cursor",
+        "omp"
       ]
     },
     {

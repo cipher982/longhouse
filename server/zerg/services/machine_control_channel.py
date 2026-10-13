@@ -50,7 +50,11 @@ def _normalized_readiness(payload: Mapping[str, Any] | None) -> Mapping[str, Map
             continue
         normalized[str(provider)] = {
             "state": state,
-            **{key: str(entry[key]) for key in ("detail", "credential_override", "remediation") if isinstance(entry.get(key), str)},
+            **{
+                key: str(entry[key])
+                for key in ("detail", "credential_override", "remediation", "probe_state", "auth_failure_reason")
+                if isinstance(entry.get(key), str)
+            },
         }
     return normalized
 

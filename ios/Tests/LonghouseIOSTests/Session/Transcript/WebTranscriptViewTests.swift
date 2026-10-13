@@ -407,6 +407,24 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertEqual(rows.first?.subtitle, "Needs choice — The active turn already ended.")
     }
 
+    func testPayloadShowsTypedProviderAuthFailureInNotDeliveredText() {
+        let reason = "provider_auth_missing: OMP has no OpenAI credential; run `omp /login` on the selected machine."
+        let rows = WebTranscriptView.payloadItems(
+            timelineItems: [],
+            submittedInputs: [
+                makeSubmittedInput(
+                    text: "continue",
+                    clientRequestId: "ios-auth-failed",
+                    serverInputId: 7,
+                    phase: .failed,
+                    lastError: reason
+                ),
+            ]
+        )
+
+        XCTAssertEqual(rows.first?.subtitle, "Not delivered — \(reason)")
+    }
+
     func testPayloadCarriesBoundedAttachmentSummaryOnOneSubmittedRow() {
         let input = SubmittedInput(
             id: "ios-request-attachments",

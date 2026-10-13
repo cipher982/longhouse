@@ -1608,3 +1608,20 @@ def test_helm_turn_phase_decays_once_the_control_lease_is_gone():
 
     assert facts.activity.state == "unknown"
     assert facts.presentation.primary is None or facts.presentation.primary.label != "Using Shell"
+
+
+@pytest.mark.parametrize("terminal_reason", ["provider_auth_missing", "provider_auth_invalid"])
+def test_typed_provider_auth_failures_keep_the_sign_in_presentation(terminal_reason):
+    facts = _facts(
+        runtime=_runtime(
+            phase=None,
+            confidence="stale",
+            terminal_state="run_failed",
+            terminal_reason=terminal_reason,
+        ),
+        session=_session(ended_at=NOW - timedelta(seconds=2)),
+    )
+
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == "provider_auth_required"
+    assert facts.presentation.primary.label == "Provider authentication required"

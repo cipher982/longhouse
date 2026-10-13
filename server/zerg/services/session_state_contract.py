@@ -1201,7 +1201,11 @@ def _primary(
 
     # Authentication is primary only when no answerable interaction or fresh
     # activity/delegation claim describes work the user can still continue.
-    if run is not None and run.lifecycle == "ended" and run.end_reason == "provider_auth_required":
+    if (
+        run is not None
+        and run.lifecycle == "ended"
+        and run.end_reason in {"provider_auth_required", "provider_auth_missing", "provider_auth_invalid"}
+    ):
         return SessionPresentationLabel(
             key="provider_auth_required",
             label="Provider authentication required",

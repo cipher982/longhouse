@@ -1437,13 +1437,14 @@ def _settle_console_turns_from_runtime(orm: Session, events: list[Any], *, obser
         if turn.state in CONSOLE_TURN_TERMINAL_STATES:
             next_turn = _starting_console_turn_dto(orm, thread_id=turn.thread_id) if turn.state == outcome else None
         else:
+            error_code, error = _console_terminal_error(event.payload, event.provider)
             next_turn = _settle_console_turn(
                 orm,
                 turn,
                 receipt,
                 next_state=outcome,
-                error=None if outcome == "completed" else _console_terminal_error(event.payload),
-                error_code=None,
+                error=error,
+                error_code=error_code,
                 now=_as_aware_utc(event.occurred_at) or observed_at,
             )
         if next_turn is not None and owner_id is not None:
@@ -1451,15 +1452,15 @@ def _settle_console_turns_from_runtime(orm: Session, events: list[Any], *, obser
     return dispatch
 
 
-def _console_terminal_error(payload: dict[str, Any]) -> str:
-    """The terminal state plus the adapter's reason, when it sent one.
+def _console_terminal_error(payload: dict[str, Any], provider: str | None) -> tuple[str | None, str | None]:
+    from zerg.services.console_turn_failures import console_terminal_failure
 
-    A bare "run_failed" hid a Codex 401 on 2026-10-07; the engine already
-    ships the provider's message as ``stderr_tail``.
-    """
-    state = str(payload["terminal_state"])
-    detail = str(payload.get("stderr_tail") or "").strip()
-    return f"{state}: {detail[-1000:]}" if detail else state
+    return console_terminal_failure(
+        payload.get("terminal_state"),
+        payload.get("terminal_reason"),
+        payload.get("stderr_tail"),
+        provider,
+    )
 
 
 def _canonical_outbox_value(value: Any) -> Any:

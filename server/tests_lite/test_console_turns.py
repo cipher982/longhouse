@@ -543,6 +543,67 @@ async def test_reconnect_replays_terminal_machine_claim_as_completed_turn():
 
 
 @pytest.mark.asyncio
+async def test_terminal_machine_claim_surfaces_typed_auth_reason_to_the_receipt():
+    session_id, thread_id, turn_id, run_id = uuid4(), uuid4(), uuid4(), uuid4()
+    turn = {
+        "turn_id": str(turn_id),
+        "session_id": str(session_id),
+        "thread_id": str(thread_id),
+        "run_id": str(run_id),
+        "receipt_id": str(uuid4()),
+        "state": SESSION_TURN_STATE_STARTING,
+        "provider": "omp",
+        "device_id": "cinder",
+        "cwd": "/tmp/longhouse",
+        "message": "hello",
+        "client_request_id": "auth-refusal",
+        "provider_config": {},
+    }
+    expected_error = "OMP has no OpenAI credential; run `omp /login` on the selected machine."
+
+    class Catalog:
+        async def call(self, method, params):
+            assert method == "session.console.turn.update.v2"
+            assert params["turn"]["error_code"] == "provider_auth_missing"
+            assert params["turn"]["error"] == expected_error
+            return {
+                "found": True,
+                "applied": True,
+                "turn": {**turn, "state": SESSION_TURN_STATE_FAILED, "error": expected_error},
+                "next_turn": None,
+            }
+
+    class Registry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **_kwargs):
+            return SimpleNamespace(
+                transport_ok=True,
+                message={
+                    "ok": True,
+                    "result": {
+                        "terminal_state": "run_failed",
+                        "terminal_reason": "provider_auth_missing",
+                        "stderr_tail": "No API key found for openai",
+                    },
+                },
+                error=None,
+            )
+
+    result = await dispatch_catalog_claimed_turn(
+        owner_id=1,
+        turn=turn,
+        client=Catalog(),
+        registry=Registry(),
+    )
+
+    assert result.state == SESSION_TURN_STATE_FAILED
+    assert result.error_code == "provider_auth_missing"
+    assert result.error == expected_error
+
+
+@pytest.mark.asyncio
 async def test_reconcile_process_gone_completes_turn_as_failed(monkeypatch):
     session_id = uuid4()
     thread_id = uuid4()

@@ -15,6 +15,9 @@ from zerg.services.session_runtime import _exit_status_for_terminal
         # An older engine put the sentence where the code goes.
         ({"exit_code": 0, "terminal_reason": "OMP native session source did not drain completely"}, "run_failed"),
         ({"exit_code": 1, "terminal_reason": "provider_auth_required"}, "provider_auth_required"),
+        ({"exit_code": 1, "terminal_reason": "provider_auth_missing"}, "provider_auth_missing"),
+        ({"exit_code": 1, "terminal_reason": "provider_auth_invalid"}, "provider_auth_invalid"),
+        ({"exit_code": 1, "terminal_reason": "provider_auth_helper_failed"}, "provider_auth_helper_failed"),
         ({"exit_status": "adapter_unavailable", "exit_code": 1}, "adapter_unavailable"),
     ],
 )

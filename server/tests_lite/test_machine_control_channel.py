@@ -311,3 +311,34 @@ def test_machine_control_registry_reports_offline_device():
         assert response.error == "Machine Agent control channel is offline"
 
     asyncio.run(_run())
+
+
+def test_machine_readiness_preserves_last_auth_failure_and_probe_state():
+    async def _run():
+        registry = MachineControlChannelRegistry()
+        websocket = _FakeWebSocket()
+        await registry.register(
+            owner_id=7,
+            device_id="cinder",
+            machine_name="cinder",
+            engine_build="abc123",
+            supports=["codex.turn_start"],
+            provider_readiness={
+                "codex": {
+                    "state": "auth_failed",
+                    "probe_state": "ready",
+                    "auth_failure_reason": "provider_auth_invalid",
+                    "remediation": "Sign in to codex on this machine",
+                }
+            },
+            websocket=websocket,
+        )
+
+        assert registry.provider_readiness_state(owner_id=7, device_id="cinder", provider="codex") == {
+            "state": "auth_failed",
+            "probe_state": "ready",
+            "auth_failure_reason": "provider_auth_invalid",
+            "remediation": "Sign in to codex on this machine",
+        }
+
+    asyncio.run(_run())

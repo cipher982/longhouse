@@ -2721,6 +2721,7 @@ struct OmpStreamProjection {
     session_settled: bool,
     has_pending_async_work: Option<bool>,
     native_error: Option<String>,
+    auth_failure_reason: Option<&'static str>,
     /// The error OMP's session store reported in this turn, if any.
     persistence_notice: Option<String>,
     /// OMP refused the prompt before accepting it: no run will follow.
@@ -2740,6 +2741,7 @@ impl OmpStreamProjection {
         self.session_settled = false;
         self.has_pending_async_work = None;
         self.native_error = None;
+        self.auth_failure_reason = None;
         self.persistence_notice = None;
         self.rpc_rejected = false;
         self.prompt_acknowledged = false;
@@ -2827,6 +2829,7 @@ impl OmpStreamProjection {
                         .filter(|text| !text.trim().is_empty())
                     {
                         self.native_error = Some(error.to_string());
+                        self.auth_failure_reason = crate::provider_auth::omp_prompt_result_reason(error);
                     }
                 }
             }
@@ -2907,25 +2910,22 @@ impl OmpStreamProjection {
     }
 }
 
-fn terminal_reason_code(terminal_state: &str, detail: Option<&str>) -> &'static str {
-    let auth_refused = terminal_state == "run_failed"
-        && detail.is_some_and(|text| {
-            let lower = text.to_ascii_lowercase();
-            lower.starts_with("401 ")
-                || lower.starts_with("403 ")
-                || lower.contains("incorrect api key")
-                || lower.contains("invalid api key")
-                || lower.contains("invalid_api_key")
-                || lower.contains("authentication_error")
-                || lower.contains("unauthorized")
-        });
+fn terminal_reason_code(
+    terminal_state: &str,
+    detail: Option<&str>,
+    auth_failure_reason: Option<&'static str>,
+) -> &'static str {
     let session_moved = terminal_state == "run_failed"
         && detail.is_some_and(|text| text.starts_with(SESSION_MOVED));
-    match (terminal_state, auth_refused) {
-        (_, true) => "provider_auth_required",
+    if terminal_state == "run_failed" {
+        if let Some(reason) = auth_failure_reason {
+            return reason;
+        }
+    }
+    match terminal_state {
         _ if session_moved => "provider_session_moved",
-        ("run_completed", _) => "run_completed",
-        ("run_cancelled", _) => "run_cancelled",
+        "run_completed" => "run_completed",
+        "run_cancelled" => "run_cancelled",
         _ => "run_failed",
     }
 }
@@ -3410,7 +3410,11 @@ impl OmpPrintSink {
         self.persist_local_phase("finished", None, Utc::now());
         let mut payload = self.terminal_payload(
             terminal_state,
-            terminal_reason_code(terminal_state, reason.as_deref()),
+            terminal_reason_code(
+                terminal_state,
+                reason.as_deref(),
+                projection.auth_failure_reason,
+            ),
             exit_code,
             reason.as_deref(),
         );
@@ -4096,42 +4100,53 @@ mod tests {
         assert!(omp_supports_no_ui(&new_path));
     }
 
-    /// The stream of a console run whose OpenAI key was refused (recorded
-    /// 2026-10-06): an empty assistant message that ended in `error`, then a
-    /// settled session. The run failed because of the key, and says so.
     #[test]
-    fn a_provider_refusal_is_the_run_failure_and_an_auth_reason() {
-        let mut projection = OmpStreamProjection::default();
-        let refusal = "401 Incorrect API key provided: sk-proj-****q1AA. (type=invalid_request_error param=invalid_api_key)";
-        for event in [
-            json!({"type":"agent_start"}),
-            json!({"type":"message_start","message":{"role":"assistant","content":[]}}),
-            json!({"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":refusal}}),
-            json!({"type":"agent_end","messages":[]}),
-            json!({"type":"prompt_result","id":"longhouse-prompt","status":"error","sessionSettled":true,"error":{"message":refusal}}),
-            json!({"type":"session_settled"}),
-        ] {
+    fn provider_auth_reason_uses_structured_prompt_result_fixtures() {
+        let cases = [
+            (
+                include_str!("../tests/fixtures/provider_auth/omp-missing-key.json"),
+                crate::provider_auth::AUTH_MISSING,
+            ),
+            (
+                include_str!("../tests/fixtures/provider_auth/omp-invalid-key.json"),
+                crate::provider_auth::AUTH_INVALID,
+            ),
+            (
+                include_str!("../tests/fixtures/provider_auth/omp-helper-failed.json"),
+                crate::provider_auth::AUTH_HELPER_FAILED,
+            ),
+        ];
+        for (fixture, expected_reason) in cases {
+            let event: Value = serde_json::from_str(fixture).unwrap();
+            let mut projection = OmpStreamProjection::default();
             projection.apply(None, &event).unwrap();
+            assert_eq!(projection.auth_failure_reason, Some(expected_reason));
+            assert_eq!(
+                terminal_reason_code(
+                    "run_failed",
+                    projection.native_error.as_deref(),
+                    projection.auth_failure_reason,
+                ),
+                expected_reason
+            );
         }
-        // Even when the native session file did not drain, the provider's own
-        // refusal is the reason, not the drain.
-        let (state, detail) =
-            terminal_state_for_projection(&projection, Some(true), false, None, true, true, false);
-        assert_eq!(state, "run_failed");
-        assert_eq!(detail.as_deref(), Some(refusal));
+
+        let generic = json!({
+            "type": "prompt_result",
+            "status": "error",
+            "error": {"message": "401 Unauthorized"}
+        });
+        let mut projection = OmpStreamProjection::default();
+        projection.apply(None, &generic).unwrap();
+        assert_eq!(projection.auth_failure_reason, None);
         assert_eq!(
-            terminal_reason_code(state, detail.as_deref()),
-            "provider_auth_required"
-        );
-        assert_eq!(
-            terminal_reason_code("run_failed", Some("OMP process exited unsuccessfully")),
+            terminal_reason_code("run_failed", projection.native_error.as_deref(), None),
             "run_failed"
         );
-        assert_eq!(terminal_reason_code("run_completed", None), "run_completed");
-        // A bad exit after a refusal is still the refusal.
-        let (_, detail) =
-            terminal_state_for_projection(&projection, Some(false), false, None, true, true, true);
-        assert_eq!(detail.as_deref(), Some(refusal));
+        assert_eq!(
+            terminal_reason_code("run_completed", None, Some(crate::provider_auth::AUTH_MISSING)),
+            "run_completed"
+        );
     }
 
     #[test]

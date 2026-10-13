@@ -33,17 +33,26 @@ def _sign_in_need(machine: MachineDirectoryEntry) -> tuple[str, str] | None:
     # otherwise it is an agent this person simply does not use.
     missing = [item for item in unavailable if item.reason == "cli_missing"] if not machine.launch.providers else []
     actionable = signed_out or missing
-    if not actionable:
+    if actionable:
+        verb = "signed out" if signed_out else "not installed"
+        if len(actionable) == 1:
+            item = actionable[0]
+            name = provider_display_name(item.provider, fallback="Unknown")
+            fallback = f"Sign in to {name} on {machine.machine_name}" if signed_out else f"Install {name} on {machine.machine_name}"
+            return f"{name} {verb}", item.remediation or fallback
+        names = sorted(provider_display_name(item.provider, fallback="Unknown") for item in actionable)
+        action = "Sign in to" if signed_out else "Install"
+        return f"{len(actionable)} agents {verb}", f"{action} {' and '.join(names)} on {machine.machine_name}"
+
+    auth_failed = [(provider, entry) for provider, entry in machine.provider_readiness.items() if entry.get("state") == "auth_failed"]
+    if not auth_failed:
         return None
-    verb = "signed out" if signed_out else "not installed"
-    if len(actionable) == 1:
-        item = actionable[0]
-        name = provider_display_name(item.provider, fallback="Unknown")
-        fallback = f"Sign in to {name} on {machine.machine_name}" if signed_out else f"Install {name} on {machine.machine_name}"
-        return f"{name} {verb}", item.remediation or fallback
-    names = sorted(provider_display_name(item.provider, fallback="Unknown") for item in actionable)
-    action = "Sign in to" if signed_out else "Install"
-    return f"{len(actionable)} agents {verb}", f"{action} {' and '.join(names)} on {machine.machine_name}"
+    if len(auth_failed) == 1:
+        provider, entry = auth_failed[0]
+        name = provider_display_name(provider, fallback="Unknown")
+        return f"{name} auth failed", entry.get("remediation") or f"Sign in to {name} on {machine.machine_name}"
+    names = sorted(provider_display_name(provider, fallback="Unknown") for provider, _ in auth_failed)
+    return f"{len(auth_failed)} agents auth failed", f"Sign in to {' and '.join(names)} on {machine.machine_name}"
 
 
 def machine_status(
@@ -74,6 +83,12 @@ def machine_status(
             return MachineStatus(tone="live", label=f"{live} live", hint=need[1] if need else None)
         if need is not None:
             return MachineStatus(tone="attention", label=need[0], hint=need[1])
+        if blocked == "providers_not_ready":
+            return MachineStatus(
+                tone="attention",
+                label="Providers not ready",
+                hint="Sign in to a provider on this machine",
+            )
         if blocked == "engine_too_old":
             return MachineStatus(tone="attention", label="Update required", hint="Update Longhouse on this machine")
         if blocked == "no_launch_support":

@@ -398,6 +398,26 @@ def test_console_failure_summary_exposes_provider_reason_without_error_code():
     assert summary.last_error == "run_failed: Codex turn ended with status failed: 401 Unauthorized"
 
 
+def test_console_auth_failure_summary_exposes_typed_reason_and_action():
+    message = "OMP has no OpenAI credential; run `omp /login` on the selected machine."
+    summary = _live_queued_summary(
+        LiveInputReceiptSnapshot(
+            id="live-omp-auth-failed",
+            owner_id=1,
+            session_id=str(uuid4()),
+            provider="omp",
+            text="start work",
+            intent="auto",
+            status=INPUT_STATUS_FAILED,
+            client_request_id="request-omp-auth-failed",
+            archive_session_input_id=None,
+            error_json=json.dumps({"code": "provider_auth_missing", "message": message}),
+        )
+    )
+
+    assert summary.last_error == f"provider_auth_missing: {message}"
+
+
 def test_delivered_input_summary_exposes_exact_transcript_echo():
     summary = _live_queued_summary(
         LiveInputReceiptSnapshot(

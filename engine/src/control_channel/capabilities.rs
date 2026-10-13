@@ -319,7 +319,9 @@ pub(super) async fn provider_readiness_snapshot() -> Value {
         });
         crate::provider_readiness::readiness_for_contract(contract, binary, on_path)
     });
-    crate::provider_readiness::readiness_map(futures_util::future::join_all(pending).await)
+    let mut readiness = crate::provider_readiness::readiness_map(futures_util::future::join_all(pending).await);
+    crate::provider_auth::apply_auth_failure_overrides(&mut readiness);
+    readiness
 }
 
 pub(super) fn control_supports() -> Vec<String> {

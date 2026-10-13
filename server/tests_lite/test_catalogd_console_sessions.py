@@ -1145,18 +1145,46 @@ def test_console_run_terminal_settles_turn_run_and_fifo_in_one_runtime_transacti
 
 
 @pytest.mark.parametrize(
-    ("payload", "expected_error"),
+    ("provider", "payload", "expected_error_code", "expected_error"),
     [
         (
+            "codex",
             {"terminal_state": "run_failed", "stderr_tail": "Codex turn ended with status failed: 401 Unauthorized"},
+            None,
             "run_failed: Codex turn ended with status failed: 401 Unauthorized",
         ),
-        ({"terminal_state": "run_failed"}, "run_failed"),
+        (
+            "codex",
+            {"terminal_state": "run_failed", "terminal_reason": "provider_auth_invalid"},
+            "provider_auth_invalid",
+            "Codex rejected its OpenAI credential; run `codex login` on the selected machine.",
+        ),
+        (
+            "omp",
+            {"terminal_state": "run_failed", "terminal_reason": "provider_auth_missing"},
+            "provider_auth_missing",
+            "OMP has no OpenAI credential; run `omp /login` on the selected machine.",
+        ),
+        (
+            "omp",
+            {
+                "terminal_state": "run_failed",
+                "terminal_reason": "provider_auth_helper_failed",
+                "stderr_tail": "omp-openai-key: target dev unavailable: credential helper timed out",
+            },
+            "provider_auth_helper_failed",
+            "OMP's OpenAI credential helper failed on the selected machine; inspect its error there. "
+            "Helper reported: omp-openai-key: target dev unavailable: credential helper timed out",
+        ),
+        (
+            "claude",
+            {"terminal_state": "run_failed", "terminal_reason": "provider_auth_required"},
+            "provider_auth_required",
+            "Claude requires authentication; sign in to Claude on the selected machine.",
+        ),
     ],
 )
-def test_console_run_failure_keeps_the_adapter_reason(tmp_path, payload, expected_error):
-    """A failed turn names why: a bare "run_failed" hid a Codex 401 on 2026-10-07."""
-
+def test_console_run_failure_keeps_typed_provider_reason(tmp_path, provider, payload, expected_error_code, expected_error):
     engine = create_catalog_engine(tmp_path / "console-failure.db")
     initialize_catalog_schema(engine)
     store = CatalogStore(engine)
@@ -1169,7 +1197,7 @@ def test_console_run_failure_keeps_the_adapter_reason(tmp_path, payload, expecte
             "session_id": str(session_id),
             "thread_id": str(thread_id),
             "owner_id": 1,
-            "provider": "codex",
+            "provider": provider,
             "device_id": "cinder",
             "cwd": "/tmp/longhouse",
             "project": "longhouse",
@@ -1190,7 +1218,7 @@ def test_console_run_failure_keeps_the_adapter_reason(tmp_path, payload, expecte
             "owner_id": 1,
             "session_id": str(session_id),
             "thread_id": str(thread_id),
-            "provider": "codex",
+            "provider": provider,
             "device_id": "cinder",
             "turn_id": turn["turn_id"],
             "run_id": turn["run_id"],
@@ -1202,16 +1230,16 @@ def test_console_run_failure_keeps_the_adapter_reason(tmp_path, payload, expecte
     store.apply_session_runtime(
         events=[
             RuntimeEventIngest(
-                runtime_key=f"codex:{session_id}",
+                runtime_key=f"{provider}:{session_id}",
                 session_id=session_id,
                 thread_id=thread_id,
                 run_id=turn["run_id"],
-                provider="codex",
+                provider=provider,
                 device_id="cinder",
-                source="codex_app_server",
+                source=f"{provider}_console",
                 kind="terminal_signal",
                 occurred_at=datetime.now(UTC) + timedelta(seconds=1),
-                dedupe_key=f"codex-exec:{session_id}:{turn['run_id']}:terminal",
+                dedupe_key=f"{provider}:{session_id}:{turn['run_id']}:terminal",
                 payload=payload,
             )
         ]
@@ -1222,7 +1250,7 @@ def test_console_run_failure_keeps_the_adapter_reason(tmp_path, payload, expecte
         assert settled.error == expected_error
         receipt = db.get(LiveSessionInputReceipt, settled.receipt_id)
         assert receipt.status == "failed"
-        assert json.loads(receipt.error_json) == {"code": None, "message": expected_error}
+        assert json.loads(receipt.error_json) == {"code": expected_error_code, "message": expected_error}
 
 
 def _seed_console_wake_target(engine, store, *, session_id, thread_id, provider_thread_id="provider-thread-1"):

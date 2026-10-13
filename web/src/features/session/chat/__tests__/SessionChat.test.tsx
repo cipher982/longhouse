@@ -2112,8 +2112,8 @@ describe("SessionChat", () => {
             status: 502,
             body: {
               detail: {
-                error_code: "provider_launch_failed",
-                message: "Provider did not start.",
+                error_code: "provider_auth_missing",
+                message: "OMP has no OpenAI credential; run `omp /login` on the selected machine.",
                 disposition: "accepted",
                 delivery_status: "failed",
                 client_request_id: requestId,
@@ -2130,7 +2130,7 @@ describe("SessionChat", () => {
       chatMode: "managed_local",
       timelineItems: [],
       onOutboxChange,
-      session: makeSession({ provider: "codex" }),
+      session: makeSession({ provider: "omp" }),
     });
     await user.type(screen.getByRole("textbox"), "keep the accepted failure");
     await user.click(screen.getByRole("button", { name: /send/i }));
@@ -2142,7 +2142,7 @@ describe("SessionChat", () => {
       expect(entries[0]).toMatchObject({
         text: "keep the accepted failure",
         state: "failed",
-        detail: "Provider did not start.",
+        detail: "OMP has no OpenAI credential; run `omp /login` on the selected machine.",
         actions: [{ label: "Edit" }, { label: "Discard" }],
       });
     });

@@ -1,0 +1,1 @@
+[{"info":{"id":"msg-auth","role":"assistant","parentID":"msg-user","error":{"name":"ProviderAuthError","data":{"providerID":"openai","message":"Authentication required for provider openai"}}},"parts":[]}]

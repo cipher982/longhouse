@@ -14,6 +14,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from zerg.services.bug_reports import read_manifest
+from zerg.services.console_turn_failures import console_terminal_failure
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_CANCELLED
 from zerg.services.session_turns import SESSION_TURN_STATE_COMPLETED
@@ -991,8 +992,12 @@ async def dispatch_catalog_claimed_turn(
                     "run_failed": SESSION_TURN_STATE_FAILED,
                     "run_cancelled": SESSION_TURN_STATE_CANCELLED,
                 }[terminal_state]
-                error_code = None
-                error = None if replayed_terminal_state == SESSION_TURN_STATE_COMPLETED else terminal_state
+                error_code, error = console_terminal_failure(
+                    terminal_state,
+                    result_payload.get("terminal_reason"),
+                    result_payload.get("stderr_tail"),
+                    provider,
+                )
             else:
                 await _persist_native_binding_result(catalog, turn=turn, response_message=message)
     state = replayed_terminal_state or (SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE)

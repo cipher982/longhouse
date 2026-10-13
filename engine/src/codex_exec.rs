@@ -2141,19 +2141,40 @@ async fn run_codex_invocation(
             } else {
                 "run_failed"
             };
+            let auth_reason = error.chain().find_map(|cause| {
+                cause
+                    .downcast_ref::<CodexTurnFailure>()
+                    .and_then(|failure| failure.auth_reason)
+            });
+            let stderr_tail = (!interrupted).then(|| error.to_string());
             let pending_count = invocation.pending_count();
             invocation.take_active_turn();
-            runtime
-                .sink
-                .post_terminal(
-                    terminal_state,
-                    None,
-                    (!interrupted).then(|| error.to_string()),
-                    &launch_id,
-                    InvocationState::Closed,
-                    pending_count,
-                )
-                .await;
+            if let Some(reason) = auth_reason {
+                runtime
+                    .sink
+                    .post_terminal_with_reason(
+                        terminal_state,
+                        reason,
+                        None,
+                        stderr_tail,
+                        &launch_id,
+                        InvocationState::Closed,
+                        pending_count,
+                    )
+                    .await;
+            } else {
+                runtime
+                    .sink
+                    .post_terminal(
+                        terminal_state,
+                        None,
+                        stderr_tail,
+                        &launch_id,
+                        InvocationState::Closed,
+                        pending_count,
+                    )
+                    .await;
+            }
             finish_runtime_turn(runtime, &current_config.session_id, &current_config.run_id).await;
             invocation.process_exited();
             if let Ok(registry) = crate::turn_claims::default_registry() {
@@ -2576,7 +2597,7 @@ async fn run_app_server_turn(
                     return Err(anyhow::Error::new(CodexTurnInterrupted));
                 }
                 if status != "completed" {
-                    anyhow::bail!(codex_turn_failure(&status, &value));
+                    Err(codex_turn_failure(&status, &value))?;
                 }
                 if let Some(path) = thread_path {
                     sink.wake_transcript_shipper(path, &completed_turn_id, "turn_completed")
@@ -2837,12 +2858,29 @@ impl AppServerRpc {
     }
 }
 
-/// A failed turn names Codex's own reason (`params.turn.error.message`), so a
-/// 401 reaches the session as itself rather than as a bare status.
-fn codex_turn_failure(status: &str, completed: &Value) -> String {
-    match json_string(completed, &["params", "turn", "error", "message"]) {
+#[derive(Debug)]
+struct CodexTurnFailure {
+    message: String,
+    auth_reason: Option<&'static str>,
+}
+
+impl std::fmt::Display for CodexTurnFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CodexTurnFailure {}
+
+/// Preserve Codex's structured turn error so the terminal event can carry its auth code.
+fn codex_turn_failure(status: &str, completed: &Value) -> CodexTurnFailure {
+    let message = match json_string(completed, &["params", "turn", "error", "message"]) {
         Some(message) => format!("Codex turn ended with status {status}: {message}"),
         None => format!("Codex turn ended with status {status}"),
+    };
+    CodexTurnFailure {
+        message,
+        auth_reason: crate::provider_auth::codex_turn_error_reason(completed),
     }
 }
 
@@ -3290,6 +3328,28 @@ impl CodexExecRuntimeSink {
         invocation_state: InvocationState,
         pending_count: usize,
     ) {
+        self.post_terminal_with_reason(
+            terminal_state,
+            terminal_state,
+            exit_code,
+            stderr_tail,
+            invocation_id,
+            invocation_state,
+            pending_count,
+        )
+        .await;
+    }
+
+    async fn post_terminal_with_reason(
+        &self,
+        terminal_state: &str,
+        terminal_reason: &str,
+        exit_code: Option<i32>,
+        stderr_tail: Option<String>,
+        invocation_id: &str,
+        invocation_state: InvocationState,
+        pending_count: usize,
+    ) {
         let observed_at = Utc::now();
         self.persist_local_phase("finished", None, observed_at);
         let terminal_event = json!({
@@ -3309,7 +3369,7 @@ impl CodexExecRuntimeSink {
                 "managed_transport": CODEX_EXEC_RUNTIME_SOURCE,
                 "execution_lifetime": "persistent",
                 "terminal_state": terminal_state,
-                "terminal_reason": terminal_state,
+                "terminal_reason": terminal_reason,
                 "terminal_source": CODEX_EXEC_RUNTIME_SOURCE,
                 "exit_code": exit_code,
                 "stderr_tail": stderr_tail,
@@ -3413,6 +3473,9 @@ impl CodexExecRuntimeSink {
         // receives the claim's exact stored event, not a freshly rebuilt retry.
         if let Some(event) = direct_event {
             self.post_events(vec![event]).await;
+        }
+        if crate::provider_auth::is_auth_failure_reason(terminal_reason) {
+            crate::sign_in::readiness_refresh_now().notify_one();
         }
     }
 
@@ -3753,21 +3816,22 @@ fn find_codex_rollout_path(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn a_failed_turn_carries_the_codex_error_message() {
-        let failed = serde_json::json!({
-            "method": "turn/completed",
-            "params": {"turn": {"id": "t1", "status": "failed",
-                "error": {"message": "unexpected status 401 Unauthorized: Incorrect API key provided"}}},
-        });
+    fn a_codex_auth_refusal_fixture_carries_a_typed_turn_reason() {
+        let failed: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/provider_auth/codex-invalid-key.json"
+        ))
+        .unwrap();
+        let failure = super::codex_turn_failure("failed", &failed);
         assert_eq!(
-            super::codex_turn_failure("failed", &failed),
+            failure.to_string(),
             "Codex turn ended with status failed: unexpected status 401 Unauthorized: Incorrect API key provided"
         );
-        let bare = serde_json::json!({"params": {"turn": {"status": "failed"}}});
-        assert_eq!(
-            super::codex_turn_failure("failed", &bare),
-            "Codex turn ended with status failed"
-        );
+        assert_eq!(failure.auth_reason, Some(crate::provider_auth::AUTH_INVALID));
+
+        let generic = serde_json::json!({
+            "params": {"turn": {"status": "failed", "error": {"message": "request timed out"}}}
+        });
+        assert_eq!(super::codex_turn_failure("failed", &generic).auth_reason, None);
     }
 
     #[tokio::test]

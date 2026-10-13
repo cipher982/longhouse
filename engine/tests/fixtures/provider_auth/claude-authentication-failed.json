@@ -1,0 +1,1 @@
+{"type":"assistant","error":"authentication_failed","is_api_error_message":true,"message":{"content":[{"type":"text","text":"Not logged in · Please run /login"}]}}

@@ -70,9 +70,11 @@ class MachineDirectoryEntry(UTCBaseModel):
         default_factory=dict,
         description=(
             "Per-provider readiness reported by the Machine Agent: state is one of ready, "
-            "cli_missing, not_authenticated, unknown, with optional detail, "
-            "credential_override, and remediation. Empty means not reported -- an offline "
-            "machine or an older engine -- never that providers are unready."
+            "cli_missing, not_authenticated, unknown, or auth_failed. An auth_failed entry "
+            "also carries probe_state and auth_failure_reason, preserving the CLI probe while "
+            "warning that the last Console turn was rejected for authentication. Optional "
+            "detail, credential_override, and remediation are safe to show. Empty means not "
+            "reported -- an offline machine or an older engine -- never that providers are unready."
         ),
     )
     launch: "MachineLaunchProjection" = Field(

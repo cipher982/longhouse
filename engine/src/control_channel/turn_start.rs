@@ -2,6 +2,24 @@
 
 use super::*;
 
+fn terminal_result_with_payload(mut result: Value, terminal_event: Option<&Value>) -> Value {
+    let Some(payload) = terminal_event
+        .and_then(|event| event.get("payload"))
+        .and_then(Value::as_object)
+    else {
+        return result;
+    };
+    let Some(output) = result.as_object_mut() else {
+        return result;
+    };
+    for field in ["terminal_reason", "stderr_tail", "exit_code"] {
+        if let Some(value) = payload.get(field) {
+            output.insert(field.to_string(), value.clone());
+        }
+    }
+    result
+}
+
 pub(super) async fn execute_turn_start(
     frame: &Value,
     payload: &Value,
@@ -198,10 +216,11 @@ pub(super) async fn execute_turn_start(
             if let Some(dir) = staging_dir.as_ref() {
                 crate::input_attachments::cleanup_dir(dir);
             }
-            return claim.result.ok_or_else(|| CommandError {
+            let result = claim.result.ok_or_else(|| CommandError {
                 code: "turn_claim_invalid".to_string(),
                 message: format!("terminal run {run_id} has no stored result"),
-            });
+            })?;
+            return Ok(terminal_result_with_payload(result, claim.terminal_event.as_ref()));
         }
         ClaimOutcome::Existing(claim) if claim.state == "spawned" => {
             let inventory = crate::process_identity::try_collect_process_facts_by_pid();
@@ -689,5 +708,29 @@ pub(super) async fn execute_turn_start(
                 message,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_claim_replay_preserves_typed_auth_failure_fields() {
+        let terminal_event = serde_json::json!({
+            "kind": "terminal_signal",
+            "payload": {
+                "terminal_state": "run_failed",
+                "terminal_reason": "provider_auth_missing",
+                "stderr_tail": "No API key found for openai"
+            }
+        });
+        let result = terminal_result_with_payload(
+            serde_json::json!({"terminal_state": "run_failed"}),
+            Some(&terminal_event),
+        );
+
+        assert_eq!(result["terminal_reason"], "provider_auth_missing");
+        assert_eq!(result["stderr_tail"], "No API key found for openai");
     }
 }
