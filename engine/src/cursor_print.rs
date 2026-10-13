@@ -240,9 +240,15 @@ pub async fn start_cursor_print_turn(
     }
     let monitor_path = stdout_path.clone();
     let monitor_stderr = stderr_path.clone();
-    tokio::spawn(async move {
+    #[cfg(test)]
+    let monitor_launch_id = launch_id.clone();
+    let monitor_task = tokio::spawn(async move {
         monitor_cursor_print(&mut child, &monitor_path, &monitor_stderr, sink, lock).await;
     });
+    #[cfg(test)]
+    crate::console_lifecycle::track_test_monitor(monitor_launch_id, monitor_task);
+    #[cfg(not(test))]
+    drop(monitor_task);
 
     Ok(CursorPrintRunSummary {
         session_id: config.session_id,
@@ -309,12 +315,27 @@ pub async fn recover_cursor_print_turns(
             },
             provider_thread_id: provider_thread_id.clone(),
         };
-        match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
+        let liveness = crate::console_adapter::claim_liveness(&claim, inventory.as_ref());
+        if liveness == ClaimLiveness::Gone && live_pid_identity_mismatch(&claim, inventory.as_ref())
+        {
+            tracing::warn!(
+                run_id = %claim.run_id,
+                "PID identity changed during Cursor Console recovery; leaving the claim untouched"
+            );
+            continue;
+        }
+        match liveness {
             ClaimLiveness::Live => {
                 let lock = acquire_conversation_lock(&cursor_managed_root()?, &provider_thread_id)?;
-                tokio::spawn(async move {
+                #[cfg(test)]
+                let monitor_launch_id = sink.launch_id.clone();
+                let monitor_task = tokio::spawn(async move {
                     monitor_recovered_claim(claim, stdout_path, stderr_path, sink, lock).await;
                 });
+                #[cfg(test)]
+                crate::console_lifecycle::track_test_monitor(monitor_launch_id, monitor_task);
+                #[cfg(not(test))]
+                drop(monitor_task);
                 recovered += 1;
             }
             ClaimLiveness::Gone => {
@@ -327,6 +348,35 @@ pub async fn recover_cursor_print_turns(
         }
     }
     Ok(recovered)
+}
+
+fn live_pid_identity_mismatch(
+    claim: &crate::turn_claims::TurnClaim,
+    inventory: Option<&std::collections::HashMap<u32, crate::process_identity::ProcessFact>>,
+) -> bool {
+    let Some(pid) = claim.pid else {
+        return false;
+    };
+    let Some(inventory) = inventory else {
+        return !claim.process_group_is_from_this_boot();
+    };
+    let Some(fact) = inventory.get(&pid) else {
+        return false;
+    };
+    !claim.process_group_is_from_this_boot()
+        || claim
+            .process_start_time
+            .as_deref()
+            .is_none_or(|start| start != fact.lstart)
+}
+
+fn recovered_group_can_be_signalled(claim: &crate::turn_claims::TurnClaim) -> bool {
+    let (Some(pid), Some(process_group_id)) = (claim.pid, claim.process_group_id) else {
+        return false;
+    };
+    process_group_id == pid as i32
+        && claim.process_group_is_from_this_boot()
+        && crate::process_identity::try_collect_process_fact(pid).is_none()
 }
 
 pub fn interrupt_cursor_print_turn(
@@ -533,7 +583,9 @@ async fn monitor_recovered_claim(
                     "run_failed".to_string()
                 }
             });
-            cleanup_process_group(sink.process_group_id).await;
+            if recovered_group_can_be_signalled(&claim) {
+                cleanup_process_group(sink.process_group_id).await;
+            }
             sink.post_terminal(&terminal, None, stderr_tail(&stderr_path))
                 .await;
             return;
@@ -572,11 +624,9 @@ async fn settle_recovered_dead_claim(
             "run_failed".to_string()
         }
     });
-    // Recovery only reaches here because the claim's process is gone, so the
-    // recorded process group id can no longer be verified against it. Signal
-    // it only when this boot is the one that recorded it; otherwise the number
-    // may name an unrelated group and killing it would hit a stranger.
-    if claim.process_group_is_from_this_boot() {
+    // Only reap a same-boot group after confirming its leader PID is absent.
+    // A live PID with a different start time may be an unrelated reused PID.
+    if recovered_group_can_be_signalled(claim) {
         cleanup_process_group(sink.process_group_id).await;
     }
     sink.post_terminal(&terminal, None, stderr_tail(stderr_path))
@@ -1162,6 +1212,332 @@ mod tests {
         assert_eq!(
             read_growth(&path, &mut offset, &mut pending).unwrap(),
             vec![b"two".to_vec()]
+        );
+    }
+    #[cfg(unix)]
+    fn write_fake_cursor(root: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let bin = root.join("fake-cursor-agent");
+        std::fs::write(
+            &bin,
+            r#"#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+import time
+import uuid
+
+args = sys.argv[1:]
+if args and args[0] == "create-chat":
+    print(uuid.uuid4(), flush=True)
+    raise SystemExit(0)
+
+provider_thread_id = args[args.index("--resume") + 1]
+prompt = args[-1]
+root = pathlib.Path.cwd()
+
+def emit(event):
+    print(json.dumps(event), flush=True)
+
+def assistant(text):
+    emit({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+
+emit({"type": "system", "subtype": "init", "session_id": provider_thread_id})
+if prompt == "restart-live":
+    assistant("output before restart")
+    while not (root / "release-live").exists():
+        time.sleep(0.01)
+    assistant("output after recovery")
+    emit({"type": "result", "subtype": "success", "is_error": False, "result": "done"})
+elif prompt == "restart-stop":
+    assistant("output before stop")
+    while True:
+        time.sleep(1)
+elif prompt == "restart-mismatch":
+    assistant("output before mismatch")
+    while True:
+        time.sleep(1)
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    #[cfg(unix)]
+    async fn start_fake_cursor_turn(
+        root: &Path,
+        cursor_bin: &Path,
+        prompt: &str,
+    ) -> CursorPrintRunSummary {
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let turn_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let client_request_id = format!("restart-{run_id}");
+        crate::turn_claims::default_registry()
+            .unwrap()
+            .claim(
+                &run_id,
+                &session_id,
+                &thread_id,
+                Some(&turn_id),
+                Some(&client_request_id),
+                "cursor",
+            )
+            .unwrap();
+        start_cursor_print_turn(CursorPrintRunConfig {
+            session_id,
+            thread_id,
+            turn_id: Some(turn_id),
+            run_id,
+            client_request_id: Some(client_request_id),
+            cwd: root.to_path_buf(),
+            cursor_bin: cursor_bin.to_string_lossy().into_owned(),
+            prompt: prompt.to_string(),
+            resume_provider_thread_id: None,
+            model: None,
+            permission_mode: "bypass".to_string(),
+            machine_name: "cursor-restart-test".to_string(),
+            local_db_path: None,
+        })
+        .await
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn restart_runtime_events() -> Vec<Value> {
+        let Ok(outbox) = crate::config::get_agent_runtime_events_outbox_dir() else {
+            return Vec::new();
+        };
+        std::fs::read_dir(outbox)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| std::fs::read(entry.ok()?.path()).ok())
+            .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
+            .collect()
+    }
+
+    #[cfg(unix)]
+    fn restart_progress_count(events: &[Value], run_id: &str, text: &str) -> usize {
+        events
+            .iter()
+            .filter(|event| {
+                event["run_id"] == run_id
+                    && event["kind"] == "progress_signal"
+                    && event["payload"]["event"]["message"]["content"]
+                        .as_array()
+                        .is_some_and(|content| content.iter().any(|part| part["text"] == text))
+            })
+            .count()
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_restart_progress(run_id: &str, text: &str) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if restart_progress_count(&restart_runtime_events(), run_id, text) > 0 {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Cursor did not project {text:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_restart_projection(run_id: &str, stdout_path: &Path) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(run_id)
+                .unwrap();
+            if claim.projected_stdout_offset >= std::fs::metadata(stdout_path).unwrap().len() {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Cursor projection checkpoint did not reach stdout"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_restart_terminal(run_id: &str) -> crate::turn_claims::TurnClaim {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(run_id)
+                .unwrap();
+            if claim.state == "terminal" {
+                return claim;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Cursor restart test run {run_id} did not settle"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_restart_group_exit(process_group_id: i32) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while crate::process_group::group_is_alive(process_group_id) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Cursor process group {process_group_id} is still alive"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn console_restart_contract() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let longhouse_home = temp.path().join("longhouse");
+        std::fs::create_dir_all(&home).unwrap();
+        let fake_cursor = write_fake_cursor(temp.path());
+
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.as_os_str())),
+                ("LONGHOUSE_HOME", Some(longhouse_home.as_os_str())),
+            ],
+            || {
+                runtime.block_on(async {
+                    let first =
+                        start_fake_cursor_turn(temp.path(), &fake_cursor, "restart-live").await;
+                    wait_for_restart_progress(&first.run_id, "output before restart").await;
+                    wait_for_restart_projection(&first.run_id, Path::new(&first.stdout_path)).await;
+                    crate::console_lifecycle::stop_test_monitor(&first.launch_id).await;
+                    crate::console_lifecycle::unregister(&first.launch_id);
+                    let process_group_id = first.process_group_id;
+                    assert!(crate::process_group::group_is_alive(process_group_id));
+
+                    assert_eq!(
+                        recover_cursor_print_turns("cursor-restart-test", None)
+                            .await
+                            .unwrap(),
+                        1
+                    );
+                    assert!(crate::process_group::group_is_alive(process_group_id));
+                    std::fs::write(temp.path().join("release-live"), b"go").unwrap();
+                    let completed = wait_for_restart_terminal(&first.run_id).await;
+                    assert_eq!(completed.result.unwrap()["terminal_state"], "run_completed");
+                    wait_for_restart_progress(&first.run_id, "output after recovery").await;
+                    let events = restart_runtime_events();
+                    assert_eq!(
+                        restart_progress_count(&events, &first.run_id, "output before restart"),
+                        1,
+                        "recovery must not replay output already projected by the first engine"
+                    );
+                    assert_eq!(
+                        restart_progress_count(&events, &first.run_id, "output after recovery"),
+                        1,
+                        "the recovered engine must project appended output exactly once"
+                    );
+                    assert_eq!(
+                        events
+                            .iter()
+                            .filter(|event| {
+                                event["run_id"] == first.run_id
+                                    && event["kind"] == "terminal_signal"
+                            })
+                            .count(),
+                        1
+                    );
+                    wait_for_restart_group_exit(process_group_id).await;
+                    crate::console_lifecycle::stop_test_monitor(&first.launch_id).await;
+                    crate::console_lifecycle::unregister(&first.launch_id);
+
+                    let stop =
+                        start_fake_cursor_turn(temp.path(), &fake_cursor, "restart-stop").await;
+                    wait_for_restart_progress(&stop.run_id, "output before stop").await;
+                    wait_for_restart_projection(&stop.run_id, Path::new(&stop.stdout_path)).await;
+                    crate::console_lifecycle::stop_test_monitor(&stop.launch_id).await;
+                    crate::console_lifecycle::unregister(&stop.launch_id);
+                    assert!(crate::process_group::group_is_alive(stop.process_group_id));
+                    assert_eq!(
+                        recover_cursor_print_turns("cursor-restart-test", None)
+                            .await
+                            .unwrap(),
+                        1
+                    );
+                    assert!(crate::process_group::group_is_alive(stop.process_group_id));
+                    let claim = crate::turn_claims::default_registry()
+                        .unwrap()
+                        .read(&stop.run_id)
+                        .unwrap();
+                    interrupt_cursor_print_turn(
+                        &stop.run_id,
+                        &stop.session_id,
+                        &stop.thread_id,
+                        claim.turn_id.as_deref().unwrap(),
+                    )
+                    .unwrap();
+                    let stopped = wait_for_restart_terminal(&stop.run_id).await;
+                    assert_eq!(stopped.result.unwrap()["terminal_state"], "run_cancelled");
+                    wait_for_restart_group_exit(stop.process_group_id).await;
+                    crate::console_lifecycle::stop_test_monitor(&stop.launch_id).await;
+                    crate::console_lifecycle::unregister(&stop.launch_id);
+
+                    let mismatch =
+                        start_fake_cursor_turn(temp.path(), &fake_cursor, "restart-mismatch").await;
+                    wait_for_restart_progress(&mismatch.run_id, "output before mismatch").await;
+                    wait_for_restart_projection(&mismatch.run_id, Path::new(&mismatch.stdout_path))
+                        .await;
+                    crate::console_lifecycle::stop_test_monitor(&mismatch.launch_id).await;
+                    crate::console_lifecycle::unregister(&mismatch.launch_id);
+                    let claims = crate::turn_claims::default_registry().unwrap();
+                    let claim = claims.read(&mismatch.run_id).unwrap();
+                    claims
+                        .mark_spawned_invocation(
+                            &claim.run_id,
+                            claim.pid.unwrap(),
+                            claim.process_group_id.unwrap(),
+                            Some("reused-pid-with-a-different-start-time".to_string()),
+                            CURSOR_PRINT_ADAPTER,
+                            &mismatch.launch_id,
+                            claim.provider_thread_id.as_deref(),
+                            claim.stdout_path.as_deref().unwrap(),
+                            claim.stderr_path.as_deref().unwrap(),
+                            claim.result.clone().unwrap(),
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        recover_cursor_print_turns("cursor-restart-test", None)
+                            .await
+                            .unwrap(),
+                        0,
+                        "a reused pid with a different start time must not be adopted"
+                    );
+                    assert!(
+                        crate::process_group::group_is_alive(mismatch.process_group_id),
+                        "recovery must not signal a process whose recorded identity mismatches"
+                    );
+                    assert!(crate::console_lifecycle::lookup_launch(&mismatch.launch_id).is_none());
+                    assert!(crate::process_group::shutdown_group(
+                        mismatch.process_group_id,
+                        crate::process_group::DEFAULT_GRACE,
+                    )
+                    .await
+                    .is_gone());
+                });
+            },
         );
     }
 

@@ -220,9 +220,15 @@ pub async fn start_antigravity_print_turn(
         return Err(error).context("persisting Antigravity Console spawn identity");
     }
     let monitor_stderr = stderr_path.clone();
-    tokio::spawn(async move {
+    #[cfg(test)]
+    let monitor_launch_id = launch_id.clone();
+    let monitor_task = tokio::spawn(async move {
         monitor_antigravity_print(&mut child, &monitor_stderr, sink).await;
     });
+    #[cfg(test)]
+    crate::console_lifecycle::track_test_monitor(monitor_launch_id, monitor_task);
+    #[cfg(not(test))]
+    drop(monitor_task);
 
     Ok(AntigravityPrintRunSummary {
         session_id: config.session_id,
@@ -282,11 +288,27 @@ pub async fn recover_antigravity_print_turns(
             },
             stdout_path,
         };
-        match recovered_claim_liveness(&claim, &sink.stdout_path, inventory.as_ref()).await {
+        let liveness =
+            recovered_claim_liveness(&claim, &sink.stdout_path, inventory.as_ref()).await;
+        if liveness == ClaimLiveness::Gone && live_pid_identity_mismatch(&claim, inventory.as_ref())
+        {
+            tracing::warn!(
+                run_id = %claim.run_id,
+                "PID identity changed during Antigravity Console recovery; leaving the claim untouched"
+            );
+            continue;
+        }
+        match liveness {
             ClaimLiveness::Live => {
-                tokio::spawn(async move {
+                #[cfg(test)]
+                let monitor_launch_id = sink.launch_id.clone();
+                let monitor_task = tokio::spawn(async move {
                     monitor_recovered_claim(claim, stderr_path, sink).await;
                 });
+                #[cfg(test)]
+                crate::console_lifecycle::track_test_monitor(monitor_launch_id, monitor_task);
+                #[cfg(not(test))]
+                drop(monitor_task);
                 recovered += 1;
             }
             ClaimLiveness::Gone => {
@@ -297,14 +319,48 @@ pub async fn recover_antigravity_print_turns(
                     run_id = %claim.run_id,
                     "Execution evidence unavailable; retrying Antigravity Console recovery"
                 );
-                tokio::spawn(async move {
+                #[cfg(test)]
+                let monitor_launch_id = sink.launch_id.clone();
+                let monitor_task = tokio::spawn(async move {
                     monitor_recovered_claim(claim, stderr_path, sink).await;
                 });
+                #[cfg(test)]
+                crate::console_lifecycle::track_test_monitor(monitor_launch_id, monitor_task);
+                #[cfg(not(test))]
+                drop(monitor_task);
                 recovered += 1;
             }
         }
     }
     Ok(recovered)
+}
+fn live_pid_identity_mismatch(
+    claim: &crate::turn_claims::TurnClaim,
+    inventory: Option<&std::collections::HashMap<u32, crate::process_identity::ProcessFact>>,
+) -> bool {
+    let Some(pid) = claim.pid else {
+        return false;
+    };
+    let Some(inventory) = inventory else {
+        return !claim.process_group_is_from_this_boot();
+    };
+    let Some(fact) = inventory.get(&pid) else {
+        return false;
+    };
+    !claim.process_group_is_from_this_boot()
+        || claim
+            .process_start_time
+            .as_deref()
+            .is_none_or(|start| start != fact.lstart)
+}
+
+fn recovered_group_can_be_signalled(claim: &crate::turn_claims::TurnClaim) -> bool {
+    let (Some(pid), Some(process_group_id)) = (claim.pid, claim.process_group_id) else {
+        return false;
+    };
+    process_group_id == pid as i32
+        && claim.process_group_is_from_this_boot()
+        && crate::process_identity::try_collect_process_fact(pid).is_none()
 }
 
 /// A claim is durable before spawn, but the PID is durable only afterwards.
@@ -492,7 +548,14 @@ async fn monitor_recovered_claim(
             // The exit status died with the engine that owned the child, so a
             // recovered turn is settled from its claim and its output rather
             // than from a code nobody can observe any more.
-            settle_antigravity_claim(&sink, cancel_requested, None, &stderr_path).await;
+            settle_antigravity_claim_inner(
+                &sink,
+                cancel_requested,
+                None,
+                &stderr_path,
+                recovered_group_can_be_signalled(&claim),
+            )
+            .await;
             return;
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -504,10 +567,14 @@ async fn settle_recovered_dead_claim(
     stderr_path: &Path,
     sink: &AntigravityPrintSink,
 ) {
-    if claim.process_group_is_from_this_boot() {
-        cleanup_process_group(sink.process_group_id).await;
-    }
-    settle_antigravity_claim(sink, claim.cancel_requested_at.is_some(), None, stderr_path).await;
+    settle_antigravity_claim_inner(
+        sink,
+        claim.cancel_requested_at.is_some(),
+        None,
+        stderr_path,
+        recovered_group_can_be_signalled(claim),
+    )
+    .await;
 }
 
 pub fn interrupt_antigravity_print_turn(
@@ -610,17 +677,31 @@ async fn settle_antigravity_claim(
     exit_code: Option<i32>,
     stderr_path: &Path,
 ) {
+    settle_antigravity_claim_inner(sink, cancel_requested, exit_code, stderr_path, true).await;
+}
+
+async fn settle_antigravity_claim_inner(
+    sink: &AntigravityPrintSink,
+    cancel_requested: bool,
+    exit_code: Option<i32>,
+    stderr_path: &Path,
+    allow_process_group_cleanup: bool,
+) {
     // Ownership is independent of turn success: cancellation and model errors
     // still leave a native transcript that belongs to this Console session.
     let output = sink.read_and_bind_transcript(true).await;
     if cancel_requested {
-        cleanup_process_group(sink.process_group_id).await;
+        if allow_process_group_cleanup {
+            cleanup_process_group(sink.process_group_id).await;
+        }
         sink.post_terminal("run_cancelled", exit_code, None).await;
         return;
     }
     // A non-zero exit is a failed turn even when agy left a readable result.
     if exit_code.is_some_and(|code| code != 0) {
-        cleanup_process_group(sink.process_group_id).await;
+        if allow_process_group_cleanup {
+            cleanup_process_group(sink.process_group_id).await;
+        }
         sink.post_terminal("run_failed", exit_code, stderr_tail(stderr_path))
             .await;
         return;
@@ -628,7 +709,9 @@ async fn settle_antigravity_claim(
     let output = match output {
         Ok(output) if output.finished => output,
         Ok(_) => {
-            cleanup_process_group(sink.process_group_id).await;
+            if allow_process_group_cleanup {
+                cleanup_process_group(sink.process_group_id).await;
+            }
             sink.post_terminal(
                 "run_failed",
                 exit_code,
@@ -640,7 +723,9 @@ async fn settle_antigravity_claim(
             return;
         }
         Err(error) => {
-            cleanup_process_group(sink.process_group_id).await;
+            if allow_process_group_cleanup {
+                cleanup_process_group(sink.process_group_id).await;
+            }
             sink.post_terminal("run_failed", exit_code, Some(error.to_string()))
                 .await;
             return;
@@ -655,7 +740,9 @@ async fn settle_antigravity_claim(
         .as_deref()
         .is_some_and(|value| !value.eq_ignore_ascii_case("SUCCESS"))
     {
-        cleanup_process_group(sink.process_group_id).await;
+        if allow_process_group_cleanup {
+            cleanup_process_group(sink.process_group_id).await;
+        }
         sink.post_terminal(
             "run_failed",
             exit_code,
@@ -669,7 +756,9 @@ async fn settle_antigravity_claim(
         return;
     }
     if locate_conversation_transcript(&conversation_id).is_none() {
-        cleanup_process_group(sink.process_group_id).await;
+        if allow_process_group_cleanup {
+            cleanup_process_group(sink.process_group_id).await;
+        }
         sink.post_terminal(
             "run_failed",
             exit_code,
@@ -1754,6 +1843,342 @@ mod tests {
         assert_eq!(terminal["payload"]["terminal_state"], "run_failed");
         assert_eq!(terminal["payload"]["exit_code"], 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    fn write_fake_antigravity(root: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let bin = root.join("fake-agy");
+        std::fs::write(
+            &bin,
+            r#"#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+import time
+
+args = sys.argv[1:]
+conversation_id = args[args.index("--conversation") + 1]
+prompt = args[-1]
+root = pathlib.Path.cwd()
+transcript = pathlib.Path.home() / ".gemini" / "antigravity-cli" / "brain" / conversation_id / ".system_generated" / "logs" / "transcript_full.jsonl"
+transcript.parent.mkdir(parents=True, exist_ok=True)
+
+def emit(event):
+    print(json.dumps(event), flush=True)
+
+def append_transcript(text):
+    with transcript.open("a") as output:
+        output.write(json.dumps({
+            "step_index": transcript.stat().st_size,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "created_at": "2026-10-12T00:00:00Z",
+            "content": text,
+        }) + "\n")
+        output.flush()
+
+assert sys.stdin.read() == ""
+append_transcript("output before restart" if prompt == "restart-live" else "output before stop" if prompt == "restart-stop" else "output before mismatch")
+emit({"event": "init", "conversation_id": conversation_id})
+if prompt == "restart-live":
+    while not (root / "release-live").exists():
+        time.sleep(0.01)
+    append_transcript("output after recovery")
+    emit({"event": "result", "result": {"conversation_id": conversation_id, "status": "SUCCESS"}})
+elif prompt in ("restart-stop", "restart-mismatch"):
+    while True:
+        time.sleep(1)
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    #[cfg(unix)]
+    async fn start_fake_antigravity_turn(
+        root: &Path,
+        antigravity_bin: &Path,
+        prompt: &str,
+    ) -> AntigravityPrintRunSummary {
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let turn_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let client_request_id = format!("restart-{run_id}");
+        let conversation_id = Uuid::new_v4().to_string();
+        crate::turn_claims::default_registry()
+            .unwrap()
+            .claim(
+                &run_id,
+                &session_id,
+                &thread_id,
+                Some(&turn_id),
+                Some(&client_request_id),
+                "antigravity",
+            )
+            .unwrap();
+        start_antigravity_print_turn(AntigravityPrintRunConfig {
+            session_id,
+            thread_id,
+            turn_id: Some(turn_id),
+            run_id,
+            client_request_id: Some(client_request_id),
+            cwd: root.to_path_buf(),
+            antigravity_bin: antigravity_bin.to_string_lossy().into_owned(),
+            prompt: prompt.to_string(),
+            model: None,
+            conversation_id: Some(conversation_id),
+            print_timeout_secs: Some(30),
+            permission_mode: "bypass".to_string(),
+            machine_name: "antigravity-restart-test".to_string(),
+            local_db_path: Some(root.join("state.db")),
+        })
+        .await
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_restart_binding(run_id: &str) {
+        let outbox = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if read_outbox_events(&outbox)
+                .iter()
+                .any(|event| event["run_id"] == run_id && event["kind"] == "binding_signal")
+            {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Antigravity did not bind the restart-test conversation"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_restart_terminal(run_id: &str) -> crate::turn_claims::TurnClaim {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(run_id)
+                .unwrap();
+            if claim.state == "terminal" {
+                return claim;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Antigravity restart test run {run_id} did not settle"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_restart_group_exit(process_group_id: i32) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while crate::process_group::group_is_alive(process_group_id) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Antigravity process group {process_group_id} is still alive"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn console_restart_contract() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let longhouse_home = temp.path().join("longhouse");
+        std::fs::create_dir_all(&home).unwrap();
+        let fake_agy = write_fake_antigravity(temp.path());
+        let db_path = temp.path().join("state.db");
+        let _ = crate::state::db::open_db(Some(&db_path)).unwrap();
+
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.as_os_str())),
+                ("LONGHOUSE_HOME", Some(longhouse_home.as_os_str())),
+            ],
+            || {
+                runtime.block_on(async {
+                    let first =
+                        start_fake_antigravity_turn(temp.path(), &fake_agy, "restart-live").await;
+                    wait_for_restart_binding(&first.run_id).await;
+                    let process_group_id = first.process_group_id;
+                    crate::console_lifecycle::stop_test_monitor(&first.launch_id).await;
+                    crate::console_lifecycle::unregister(&first.launch_id);
+                    assert!(crate::process_group::group_is_alive(process_group_id));
+
+                    assert_eq!(
+                        recover_antigravity_print_turns(
+                            "antigravity-restart-test",
+                            Some(db_path.clone()),
+                        )
+                        .await
+                        .unwrap(),
+                        1
+                    );
+                    assert!(crate::process_group::group_is_alive(process_group_id));
+                    std::fs::write(temp.path().join("release-live"), b"go").unwrap();
+                    let completed = wait_for_restart_terminal(&first.run_id).await;
+                    assert_eq!(completed.result.unwrap()["terminal_state"], "run_completed");
+                    wait_for_restart_group_exit(process_group_id).await;
+                    crate::console_lifecycle::stop_test_monitor(&first.launch_id).await;
+                    crate::console_lifecycle::unregister(&first.launch_id);
+
+                    let transcript = PathBuf::from(
+                        crate::turn_claims::default_registry()
+                            .unwrap()
+                            .read(&first.run_id)
+                            .unwrap()
+                            .source_path
+                            .unwrap(),
+                    );
+                    let projected =
+                        crate::pipeline::parser::parse_session_file(&transcript, 0).unwrap();
+                    assert_eq!(
+                        projected
+                            .events
+                            .iter()
+                            .filter(|event| event.content_text.as_deref()
+                                == Some("output before restart"))
+                            .count(),
+                        1,
+                        "the recovered engine must not duplicate existing transcript output"
+                    );
+                    assert_eq!(
+                        projected
+                            .events
+                            .iter()
+                            .filter(|event| event.content_text.as_deref()
+                                == Some("output after recovery"))
+                            .count(),
+                        1,
+                        "output written after recovery must be projected exactly once"
+                    );
+                    let events = read_outbox_events(
+                        &crate::config::get_agent_runtime_events_outbox_dir().unwrap(),
+                    );
+                    let binding_keys = events
+                        .iter()
+                        .filter(|event| {
+                            event["run_id"] == first.run_id && event["kind"] == "binding_signal"
+                        })
+                        .filter_map(|event| event["dedupe_key"].as_str())
+                        .collect::<std::collections::HashSet<_>>();
+                    assert_eq!(
+                        binding_keys.len(),
+                        1,
+                        "recovery must preserve one logical binding for the adopted source"
+                    );
+                    assert_eq!(
+                        events
+                            .iter()
+                            .filter(|event| {
+                                event["run_id"] == first.run_id
+                                    && event["kind"] == "terminal_signal"
+                            })
+                            .count(),
+                        1
+                    );
+
+                    let stop =
+                        start_fake_antigravity_turn(temp.path(), &fake_agy, "restart-stop").await;
+                    wait_for_restart_binding(&stop.run_id).await;
+                    crate::console_lifecycle::stop_test_monitor(&stop.launch_id).await;
+                    crate::console_lifecycle::unregister(&stop.launch_id);
+                    assert!(crate::process_group::group_is_alive(stop.process_group_id));
+                    assert_eq!(
+                        recover_antigravity_print_turns(
+                            "antigravity-restart-test",
+                            Some(db_path.clone()),
+                        )
+                        .await
+                        .unwrap(),
+                        1
+                    );
+                    assert!(crate::process_group::group_is_alive(stop.process_group_id));
+                    let claim = crate::turn_claims::default_registry()
+                        .unwrap()
+                        .read(&stop.run_id)
+                        .unwrap();
+                    interrupt_antigravity_print_turn(
+                        &stop.run_id,
+                        &stop.session_id,
+                        &stop.thread_id,
+                        claim.turn_id.as_deref().unwrap(),
+                    )
+                    .unwrap();
+                    let stopped = wait_for_restart_terminal(&stop.run_id).await;
+                    assert_eq!(stopped.result.unwrap()["terminal_state"], "run_cancelled");
+                    wait_for_restart_group_exit(stop.process_group_id).await;
+                    crate::console_lifecycle::stop_test_monitor(&stop.launch_id).await;
+                    crate::console_lifecycle::unregister(&stop.launch_id);
+
+                    let mismatch =
+                        start_fake_antigravity_turn(temp.path(), &fake_agy, "restart-mismatch")
+                            .await;
+                    wait_for_restart_binding(&mismatch.run_id).await;
+                    crate::console_lifecycle::stop_test_monitor(&mismatch.launch_id).await;
+                    crate::console_lifecycle::unregister(&mismatch.launch_id);
+                    let claims = crate::turn_claims::default_registry().unwrap();
+                    let claim = claims.read(&mismatch.run_id).unwrap();
+                    claims
+                        .mark_spawned_invocation(
+                            &claim.run_id,
+                            claim.pid.unwrap(),
+                            claim.process_group_id.unwrap(),
+                            Some("reused-pid-with-a-different-start-time".to_string()),
+                            ANTIGRAVITY_PRINT_ADAPTER,
+                            &mismatch.launch_id,
+                            claim.provider_thread_id.as_deref(),
+                            claim.stdout_path.as_deref().unwrap(),
+                            claim.stderr_path.as_deref().unwrap(),
+                            claim.result.clone().unwrap(),
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        recover_antigravity_print_turns(
+                            "antigravity-restart-test",
+                            Some(db_path.clone()),
+                        )
+                        .await
+                        .unwrap(),
+                        0,
+                        "a reused pid with a different start time must not be adopted"
+                    );
+                    assert!(
+                        crate::process_group::group_is_alive(mismatch.process_group_id),
+                        "recovery must not signal a process whose recorded identity mismatches"
+                    );
+                    assert_eq!(
+                        claims.read(&mismatch.run_id).unwrap().state,
+                        "spawned",
+                        "recovery must leave a mismatched live claim untouched"
+                    );
+                    assert!(crate::console_lifecycle::lookup_launch(&mismatch.launch_id).is_none());
+                    assert!(crate::process_group::shutdown_group(
+                        mismatch.process_group_id,
+                        crate::process_group::DEFAULT_GRACE,
+                    )
+                    .await
+                    .is_gone());
+                });
+            },
+        );
     }
 
     fn read_outbox_events(outbox: &Path) -> Vec<Value> {
