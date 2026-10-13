@@ -395,7 +395,8 @@ struct SessionInputReconciliationTests {
         let rows = WebTranscriptView.payloadItems(
             timelineItems: TimelineBuilder.build(events: [echo]), submittedInputs: placed
         )
-        #expect(rows.map(\.body) == ["Task finished", "Undated completion"])
+        #expect(rows.map(\.body) == ["Undated completion (2 updates)"])
+        #expect(rows.first?.wake == true)
         #expect(placed.map(\.clientRequestId) == ["wake:undated"])
         #expect(placed.first?.placedAtSendTime == false)
     }
@@ -425,7 +426,7 @@ struct SessionInputReconciliationTests {
         let rows = WebTranscriptView.payloadItems(
             timelineItems: TimelineBuilder.build(events: events), submittedInputs: placed
         )
-        #expect(rows.map(\.body) == [body, "Background task finished: Another command", "Background task finished: \(body)"])
+        #expect(rows.map(\.body) == [body, "Background task finished: \(body) (2 updates)"])
     }
 
     @Test
