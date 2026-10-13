@@ -145,11 +145,33 @@ pub fn seal_with_extension(root: &Path, bytes: &[u8], extension: &str) -> Result
     }
     file.write_all(bytes)
         .with_context(|| format!("writing the payload {}", temporary.display()))?;
-    file.sync_all()?;
+    sync_payload(&file).with_context(|| format!("syncing the payload {}", temporary.display()))?;
     drop(file);
     std::fs::rename(&temporary, &target)
         .with_context(|| format!("publishing the payload {}", target.display()))?;
     Ok(sealed)
+}
+
+/// Flush a payload to the OS before it is published. On macOS `sync_all` is
+/// `F_FULLFSYNC`, a drive-cache flush that took 13% of the engine's busy
+/// samples with six live sessions in the steady-state soak (one per prepared
+/// envelope). The row that names this payload is committed with SQLite
+/// `synchronous=NORMAL` and SQLite's default `fullfsync=OFF`, i.e. plain
+/// `fsync`, so a full flush here bought no durability the row itself has.
+/// Plain `fsync` keeps the payload exactly as durable as its row.
+fn sync_payload(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd;
+        if unsafe { libc::fsync(file.as_raw_fd()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        file.sync_all()
+    }
 }
 
 /// Read a payload back, refusing anything that is not the bytes that were sealed.

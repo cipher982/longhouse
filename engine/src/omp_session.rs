@@ -295,6 +295,87 @@ pub fn read_session_header(path: &Path) -> Result<OmpSessionHeader> {
     if !metadata.file_type().is_file() {
         bail!("OMP source is not a regular file: {}", path.display());
     }
+    if let Some(header) = header_cache::lookup(path, &metadata) {
+        return Ok(header);
+    }
+    let header = read_session_header_uncached(path)?;
+    header_cache::store(path, &metadata, &header);
+    Ok(header)
+}
+
+/// Session headers by file identity. Every transcript write event asks for
+/// the header of the file it touched, and the open+read was ~6% of the
+/// engine's busy samples with six live sessions in the steady-state soak. An
+/// appended session file keeps its header; a file replaced by rename has a new
+/// inode, and one rewritten in place shrinks first, so either reads afresh.
+mod header_cache {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    use super::OmpSessionHeader;
+
+    const MAX_ENTRIES: usize = 4096;
+
+    struct Entry {
+        device: u64,
+        inode: u64,
+        len: u64,
+        header: OmpSessionHeader,
+    }
+
+    static CACHE: Mutex<Option<HashMap<PathBuf, Entry>>> = Mutex::new(None);
+
+    #[cfg(unix)]
+    fn identity(metadata: &std::fs::Metadata) -> (u64, u64) {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.dev(), metadata.ino())
+    }
+
+    #[cfg(not(unix))]
+    fn identity(_metadata: &std::fs::Metadata) -> (u64, u64) {
+        (0, 0)
+    }
+
+    pub(super) fn lookup(path: &Path, metadata: &std::fs::Metadata) -> Option<OmpSessionHeader> {
+        if !cfg!(unix) {
+            return None;
+        }
+        let (device, inode) = identity(metadata);
+        let mut cache = CACHE.lock().ok()?;
+        let entry = cache.as_mut()?.get_mut(path)?;
+        if entry.device != device || entry.inode != inode || metadata.len() < entry.len {
+            return None;
+        }
+        entry.len = metadata.len();
+        Some(entry.header.clone())
+    }
+
+    pub(super) fn store(path: &Path, metadata: &std::fs::Metadata, header: &OmpSessionHeader) {
+        if !cfg!(unix) {
+            return;
+        }
+        let (device, inode) = identity(metadata);
+        let Ok(mut cache) = CACHE.lock() else {
+            return;
+        };
+        let cache = cache.get_or_insert_with(HashMap::new);
+        if cache.len() >= MAX_ENTRIES && !cache.contains_key(path) {
+            cache.clear();
+        }
+        cache.insert(
+            path.to_path_buf(),
+            Entry {
+                device,
+                inode,
+                len: metadata.len(),
+                header: header.clone(),
+            },
+        );
+    }
+}
+
+fn read_session_header_uncached(path: &Path) -> Result<OmpSessionHeader> {
     let file =
         File::open(path).with_context(|| format!("opening OMP source: {}", path.display()))?;
     let mut reader = BufReader::new(file);
@@ -1020,6 +1101,33 @@ mod tests {
         format!(
             r#"{{"type":"session","version":3,"id":"{id}","timestamp":"2026-09-09T00:00:00Z","cwd":"/workspace"}}"#
         )
+    }
+
+    #[test]
+    fn cached_header_follows_replacement_and_in_place_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, format!("{}\n", session_line("first"))).unwrap();
+        assert_eq!(read_session_header(&path).unwrap().native_id, "first");
+
+        // Appends keep the header.
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(&mut file, b"{\"type\":\"message\"}\n").unwrap();
+        drop(file);
+        assert_eq!(read_session_header(&path).unwrap().native_id, "first");
+
+        // Replaced by rename: a new inode, so the new header is read.
+        let replacement = dir.path().join("replacement.jsonl");
+        std::fs::write(&replacement, format!("{}\n", session_line("second"))).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        assert_eq!(read_session_header(&path).unwrap().native_id, "second");
+
+        // Rewritten in place, shorter: same inode, but it shrank.
+        std::fs::write(&path, format!("{}\n", session_line("t"))).unwrap();
+        assert_eq!(read_session_header(&path).unwrap().native_id, "t");
     }
 
     #[test]
