@@ -96,15 +96,20 @@ private final class CommandOutputCapture: @unchecked Sendable {
         self.handle = handle
     }
 
+    /// A dedicated thread, not a GCD queue: the caller blocks waiting for the
+    /// child, and on a small runner every pool thread can be blocked the same
+    /// way, so a queued drain never runs and the child stalls on a full pipe.
     func startReading(in group: DispatchGroup) {
         group.enter()
-        DispatchQueue.global(qos: .utility).async { [self] in
+        let thread = Thread { [self] in
             let data = handle.readDataToEndOfFile()
             lock.lock()
             capturedData = data
             lock.unlock()
             group.leave()
         }
+        thread.name = "longhouse-command-output"
+        thread.start()
     }
 
     var data: Data {
