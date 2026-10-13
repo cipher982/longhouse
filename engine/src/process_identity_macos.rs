@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
 use std::path::PathBuf;
@@ -153,6 +153,140 @@ struct KinfoProc {
 
 const _: [(); 0x288] = [(); std::mem::size_of::<KinfoProc>()];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProcessCommandIdentity {
+    pid: u32,
+    start_time_micros: u64,
+    comm: [libc::c_char; 17],
+}
+
+impl ProcessCommandIdentity {
+    fn from_info(info: &KinfoProc) -> Option<Self> {
+        let start_time = &info.kp_proc.p_starttime;
+        let start_time_micros = u64::try_from(start_time.tv_sec)
+            .ok()?
+            .checked_mul(1_000_000)?
+            .checked_add(u64::try_from(start_time.tv_usec).ok()?)?;
+        Some(Self {
+            pid: u32::try_from(info.kp_proc.p_pid).ok()?,
+            start_time_micros,
+            comm: info.kp_proc.p_comm,
+        })
+    }
+}
+
+#[derive(Default)]
+struct ProcessCommandCache {
+    entries: HashMap<u32, CachedProcessCommand>,
+}
+
+struct CachedProcessCommand {
+    identity: ProcessCommandIdentity,
+    command: String,
+}
+
+impl ProcessCommandCache {
+    fn command_for(
+        &mut self,
+        identity: ProcessCommandIdentity,
+        is_zombie: bool,
+        read: impl FnOnce() -> Result<String, ProbeError>,
+    ) -> Result<String, ProbeError> {
+        if is_zombie {
+            self.entries.remove(&identity.pid);
+            return read();
+        }
+        if let Some(cached) = self
+            .entries
+            .get(&identity.pid)
+            .filter(|cached| cached.identity == identity)
+        {
+            return Ok(cached.command.clone());
+        }
+        self.entries.remove(&identity.pid);
+        let command = read()?;
+        self.entries.insert(
+            identity.pid,
+            CachedProcessCommand {
+                identity,
+                command: command.clone(),
+            },
+        );
+        Ok(command)
+    }
+
+    fn retain_only_pids(&mut self, pids: &HashSet<u32>) {
+        self.entries.retain(|pid, _| pids.contains(pid));
+    }
+}
+
+static PROCESS_COMMAND_CACHE: std::sync::LazyLock<std::sync::Mutex<ProcessCommandCache>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(ProcessCommandCache::default()));
+
+#[cfg(test)]
+mod tests {
+    use super::{ProcessCommandCache, ProcessCommandIdentity};
+    use std::collections::HashSet;
+
+    fn test_comm(name: &str) -> [libc::c_char; 17] {
+        let mut comm = [0; 17];
+        for (byte, source) in comm.iter_mut().zip(name.bytes()) {
+            *byte = source as libc::c_char;
+        }
+        comm
+    }
+
+    #[test]
+    fn process_command_cache_invalidates_on_exec_and_prunes_missing_pids() {
+        let identity = ProcessCommandIdentity {
+            pid: 42,
+            start_time_micros: 1_234_567,
+            comm: test_comm("sh"),
+        };
+        let mut cache = ProcessCommandCache::default();
+        let mut reads = 0;
+
+        assert_eq!(
+            cache
+                .command_for(identity, false, || {
+                    reads += 1;
+                    Ok("sh -c cat".to_string())
+                })
+                .unwrap(),
+            "sh -c cat"
+        );
+        assert_eq!(
+            cache
+                .command_for(identity, false, || {
+                    panic!("unchanged process identity should use the cache")
+                })
+                .unwrap(),
+            "sh -c cat"
+        );
+
+        let after_exec = ProcessCommandIdentity {
+            comm: test_comm("cat"),
+            ..identity
+        };
+        assert_eq!(
+            cache
+                .command_for(after_exec, false, || {
+                    reads += 1;
+                    Ok("cat".to_string())
+                })
+                .unwrap(),
+            "cat"
+        );
+        assert_eq!(reads, 2, "a changed comm must re-read argv");
+
+        cache.retain_only_pids(&HashSet::from([99]));
+        assert!(cache.entries.is_empty(), "disappeared pids must be pruned");
+    }
+
+
+}
+
+
 pub(super) fn inspect_process_fact(pid: u32) -> ProcessFactLookup {
     match process_fact(pid, true) {
         Ok(Some(fact)) => ProcessFactLookup::Present(fact),
@@ -163,19 +297,41 @@ pub(super) fn inspect_process_fact(pid: u32) -> ProcessFactLookup {
 
 pub(super) fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     let processes = list_kinfo_processes().ok()?;
-    let mut facts = HashMap::with_capacity(processes.len());
-    for info in processes {
+    let mut enumerated_pids = HashSet::with_capacity(processes.len());
+    for info in &processes {
         let pid = u32::try_from(info.kp_proc.p_pid).ok()?;
+        if pid != 0 {
+            enumerated_pids.insert(pid);
+        }
+    }
+
+    let mut cache = PROCESS_COMMAND_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut facts = HashMap::with_capacity(processes.len());
+    let mut unavailable = false;
+    for info in processes {
+        let Ok(pid) = u32::try_from(info.kp_proc.p_pid) else {
+            unavailable = true;
+            break;
+        };
         if pid == 0 {
             continue;
         }
-        match process_fact_with_info(info, false) {
+        match process_fact_with_info_cached(info, false, &mut cache) {
             Ok(Some(fact)) => {
                 facts.insert(pid, fact);
             }
             Ok(None) | Err(ProbeError::Absent) => {}
-            Err(ProbeError::Unavailable) => return None,
+            Err(ProbeError::Unavailable) => {
+                unavailable = true;
+                break;
+            }
         }
+    }
+    cache.retain_only_pids(&enumerated_pids);
+    if unavailable {
+        return None;
     }
     facts.contains_key(&std::process::id()).then_some(facts)
 }
@@ -374,6 +530,38 @@ fn process_fact_with_info(
 ) -> Result<Option<ProcessFact>, ProbeError> {
     let pid = u32::try_from(initial.kp_proc.p_pid).map_err(|_| ProbeError::Unavailable)?;
     let (info, command) = process_command_with_identity(pid, Some(initial))?;
+    process_fact_from_command(info, command, parse_all_start_times)
+}
+
+fn process_fact_with_info_cached(
+    initial: KinfoProc,
+    parse_all_start_times: bool,
+    cache: &mut ProcessCommandCache,
+) -> Result<Option<ProcessFact>, ProbeError> {
+    let pid = u32::try_from(initial.kp_proc.p_pid).map_err(|_| ProbeError::Unavailable)?;
+    let is_zombie = initial.kp_proc.p_stat as u8 as u32 == libc::SZOMB;
+    let mut info = initial;
+    let command = match ProcessCommandIdentity::from_info(&initial) {
+        Some(identity) => cache.command_for(identity, is_zombie, || {
+            let (resolved_info, command) = process_command_with_identity(pid, Some(initial))?;
+            info = resolved_info;
+            Ok(command)
+        })?,
+        None => {
+            let (resolved_info, command) = process_command_with_identity(pid, Some(initial))?;
+            info = resolved_info;
+            command
+        }
+    };
+    process_fact_from_command(info, command, parse_all_start_times)
+}
+
+fn process_fact_from_command(
+    info: KinfoProc,
+    command: String,
+    parse_all_start_times: bool,
+) -> Result<Option<ProcessFact>, ProbeError> {
+    let pid = u32::try_from(info.kp_proc.p_pid).map_err(|_| ProbeError::Unavailable)?;
     if command.is_empty() {
         return Err(ProbeError::Unavailable);
     }
