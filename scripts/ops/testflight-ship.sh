@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ship an exact main revision to TestFlight through the ios-testflight workflow
-# and wait for it. The workflow archives, uploads, waits for processing, submits
-# for Beta App Review when needed, and prints the public link in its job summary.
+# and wait for it. By default, it submits for Beta App Review when needed, publishes to
+# the public group, and prints the public link in its job summary.
 #
 #   scripts/ops/testflight-ship.sh [sha]        # default: HEAD (must be on origin/main)
 #   WHATS_NEW="note for testers" scripts/ops/testflight-ship.sh
@@ -37,4 +37,4 @@ done
 
 echo "testflight-ship: $SHA -> run $run_id (https://github.com/$REPO/actions/runs/$run_id)"
 gh run watch "$run_id" -R "$REPO" --exit-status
-echo "testflight-ship: done. Link and review state: job summary of run $run_id, or 'make testflight-status'"
+echo "testflight-ship: done. See publish details in the job summary of run $run_id, or use 'make testflight-status'"

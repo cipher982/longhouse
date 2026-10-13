@@ -68,7 +68,7 @@ jobs:
           set -euo pipefail
           ios/scripts/testflight-build.sh --upload | tee "$RUNNER_TEMP/build.out"
           echo "build=$(sed -n 's/^build_number=//p' "$RUNNER_TEMP/build.out")" >> "$GITHUB_OUTPUT"
-      - name: Wait for processing and publish to the public link
+      - name: Wait for processing and publish to TestFlight
         env:
           ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
           ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}

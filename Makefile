@@ -400,7 +400,7 @@ test-ios-helper: ## iOS simulator and native-dispatch helper script tests
 	@python3 scripts/tests/native-test-isolation.test.py
 	@python3 scripts/tests/ios-test-lanes.test.py
 
-testflight: ## Ship a main revision to TestFlight via CI (SHA=<sha>, default HEAD; WHATS_NEW="tester note")
+testflight: ## Ship a main revision to TestFlight via CI (SHA=<sha>, default HEAD; WHATS_NEW="tester note"; INTERNAL_ONLY=1)
 	@scripts/ops/testflight-ship.sh $(SHA)
 
 testflight-status: ## TestFlight builds, review state and public link (needs ASC_API_* in the environment)

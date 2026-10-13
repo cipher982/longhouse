@@ -363,14 +363,45 @@ def main() -> None:
         run_publish(args)
         assert sorted(FAKE.internal_members) == ["T1", "T2"]
 
-        # 3d''. internal-only: the build reaches the internal group with its note and notification,
-        # and no request attaches it to a public group or submits it for Beta App Review
+        # 3d''. Internal-only publishing updates the note/notification but does not configure
+        # the public group, app metadata or review details, or submit for Beta App Review.
         mark = len(FAKE.calls)
-        internal_only = run_publish(argparse.Namespace(build="42", version="0.1.56", whats_new="note for testers", internal_only=True))
-        assert internal_only["internal_only"] is True and internal_only["submitted_this_run"] is False, internal_only
+        FAKE.whats_new["whatsNew"] = "previous note"
+        FAKE.auto_notify = False
+        public_secrets = {
+            key: os.environ.pop(key)
+            for key in (
+                "TESTFLIGHT_FEEDBACK_EMAIL",
+                "TESTFLIGHT_REVIEW_CONTACT_FIRST",
+                "TESTFLIGHT_REVIEW_CONTACT_LAST",
+                "TESTFLIGHT_REVIEW_CONTACT_PHONE",
+                "TESTFLIGHT_REVIEW_CONTACT_EMAIL",
+            )
+            if key in os.environ
+        }
+        try:
+            internal_only = run_publish(
+                argparse.Namespace(build="42", version="0.1.56", whats_new="internal note", internal_only=True)
+            )
+        finally:
+            os.environ.update(public_secrets)
         new_calls = FAKE.calls[mark:]
-        assert not any("betaAppReviewSubmissions" in call or call.endswith("/relationships/builds") for call in new_calls), new_calls
-        assert any("betaBuildLocalizations" in call for call in new_calls) and any("buildBetaDetail" in call for call in new_calls), new_calls
+        assert internal_only["internal_only"] is True and internal_only["submitted_this_run"] is False, internal_only
+        assert internal_only["internal_build_available"] is True and "public_link" not in internal_only, internal_only
+        assert FAKE.whats_new["whatsNew"] == "internal note" and FAKE.auto_notify is True
+        assert not any(
+            path in call
+            for call in new_calls
+            for path in (
+                "/v1/apps/APP/betaAppLocalizations",
+                "/v1/betaAppLocalizations",
+                "/v1/apps/APP/betaAppReviewDetail",
+                "/v1/betaAppReviewDetails",
+                "/v1/betaAppReviewSubmissions",
+                "/v1/betaGroups/G1",
+            )
+        ), new_calls
+        assert FAKE.submissions == 1
 
         # 3e. a build the group lists late is waited for; one it never lists fails the publish
         FAKE.internal_hidden_reads = 2

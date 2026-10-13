@@ -56,14 +56,17 @@ Do not blur these lanes:
   already-validated candidate (`RELEASE_REVALIDATE=1` forces it).
 - **iOS TestFlight** — `make testflight [SHA=<sha>] [WHATS_NEW="tester note"]`
   dispatches `ios-testflight.yml` (archive on a hosted macOS runner with the
-  iOS 26 SDK, upload, wait for processing, Beta App Review submission when
-  needed, publish to the public group) and waits for it. The SHA defaults to
-  `HEAD` and must already be on `origin/main`. `make testflight-status` shows
-  builds, review state and the public link and needs the `ASC_API_*` credentials
-  in the environment. The public link is `https://testflight.apple.com/join/CmEd5kY7`;
-  publishing fails when the group's link is not the one the landing page
-  advertises (`web/src/features/marketing/landing/links.ts`). Hosted deploys,
-  laptop releases and `make phone-deploy` never ship to TestFlight.
+  iOS 26 SDK, upload and wait for processing). By default it submits for Beta
+  App Review when needed and publishes to both the public group and the internal
+  group. Set `INTERNAL_ONLY=1` to skip public-group and Beta App Review setup;
+  the build is made available only through the all-builds internal group. The SHA
+  defaults to `HEAD` and must already be on `origin/main`. `make testflight-status`
+  shows builds, review state and the public link and needs the `ASC_API_*`
+  credentials in the environment. The public link is
+  `https://testflight.apple.com/join/CmEd5kY7`; public publishing fails when the
+  group's link is not the one the landing page advertises
+  (`web/src/features/marketing/landing/links.ts`). Hosted deploys, laptop
+  releases and `make phone-deploy` never ship to TestFlight.
 - **Runner release** — updates the separately installed runner binary/service.
   This is its own release/update path and is not covered by the normal runtime
   or control-plane deploy lanes.

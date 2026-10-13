@@ -7,21 +7,27 @@
 
     testflight.py status                      app, recent builds, groups, public link
     testflight.py wait-build --build N        block until build N has finished processing
-    testflight.py publish --build N           make build N reachable through the public link
-                                              and the internal group
+    testflight.py publish --build N           make build reachable by public link
+                                              and the internal group (default)
+    testflight.py publish --build N --internal-only
+                                              make build available only to internal testers
     testflight.py dev-certs                   ids of the API-created development certificates
     testflight.py revoke-dev-certs --keep F --held H
                                               revoke the API-created development certificates
                                               this machine holds the key for (SHA-1s in H) and
                                               that were not listed before the run (ids in F)
 
-`publish` is idempotent: it upserts the tester-facing text and review details from
+`publish` is idempotent. By default, it upserts tester-facing text and review details from
 ios/testflight/beta.toml, attaches the build to the public beta group, submits it for
-Beta App Review when that is still needed, and prints the public link. It also keeps an
-internal group (every App Store Connect account holder/admin, with access to all builds):
-internal testers get a processed build immediately, with no Beta App Review, and the
-group's all-builds flag means no per-build attach exists or is allowed. The app record
-itself cannot be created through the API; create it once in App Store Connect.
+Beta App Review when still needed, and prints the public link. It also ensures the internal
+group (every App Store Connect account holder/admin, with access to all builds); the
+group's all-builds flag means no per-build attach exists or is allowed.
+
+With `--internal-only`, publish still upserts the tester-facing note, enables build
+notifications, ensures the internal group and its testers, and verifies the build is
+available there. It skips public-group setup, public beta metadata/review details, Beta App
+Review submission, and the public-link check. The app record itself cannot be created
+through the API; create it once in App Store Connect.
 
 Environment (nothing is read from anywhere else):
     ASC_API_KEY_ID, ASC_API_ISSUER_ID, and ASC_API_KEY_P8_B64 (or ASC_API_KEY_PATH)
