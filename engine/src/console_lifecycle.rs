@@ -2133,8 +2133,10 @@ mod tests {
             (InvocationCleanup::Complete, None)
         );
 
-        assert!(!crate::process_group::group_is_alive(pid as i32));
+        // Complete can be reported while the leader is an unreaped zombie; the
+        // group is gone once its owner (the monitor) has reaped it.
         assert!(!monitor.await.unwrap().unwrap().success());
+        assert!(!crate::process_group::group_is_alive(pid as i32));
     }
 
     #[tokio::test]
