@@ -85,6 +85,19 @@ envelope goes to the Runtime Host in the heartbeat, never to the local file.
 Heartbeat `resource_usage` samples the engine and, on macOS, Longhouse.app at
 most every 30 s over a trailing window of up to 10 minutes; this volatile field
 does not force a status-file rewrite.
+Phase-ledger writes rebuild the local projection after a 15 ms debounce and at
+most once a second; live per-session phase reaches the host through status
+slots, not this projection.
+
+Shipping keeps per-event work bounded. OMP session headers are memoized per
+file identity (device, inode), re-read when the file is replaced or shrinks.
+OMP source ownership is cached per source and invalidated by claim writes and
+by managed state files appearing or disappearing; every entry is re-derived at
+least every 5 s, so a dropped watcher event never holds stale ownership longer
+than one managed scan. A sealed envelope payload is flushed with plain `fsync`,
+the same durability as the SQLite row (`synchronous=NORMAL`) that names it; a
+receipted-Cursor drain that finds nothing waits 10 minutes before rescanning.
+Steady-state cost is measured nightly by the perf lane (`scripts/ci/perf-soak.py`).
 
 Fresh OMP Helm and Console use native creation, not resume. OMP may report its
 exact session path before writing a JSONL header: controls can be ready while
