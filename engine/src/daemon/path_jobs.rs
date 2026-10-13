@@ -687,21 +687,39 @@ impl DaemonState {
         // makes owed envelopes visible to the safety predicate. Never
         // put this writer on the event-loop connection: even a bounded
         // batch must not pause live transcript scheduling.
-        if self.storage_maintenance_tasks.is_empty() {
+        // An empty drain is the common case once the backlog is gone, and its
+        // eligibility scan is not cheap: on cinder (51k epochs, 303k drained
+        // rows, 2026-10-13) it took ~6% of a core at the 30 s retry cadence
+        // and found nothing. After an empty pass, wait CURSOR_DRAIN_IDLE_BACKOFF;
+        // the only cost is reclaiming receipted bytes a few minutes later.
+        let drain_due = self
+            .cursor_drain_idle_until
+            .lock()
+            .map(|until| until.is_none_or(|until| Instant::now() >= until))
+            .unwrap_or(true);
+        if drain_due && self.storage_maintenance_tasks.is_empty() {
             let db_path = self.projection_db_path.clone();
+            let idle_until = std::sync::Arc::clone(&self.cursor_drain_idle_until);
             self.storage_maintenance_tasks.spawn_blocking(move || {
                 let result = crate::state::db::open_connection(&db_path).and_then(|conn| {
                     crate::state::cursor_store_records::drain_receipted_cursor_records(&conn)
                 });
-                match result {
-                    Ok(0) => {}
+                let backoff = match result {
+                    Ok(0) => Some(Instant::now() + CURSOR_DRAIN_IDLE_BACKOFF),
                     Ok(drained) => {
-                        tracing::info!(drained, "drained bounded batch of receipted Cursor records")
+                        tracing::info!(
+                            drained,
+                            "drained bounded batch of receipted Cursor records"
+                        );
+                        None
                     }
-                    Err(error) => tracing::warn!(
-                        error = %error,
-                        "Cursor record drain error"
-                    ),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Cursor record drain error");
+                        None
+                    }
+                };
+                if let Ok(mut until) = idle_until.lock() {
+                    *until = backoff;
                 }
             });
         }

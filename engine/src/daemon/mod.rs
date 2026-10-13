@@ -211,6 +211,8 @@ const PHASE_PROJECTION_DEBOUNCE: Duration = Duration::from_millis(15);
 /// below anything a reader can see while capping a busy turn at 60 rebuilds a
 /// minute.
 const PHASE_PROJECTION_MIN_INTERVAL: Duration = Duration::from_secs(1);
+/// Wait after a receipted-Cursor drain that found nothing (see path_jobs).
+const CURSOR_DRAIN_IDLE_BACKOFF: Duration = Duration::from_secs(10 * 60);
 
 const MANAGED_WAKE_FSEVENT_DEFER_WINDOW: Duration = Duration::from_secs(30);
 const MANAGED_WAKE_FSEVENT_FALLBACK_DELAY: Duration = Duration::from_millis(250);
@@ -749,6 +751,8 @@ struct DaemonState {
     outbox_dir: PathBuf,
     daily_maintenance_tasks: JoinSet<()>,
     storage_maintenance_tasks: JoinSet<()>,
+    /// No receipted-Cursor drain before this instant; set after an empty pass.
+    cursor_drain_idle_until: std::sync::Arc<std::sync::Mutex<Option<Instant>>>,
     unmanaged_binding_refresh_generation: Option<(u64, u64)>,
     unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult>,
     machine_presence_post_tasks: JoinSet<MachinePresencePostResult>,
@@ -1320,6 +1324,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         outbox_dir,
         daily_maintenance_tasks,
         storage_maintenance_tasks,
+        cursor_drain_idle_until: Default::default(),
         unmanaged_binding_refresh_generation,
         unmanaged_binding_refresh_tasks,
         machine_presence_post_tasks,

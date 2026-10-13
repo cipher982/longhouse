@@ -1115,8 +1115,43 @@ pub(crate) fn bind_discovered_source(
     Ok(ownership)
 }
 
-pub(crate) fn invalidate_discovered_source_cache() {
-    discovered_source_cache::invalidate();
+/// Invalidate cached ownership for managed-state watcher events that can
+/// change it: any claim write, and a state file appearing or disappearing.
+/// A live Helm launcher rewrites its existing state file about every 2 s for
+/// its heartbeat (cinder, 2026-10-13: 60 rewrites in 30 s with 5 sessions),
+/// which invalidated every entry on every heartbeat and left the cache
+/// missing at idle. A content change inside a known state file (a new run,
+/// a terminal state) is picked up by the cache's 5 s `MAX_AGE`.
+pub(crate) fn note_managed_state_changes(paths: &[PathBuf]) {
+    static KNOWN_STATE_FILES: std::sync::Mutex<Option<std::collections::HashSet<PathBuf>>> =
+        std::sync::Mutex::new(None);
+    let claim_dirs = crate::config::get_longhouse_home().ok().map(|home| {
+        [
+            home.join("managed-local").join("claims"),
+            home.join("agent").join("turn-claims"),
+        ]
+    });
+    let Ok(mut known) = KNOWN_STATE_FILES.lock() else {
+        discovered_source_cache::invalidate();
+        return;
+    };
+    let known = known.get_or_insert_with(Default::default);
+    let mut relevant = false;
+    for path in paths {
+        if claim_dirs
+            .as_ref()
+            .is_none_or(|dirs| dirs.iter().any(|dir| path.starts_with(dir)))
+        {
+            relevant = true;
+        } else if path.exists() {
+            relevant |= known.insert(path.clone());
+        } else {
+            relevant |= known.remove(path);
+        }
+    }
+    if relevant {
+        discovered_source_cache::invalidate();
+    }
 }
 
 mod discovered_source_cache {
