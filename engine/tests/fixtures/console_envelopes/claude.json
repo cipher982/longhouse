@@ -20,7 +20,7 @@
         "managed_transport": "claude_print",
         "provider_thread_id": "golden-provider-thread",
         "stderr_tail": "Not logged in · Please run /login",
-        "terminal_reason": "provider_auth_required",
+        "terminal_reason": "run_failed",
         "terminal_source": "claude_print",
         "terminal_state": "run_failed",
         "turn_id": "golden-turn"
@@ -185,7 +185,7 @@
         "managed_transport": "claude_print",
         "provider_thread_id": "golden-provider-thread",
         "stderr_tail": "Not logged in · Please run /login",
-        "terminal_reason": "provider_auth_required",
+        "terminal_reason": "run_failed",
         "terminal_source": "claude_print",
         "terminal_state": "run_failed",
         "turn_id": "golden-turn"

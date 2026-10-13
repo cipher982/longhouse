@@ -220,7 +220,10 @@ pub(super) async fn execute_turn_start(
                 code: "turn_claim_invalid".to_string(),
                 message: format!("terminal run {run_id} has no stored result"),
             })?;
-            return Ok(terminal_result_with_payload(result, claim.terminal_event.as_ref()));
+            return Ok(terminal_result_with_payload(
+                result,
+                claim.terminal_event.as_ref(),
+            ));
         }
         ClaimOutcome::Existing(claim) if claim.state == "spawned" => {
             let inventory = crate::process_identity::try_collect_process_facts_by_pid();

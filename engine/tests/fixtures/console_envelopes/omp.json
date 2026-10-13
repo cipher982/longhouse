@@ -21,7 +21,7 @@
         "provider_thread_id": "golden-provider-thread",
         "source_path": "<home>/sessions/native.jsonl",
         "stderr_tail": "401 Unauthorized",
-        "terminal_reason": "provider_auth_required",
+        "terminal_reason": "run_failed",
         "terminal_source": "omp_print",
         "terminal_state": "run_failed",
         "turn_id": "golden-turn"
@@ -131,7 +131,7 @@
         "provider_thread_id": "golden-provider-thread",
         "source_path": "<home>/sessions/native.jsonl",
         "stderr_tail": "401 Unauthorized",
-        "terminal_reason": "provider_auth_required",
+        "terminal_reason": "run_failed",
         "terminal_source": "omp_print",
         "terminal_state": "run_failed",
         "turn_id": "golden-turn"

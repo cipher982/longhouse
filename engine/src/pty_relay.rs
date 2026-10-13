@@ -574,14 +574,8 @@ mod tests {
             std::ptr::null_mut()
         };
         let mut size = terminal_winsize(-1);
-        let pid = unsafe {
-            libc::forkpty(
-                &mut master,
-                slave_name_ptr,
-                std::ptr::null_mut(),
-                &mut size,
-            )
-        };
+        let pid =
+            unsafe { libc::forkpty(&mut master, slave_name_ptr, std::ptr::null_mut(), &mut size) };
         assert!(
             pid >= 0,
             "forkpty failed: {}",
@@ -597,8 +591,7 @@ mod tests {
             }
         }
         #[cfg(target_os = "macos")]
-        let slave_hold =
-            unsafe { libc::open(slave_name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
+        let slave_hold = unsafe { libc::open(slave_name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
         #[cfg(not(target_os = "macos"))]
         let slave_hold = -1;
         if cfg!(target_os = "macos") && slave_hold < 0 {

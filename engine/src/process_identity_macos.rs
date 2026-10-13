@@ -282,10 +282,7 @@ mod tests {
         cache.retain_only_pids(&HashSet::from([99]));
         assert!(cache.entries.is_empty(), "disappeared pids must be pruned");
     }
-
-
 }
-
 
 pub(super) fn inspect_process_fact(pid: u32) -> ProcessFactLookup {
     match process_fact(pid, true) {

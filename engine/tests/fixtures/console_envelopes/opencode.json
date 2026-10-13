@@ -3,8 +3,31 @@
     "invocation_state": null,
     "pending_count": 0,
     "state": "terminal",
-    "terminal_event": null,
-    "terminal_event_handed_off": false
+    "terminal_event": {
+      "dedupe_key": "opencode-run:00000000-0000-4000-8000-0000000000ee:00000000-0000-4000-8000-0000000000aa:terminal",
+      "device_id": "golden-machine",
+      "kind": "terminal_signal",
+      "occurred_at": "<clock>",
+      "payload": {
+        "client_request_id": "golden-client-request",
+        "execution_lifetime": "one_shot",
+        "exit_code": 1,
+        "managed_transport": "opencode_run",
+        "provider_thread_id": "golden-provider-thread",
+        "stderr_tail": "boom",
+        "terminal_reason": "run_failed",
+        "terminal_source": "opencode_run",
+        "terminal_state": "run_failed",
+        "turn_id": "golden-turn"
+      },
+      "provider": "opencode",
+      "run_id": "00000000-0000-4000-8000-0000000000aa",
+      "runtime_key": "opencode:00000000-0000-4000-8000-0000000000ee",
+      "session_id": "00000000-0000-4000-8000-0000000000ee",
+      "source": "opencode_run",
+      "thread_id": "00000000-0000-4000-8000-0000000000bb"
+    },
+    "terminal_event_handed_off": true
   },
   "local_phases": [
     {
