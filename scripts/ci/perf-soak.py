@@ -568,6 +568,277 @@ def _start_fake_provider(
     )
 
 
+def _process_start_time(pid: int) -> str:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+        start_time = result.stdout.strip()
+        if result.returncode == 0 and start_time:
+            return start_time
+        time.sleep(0.05)
+    raise SoakError(f"could not read process start time for live fixture pid {pid}")
+
+
+def _machine_boot_id() -> str:
+    os_name = platform.system()
+    if os_name == "Linux":
+        try:
+            value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise SoakError(f"could not read Linux boot identity: {exc}") from exc
+        if value:
+            return f"linux:{value}"
+    elif os_name == "Darwin":
+        result = subprocess.run(
+            ["sysctl", "-n", "kern.boottime"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            seconds = re.search(r"sec\s*=\s*(\d+)", result.stdout)
+            micros = re.search(r"usec\s*=\s*(\d+)", result.stdout)
+            if seconds and micros:
+                return f"macos:{seconds.group(1)}:{micros.group(1)}"
+    raise SoakError(f"could not read {os_name} boot identity for the live turn claim")
+
+
+def _write_fake_omp_launcher_script(path: Path) -> None:
+    path.write_text(
+        """#!/usr/bin/env python3
+import signal
+import time
+
+running = True
+def stop(_signum, _frame):
+    global running
+    running = False
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+while running:
+    time.sleep(1)
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def _start_fake_omp_launcher(
+    run_dir: Path, env: dict[str, str]
+) -> subprocess.Popen[str]:
+    script = run_dir / "fake-omp-helm-launcher.py"
+    _write_fake_omp_launcher_script(script)
+    return _start_process(
+        [sys.executable, "-u", str(script)],
+        cwd=run_dir,
+        env=env,
+    )
+
+
+def _write_fake_managed_provider_script(path: Path) -> None:
+    path.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import socket
+import signal
+import sqlite3
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+config_path, db_path = sys.argv[1:]
+running = True
+children = []
+def stop(_signum, _frame):
+    global running
+    running = False
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+
+config_file = Path(config_path)
+while running and not config_file.is_file():
+    time.sleep(0.02)
+if not running:
+    raise SystemExit(0)
+config = json.loads(config_file.read_text(encoding="utf-8"))
+transcript = Path(config["session_file"])
+state_path = Path(config["state_file"])
+status_slot_path = Path(config["status_slot_file"])
+session_id = config["session_id"]
+workspace = config["workspace"]
+native_session_id = config["native_session_id"]
+wake_socket = Path(config["transcript_wake_socket"])
+state = json.loads(state_path.read_text(encoding="utf-8"))
+status_slot = json.loads(status_slot_path.read_text(encoding="utf-8"))
+db = sqlite3.connect(db_path, timeout=5)
+db.execute("PRAGMA busy_timeout = 5000")
+phases = ("thinking", "running", "waiting")
+phase_index = 0
+line_index = 0
+next_phase = next_line = next_child = time.monotonic()
+
+def stamp():
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+def atomic_json(path, value):
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(value, separators=(",", ":")) + "\\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def wake(reason):
+    payload = {
+        "provider": "omp",
+        "path": str(transcript),
+        "phase": state["phase"],
+        "session_id": session_id,
+        "run_id": state["run_id"],
+        "provider_turn_id": native_session_id,
+        "wake_reason": reason,
+        "observed_at_ms": int(time.time() * 1000),
+        "file_len_hint": transcript.stat().st_size,
+    }
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
+            stream.settimeout(0.05)
+            stream.connect(str(wake_socket))
+            stream.sendall(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    except OSError:
+        pass
+while running:
+    now = time.monotonic()
+    worked = False
+    if now >= next_phase:
+        observed_at = stamp()
+        phase = phases[phase_index % len(phases)]
+        tool_name = "Bash" if phase == "running" else None
+        state.update({"phase": phase, "tool_name": tool_name, "updated_at": observed_at})
+        atomic_json(state_path, state)
+        status_slot.update({
+            "phase": phase,
+            "tool_name": tool_name,
+            "observed_at": observed_at,
+            "seq": status_slot["seq"] + 1,
+        })
+        atomic_json(status_slot_path, status_slot)
+        db.execute(\"\"\"INSERT INTO session_phase_state (
+            session_id, provider, phase, tool_name, source, observed_at, run_id, revision
+        ) VALUES (?, 'omp', ?, ?, 'omp_helm_channel', ?, ?, 1)
+        ON CONFLICT(session_id) DO UPDATE SET phase=excluded.phase,
+            tool_name=excluded.tool_name, observed_at=excluded.observed_at,
+            run_id=excluded.run_id, revision=session_phase_state.revision+1\"\"\",
+            (session_id, phase, tool_name, observed_at, state["run_id"]))
+        db.commit()
+        wake("phase")
+        phase_index += 1
+        next_phase += 1 / 3
+        if next_phase <= now:
+            next_phase = now + 1 / 3
+        worked = True
+    if now >= next_line:
+        observed_at = stamp()
+        event = {
+            "type": "message",
+            "id": f"managed-active-{line_index}",
+            "timestamp": observed_at,
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Synthetic managed Helm turn activity."}],
+            },
+        }
+        with transcript.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(event, separators=(",", ":")) + "\\n")
+            stream.flush()
+        wake("progress")
+        line_index += 1
+        next_line += 0.5
+        if next_line <= now:
+            next_line = now + 0.5
+        worked = True
+    if now >= next_child:
+        children.append(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.15)"]))
+        next_child += 2
+        if next_child <= now:
+            next_child = now + 2
+        worked = True
+    for child in children[:]:
+        if child.poll() is not None:
+            child.wait()
+            children.remove(child)
+    if not worked:
+        time.sleep(max(0.001, min(next_phase, next_line, next_child) - time.monotonic()))
+
+for child in children:
+    if child.poll() is None:
+        child.terminate()
+        try:
+            child.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
+db.close()
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def _start_fake_managed_provider(
+    run_dir: Path, env: dict[str, str], config_path: Path, db_path: Path
+) -> subprocess.Popen[str]:
+    script = run_dir / "fake-omp-managed-provider.py"
+    _write_fake_managed_provider_script(script)
+    return _start_process(
+        [sys.executable, "-u", str(script), str(config_path), str(db_path)],
+        cwd=run_dir,
+        env=env,
+    )
+
+
+def _live_managed_omp_session(status: Any, session_id: str) -> dict[str, Any] | None:
+    if not isinstance(status, dict):
+        return None
+    sessions = status.get("managed_sessions")
+    if not isinstance(sessions, list):
+        return None
+    for session in sessions:
+        if (
+            isinstance(session, dict)
+            and session.get("session_id") == session_id
+            and session.get("provider") == "omp"
+            and session.get("state") == "attached"
+        ):
+            return session
+    return None
+
+
+def _wait_for_live_managed_omp_session(
+    status_path: Path, session_id: str, timeout: float
+) -> dict[str, Any] | None:
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            status = None
+        session = _live_managed_omp_session(status, session_id)
+        if session is not None:
+            return session
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+
+
 def _prepare_desktop_fixture(source_status: Path, fixture_status: Path, health_snapshot: Path) -> None:
     status = json.loads(source_status.read_text(encoding="utf-8"))
     ledger = status.setdefault("phase_ledger", [])
@@ -962,6 +1233,14 @@ def _write_summary(artifact: dict[str, Any], path: Path) -> str:
         desktop_summary = f"Core snapshot fallback; gap: {measurement.get('gap')}"
     else:
         desktop_summary = measurement.get("reason", measurement.get("status", "not measured"))
+    managed_check = (
+        ((artifact.get("scenarios") or {}).get("managed_active") or {}).get("managed_session_check") or {}
+    )
+    managed_session_summary = (
+        f"{managed_check.get('seen_live', False)} for `{managed_check.get('session_id', 'unknown')}`"
+        if managed_check
+        else "not measured"
+    )
     lines = [
         f"## {platform_name} steady-state soak",
         "",
@@ -970,6 +1249,7 @@ def _write_summary(artifact: dict[str, Any], path: Path) -> str:
         f"- Previous successful main run: `{(artifact.get('previous_run') or {}).get('run_id', 'unavailable')}` ({(artifact.get('previous_run') or {}).get('reason', (artifact.get('previous_run') or {}).get('status', 'unknown'))})",
         f"- Console scenario: omitted — {artifact['console']['reason']}",
         f"- Desktop measurement: {desktop_summary}",
+        f"- Managed OMP Helm session seen live: {managed_session_summary}",
         "",
         "| Scenario | Engine CPU / budget | Engine writes MB/s / budget | Wakeups/s | Status writes/min | Engine children/min / budget | Engine peak RSS MB | Desktop CPU / budget | Desktop writes B/s | Desktop wakeups/s | Desktop peak RSS MB |",
         "| --- | --- | --- | ---: | ---: | --- | ---: | --- | ---: | ---: | ---: |",
@@ -1112,6 +1392,7 @@ def run_soak(args: argparse.Namespace) -> dict[str, Any]:
         server: subprocess.Popen[str] | None = None
         bootstrap_engine: subprocess.Popen[str] | None = None
         engine: subprocess.Popen[str] | None = None
+        managed_launcher: subprocess.Popen[str] | None = None
         provider: subprocess.Popen[str] | None = None
         desktop_app: subprocess.Popen[str] | None = None
         desktop_core_worker: subprocess.Popen[str] | None = None
@@ -1159,7 +1440,7 @@ def run_soak(args: argparse.Namespace) -> dict[str, Any]:
                     health_snapshot,
                     run_dir,
                     env,
-                    args.idle_seconds + args.active_seconds + args.profile_seconds * 2 + 20,
+                    args.idle_seconds + args.active_seconds * 2 + args.profile_seconds * 3 + 20,
                 )
                 time.sleep(2)
                 print("soak: Desktop harness launch settled", flush=True)
@@ -1262,8 +1543,116 @@ def run_soak(args: argparse.Namespace) -> dict[str, Any]:
             _stop_process(provider)
             print("soak: active fake provider stopped", flush=True)
             provider = None
+            managed_launcher = _start_fake_omp_launcher(run_dir, env)
+            if managed_launcher.poll() is not None:
+                raise SoakError("fake OMP Helm launcher exited before managed_active")
+            launcher_start_time = _process_start_time(managed_launcher.pid)
+            managed_config_path = run_dir / "managed-active-provider.json"
+            provider = _start_fake_managed_provider(run_dir, env, managed_config_path, db_path)
+            provider_start_time = _process_start_time(provider.pid)
+            managed_fixture = perf_soak_fixtures.create_managed_active_fixture(
+                home,
+                longhouse_home,
+                workspace,
+                state_target_bytes=int(fixture["shape"]["managed_local_omp_helm"]["median_bytes"]),
+                provider_binary=Path(fixture["fake_provider_bin"]["omp"]),
+                provider_binary_sha256=fixture["omp_binary_sha256"],
+                provider_pid=provider.pid,
+                provider_process_start_time=provider_start_time,
+                launcher_pid=managed_launcher.pid,
+                launcher_process_start_time=launcher_start_time,
+                boot_id=_machine_boot_id(),
+            )
+            fixture["managed_active"] = managed_fixture
+            managed_config_path.write_text(
+                json.dumps(
+                    {
+                        "session_id": managed_fixture["session_id"],
+                        "session_file": managed_fixture["session_file"],
+                        "state_file": managed_fixture["state_file"],
+                        "status_slot_file": managed_fixture["status_slot_file"],
+                        "native_session_id": managed_fixture["native_session_id"],
+                        "transcript_wake_socket": str(
+                            longhouse_home / "agent" / "transcript-wake.sock"
+                        ),
+                        "workspace": managed_fixture["workspace"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            time.sleep(1)
+            if provider.poll() is not None or managed_launcher.poll() is not None:
+                raise SoakError("fake OMP managed session process exited before managed_active")
+            managed_start_status = _wait_for_live_managed_omp_session(
+                status_path, managed_fixture["session_id"], timeout=10
+            )
+            print("soak: fake managed OMP Helm session active", flush=True)
+            if platform_name == "macOS" and not args.skip_desktop:
+                churn_stop, churn_thread = _start_desktop_churner(
+                    desktop_fixture_status,
+                    health_snapshot if desktop_fallback_reason else None,
+                )
+            if desktop_fallback_reason:
+                desktop_core_worker, managed_core_result = _start_desktop_core_renderer(
+                    desktop_snapshot_bin,
+                    health_snapshot,
+                    run_dir,
+                    env,
+                    scenario="managed_active",
+                    seconds=args.active_seconds,
+                    interval_seconds=5.0,
+                )
+            else:
+                managed_core_result = None
+            managed_active = sample_window(
+                process_ids,
+                seconds=args.active_seconds,
+                os_name=os_name,
+                engine_status_path=status_path,
+            )
+            managed_end_status = _wait_for_live_managed_omp_session(
+                status_path, managed_fixture["session_id"], timeout=2
+            )
+            if desktop_core_worker is not None and managed_core_result is not None:
+                managed_active["desktop_core_renderer"] = _desktop_core_result(
+                    desktop_core_worker, managed_core_result, args.active_seconds
+                )
+                desktop_core_worker = None
+            managed_active["workload"] = {
+                "provider_pid": provider.pid,
+                "launcher_pid": managed_launcher.pid,
+                "transcript_lines_per_second": 2,
+                "phase_writes_per_second": 3,
+                "child_spawns_per_minute": 30,
+                "transcript_wakes_per_second": 5,
+            }
+            managed_active["managed_session_check"] = {
+                "session_id": managed_fixture["session_id"],
+                "provider": "omp",
+                "expected_live_state": "attached",
+                "seen_live": managed_start_status is not None or managed_end_status is not None,
+                "live_at_start": managed_start_status is not None,
+                "live_at_end": managed_end_status is not None,
+                "start_status": managed_start_status,
+                "end_status": managed_end_status,
+                "engine_status_file": str(status_path),
+            }
+            managed_active["top_functions"] = _profile_engine(
+                engine.pid, run_dir, "managed_active", args.profile_seconds
+            )
+            print("soak: managed_active scenario measured", flush=True)
+            if churn_stop is not None:
+                churn_stop.set()
+                churn_thread.join(timeout=2)
+                churn_stop = None
+                churn_thread = None
+            _stop_process(provider)
+            provider = None
+            _stop_process(managed_launcher)
+            managed_launcher = None
 
-            scenarios = {"idle": idle, "active": active}
+            scenarios = {"idle": idle, "active": active, "managed_active": managed_active}
             previous, previous_run = _previous_baseline(args, platform_name, run_dir)
             failures = evaluate_budgets_and_regressions(
                 scenarios,
@@ -1271,7 +1660,22 @@ def run_soak(args: argparse.Namespace) -> dict[str, Any]:
                 previous,
                 desktop_app_measured=desktop_app is not None,
             )
+            if not managed_active["managed_session_check"]["seen_live"]:
+                failures.append(
+                    {
+                        "scenario": "managed_active",
+                        "metric": "managed_session.live",
+                        "value": 0,
+                        "limit": 1,
+                        "unit": "session",
+                        "regression": (
+                            "engine-status.json never listed managed OMP session "
+                            f"{managed_fixture['session_id']} in attached state"
+                        ),
+                    }
+                )
             print(f"soak: budget comparison complete ({len(failures)} findings)", flush=True)
+
             git_info = {
                 "sha": _git_value(["rev-parse", "HEAD"]),
                 "branch": _git_value(["branch", "--show-current"]),
@@ -1298,6 +1702,7 @@ def run_soak(args: argparse.Namespace) -> dict[str, Any]:
                     "warmup": args.warmup_seconds,
                     "idle": args.idle_seconds,
                     "active": args.active_seconds,
+                    "managed_active": args.active_seconds,
                 },
                 "scenarios": scenarios,
                 "desktop_measurement": desktop_measurement,
@@ -1314,6 +1719,7 @@ def run_soak(args: argparse.Namespace) -> dict[str, Any]:
             if churn_thread is not None:
                 churn_thread.join(timeout=2)
             _stop_process(provider)
+            _stop_process(managed_launcher)
             _stop_process(desktop_core_worker)
             _stop_process(desktop_app)
             print("soak: terminating engine", flush=True)

@@ -226,6 +226,9 @@ def test_soak_budget_and_baseline_regression_rules() -> None:
     }
     assert scenarios["idle"]["budgets"]["engine.processes_spawned_per_minute"]["status"] == "pass"
     assert scenarios["active"]["budgets"]["engine.cpu_percent"]["regressed_over_50_percent"]
+    assert soak._budgets("macOS", "managed_active", desktop_app_measured=True) == soak._budgets(
+        "macOS", "active", desktop_app_measured=True
+    )
     fallback = {
         "idle": {
             "engine": {
@@ -240,6 +243,30 @@ def test_soak_budget_and_baseline_regression_rules() -> None:
         fallback, "macOS", None, desktop_app_measured=False
     ) == []
     assert "desktop_app.cpu_percent" not in fallback["idle"]["budgets"]
+
+
+def test_soak_managed_active_status_gate() -> None:
+    soak = _soak_module()
+    session_id = "managed-omp-session"
+    attached = {
+        "managed_sessions": [
+            {"session_id": session_id, "provider": "omp", "state": "attached"}
+        ]
+    }
+    assert soak._live_managed_omp_session(attached, session_id) == attached["managed_sessions"][0]
+    assert soak._live_managed_omp_session(
+        {"managed_sessions": [{"session_id": session_id, "provider": "omp", "state": "detached"}]},
+        session_id,
+    ) is None
+    assert soak._live_managed_omp_session(attached, "another-session") is None
+
+
+def test_managed_active_provider_script_compiles() -> None:
+    soak = _soak_module()
+    with tempfile.TemporaryDirectory() as temporary:
+        script = Path(temporary) / "fake-omp-managed-provider.py"
+        soak._write_fake_managed_provider_script(script)
+        compile(script.read_text(encoding="utf-8"), str(script), "exec")
 
 
 def test_soak_darwin_rusage_info_v4_layout() -> None:
@@ -324,7 +351,38 @@ def test_cinder_fixture_generator_writes_reader_shaped_state() -> None:
         event = json.loads(transcript.read_text(encoding="utf-8").splitlines()[0])
         assert event["type"] == "user"
         assert event["cwd"] == fixture["workspace"]
-
+        managed = fixtures.create_managed_active_fixture(
+            home,
+            longhouse_home,
+            workspace,
+            state_target_bytes=int(shape["managed_local_omp_helm"]["median_bytes"]),
+            provider_binary=Path(fixture["fake_provider_bin"]["omp"]),
+            provider_binary_sha256=fixture["omp_binary_sha256"],
+            provider_pid=321,
+            provider_process_start_time="Thu Jun 30 00:00:00 2026",
+            launcher_pid=322,
+            launcher_process_start_time="Thu Jun 30 00:00:01 2026",
+            boot_id="fixture:boot",
+        )
+        state = json.loads(Path(managed["state_file"]).read_text(encoding="utf-8"))
+        claim = json.loads(Path(managed["turn_claim_file"]).read_text(encoding="utf-8"))
+        slot = json.loads(Path(managed["status_slot_file"]).read_text(encoding="utf-8"))
+        source_claim = json.loads(Path(managed["managed_source_claim_file"]).read_text(encoding="utf-8"))
+        assert state["session_id"] == managed["session_id"]
+        assert state["status"] == "ready" and state["ready"] is True
+        assert state["provider_pid"] == 321 and state["launcher_pid"] == 322
+        assert state["provider_process_start_time"] == "Thu Jun 30 00:00:00 2026"
+        assert Path(managed["state_file"]).stat().st_size >= shape["managed_local_omp_helm"]["median_bytes"]
+        assert claim["state"] == "spawned" and claim["pid"] == 321
+        assert {item["pid"] for item in claim["owned_processes"]} == {321, 322}
+        assert claim["boot_id"] == "fixture:boot"
+        assert source_claim["state"] == "bound"
+        assert source_claim["native_session_id"] == managed["native_session_id"]
+        assert source_claim["provider_pid"] == 321
+        assert slot["provider"] == "omp" and slot["run_id"] == managed["run_id"]
+        assert json.loads(Path(managed["session_file"]).read_text(encoding="utf-8").splitlines()[0])["id"] == (
+            managed["native_session_id"]
+        )
 
 
 def main() -> int:
@@ -341,6 +399,8 @@ def main() -> int:
         test_soak_budget_and_baseline_regression_rules,
         test_soak_linux_wakeups_are_unavailable_not_zero,
         test_soak_darwin_rusage_info_v4_layout,
+        test_soak_managed_active_status_gate,
+        test_managed_active_provider_script_compiles,
         test_cinder_fixture_generator_writes_reader_shaped_state,
     ]
     for test in tests:
