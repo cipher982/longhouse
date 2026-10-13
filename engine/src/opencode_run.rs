@@ -934,7 +934,9 @@ async fn start_reserved_turn(
         expected_provider_thread_id: resume_provider_thread_id.clone(),
     };
     let turn_config = config.clone();
-    tokio::spawn(async move {
+    #[cfg(test)]
+    let test_monitor_launch_id = launch_id.clone();
+    let monitor_task = tokio::spawn(async move {
         drive_turn(
             child,
             server,
@@ -947,6 +949,10 @@ async fn start_reserved_turn(
         )
         .await;
     });
+    #[cfg(test)]
+    crate::console_lifecycle::track_test_monitor(test_monitor_launch_id, monitor_task);
+    #[cfg(not(test))]
+    drop(monitor_task);
     Ok(OpenCodeRunSummary {
         session_id: config.session_id.clone(),
         thread_id: config.thread_id.clone(),
@@ -1492,9 +1498,15 @@ pub async fn recover_opencode_run_turns(
                     .as_deref()
                     .unwrap_or(&claim.session_id);
                 let lock = acquire_turn_lock(&opencode_console_root()?, lock_key)?;
-                tokio::spawn(async move {
+                #[cfg(test)]
+                let test_monitor_launch_id = sink.run.launch_id.clone();
+                let monitor_task = tokio::spawn(async move {
                     recover_turn(run_dir, sink, lock).await;
                 });
+                #[cfg(test)]
+                crate::console_lifecycle::track_test_monitor(test_monitor_launch_id, monitor_task);
+                #[cfg(not(test))]
+                drop(monitor_task);
                 recovered += 1;
             }
             ClaimLiveness::Gone => {
@@ -1982,9 +1994,10 @@ pub async fn steer_opencode_console_turn(
 /// control channel). Modes, from `OPENCODE_FAKE_MODE`: `ok` answers at once,
 /// `error` answers with a provider error, `missing` has no such session,
 /// `permission` waits for a permission reply, `hold` waits for an abort,
-/// `steer` runs a two-second tool that a steer posted meanwhile is consumed
-/// after (the reply parented at the steer), and `flip` has the running turn end
-/// just as the steer arrives, so the steer starts a turn of its own.
+/// `restart` emits output mid-turn and waits for simulated recovery, `steer`
+/// runs a two-second tool that a steer posted meanwhile is consumed after
+/// (the reply parented at the steer), and `flip` has the running turn end just
+/// as the steer arrives, so the steer starts a turn of its own.
 /// Requests are appended to `OPENCODE_FAKE_LOG`. Message ids are OpenCode's
 /// ascending shape and carry its timestamps, which a steer's outcome rests on.
 #[cfg(test)]
@@ -2000,7 +2013,8 @@ mode = os.environ.get("OPENCODE_FAKE_MODE", "ok")
 log_path = os.environ.get("OPENCODE_FAKE_LOG")
 lock = threading.Lock()
 state = {"messages": [], "busy": False, "loops": 0, "permissions": [], "steers": [],
-         "reply": None, "flipped": False, "counter": 0, "released": threading.Event()}
+         "reply": None, "flipped": False, "counter": 0, "released": threading.Event(),
+         "aborted": False, "events": []}
 
 
 def record(line):
@@ -2011,6 +2025,8 @@ def record(line):
 
 def now():
     return int(time.time() * 1000)
+def publish(kind, properties):
+    state["events"].append(json.loads(json.dumps({"type": kind, "properties": properties})))
 
 
 def mid(kind):
@@ -2028,8 +2044,10 @@ def add_user(user_id):
 def start_reply(parent):
     info = {"id": mid("a"), "role": "assistant", "parentID": parent, "sessionID": SES,
             "time": {"created": now()}}
-    state["messages"].append({"info": info, "parts": []})
-    return state["messages"][-1]
+    message = {"info": info, "parts": []}
+    state["messages"].append(message)
+    publish("message.updated", {"info": info})
+    return message
 
 
 def finish_reply(message, finish, text=None, error=None, completed=None):
@@ -2040,9 +2058,11 @@ def finish_reply(message, finish, text=None, error=None, completed=None):
         info["finish"] = finish
         info["time"]["completed"] = completed or now()
     if text:
-        message["parts"].append({"id": "prt_" + info["id"], "type": "text", "text": text,
-                                 "sessionID": SES, "messageID": info["id"], "time": {"end": 2}})
-
+        part = {"id": "prt_" + info["id"], "type": "text", "text": text,
+                "sessionID": SES, "messageID": info["id"], "time": {"end": 2}}
+        message["parts"].append(part)
+        publish("message.part.updated", {"part": part})
+    publish("message.updated", {"info": info})
 
 def run_loop(loop_no, reply):
     time.sleep(0.15)
@@ -2053,6 +2073,23 @@ def run_loop(loop_no, reply):
         state["released"].wait(60)
         with lock:
             finish_reply(reply, None, error={"name": "MessageAbortedError", "data": {"message": "aborted"}})
+    elif mode == "restart":
+        with lock:
+            part = {"id": "prt_before_restart", "type": "text", "text": "before restart",
+                    "sessionID": SES, "messageID": reply["info"]["id"], "time": {"end": 2}}
+            reply["parts"].append(part)
+            publish("message.part.updated", {"part": part})
+        state["released"].wait(60)
+        with lock:
+            if state["aborted"]:
+                finish_reply(reply, None, error={"name": "MessageAbortedError",
+                                                  "data": {"message": "aborted"}})
+            elif state["steers"]:
+                finish_reply(reply, "tool-calls")
+                follow = start_reply(state["steers"][-1])
+                finish_reply(follow, "stop", text="after restart")
+            else:
+                finish_reply(reply, "stop", text="after restart")
     elif mode == "permission":
         state["permissions"].append({"id": "per_1", "sessionID": SES, "permission": "bash",
                                      "patterns": [], "metadata": {}, "always": []})
@@ -2134,13 +2171,22 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 return self.send_json(200, json.loads(json.dumps(state["messages"])))
         if path == "/event":
+            with lock:
+                cursor = len(state["events"])
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
             self.wfile.write(b'data: {"type":"server.connected","properties":{}}\n\n')
             self.wfile.flush()
             while True:
-                time.sleep(1)
+                with lock:
+                    pending = state["events"][cursor:]
+                    cursor = len(state["events"])
+                for event in pending:
+                    self.wfile.write(b"data: " + json.dumps(event).encode() + b"\n\n")
+                if pending:
+                    self.wfile.flush()
+                time.sleep(0.05)
         self.send_json(404, {"name": "NotFoundError"})
 
     def do_POST(self):
@@ -2161,6 +2207,10 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == "/session/%s/abort" % SES:
+            state["aborted"] = True
+            state["released"].set()
+            return self.send_json(200, True)
+        if path == "/fake/release":
             state["released"].set()
             return self.send_json(200, True)
         if path == "/permission/per_1/reply":
@@ -3282,6 +3332,14 @@ mod tests {
             }
         }
 
+        async fn release(&self, summary: &OpenCodeRunSummary) {
+            served_state(summary)
+                .server()
+                .post("/fake/release", None)
+                .await
+                .unwrap();
+        }
+
         fn requests(&self) -> Vec<String> {
             std::fs::read_to_string(&self.log)
                 .unwrap_or_default()
@@ -3509,6 +3567,168 @@ mod tests {
 
     fn served_state(summary: &OpenCodeRunSummary) -> ServeState {
         ServeState::load(Path::new(&summary.stdout_path).parent().unwrap()).unwrap()
+    }
+
+    async fn wait_for_stream_text(summary: &OpenCodeRunSummary, expected: &str) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            let stream = std::fs::read_to_string(&summary.stdout_path).unwrap_or_default();
+            if stream.contains(expected) {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "stream never contained {expected:?}: {stream}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn console_restart_contract() {
+        {
+            let fake = FakeOpenCode::new("restart");
+            let (run_id, _turn_id, summary) = fake.start(None).await;
+            fake.wait_for_prompts(1).await;
+            wait_for_stream_text(&summary, "before restart").await;
+
+            let registry = crate::turn_claims::default_registry().unwrap();
+            let claim = registry.read(&run_id).unwrap();
+            assert_eq!(claim.state, "spawned");
+            let process_group_id = claim.process_group_id.unwrap();
+            crate::console_lifecycle::stop_test_monitor(&summary.launch_id).await;
+            assert!(crate::process_group::group_is_alive(process_group_id));
+
+            assert_eq!(
+                recover_opencode_run_turns("fake-opencode", None)
+                    .await
+                    .unwrap(),
+                1
+            );
+            assert!(crate::process_group::group_is_alive(process_group_id));
+            assert_eq!(
+                fake.steer(&run_id, "steer after recovery").await,
+                Ok(ConsoleSteerOutcome::Steered)
+            );
+            fake.release(&summary).await;
+
+            let completed = fake.terminal(&run_id).await;
+            assert_eq!(terminal_state(&completed), "run_completed");
+            let stream = std::fs::read_to_string(&summary.stdout_path).unwrap();
+            assert_eq!(
+                stream.matches("\"text\":\"before restart\"").count(),
+                1,
+                "recovery must not duplicate output already projected: {stream}"
+            );
+            assert_eq!(
+                stream.matches("\"text\":\"after restart\"").count(),
+                1,
+                "recovery must retain output produced after restart: {stream}"
+            );
+            let requests = fake.requests();
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|line| line.ends_with("/prompt_async"))
+                    .count(),
+                2,
+                "recovery must not resubmit the original prompt: {requests:?}"
+            );
+            assert!(!requests.iter().any(|line| line.ends_with("/abort")));
+            assert_eq!(served_state(&summary).message_ids.len(), 2);
+        }
+
+        {
+            let fake = FakeOpenCode::new("restart");
+            let (run_id, turn_id, summary) = fake.start(None).await;
+            fake.wait_for_prompts(1).await;
+            wait_for_stream_text(&summary, "before restart").await;
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(&run_id)
+                .unwrap();
+            let process_group_id = claim.process_group_id.unwrap();
+            crate::console_lifecycle::stop_test_monitor(&summary.launch_id).await;
+            assert_eq!(
+                recover_opencode_run_turns("fake-opencode", None)
+                    .await
+                    .unwrap(),
+                1
+            );
+
+            interrupt_opencode_run_turn(&run_id, &fake.session_id, &fake.thread_id, &turn_id)
+                .await
+                .unwrap();
+            assert_eq!(
+                terminal_state(&fake.terminal(&run_id).await),
+                "run_cancelled"
+            );
+            assert!(fake
+                .requests()
+                .iter()
+                .any(|line| line == &format!("POST /session/{}/abort", fake_server::SESSION)));
+            assert!(!crate::process_group::group_is_alive(process_group_id));
+        }
+
+        {
+            let fake = FakeOpenCode::new("restart");
+            let (run_id, _turn_id, summary) = fake.start(None).await;
+            fake.wait_for_prompts(1).await;
+            wait_for_stream_text(&summary, "before restart").await;
+            let registry = crate::turn_claims::default_registry().unwrap();
+            let claim = registry.read(&run_id).unwrap();
+            let pid = claim.pid.unwrap();
+            let process_group_id = claim.process_group_id.unwrap();
+            let launch_id = claim.launch_id.clone().unwrap();
+            crate::console_lifecycle::stop_test_monitor(&summary.launch_id).await;
+            let reads_before = fake
+                .requests()
+                .iter()
+                .filter(|line| *line == &format!("GET /session/{}/message", fake_server::SESSION))
+                .count();
+            registry
+                .mark_spawned_invocation(
+                    &claim.run_id,
+                    pid,
+                    process_group_id,
+                    Some("reused-pid-with-a-different-start-time".to_string()),
+                    OPENCODE_RUN_ADAPTER,
+                    &launch_id,
+                    claim.provider_thread_id.as_deref(),
+                    claim.stdout_path.as_deref().unwrap(),
+                    claim.stderr_path.as_deref().unwrap(),
+                    claim.result.clone().unwrap(),
+                )
+                .unwrap();
+
+            assert_eq!(
+                recover_opencode_run_turns("fake-opencode", None)
+                    .await
+                    .unwrap(),
+                0,
+                "a reused pid with a different start time must not be adopted"
+            );
+            assert_eq!(terminal_state(&fake.terminal(&run_id).await), "run_failed");
+            assert!(
+                crate::process_group::group_is_alive(process_group_id),
+                "recovery must not signal a process whose recorded identity mismatches"
+            );
+            let reads_after = fake
+                .requests()
+                .iter()
+                .filter(|line| *line == &format!("GET /session/{}/message", fake_server::SESSION))
+                .count();
+            assert_eq!(
+                reads_after, reads_before,
+                "mismatched process was not adopted"
+            );
+            assert!(crate::process_group::shutdown_group(
+                process_group_id,
+                crate::process_group::DEFAULT_GRACE
+            )
+            .await
+            .is_gone());
+        }
     }
 
     #[tokio::test]
