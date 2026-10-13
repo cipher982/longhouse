@@ -278,6 +278,10 @@ h3 {
   font-size: 15px;
 }
 
+/* A table too wide for the screen scrolls sideways in here instead of
+   squeezing its columns. The backgrounds mark an edge that has more behind
+   it: the two page-colored covers travel with the table and hide the two
+   edge tints, which stay put, once that side is scrolled to its end. */
 .table-wrap {
   overflow-x: auto;
   overscroll-behavior-x: contain;
@@ -285,26 +289,42 @@ h3 {
   margin: 0.5em 0 0.75em;
   border-radius: 7px;
   border: 1px solid var(--rule);
+  background:
+    linear-gradient(to right, var(--page) 40%, transparent) left / 28px 100% no-repeat local,
+    linear-gradient(to left, var(--page) 40%, transparent) right / 28px 100% no-repeat local,
+    linear-gradient(to right, var(--edge), transparent) left / 16px 100% no-repeat scroll,
+    linear-gradient(to left, var(--edge), transparent) right / 16px 100% no-repeat scroll;
+  --edge: color-mix(in srgb, var(--text) 22%, transparent);
 }
 
 table {
   border-collapse: collapse;
-  width: 100%;
+  min-width: 100%;
   font-size: 0.9em;
 }
 
+/* Labels and values stay on one line. */
 th, td {
   padding: 6px 10px;
   text-align: left;
   border-bottom: 1px solid var(--rule);
-  white-space: normal;
+  white-space: nowrap;
   vertical-align: top;
+}
+
+/* A column of sentences wraps between words and keeps a readable line. The
+   body's `overflow-wrap: anywhere` would let table layout shrink it to one
+   letter per line; `break-word` splits only a token wider than max-width. */
+th.prose, td.prose {
+  white-space: normal;
+  overflow-wrap: break-word;
+  min-width: 10em;
+  max-width: 22em;
 }
 
 th {
   font-weight: 650;
   background: var(--code);
-  white-space: nowrap;
 }
 
 tr:last-child td {

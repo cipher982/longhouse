@@ -45,6 +45,17 @@ describe("markdownToHtml", () => {
     );
   });
 
+  it("marks a column of sentences as prose by the text it shows", () => {
+    const html = markdownToHtml(
+      "| # | Work | Ref |\n|---|---|--:|\n| 1 | **Record today's findings in the repo** | [spec](https://example.com/a/long/address/nobody/sees) |",
+    );
+    expect(html).toBe(
+      '<div class="table-wrap"><table><thead><tr><th>#</th><th class="prose">Work</th><th align="right">Ref</th></tr></thead>' +
+        '<tbody><tr><td>1</td><td class="prose"><strong>Record today&#39;s findings in the repo</strong></td>' +
+        '<td align="right"><a href="https://example.com/a/long/address/nobody/sees">spec</a></td></tr></tbody></table></div>',
+    );
+  });
+
   it("does not turn a lone pipe line into a table", () => {
     expect(markdownToHtml("run `ls | wc -l` now")).toBe("<p>run <code>ls | wc -l</code> now</p>");
     expect(markdownToHtml("a|b\nplain")).toBe("<p>a|b<br>plain</p>");

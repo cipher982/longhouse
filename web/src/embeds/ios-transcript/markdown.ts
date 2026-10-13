@@ -46,6 +46,10 @@ export function parseAligns(sepLine: string): string[] {
   });
 }
 
+// A cell longer than this is a sentence that wraps; a shorter one is a label
+// or a value and stays on one line.
+const PROSE_CELL_CHARS = 20;
+
 // Render accumulated table rows (first is header, second is separator) to HTML.
 export function tableToHtml(rows: string[]): string {
   // Need at least header + separator; separator must actually look like one.
@@ -53,15 +57,21 @@ export function tableToHtml(rows: string[]): string {
     return rows.map((r) => paragraphHtml([r])).join("");
   }
   const aligns = parseAligns(rows[1]);
-  const alignAttr = (i: number) => (aligns[i] ? ` align="${aligns[i]}"` : "");
+  const header = splitCells(rows[0]).map(inlineMarkdown);
+  const body = rows.slice(2).map((row) => {
+    const cells = splitCells(row);
+    return header.map((_, i) => inlineMarkdown(cells[i] ?? ""));
+  });
+  // Width follows the text a cell shows, not its markup or a link's address.
+  const shown = (cell: string) => cell.replace(/<[^>]*>/g, "").length;
+  const prose = header.map((_, i) => [header, ...body].some((cells) => shown(cells[i]) > PROSE_CELL_CHARS));
+  const cellAttrs = (i: number) => (prose[i] ? ' class="prose"' : "") + (aligns[i] ? ` align="${aligns[i]}"` : "");
 
-  const header = splitCells(rows[0]);
-  const h = "<thead><tr>" + header.map((c, i) => `<th${alignAttr(i)}>${inlineMarkdown(c)}</th>`).join("") + "</tr></thead>";
+  const h = "<thead><tr>" + header.map((c, i) => `<th${cellAttrs(i)}>${c}</th>`).join("") + "</tr></thead>";
 
   let b = "<tbody>";
-  for (let ri = 2; ri < rows.length; ri++) {
-    const cells = splitCells(rows[ri]);
-    b += "<tr>" + header.map((_, i) => `<td${alignAttr(i)}>${inlineMarkdown(cells[i] ?? "")}</td>`).join("") + "</tr>";
+  for (const cells of body) {
+    b += "<tr>" + cells.map((c, i) => `<td${cellAttrs(i)}>${c}</td>`).join("") + "</tr>";
   }
   b += "</tbody>";
 
