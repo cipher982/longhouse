@@ -257,6 +257,18 @@ def _select_evidence_class(
     return None
 
 
+def _required_evidence_classes(*cells: Mapping[str, Any]) -> tuple[str, ...]:
+    classes: set[str] = set()
+    for cell in cells:
+        evidence_class = cell.get("evidence_class")
+        if isinstance(evidence_class, str) and evidence_class:
+            classes.add(evidence_class)
+        required = cell.get("required_evidence_classes")
+        if isinstance(required, Sequence) and not isinstance(required, (str, bytes)):
+            classes.update(value for value in required if isinstance(value, str) and value)
+    return tuple(sorted(classes))
+
+
 def _diagnostic(code: str, message: str, *, cell: Mapping[str, Any] | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {"code": code, "message": message}
     if cell is not None:
@@ -334,6 +346,8 @@ def _producer_supports_cell(
     cell: Mapping[str, Any],
     census: Mapping[str, Any],
     subject: Mapping[str, Any],
+    *,
+    required_evidence_classes: Sequence[str] = (),
 ) -> list[str]:
     failures: list[str] = []
     cell_subject_kind = _cell_subject_kind(cell)
@@ -400,7 +414,19 @@ def _producer_supports_cell(
             failures.append("provider_artifact_platform")
         if artifact.get("architecture") != census.get("architecture"):
             failures.append("provider_artifact_architecture")
-    if _select_evidence_class(registration, cell, census) is None:
+    if required_evidence_classes:
+        available = set(census.get("credential_binding_ids", []))
+        for evidence_class in required_evidence_classes:
+            if evidence_class not in registration.get("evidence_classes", []):
+                failures.append("evidence_class")
+            bindings = _registration_bindings(
+                registration,
+                provider=str(cell.get("provider") or ""),
+                evidence_class=evidence_class,
+            )
+            if bindings is None or not set(bindings).issubset(available):
+                failures.append("credential_binding")
+    elif _select_evidence_class(registration, cell, census) is None:
         failures.append("credential_binding")
     if registration.get("sandbox_policy") != census.get("sandbox_policy"):
         failures.append("sandbox_policy")
@@ -444,6 +470,7 @@ def _reuse_failures(
     registration: Mapping[str, Any],
     subjects: Mapping[str, Any],
     census: Mapping[str, Any],
+    evidence_class: str,
 ) -> list[str]:
     failures: list[str] = []
     artifact = subject.get("provider_artifact") if isinstance(subject.get("provider_artifact"), Mapping) else {}
@@ -496,7 +523,7 @@ def _reuse_failures(
         for field, value in expected_vehicle.items():
             if proof.get(field) != value:
                 failures.append(field)
-    if proof.get("evidence_class") not in cell.get("acceptable_evidence", []):
+    if proof.get("evidence_class") != evidence_class or evidence_class not in cell.get("acceptable_evidence", []):
         failures.append("evidence_class")
     artifact_id = proof.get("artifact_id")
     if not isinstance(artifact_id, str) or len(artifact_id) != 64:
@@ -578,14 +605,22 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
     if sorted(requested_cells, key=_cell_sort_key) != sorted(expected_cells, key=_cell_sort_key):
         diagnostics.append(_diagnostic("scheduled_cell_omission", "scheduling did not request every accepted Resume cell"))
     raw_decisions = scheduling.get("decisions") if isinstance(scheduling.get("decisions"), list) else []
-    decision_by_key = {
-        _cell_key(item["cell"]): item for item in raw_decisions if isinstance(item, Mapping) and isinstance(item.get("cell"), Mapping)
-    }
-    if len(decision_by_key) != len(raw_decisions) or set(decision_by_key) != {_cell_key(cell) for cell in expected_cells}:
-        diagnostics.append(_diagnostic("scheduling_decisions_invalid", "scheduling did not decide every accepted Resume cell exactly once"))
+    decision_by_key: dict[tuple[tuple[str, str, str, str, str], str | None], Mapping[str, Any]] = {}
+    for item in raw_decisions:
+        if not isinstance(item, Mapping) or not isinstance(item.get("cell"), Mapping):
+            continue
+        evidence_class = item["cell"].get("evidence_class")
+        if not isinstance(evidence_class, str) or not evidence_class:
+            evidence_class = None
+        decision_by_key[(_cell_key(item["cell"]), evidence_class)] = item
+    duplicate_decisions = len(decision_by_key) != len(raw_decisions)
     if scheduling.get("max_concurrency") != 1:
         diagnostics.append(_diagnostic("scheduling_concurrency_invalid", "Resume scheduling must remain single-concurrency"))
 
+    accepted_cells_by_key = {_cell_key(item): item for item in accepted_rows if isinstance(item, Mapping)}
+    expected_decision_keys: set[tuple[tuple[str, str, str, str, str], str]] = set()
+    matched_decision_keys: set[tuple[tuple[str, str, str, str, str], str]] = set()
+    matched_input_decision_keys: set[tuple[tuple[str, str, str, str, str], str | None]] = set()
     compiled_cells: list[dict[str, Any]] = []
     sampled_compiled_cells: list[dict[str, Any]] = []
     commands: list[dict[str, Any]] = []
@@ -595,8 +630,11 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
     for selected in sorted(expected_cells, key=_cell_sort_key):
         key = _cell_key(selected)
         cell = current_by_key.get(key)
+        class_contract = cell if cell is not None else accepted_cells_by_key.get(key, {})
+        required_classes = _required_evidence_classes(selected, class_contract)
         cell_diagnostics: list[dict[str, Any]] = []
         eligible: list[Mapping[str, Any]] = []
+        cell_subject: Mapping[str, Any] = {}
         if cell is None:
             cell_diagnostics.append(_diagnostic("selected_cell_missing", "selected Resume cell is absent", cell=selected))
         else:
@@ -610,7 +648,13 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 if not isinstance(item, Mapping) or not isinstance(item.get("registration"), Mapping):
                     continue
                 registration = item["registration"]
-                failures = _producer_supports_cell(registration, cell, census, cell_subject)
+                failures = _producer_supports_cell(
+                    registration,
+                    cell,
+                    census,
+                    cell_subject,
+                    required_evidence_classes=required_classes,
+                )
                 vehicle_provider = registration.get("vehicle_provider")
                 if not failures and isinstance(vehicle_provider, str):
                     vehicle_subject = subjects.get(vehicle_provider)
@@ -645,11 +689,51 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 cell_diagnostics.append(
                     _diagnostic("eligible_producer_ambiguous", "more than one producer can satisfy the cell", cell=cell)
                 )
-            decision = decision_by_key.get(key)
+
+        evidence_classes = required_classes
+        if not evidence_classes and len(eligible) == 1 and cell is not None:
+            selected_class = _select_evidence_class(eligible[0]["registration"], cell, census)
+            if selected_class is not None:
+                evidence_classes = (selected_class,)
+        if not evidence_classes:
+            scheduled_classes = tuple(
+                evidence_class
+                for (decision_cell_key, evidence_class) in decision_by_key
+                if decision_cell_key == key and evidence_class is not None
+            )
+            if len(scheduled_classes) == 1:
+                evidence_classes = scheduled_classes
+        if not evidence_classes:
+            evidence_classes = (None,)
+
+        is_multiclass = len(evidence_classes) > 1
+        for evidence_class in evidence_classes:
+            decision_key = (key, evidence_class) if evidence_class is not None else None
+            decision = decision_by_key.get(decision_key) if decision_key is not None else None
+            matched_input_key = decision_key if decision is not None else None
+            # Preserve old single-class decisions; classless decisions never satisfy a multiclass contract.
+            if decision is None and len(evidence_classes) == 1:
+                classless_key = (key, None)
+                decision = decision_by_key.get(classless_key)
+                if decision is not None:
+                    matched_input_key = classless_key
+            if decision_key is not None:
+                expected_decision_keys.add(decision_key)
+                if matched_input_key is not None:
+                    matched_decision_keys.add(decision_key)
+                    matched_input_decision_keys.add(matched_input_key)
+            diagnostic_cell = (
+                {**dict(cell), "evidence_class": evidence_class}
+                if is_multiclass and cell is not None and evidence_class is not None
+                else cell
+            )
+            class_diagnostics = list(cell_diagnostics)
             action = decision.get("action") if isinstance(decision, Mapping) else None
-            if action not in {"execute", "reuse"}:
-                cell_diagnostics.append(_diagnostic("scheduling_action_invalid", "cell scheduling action is invalid", cell=cell))
-            elif action == "reuse":
+            if cell is not None and action not in {"execute", "reuse"}:
+                class_diagnostics.append(
+                    _diagnostic("scheduling_action_invalid", "cell scheduling action is invalid", cell=diagnostic_cell)
+                )
+            elif cell is not None and action == "reuse":
                 proof = decision.get("proof") if isinstance(decision.get("proof"), Mapping) else {}
                 failures = _reuse_failures(
                     proof,
@@ -660,141 +744,156 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                     registration=eligible[0]["registration"] if len(eligible) == 1 else {},
                     subjects=subjects,
                     census=census,
+                    evidence_class=str(evidence_class),
                 )
                 if failures:
-                    cell_diagnostics.append(
-                        _diagnostic("scheduled_proof_not_reusable", f"scheduled proof cannot be reused: {sorted(set(failures))}", cell=cell)
+                    class_diagnostics.append(
+                        _diagnostic(
+                            "scheduled_proof_not_reusable",
+                            f"scheduled proof cannot be reused: {sorted(set(failures))}",
+                            cell=diagnostic_cell,
+                        )
                     )
-        diagnostics.extend(cell_diagnostics)
-        compiled: dict[str, Any] = {
-            "cell": dict(selected),
-            "subject_kind": _cell_subject_kind(selected),
-            "subject_key": cell_subject.get("subject_key") if cell is not None else None,
-            "valid": not cell_diagnostics,
-            "diagnostics": cell_diagnostics,
-            "producer_id": None,
-            "disposition": None,
-        }
-        if not cell_diagnostics:
-            producer = eligible[0]
-            registration = producer["registration"]
-            compiled["producer_id"] = registration["producer_id"]
-            decision = decision_by_key[key]
-            compiled["disposition"] = decision["action"]
-            selected_evidence_class = _select_evidence_class(registration, cell, census)
-            if selected_evidence_class is None:
-                raise RuntimeError("eligible producer lost its evidence-class credential binding")
-            command = {
-                "producer_id": registration["producer_id"],
-                "producer_revision": registration["producer_revision"],
-                "scenario_id": cell["scenario_id"],
-                "scenario_revision": registration["scenario_revision"],
-                "assertion_id": selected["assertion_id"],
-                "variant": selected["variant"],
-                "execution_variant": execution_variant_key(
-                    provider=str(selected["provider"]) if selected.get("provider") is not None else None,
-                    assertion_id=str(selected["assertion_id"]),
-                    scenario_id=str(cell["scenario_id"]),
-                    variant=selected.get("variant"),
-                    subject_kind=_cell_subject_kind(selected),
-                ),
-                "module": registration["executable_module"],
-                "implementation": registration["implementation"],
-                "oracle_source": registration["oracle_source"],
-                "oracle_entrypoint": registration["oracle_entrypoint"],
-                "evidence_class": selected_evidence_class,
-                "required_activity": list(registration["observed_activity"]),
-                "required_artifacts": list(
-                    dict.fromkeys(
-                        [
-                            *registration["required_artifacts"],
-                            *(registration.get("required_artifacts_by_scenario") or {}).get(
-                                str(cell["scenario_id"]),
-                                [],
-                            ),
-                        ]
-                    )
-                ),
-                "required_cleanup": list(registration["required_cleanup"]),
-                "required_executables": list(registration.get("required_executables", [])),
-                "credential_binding_ids": list(
-                    _registration_bindings(
-                        registration,
-                        provider=str(selected.get("provider") or ""),
-                        evidence_class=selected_evidence_class,
-                    )
-                    or []
-                ),
+            diagnostics.extend(class_diagnostics)
+            compiled_cell = dict(selected)
+            compiled: dict[str, Any] = {
+                "cell": compiled_cell,
                 "subject_kind": _cell_subject_kind(selected),
-                "subject_key": cell_subject.get("subject_key"),
-                "provider": selected.get("provider"),
-                "capability": cell.get("capability"),
-                "disposition": cell.get("disposition", "implemented"),
-                "subject_id": cell_subject.get("subject_key") or cell_subject.get("subject_id"),
-                "provider_artifact_required": registration.get("provider_artifact_required", True),
-                "provider_contract_digest": sha256_json(cell),
-                "adapter_digest": producer.get("code_digest"),
-                "oracle_digest": producer.get("oracle_digest"),
-                "longhouse_source_sha": subject["longhouse_source_sha"],
-                "mode": sorted(registration.get("modes") or [""])[0] or None,
-                "worker_id": census.get("worker_id"),
-                "worker_platform": census.get("platform"),
-                "worker_architecture": census.get("architecture"),
-                "sandbox_policy": registration["sandbox_policy"],
-                "network_policy": registration["network_policy"],
-                "observation_scope": registration.get("observation_scope", "cell"),
-                "qualification_model": (
-                    (census.get("qualification_model_pins") or {}).get(str(selected.get("provider")))
-                    if selected.get("provider") is not None
-                    else None
-                ),
-                "priority": cell.get("assurance_priority", "release_gate"),
-                "timeout_seconds": 600,
-                "max_cost_usd": 2.0,
-                "freshness_max_age_seconds": _max_age_for_class(cell, selected_evidence_class),
-                "scheduling_reason": decision["reason"],
+                "subject_key": cell_subject.get("subject_key") if cell is not None else None,
+                "valid": not class_diagnostics,
+                "diagnostics": class_diagnostics,
+                "producer_id": None,
+                "disposition": None,
             }
-            if _cell_subject_kind(selected) == PROVIDER_RELEASE_SUBJECT:
-                command["provider_artifact"] = dict(cell_subject.get("provider_artifact") or {})
-            elif isinstance(registration.get("vehicle_provider"), str):
-                vehicle_provider = str(registration["vehicle_provider"])
-                vehicle_subject = subjects[vehicle_provider]
-                command["vehicle_provider"] = vehicle_provider
-                command["vehicle_provider_artifact"] = dict(vehicle_subject.get("provider_artifact") or {})
-                command["vehicle_qualification_model"] = (census.get("qualification_model_pins") or {}).get(vehicle_provider)
-            command["longhouse_source_sha"] = cell_subject.get("longhouse_source_sha")
-            # Loop 1 may reuse an exact proof, but Loop 2 must still know how
-            # to execute this cell against a new Longhouse candidate. Keep one
-            # complete, immutable command denominator in the retained plan;
-            # `commands` remains only the Loop 1 execution subset.
-            qualification_commands.append(command)
-            is_sampled = key in sampled_keys
-            if is_sampled:
-                # Sampled behavior is intentionally executed by Loop 2 but is
-                # never admitted into Loop 1's proof/reuse gate. Keeping it in
-                # the same immutable manifest makes the signal real without
-                # letting a model-choice observation block a release.
-                sampled_commands.append(command)
-            elif decision["action"] == "reuse":
-                reused_proofs.append(
-                    {
-                        **dict(decision["proof"]),
-                        # Proof rows are assertion-shaped, but a scenario
-                        # producer makes one observation for all of its cells.
-                        # Keep that grouping inside the retained plan so exact
-                        # admission can reject legacy/mixed generations.
-                        "producer_id": registration["producer_id"],
-                        "scenario_id": cell["scenario_id"],
-                        "scenario_revision": registration["scenario_revision"],
-                        "observation_scope": registration.get("observation_scope", "cell"),
-                    }
-                )
+            if is_multiclass and evidence_class is not None:
+                compiled_cell["evidence_class"] = evidence_class
+                compiled["evidence_class"] = evidence_class
+            if not class_diagnostics:
+                producer = eligible[0]
+                registration = producer["registration"]
+                compiled["producer_id"] = registration["producer_id"]
+                compiled["disposition"] = decision["action"]
+                if evidence_class is None:
+                    raise RuntimeError("eligible producer lost its evidence-class credential binding")
+                command = {
+                    "producer_id": registration["producer_id"],
+                    "producer_revision": registration["producer_revision"],
+                    "scenario_id": cell["scenario_id"],
+                    "scenario_revision": registration["scenario_revision"],
+                    "assertion_id": selected["assertion_id"],
+                    "variant": selected["variant"],
+                    "execution_variant": execution_variant_key(
+                        provider=str(selected["provider"]) if selected.get("provider") is not None else None,
+                        assertion_id=str(selected["assertion_id"]),
+                        scenario_id=str(cell["scenario_id"]),
+                        variant=selected.get("variant"),
+                        subject_kind=_cell_subject_kind(selected),
+                    ),
+                    "module": registration["executable_module"],
+                    "implementation": registration["implementation"],
+                    "oracle_source": registration["oracle_source"],
+                    "oracle_entrypoint": registration["oracle_entrypoint"],
+                    "evidence_class": evidence_class,
+                    "required_activity": list(registration["observed_activity"]),
+                    "required_artifacts": list(
+                        dict.fromkeys(
+                            [
+                                *registration["required_artifacts"],
+                                *(registration.get("required_artifacts_by_scenario") or {}).get(
+                                    str(cell["scenario_id"]),
+                                    [],
+                                ),
+                            ]
+                        )
+                    ),
+                    "required_cleanup": list(registration["required_cleanup"]),
+                    "required_executables": list(registration.get("required_executables", [])),
+                    "credential_binding_ids": list(
+                        _registration_bindings(
+                            registration,
+                            provider=str(selected.get("provider") or ""),
+                            evidence_class=evidence_class,
+                        )
+                        or []
+                    ),
+                    "subject_kind": _cell_subject_kind(selected),
+                    "subject_key": cell_subject.get("subject_key"),
+                    "provider": selected.get("provider"),
+                    "capability": cell.get("capability"),
+                    "disposition": cell.get("disposition", "implemented"),
+                    "subject_id": cell_subject.get("subject_key") or cell_subject.get("subject_id"),
+                    "provider_artifact_required": registration.get("provider_artifact_required", True),
+                    "provider_contract_digest": sha256_json(cell),
+                    "adapter_digest": producer.get("code_digest"),
+                    "oracle_digest": producer.get("oracle_digest"),
+                    "longhouse_source_sha": subject["longhouse_source_sha"],
+                    "mode": sorted(registration.get("modes") or [""])[0] or None,
+                    "worker_id": census.get("worker_id"),
+                    "worker_platform": census.get("platform"),
+                    "worker_architecture": census.get("architecture"),
+                    "sandbox_policy": registration["sandbox_policy"],
+                    "network_policy": registration["network_policy"],
+                    "observation_scope": registration.get("observation_scope", "cell"),
+                    "qualification_model": (
+                        (census.get("qualification_model_pins") or {}).get(str(selected.get("provider")))
+                        if selected.get("provider") is not None
+                        else None
+                    ),
+                    "priority": cell.get("assurance_priority", "release_gate"),
+                    "timeout_seconds": 600,
+                    "max_cost_usd": 2.0,
+                    "freshness_max_age_seconds": _max_age_for_class(cell, evidence_class),
+                    "scheduling_reason": decision["reason"],
+                }
+                if _cell_subject_kind(selected) == PROVIDER_RELEASE_SUBJECT:
+                    command["provider_artifact"] = dict(cell_subject.get("provider_artifact") or {})
+                elif isinstance(registration.get("vehicle_provider"), str):
+                    vehicle_provider = str(registration["vehicle_provider"])
+                    vehicle_subject = subjects[vehicle_provider]
+                    command["vehicle_provider"] = vehicle_provider
+                    command["vehicle_provider_artifact"] = dict(vehicle_subject.get("provider_artifact") or {})
+                    command["vehicle_qualification_model"] = (census.get("qualification_model_pins") or {}).get(vehicle_provider)
+                command["longhouse_source_sha"] = cell_subject.get("longhouse_source_sha")
+                # Loop 1 may reuse an exact proof, but Loop 2 must still know how
+                # to execute this cell against a new Longhouse candidate. Keep one
+                # complete, immutable command denominator in the retained plan;
+                # `commands` remains only the Loop 1 execution subset.
+                qualification_commands.append(command)
+                is_sampled = key in sampled_keys
+                if is_sampled:
+                    # Sampled behavior is intentionally executed by Loop 2 but is
+                    # never admitted into Loop 1's proof/reuse gate. Keeping it in
+                    # the same immutable manifest makes the signal real without
+                    # letting a model-choice observation block a release.
+                    sampled_commands.append(command)
+                elif decision["action"] == "reuse":
+                    reused_proofs.append(
+                        {
+                            **dict(decision["proof"]),
+                            "evidence_class": evidence_class,
+                            # Proof rows are assertion-shaped, but a scenario
+                            # producer makes one observation for all of its cells.
+                            # Keep that grouping inside the retained plan so exact
+                            # admission can reject legacy/mixed generations.
+                            "producer_id": registration["producer_id"],
+                            "scenario_id": cell["scenario_id"],
+                            "scenario_revision": registration["scenario_revision"],
+                            "observation_scope": registration.get("observation_scope", "cell"),
+                        }
+                    )
+                else:
+                    commands.append(command)
+            if key in sampled_keys:
+                sampled_compiled_cells.append(compiled)
             else:
-                commands.append(command)
-        if key in sampled_keys:
-            sampled_compiled_cells.append(compiled)
-        else:
-            compiled_cells.append(compiled)
+                compiled_cells.append(compiled)
+    if duplicate_decisions or matched_decision_keys != expected_decision_keys or matched_input_decision_keys != set(decision_by_key):
+        diagnostics.append(
+            _diagnostic(
+                "scheduling_decisions_invalid",
+                "scheduling did not decide every accepted Resume cell/evidence class exactly once",
+            )
+        )
 
     subject_keys = sorted(
         {

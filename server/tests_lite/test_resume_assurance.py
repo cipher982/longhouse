@@ -123,7 +123,8 @@ def _inputs() -> dict:
             "changed_paths": [],
             "decisions": [
                 {
-                    "cell": copy.deepcopy(cell),
+                    "cell": {**copy.deepcopy(cell), "evidence_class": "live_token"},
+                    "required_evidence_class": "live_token",
                     "action": "execute",
                     "reason": "never_proven",
                     "priority": "release_gate",
@@ -136,6 +137,36 @@ def _inputs() -> dict:
             "total_execute_cost_budget_usd": 4.0,
         },
     }
+
+
+def _dual_class_inputs() -> dict:
+    inputs = _inputs()
+    target_variant = "clean_exit"
+    for rows in (inputs["accepted_epoch"]["contract_shape"], inputs["current_contract"]):
+        row = next(row for row in rows if row["variant"] == target_variant)
+        row["acceptable_evidence"] = ["live_token", "scripted_model"]
+        row["required_evidence_classes"] = ["live_token", "scripted_model"]
+    for producers in (inputs["accepted_epoch"]["producers"], inputs["worker_census"]["producers"]):
+        registration = producers[0]["registration"]
+        registration["evidence_classes"] = sorted(set(registration["evidence_classes"]) | {"scripted_model"})
+        registration["credential_binding_ids_by_evidence_class"] = {
+            "live_token": ["codex_provider_token", "runtime_host_control"],
+            "scripted_model": ["runtime_host_control"],
+        }
+    decisions = []
+    for decision in inputs["scheduling"]["decisions"]:
+        if decision["cell"]["variant"] == target_variant:
+            for evidence_class in ("live_token", "scripted_model"):
+                class_decision = copy.deepcopy(decision)
+                class_decision["cell"]["evidence_class"] = evidence_class
+                class_decision["required_evidence_class"] = evidence_class
+                decisions.append(class_decision)
+        else:
+            decisions.append(decision)
+    inputs["scheduling"]["decisions"] = decisions
+    inputs["accepted_epoch"]["epoch_digest"] = content_digest(inputs["accepted_epoch"], "epoch_digest")
+    inputs["worker_census"]["census_digest"] = content_digest(inputs["worker_census"], "census_digest")
+    return inputs
 
 
 def _codes(compiled: dict) -> set[str]:
@@ -220,7 +251,8 @@ def _product_vehicle_inputs() -> dict:
                 "changed_paths": [],
                 "decisions": [
                     {
-                        "cell": copy.deepcopy(cell),
+                        "cell": {**copy.deepcopy(cell), "evidence_class": "live_token"},
+                        "required_evidence_class": "live_token",
                         "action": "execute",
                         "reason": "never_proven",
                         "priority": "release_gate",
@@ -244,6 +276,8 @@ def test_compiler_emits_deterministic_two_variant_plan() -> None:
 
     assert first == second
     assert first["report"]["valid"] is True
+    assert first["report"]["report_digest"] == "sha256:65b80a2f1125d53d16bc8b01546a6f1a7bbdd07aaaf5c2128e1f507d2ac01a63"
+    assert first["plan"]["plan_digest"] == "sha256:1c97ce490e69d93ca87afe89c517ebd91b0e0acccc483c5fda3ed7bf0d72a512"
     assert first["report"]["report_digest"].startswith("sha256:")
     assert first["plan"]["plan_digest"] == first["report"]["plan_digest"]
     assert [command["variant"] for command in first["plan"]["commands"]] == [
@@ -253,6 +287,60 @@ def test_compiler_emits_deterministic_two_variant_plan() -> None:
     assert first["plan"]["qualification_commands"] == first["plan"]["commands"]
     assert {command["module"] for command in first["plan"]["commands"]} == {"zerg.qa.codex_native_resume"}
     assert {command["qualification_model"] for command in first["plan"]["commands"]} == {"gpt-5.3-codex-low"}
+
+
+def test_compiler_infers_single_class_for_untagged_decisions() -> None:
+    inputs = _inputs()
+    for decision in inputs["scheduling"]["decisions"]:
+        decision["cell"].pop("evidence_class")
+        decision.pop("required_evidence_class")
+
+    compiled = compile_resume_plan(inputs)
+
+    assert compiled["report"]["valid"] is True
+    assert {command["evidence_class"] for command in compiled["plan"]["commands"]} == {"live_token"}
+    assert compiled["plan"]["qualification_commands"] == compile_resume_plan(_inputs())["plan"]["qualification_commands"]
+
+
+def test_compiler_expands_required_evidence_classes_into_commands() -> None:
+    compiled = compile_resume_plan(_dual_class_inputs())
+
+    assert compiled["report"]["valid"] is True
+    cells = [row for row in compiled["report"]["cells"] if row["cell"]["variant"] == "clean_exit"]
+    assert {row["evidence_class"] for row in cells} == {"live_token", "scripted_model"}
+    assert {row["cell"]["evidence_class"] for row in cells} == {"live_token", "scripted_model"}
+    commands = [command for command in compiled["plan"]["commands"] if command["variant"] == "clean_exit"]
+    assert {command["evidence_class"] for command in commands} == {"live_token", "scripted_model"}
+    assert {tuple(command["credential_binding_ids"]) for command in commands} == {
+        ("codex_provider_token", "runtime_host_control"),
+        ("runtime_host_control",),
+    }
+
+
+def test_compiler_rejects_a_missing_required_class_decision() -> None:
+    inputs = _dual_class_inputs()
+    inputs["scheduling"]["decisions"] = [
+        decision for decision in inputs["scheduling"]["decisions"] if decision["cell"].get("evidence_class") != "scripted_model"
+    ]
+
+    compiled = compile_resume_plan(inputs)
+
+    assert compiled["plan"] is None
+    assert "scheduling_decisions_invalid" in _codes(compiled)
+
+
+def test_compiler_requires_producer_registration_for_each_required_class() -> None:
+    inputs = _dual_class_inputs()
+    for producers in (inputs["accepted_epoch"]["producers"], inputs["worker_census"]["producers"]):
+        registration = producers[0]["registration"]
+        registration["evidence_classes"].remove("scripted_model")
+    inputs["accepted_epoch"]["epoch_digest"] = content_digest(inputs["accepted_epoch"], "epoch_digest")
+    inputs["worker_census"]["census_digest"] = content_digest(inputs["worker_census"], "census_digest")
+
+    compiled = compile_resume_plan(inputs)
+
+    assert compiled["plan"] is None
+    assert "eligible_producer_missing" in _codes(compiled)
 
 
 def test_compiler_keeps_sampled_cells_executable_but_outside_the_release_gate() -> None:
@@ -474,10 +562,44 @@ def test_compiler_reuses_only_exact_fresh_published_proof() -> None:
     assert {command["variant"] for command in compiled["plan"]["qualification_commands"]} == {"clean_exit", "process_loss"}
     reused = compiled["plan"]["reused_proofs"][0]
     assert reused["artifact_id"] == "a" * 64
+    assert reused["evidence_class"] == "live_token"
     assert reused["producer_id"] == REGISTRATION.producer_id
     assert reused["scenario_id"] == "helm_cold_resume"
     assert reused["scenario_revision"] == REGISTRATION.scenario_revision
     assert reused["observation_scope"] == "cell"
+
+
+def test_compiler_reuses_each_required_evidence_class_separately() -> None:
+    inputs = _dual_class_inputs()
+    artifact = inputs["subjects"]["codex"]["provider_artifact"]
+    for index, decision in enumerate(inputs["scheduling"]["decisions"]):
+        cell = decision["cell"]
+        if cell["variant"] != "clean_exit":
+            continue
+        decision.update(
+            action="reuse",
+            reason="fresh_exact_proof",
+            proof={
+                "artifact_id": f"{index + 1:064x}",
+                "provider": "codex",
+                "assertion_id": cell["assertion_id"],
+                "variant": cell["variant"],
+                "evidence_class": cell["evidence_class"],
+                "provider_version": artifact["version"],
+                "provider_executable_identity": artifact["executable_identity"],
+                "provider_build_identity": artifact["build_identity"],
+                "longhouse_source_sha": inputs["subject"]["longhouse_source_sha"],
+                "accepted_epoch_digest": inputs["accepted_epoch"]["epoch_digest"],
+                "generated_at": "2026-08-02T23:59:00Z",
+                "publication_message_id": f"provider-assurance-proof:{index}",
+            },
+        )
+
+    compiled = compile_resume_plan(inputs)
+
+    assert compiled["report"]["valid"] is True
+    reused = [proof for proof in compiled["plan"]["reused_proofs"] if proof["variant"] == "clean_exit"]
+    assert {proof["evidence_class"] for proof in reused} == {"live_token", "scripted_model"}
 
 
 def test_compiler_rejects_nearby_reuse_variant() -> None:
