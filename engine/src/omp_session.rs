@@ -1129,9 +1129,15 @@ mod discovered_source_cache {
     use crate::turn_claims::TurnClaim;
 
     const MAX_ENTRIES: usize = 4096;
+    /// Watcher events invalidate the cache, but an event can be dropped
+    /// (FSEvents coalesces and drops under load). Binding authority must not
+    /// rest on that: an entry is re-derived at least this often, the managed
+    /// observation cadence, so a missed claim change costs at most one scan.
+    const MAX_AGE: std::time::Duration = std::time::Duration::from_secs(5);
 
     struct Entry {
         generation: u64,
+        stored_at: std::time::Instant,
         device: u64,
         inode: u64,
         len: u64,
@@ -1173,6 +1179,7 @@ mod discovered_source_cache {
         let mut cache = CACHE.lock().ok()?;
         let entry = cache.as_mut()?.get_mut(path)?;
         if entry.generation != generation
+            || entry.stored_at.elapsed() > MAX_AGE
             || entry.device != device
             || entry.inode != inode
             || metadata.len() < entry.len
@@ -1208,6 +1215,7 @@ mod discovered_source_cache {
             path.to_path_buf(),
             Entry {
                 generation,
+                stored_at: std::time::Instant::now(),
                 device,
                 inode,
                 len: metadata.len(),
