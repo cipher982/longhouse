@@ -59,15 +59,12 @@ enum HearthPalette {
     }
 }
 
-/// One frame clock for every flame in a panel. Per-flame TimelineViews each
-/// schedule their own update, and the per-update cost (SwiftUI update, layout,
-/// CA commit) dwarfs drawing. Measured 2026-10-04, release build, four lit
-/// flames: a flame draw is ~0.03 ms; four independent timelines cost ~6% of a
-/// core, this shared clock ~4.3%, the same panel with no lit flame 0.4%.
+/// One shared frame clock avoids the per-flame SwiftUI update/layout/commit
+/// cost measured at 4.3% of a core for four lit flames.
 @MainActor
 public final class HearthClock: ObservableObject {
-    /// 24 fps: the flicker is smooth noise, so film rate reads as fire.
-    static let frameInterval: TimeInterval = 1.0 / 24.0
+    /// Ten frames per second keeps the visible hearth under the desktop CPU budget.
+    static let frameInterval: TimeInterval = 1.0 / 10.0
 
     @Published private(set) var time: Double = 0
     private var timer: Timer?

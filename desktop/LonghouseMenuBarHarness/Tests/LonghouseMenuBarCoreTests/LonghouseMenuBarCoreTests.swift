@@ -2922,7 +2922,7 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func cliSourceLoadsLargeSnapshotWithoutPipeDeadlock() throws {
+    func cliSourceDrainsLargeStdoutAndStderrConcurrently() throws {
         let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -2938,8 +2938,10 @@ struct LonghouseMenuBarCoreTests {
             "suggested_actions": [String](),
         ]
         try JSONSerialization.data(withJSONObject: payload).write(to: payloadURL)
+        let outputCommand = LonghouseCLI.terminalCommand(for: ("/bin/cat", [payloadURL.path]))
         let source = CLIHealthSnapshotSource(
-            launchPath: "/bin/cat", arguments: [payloadURL.path]
+            launchPath: "/bin/sh",
+            arguments: ["-c", "\(outputCommand) && /usr/bin/head -c 200000 /dev/zero >&2"]
         )
 
         let snapshot = try source.load()
@@ -4001,6 +4003,12 @@ struct LonghouseMenuBarCoreTests {
         // Lit above 0.12; lost control and quiet are cold ash.
         #expect(waiting > 0.12)
         #expect(sessions[4].hearthHeat <= 0.12 && sessions[5].hearthHeat <= 0.12)
+    }
+
+    @Test
+    @MainActor
+    func hearthAnimationRespectsDesktopFrameBudget() {
+        #expect(HearthClock.frameInterval >= 0.1)
     }
 
     @Test

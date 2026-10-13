@@ -39,40 +39,36 @@ public enum SnapshotSourceError: Error, LocalizedError {
     }
 }
 
-/// Capture both streams without pipe backpressure. The caller owns the timeout.
+/// Capture both streams concurrently; piping stdout to disk made every refresh
+/// a write proportional to the whole health snapshot.
 func runNativeCommand(
     launchPath: String,
     arguments: [String],
     timeoutSeconds: TimeInterval,
     currentDirectory: URL? = nil
 ) throws -> (status: Int32, output: Data, errorOutput: Data) {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("longhouse-command-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(
-        at: directory, withIntermediateDirectories: false,
-        attributes: [.posixPermissions: 0o700]
-    )
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let stdoutURL = directory.appendingPathComponent("stdout")
-    let stderrURL = directory.appendingPathComponent("stderr")
-    try Data().write(to: stdoutURL)
-    try Data().write(to: stderrURL)
-    let stdout = try FileHandle(forWritingTo: stdoutURL)
-    defer { try? stdout.close() }
-    let stderr = try FileHandle(forWritingTo: stderrURL)
-    defer { try? stderr.close() }
+    let stdoutPipe = Pipe()
+    let stderrPipe = Pipe()
+    let stdout = CommandOutputCapture(handle: stdoutPipe.fileHandleForReading)
+    let stderr = CommandOutputCapture(handle: stderrPipe.fileHandleForReading)
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: launchPath)
     process.arguments = arguments
     process.currentDirectoryURL = currentDirectory
     process.environment = LonghouseCLI.environment(prependingExecutablePath: launchPath)
-    process.standardOutput = stdout
-    process.standardError = stderr
+    process.standardOutput = stdoutPipe
+    process.standardError = stderrPipe
     let didExit = DispatchSemaphore(value: 0)
     process.terminationHandler = { _ in didExit.signal() }
     defer { process.terminationHandler = nil }
     try process.run()
+    stdoutPipe.fileHandleForWriting.closeFile()
+    stderrPipe.fileHandleForWriting.closeFile()
+
+    let readers = DispatchGroup()
+    stdout.startReading(in: readers)
+    stderr.startReading(in: readers)
     if didExit.wait(timeout: .now() + timeoutSeconds) == .timedOut {
         process.terminate()
         if didExit.wait(timeout: .now() + 2) == .timedOut, process.isRunning {
@@ -86,11 +82,36 @@ func runNativeCommand(
         }
         throw SnapshotSourceError.timedOut(seconds: timeoutSeconds)
     }
-    return (
-        process.terminationStatus,
-        try Data(contentsOf: stdoutURL),
-        try Data(contentsOf: stderrURL)
-    )
+
+    readers.wait()
+    return (process.terminationStatus, stdout.data, stderr.data)
+}
+
+private final class CommandOutputCapture: @unchecked Sendable {
+    private let handle: FileHandle
+    private let lock = NSLock()
+    private var capturedData = Data()
+
+    init(handle: FileHandle) {
+        self.handle = handle
+    }
+
+    func startReading(in group: DispatchGroup) {
+        group.enter()
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let data = handle.readDataToEndOfFile()
+            lock.lock()
+            capturedData = data
+            lock.unlock()
+            group.leave()
+        }
+    }
+
+    var data: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return capturedData
+    }
 }
 
 public struct FixtureHealthSnapshotSource: HealthSnapshotSource {
