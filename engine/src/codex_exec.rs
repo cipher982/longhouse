@@ -2226,6 +2226,7 @@ async fn run_codex_invocation(
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         };
         let outcome = invocation
             .idle(idle_signal)
@@ -2329,6 +2330,7 @@ async fn run_codex_invocation(
                                     terminal_state: "run_completed".to_string(),
                                     exit_code: Some(0),
                                     stderr: None,
+                                    terminal_reason: None,
                                 },
                             ) {
                                 input.discard_wake_input(&wake_id).await;
@@ -3826,12 +3828,18 @@ mod tests {
             failure.to_string(),
             "Codex turn ended with status failed: unexpected status 401 Unauthorized: Incorrect API key provided"
         );
-        assert_eq!(failure.auth_reason, Some(crate::provider_auth::AUTH_INVALID));
+        assert_eq!(
+            failure.auth_reason,
+            Some(crate::provider_auth::AUTH_INVALID)
+        );
 
         let generic = serde_json::json!({
             "params": {"turn": {"status": "failed", "error": {"message": "request timed out"}}}
         });
-        assert_eq!(super::codex_turn_failure("failed", &generic).auth_reason, None);
+        assert_eq!(
+            super::codex_turn_failure("failed", &generic).auth_reason,
+            None
+        );
     }
 
     #[tokio::test]

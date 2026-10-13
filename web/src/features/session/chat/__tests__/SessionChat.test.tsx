@@ -2146,6 +2146,11 @@ describe("SessionChat", () => {
         actions: [{ label: "Edit" }, { label: "Discard" }],
       });
     });
+    expect(
+      screen.getByText(
+        "OMP has no OpenAI credential; run `omp /login` on the selected machine.",
+      ),
+    ).toBeInTheDocument();
     expect(requestId).not.toBe("");
     expect(screen.queryByText(/Not confirmed —/)).not.toBeInTheDocument();
   });

@@ -2163,6 +2163,7 @@ mod tests {
                         terminal_state: "run_completed".to_string(),
                         exit_code: Some(0),
                         stderr: None,
+                        terminal_reason: None,
                     })
                     .unwrap();
                 crate::console_lifecycle::register(invocation).unwrap();

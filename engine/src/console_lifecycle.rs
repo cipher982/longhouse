@@ -158,6 +158,7 @@ pub struct IdleSignal {
     pub terminal_state: String,
     pub exit_code: Option<i32>,
     pub stderr: Option<String>,
+    pub terminal_reason: Option<&'static str>,
 }
 
 #[derive(Clone, Debug)]
@@ -1321,6 +1322,7 @@ mod tests {
                 terminal_state: "run_completed".to_string(),
                 exit_code: Some(0),
                 stderr: None,
+                terminal_reason: None,
             })
             .unwrap();
         assert_eq!(outcome.invocation_state, InvocationState::Parked);
@@ -1352,6 +1354,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         }
     }
 
@@ -1423,6 +1426,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
         let wake = invocation
             .response_started(serde_json::json!({"kind": "task_completed"}))
@@ -1473,6 +1477,7 @@ mod tests {
                 terminal_state: "run_completed".to_string(),
                 exit_code: Some(0),
                 stderr: None,
+                terminal_reason: None,
             })
             .unwrap();
         let first = invocation
@@ -1494,6 +1499,7 @@ mod tests {
                     terminal_state: "run_completed".to_string(),
                     exit_code: Some(0),
                     stderr: None,
+                    terminal_reason: None,
                 },
             )
             .unwrap();
@@ -1521,6 +1527,7 @@ mod tests {
                     terminal_state: "run_completed".to_string(),
                     exit_code: Some(0),
                     stderr: None,
+                    terminal_reason: None,
                 },
             )
             .unwrap();
@@ -1544,6 +1551,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
         let wake = invocation
             .response_started(serde_json::json!({"kind": "task_completed"}))
@@ -1558,6 +1566,7 @@ mod tests {
                 terminal_state: "run_completed".to_string(),
                 exit_code: Some(0),
                 stderr: None,
+                terminal_reason: None,
             })
             .unwrap();
         assert!(!outcome.has_active_turn);
@@ -1627,6 +1636,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
         let wake = invocation
             .response_started(serde_json::json!({"kind": "monitor_event"}))
@@ -1635,6 +1645,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
         // The provider exits while its registry still lists the monitor.
         invocation.mark_stopped();
@@ -1674,6 +1685,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
         let wake = invocation
             .response_started(serde_json::json!({"kind": "task_completed"}))
@@ -1717,6 +1729,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
         invocation
             .send_user_input(
@@ -1751,6 +1764,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
         let wake = invocation
             .response_started(serde_json::json!({"kind": "task_completed"}))
@@ -1760,6 +1774,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
         assert!(lookup_retained_wake(&wake.invocation_id, &wake.wake_id).is_some());
 
@@ -1795,6 +1810,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
         let first = invocation
             .response_started(serde_json::json!({"kind": "first"}))
@@ -1804,6 +1820,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
         let second = invocation
             .response_started(serde_json::json!({"kind": "second"}))
@@ -1813,6 +1830,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
 
         assert!(lookup_retained_wake(&first.invocation_id, &first.wake_id).is_none());
@@ -2061,6 +2079,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
         let wake = invocation
             .response_started(serde_json::json!({"kind": "task_completed"}))
@@ -2069,6 +2088,7 @@ mod tests {
             terminal_state: "run_completed".to_string(),
             exit_code: Some(0),
             stderr: None,
+            terminal_reason: None,
         });
         retained_wakes()
             .lock()

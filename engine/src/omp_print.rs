@@ -997,6 +997,7 @@ async fn queue_responding_turn(
                 Some(error.to_string()),
                 Some(invocation.state().as_str()),
                 Some(pending_count),
+                None,
             )
             .await;
             return Err(error).context("queueing user input in a responding OMP invocation");
@@ -1043,6 +1044,7 @@ async fn queue_responding_turn(
             &reason,
             None,
             invocation.pending_count(),
+            None,
         )
         .await;
         invocation.process_exited();
@@ -1237,6 +1239,7 @@ async fn cancel_missing_wake(config: &OmpPrintRunConfig) -> Result<OmpPrintRunSu
         Some("wake target is gone or wake_id is unknown".to_string()),
         Some("closed"),
         Some(0),
+        None,
     )
     .await;
     Ok(OmpPrintRunSummary {
@@ -1918,6 +1921,7 @@ async fn monitor_omp_print(
                     terminal_state: terminal_state.to_string(),
                     exit_code: None,
                     stderr,
+                    terminal_reason: projection.auth_failure_reason,
                 }) {
                     Some(outcome) if outcome.invocation_state == InvocationState::Closed => {
                         closing_idle = Some(outcome)
@@ -2020,6 +2024,7 @@ async fn settle_omp_turn_claim(
     reason: &str,
     exit_code: Option<i32>,
     pending_count: usize,
+    auth_failure_reason: Option<&'static str>,
 ) {
     let Ok(claim) = claims.read(&binding.run_id) else {
         return;
@@ -2035,6 +2040,7 @@ async fn settle_omp_turn_claim(
             (!reason.is_empty()).then(|| reason.to_string()),
             Some("closed"),
             Some(pending_count),
+            auth_failure_reason,
         )
         .await;
 }
@@ -2044,6 +2050,7 @@ async fn settle_omp_recorded_claim(
     terminal_state: &str,
     reason: Option<&str>,
     exit_code: Option<i32>,
+    auth_failure_reason: Option<&'static str>,
 ) {
     if let Ok(registry) = crate::turn_claims::default_registry() {
         settle_omp_turn_claim(
@@ -2054,6 +2061,7 @@ async fn settle_omp_recorded_claim(
             reason.unwrap_or(""),
             exit_code,
             claim.pending_count,
+            auth_failure_reason,
         )
         .await;
     }
@@ -2085,6 +2093,7 @@ async fn settle_omp_invocation_turns(
             reason,
             exit_code,
             pending_count,
+            None,
         )
         .await;
     }
@@ -2101,6 +2110,7 @@ async fn settle_omp_invocation_turns(
             &queued_reason,
             exit_code,
             pending_count,
+            None,
         )
         .await;
     }
@@ -2113,6 +2123,7 @@ async fn settle_omp_invocation_turns(
             reason,
             exit_code,
             pending_count,
+            None,
         )
         .await;
     }
@@ -2177,6 +2188,7 @@ async fn settle_omp_claims_for_launch(
             reason,
             None,
             claim.pending_count,
+            None,
         )
         .await;
     }
@@ -2341,6 +2353,7 @@ async fn complete_idle(
                 outcome.signal.stderr,
                 Some(outcome.invocation_state.as_str()),
                 Some(outcome.pending_count),
+                outcome.signal.terminal_reason,
             )
             .await;
     } else if let Ok(claims) = crate::turn_claims::default_registry() {
@@ -2441,7 +2454,7 @@ async fn monitor_recovered_omp_claim(
             } else {
                 format!("OMP recovered process-group cleanup was not verified: {error}")
             };
-            settle_omp_recorded_claim(&claim, &sink, "run_failed", Some(&reason), None).await;
+            settle_omp_recorded_claim(&claim, &sink, "run_failed", Some(&reason), None, None).await;
             return;
         }
         if !thinking_posted && projection.prompt_acknowledged {
@@ -2461,7 +2474,7 @@ async fn monitor_recovered_omp_claim(
             } else {
                 format!("{reason}; recovered process-group cleanup was not verified")
             };
-            settle_omp_recorded_claim(&claim, &sink, "run_failed", Some(&reason), None).await;
+            settle_omp_recorded_claim(&claim, &sink, "run_failed", Some(&reason), None, None).await;
             return;
         }
         if (projection.turn_settled || projection.rpc_rejected)
@@ -2521,6 +2534,9 @@ async fn monitor_recovered_omp_claim(
                 terminal_state,
                 terminal_reason.as_deref(),
                 None,
+                cleanup_verified
+                    .then_some(projection.auth_failure_reason)
+                    .flatten(),
             )
             .await;
             return;
@@ -2539,7 +2555,7 @@ async fn monitor_recovered_omp_claim(
                 "OMP recovered terminal drain expired and owned process-group cleanup was not verified"
                     .to_string()
             };
-            settle_omp_recorded_claim(&claim, &sink, "run_failed", Some(&reason), None).await;
+            settle_omp_recorded_claim(&claim, &sink, "run_failed", Some(&reason), None, None).await;
             return;
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -2610,6 +2626,9 @@ async fn settle_recovered_dead_claim(
         terminal_state,
         terminal_reason.as_deref(),
         None,
+        cleanup_verified
+            .then_some(projection.auth_failure_reason)
+            .flatten(),
     )
     .await;
 }
@@ -2829,7 +2848,8 @@ impl OmpStreamProjection {
                         .filter(|text| !text.trim().is_empty())
                     {
                         self.native_error = Some(error.to_string());
-                        self.auth_failure_reason = crate::provider_auth::omp_prompt_result_reason(error);
+                        self.auth_failure_reason =
+                            crate::provider_auth::omp_prompt_result_reason(error);
                     }
                 }
             }
@@ -3406,15 +3426,12 @@ impl OmpPrintSink {
         reason: Option<String>,
         invocation_state: Option<&str>,
         pending_count: Option<usize>,
+        auth_failure_reason: Option<&'static str>,
     ) {
         self.persist_local_phase("finished", None, Utc::now());
         let mut payload = self.terminal_payload(
             terminal_state,
-            terminal_reason_code(
-                terminal_state,
-                reason.as_deref(),
-                projection.auth_failure_reason,
-            ),
+            terminal_reason_code(terminal_state, reason.as_deref(), auth_failure_reason),
             exit_code,
             reason.as_deref(),
         );
@@ -3796,6 +3813,7 @@ mod tests {
                 Some("401 Unauthorized".to_string()),
                 Some("parked"),
                 Some(1),
+                None,
             )
             .await;
         });
@@ -4144,7 +4162,11 @@ mod tests {
             "run_failed"
         );
         assert_eq!(
-            terminal_reason_code("run_completed", None, Some(crate::provider_auth::AUTH_MISSING)),
+            terminal_reason_code(
+                "run_completed",
+                None,
+                Some(crate::provider_auth::AUTH_MISSING)
+            ),
             "run_completed"
         );
     }
@@ -4260,6 +4282,7 @@ mod tests {
                 terminal_state: "run_completed".to_string(),
                 exit_code: Some(0),
                 stderr: None,
+                terminal_reason: None,
             })
             .unwrap();
         assert_eq!(idle.invocation_state, InvocationState::Parked);

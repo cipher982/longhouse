@@ -34,7 +34,6 @@ const CLAUDE_RUNTIME_SOURCE: &str = "claude_console";
 #[cfg(test)]
 pub const DEFAULT_CLAUDE_BIN: &str = "claude";
 
-
 #[derive(Clone, Debug)]
 pub struct ClaudePrintRunConfig {
     pub session_id: String,
@@ -97,7 +96,6 @@ impl std::ops::DerefMut for ClaudePrintSink {
         &mut self.run
     }
 }
-
 
 #[derive(Default)]
 struct StreamProgress {
@@ -398,15 +396,7 @@ pub async fn start_claude_print_turn(
         argv,
     };
     tokio::spawn(async move {
-        monitor_claude_print(
-            child,
-            stdout_path,
-            stderr_path,
-            sink,
-            invocation,
-            lock,
-        )
-        .await;
+        monitor_claude_print(child, stdout_path, stderr_path, sink, invocation, lock).await;
         drop(monitor);
     });
     Ok(summary)
@@ -1067,7 +1057,7 @@ async fn monitor_claude_print(
     mut child: Child,
     stdout_path: PathBuf,
     stderr_path: PathBuf,
-    mut sink: ClaudePrintSink,
+    sink: ClaudePrintSink,
     invocation: Arc<ConsoleInvocation>,
     lock: File,
 ) {
@@ -1225,6 +1215,7 @@ async fn monitor_claude_print(
                     terminal_state: terminal,
                     exit_code: None,
                     stderr,
+                    terminal_reason: None,
                 }) {
                     let closed = complete_idle(&invocation, &sink, outcome).await;
                     stream.begin_turn();
@@ -1235,7 +1226,6 @@ async fn monitor_claude_print(
                 }
             }
         }
-
 
         match exit_status {
             Ok(Some(status)) => {
@@ -1370,7 +1360,6 @@ fn record_closed_invocation(invocation: &ConsoleInvocation) {
     }
 }
 
-
 fn spawn_claude(
     config: &ClaudePrintRunConfig,
     args: &[String],
@@ -1500,7 +1489,6 @@ fn settle_terminal_state(
         "run_failed".to_string()
     }
 }
-
 
 impl ClaudePrintSink {
     fn for_binding(&self, binding: &TurnBinding) -> Self {
@@ -1919,7 +1907,6 @@ fn private_output_file(path: &Path) -> Result<File> {
         .open(path)?)
 }
 
-
 fn set_private_dir(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
@@ -2078,7 +2065,6 @@ mod tests {
             "run_cancelled"
         );
     }
-
 
     #[test]
     fn stream_init_identity_must_match_requested_provider_thread() {
@@ -3296,15 +3282,25 @@ for _ in sys.stdin:
 
         assert_eq!(result["terminal_state"], "run_failed");
         let launches = fake.launches();
-        assert_eq!(launches.len(), 1, "typed auth failures must not be retried: {launches:?}");
+        assert_eq!(
+            launches.len(),
+            1,
+            "typed auth failures must not be retried: {launches:?}"
+        );
         assert!(launches[0].contains("--session-id"), "{launches:?}");
         let terminal = events
             .iter()
             .find(|event| event["kind"] == "terminal_signal")
             .expect("terminal signal posted");
-        assert_eq!(terminal["payload"]["terminal_reason"], "provider_auth_required");
+        assert_eq!(
+            terminal["payload"]["terminal_reason"],
+            "provider_auth_required"
+        );
         assert!(!events.iter().any(|event| {
-            event.pointer("/payload/progress_kind").and_then(Value::as_str) == Some("claude_print_stream")
+            event
+                .pointer("/payload/event/error")
+                .and_then(Value::as_str)
+                == Some("authentication_failed")
         }));
         assert_fake_groups_gone(&fake).await;
     }

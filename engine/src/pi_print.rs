@@ -510,6 +510,7 @@ async fn monitor_pi_print(
                 terminal_state: "run_failed".to_string(),
                 exit_code: None,
                 stderr: Some(error.to_string()),
+                terminal_reason: None,
             }) {
                 sink.post_terminal_with_lifecycle(
                     &outcome.signal.terminal_state,
@@ -575,6 +576,7 @@ async fn monitor_pi_print(
                     terminal_state: terminal_state.to_string(),
                     exit_code: status.code(),
                     stderr,
+                    terminal_reason: None,
                 }) {
                     sink.post_terminal_with_lifecycle(
                         &outcome.signal.terminal_state,
@@ -597,6 +599,7 @@ async fn monitor_pi_print(
                     terminal_state: "run_failed".to_string(),
                     exit_code: None,
                     stderr: Some(error.to_string()),
+                    terminal_reason: None,
                 }) {
                     sink.post_terminal_with_lifecycle(
                         &outcome.signal.terminal_state,

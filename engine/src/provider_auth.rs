@@ -7,7 +7,12 @@ pub const AUTH_MISSING: &str = "provider_auth_missing";
 pub const AUTH_INVALID: &str = "provider_auth_invalid";
 pub const AUTH_HELPER_FAILED: &str = "provider_auth_helper_failed";
 
-const AUTH_FAILURE_REASONS: &[&str] = &[AUTH_REQUIRED, AUTH_MISSING, AUTH_INVALID, AUTH_HELPER_FAILED];
+const AUTH_FAILURE_REASONS: &[&str] = &[
+    AUTH_REQUIRED,
+    AUTH_MISSING,
+    AUTH_INVALID,
+    AUTH_HELPER_FAILED,
+];
 
 pub fn auth_failure_reason(reason: &str) -> Option<&'static str> {
     match reason {
@@ -44,7 +49,10 @@ pub fn codex_turn_error_reason(completed: &Value) -> Option<&'static str> {
     let error = completed.pointer("/params/turn/error")?;
     let code = error.get("code").and_then(Value::as_str);
     let kind = error.get("type").and_then(Value::as_str);
-    let message = error.get("message").and_then(Value::as_str).unwrap_or_default();
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     (code == Some("invalid_api_key")
         || kind == Some("authentication_error")
         || (message.starts_with("unexpected status 401 Unauthorized: Incorrect API key provided")
@@ -81,7 +89,11 @@ pub fn latest_auth_failures() -> HashMap<String, &'static str> {
         let item = history.entry(provider.to_string()).or_default();
         match payload.get("terminal_state").and_then(Value::as_str) {
             Some("run_completed") => {
-                if item.success_at.as_deref().is_none_or(|previous| occurred_at > previous) {
+                if item
+                    .success_at
+                    .as_deref()
+                    .is_none_or(|previous| occurred_at > previous)
+                {
                     item.success_at = Some(occurred_at.to_string());
                 }
             }
@@ -138,14 +150,20 @@ pub fn apply_auth_failure_overrides(readiness: &mut Value) {
         let Some(entry) = entries.get_mut(&provider).and_then(Value::as_object_mut) else {
             continue;
         };
-        let probe_state = entry.get("state").and_then(Value::as_str).unwrap_or("unknown");
+        let probe_state = match entry.get("state").and_then(Value::as_str) {
+            Some("ready") => Some("ready"),
+            Some("unknown") | None => Some("unknown"),
+            _ => None,
+        };
         entry.insert("auth_failure_reason".into(), Value::String(reason.into()));
-        if matches!(probe_state, "ready" | "unknown") {
+        if let Some(probe_state) = probe_state {
             entry.insert("probe_state".into(), Value::String(probe_state.into()));
             entry.insert("state".into(), Value::String("auth_failed".into()));
             entry.insert(
                 "detail".into(),
-                Value::String("The last Console turn was rejected for provider authentication".into()),
+                Value::String(
+                    "The last Console turn was rejected for provider authentication".into(),
+                ),
             );
             entry.insert(
                 "remediation".into(),
@@ -170,11 +188,15 @@ mod tests {
             Some(AUTH_MISSING)
         );
         assert_eq!(
-            omp_prompt_result_reason("omp-openai-key: target dev unavailable: credential helper timed out"),
+            omp_prompt_result_reason(
+                "omp-openai-key: target dev unavailable: credential helper timed out"
+            ),
             Some(AUTH_HELPER_FAILED)
         );
         assert_eq!(
-            omp_prompt_result_reason("401 Incorrect API key provided: masked (param=invalid_api_key)"),
+            omp_prompt_result_reason(
+                "401 Incorrect API key provided: masked (param=invalid_api_key)"
+            ),
             Some(AUTH_INVALID)
         );
         assert_eq!(omp_prompt_result_reason("request timed out"), None);
@@ -192,7 +214,10 @@ mod tests {
         });
         assert_eq!(codex_turn_error_reason(&failed), Some(AUTH_INVALID));
         assert_eq!(codex_turn_error_reason(&timeout), None);
-        assert_eq!(codex_turn_error_reason(&serde_json::json!({"message":"401 Unauthorized"})), None);
+        assert_eq!(
+            codex_turn_error_reason(&serde_json::json!({"message":"401 Unauthorized"})),
+            None
+        );
     }
 
     #[test]
@@ -236,7 +261,8 @@ mod tests {
                 )
                 .unwrap();
 
-            let mut readiness = serde_json::json!({"codex": {"state": "ready", "detail": "max plan"}});
+            let mut readiness =
+                serde_json::json!({"codex": {"state": "ready", "detail": "max plan"}});
             apply_auth_failure_overrides(&mut readiness);
             assert_eq!(readiness["codex"]["state"], "auth_failed");
             assert_eq!(readiness["codex"]["probe_state"], "ready");
@@ -259,7 +285,8 @@ mod tests {
                     ),
                 )
                 .unwrap();
-            let mut readiness = serde_json::json!({"codex": {"state": "ready", "detail": "max plan"}});
+            let mut readiness =
+                serde_json::json!({"codex": {"state": "ready", "detail": "max plan"}});
             apply_auth_failure_overrides(&mut readiness);
             assert_eq!(readiness["codex"]["state"], "ready");
             assert!(readiness["codex"].get("auth_failure_reason").is_none());

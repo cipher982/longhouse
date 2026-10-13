@@ -187,6 +187,7 @@ enum TurnOutcome {
     /// Idle with work unfinished. Not yet a failure: it must persist for
     /// `STALL_GRACE`, so a gap between steps is not mistaken for the end.
     Stalled(String),
+    Failed(String),
     AuthFailed(String),
 }
 
@@ -1822,7 +1823,10 @@ fn classify_steer(
 fn turn_is_over(messages: &[MessageView], submitted: &[String], busy: bool) -> bool {
     matches!(
         turn_outcome(messages, submitted, busy),
-        TurnOutcome::Completed | TurnOutcome::Cancelled | TurnOutcome::Failed(_) | TurnOutcome::AuthFailed(_)
+        TurnOutcome::Completed
+            | TurnOutcome::Cancelled
+            | TurnOutcome::Failed(_)
+            | TurnOutcome::AuthFailed(_)
     )
 }
 
