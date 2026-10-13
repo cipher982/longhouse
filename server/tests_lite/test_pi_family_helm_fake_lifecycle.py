@@ -38,17 +38,69 @@ def longhouse(tmp_path, monkeypatch):
         yield made
 
 
-def test_wait_for_idle_update_rejects_a_stale_idle_snapshot() -> None:
+def test_pi_turn_barrier_rejects_idle_before_its_native_completion() -> None:
     lifecycle = object.__new__(Lifecycle)
-    lifecycle.f = SimpleNamespace(is_idle=lambda state: state.get("phase") == "idle")
+    lifecycle.scripted_model = True
+    lifecycle.f = SimpleNamespace(
+        provider="pi",
+        name="Pi",
+        settles_between_turns=True,
+        is_idle=lambda state: state.get("phase") == "idle",
+    )
+    marker = "PI_HELM_TURN"
+    before = {"phase": "running", "updated_at": "2026-10-13T22:00:00.000Z"}
+    completion = {
+        "type": "message",
+        "id": "assistant-turn",
+        "timestamp": "2026-10-13T22:00:02.000Z",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": marker}], "stopReason": "stop"},
+    }
     states = [
-        {"phase": "idle", "updated_at": "before"},
-        {"phase": "running", "updated_at": "during"},
-        {"phase": "idle", "updated_at": "after"},
+        {"phase": "idle", "updated_at": "2026-10-13T22:00:01.000Z"},
+        {"phase": "running", "updated_at": "2026-10-13T22:00:03.000Z"},
+        {"phase": "idle", "updated_at": "2026-10-13T22:00:04.000Z"},
     ]
-    lifecycle.wait_state = lambda predicate, timeout=30: next(state for state in states if predicate(state))
+    observed = []
 
-    assert lifecycle.wait_for_idle_update(states[0]) == states[2]
+    def wait_state(predicate, timeout=30):
+        for state in states:
+            observed.append(state)
+            if predicate(state):
+                return state
+        raise AssertionError("the barrier accepted no subsequent idle state")
+
+    lifecycle.wait_state = wait_state
+
+    assert "live_turn_seq" not in before
+    assert lifecycle.wait_for_turn_completion(before, completion, marker=marker) == states[2]
+    assert observed == states
+
+
+def test_omp_turn_barrier_uses_the_next_terminal_sequence(monkeypatch, tmp_path) -> None:
+    helm = importlib.import_module("zerg.qa.pi_family_helm")
+    lifecycle = object.__new__(Lifecycle)
+    lifecycle.f = SimpleNamespace(provider="omp", name="OMP")
+    lifecycle.home = tmp_path
+    lifecycle.session_id = "session"
+    lifecycle.state = {"native_session_id": "native"}
+    lifecycle.session_file = tmp_path / "session.jsonl"
+    marker = "OMP_HELM_TURN"
+    completion = {
+        "type": "message",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": marker}], "stopReason": "stop"},
+    }
+    observed = {}
+
+    def wait_terminal(_home, _family, **kwargs):
+        observed.update(kwargs)
+        return {"type": "agent_end"}, {"live_turn_seq": kwargs["exact_turn_seq"]}
+
+    monkeypatch.setattr(helm, "_wait_channel_terminal", wait_terminal)
+
+    state = lifecycle.wait_for_turn_completion({"live_turn_seq": 11}, completion, marker=marker)
+
+    assert observed["exact_turn_seq"] == 12
+    assert state["live_turn_seq"] == 12
 
 
 def test_begin_rejects_a_queued_input_as_an_active_turn() -> None:
@@ -98,6 +150,11 @@ def test_a_whole_lifecycle_holds_every_cell(provider, whole):
     assert not not_held and result.get("assertions"), {"not held": not_held, "error": result.get("error")}
     assert (code, result["status"]) == (0, "pass")
     _conforms(provider, result)
+    if provider == "pi":
+        abort = result["observation"]["controls"]["abort"]["native_abort"]
+        local_abort = result["observation"]["controls"]["local_abort"]["native_abort"]
+        assert abort["observed"] is True and abort["stop_reason"] == "aborted"
+        assert local_abort["observed"] is True and local_abort["stop_reason"] == "aborted"
     assert set(result["assertions"]) == set(module.ASSERTIONS)
     assert json.loads((root / "cleanup-receipt.json").read_text(encoding="utf-8"))["status"] == "pass"
     # The producer removed its own isolation; the fixture had nothing to remove.
@@ -207,6 +264,25 @@ def test_scripted_model_lifecycle_calls_the_profile_endpoint_for_every_turn(prov
         and row["openrouter_credential_present"] is False
         for row in auth_rows
     )
+
+
+def test_scripted_pi_barrier_waits_past_an_early_idle_update(tmp_path, monkeypatch, capsys) -> None:
+    module = importlib.import_module("zerg.qa.pi_helm_lifecycle")
+    monkeypatch.delenv(module.FAMILY.live_env, raising=False)
+    monkeypatch.setenv(fake.FAULT_ENV, "idle_before_terminal")
+    root = tmp_path / "scripted-evidence"
+
+    with fake.longhouse(tmp_path, monkeypatch.setenv) as (cli, isolation):
+        code = module.main(fake.scripted_model_arguments("pi", cli, root))
+        result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+        assert list(isolation.iterdir()) == []
+    capsys.readouterr()
+
+    assert (code, result["status"], result["evidence_class"]) == (0, "pass", "scripted_model")
+    controls = result["observation"]["controls"]
+    assert "live_turn_seq" not in controls["launch"]["state"]
+    assert controls["follow_up"]["active_command"]["payload"]["outcome"] == "sent"
+    assert controls["follow_up"]["command"]["payload"]["outcome"] == "queued"
 
 
 @pytest.mark.parametrize("provider", ["omp", "pi"])

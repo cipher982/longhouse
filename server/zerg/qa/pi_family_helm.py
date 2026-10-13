@@ -34,6 +34,8 @@ import urllib.request
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -144,7 +146,7 @@ class Family:
     local_health: bool = False  # the engine's local health is snapshotted after launch
 
     # Which unmet conditions end the run (a failure of the run) and which are recorded for a cell to judge.
-    settles_between_turns: bool = False  # require a fresh idle state before starting the next input turn
+    settles_between_turns: bool = False  # use provider-correlated turn boundaries before another scripted input
     records_misses: bool = False  # an unseen busy state, an unanswered stale frame: recorded, not raised
     flush_must_complete: bool = False  # a flush that did not ship cleanly ends the run where it happens
     refused_command_ends_run: bool = False  # a host input or a final terminate that is not accepted ends the run
@@ -1476,6 +1478,18 @@ def _turn_sequence(state: Mapping[str, Any]) -> int:
     return value if type(value) is int and value >= 0 else 0
 
 
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
 def _wait_channel_terminal(
     home: Path,
     family: Family,
@@ -1484,6 +1498,7 @@ def _wait_channel_terminal(
     native_session_id: str,
     session_file: Path,
     minimum_turn_seq: int = 0,
+    exact_turn_seq: int | None = None,
     timeout: float = 90,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     def observe() -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -1492,7 +1507,7 @@ def _wait_channel_terminal(
                 state.get("ready") is True
                 and state.get("native_session_id") == native_session_id
                 and state.get("session_file") == str(session_file)
-                and _turn_sequence(state) >= minimum_turn_seq
+                and (_turn_sequence(state) == exact_turn_seq if exact_turn_seq is not None else _turn_sequence(state) >= minimum_turn_seq)
                 and state.get("agent_end_observed") is True
                 and state.get("agent_end_is_terminal") is True
             ):
@@ -2281,6 +2296,55 @@ class Lifecycle:
 
     # -- what the steps share
 
+    @property
+    def scripted_turn_barrier(self) -> bool:
+        """Use fresh, provider-correlated boundaries only in the deterministic lane."""
+
+        return self.scripted_model and self.f.settles_between_turns
+
+    def wait_for_turn_completion(
+        self,
+        before: Mapping[str, Any],
+        completion_row: Mapping[str, Any],
+        *,
+        marker: str,
+        timeout: float = 30,
+    ) -> dict[str, Any]:
+        """Wait for this turn's terminal evidence before permitting another input."""
+
+        message = completion_row.get("message")
+        if (
+            completion_row.get("type") != "message"
+            or not isinstance(message, Mapping)
+            or message.get("role") != "assistant"
+            or not marker_answered(lifecycle._native_message_text(message), marker)
+        ):
+            raise RuntimeError(f"{self.f.name} Helm {marker} is not bound to its native assistant answer")
+
+        if self.f.provider == "omp":
+            _event, state = _wait_channel_terminal(
+                self.home,
+                self.f,
+                session_id=self.session_id,
+                native_session_id=str(self.state.get("native_session_id") or ""),
+                session_file=self.session_file,
+                exact_turn_seq=_turn_sequence(before) + 1,
+                timeout=timeout,
+            )
+            return state
+
+        if message.get("stopReason") not in {"stop", "length"}:
+            raise RuntimeError(f"Pi Helm {marker} did not finish in its native assistant completion row")
+        completed_at = _parse_timestamp(completion_row.get("timestamp"))
+        if completed_at is None:
+            raise RuntimeError(f"Pi Helm {marker} native completion row has no valid timestamp")
+
+        def idle_after_completion(state: Mapping[str, Any]) -> bool:
+            updated_at = _parse_timestamp(state.get("updated_at"))
+            return self.f.is_idle(state) and updated_at is not None and updated_at > completed_at
+
+        return self.wait_state(idle_after_completion, timeout=timeout)
+
     def marker(self, name: str) -> str:
         return f"{self.f.marker_prefix}_{name}_{os.urandom(8).hex()}"
 
@@ -2289,16 +2353,6 @@ class Lifecycle:
 
     def wait_state(self, predicate: Any = None, *, timeout: float = 30) -> dict[str, Any]:
         return _wait_state(self.home, self.f, session_id=self.session_id or None, predicate=predicate, timeout=timeout)
-
-    def wait_for_idle_update(self, before: Mapping[str, Any], *, timeout: float = 30) -> dict[str, Any]:
-        """Wait for a new idle observation, not a stale idle state from before the turn."""
-
-        previous = before.get("updated_at")
-
-        def updated_idle(state: Mapping[str, Any]) -> bool:
-            return self.f.is_idle(state) and (not isinstance(previous, str) or state.get("updated_at") != previous)
-
-        return self.wait_state(updated_idle, timeout=timeout)
 
     def or_missing(self, wait: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         """What a wait saw. Where the family records a miss, a wait that expired saw nothing, and a cell judges that."""
@@ -2527,9 +2581,8 @@ class Lifecycle:
             )
         self.own("initial", self.state, marker=marker, controls=() if self.background else ("send", "follow_up", "steer", "abort"))
         row, evidence = self.reply(marker, 0, timeout=_first_turn_timeout(background=self.background))
-        if f.settles_between_turns and not f.channel_terminal:
-            # Readiness can be observed after Pi's first prompt has already settled.
-            self.wait_state(f.is_idle, timeout=f.timeouts["launch"])
+        if self.scripted_turn_barrier and not f.channel_terminal:
+            self.wait_for_turn_completion(self.state, row, marker=marker, timeout=f.timeouts["launch"])
         launch = self.controls["launch"] = {
             "action_label": "launch",
             "prompt": prompt,
@@ -2614,7 +2667,7 @@ class Lifecycle:
     def send_idle(self, *, local: bool = False) -> None:
         name = "local_send" if local else "send"
         marker = self.marker(name.upper())
-        before_state = self.wait_state(self.f.is_idle, timeout=30) if self.f.settles_between_turns else dict(self.state)
+        before_state = self.wait_state(self.f.is_idle, timeout=30) if self.scripted_turn_barrier else dict(self.state)
         offset = _read_source_size(self.session_file)
         prompt = self.prompt("send", marker)
         command = self.control("send", prompt, local=local)
@@ -2648,8 +2701,8 @@ class Lifecycle:
                 answered=record["marker_wait"]["status"] == "answered",
             )
         record.update(marker_row=row, evidence=evidence)
-        if self.f.settles_between_turns:
-            self.wait_for_idle_update(before_state)
+        if self.scripted_turn_barrier:
+            self.wait_for_turn_completion(before_state, row, marker=marker)
         # Serving a reply does not depend on how the prompt was sent: the local command's turn is not shown served again.
         if not local:
             record["served"] = self.converge("send", marker, row, flush=self.flush("send"))
@@ -2658,15 +2711,15 @@ class Lifecycle:
         """Start a busy turn and send into it: a send made mid-turn is queued and delivered when the turn is over."""
 
         active_marker, marker = self.marker("ACTIVE"), self.marker("FOLLOW_UP")
-        before_state = self.wait_state(self.f.is_idle, timeout=30) if self.f.settles_between_turns else dict(self.state)
+        before_state = self.wait_state(self.f.is_idle, timeout=30) if self.scripted_turn_barrier else dict(self.state)
         offset = _read_source_size(self.session_file)
         active = self.begin("busy turn's send", self.prompt("busy", active_marker))
         active_state = self.busy_state(after=before_state if self.f.provider == "omp" else None)
         prompt = self.prompt("follow_up", marker)
         command = self.host("send", prompt)
         row, evidence = self.reply(marker, offset)
-        if self.f.settles_between_turns:
-            self.wait_for_idle_update(active_state)
+        if self.scripted_turn_barrier:
+            self.wait_for_turn_completion(active_state, row, marker=marker)
         payload = command.get("payload")
         record = self.controls["follow_up"] = {
             "action_label": "follow_up",
@@ -2686,7 +2739,7 @@ class Lifecycle:
     def steer(self, *, local: bool = False) -> None:
         f = self.f
         name = "local_steer" if local else "steer"
-        if f.settles_between_turns:
+        if self.scripted_turn_barrier:
             self.wait_state(f.is_idle, timeout=30)
         offset = _read_source_size(self.session_file)
         task, done, marker = (self.marker(f"{name.upper()}{part}") for part in ("_TASK", "_TASK_DONE", ""))
@@ -2721,7 +2774,7 @@ class Lifecycle:
     def abort(self, *, local: bool = False) -> None:
         f = self.f
         name = "local_abort" if local else "abort"
-        idle = self.wait_state(f.is_idle, timeout=30) if f.settles_between_turns else None
+        idle = self.wait_state(f.is_idle, timeout=30) if self.scripted_turn_barrier and f.channel_terminal else None
         task, done, after = (self.marker(f"{name.upper()}{part}") for part in ("_TASK", "_TASK_DONE", "_AFTER"))
         active = self.begin(f"{name} turn's send", step_task_prompt(task, done), local=local)
         active_state = self.busy_state(after=idle)

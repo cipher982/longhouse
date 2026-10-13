@@ -274,18 +274,21 @@ class _Launcher:
             "status": "ready",
             "phase": "idle",
             "ready": True,
-            "agent_end_observed": False,
-            "agent_end_is_terminal": None,
-            "agent_end_is_terminal_present": False,
-            "agent_end_will_continue": None,
-            "agent_end_will_continue_present": False,
-            "live_turn_seq": int(prior.get("live_turn_seq") or 0),
             "terminal_state": None,
             "terminal_reason": None,
             "exit_code": None,
             "started_at": _now(),
             "updated_at": _now(),
         }
+        if provider == "omp":
+            self.state.update(
+                agent_end_observed=False,
+                agent_end_is_terminal=None,
+                agent_end_is_terminal_present=False,
+                agent_end_will_continue=None,
+                agent_end_will_continue_present=False,
+                live_turn_seq=int(prior.get("live_turn_seq") or 0),
+            )
 
     def _record_model_auth_receipt(self) -> None:
         report_path = os.environ.get("LONGHOUSE_FAKE_MODEL_AUTH_RECEIPT")
@@ -380,6 +383,14 @@ class _Launcher:
             raise RuntimeError(f"fake scripted provider received unsupported tool {name!r}")
         return result, False
 
+    def _publish_early_idle_before_terminal(self) -> bool:
+        if self.provider != "pi" or self.turns != 1 or "idle_before_terminal" not in _faults():
+            return False
+        with self.lock:
+            self.state["phase"] = "idle"
+            self._publish()
+        return True
+
     def _scripted_turn(self, prompt: str) -> None:
         self._entry({"role": "user", "content": [{"type": "text", "text": prompt}]})
         self.model_messages.append({"role": "user", "content": prompt})
@@ -390,7 +401,11 @@ class _Launcher:
             if not tool_calls:
                 text = message.get("content") or ""
                 self.model_messages.append({"role": "assistant", "content": text})
+                early_idle = self._publish_early_idle_before_terminal()
                 self._assistant([{"type": "text", "text": text}], "stop")
+                if early_idle:
+                    # Let the producer see idle before the native terminal row and its later idle update.
+                    time.sleep(0.25)
                 return
             if len(tool_calls) != 1:
                 raise RuntimeError("fake scripted provider expected one fixture tool call")
@@ -538,15 +553,16 @@ class _Launcher:
                 self._assistant([{"type": "text", "text": self._reply(prompt)}], "stop")
         with self.lock:
             self.busy, self.steer, self.abort = False, None, False
-            # What the OMP extension reports when a turn ends (engine/src/omp_helm_launcher.rs: handle_extension_frame, "agent_end").
-            self.state.update(
-                phase="idle",
-                agent_end_observed=True,
-                agent_end_is_terminal=True,
-                agent_end_is_terminal_present=True,
-                agent_end_will_continue=False,
-                agent_end_will_continue_present=True,
-            )
+            self.state["phase"] = "idle"
+            if self.provider == "omp":
+                # What the OMP extension reports when a turn ends (engine/src/omp_helm_launcher.rs: handle_extension_frame, "agent_end").
+                self.state.update(
+                    agent_end_observed=True,
+                    agent_end_is_terminal=True,
+                    agent_end_is_terminal_present=True,
+                    agent_end_will_continue=False,
+                    agent_end_will_continue_present=True,
+                )
             self._publish()
         self.turns += 1
         if f"exit_after:{self.turns}" in _faults():
@@ -561,7 +577,9 @@ class _Launcher:
     def _accept(self, prompt: str) -> None:
         with self.lock:
             self.busy = True
-            self.state.update(phase="running", agent_end_observed=False, live_turn_seq=self.state["live_turn_seq"] + 1)
+            self.state["phase"] = "running"
+            if self.provider == "omp":
+                self.state.update(agent_end_observed=False, live_turn_seq=self.state["live_turn_seq"] + 1)
             self._publish()
         self.prompts.put(prompt)
 
