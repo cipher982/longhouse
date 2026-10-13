@@ -2876,6 +2876,40 @@ def _assemble_session_facts(
         if current is None or turn_priority[str(row["state"])] > turn_priority[str(current["state"])]:
             console_turn_by_session[session_id] = row
 
+    console_session_ids = [
+        session_id for session_id in session_ids if str(catalogs.get(session_id, {}).get("origin_kind") or "").strip().lower() == "console"
+    ]
+    console_prompt_by_session: dict[str, str] = {}
+    if console_session_ids:
+        receipt_table = LiveSessionInputReceipt.__table__
+        ranked_console_prompts = (
+            select(
+                console_turn_table.c.session_id,
+                func.substr(receipt_table.c.text, 1, 500).label("console_prompt_preview"),
+                func.row_number()
+                .over(
+                    partition_by=console_turn_table.c.session_id,
+                    order_by=(console_turn_table.c.created_at.asc(), console_turn_table.c.id.asc()),
+                )
+                .label("prompt_rank"),
+            )
+            .select_from(console_turn_table.join(receipt_table, receipt_table.c.id == console_turn_table.c.receipt_id))
+            .where(
+                console_turn_table.c.session_id.in_(console_session_ids),
+                func.coalesce(console_turn_table.c.origin, "user") == "user",
+                func.length(func.trim(receipt_table.c.text)) > 0,
+            )
+            .subquery()
+        )
+        for row in connection.execute(
+            select(ranked_console_prompts.c.session_id, ranked_console_prompts.c.console_prompt_preview).where(
+                ranked_console_prompts.c.prompt_rank == 1
+            )
+        ).mappings():
+            prompt = str(row["console_prompt_preview"] or "").strip()
+            if prompt:
+                console_prompt_by_session[str(row["session_id"])] = _truncate_utf8(prompt, 2_000)
+
     control_leases_by_session: dict[str, list[Any]] = {}
     live_preview_by_session: dict[str, Any] = {}
     if not compact:
@@ -2988,6 +3022,7 @@ def _assemble_session_facts(
                     _row_dto(row, fields=_CONNECTION_FIELDS, text_limits=_CONNECTION_TEXT_LIMITS)
                     for row in _bounded_connections(connections_by_run.get(run_id, []), observed_at=observed_at)
                 ],
+                "console_prompt_preview": console_prompt_by_session.get(session_id),
                 "latest_console_turn": _row_dto(
                     console_turn_by_session.get(session_id),
                     fields=frozenset({"id", "session_id", "thread_id", "run_id", "state", "origin", "created_at", "updated_at"}),

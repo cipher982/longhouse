@@ -158,7 +158,7 @@ def sanitize_timeline_title(text: str | None, *, max_words: int = _MAX_TITLE_WOR
 
 
 def empty_session_title(project: str | None, provider: str | None) -> str:
-    """Explicit headline for a durable shell with no transcript content."""
+    """Explicit headline when no titleable transcript or Console prompt exists."""
     context = str(project or "").strip() or str(provider or "Session").strip().title()
     return f"{context} · Empty session"
 
@@ -171,20 +171,22 @@ def resolve_title_provenance(
     title_retry_at: object | None,
     title_last_error: str | None = None,
     anchor_title_source: str | None = None,
+    console_prompt: str | None = None,
 ) -> tuple[str, str]:
     """Return the API-visible title state and source.
 
     Display fallbacks remain useful, but they are intentionally distinguishable
     from an AI title so operational title debt cannot disappear in a readable
-    timeline row.
+    timeline row. An accepted Console prompt is a fallback candidate, never a
+    completed title.
     """
     # A bounded title failure may have left an old deterministic prompt in the
     # write-once anchor column. It is still useful transcript text, but it is
     # not an AI title and must not be reported as ready.
     if sanitize_timeline_title(anchor_title) and not str(title_last_error or "").strip():
         return "ready", ("provider" if anchor_title_source == "provider" else "ai")
-    if (user_messages or 0) > 0:
-        prompt_title = sanitize_timeline_title(first_user_message)
+    prompt_title = sanitize_timeline_title(first_user_message) or sanitize_timeline_title(console_prompt)
+    if (user_messages or 0) > 0 or prompt_title:
         return (
             "degraded" if title_retry_at is not None or str(title_last_error or "").strip() else "pending",
             "prompt" if prompt_title else "project",
@@ -202,14 +204,16 @@ def resolve_timeline_title(
     user_messages: int | None = None,
     assistant_messages: int | None = None,
     tool_calls: int | None = None,
+    console_prompt: str | None = None,
 ) -> str:
     """Resolve the stable headline a client should render. Always non-empty.
 
     Ladder (highest signal + most stable first):
       1. frozen ``anchor_title`` — the durable AI title, set once
-      2. a sanitized ``first_user_message`` — temporary recovery display only
-      3. structured ``{project} · {branch}`` context fallback
-
+      2. a sanitized ``first_user_message`` transcript prompt
+      3. a sanitized accepted Console turn prompt while its transcript is pending
+      4. an explicit empty-session headline when all content counts are zero
+      5. structured ``{project} · {branch}`` context fallback
     Summary fields are deliberately not inputs. They are drifting search
     artifacts; allowing them here would make a summary race look like a
     successfully generated session title and hide title debt.
@@ -221,6 +225,9 @@ def resolve_timeline_title(
     from_message = sanitize_timeline_title(first_user_message)
     if from_message:
         return from_message
+    from_console_prompt = sanitize_timeline_title(console_prompt)
+    if from_console_prompt:
+        return from_console_prompt
 
     counts_are_known = user_messages is not None and assistant_messages is not None and tool_calls is not None
     if counts_are_known and not any((user_messages, assistant_messages, tool_calls)):

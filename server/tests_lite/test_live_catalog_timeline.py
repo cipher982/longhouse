@@ -27,12 +27,14 @@ from zerg.catalogd.store import CatalogStore
 from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
 from zerg.machine_evidence import canonical_evidence_hash
+from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession as LiveSessionRow
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
@@ -1290,6 +1292,79 @@ def test_failed_matching_anchor_and_summary_fall_back_to_project_title():
     assert live_catalog_timeline._title(session, card) == "cursor-workspace-di-source · Empty session"
     assert live_catalog_timeline._title_state(session, card) == "awaiting_input"
     assert live_catalog_timeline._title_source(session, card) == "project"
+
+
+def test_accepted_console_prompt_titles_an_empty_session_before_transcript(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'console-prompt-title.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    session_id = str(uuid4())
+    thread_id = str(uuid4())
+    receipt_id = str(uuid4())
+    prompt = "Repair the Console title"
+    with LiveSession() as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=session_id,
+                provider="codex",
+                origin_kind="console",
+                environment="local",
+                project="zerg",
+                started_at=now,
+                last_activity_at=now,
+                user_messages=0,
+                assistant_messages=0,
+                tool_calls=0,
+                hidden_from_default_timeline=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveSessionInputReceipt(
+                id=receipt_id,
+                owner_id=1,
+                session_id=session_id,
+                thread_id=thread_id,
+                provider="codex",
+                device_id="cinder",
+                origin="user",
+                client_request_id="console-request",
+                intent="send",
+                status="queued",
+                text=prompt,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveConsoleTurn(
+                id=str(uuid4()),
+                session_id=session_id,
+                thread_id=thread_id,
+                receipt_id=receipt_id,
+                origin="user",
+                state="completed",
+                provider="codex",
+                device_id="cinder",
+                cwd="/workspace/zerg",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+    facts = CatalogStore(engine).read_session(session_id=session_id, owner_id=None)["facts"]
+    response = project_catalog_session_facts(facts, observed_at=now)
+
+    assert facts["console_prompt_preview"] == prompt
+    assert response.timeline_title == prompt
+    assert response.title_state == "pending"
+    assert response.title_source == "prompt"
+    assert response.first_user_message is None
+    assert response.hidden_from_default_timeline is True
+    engine.dispose()
 
 
 def test_summary_never_establishes_title_readiness_or_provenance():

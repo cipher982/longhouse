@@ -308,7 +308,12 @@ def project_catalog_session_facts(
     )
 
 
-def _title_projection(session: LiveSessionCatalog, card: LiveTimelineCard) -> tuple[str, str, str]:
+def _title_projection(
+    session: LiveSessionCatalog,
+    card: LiveTimelineCard,
+    *,
+    catalog_facts: dict[str, Any] | None = None,
+) -> tuple[str, str, str]:
     """Project one headline and its lifecycle from the same trusted facts.
 
     ``anchor_title`` is the sole AI-title authority. ``summary_title`` remains
@@ -320,12 +325,20 @@ def _title_projection(session: LiveSessionCatalog, card: LiveTimelineCard) -> tu
     user_messages, assistant_messages, tool_calls = _message_counts(session, card)
     raw_first_user_message = card.first_user_message_preview or session.first_user_message_preview
     first_user_message = sanitize_timeline_title(raw_first_user_message, max_words=6)
+    raw_console_prompt = (
+        catalog_facts.get("console_prompt_preview")
+        if str(session.origin_kind or "").strip() == "console" and catalog_facts is not None
+        else None
+    )
+    console_prompt = sanitize_timeline_title(raw_console_prompt, max_words=6) if isinstance(raw_console_prompt, str) else None
+
     title_error = str(session.title_last_error or "").strip()
     trusted_anchor = None if title_error else sanitize_timeline_title(session.anchor_title, max_words=6)
     title = resolve_timeline_title(
         anchor_title=trusted_anchor,
         first_user_message=first_user_message,
         project=session.project,
+        console_prompt=console_prompt,
         git_branch=session.git_branch,
         provider=session.provider,
         user_messages=user_messages,
@@ -338,6 +351,7 @@ def _title_projection(session: LiveSessionCatalog, card: LiveTimelineCard) -> tu
         user_messages=user_messages,
         title_retry_at=session.title_retry_at,
         title_last_error=session.title_last_error,
+        console_prompt=console_prompt,
         anchor_title_source=getattr(session, "anchor_title_source", None),
     )
     return title, title_state, title_source
@@ -413,7 +427,7 @@ def _pending_response_from_catalog(
     commit_seq: int | None,
 ):
     response = build_live_launch_placeholder_response(readiness)
-    title, title_state, title_source = _title_projection(session, card)
+    title, title_state, title_source = _title_projection(session, card, catalog_facts=catalog_facts)
     ended_at = normalize_utc(session.ended_at)
     last_activity_at = normalize_utc(card.last_activity_at) or normalize_utc(session.last_activity_at) or response.started_at
     capabilities = response.capabilities
@@ -556,7 +570,7 @@ def _response_from_catalog(
     )
     capabilities = project_compat_capabilities_from_state(capabilities, session_state, provider=session.provider)
     canonical_aliases = _canonical_runtime_aliases(session_state=session_state, runtime_display=runtime_display)
-    title, title_state, title_source = _title_projection(session, card)
+    title, title_state, title_source = _title_projection(session, card, catalog_facts=catalog_facts)
     return SessionResponse(
         id=str(session.session_id),
         origin_kind=session.origin_kind,

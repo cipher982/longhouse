@@ -169,6 +169,33 @@ class TestResolveTimelineTitle:
     def test_structured_fallback_last(self):
         assert self._resolve() == "zerg · main"
 
+    def test_title_precedence_is_ai_then_transcript_or_console_prompt_then_empty(self):
+        assert (
+            self._resolve(
+                anchor_title="AI title",
+                first_user_message="transcript prompt",
+                console_prompt="accepted Console prompt",
+                user_messages=0,
+            )
+            == "AI title"
+        )
+        assert (
+            self._resolve(
+                first_user_message="transcript prompt",
+                console_prompt="accepted Console prompt",
+                user_messages=0,
+            )
+            == "transcript prompt"
+        )
+        assert (
+            self._resolve(
+                console_prompt="accepted Console prompt",
+                user_messages=0,
+            )
+            == "accepted Console prompt"
+        )
+        assert self._resolve(user_messages=0) == "zerg · Empty session"
+
     def test_zero_content_shell_is_explicitly_empty(self):
         assert self._resolve(user_messages=0) == "zerg · Empty session"
 
@@ -216,6 +243,15 @@ class TestTitleProvenance:
             user_messages=1,
             title_retry_at=object(),
         ) == ("degraded", "project")
+
+    def test_accepted_console_prompt_is_pending_prompt_provenance(self):
+        assert resolve_title_provenance(
+            anchor_title=None,
+            first_user_message=None,
+            user_messages=0,
+            title_retry_at=None,
+            console_prompt="accepted Console prompt",
+        ) == ("pending", "prompt")
 
     def test_empty_shell_awaits_input_without_title_debt(self):
         assert resolve_title_provenance(

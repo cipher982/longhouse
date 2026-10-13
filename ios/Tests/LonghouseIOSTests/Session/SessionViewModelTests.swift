@@ -131,6 +131,36 @@ struct SessionViewModelTests {
         )
     }
 
+    private func workspacePage(
+        from base: SessionWorkspaceResponse,
+        items: [SessionProjectionItem],
+        total: Int,
+        pageOffset: Int,
+        nextCursor: String?
+    ) -> SessionWorkspaceResponse {
+        let projection = SessionProjectionResponse(
+            rootSessionId: "session-1",
+            focusSessionId: "session-1",
+            headSessionId: "session-1",
+            pathSessionIds: ["session-1"],
+            items: items,
+            total: total,
+            pageOffset: pageOffset,
+            branchMode: "head",
+            abandonedEvents: 0,
+            generationId: "gen-1",
+            nextCursor: nextCursor,
+            hasMore: nextCursor != nil
+        )
+        return SessionWorkspaceResponse(
+            session: base.session,
+            thread: base.thread,
+            projection: projection,
+            workspaceRevision: base.workspaceRevision
+        )
+    }
+
+
     @Test
     func aWakeReadsOnlyNewEventsAndKeepsTheHeldRows() async throws {
         let base = try makeWorkspace(eventId: 10, content: "seed")
@@ -537,6 +567,48 @@ struct SessionViewModelTests {
         #expect(await api.workspaceRequestCount() == 2)
     }
 
+
+    @Test
+    func nonOverlappingFullTailReplacesStaleRowsAndRestartsOlderPaging() async throws {
+        let base = try makeWorkspace(eventId: 100, content: "seed")
+        let firstTailItems = conversationItems(51...100)
+        let firstOlderItems = conversationItems(1...50)
+        let freshTailItems = conversationItems(151...200)
+        let nextOlderItems = conversationItems(101...150)
+        let api = FakeSessionWorkspaceClient(workspaces: [
+            workspacePage(from: base, items: firstTailItems, total: 100, pageOffset: 50, nextCursor: "old-cursor"),
+            workspacePage(from: base, items: firstOlderItems, total: 100, pageOffset: 0, nextCursor: nil),
+            workspacePage(from: base, items: freshTailItems, total: 200, pageOffset: 150, nextCursor: "fresh-cursor"),
+            workspacePage(from: base, items: nextOlderItems, total: 200, pageOffset: 100, nextCursor: nil)
+        ])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: Self.isolatedPendingInputStore()
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await model.loadOlder(sessionId: "session-1", appState: appState)
+        await model.reload(sessionId: "session-1", appState: appState)
+
+        let freshTailItemIds = TimelineBuilder.build(items: freshTailItems).map(\.id)
+        await waitForCondition("full tail replaces non-overlapping held history") {
+            model.items.map(\.id) == freshTailItemIds
+        }
+        #expect(model.items.map(\.id) == freshTailItemIds)
+
+        await model.loadOlder(sessionId: "session-1", appState: appState)
+        let refreshedOlderRequest = await api.tailRequest(at: 3)
+        #expect(refreshedOlderRequest?.offset == 50)
+        #expect(refreshedOlderRequest?.cursor == "fresh-cursor")
+        #expect(
+            model.items.map(\.id)
+                == TimelineBuilder.build(items: nextOlderItems + freshTailItems).map(\.id)
+        )
+    }
+
     @Test
     func loadOlderPrependsPreviousTailPage() async throws {
         let tail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
@@ -638,10 +710,15 @@ struct SessionViewModelTests {
 
     @Test
     func refreshTailPreservesLoadedOlderPage() async throws {
-        let tail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
-        let older = try makeWorkspace(eventId: 1, content: "Older page", total: 100, pageOffset: 0)
-        let refreshedTail = try makeWorkspace(eventId: 52, content: "Fresh tail", total: 101, pageOffset: 51)
-        let api = FakeSessionWorkspaceClient(workspaces: [tail, older, refreshedTail])
+        let base = try makeWorkspace(eventId: 100, content: "Recent tail", total: 100, pageOffset: 50)
+        let olderItems = conversationItems(1...50)
+        let heldTailItems = conversationItems(51...100)
+        let refreshedTailItems = conversationItems(52...101)
+        let api = FakeSessionWorkspaceClient(workspaces: [
+            workspacePage(from: base, items: heldTailItems, total: 100, pageOffset: 50, nextCursor: "older-50"),
+            workspacePage(from: base, items: olderItems, total: 100, pageOffset: 0, nextCursor: nil),
+            workspacePage(from: base, items: refreshedTailItems, total: 101, pageOffset: 51, nextCursor: "older-51")
+        ])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
@@ -650,7 +727,8 @@ struct SessionViewModelTests {
         await model.loadOlder(sessionId: "session-1", appState: appState)
         await model.reload(sessionId: "session-1", appState: appState)
 
-        #expect(model.items.map(\.id) == ["user:1", "user:51", "user:52"])
+        let expectedIds = TimelineBuilder.build(items: conversationItems(1...101)).map(\.id)
+        #expect(model.items.map(\.id) == expectedIds)
         let refreshRequest = await api.tailRequest(at: 2)
         #expect(refreshRequest?.offset == 0)
         #expect(refreshRequest?.snapshotEventId == nil)
@@ -841,31 +919,39 @@ struct SessionViewModelTests {
 
     @Test
     func cachePreservesLoadedOlderPagesAcrossViewModels() async throws {
-        let tail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
-        let older = try makeWorkspace(eventId: 1, content: "Older page", total: 100, pageOffset: 0)
-        let fresh = try makeWorkspace(eventId: 52, content: "Network tail", total: 101, pageOffset: 51)
+        let base = try makeWorkspace(eventId: 100, content: "Recent tail", total: 100, pageOffset: 50)
+        let olderItems = conversationItems(1...50)
+        let heldTailItems = conversationItems(51...100)
+        let freshTailItems = conversationItems(52...101)
         let cacheDirectory = Self.tempCacheDirectory()
         defer { try? FileManager.default.removeItem(at: cacheDirectory) }
         let cache = TranscriptSnapshotStore(directory: cacheDirectory)
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
 
-        let firstAPI = FakeSessionWorkspaceClient(workspaces: [tail, older])
+        let firstAPI = FakeSessionWorkspaceClient(workspaces: [
+            workspacePage(from: base, items: heldTailItems, total: 100, pageOffset: 50, nextCursor: "older-50"),
+            workspacePage(from: base, items: olderItems, total: 100, pageOffset: 0, nextCursor: nil)
+        ])
         let firstModel = SessionViewModel(apiFactory: { _ in firstAPI }, enableRealtime: false, snapshotStore: cache, pendingInputStore: Self.isolatedPendingInputStore())
         await firstModel.start(sessionId: "session-1", appState: appState)
         await firstModel.loadOlder(sessionId: "session-1", appState: appState)
 
-        let secondAPI = FakeSessionWorkspaceClient(workspaces: [fresh])
+        let secondAPI = FakeSessionWorkspaceClient(workspaces: [
+            workspacePage(from: base, items: freshTailItems, total: 101, pageOffset: 51, nextCursor: "older-51")
+        ])
         await secondAPI.pauseNextTailResponse(offset: 0)
         let secondModel = SessionViewModel(apiFactory: { _ in secondAPI }, enableRealtime: false, snapshotStore: cache, pendingInputStore: Self.isolatedPendingInputStore())
         await secondModel.start(sessionId: "session-1", appState: appState)
+        let cachedItemIds = TimelineBuilder.build(items: conversationItems(1...100)).map(\.id)
         await waitForCondition("cached history frame", sourceLocation: #_sourceLocation) {
-            secondModel.items.map(\.id) == ["user:1", "user:51"]
+            secondModel.items.map(\.id) == cachedItemIds
         }
         recordCurrentTranscriptFrame(secondModel)
         await secondAPI.resumePausedTailResponses()
+        let refreshedItemIds = TimelineBuilder.build(items: conversationItems(1...101)).map(\.id)
         await waitForCondition("preserved cached history reconcile", sourceLocation: #_sourceLocation) {
-            secondModel.items.map(\.id) == ["user:1", "user:51", "user:52"]
+            secondModel.items.map(\.id) == refreshedItemIds
         }
         #expect(await secondAPI.workspaceRequestCount() == 1)
     }

@@ -2963,10 +2963,14 @@ final class SessionViewModel: ObservableObject {
             let clearingBlockingLoadError = !hasLoadedTranscript
             let acceptedTranscriptPreview = detail?.transcriptPreview
             let acceptedTranscriptReadThrough = self.acceptedTranscriptReadThrough(for: tail.session)
-            let mergedEvents = mergeRefreshedTail(read.freshItems.compactMap(\.event))
+            let mergedEvents = mergeRefreshedTail(
+                read.freshItems.compactMap(\.event),
+                fullTailRead: !read.isDelta
+            )
             let mergedProjectionItems = mergeRefreshedProjectionItems(
                 freshTailItems: read.freshItems,
-                mergedEvents: mergedEvents
+                mergedEvents: mergedEvents,
+                fullTailRead: !read.isDelta
             )
             let refreshedLoadedCount: Int
             if read.isDelta {
@@ -3194,7 +3198,22 @@ final class SessionViewModel: ObservableObject {
         return nil
     }
 
-    private func mergeRefreshedTail(_ freshTailEvents: [SessionEvent]) -> [SessionEvent] {
+    private func refreshedTailStartsAfterHeldHistory(
+        oldestFreshEvent: SessionEvent,
+        freshEventIds: Set<String>
+    ) -> Bool {
+        guard let newestHeldEvent = lastWorkspaceEvents.last,
+              !lastWorkspaceEvents.contains(where: { freshEventIds.contains($0.id) })
+        else {
+            return false
+        }
+        return newestHeldEvent.isOrdered(before: oldestFreshEvent) == true
+    }
+
+    private func mergeRefreshedTail(
+        _ freshTailEvents: [SessionEvent],
+        fullTailRead: Bool
+    ) -> [SessionEvent] {
         let currentTailWindowCount = min(initialTailLimit, totalProjectionItemCount)
         guard loadedProjectionItemCount > currentTailWindowCount else {
             return freshTailEvents
@@ -3204,6 +3223,14 @@ final class SessionViewModel: ObservableObject {
         }
 
         let freshTailEventIds = Set(freshTailEvents.map(\.id))
+        if fullTailRead,
+           refreshedTailStartsAfterHeldHistory(
+               oldestFreshEvent: firstFreshTailEvent,
+               freshEventIds: freshTailEventIds
+           ) {
+            return freshTailEvents
+        }
+
         let olderEvents: [SessionEvent]
         if let firstFreshIndex = lastWorkspaceEvents.firstIndex(where: { $0.id == firstFreshTailEvent.id }) {
             olderEvents = lastWorkspaceEvents[..<firstFreshIndex].filter { !freshTailEventIds.contains($0.id) }
@@ -3217,13 +3244,22 @@ final class SessionViewModel: ObservableObject {
 
     private func mergeRefreshedProjectionItems(
         freshTailItems: [SessionProjectionItem],
-        mergedEvents: [SessionEvent]
+        mergedEvents: [SessionEvent],
+        fullTailRead: Bool
     ) -> [SessionProjectionItem] {
         let currentTailWindowCount = min(initialTailLimit, totalProjectionItemCount)
         guard loadedProjectionItemCount > currentTailWindowCount else {
             return freshTailItems
         }
         guard let firstFreshEvent = freshTailItems.compactMap(\.event).first else {
+            return freshTailItems
+        }
+        let freshEventIds = Set(freshTailItems.compactMap(\.event?.id))
+        if fullTailRead,
+           refreshedTailStartsAfterHeldHistory(
+               oldestFreshEvent: firstFreshEvent,
+               freshEventIds: freshEventIds
+           ) {
             return freshTailItems
         }
 
@@ -3236,7 +3272,7 @@ final class SessionViewModel: ObservableObject {
             return olderItems + freshTailItems
         }
 
-        let freshEventIds = Set(freshTailItems.compactMap(\.event?.id))
+
         let freshActionIds = Set(freshTailItems.compactMap(\.action?.id))
         let olderMergedEventIds = Set(mergedEvents.filter {
             $0.isOrdered(before: firstFreshEvent) != false
