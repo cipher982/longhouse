@@ -12,6 +12,7 @@ import re
 import shutil
 import signal
 import sqlite3
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -1194,7 +1195,15 @@ def _previous_run_baseline(platform_name: str, work_dir: Path) -> tuple[dict[str
         key=lambda run: int(run.get("run_number", 0)),
         reverse=True,
     )
+    # One previous run is not a baseline: identical code on hosted macOS read
+    # idle engine CPU anywhere from 2.1% to 3.9% (runs 38322190460..38338291005),
+    # so a single low neighbour flagged a "regression" that was runner noise.
+    # Compare against the median of the last few runs instead.
+    loaded: list[dict[str, Any]] = []
+    sources: list[dict[str, Any]] = []
     for run in candidates:
+        if len(loaded) >= BASELINE_RUNS:
+            break
         sha = str(run.get("head_sha") or "")
         if not sha:
             continue
@@ -1209,17 +1218,32 @@ def _previous_run_baseline(platform_name: str, work_dir: Path) -> tuple[dict[str
         baseline_path = destination / f"perf-soak-{platform_name.lower()}-{sha}.json"
         if download.returncode == 0 and baseline_path.is_file():
             try:
-                baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+                loaded.append(json.loads(baseline_path.read_text(encoding="utf-8")))
             except (OSError, ValueError):
                 continue
-            return baseline, {
-                "status": "loaded",
-                "run_id": str(run["id"]),
-                "run_url": run.get("html_url"),
-                "sha": sha,
-                "artifact": artifact_name,
-            }
-    return None, {"status": "unavailable", "reason": "no previous successful main run has this platform's soak artifact"}
+            sources.append({"run_id": str(run["id"]), "run_url": run.get("html_url"), "sha": sha})
+    if not loaded:
+        return None, {"status": "unavailable", "reason": "no previous successful main run has this platform's soak artifact"}
+    return median_baseline(loaded), {"status": "loaded", "aggregate": "median", "runs": sources}
+
+
+BASELINE_RUNS = 5
+
+
+def median_baseline(baselines: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per-metric median across baselines; a metric some runs lack uses the rest."""
+
+    def merge(values: list[Any]) -> Any:
+        numbers = [v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        if numbers and len(numbers) == len(values):
+            return statistics.median(numbers)
+        dicts = [v for v in values if isinstance(v, dict)]
+        if dicts and len(dicts) == len(values):
+            keys = {key for d in dicts for key in d}
+            return {key: merge([d[key] for d in dicts if key in d]) for key in keys}
+        return values[0]
+
+    return {"scenarios": merge([b.get("scenarios") or {} for b in baselines])}
 
 
 def _previous_baseline(args: argparse.Namespace, platform_name: str, work_dir: Path) -> tuple[dict[str, Any] | None, dict[str, Any]]:
@@ -1233,6 +1257,15 @@ def _previous_baseline(args: argparse.Namespace, platform_name: str, work_dir: P
         except (OSError, ValueError) as exc:
             return None, {"status": "unavailable", "reason": f"could not read --baseline: {exc}"}
     return _previous_run_baseline(platform_name, work_dir)
+
+
+def _baseline_description(previous_run: dict[str, Any]) -> str:
+    runs = previous_run.get("runs")
+    if runs:
+        return f"median of {len(runs)} previous successful main runs ({', '.join(f'`{run['run_id']}`' for run in runs)})"
+    if previous_run.get("source"):
+        return f"`{previous_run['source']}`"
+    return f"unavailable ({previous_run.get('reason', previous_run.get('status', 'unknown'))})"
 
 
 def _write_summary(artifact: dict[str, Any], path: Path) -> str:
@@ -1257,7 +1290,7 @@ def _write_summary(artifact: dict[str, Any], path: Path) -> str:
         "",
         f"- SHA: `{(artifact.get('git') or {}).get('sha') or 'unknown'}`",
         f"- Fixture shape: `{sum(item.get('count', 0) for item in (artifact.get('fixtures', {}).get('files') or {}).values())}` state files plus `{(artifact.get('fixtures') or {}).get('database_rows', {})}` DB rows; contents invented.",
-        f"- Previous successful main run: `{(artifact.get('previous_run') or {}).get('run_id', 'unavailable')}` ({(artifact.get('previous_run') or {}).get('reason', (artifact.get('previous_run') or {}).get('status', 'unknown'))})",
+        f"- Baseline: {_baseline_description(artifact.get('previous_run') or {})}",
         f"- Console scenario: omitted — {artifact['console']['reason']}",
         f"- Desktop measurement: {desktop_summary}",
         f"- Managed OMP Helm session seen live: {managed_session_summary}",

@@ -184,6 +184,30 @@ def test_failed_surfaces_ignores_skips_but_reports_failures() -> None:
         "mixed_live_archive",
     ]
 
+def test_soak_median_baseline_ignores_one_noisy_neighbour() -> None:
+    soak = _soak_module()
+
+    def run(idle_cpu: float) -> dict:
+        return {"scenarios": {"idle": {"engine": {"cpu_percent": idle_cpu}}}}
+
+    # Hosted macOS, identical code, 2026-10-12/13: idle engine CPU per run.
+    history = [run(2.08), run(3.46), run(3.45), run(3.88)]
+    baseline = soak.median_baseline(history)
+    assert baseline["scenarios"]["idle"]["engine"]["cpu_percent"] == 3.455
+
+    def idle_findings(value: float) -> list:
+        scenarios = {"idle": {"engine": {"cpu_percent": value, "disk_write_bytes_per_second": 0, "processes_spawned_per_minute": 0.0}}}
+        return [f for f in soak.evaluate_budgets_and_regressions(scenarios, "Linux", baseline) if f["metric"] == "engine.cpu_percent"]
+
+    # 3.79 failed against the single 2.08 neighbour; against the median it is noise.
+    assert idle_findings(3.79) == []
+    # A real jump over a steady history is still caught.
+    steady = soak.median_baseline([run(1.0), run(1.2), run(1.1)])
+    jumped = {"idle": {"engine": {"cpu_percent": 2.6, "disk_write_bytes_per_second": 0, "processes_spawned_per_minute": 0.0}}}
+    findings = soak.evaluate_budgets_and_regressions(jumped, "Linux", steady)
+    assert any(f["metric"] == "engine.cpu_percent" and f["regression"] for f in findings)
+
+
 def test_soak_budget_and_baseline_regression_rules() -> None:
     soak = _soak_module()
     previous = {
@@ -436,6 +460,7 @@ def main() -> int:
         test_summary_markdown_contains_core_surfaces,
         test_shipper_signal_treats_zero_rss_as_unavailable,
         test_failed_surfaces_ignores_skips_but_reports_failures,
+        test_soak_median_baseline_ignores_one_noisy_neighbour,
         test_soak_budget_and_baseline_regression_rules,
         test_soak_linux_wakeups_are_unavailable_not_zero,
         test_soak_darwin_rusage_info_v4_layout,
