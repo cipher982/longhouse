@@ -6,6 +6,7 @@ The fake (``_pi_family_helm_fake``) stands at the producers' process boundary: t
 
 from __future__ import annotations
 
+import hashlib
 import copy
 import importlib
 import json
@@ -101,6 +102,114 @@ def test_a_whole_lifecycle_holds_every_cell(provider, whole):
     assert set(module.FAMILY.reached) == set(module.ASSERTIONS)
     reached = reached_only(module.FAMILY.cells(result["observation"]), result["observation"], module.FAMILY.reached)
     assert reached == result["assertions"]
+
+
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_scripted_model_lifecycle_calls_the_profile_endpoint_for_every_turn(provider, tmp_path, monkeypatch, capsys) -> None:
+    module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
+    model_key = "live-provider-key-must-not-enter-scripted-child"
+    auth_receipt = tmp_path / "model-auth-receipt.jsonl"
+    monkeypatch.setenv("OPENROUTER_API_KEY", model_key)
+    monkeypatch.setenv("LONGHOUSE_FAKE_EXPECTED_OPENROUTER_KEY_SHA256", hashlib.sha256(model_key.encode()).hexdigest())
+    monkeypatch.setenv("LONGHOUSE_FAKE_MODEL_AUTH_RECEIPT", str(auth_receipt))
+    monkeypatch.setenv(module.FAMILY.live_env, "1")
+    root = tmp_path / "scripted-evidence"
+    scripted_arguments = fake.scripted_model_arguments(provider, Path("/fake/longhouse"), root)
+    assert [
+        scripted_arguments[index + 1] for index, argument in enumerate(scripted_arguments[:-1]) if argument == "--credential-binding"
+    ] == ["runtime_host_control"]
+
+    with fake.longhouse(tmp_path, monkeypatch.setenv) as (cli, isolation):
+        code = module.main(fake.scripted_model_arguments(provider, cli, root))
+        result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+        assert list(isolation.iterdir()) == []
+    capsys.readouterr()
+
+    common_turns = {
+        f"{provider}-send",
+        f"{provider}-busy-tool",
+        f"{provider}-busy-answer",
+        f"{provider}-follow-up",
+        f"{provider}-steer-tool",
+        f"{provider}-steer-answer",
+        f"{provider}-abort-tool",
+        f"{provider}-abort-after",
+        f"{provider}-replacement",
+        f"{provider}-cold-resume",
+    }
+    expected_turns = common_turns | (
+        {f"{provider}-launch"} if provider == "omp" else {f"{provider}-launch-tool", f"{provider}-launch-answer"}
+    )
+    if provider == "pi":
+        expected_turns |= {
+            "pi-local-send",
+            "pi-local-steer-tool",
+            "pi-local-steer-answer",
+            "pi-local-abort-tool",
+            "pi-local-abort-after",
+            "pi-reload",
+        }
+
+    assert (code, result["status"], result["evidence_class"]) == (0, "pass", "scripted_model")
+    assert all(result["assertions"].values())
+    receipt = result["observation"]["scripted_model"]
+    assert receipt["status"] == "pass"
+    assert expected_turns <= set(receipt["matched_turns"])
+    assert f"{provider}-stale-owner-refused" not in receipt["matched_turns"]
+    assert (root / "scripted-model-receipt.json").is_file()
+    assert json.loads((root / "scripted-model-receipt.json").read_text(encoding="utf-8")) == receipt
+
+    fixture = json.loads((root / "scripted-model-fixture.json").read_text(encoding="utf-8"))
+    turns = {turn["id"]: turn for turn in fixture["turns"]}
+    assert turns[f"{provider}-steer-tool"]["tool_call"]["command"] == f"sleep 30 && echo scripted-steer-result"
+    assert turns[f"{provider}-abort-tool"]["tool_call"]["command"] == f"sleep 300 && echo scripted-abort-result"
+    assert turns[f"{provider}-replacement"]["reply"] == "sable-harbor-729 {{input_marker}}"
+    assert turns[f"{provider}-cold-resume"]["reply_from_history"]["pattern"] == "sable-harbor-729"
+
+    auth_rows = [json.loads(line) for line in auth_receipt.read_text(encoding="utf-8").splitlines()]
+    assert auth_rows
+    assert all(
+        row["model_profile_loaded"]
+        and row["profile_endpoint_is_local"]
+        and row["profile_api_key_is_dummy"]
+        and row["profile_matches_script_endpoint"]
+        and row["openrouter_credential_present"] is False
+        for row in auth_rows
+    )
+
+
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_live_token_lifecycle_keeps_the_real_provider_binding_and_environment(provider, tmp_path, monkeypatch, capsys) -> None:
+    module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
+    model_key = "real-provider-credential-fixture"
+    auth_receipt = tmp_path / "live-auth-receipt.jsonl"
+    monkeypatch.setenv("OPENROUTER_API_KEY", model_key)
+    monkeypatch.setenv("LONGHOUSE_FAKE_EXPECTED_OPENROUTER_KEY_SHA256", hashlib.sha256(model_key.encode()).hexdigest())
+    monkeypatch.setenv("LONGHOUSE_FAKE_MODEL_AUTH_RECEIPT", str(auth_receipt))
+    monkeypatch.setenv(module.FAMILY.live_env, "1")
+    root = tmp_path / "live-evidence"
+
+    with fake.longhouse(tmp_path, monkeypatch.setenv) as (cli, isolation):
+        arguments = fake.producer_arguments(provider, cli, root)
+        assert [arguments[index + 1] for index, argument in enumerate(arguments[:-1]) if argument == "--credential-binding"] == [
+            f"{provider}_provider_token",
+            "runtime_host_control",
+        ]
+        code = module.main(arguments)
+        result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+        assert list(isolation.iterdir()) == []
+    capsys.readouterr()
+
+    provider_binding = f"{provider}_provider_token"
+    bindings = module.REGISTRATION.to_dict()["credential_binding_ids_by_evidence_class"]
+    assert provider_binding in bindings["live_token"]
+    assert provider_binding not in bindings["scripted_model"]
+    assert "runtime_host_control" in bindings["scripted_model"]
+    assert (code, result["status"], result["evidence_class"]) == (0, "pass", "live_token")
+    assert "scripted_model" not in result["observation"]
+    auth_rows = [json.loads(line) for line in auth_receipt.read_text(encoding="utf-8").splitlines()]
+    assert auth_rows
+    assert all(row["openrouter_credential_present"] is True and row["openrouter_credential_matches_expected"] is True for row in auth_rows)
 
 
 # One fact of a whole lifecycle's record, broken: the cell that rests on it no longer holds. The record is the

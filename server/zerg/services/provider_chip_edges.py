@@ -38,7 +38,13 @@ CERTIFICATION_STATES = (CERTIFIED, UNVERIFIED, STALE, FAILING, UNPROVEN)
 
 
 def _live(assertion: object) -> bool:
-    return isinstance(assertion, Mapping) and list(assertion.get("acceptable_evidence") or ()) == ["live_token"]
+    if not isinstance(assertion, Mapping):
+        return False
+    acceptable = list(assertion.get("acceptable_evidence") or ())
+    required = assertion.get("required_evidence_classes")
+    if isinstance(required, list):
+        return "live_token" in required and "live_token" in acceptable
+    return acceptable == ["live_token"]
 
 
 def _live_token_proof(assertions: object) -> bool:

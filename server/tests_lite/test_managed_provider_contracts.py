@@ -325,6 +325,20 @@ def test_operation_evidence_accepts_scripted_model_assertions():
     _validate_required_assertions("test", entry["required_assertions"])
 
 
+def test_required_evidence_classes_bind_independent_freshness() -> None:
+    assertion = {
+        **_LIVE_PROOF,
+        "acceptable_evidence": ["live_token", "scripted_model"],
+        "required_evidence_classes": ["live_token", "scripted_model"],
+        "max_age_seconds_by_evidence_class": {"live_token": 604800, "scripted_model": 1800},
+    }
+    _validate_required_assertions("test", [assertion])
+
+    assertion["max_age_seconds_by_evidence_class"] = {"live_token": 604800}
+    with pytest.raises(ValueError, match="must cover every required class"):
+        _validate_required_assertions("test", [assertion])
+
+
 @pytest.mark.parametrize(
     ("mutator", "message"),
     [

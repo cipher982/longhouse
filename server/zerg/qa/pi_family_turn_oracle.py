@@ -173,6 +173,21 @@ def task_tool_boundary(entries: list[Mapping[str, Any]], task_marker: str) -> st
     return None
 
 
+def task_tool_call_boundary(entries: list[Mapping[str, Any]], task_marker: str) -> str | None:
+    """Id of the first tool call inside the task turn, before its tool result."""
+
+    task, _count = _single_user(entries, task_marker)
+    if task is None:
+        return None
+    by_id = _index(entries)
+    for entry in entries:
+        if _role(entry) != "assistant" or _stop_reason(entry) != "tooluse" or not _tool_call_texts(entry):
+            continue
+        if any(item.get("id") == task.get("id") for item in _ancestors(entry, by_id)):
+            return str(entry.get("id"))
+    return None
+
+
 def steer_turn_verdict(
     entries: list[Mapping[str, Any]],
     *,

@@ -4018,10 +4018,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             },
             {
               "id": "pi_helm_native_tool_taxonomy",
@@ -4029,10 +4038,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             },
             {
               "id": "pi_helm_send_idle",
@@ -4040,10 +4058,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             },
             {
               "id": "pi_helm_steer_active",
@@ -4051,10 +4078,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             },
             {
               "id": "pi_helm_follow_up_native",
@@ -4062,10 +4098,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 7,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             },
             {
               "id": "pi_helm_abort_native",
@@ -4073,10 +4118,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             },
             {
               "id": "pi_helm_terminate_owned",
@@ -4084,10 +4138,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             },
             {
               "id": "pi_helm_reload_rebind",
@@ -4095,10 +4158,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             },
             {
               "id": "pi_helm_session_replacement_rebind",
@@ -4106,10 +4178,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             }
           ]
         },
@@ -4133,10 +4214,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 8,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             },
             {
               "id": "pi_helm_stale_owner_refused",
@@ -4144,10 +4234,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             }
           ]
         },
@@ -4252,10 +4351,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             }
           ],
           "level": "live_token",
@@ -4277,10 +4385,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 8,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             }
           ],
           "level": "live_token",
@@ -4295,10 +4412,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             }
           ],
           "level": "live_token",
@@ -4313,10 +4439,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             }
           ],
           "level": "live_token",
@@ -4331,10 +4466,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             }
           ],
           "level": "live_token",
@@ -4356,10 +4500,19 @@
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
               "minimum_scenario_revision": 6,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d9966ecbf0427fd9fe4667cf33004a6390e60d1be3a4980151497796c323116"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "3d6f275ed07727ba173ac53a28daa1a4485071e342bbdbe2e34dc48df2eba1f8"
             }
           ],
           "level": "live_token",
@@ -4681,10 +4834,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 11,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             }
           ],
           "level": "live_token",
@@ -4706,10 +4868,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 13,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             }
           ],
           "level": "live_token",
@@ -4724,10 +4895,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 11,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             }
           ],
           "level": "live_token",
@@ -4742,10 +4922,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 11,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             }
           ],
           "level": "live_token",
@@ -4760,10 +4949,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 11,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             }
           ],
           "level": "live_token",
@@ -4786,10 +4984,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 11,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             }
           ],
           "level": "live_token",
@@ -4872,10 +5079,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 11,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             },
             {
               "id": "omp_helm_send_idle",
@@ -4883,10 +5099,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 11,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             },
             {
               "id": "omp_helm_follow_up_native",
@@ -4894,10 +5119,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 12,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             },
             {
               "id": "omp_helm_steer_active",
@@ -4905,10 +5139,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 11,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             },
             {
               "id": "omp_helm_abort_native",
@@ -4916,10 +5159,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 11,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             },
             {
               "id": "omp_helm_terminate_owned",
@@ -4927,10 +5179,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 11,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             },
             {
               "id": "omp_helm_native_replacement_bound",
@@ -4938,10 +5199,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 11,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             }
           ]
         },
@@ -4965,10 +5235,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 13,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             },
             {
               "id": "omp_helm_stale_owner_refused",
@@ -4976,10 +5255,19 @@
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
               "minimum_scenario_revision": 11,
               "acceptable_evidence": [
-                "live_token"
+                "live_token",
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "live_token",
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8b89c720e4a963355e66b0c6ecd21d578a1b36239f2363374761bd95c79ff7bb"
+              "max_age_seconds_by_evidence_class": {
+                "live_token": 604800,
+                "scripted_model": 1800
+              },
+              "oracle_digest": "1a648e4c32a12d31e123c0a28fe856740dc859386408ae9ef430b301a6339805"
             }
           ]
         },

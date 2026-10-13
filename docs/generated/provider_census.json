@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 328,
+  "file_count": 329,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1595,6 +1595,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_provider_capability_schema.py",
+      "providers": [
+        "omp",
+        "pi"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_provider_chip_certification.py",
       "providers": [
         "antigravity",
@@ -1786,7 +1793,8 @@
       "providers": [
         "claude",
         "codex",
-        "cursor"
+        "cursor",
+        "omp"
       ]
     },
     {

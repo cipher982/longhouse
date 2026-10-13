@@ -2536,8 +2536,10 @@ providers:
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
         minimum_scenario_revision: 6
-        acceptable_evidence: [live_token]
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
       - <<: *pi_helm_lifecycle_assertion
         id: pi_helm_native_tool_taxonomy
       - <<: *pi_helm_lifecycle_assertion
@@ -2632,9 +2634,10 @@ providers:
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
         minimum_scenario_revision: 6
-        acceptable_evidence:
-        - live_token
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
     run_once:
       level: none
       source: "Console routes through session.turn.start, not the legacy run_once command"
@@ -2648,9 +2651,10 @@ providers:
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
         minimum_scenario_revision: 8
-        acceptable_evidence:
-        - live_token
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
     send_input:
       disposition: implemented
       required_assertions:
@@ -2658,9 +2662,10 @@ providers:
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
         minimum_scenario_revision: 6
-        acceptable_evidence:
-        - live_token
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
     interrupt:
       disposition: implemented
       required_assertions:
@@ -2668,9 +2673,10 @@ providers:
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
         minimum_scenario_revision: 6
-        acceptable_evidence:
-        - live_token
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
     steer_active_turn:
       disposition: implemented
       required_assertions:
@@ -2678,9 +2684,10 @@ providers:
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
         minimum_scenario_revision: 6
-        acceptable_evidence:
-        - live_token
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
     answer_pause:
       level: none
       source: "Pi has no provider-owned remote permission reply transport"
@@ -2694,9 +2701,10 @@ providers:
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
         minimum_scenario_revision: 6
-        acceptable_evidence:
-        - live_token
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
     tail_output:
       level: source_review
       source: "native JSONL history plus reconciled Console live previews"
@@ -2941,9 +2949,10 @@ providers:
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
         minimum_scenario_revision: 11
-        acceptable_evidence:
-        - live_token
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
     run_once: {level: none, source: "Console routes through session.turn.start, not the legacy run_once command", disposition: policy_disabled, reason: "OMP Console has one turn-scoped path through session.turn.start.", routed_to: turn_start}
     reattach:
       disposition: implemented
@@ -2952,9 +2961,10 @@ providers:
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
         minimum_scenario_revision: 13
-        acceptable_evidence:
-        - live_token
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
     send_input:
       disposition: implemented
       required_assertions:
@@ -2962,9 +2972,10 @@ providers:
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
         minimum_scenario_revision: 11
-        acceptable_evidence:
-        - live_token
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
     interrupt:
       disposition: implemented
       required_assertions:
@@ -2972,9 +2983,10 @@ providers:
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
         minimum_scenario_revision: 11
-        acceptable_evidence:
-        - live_token
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
     steer_active_turn:
       disposition: implemented
       required_assertions:
@@ -2982,9 +2994,10 @@ providers:
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
         minimum_scenario_revision: 11
-        acceptable_evidence:
-        - live_token
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
     answer_pause: {level: none, source: "OMP provider-local Console approval surface", disposition: not_implemented, reason: "OMP does not expose a proven remote approval transport", owner_action: "Add an OMP remote approval canary before exposing answer_pause", blocker: none}
     terminate:
       disposition: implemented
@@ -2993,9 +3006,10 @@ providers:
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
         minimum_scenario_revision: 11
-        acceptable_evidence:
-        - live_token
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
     tail_output: {level: source_review, source: "OMP native JSONL Shadow source", disposition: implemented, blocker: none}
     runtime_phase: {level: hermetic, source: "OMP extension lifecycle reducer tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
     transcript_binding: {level: source_review, source: "Opaque OMP source identity and source epochs", disposition: implemented, blocker: none}
@@ -3034,8 +3048,10 @@ providers:
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
         minimum_scenario_revision: 11
-        acceptable_evidence: [live_token]
+        acceptable_evidence: [live_token, scripted_model]
+        required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
+        max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
       - <<: *omp_helm_lifecycle_assertion
         id: omp_helm_send_idle
       - <<: *omp_helm_lifecycle_assertion

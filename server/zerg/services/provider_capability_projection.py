@@ -89,7 +89,7 @@ def _rejection_reasons(
     generated = _parse_timestamp(record.generated_at)
     if generated is None or generated > moment:
         reasons.append("proof_time_invalid")
-    elif (moment - generated).total_seconds() > assertion.max_age_seconds:
+    elif (moment - generated).total_seconds() >= assertion.max_age_for_evidence_class(record.evidence_class.value):
         reasons.append("semantic_proof_stale")
     if record.outcome is not AssertionOutcome.PASS:
         reasons.append("semantic_proof_failed")

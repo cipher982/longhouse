@@ -29,7 +29,7 @@ OUTPUT_TOKENS = 8
 TOTAL_TOKENS = INPUT_TOKENS + OUTPUT_TOKENS
 PROMPT_MARKER = re.compile(r'concatenate the prefix "([^"]+)" and suffix "([^"]+)"', re.IGNORECASE)
 GEMINI_GENERATE = re.compile(r"(?:^|/)models/(.+):(streamGenerateContent|generateContent|countTokens)$")
-SCRIPTED_INPUT_MARKER = re.compile(r"\bLONGHOUSE_PI_PROBE_[a-f0-9]{32}\b")
+SCRIPTED_INPUT_MARKER = re.compile(r"\b(?:LONGHOUSE_PI_PROBE_[a-f0-9]{32}|(?:OMP|PI)_HELM_[A-Z0-9_]+_[a-f0-9]{16})\b")
 
 
 @dataclass(frozen=True)
@@ -113,6 +113,14 @@ def _user_text(value: object) -> list[str]:
         for item in value:
             found.extend(_user_text(item))
     return found
+
+
+def _latest_user_marker(value: object) -> str | None:
+    for text in reversed(_user_text(value)):
+        matches = tuple(SCRIPTED_INPUT_MARKER.finditer(text))
+        if matches:
+            return matches[-1].group()
+    return None
 
 
 def _has_user_prompt(payload: dict) -> bool:
@@ -438,10 +446,10 @@ def _scripted_plan(payload: dict, turns: list[dict]) -> GenerationPlan | None:
             value = _history_value(payload, history)
             reply = reply.replace("{{history}}", value) if reply is not None else value
         if isinstance(reply, str) and "{{input_marker}}" in reply:
-            marker = SCRIPTED_INPUT_MARKER.search(latest)
+            marker = _latest_user_marker(payload)
             if marker is None:
-                raise ValueError("scripted reply input-marker template has no matching marker in the latest user input")
-            reply = reply.replace("{{input_marker}}", marker.group())
+                raise ValueError("scripted reply input-marker template has no matching marker in a user message")
+            reply = reply.replace("{{input_marker}}", marker)
         tool_spec = turn.get("tool_call")
         tool_call = _scripted_tool_call(payload, tool_spec) if tool_spec is not None else None
         return GenerationPlan(reply, tool_call, turn["id"])

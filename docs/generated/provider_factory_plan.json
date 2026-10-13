@@ -2294,10 +2294,12 @@
           "scenario_id": "omp_helm_lifecycle",
           "minimum_scenario_revision": 11,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -2307,10 +2309,12 @@
           "scenario_id": "omp_helm_lifecycle",
           "minimum_scenario_revision": 11,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -2320,10 +2324,12 @@
           "scenario_id": "omp_helm_lifecycle",
           "minimum_scenario_revision": 12,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -2333,10 +2339,12 @@
           "scenario_id": "omp_helm_lifecycle",
           "minimum_scenario_revision": 11,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -2346,10 +2354,12 @@
           "scenario_id": "omp_helm_lifecycle",
           "minimum_scenario_revision": 11,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -2359,10 +2369,12 @@
           "scenario_id": "omp_helm_lifecycle",
           "minimum_scenario_revision": 11,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -2372,10 +2384,12 @@
           "scenario_id": "omp_helm_lifecycle",
           "minimum_scenario_revision": 11,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -2385,10 +2399,12 @@
           "scenario_id": "omp_helm_lifecycle",
           "minimum_scenario_revision": 13,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -2398,10 +2414,12 @@
           "scenario_id": "omp_helm_lifecycle",
           "minimum_scenario_revision": 11,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -3127,10 +3145,12 @@
           "scenario_id": "pi_helm_lifecycle",
           "minimum_scenario_revision": 6,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -3140,10 +3160,12 @@
           "scenario_id": "pi_helm_lifecycle",
           "minimum_scenario_revision": 6,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -3153,10 +3175,12 @@
           "scenario_id": "pi_helm_lifecycle",
           "minimum_scenario_revision": 6,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -3166,10 +3190,12 @@
           "scenario_id": "pi_helm_lifecycle",
           "minimum_scenario_revision": 6,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -3179,10 +3205,12 @@
           "scenario_id": "pi_helm_lifecycle",
           "minimum_scenario_revision": 7,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -3192,10 +3220,12 @@
           "scenario_id": "pi_helm_lifecycle",
           "minimum_scenario_revision": 6,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -3205,10 +3235,12 @@
           "scenario_id": "pi_helm_lifecycle",
           "minimum_scenario_revision": 6,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -3218,10 +3250,12 @@
           "scenario_id": "pi_helm_lifecycle",
           "minimum_scenario_revision": 6,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -3231,10 +3265,12 @@
           "scenario_id": "pi_helm_lifecycle",
           "minimum_scenario_revision": 6,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -3244,10 +3280,12 @@
           "scenario_id": "pi_helm_lifecycle",
           "minimum_scenario_revision": 8,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -3257,10 +3295,12 @@
           "scenario_id": "pi_helm_lifecycle",
           "minimum_scenario_revision": 6,
           "acceptable_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },

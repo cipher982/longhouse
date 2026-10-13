@@ -72,7 +72,7 @@ REGISTRATION = ProducerRegistration(
     platforms=("linux", "darwin"),
     architectures=("x86_64", "aarch64"),
     modes=("helm",),
-    evidence_classes=("live_token",),
+    evidence_classes=("live_token", "scripted_model"),
     observed_activity=(
         "omp_native_extension_channel_bound",
         "omp_agent_end_settlement_observed",
@@ -83,7 +83,11 @@ REGISTRATION = ProducerRegistration(
         "omp_owned_processes_dead",
     ),
     acquisition_methods=("staged_release",),
-    credential_binding_ids=("omp_provider_token", "runtime_host_control"),
+    credential_binding_ids=("runtime_host_control",),
+    credential_binding_ids_by_evidence_class={
+        "live_token": ("omp_provider_token", "runtime_host_control"),
+        "scripted_model": ("runtime_host_control",),
+    },
     sandbox_policy="provider-qualification-bwrap-v3",
     network_policy="shared_provider_egress",
     required_artifacts=(
@@ -423,6 +427,7 @@ def _request_args(
         api_url=os.environ.get("LONGHOUSE_RUNTIME_API_URL"),
         agents_token=runtime_token,
         model=os.environ.get("LONGHOUSE_OMP_QUALIFICATION_MODEL", ""),
+        evidence_class=str(request.get("evidence_class") or EvidenceClass.LIVE_TOKEN.value),
         variant=variant,
     )
 
@@ -443,21 +448,23 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
         run_args = _request_args(request_path, evidence_root, request=request, agents_token=runtime_token)
         run_args.provider_bin = binary
         result = run_omp_helm(run_args, raises=True)
+        selected_evidence_class = EvidenceClass(helm.evidence_class(run_args))
         observation = dict(result.get("observation") or {})
-        model_evidence = omp_native_model_evidence(
-            evidence_root,
-            source_canary=PROFILE,
-            api_key_configured=bool(str(os.environ.get("OPENROUTER_API_KEY") or "").strip()),
-            qualification_model=run_args.model,
-        )
-        if model_evidence is not None:
-            observation["live_model_evidence"] = model_evidence
+        if selected_evidence_class is not EvidenceClass.SCRIPTED_MODEL:
+            model_evidence = omp_native_model_evidence(
+                evidence_root,
+                source_canary=PROFILE,
+                api_key_configured=bool(str(os.environ.get("OPENROUTER_API_KEY") or "").strip()),
+                qualification_model=run_args.model,
+            )
+            if model_evidence is not None:
+                observation["live_model_evidence"] = model_evidence
         assertions = omp_helm_lifecycle_assertions(observation)
         semantic_assertions = tuple(
             semantic.SemanticAssertion(
                 assertion,
                 AssertionOutcome.PASS if passed else AssertionOutcome.SEMANTIC_FAIL,
-                EvidenceClass.LIVE_TOKEN,
+                selected_evidence_class,
             )
             for assertion, passed in assertions.items()
         )

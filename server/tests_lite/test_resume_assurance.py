@@ -680,6 +680,25 @@ def test_direct_producer_registration_cli_needs_no_execution_arguments(capsys) -
     assert "codex.native_resume.v1" in capsys.readouterr().out
 
 
+def test_scripted_helm_selection_does_not_require_a_provider_token() -> None:
+    from zerg.qa import omp_helm_lifecycle
+    from zerg.qa.resume_assurance import _registration_bindings
+    from zerg.qa.resume_assurance import _select_evidence_class
+
+    registration = omp_helm_lifecycle.REGISTRATION.to_dict()
+    cell = {
+        "provider": "omp",
+        "acceptable_evidence": ["live_token", "scripted_model"],
+        "required_evidence_classes": ["live_token", "scripted_model"],
+    }
+    census = {"credential_binding_ids": ["runtime_host_control"]}
+
+    evidence_class = _select_evidence_class(registration, cell, census)
+
+    assert evidence_class == "scripted_model"
+    assert _registration_bindings(registration, provider="omp", evidence_class=evidence_class) == ["runtime_host_control"]
+
+
 def test_codex_resume_intent_maps_exact_session_to_provider_thread(tmp_path) -> None:
     from zerg.qa.codex_native_resume import _validate_resume_intent
 

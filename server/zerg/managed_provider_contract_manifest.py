@@ -502,6 +502,22 @@ def _validate_required_assertions(prefix: str, assertions: Any) -> None:
         evidence = assertion.get("acceptable_evidence")
         if not isinstance(evidence, list) or not evidence or not set(evidence) <= _CAPABILITY_EVIDENCE_CLASSES:
             raise ValueError(f"{prefix}.required_assertions acceptable_evidence is invalid")
+        required_classes = assertion.get("required_evidence_classes")
+        if required_classes is not None:
+            if (
+                not isinstance(required_classes, list)
+                or not required_classes
+                or any(not isinstance(item, str) or item not in evidence for item in required_classes)
+                or len(set(required_classes)) != len(required_classes)
+            ):
+                raise ValueError(f"{prefix}.required_assertions required_evidence_classes is invalid")
+            class_ages = assertion.get("max_age_seconds_by_evidence_class")
+            if not isinstance(class_ages, dict) or set(class_ages) != set(required_classes):
+                raise ValueError(f"{prefix}.required_assertions max_age_seconds_by_evidence_class must cover every required class")
+            if any(not isinstance(age, int) or isinstance(age, bool) or age < 1 for age in class_ages.values()):
+                raise ValueError(f"{prefix}.required_assertions per-class max ages must be positive integers")
+        elif "max_age_seconds_by_evidence_class" in assertion:
+            raise ValueError(f"{prefix}.required_assertions per-class max ages require required_evidence_classes")
         max_age = assertion.get("max_age_seconds")
         if not isinstance(max_age, int) or isinstance(max_age, bool) or max_age < 1:
             raise ValueError(f"{prefix}.required_assertions max_age_seconds must be positive")

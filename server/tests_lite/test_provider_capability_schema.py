@@ -65,3 +65,27 @@ def test_real_schema_loads_every_declared_assertion() -> None:
         assert assertion.scenario_id
         assert assertion.provider
         assert assertion.max_age_seconds > 0
+
+
+@pytest.mark.parametrize(
+    ("provider", "assertion_id"),
+    (("omp", "omp_helm_launch_registration"), ("pi", "pi_helm_launch_registration")),
+)
+def test_helm_cells_keep_class_local_freshness_and_chips_live_only(provider: str, assertion_id: str) -> None:
+    contract = next(
+        assertion
+        for assertion in provider_capability_schema.load_capability_assertions()
+        if assertion.provider == provider and assertion.assertion_id == assertion_id
+    )
+    assert contract.acceptable_evidence == ("live_token", "scripted_model")
+    assert contract.required_evidence_classes == ("live_token", "scripted_model")
+    assert contract.max_age_for_evidence_class("live_token") == 604800
+    assert contract.max_age_for_evidence_class("scripted_model") == 1800
+
+    chip_assertions = provider_capability_schema.load_chip_edge_assertions()[provider]
+    live_chip_requirement = next(
+        assertion for assertions in chip_assertions.values() for assertion in assertions or () if assertion.assertion_id == assertion_id
+    )
+    assert live_chip_requirement.acceptable_evidence == ("live_token",)
+    assert live_chip_requirement.required_evidence_classes == ("live_token",)
+    assert live_chip_requirement.max_age_seconds == 604800

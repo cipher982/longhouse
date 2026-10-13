@@ -27,6 +27,7 @@ import os
 import shutil
 import socket
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -38,6 +39,8 @@ from typing import Any
 from urllib.parse import quote
 
 from zerg.qa import provider_console_lifecycle as lifecycle
+from zerg.qa import provider_interaction_probe
+from zerg.qa import scripted_model_server
 from zerg.qa.answer_markers import marker_answered
 from zerg.qa.console_served_state_core import MarkerAnswerCountError
 from zerg.qa.console_served_state_core import StandingServedAnswerFault
@@ -73,6 +76,7 @@ from zerg.qa.pi_family_turn_oracle import send_turn_verdict
 from zerg.qa.pi_family_turn_oracle import steer_turn_verdict
 from zerg.qa.pi_family_turn_oracle import step_task_prompt
 from zerg.qa.pi_family_turn_oracle import task_tool_boundary
+from zerg.qa.pi_family_turn_oracle import task_tool_call_boundary
 from zerg.qa.pi_native import pi_native_shadow_taxonomy
 from zerg.qa.pi_native import pi_transcript_rows
 from zerg.qa.producer_shell import Run
@@ -147,6 +151,113 @@ class Family:
     strict_resume_state: bool = False  # the resumed owner must name the same session and file before the turn is read
     evidence_must_be_final: bool = False  # the result says whether the evidence tree was still changing; the provider's module judges it
     control_outlives_failure: bool = False  # a negative control's verdict is reported even when the run failed
+
+
+SCRIPTED_CONTEXT_PHRASE = "sable-harbor-729"
+
+
+def evidence_class(args: argparse.Namespace) -> str:
+    selected = getattr(args, "evidence_class", None) or "live_token"
+    selected = getattr(selected, "value", selected)
+    if selected not in ("live_token", "scripted_model"):
+        raise ValueError(f"unsupported Helm evidence class: {selected!r}")
+    return str(selected)
+
+
+def _scripted_model_fixture(family: Family, proof_file: Path | None) -> tuple[list[dict[str, Any]], frozenset[str]]:
+    """One deterministic fixture for the complete provider-specific Helm lifecycle."""
+
+    prefix = family.marker_prefix
+    provider = family.provider
+    turns: list[dict[str, Any]] = []
+    expected: set[str] = set()
+
+    def add(
+        name: str,
+        match: str,
+        *,
+        reply: str | None = None,
+        tool_call: dict[str, Any] | None = None,
+        reply_from_history: dict[str, Any] | None = None,
+        expected_request: bool = True,
+    ) -> None:
+        turn: dict[str, Any] = {"id": f"{provider}-{name}", "match": match}
+        if reply is not None:
+            turn["reply"] = reply
+        if tool_call is not None:
+            turn["tool_call"] = tool_call
+        if reply_from_history is not None:
+            turn["reply_from_history"] = reply_from_history
+        turns.append(turn)
+        if expected_request:
+            expected.add(turn["id"])
+
+    if proof_file is None:
+        add("launch", f"{prefix}_LAUNCH_", reply="{{input_marker}}")
+    else:
+        add(
+            "launch-tool",
+            "Use the read tool to read",
+            tool_call={"name": "read", "arguments": {"path": str(proof_file)}},
+        )
+        add("launch-answer", proof_file.read_text(encoding="utf-8").strip(), reply="{{input_marker}}")
+
+    if provider == "pi":
+        add("local-send", f"{prefix}_LOCAL_SEND_", reply="{{input_marker}}")
+    add(
+        "send",
+        f"{prefix}_SEND_",
+        reply="{{input_marker}}",
+    )
+    add(
+        "busy-tool",
+        f"{prefix}_ACTIVE_",
+        tool_call={"name": "bash", "command": "sleep 8 && echo scripted-helm-busy-result"},
+    )
+    add("busy-answer", "scripted-helm-busy-result", reply="{{input_marker}}")
+    add("follow-up", f"{prefix}_FOLLOW_UP_", reply="{{input_marker}}")
+
+    for local in (False, True) if provider == "pi" else (False,):
+        label = "local-steer" if local else "steer"
+        owner_prefix = f"{prefix}_LOCAL_" if local else f"{prefix}_"
+        add(
+            f"{label}-tool",
+            f"Task {owner_prefix}STEER_TASK_",
+            tool_call={"name": "bash", "command": f"sleep 30 && echo scripted-{label}-result"},
+        )
+        add(f"{label}-answer", f"{prefix}_{'LOCAL_' if local else ''}STEER_", reply="{{input_marker}}")
+
+    for local in (False, True) if provider == "pi" else (False,):
+        label = "local-abort" if local else "abort"
+        owner_prefix = f"{prefix}_LOCAL_" if local else f"{prefix}_"
+        add(
+            f"{label}-tool",
+            f"Task {owner_prefix}ABORT_TASK_",
+            tool_call={"name": "bash", "command": f"sleep 300 && echo scripted-{label}-result"},
+        )
+        add(f"{label}-after", f"{prefix}_{'LOCAL_' if local else ''}ABORT_AFTER_", reply="{{input_marker}}")
+
+    if provider == "pi":
+        add("reload", f"{prefix}_RELOAD_", reply="{{input_marker}}")
+
+    add(
+        "replacement",
+        "Remember this context phrase for later:",
+        reply=f"{SCRIPTED_CONTEXT_PHRASE} {{{{input_marker}}}}",
+    )
+    add(
+        "stale-owner-refused",
+        "A stale owner must be refused:",
+        reply="unexpected-stale-owner-model-call",
+        expected_request=False,
+    )
+    add(
+        "cold-resume",
+        "It is in the conversation history above.",
+        reply="{{history}} {{input_marker}}",
+        reply_from_history={"pattern": SCRIPTED_CONTEXT_PHRASE},
+    )
+    return turns, frozenset(expected)
 
 
 def _read_state(path: Path) -> dict[str, Any] | None:
@@ -1918,6 +2029,23 @@ def _wait_task_tool_boundary(session_file: Path, task_marker: str, *, timeout: f
     )
 
 
+def _wait_task_tool_call_boundary(session_file: Path, task_marker: str, *, timeout: float = 90) -> dict[str, Any]:
+    """For the local fixture, stop the run at the issued tool call before its long shell command ends."""
+
+    def observe() -> dict[str, Any] | None:
+        if not session_file.is_file():
+            return None
+        boundary = task_tool_call_boundary(read_session_entries(session_file), task_marker)
+        return {"tool_call_id": boundary} if boundary else None
+
+    return _wait(
+        observe,
+        timeout=timeout,
+        description=f"tool call in task {task_marker}",
+        waited_on=lambda: PROVIDER_TURN if provider_holds_prompt(session_file, task_marker) else None,
+    )
+
+
 # How long the first turn may take to answer. A plain launch turn is one model
 # call. The background turn is a whole job: about five model calls in the
 # parent, a child agent with calls of its own, and two 2 s commands. The parent
@@ -1993,6 +2121,11 @@ class Lifecycle:
 
     def __init__(self, family: Family, run: Run, args: argparse.Namespace) -> None:
         self.f, self.run, self.args, self.root = family, run, args, run.root
+        self.scripted_model = evidence_class(args) == "scripted_model"
+        self.scripted_model_server: scripted_model_server.ThreadedServer | None = None
+        self.scripted_model_thread: threading.Thread | None = None
+        self.scripted_model_script: Path | None = None
+        self.scripted_model_expected_turns: frozenset[str] = frozenset()
         if os.environ.get(family.live_env) not in {"1", "true", "yes", "on"}:
             raise RuntimeError(f"{family.name} Helm qualification requires explicit {family.live_env} opt-in")
         self.api_url = str(args.api_url or os.environ.get(RUNTIME_API_URL_ENV) or "")
@@ -2015,6 +2148,8 @@ class Lifecycle:
             self.workspace.mkdir(mode=0o700, parents=True)
             upper = family.provider.upper()
             self.env = dict(os.environ)
+            if self.scripted_model:
+                self.env = provider_interaction_probe._credential_free_environment(reject_ambient_credentials=False)
             self.env.update(
                 {
                     "HOME": str(self.provider_home),
@@ -2032,7 +2167,10 @@ class Lifecycle:
                 self.env["LONGHOUSE_QA_FAULT"] = fault_name(family.provider, self.negative_control)
                 self.env["LONGHOUSE_QA_FAULT_RECEIPT"] = str(self.root / "qa-fault-receipt.jsonl")
             family.prepare(self)
+            if self.scripted_model:
+                self._start_scripted_model()
         except BaseException:
+            self._close_scripted_model_server()
             shutil.rmtree(self.isolation)
             raise
         self.terminals: list[ProviderPtySession] = []
@@ -2060,6 +2198,79 @@ class Lifecycle:
             "settlement": {},
             "cleanup": {},
         }
+
+    def _start_scripted_model(self) -> None:
+        script = self.root / "scripted-model-fixture.json"
+        turns, expected = _scripted_model_fixture(self.f, getattr(self, "proof_file", None))
+        script.write_text(json.dumps({"turns": turns}, sort_keys=True) + "\n", encoding="utf-8")
+        script.chmod(0o600)
+        turns, script_sha256 = scripted_model_server.load_script(script)
+        server = scripted_model_server.ThreadedServer(
+            ("127.0.0.1", 0),
+            scripted_model_server.MockHandler,
+            script_turns=turns,
+            script_sha256=script_sha256,
+            receipt_file=self.root / "scripted-model-server-receipt.json",
+        )
+        thread = threading.Thread(target=server.serve_forever, name=f"{self.f.provider}-helm-scripted-model", daemon=True)
+        self.scripted_model_server, self.scripted_model_thread = server, thread
+        thread.start()
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                with urllib.request.urlopen(f"{server.endpoint}/healthz", timeout=0.5):
+                    break
+            except (OSError, urllib.error.URLError):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("scripted model server did not become ready on loopback")
+                time.sleep(0.01)
+        self.scripted_model_expected_turns = expected
+        self.scripted_model_script = script
+        self.env[provider_interaction_probe._SCRIPTED_MODEL_BASE_URL_ENV] = server.endpoint
+        self.env[provider_interaction_probe._SCRIPTED_MODEL_SCRIPT_ENV] = str(script)
+        provider_interaction_probe._configure_scripted_model_profile(self.f.provider, self.provider_home, self.env)
+        if self.f.provider == "omp":
+            self.args.model = f"{provider_interaction_probe._SCRIPTED_MODEL_PROVIDER}/{provider_interaction_probe._SCRIPTED_MODEL_NAME}"
+        else:
+            self.args.model_provider = provider_interaction_probe._SCRIPTED_MODEL_PROVIDER
+            self.args.model = provider_interaction_probe._SCRIPTED_MODEL_NAME
+
+    def _close_scripted_model_server(self) -> None:
+        server = self.scripted_model_server
+        if server is None:
+            return
+        thread = self.scripted_model_thread
+        if thread is not None and thread.is_alive():
+            server.shutdown()
+        server.server_close()
+        if thread is not None:
+            thread.join(timeout=5.0)
+        self.scripted_model_server = None
+        self.scripted_model_thread = None
+
+    def _record_scripted_model_receipt(self) -> None:
+        if not self.scripted_model:
+            return
+        try:
+            receipt = provider_interaction_probe._scripted_model_receipt(
+                self.env,
+                requests_before=0,
+                require_served_request=True,
+            )
+            missing = sorted(self.scripted_model_expected_turns - set(receipt["matched_turns"]))
+            if missing:
+                raise RuntimeError("scripted model did not serve required Helm turns: " + ", ".join(missing))
+            receipt["status"] = "pass"
+        except Exception as exc:  # noqa: BLE001 - a missing or failed fixture request is scripted-lane evidence
+            receipt = {
+                "status": "fail",
+                "endpoint": self.env.get(provider_interaction_probe._SCRIPTED_MODEL_BASE_URL_ENV),
+                "script_sha256": sha256_file(self.scripted_model_script) if self.scripted_model_script is not None else None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        self.observation["scripted_model"] = receipt
+        lifecycle.write_json(self.root / "scripted-model-receipt.json", receipt)
+        self._close_scripted_model_server()
 
     # -- what the steps share
 
@@ -2453,7 +2664,8 @@ class Lifecycle:
         task, done, marker = (self.marker(f"{name.upper()}{part}") for part in ("_TASK", "_TASK_DONE", ""))
         active = self.begin(f"{name} turn's send", step_task_prompt(task, done), local=local)
         active_state = self.busy_state()
-        self.observation[f"{name}_tool_boundary"] = _wait_task_tool_boundary(self.session_file, task)
+        boundary_wait = _wait_task_tool_call_boundary if self.scripted_model else _wait_task_tool_boundary
+        self.observation[f"{name}_tool_boundary"] = boundary_wait(self.session_file, task)
         prompt = self.prompt("steer", marker)
         command = self.control("steer", prompt, local=local)
         row, evidence = self.reply(marker, offset, timeout=150)
@@ -2486,7 +2698,8 @@ class Lifecycle:
         active = self.begin(f"{name} turn's send", step_task_prompt(task, done), local=local)
         active_state = self.busy_state(after=idle)
         offset = _read_source_size(self.session_file)
-        self.observation[f"{name}_tool_boundary"] = _wait_task_tool_boundary(self.session_file, task)
+        boundary_wait = _wait_task_tool_call_boundary if self.scripted_model else _wait_task_tool_boundary
+        self.observation[f"{name}_tool_boundary"] = boundary_wait(self.session_file, task)
         command = self.control("abort", local=local)
         record: dict[str, Any] = {
             "action_label": "abort",
@@ -2624,15 +2837,17 @@ class Lifecycle:
             self.stale_frame(old, replaced)
         self.state = replaced
         self.session_file = Path(str(replaced["session_file"]))
-        marker, phrase = self.marker("REPLACEMENT"), self.marker("CONTEXT")
+        marker = self.marker("REPLACEMENT")
+        phrase = SCRIPTED_CONTEXT_PHRASE if self.scripted_model else self.marker("CONTEXT")
         self.context_phrase = phrase
         self.own("replacement", replaced, marker=marker, controls=("replacement", "cold_resume"))
         identity = self.identity("replacement", replaced)
         # The provider may reserve the path at `/new` and write the file with the first turn.
         offset = _read_source_size(self.session_file)
         prompt = _context_prompt(phrase, marker)
+        alongside = (phrase,) if self.scripted_model else ()
         command = self.host(f.rebind_command, prompt)
-        row, evidence = self.reply(marker, offset)
+        row, evidence = self.reply(marker, offset, alongside=alongside)
         seed_row, seed = self.reply(phrase, offset, role="user")
         record = self.controls["replacement"] = {
             "action_label": "replacement_send",
@@ -2648,7 +2863,7 @@ class Lifecycle:
             "context_evidence": seed,
             "control_identity": identity,
         }
-        record["served"] = self.converge("replacement", marker, row, flush=self.flush("replacement"))
+        record["served"] = self.converge("replacement", marker, row, flush=self.flush("replacement"), alongside=alongside)
 
     def _stopped(self, state: Mapping[str, Any], terminal: ProviderPtySession, *, owner: str, tolerate: bool = False) -> dict[str, Any]:
         """What proves the owner stopped after a terminate, as this lifecycle proves it today.
@@ -2908,6 +3123,7 @@ class Lifecycle:
             if self.owner_records
             else {"status": "fail", "provider_process_dead": False, "process_group_dead": False, "orphan_count": 1}
         )
+        self._record_scripted_model_receipt()
         run_id = str(self.state.get("run_id") or "")
         if f.retirement_claims:
             if not self.retirement_claims:
@@ -3099,6 +3315,8 @@ class Lifecycle:
                 "manifest_entry_count": len(manifest),
             }
         failure = self.failure
+        if failure is None and self.scripted_model and observation.get("scripted_model", {}).get("status") != "pass":
+            failure = RuntimeError("scripted model receipt did not prove every required Helm turn")
         if failure is None and not f.evidence_must_be_final and cleanup.get("status") != "pass":
             failure = RuntimeError(
                 f"{f.name} Helm cleanup did not prove run retirement, source retention, shipper stop, and scratch removal"

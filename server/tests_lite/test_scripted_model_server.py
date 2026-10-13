@@ -454,6 +454,24 @@ def test_scripted_reply_template_uses_the_current_pi_input_marker(tmp_path: Path
         assert _receipt(endpoint)["requests"] == [{"request_id": 1, "matched_turn_id": "pi-input-marker", "status": "served"}]
 
 
+@pytest.mark.parametrize("prefix", ("OMP_HELM", "PI_HELM"))
+def test_scripted_reply_template_uses_the_latest_user_marker_after_a_tool_result(prefix: str) -> None:
+    marker = f"{prefix}_STEER_{'a' * 16}"
+    payload = {
+        "messages": [
+            {"role": "user", "content": f"Stop and reply with {marker}."},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "call-1"}]},
+            {"role": "tool", "tool_call_id": "call-1", "content": "scripted-tool-result"},
+        ]
+    }
+
+    plan = scripted_model_server._scripted_plan(
+        payload, [{"id": "steer-answer", "match": "scripted-tool-result", "reply": "{{input_marker}}"}]
+    )
+
+    assert plan is not None and plan.text == marker
+
+
 def test_scripted_responses_tool_only_continuation_uses_fixture_and_counts_only_success(tmp_path: Path) -> None:
     script = tmp_path / "responses-continuation.json"
     script.write_text(

@@ -11,6 +11,7 @@ from, so it can be checked there. Run as a script it is both ``longhouse`` and `
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import http.server
 import json
 import os
@@ -133,12 +134,88 @@ def _post(url: str, path: str, payload: dict[str, Any]) -> None:
 # The launcher: `longhouse omp|pi`, the process that owns one provider and its channel.
 
 
+def _read_model_profile(provider: str) -> dict[str, str] | None:
+    if provider == "omp":
+        path = Path(os.environ.get("HOME") or "") / ".omp" / "agent" / "models.yml"
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        fields = {
+            "provider": re.search(r"^  ([^:\n]+):\s*$", text, re.MULTILINE),
+            "base_url": re.search(r'^\s+baseUrl:\s*"([^"]+)"', text, re.MULTILINE),
+            "api_key": re.search(r'^\s+apiKey:\s*"([^"]+)"', text, re.MULTILINE),
+            "model": re.search(r"^\s+- id:\s*(\S+)", text, re.MULTILINE),
+        }
+        if not all(fields.values()):
+            return None
+        return {name: match.group(1) for name, match in fields.items() if match is not None}
+
+    path = Path(os.environ.get("PI_CODING_AGENT_DIR") or "") / "models.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    provider_name = str(os.environ.get("LONGHOUSE_PI_PROVIDER") or "openrouter")
+    provider_config = (payload.get("providers") or {}).get(provider_name)
+    if not isinstance(provider_config, Mapping):
+        return None
+    models = provider_config.get("models")
+    model = models[0] if isinstance(models, list) and models else {}
+    if not isinstance(model, Mapping):
+        return None
+    return {
+        "provider": provider_name,
+        "base_url": str(provider_config.get("baseUrl") or ""),
+        "api_key": str(provider_config.get("apiKey") or ""),
+        "model": str(model.get("id") or ""),
+    }
+
+
+def _local_chat_completions_url(profile: Mapping[str, str] | None) -> str | None:
+    if profile is None:
+        return None
+    parsed = urllib.parse.urlsplit(profile.get("base_url", ""))
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return None
+    return profile["base_url"].rstrip("/") + "/chat/completions"
+
+
+def _prior_assistant_messages(path: Path) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    try:
+        rows = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return messages
+    for line in rows:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        message = row.get("message") if isinstance(row, dict) else None
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        text = "\n".join(
+            str(part.get("text"))
+            for part in content or []
+            if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
+        )
+        if text:
+            messages.append({"role": "assistant", "content": text})
+    return messages
+
+
 class _Launcher:
     def __init__(self, provider: str, *, url: str, cwd: str, model: str, resume_session: str | None) -> None:
         self.provider = provider
         self.id_key = _ID_KEY[provider]
         self.url = url
         self.model = model or "fake/model"
+        self.model_profile = _read_model_profile(provider)
+        self.scripted_model_url = _local_chat_completions_url(self.model_profile)
+        self.model_messages: list[dict[str, Any]] = []
+        self._record_model_auth_receipt()
         home = Path(os.environ["LONGHOUSE_HOME"])
         self.state_dir = home / "managed-local" / f"{provider}-helm"
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -166,6 +243,7 @@ class _Launcher:
             if prior.get("status") != "stopped" and _alive(prior.get("launcher_pid")):
                 raise SystemExit(f"{provider} Helm session {resume_session} is already attached or resuming")
             self.leaf = self._last_entry_id(Path(prior["session_file"]))
+            self.model_messages.extend(_prior_assistant_messages(Path(prior["session_file"])))
         session_id = resume_session or str(uuid.uuid4())
         native_id = prior.get(self.id_key) or str(uuid.uuid4())
         self.provider_process = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep({MAX_LIFETIME_SECONDS})"])
@@ -208,6 +286,155 @@ class _Launcher:
             "started_at": _now(),
             "updated_at": _now(),
         }
+
+    def _record_model_auth_receipt(self) -> None:
+        report_path = os.environ.get("LONGHOUSE_FAKE_MODEL_AUTH_RECEIPT")
+        if not report_path:
+            return
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        profile = self.model_profile or {}
+        expected = os.environ.get("LONGHOUSE_FAKE_EXPECTED_OPENROUTER_KEY_SHA256")
+        row = {
+            "provider": self.provider,
+            "model_profile_loaded": self.model_profile is not None,
+            "profile_provider": profile.get("provider"),
+            "profile_endpoint_is_local": self.scripted_model_url is not None,
+            "profile_api_key_is_dummy": profile.get("api_key") == "longhouse-mock-key",
+            "profile_matches_script_endpoint": (
+                profile.get("base_url", "").rstrip("/").removesuffix("/v1")
+                == str(os.environ.get("LONGHOUSE_SCRIPTED_MODEL_BASE_URL") or "").rstrip("/")
+                if os.environ.get("LONGHOUSE_SCRIPTED_MODEL_BASE_URL")
+                else False
+            ),
+            "openrouter_credential_present": bool(api_key),
+            "openrouter_credential_matches_expected": (
+                bool(expected) and bool(api_key) and hashlib.sha256(api_key.encode()).hexdigest() == expected
+            ),
+        }
+        path = Path(report_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(row, sort_keys=True) + "\n")
+
+    def _scripted_model_request(self) -> dict[str, Any]:
+        profile = self.model_profile
+        if profile is None or self.scripted_model_url is None:
+            raise RuntimeError("fake provider model profile has no local scripted endpoint")
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "bash",
+                    "description": "Run a foreground shell command",
+                    "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "description": "Read a local file",
+                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+                },
+            },
+        ]
+        payload = json.dumps({"model": profile["model"], "messages": self.model_messages, "tools": tools}).encode("utf-8")
+        request = urllib.request.Request(
+            self.scripted_model_url,
+            data=payload,
+            headers={"Authorization": f"Bearer {profile['api_key']}", "Content-Type": "application/json"},
+        )
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=10) as response:
+            value = json.loads(response.read())
+        message = value["choices"][0]["message"]
+        if not isinstance(message, dict):
+            raise RuntimeError("scripted model returned no assistant message")
+        return message
+
+    def _scripted_tool_result(self, name: str, arguments: dict[str, Any]) -> tuple[str, bool]:
+        if name == "read":
+            result = Path(str(arguments.get("path") or "")).read_text(encoding="utf-8")
+        elif name == "bash":
+            command = str(arguments.get("command") or "")
+            if " && echo " not in command:
+                raise RuntimeError(f"fake scripted shell call did not echo its fixture result: {command}")
+            result = command.split(" && echo ", 1)[1].strip() + "\n"
+            if "sleep " in command:
+                steering = "steer-result" in command
+                aborting = "abort-result" in command
+                deadline = time.monotonic() + (2.0 if steering or aborting else 0.25)
+                while time.monotonic() < deadline:
+                    with self.lock:
+                        aborted, steered = self.abort, self.steer is not None
+                    if aborting and aborted:
+                        return "shell command interrupted by Helm abort\n", True
+                    if steering and steered:
+                        break
+                    if not steering and not aborting and time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.01)
+                if (steering or aborting) and time.monotonic() >= deadline:
+                    raise RuntimeError("fake scripted tool call was not steered or aborted")
+        else:
+            raise RuntimeError(f"fake scripted provider received unsupported tool {name!r}")
+        return result, False
+
+    def _scripted_turn(self, prompt: str) -> None:
+        self._entry({"role": "user", "content": [{"type": "text", "text": prompt}]})
+        self.model_messages.append({"role": "user", "content": prompt})
+        task_turn = _STEP_TASK.search(prompt) is not None
+        while True:
+            message = self._scripted_model_request()
+            tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                text = message.get("content") or ""
+                self.model_messages.append({"role": "assistant", "content": text})
+                self._assistant([{"type": "text", "text": text}], "stop")
+                return
+            if len(tool_calls) != 1:
+                raise RuntimeError("fake scripted provider expected one fixture tool call")
+            call = tool_calls[0]
+            function = call.get("function") or {}
+            name = str(function.get("name") or "")
+            arguments = json.loads(function.get("arguments") or "{}")
+            call_id = str(call.get("id") or f"call_{uuid.uuid4().hex[:12]}")
+            self.model_messages.append(
+                {
+                    "role": "assistant",
+                    "content": message.get("content"),
+                    "tool_calls": tool_calls,
+                }
+            )
+            self._assistant([{"type": "toolCall", "id": call_id, "name": name, "arguments": arguments}], "toolUse")
+            result, is_error = self._scripted_tool_result(name, arguments)
+            self._entry(
+                {
+                    "role": "toolResult",
+                    "toolCallId": call_id,
+                    "toolName": name,
+                    "content": [{"type": "text", "text": result}],
+                    "isError": is_error,
+                }
+            )
+            self.model_messages.append({"role": "tool", "tool_call_id": call_id, "content": result, "is_error": is_error})
+            if task_turn:
+                deadline = time.monotonic() + 2.0
+                while time.monotonic() < deadline:
+                    with self.lock:
+                        aborted, steered = self.abort, self.steer is not None
+                    if aborted or steered:
+                        break
+                    time.sleep(0.01)
+                with self.lock:
+                    aborted = self.abort
+                    steer, self.steer = self.steer, None
+                if aborted:
+                    self._assistant([{"type": "text", "text": ""}], "aborted")
+                    return
+                if steer is not None:
+                    self._entry({"role": "user", "content": [{"type": "text", "text": steer}]})
+                    self.model_messages.append({"role": "user", "content": steer})
 
     def _new_session_file(self, native_id: str) -> str:
         return str(self.session_dir / f"{datetime.now(UTC).strftime('%Y-%m-%dT%H-%M-%S-%f')}_{native_id}.jsonl")
@@ -290,22 +517,25 @@ class _Launcher:
         return None
 
     def _turn(self, prompt: str) -> None:
-        self._entry({"role": "user", "content": [{"type": "text", "text": prompt}]})
-        task = _STEP_TASK.search(prompt)
-        if task is not None:
-            left = self._step_task(task.group(1))
-            if left == "aborted":
-                self._assistant([{"type": "text", "text": ""}], "aborted")
-            else:
-                self._assistant([{"type": "text", "text": self._reply(left or prompt)}], "stop")
+        if self.scripted_model_url is not None:
+            self._scripted_turn(prompt)
         else:
-            read = re.search(r"Use the read tool (?:repeatedly on|to read) (\S+?),", prompt)
-            if read is not None:
-                seconds = BUSY_SECONDS if "repeatedly" in prompt else 0.1
-                self._tool_call("read", {"path": read.group(1)}, Path(read.group(1)).read_text(encoding="utf-8"), seconds)
-            elif "Use the bash tool" in prompt:
-                self._tool_call("bash", {"command": "sleep 8"}, "", BUSY_SECONDS)
-            self._assistant([{"type": "text", "text": self._reply(prompt)}], "stop")
+            self._entry({"role": "user", "content": [{"type": "text", "text": prompt}]})
+            task = _STEP_TASK.search(prompt)
+            if task is not None:
+                left = self._step_task(task.group(1))
+                if left == "aborted":
+                    self._assistant([{"type": "text", "text": ""}], "aborted")
+                else:
+                    self._assistant([{"type": "text", "text": self._reply(left or prompt)}], "stop")
+            else:
+                read = re.search(r"Use the read tool (?:repeatedly on|to read) (\S+?),", prompt)
+                if read is not None:
+                    seconds = BUSY_SECONDS if "repeatedly" in prompt else 0.1
+                    self._tool_call("read", {"path": read.group(1)}, Path(read.group(1)).read_text(encoding="utf-8"), seconds)
+                elif "Use the bash tool" in prompt:
+                    self._tool_call("bash", {"command": "sleep 8"}, "", BUSY_SECONDS)
+                self._assistant([{"type": "text", "text": self._reply(prompt)}], "stop")
         with self.lock:
             self.busy, self.steer, self.abort = False, None, False
             # What the OMP extension reports when a turn ends (engine/src/omp_helm_launcher.rs: handle_extension_frame, "agent_end").
@@ -419,6 +649,7 @@ class _Launcher:
                     native_id = str(uuid.uuid4())
                     self.state.update({self.id_key: native_id, "session_file": self._new_session_file(native_id)})
                     self.leaf = None
+                    self.model_messages.clear()
                     if self.provider == "omp":
                         self.state["lease_generation"] = str(uuid.uuid4())
                     self._publish(host=True)
@@ -762,8 +993,8 @@ def longhouse(directory: Path, setenv: Callable[[str, str], object] = os.environ
         raise RuntimeError(f"the run left fake processes {left_running} or its isolation {isolation} behind")
 
 
-def producer_arguments(provider: str, cli: Path, root: Path) -> list[str]:
-    """The arguments the factory passes a Helm producer for its first cell (control-plane ``_provider_producer_argv``)."""
+def producer_arguments(provider: str, cli: Path, root: Path, *, evidence_class: str = "live_token") -> list[str]:
+    """The arguments the factory passes a Helm producer for one evidence class."""
 
     import importlib
 
@@ -778,7 +1009,17 @@ def producer_arguments(provider: str, cli: Path, root: Path) -> list[str]:
     ]
     arguments += ["--engine", str(cli), "--longhouse-cli", str(cli), "--provider-bin", str(cli), "--provider-version", "0.0.0"]
     arguments += ["--model", "openrouter/fake-model", "--provider", provider, "--platform", "linux", "--architecture", "x86_64"]
-    return [*arguments, "--evidence-class", "live_token", "--credential-binding", "runtime_host_control"]
+    bindings = module.REGISTRATION.credential_binding_ids_by_evidence_class[evidence_class]
+    return [
+        *arguments,
+        "--evidence-class",
+        evidence_class,
+        *(part for binding in bindings for part in ("--credential-binding", binding)),
+    ]
+
+
+def scripted_model_arguments(provider: str, cli: Path, root: Path) -> list[str]:
+    return producer_arguments(provider, cli, root, evidence_class="scripted_model")
 
 
 def run_lifecycle(

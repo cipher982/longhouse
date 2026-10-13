@@ -969,7 +969,7 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
                         "longhouse_git_sha": p.longhouse_git_sha,
                         "provider_version": p.provider_version,
                         "accepted_epoch_id": p.accepted_epoch_id,
-                        "max_age_seconds": assertion.max_age_seconds,
+                        "max_age_seconds": assertion.max_age_for_evidence_class("live_token"),
                     }
                 )
             state = rollup_state(row["proof_status"] for row in rows)

@@ -85,7 +85,7 @@ REGISTRATION = ProducerRegistration(
     platforms=("linux", "darwin"),
     architectures=("x86_64", "aarch64"),
     modes=("helm",),
-    evidence_classes=("live_token",),
+    evidence_classes=("live_token", "scripted_model"),
     observed_activity=(
         "stock_longhouse_pi_helm_launch",
         "pi_native_session_jsonl_bound",
@@ -96,7 +96,11 @@ REGISTRATION = ProducerRegistration(
         "owned_processes_dead",
     ),
     acquisition_methods=("staged_release", "observed_install"),
-    credential_binding_ids=("pi_provider_token", "runtime_host_control"),
+    credential_binding_ids=("runtime_host_control",),
+    credential_binding_ids_by_evidence_class={
+        "live_token": ("pi_provider_token", "runtime_host_control"),
+        "scripted_model": ("runtime_host_control",),
+    },
     sandbox_policy="provider-qualification-bwrap-v3",
     network_policy="shared_provider_egress",
     required_artifacts=(
@@ -382,7 +386,7 @@ def pi_helm_lifecycle_assertions(observation: Mapping[str, Any]) -> dict[str, bo
 
 def _launch_argv(args: argparse.Namespace, *, workspace: Path, prompt: str, resume_session: str | None = None) -> list[str]:
     argv = [str(args.longhouse_cli), "pi", "--cwd", str(workspace), "--pi-bin", str(args.provider_bin)]
-    argv += ["--provider", "openrouter", "--model", args.model]
+    argv += ["--provider", getattr(args, "model_provider", "openrouter"), "--model", args.model]
     if resume_session is not None:
         argv += ["--resume-session", resume_session]
     return [*argv, "--prompt", prompt]
@@ -394,7 +398,11 @@ def _prepare(life: Lifecycle) -> None:
     life.proof_file = life.workspace / "pi-tool-proof.txt"
     life.proof_file.write_text(life.marker("TOOL") + "\n", encoding="utf-8")
     # One slow OpenRouter host must not stall a cell: pin the model's requests.
-    _write_json(life.root / "openrouter-routing-receipt.json", prepare_pi_openrouter_routing(life.provider_home / ".pi", life.args.model))
+    if not life.scripted_model:
+        _write_json(
+            life.root / "openrouter-routing-receipt.json",
+            prepare_pi_openrouter_routing(life.provider_home / ".pi", life.args.model),
+        )
 
 
 def _converged(served: Mapping[str, Any]) -> bool:
@@ -486,6 +494,7 @@ def _request_args(
         api_url=os.environ.get("LONGHOUSE_RUNTIME_API_URL"),
         agents_token=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"),
         model=os.environ.get("LONGHOUSE_PI_QUALIFICATION_MODEL", ""),
+        evidence_class=str(request.get("evidence_class") or EvidenceClass.LIVE_TOKEN.value),
         variant=None,
     )
 
@@ -503,13 +512,14 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
         run_args = _request_args(request_path, evidence_root, request=request)
         run_args.provider_bin = binary
         result = run_pi_helm_lifecycle(run_args, raises=True)
+        selected_evidence_class = EvidenceClass(helm.evidence_class(run_args))
         observation = dict(result.get("observation") or result.get("partial_observation") or {})
         assertions = dict(result.get("assertions") or {})
         semantic_assertions = tuple(
             semantic.SemanticAssertion(
                 assertion,
                 AssertionOutcome.PASS if assertions.get(assertion) is True else AssertionOutcome.SEMANTIC_FAIL,
-                EvidenceClass.LIVE_TOKEN,
+                selected_evidence_class,
             )
             for assertion in ASSERTIONS
         )

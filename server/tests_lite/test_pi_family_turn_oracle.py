@@ -19,6 +19,9 @@ from zerg.qa.pi_family_turn_oracle import control_run_assertions
 from zerg.qa.pi_family_turn_oracle import pi_family_steer_noncompliance
 from zerg.qa.pi_family_turn_oracle import send_turn_verdict
 from zerg.qa.pi_family_turn_oracle import steer_turn_verdict
+from zerg.qa.pi_family_turn_oracle import step_task_prompt
+from zerg.qa.pi_family_turn_oracle import task_tool_boundary
+from zerg.qa.pi_family_turn_oracle import task_tool_call_boundary
 
 TASK = "TASK_abc"
 DONE = "DONE_abc"
@@ -36,6 +39,19 @@ def _entry(entry_id: str, parent: str | None, role: str, *, text: str = "", stop
     if stop:
         message["stopReason"] = stop
     return {"type": "message", "id": entry_id, "parentId": parent, "message": message}
+
+
+def test_scripted_turn_boundary_can_observe_the_tool_call_before_its_result() -> None:
+    task = _entry("task", None, "user", text=step_task_prompt(TASK, DONE))
+    call = _entry("call", "task", "assistant", stop="toolUse", tool=True)
+    entries = [task, call]
+
+    assert task_tool_call_boundary(entries, TASK) == "call"
+    assert task_tool_boundary(entries, TASK) is None
+
+    entries.append(_entry("result", "call", "toolResult"))
+    assert task_tool_call_boundary(entries, TASK) == "call"
+    assert task_tool_boundary(entries, TASK) == "result"
 
 
 def _task_prefix() -> list[dict]:

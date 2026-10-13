@@ -96,6 +96,7 @@ class ProducerRegistration:
     # selected provider.  The flat tuple remains the compatibility shape for
     # single-provider producers.
     credential_binding_ids_by_provider: Mapping[str, tuple[str, ...]] = dataclass_field(default_factory=dict)
+    credential_binding_ids_by_evidence_class: Mapping[str, tuple[str, ...]] = dataclass_field(default_factory=dict)
     # A producer spanning several scenarios may require evidence that is only
     # meaningful in one of them. The compiler adds these roles to the common
     # required_artifacts for the selected scenario.
@@ -138,6 +139,12 @@ class ProducerRegistration:
             }
         else:
             payload.pop("credential_binding_ids_by_provider", None)
+        if self.credential_binding_ids_by_evidence_class:
+            payload["credential_binding_ids_by_evidence_class"] = {
+                evidence_class: list(bindings) for evidence_class, bindings in sorted(self.credential_binding_ids_by_evidence_class.items())
+            }
+        else:
+            payload.pop("credential_binding_ids_by_evidence_class", None)
         if self.required_artifacts_by_scenario:
             payload["required_artifacts_by_scenario"] = {
                 scenario: list(artifacts) for scenario, artifacts in sorted(self.required_artifacts_by_scenario.items())
@@ -156,22 +163,27 @@ def capability_contract_shape(assertions: Sequence[object], *, provider: str, ca
     for assertion in assertions:
         if getattr(assertion, "provider") != provider or getattr(assertion, "capability") != capability:
             continue
-        rows.append(
-            {
-                "subject_kind": PROVIDER_RELEASE_SUBJECT,
-                "provider": provider,
-                "capability": capability,
-                "disposition": getattr(assertion, "disposition", "implemented"),
-                "assertion_id": getattr(assertion, "assertion_id"),
-                "variant": getattr(assertion, "variant"),
-                "scenario_id": getattr(assertion, "scenario_id"),
-                "minimum_scenario_revision": getattr(assertion, "minimum_scenario_revision"),
-                "oracle_source": getattr(assertion, "oracle_source"),
-                "acceptable_evidence": sorted(getattr(assertion, "acceptable_evidence")),
-                "max_age_seconds": getattr(assertion, "max_age_seconds"),
-                "assurance_priority": getattr(assertion, "assurance_priority", "release_gate"),
-            }
-        )
+        row = {
+            "subject_kind": PROVIDER_RELEASE_SUBJECT,
+            "provider": provider,
+            "capability": capability,
+            "disposition": getattr(assertion, "disposition", "implemented"),
+            "assertion_id": getattr(assertion, "assertion_id"),
+            "variant": getattr(assertion, "variant"),
+            "scenario_id": getattr(assertion, "scenario_id"),
+            "minimum_scenario_revision": getattr(assertion, "minimum_scenario_revision"),
+            "oracle_source": getattr(assertion, "oracle_source"),
+            "acceptable_evidence": sorted(getattr(assertion, "acceptable_evidence")),
+            "max_age_seconds": getattr(assertion, "max_age_seconds"),
+            "assurance_priority": getattr(assertion, "assurance_priority", "release_gate"),
+        }
+        required_classes = getattr(assertion, "required_evidence_classes", None)
+        if required_classes is not None:
+            row["required_evidence_classes"] = list(required_classes)
+        class_ages = dict(getattr(assertion, "max_age_seconds_by_evidence_class", ()))
+        if class_ages:
+            row["max_age_seconds_by_evidence_class"] = class_ages
+        rows.append(row)
     return sorted(rows, key=_cell_sort_key)
 
 
@@ -194,6 +206,55 @@ def _cell_sort_key(cell: Mapping[str, Any]) -> tuple[str, str, str, str, str]:
 
 def _cell_key(cell: Mapping[str, Any]) -> tuple[str, str, str, str, str]:
     return _cell_sort_key(cell)
+
+
+def _max_age_for_class(cell: Mapping[str, Any], evidence_class: str) -> int:
+    scalar = cell.get("max_age_seconds")
+    if not isinstance(scalar, int) or isinstance(scalar, bool) or scalar < 1:
+        return 0
+    class_ages = cell.get("max_age_seconds_by_evidence_class")
+    class_age = class_ages.get(evidence_class, scalar) if isinstance(class_ages, Mapping) else scalar
+    if not isinstance(class_age, int) or isinstance(class_age, bool) or class_age < 1:
+        return 0
+    return min(scalar, class_age)
+
+
+def _registration_bindings(
+    registration: Mapping[str, Any],
+    *,
+    provider: str,
+    evidence_class: str,
+) -> list[str] | None:
+    by_class = registration.get("credential_binding_ids_by_evidence_class")
+    if by_class:
+        if not isinstance(by_class, Mapping):
+            return None
+        bindings = by_class.get(evidence_class)
+        return bindings if isinstance(bindings, list) and all(isinstance(item, str) for item in bindings) else None
+    by_provider = registration.get("credential_binding_ids_by_provider")
+    if by_provider:
+        if not isinstance(by_provider, Mapping):
+            return None
+        bindings = by_provider.get(provider)
+        return bindings if isinstance(bindings, list) and all(isinstance(item, str) for item in bindings) else None
+    bindings = registration.get("credential_binding_ids", [])
+    return bindings if isinstance(bindings, list) and all(isinstance(item, str) for item in bindings) else None
+
+
+def _select_evidence_class(
+    registration: Mapping[str, Any],
+    cell: Mapping[str, Any],
+    census: Mapping[str, Any],
+) -> str | None:
+    accepted = cell.get("required_evidence_classes", cell.get("acceptable_evidence", []))
+    candidates = sorted(set(registration.get("evidence_classes", [])) & set(accepted or []))
+    available = set(census.get("credential_binding_ids", []))
+    provider = str(cell.get("provider") or "")
+    for evidence_class in candidates:
+        bindings = _registration_bindings(registration, provider=provider, evidence_class=evidence_class)
+        if bindings is not None and set(bindings).issubset(available):
+            return evidence_class
+    return None
 
 
 def _diagnostic(code: str, message: str, *, cell: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -248,6 +309,19 @@ def _validate_contract(
         accepted_evidence = baseline.get("acceptable_evidence")
         if not isinstance(candidate_evidence, list) or not set(candidate_evidence).issubset(set(accepted_evidence or [])):
             diagnostics.append(_diagnostic("acceptable_evidence_broadened", "acceptable evidence was broadened", cell=baseline))
+        candidate_classes = candidate.get("required_evidence_classes", candidate_evidence)
+        accepted_classes = baseline.get("required_evidence_classes", accepted_evidence)
+        if not isinstance(candidate_classes, list) or not set(candidate_classes).issubset(set(accepted_classes or [])):
+            diagnostics.append(
+                _diagnostic("required_evidence_classes_broadened", "required evidence classes were broadened", cell=baseline)
+            )
+        if isinstance(candidate_classes, list):
+            for evidence_class in candidate_classes:
+                if _max_age_for_class(candidate, evidence_class) > _max_age_for_class(baseline, evidence_class):
+                    diagnostics.append(
+                        _diagnostic("freshness_requirement_weakened", "proof freshness is weaker for an evidence class", cell=baseline)
+                    )
+                    break
         max_age = candidate.get("max_age_seconds")
         accepted_max_age = baseline.get("max_age_seconds")
         if not isinstance(max_age, int) or isinstance(max_age, bool) or max_age > accepted_max_age:
@@ -326,21 +400,7 @@ def _producer_supports_cell(
             failures.append("provider_artifact_platform")
         if artifact.get("architecture") != census.get("architecture"):
             failures.append("provider_artifact_architecture")
-    available_bindings = set(census.get("credential_binding_ids", []))
-    bindings_by_provider = registration.get("credential_binding_ids_by_provider") or {}
-    selected_bindings: object = registration.get("credential_binding_ids", [])
-    if bindings_by_provider:
-        if not isinstance(bindings_by_provider, Mapping):
-            failures.append("credential_binding_map")
-            bindings_by_provider = {}
-        elif cell_subject_kind != PROVIDER_RELEASE_SUBJECT:
-            failures.append("credential_binding_map")
-        else:
-            selected_bindings = bindings_by_provider.get(str(cell.get("provider") or ""))
-            if not isinstance(selected_bindings, list):
-                failures.append("credential_binding_map")
-                selected_bindings = []
-    if not isinstance(selected_bindings, list) or not set(selected_bindings).issubset(available_bindings):
+    if _select_evidence_class(registration, cell, census) is None:
         failures.append("credential_binding")
     if registration.get("sandbox_policy") != census.get("sandbox_policy"):
         failures.append("sandbox_policy")
@@ -447,7 +507,8 @@ def _reuse_failures(
     except ValueError:
         failures.append("generated_at")
     else:
-        if generated > evaluated or (evaluated - generated).total_seconds() >= int(cell.get("max_age_seconds") or 0):
+        proof_age = _max_age_for_class(cell, str(proof.get("evidence_class") or ""))
+        if generated > evaluated or proof_age < 1 or (evaluated - generated).total_seconds() >= proof_age:
             failures.append("freshness")
     if not isinstance(proof.get("publication_message_id"), str) or not proof.get("publication_message_id"):
         failures.append("publication_message_id")
@@ -620,6 +681,9 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
             compiled["producer_id"] = registration["producer_id"]
             decision = decision_by_key[key]
             compiled["disposition"] = decision["action"]
+            selected_evidence_class = _select_evidence_class(registration, cell, census)
+            if selected_evidence_class is None:
+                raise RuntimeError("eligible producer lost its evidence-class credential binding")
             command = {
                 "producer_id": registration["producer_id"],
                 "producer_revision": registration["producer_revision"],
@@ -638,7 +702,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "implementation": registration["implementation"],
                 "oracle_source": registration["oracle_source"],
                 "oracle_entrypoint": registration["oracle_entrypoint"],
-                "evidence_class": sorted(set(registration["evidence_classes"]).intersection(cell["acceptable_evidence"]))[0],
+                "evidence_class": selected_evidence_class,
                 "required_activity": list(registration["observed_activity"]),
                 "required_artifacts": list(
                     dict.fromkeys(
@@ -654,10 +718,12 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "required_cleanup": list(registration["required_cleanup"]),
                 "required_executables": list(registration.get("required_executables", [])),
                 "credential_binding_ids": list(
-                    (registration.get("credential_binding_ids_by_provider") or {}).get(
-                        str(selected.get("provider") or ""),
-                        registration["credential_binding_ids"],
+                    _registration_bindings(
+                        registration,
+                        provider=str(selected.get("provider") or ""),
+                        evidence_class=selected_evidence_class,
                     )
+                    or []
                 ),
                 "subject_kind": _cell_subject_kind(selected),
                 "subject_key": cell_subject.get("subject_key"),
@@ -685,7 +751,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "priority": cell.get("assurance_priority", "release_gate"),
                 "timeout_seconds": 600,
                 "max_cost_usd": 2.0,
-                "freshness_max_age_seconds": cell["max_age_seconds"],
+                "freshness_max_age_seconds": _max_age_for_class(cell, selected_evidence_class),
                 "scheduling_reason": decision["reason"],
             }
             if _cell_subject_kind(selected) == PROVIDER_RELEASE_SUBJECT:
