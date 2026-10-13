@@ -559,19 +559,62 @@ mod tests {
     /// A `cat` under a PTY. `forkpty` children inherit every descriptor without
     /// close-on-exec, and parallel tests hold plain `libc::pipe` ends; a `cat`
     /// keeping another test's write end open would leave that test waiting
-    /// for EOF forever. The shell closes them before it becomes `cat`.
+    /// for EOF forever. Close inherited descriptors 3..1024 in the child,
+    /// rather than using a shell loop that can close the shell's own fds.
     fn cat_child() -> PtyChild {
-        let command = PtyCommand {
-            argv: vec![
-                CString::new("/bin/sh").unwrap(),
-                CString::new("-c").unwrap(),
-                CString::new("fd=3; while [ $fd -lt 1024 ]; do eval \"exec $fd>&-\"; fd=$((fd+1)); done; exec /bin/cat").unwrap(),
-            ],
-            env: vec![CString::new("PATH=/usr/bin:/bin").unwrap()],
-            cwd: CString::new("/").unwrap(),
+        let cat = CString::new("/bin/cat").unwrap();
+        let path_env = CString::new("PATH=/usr/bin:/bin").unwrap();
+        let argv = [cat.as_ptr(), std::ptr::null()];
+        let env = [path_env.as_ptr(), std::ptr::null()];
+        let mut master = -1;
+        let mut slave_name = [0 as libc::c_char; 1024];
+        let slave_name_ptr = if cfg!(target_os = "macos") {
+            slave_name.as_mut_ptr()
+        } else {
+            std::ptr::null_mut()
         };
         let mut size = terminal_winsize(-1);
-        spawn(&command, &mut size).unwrap()
+        let pid = unsafe {
+            libc::forkpty(
+                &mut master,
+                slave_name_ptr,
+                std::ptr::null_mut(),
+                &mut size,
+            )
+        };
+        assert!(
+            pid >= 0,
+            "forkpty failed: {}",
+            std::io::Error::last_os_error()
+        );
+        if pid == 0 {
+            unsafe {
+                for fd in 3..1024 {
+                    libc::close(fd);
+                }
+                libc::execve(cat.as_ptr(), argv.as_ptr(), env.as_ptr());
+                libc::_exit(127)
+            }
+        }
+        #[cfg(target_os = "macos")]
+        let slave_hold =
+            unsafe { libc::open(slave_name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
+        #[cfg(not(target_os = "macos"))]
+        let slave_hold = -1;
+        if cfg!(target_os = "macos") && slave_hold < 0 {
+            let error = std::io::Error::last_os_error();
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+                libc::close(master);
+                libc::waitpid(pid, std::ptr::null_mut(), 0);
+            }
+            panic!("open PTY slave hold failed: {error}");
+        }
+        PtyChild {
+            pid,
+            master,
+            slave_hold,
+        }
     }
 
     /// The user's keystrokes reach the child and its output reaches the user,
