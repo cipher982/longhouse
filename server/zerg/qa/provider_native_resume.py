@@ -163,10 +163,11 @@ def registration_for(provider: str) -> ProducerRegistration:
 
 
 def _close_recordings(processes: tuple[live_session_toolkit.PtyProcess | None, ...]) -> None:
-    """Close PTY recording streams before hashing the evidence manifest."""
+    """Finalize PTY recordings before their evidence is rewritten or scanned."""
 
     for process in processes:
         if process is not None:
+            process.finalize_recording()
             process.close()
 
 

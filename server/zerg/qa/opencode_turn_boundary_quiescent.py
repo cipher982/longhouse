@@ -211,15 +211,11 @@ def _terminal_size(path: Path) -> int:
 
 
 def _pump_until(process: PtyProcess, recording: Path, *, timeout: float, predicate) -> float | None:
-    """Drain the owned PTY until ``predicate(size)`` is true, or time out.
+    """Drain buffered PTY output while waiting for the recording to grow.
 
-    New helper: ``zerg.qa.pty_session.wait_for_terminal_quiescence`` proves
-    the same operational concept (bytes settle around a real terminal) but
-    assumes a background auto-draining thread (``ProviderPtySession``).
-    ``PtyProcess`` (the type every other real OpenCode producer in this
-    codebase already uses) has no such thread -- its non-blocking ``drain()``
-    only pulls bytes when called -- so this pumps it explicitly instead of
-    duplicating a second background-thread PTY primitive.
+    ``PtyProcess`` owns a background reader; this loop consumes its in-memory
+    buffer during the bounded wait. The recording remains the byte-count
+    signal, so unread output does not accumulate in memory.
     """
 
     deadline = time.monotonic() + timeout
@@ -459,6 +455,11 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
         serve_log = retain_opencode_serve_log(
             root / "opencode-serve.log", initial_state, qualification_secrets(os.environ, args.agents_token)
         )
+        recording_incomplete = False
+        if initial is not None:
+            finalized = initial.finalize_recording()
+            recording_incomplete = not finalized or bool(getattr(initial, "recording_incomplete", False))
+        reader_error = getattr(initial, "reader_error", None) if initial is not None else None
         redacted_secret_files = _redact_retained_secrets(
             root,
             list(qualification_secrets(os.environ, args.agents_token)),
@@ -477,6 +478,8 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             "managed_opencode_process_exited": managed_opencode_process_exited,
             "no_orphan_provider_processes": no_orphan_provider_processes,
             "artifact_secret_scan_passed": not redacted_secret_files,
+            "recording_incomplete": recording_incomplete,
+            "reader_error": reader_error,
             "serve_log": serve_log,
         }
         run.observation = observation
@@ -498,11 +501,17 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             if initial_state is not None
             else None
         )
+        recording_incomplete = False
+        if initial is not None:
+            finalized = initial.finalize_recording()
+            recording_incomplete = not finalized or bool(getattr(initial, "recording_incomplete", False))
+        reader_error = getattr(initial, "reader_error", None) if initial is not None else None
         redacted_secret_files = _redact_retained_secrets(
             root,
             list(qualification_secrets(os.environ, getattr(args, "agents_token", ""))),
         )
-        run.fields.update(serve_log=serve_log, redacted_secret_files=redacted_secret_files)
+        run.fields.update(serve_log=serve_log, redacted_secret_files=redacted_secret_files, recording_incomplete=recording_incomplete)
+        run.fields["reader_error"] = reader_error
         raise
     finally:
         if initial is not None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import functools
 import json
 import os
@@ -27,6 +28,8 @@ from zerg.qa.answer_markers import any_marker_answered
 from zerg.qa.answer_markers import marker_answered
 from zerg.qa.live_kit import poll
 from zerg.qa.live_session_toolkit import require_disposable_runtime
+from zerg.qa.live_session_toolkit import wait_process_group_dead
+from zerg.qa.pty_reader import OwnedPtyReader
 from zerg.qa.wait_kind import LONGHOUSE_ENGINE
 from zerg.qa.wait_kind import LONGHOUSE_INGEST
 from zerg.qa.wait_kind import PROVIDER_TURN
@@ -294,64 +297,135 @@ def abort_stopped_generation(
     }
 
 
+_PTY_TEARDOWN_LOCK_TIMEOUT_SECONDS = 1.0
+
+
 @dataclass
 class _PtyProcess:
     process: subprocess.Popen[bytes]
     master_fd: int
     terminal_path: Path
-    stop: threading.Event
-    reader: threading.Thread
+    reader: OwnedPtyReader
+    master_lock: threading.Lock
+    reader_join_timed_out: bool = False
+    master_close_timed_out: bool = False
+    _closed: bool = False
 
     @classmethod
     def start(cls, argv: list[str], *, cwd: Path, terminal_path: Path) -> _PtyProcess:
+        terminal_path.parent.mkdir(parents=True, exist_ok=True)
         master_fd, slave_fd = pty.openpty()
-        process = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            start_new_session=True,
-        )
+        try:
+            process = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                start_new_session=True,
+            )
+        except BaseException:
+            for fd in (master_fd, slave_fd):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            raise
         os.close(slave_fd)
-        stop = threading.Event()
+        os.set_blocking(master_fd, False)
+        try:
+            reader = OwnedPtyReader.start(
+                master_fd,
+                terminal_path,
+                mode="wb",
+                max_tail_bytes=0,
+                thread_name="cursor-product-pty-recorder",
+            )
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+            raise
+        return cls(process, master_fd, terminal_path, reader, threading.Lock())
 
-        def read_terminal() -> None:
-            with terminal_path.open("wb") as output:
-                while not stop.is_set():
-                    try:
-                        chunk = os.read(master_fd, 65536)
-                    except OSError:
-                        break
-                    if not chunk:
-                        break
-                    output.write(chunk)
-                    output.flush()
+    @property
+    def recording_incomplete(self) -> bool:
+        return self.reader.recording_incomplete
 
-        reader = threading.Thread(target=read_terminal, daemon=True)
-        reader.start()
-        return cls(process, master_fd, terminal_path, stop, reader)
+    @property
+    def recording_lock_timed_out(self) -> bool:
+        return self.reader.recording_lock_timed_out
+
+    @property
+    def reader_wake_timed_out(self) -> bool:
+        return self.reader.wake_timed_out
+
+    @property
+    def reader_error(self) -> str | None:
+        return self.reader.reader_error
+
+    def _close_master(self) -> bool:
+        if not self.master_lock.acquire(timeout=_PTY_TEARDOWN_LOCK_TIMEOUT_SECONDS):
+            self.master_close_timed_out = True
+            self.reader.mark_incomplete()
+            return False
+        try:
+            master_fd = self.master_fd
+            self.master_fd = -1
+        finally:
+            self.master_lock.release()
+        if master_fd >= 0:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+        return True
 
     def send(self, text: str) -> None:
-        os.write(self.master_fd, text.encode())
+        with self.master_lock:
+            if self.master_fd < 0:
+                raise OSError(errno.EBADF, os.strerror(errno.EBADF))
+            os.write(self.master_fd, text.encode())
 
     def close(self) -> None:
-        self.stop.set()
-        if self.process.poll() is None:
+        if self._closed:
+            return
+        try:
+            process_group = self.process.pid
             try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
+                os.killpg(process_group, signal.SIGTERM)
+            except (PermissionError, ProcessLookupError):
                 pass
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                os.killpg(self.process.pid, signal.SIGKILL)
-                self.process.wait(timeout=5)
-        try:
-            os.close(self.master_fd)
-        except OSError:
-            pass
-        self.reader.join(timeout=2)
+                pass
+            if not wait_process_group_dead(process_group, timeout=5):
+                try:
+                    os.killpg(process_group, signal.SIGKILL)
+                except (PermissionError, ProcessLookupError):
+                    pass
+                if self.process.poll() is None:
+                    try:
+                        self.process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                wait_process_group_dead(process_group, timeout=5)
+            if not self.reader.close(timeout=0.2):
+                self.reader.mark_incomplete()
+            self.reader_join_timed_out = self.reader.reader_join_timed_out
+        finally:
+            master_closed = self._close_master()
+            self._closed = master_closed and self.reader.closed
 
 
 def _accept_workspace_trust_if_prompted(session: _PtyProcess, *, timeout: float) -> bool:
@@ -1113,7 +1187,15 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 except Exception:
                     pass
             if session is not None:
-                session.close()
+                try:
+                    session.close()
+                finally:
+                    report["reader_join_timed_out"] = session.reader_join_timed_out
+                    report["recording_lock_timed_out"] = session.recording_lock_timed_out
+                    report["reader_error"] = session.reader_error
+                    report["recording_incomplete"] = session.recording_incomplete
+                    report["reader_wake_timed_out"] = session.reader_wake_timed_out
+                    report["master_close_timed_out"] = session.master_close_timed_out
             allow_path.unlink(missing_ok=True)
             deny_path.unlink(missing_ok=True)
             (artifact_root / "product-e2e.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

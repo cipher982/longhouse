@@ -403,6 +403,8 @@ def test_cleanup_aggregate_records_zero_orphans_only_for_complete_cleanup(tmp_pa
 
 def test_failed_close_diagnostics_cannot_mask_the_close_error() -> None:
     class BrokenSession:
+        reader_error = "OSError: stored PTY read failure"
+
         def alive(self) -> bool:
             raise RuntimeError("secondary liveness probe failed")
 
@@ -410,4 +412,5 @@ def test_failed_close_diagnostics_cannot_mask_the_close_error() -> None:
 
     assert receipt["error"] == "ValueError: causal close failure"
     assert receipt["alive_after_close"] is None
+    assert receipt["reader_error"] == "OSError: stored PTY read failure"
     assert receipt["alive_probe_error"] == "RuntimeError: secondary liveness probe failed"

@@ -121,6 +121,10 @@ def failed_session_close_receipt(session: ProviderPtySession, error: BaseExcepti
     except Exception as probe_error:  # noqa: BLE001 - diagnostics must never mask the causal failure
         receipt["alive_after_close"] = None
         receipt["alive_probe_error"] = f"{type(probe_error).__name__}: {probe_error}"
+    receipt["reader_join_timed_out"] = getattr(session, "reader_join_timed_out", False)
+    receipt["recording_incomplete"] = getattr(session, "recording_incomplete", False)
+    receipt["reader_error"] = getattr(session, "reader_error", None)
+    receipt["master_close_timed_out"] = getattr(session, "master_close_timed_out", False)
     return receipt
 
 
@@ -777,7 +781,14 @@ def close_session(session: ProviderPtySession, *, exit_command: str | None = "/e
         pass
     finally:
         session.close()
-    return {"exit_code": session.process.returncode, "alive_after_close": session.alive()}
+    return {
+        "exit_code": session.process.returncode,
+        "alive_after_close": session.alive(),
+        "reader_join_timed_out": getattr(session, "reader_join_timed_out", False),
+        "recording_incomplete": getattr(session, "recording_incomplete", False),
+        "reader_error": getattr(session, "reader_error", None),
+        "master_close_timed_out": getattr(session, "master_close_timed_out", False),
+    }
 
 
 @dataclass

@@ -25,13 +25,13 @@ import os
 import pty
 import pwd
 import re
-import select
 import signal
 import socket
 import sqlite3
 import subprocess
 import tempfile
 import termios
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -56,6 +56,7 @@ from zerg.qa.producer_shell import write_json
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.provider_sqlite import open_readonly
+from zerg.qa.pty_reader import OwnedPtyReader
 from zerg.qa.wait_kind import PROVIDER_PROCESS
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
@@ -161,6 +162,10 @@ _CURSOR_DIAGNOSTIC_PAYLOAD_KEYS = frozenset({"generation_id", "status", "phase",
 
 
 _MAX_RETAINED_TERMINAL_BYTES = 64 * 1024
+# The .tty stream records all bytes; artifact retention is capped at finalization.
+_MAX_PENDING_PTY_BUFFER_BYTES = _MAX_RETAINED_TERMINAL_BYTES
+
+_PTY_TEARDOWN_LOCK_TIMEOUT_SECONDS = 1.0
 
 
 _TERMINAL_RECORDINGS = ("initial.tty", "native-resume.tty", "concurrent-resume-attempt.tty", "claude-onboarding.tty")
@@ -702,61 +707,183 @@ class TranscriptShipper:
 class PtyProcess:
     def __init__(self, argv: list[str], *, cwd: Path, env: dict[str, str], recording: Path) -> None:
         master, slave = pty.openpty()
-        termios.tcsetwinsize(slave, (40, 140))
+        self._master_lock = threading.Lock()
         self.master = master
+        self.master_close_timed_out = False
         self.recording = recording
         self.claude_permission_acceptance_sent = False
         self.claude_development_channel_acceptance_sent = False
         self.claude_development_channel_prompt_seen_at: float | None = None
         self.cursor_workspace_trust_sent = False
         self._closed = False
-        self.recording.parent.mkdir(parents=True, exist_ok=True)
-        self._stream = self.recording.open("ab", buffering=0)
-        self.process = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            env=env,
-            stdin=slave,
-            stdout=slave,
-            stderr=slave,
-            start_new_session=True,
-            close_fds=True,
-        )
-        os.close(slave)
-        os.set_blocking(master, False)
+        self._recording_incomplete = False
+        self._reader: OwnedPtyReader | None = None
+        process: subprocess.Popen[bytes] | None = None
+        slave_fd = slave
+        try:
+            termios.tcsetwinsize(slave, (40, 140))
+            self.recording.parent.mkdir(parents=True, exist_ok=True)
+            process = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=env,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                start_new_session=True,
+                close_fds=True,
+            )
+            self.process = process
+            os.close(slave_fd)
+            slave_fd = -1
+            os.set_blocking(master, False)
+            self._reader = OwnedPtyReader.start(
+                master,
+                recording,
+                mode="ab",
+                max_tail_bytes=_MAX_PENDING_PTY_BUFFER_BYTES,
+                thread_name=f"pty-reader-{process.pid}",
+            )
+        except BaseException:
+            if process is not None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (PermissionError, ProcessLookupError):
+                    pass
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+            if slave_fd >= 0:
+                try:
+                    os.close(slave_fd)
+                except OSError:
+                    pass
+            if self._reader is not None:
+                try:
+                    self._reader.close()
+                except Exception:
+                    pass
+            self._close_master()
+            try:
+                recording.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._closed = True
+            raise
 
     @property
     def pid(self) -> int:
         return self.process.pid
 
-    def drain(self) -> bytes:
-        output = bytearray()
-        while True:
-            ready, _, _ = select.select([self.master], [], [], 0)
-            if not ready:
-                break
-            try:
-                chunk = os.read(self.master, 64 * 1024)
-            except OSError as exc:
-                if exc.errno in {errno.EIO, errno.EBADF}:
-                    break
-                raise
-            if not chunk:
-                break
-            self._stream.write(chunk)
-            output.extend(chunk)
-        return bytes(output)
+    def _close_master(self) -> bool:
+        if not self._master_lock.acquire(timeout=_PTY_TEARDOWN_LOCK_TIMEOUT_SECONDS):
+            self.master_close_timed_out = True
+            self._mark_recording_incomplete()
+            return False
+        try:
+            master = self.master
+            if master < 0:
+                return True
+            self.master = -1
+        finally:
+            self._master_lock.release()
+        try:
+            os.close(master)
+        except OSError:
+            pass
+        return True
+
+    def _mark_recording_incomplete(self) -> None:
+        self._recording_incomplete = True
+        if self._reader is not None:
+            self._reader.mark_incomplete()
+
+    @property
+    def recording_incomplete(self) -> bool:
+        return self._recording_incomplete or (self._reader is not None and self._reader.recording_incomplete)
+
+    def _reader_or_raise(self) -> OwnedPtyReader:
+        if self._reader is None:
+            raise RuntimeError("PTY recording reader did not start")
+        return self._reader
+
+    def drain(self, *, reader_join_timeout: float = 2.0) -> bytes:
+        reader = self._reader_or_raise()
+        if self.process.poll() is not None:
+            reader.join(reader_join_timeout)
+        return reader.drain()
+
+    @property
+    def dropped_output_bytes(self) -> int:
+        return self._reader_or_raise().dropped_output_bytes
+
+    @property
+    def reader_eof_reached(self) -> bool:
+        return self._reader_or_raise().reader_eof_reached
+
+    @property
+    def reader_eof_join_timed_out(self) -> bool:
+        return self._reader_or_raise().reader_eof_join_timed_out
+
+    @property
+    def reader_join_timed_out(self) -> bool:
+        return self._reader_or_raise().reader_join_timed_out
+
+    @property
+    def reader_wake_timed_out(self) -> bool:
+        return self._reader_or_raise().wake_timed_out
+
+    @property
+    def recording_lock_timed_out(self) -> bool:
+        return self._reader_or_raise().recording_lock_timed_out
+
+    @property
+    def reader_state_lock_timed_out(self) -> bool:
+        return self._reader_or_raise().reader_state_lock_timed_out
+
+    @property
+    def reader_error(self) -> str | None:
+        return self._reader_or_raise().reader_error
 
     def send(self, text: str) -> None:
-        os.write(self.master, text.encode())
+        with self._master_lock:
+            if self.master < 0:
+                raise OSError(errno.EBADF, os.strerror(errno.EBADF))
+            os.write(self.master, text.encode())
 
-    def wait(self, timeout: float) -> int | None:
+    def wait(self, timeout: float, *, reader_join_timeout: float | None = None) -> int | None:
         deadline = time.monotonic() + timeout
         while self.process.poll() is None and time.monotonic() < deadline:
-            self.drain()
-            time.sleep(0.1)
-        self.drain()
-        return self.process.poll()
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                self.drain(reader_join_timeout=remaining)
+            except OSError:
+                pass
+            if self.process.poll() is None:
+                time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+        exit_code = self.process.poll()
+        if exit_code is None:
+            try:
+                self.drain(reader_join_timeout=0.0)
+            except OSError:
+                pass
+            exit_code = self.process.poll()
+        if exit_code is not None:
+            if reader_join_timeout is None:
+                join_timeout = max(0.0, deadline - time.monotonic()) if timeout > 0 else 2.0
+            else:
+                join_timeout = max(0.0, reader_join_timeout)
+                if timeout > 0:
+                    join_timeout = min(join_timeout, max(0.0, deadline - time.monotonic()))
+            reader = self._reader_or_raise()
+            if not reader.join(join_timeout):
+                reader.reader_eof_join_timed_out = True
+            try:
+                reader.drain()
+            except OSError:
+                pass
+        return exit_code
 
     def settle(self, *, minimum: float = 0.75, quiet: float = 0.35, timeout: float = 5.0) -> bytes:
         """Drain the PTY until the upstream TUI has had time to attach."""
@@ -766,10 +893,12 @@ class PtyProcess:
         quiet_deadline: float | None = None
         captured = bytearray()
         while time.monotonic() < deadline:
+            remaining = max(0.0, deadline - time.monotonic())
             if self.process.poll() is not None:
-                captured.extend(self.drain())
+                self._reader_or_raise().join(remaining)
+                captured.extend(self._reader_or_raise().drain())
                 return bytes(captured)
-            chunk = self.drain()
+            chunk = self.drain(reader_join_timeout=remaining)
             if chunk:
                 captured.extend(chunk)
                 quiet_deadline = time.monotonic() + quiet
@@ -777,25 +906,29 @@ class PtyProcess:
             if now >= minimum_deadline and (quiet_deadline is None or now >= quiet_deadline):
                 return bytes(captured)
             time.sleep(0.05)
-        captured.extend(self.drain())
+        captured.extend(self.drain(reader_join_timeout=0.0))
         return bytes(captured)
 
     def kill_group(self, sig: int) -> None:
         if self.process.poll() is None:
             os.killpg(self.process.pid, sig)
 
+    def finalize_recording(self, timeout: float = 2.0) -> bool:
+        reader = self._reader_or_raise()
+        finalized = reader.finalize_recording(timeout)
+        if not finalized:
+            self._mark_recording_incomplete()
+        return finalized
+
     def close(self) -> None:
         if self._closed:
             return
+        reader = self._reader_or_raise()
         try:
-            self.drain()
+            if not reader.close():
+                self._mark_recording_incomplete()
         finally:
-            self._stream.close()
-            self._closed = True
-        try:
-            os.close(self.master)
-        except OSError:
-            pass
+            self._closed = self._close_master() or self.master < 0
 
 
 class RuntimeHostRegistrationTransient(RuntimeError):
@@ -811,7 +944,11 @@ def _raise_known_registration_transient(process: PtyProcess) -> None:
         f"HTTP {status}" in terminal for status in (408, 502, 503, 504)
     )
     if timed_out or unavailable:
-        raise RuntimeHostRegistrationTransient("managed Claude resume registration temporarily unavailable")
+        message = "managed Claude resume registration temporarily unavailable"
+        if not getattr(process, "reader_eof_reached", True):
+            join_timed_out = getattr(process, "reader_eof_join_timed_out", False)
+            message += f" (pty_reader_eof=false; pty_reader_join_timed_out={join_timed_out})"
+        raise RuntimeHostRegistrationTransient(message)
 
 
 def _write_best_effort_json(path: Path, payload: object) -> bool:
@@ -1103,11 +1240,24 @@ def cleanup_processes(
     for pid in provider_pids:
         if _signal_pid_if_alive(pid, signal.SIGKILL):
             forced_provider_pids.append(pid)
+    for process in processes:
+        if process is not None:
+            process.finalize_recording()
+            process.close()
     process_receipts = [
         {
             "pid": process.pid,
             "process_exited": process.process.poll() is not None,
             "process_group_dead": wait_process_group_dead(process.pid),
+            "reader_eof_reached": process.reader_eof_reached,
+            "reader_eof_join_timed_out": process.reader_eof_join_timed_out,
+            "reader_join_timed_out": process.reader_join_timed_out,
+            "reader_wake_timed_out": process.reader_wake_timed_out,
+            "recording_incomplete": process.recording_incomplete,
+            "reader_error": process.reader_error,
+            "recording_lock_timed_out": process.recording_lock_timed_out,
+            "reader_state_lock_timed_out": process.reader_state_lock_timed_out,
+            "master_close_timed_out": process.master_close_timed_out,
         }
         for process in processes
         if process is not None
@@ -1737,12 +1887,22 @@ def wait_state(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process is not None:
-            process.drain()
-            if process.process.poll() is not None:
-                _raise_known_registration_transient(process)
+            reader_remaining = max(0.0, deadline - time.monotonic())
+            if process.wait(0, reader_join_timeout=reader_remaining) is not None:
+                try:
+                    _raise_known_registration_transient(process)
+                except RuntimeHostRegistrationTransient as exc:
+                    if not process.reader_eof_reached:
+                        raise RuntimeHostRegistrationTransient(
+                            f"{exc} (pty_reader_eof=false; pty_reader_join_timed_out={process.reader_eof_join_timed_out})"
+                        ) from exc
+                    raise
                 diagnostics = _state_candidate_diagnostics(spec, home)
                 raise RuntimeError(
-                    f"{spec.provider} Helm process exited before publishing state; candidates={json.dumps(diagnostics, sort_keys=True)}"
+                    f"{spec.provider} Helm process exited before publishing state; "
+                    f"candidates={json.dumps(diagnostics, sort_keys=True)}; "
+                    f"pty_reader_eof={process.reader_eof_reached}; "
+                    f"pty_reader_join_timed_out={process.reader_eof_join_timed_out}"
                 )
             if spec.provider == "claude":
                 _accept_latest_claude_runtime_prompt(process)

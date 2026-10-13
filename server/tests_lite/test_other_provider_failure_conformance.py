@@ -56,6 +56,7 @@ class _FakePty:
     def __init__(self, *_args: object, **_kwargs: object) -> None:
         self.process = SimpleNamespace(pid=4242, poll=lambda: None)
         self.sent: list[str] = []
+        self.recording_finalized = False
 
     def send(self, text: str) -> None:
         self.sent.append(text)
@@ -66,8 +67,12 @@ class _FakePty:
     def drain(self) -> bytes:
         return b""
 
+    def finalize_recording(self) -> bool:
+        self.recording_finalized = True
+        return False
+
     def close(self) -> None:
-        return None
+        self.finalize_recording()
 
     def wait(self, _timeout: float) -> int:
         return 1

@@ -46,7 +46,9 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -278,6 +280,54 @@ def _start_cursor_machine(
     return machine
 
 
+def _cleanup_receipt_has_survivors(receipt: dict[str, Any]) -> bool:
+    orphan_count = receipt.get("orphan_count")
+    return not isinstance(orphan_count, int) or isinstance(orphan_count, bool) or orphan_count != 0
+
+
+def _escalate_cleanup_survivors(
+    process: PtyProcess,
+    state: dict[str, Any] | None,
+    receipt: dict[str, Any],
+) -> list[str]:
+    targets: set[tuple[int, bool]] = set()
+
+    def add_target(pid: Any, *, process_group: bool) -> None:
+        if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+            targets.add((pid, process_group))
+
+    for row in receipt.get("processes") or []:
+        if not isinstance(row, dict):
+            continue
+        pid = row.get("pid")
+        if row.get("process_exited") is not True:
+            add_target(pid, process_group=False)
+        if row.get("process_group_dead") is not True:
+            add_target(pid, process_group=True)
+    for key in ("provider_processes", "attach_processes"):
+        for row in receipt.get(key) or []:
+            if isinstance(row, dict) and row.get("process_dead") is not True:
+                add_target(row.get("pid"), process_group=False)
+    if state is not None:
+        add_target(state.get("cursor_pid"), process_group=False)
+    if process.process.poll() is None:
+        add_target(process.pid, process_group=False)
+
+    errors: list[str] = []
+    for pid, process_group in sorted(targets):
+        try:
+            if process_group:
+                os.killpg(pid, signal.SIGKILL)
+            else:
+                os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            scope = "process group" if process_group else "process"
+            errors.append(f"{scope} {pid}: {type(exc).__name__}: {exc}")
+    return errors
+
+
 def _launch_cursor_session(
     args: argparse.Namespace,
     root: Path,
@@ -312,17 +362,60 @@ def _launch_cursor_session(
         env=environment,
         recording=root / f"{label}.tty",
     )
-    state = wait_state(_SPEC, home, process=process, exclude_paths=prior_state_paths)
-    wait_cursor_tui_ready(process, root / f"{label}.tty")
-    return _CursorSession(
-        session_id=str(state["session_id"]),
-        provider_thread_id=str(state["provider_session_id"]),
-        home=home,
-        environment=environment,
-        process=process,
-        provider_cwd=provider_cwd,
-        state=state,
-    )
+    state: dict[str, Any] | None = None
+    try:
+        state = wait_state(_SPEC, home, process=process, exclude_paths=prior_state_paths)
+        wait_cursor_tui_ready(process, root / f"{label}.tty")
+        return _CursorSession(
+            session_id=str(state["session_id"]),
+            provider_thread_id=str(state["provider_session_id"]),
+            home=home,
+            environment=environment,
+            process=process,
+            provider_cwd=provider_cwd,
+            state=state,
+        )
+    except BaseException as launch_error:
+        rollback_state = state if state is not None else {}
+        rollback_session = _CursorSession(
+            session_id=str(rollback_state.get("session_id") or ""),
+            provider_thread_id=str(rollback_state.get("provider_session_id") or ""),
+            home=home,
+            environment=environment,
+            process=process,
+            provider_cwd=provider_cwd,
+            state=rollback_state,
+        )
+        try:
+            cleanup_receipt = _teardown_cursor_session(args, rollback_session, force=True)
+        except Exception as cleanup_error:
+            cleanup_receipt = {
+                "verified": False,
+                "orphan_count": None,
+                "session_id": rollback_session.session_id or None,
+                "processes": [],
+                "provider_processes": [],
+                "attach_processes": [],
+                "control_endpoints": [],
+                "cleanup_error": f"{type(cleanup_error).__name__}: {cleanup_error}",
+            }
+            try:
+                process.finalize_recording()
+            except Exception as exc:
+                cleanup_receipt["recording_finalize_error"] = f"{type(exc).__name__}: {exc}"
+            try:
+                process.close()
+            except Exception as exc:
+                cleanup_receipt["process_close_error"] = f"{type(exc).__name__}: {exc}"
+        cleanup_receipt["launch_label"] = label
+        try:
+            setattr(launch_error, "cursor_launch_cleanup_receipt", cleanup_receipt)
+        except Exception:
+            try:
+                launch_error.add_note(f"Cursor launch cleanup receipt: {json.dumps(cleanup_receipt, sort_keys=True)}")
+            except Exception:
+                pass
+        raise
 
 
 def _cursor_profile_environment(home: Path) -> dict[str, str]:
@@ -348,36 +441,93 @@ def _cursor_profile_environment(home: Path) -> dict[str, str]:
 def _teardown_cursor_session(
     args: argparse.Namespace,
     session: _CursorSession | None,
+    *,
+    force: bool = False,
 ) -> dict[str, Any]:
     if session is None:
-        return {"skipped": True}
+        return {"skipped": True, "reason": "not_launched"}
     graceful_stop: dict[str, Any] | None = None
     graceful_stop_error: str | None = None
+    if not force:
+        try:
+            graceful_stop = stop_session(
+                _SPEC,
+                args,
+                session.state,
+                session.process,
+                force=False,
+                environment=session.environment,
+                stop_phase="final",
+            )
+        except Exception as exc:  # noqa: BLE001 - exact-owner cleanup below is the bounded fallback
+            graceful_stop_error = f"{type(exc).__name__}: {exc}"
+
+    state = session.state
     try:
-        graceful_stop = stop_session(
-            _SPEC,
-            args,
-            session.state,
-            session.process,
-            force=False,
-            environment=session.environment,
-            stop_phase="final",
+        cleanup = cleanup_processes(_SPEC, (session.process,), [state])
+    except Exception as cleanup_error:
+        cursor_pid = state.get("cursor_pid")
+        provider_processes = (
+            [{"pid": cursor_pid, "process_dead": False}]
+            if isinstance(cursor_pid, int) and not isinstance(cursor_pid, bool) and cursor_pid > 0
+            else []
         )
-    except Exception as exc:  # noqa: BLE001 - exact-owner cleanup below is the bounded fallback
-        graceful_stop_error = f"{type(exc).__name__}: {exc}"
-    cleanup = cleanup_processes(_SPEC, (session.process,), [session.state])
+        cleanup = {
+            "verified": False,
+            "orphan_count": None,
+            "processes": [{"pid": session.process.pid, "process_exited": False, "process_group_dead": False}],
+            "provider_processes": provider_processes,
+            "attach_processes": [],
+            "control_endpoints": [],
+            "cleanup_error": f"{type(cleanup_error).__name__}: {cleanup_error}",
+        }
+    if _cleanup_receipt_has_survivors(cleanup):
+        initial_cleanup = cleanup
+        escalation_errors = _escalate_cleanup_survivors(session.process, state, initial_cleanup)
+        recheck_error: Exception | None = None
+        try:
+            cleanup = cleanup_processes(_SPEC, (session.process,), [state])
+        except Exception as exc:
+            recheck_error = exc
+            cleanup = {
+                **initial_cleanup,
+                "verified": False,
+                "recheck_error": f"{type(exc).__name__}: {exc}",
+            }
+        cleanup["initial_cleanup"] = initial_cleanup
+        cleanup["escalated"] = True
+        if escalation_errors:
+            cleanup["escalation_errors"] = escalation_errors
+        if recheck_error is not None:
+            finalization_errors: list[str] = []
+            try:
+                session.process.finalize_recording()
+            except Exception as exc:
+                finalization_errors.append(f"recording finalization: {type(exc).__name__}: {exc}")
+            try:
+                session.process.close()
+            except Exception as exc:
+                finalization_errors.append(f"process close: {type(exc).__name__}: {exc}")
+            if finalization_errors:
+                cleanup["finalization_errors"] = finalization_errors
+
     # An abnormal provider timeout can leave the exact session's Unix socket
     # inode behind after every owning process is dead. It is no longer a live
-    # endpoint, but required cleanup means removing the stale inode too.
+    # endpoint, but required cleanup means removing that stale inode too.
     if cleanup.get("orphan_count") == 0:
+        endpoint_cleanup_errors: list[str] = []
         for endpoint in cleanup.get("control_endpoints") or []:
             if not isinstance(endpoint, dict) or endpoint.get("kind") != "unix_socket":
                 continue
             raw_path = endpoint.get("endpoint")
             if not isinstance(raw_path, str) or not raw_path:
                 continue
-            Path(raw_path).unlink(missing_ok=True)
-            endpoint["absent"] = not Path(raw_path).exists()
+            try:
+                Path(raw_path).unlink(missing_ok=True)
+                endpoint["absent"] = not Path(raw_path).exists()
+            except OSError as exc:
+                endpoint["absent"] = False
+                endpoint_cleanup_errors.append(f"{Path(raw_path).name}: {type(exc).__name__}: {exc}")
         socket_absent = all(
             not isinstance(endpoint, dict) or endpoint.get("kind") != "unix_socket" or endpoint.get("absent") is True
             for endpoint in cleanup.get("control_endpoints") or []
@@ -387,6 +537,8 @@ def _teardown_cursor_session(
         if isinstance(verification, dict):
             verification["verified"] = socket_absent
         cleanup["verified"] = socket_absent
+        if endpoint_cleanup_errors:
+            cleanup["endpoint_cleanup_errors"] = endpoint_cleanup_errors
     cleanup["graceful_stop"] = graceful_stop
     cleanup["graceful_stop_error"] = graceful_stop_error
     return cleanup
@@ -433,32 +585,47 @@ def _write_session_launch_receipts(
     write_json(root / "session-launch-receipts.json", receipt)
 
 
+def _active_launch_cleanup_receipt() -> dict[str, Any] | None:
+    error = sys.exc_info()[1]
+    receipt = getattr(error, "cursor_launch_cleanup_receipt", None)
+    return receipt if isinstance(receipt, dict) else None
+
+
 def _session_cleanup_receipt(
     role: str,
     args: argparse.Namespace,
     session: _CursorSession | None,
     *,
     launch_attempted: bool | None = None,
+    launch_cleanup_receipt: dict[str, Any] | None = None,
 ) -> _SessionCleanupReceipt:
     """Retain one session's teardown without confusing it with aggregate proof."""
 
     attempted = session is not None if launch_attempted is None else launch_attempted
-    try:
-        diagnostics = _teardown_cursor_session(args, session)
-    except Exception as exc:  # noqa: BLE001 - cleanup failure is evidence, not a reason to lose evidence
-        diagnostics = {"status": "cleanup_failed", "error": f"{type(exc).__name__}: {exc}"}
+    rollback_applies = session is None and attempted and launch_cleanup_receipt is not None
+    cleanup_attempted = session is not None or rollback_applies
+    if rollback_applies:
+        diagnostics = launch_cleanup_receipt
+    elif session is None and not attempted:
+        diagnostics = {"skipped": True, "reason": "not_launched"}
+    else:
+        try:
+            diagnostics = _teardown_cursor_session(args, session)
+        except Exception as exc:  # noqa: BLE001 - cleanup failure is evidence, not a reason to lose evidence
+            diagnostics = {"status": "cleanup_failed", "error": f"{type(exc).__name__}: {exc}"}
     skipped = not attempted and session is None and diagnostics.get("skipped") is True
     raw_orphan_count = diagnostics.get("orphan_count")
     valid_orphan_count = isinstance(raw_orphan_count, int) and not isinstance(raw_orphan_count, bool) and raw_orphan_count >= 0
     orphan_count = 0 if skipped else raw_orphan_count if valid_orphan_count else None
     cleanup_complete = skipped or valid_orphan_count
+    session_id = session.session_id if session is not None else diagnostics.get("session_id")
     return {
         "schema_version": 1,
         "artifact_kind": "cursor_coordination_session_cleanup_receipt",
         "role": role,
-        "session_id": session.session_id if session is not None else None,
+        "session_id": session_id if isinstance(session_id, str) else None,
         "launch_attempted": attempted,
-        "cleanup_attempted": session is not None,
+        "cleanup_attempted": cleanup_attempted,
         "cleanup_complete": cleanup_complete,
         "orphan_count": orphan_count,
         "no_orphan_provider_processes": cleanup_complete and orphan_count == 0,
@@ -769,7 +936,13 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
         write_json(root / "coordination-observation.json", observation)
         return observation
     finally:
-        cleanup = _session_cleanup_receipt("awareness", args, session, launch_attempted=launch_attempted)
+        cleanup = _session_cleanup_receipt(
+            "awareness",
+            args,
+            session,
+            launch_attempted=launch_attempted,
+            launch_cleanup_receipt=_active_launch_cleanup_receipt(),
+        )
         write_json(root / "cleanup-receipt-awareness.json", cleanup)
         machine_cleanup = _teardown_cursor_machine(machine)
         write_json(root / "cleanup-receipt-machine.json", machine_cleanup)
@@ -921,17 +1094,41 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                 write_json(root / "coordination-observation.json", observation)
                 return observation
             finally:
-                target_cleanup = _session_cleanup_receipt("target", args, target, launch_attempted=target_launch_attempted)
+                target_cleanup = _session_cleanup_receipt(
+                    "target",
+                    args,
+                    target,
+                    launch_attempted=target_launch_attempted,
+                    launch_cleanup_receipt=_active_launch_cleanup_receipt(),
+                )
                 write_json(root / "cleanup-receipt-target.json", target_cleanup)
         finally:
-            source_cleanup = _session_cleanup_receipt("source", args, source, launch_attempted=source_launch_attempted)
+            source_cleanup = _session_cleanup_receipt(
+                "source",
+                args,
+                source,
+                launch_attempted=source_launch_attempted,
+                launch_cleanup_receipt=_active_launch_cleanup_receipt(),
+            )
             write_json(root / "cleanup-receipt-source.json", source_cleanup)
     finally:
         if source_cleanup is None:
-            source_cleanup = _session_cleanup_receipt("source", args, source, launch_attempted=source_launch_attempted)
+            source_cleanup = _session_cleanup_receipt(
+                "source",
+                args,
+                source,
+                launch_attempted=source_launch_attempted,
+                launch_cleanup_receipt=_active_launch_cleanup_receipt(),
+            )
             write_json(root / "cleanup-receipt-source.json", source_cleanup)
         if target_cleanup is None:
-            target_cleanup = _session_cleanup_receipt("target", args, target, launch_attempted=target_launch_attempted)
+            target_cleanup = _session_cleanup_receipt(
+                "target",
+                args,
+                target,
+                launch_attempted=target_launch_attempted,
+                launch_cleanup_receipt=_active_launch_cleanup_receipt(),
+            )
             write_json(root / "cleanup-receipt-target.json", target_cleanup)
         machine_cleanup = _teardown_cursor_machine(machine)
         write_json(root / "cleanup-receipt-machine.json", machine_cleanup)

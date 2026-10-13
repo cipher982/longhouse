@@ -33,8 +33,16 @@ class _FakePty:
     def __init__(self, terminal_path: Path, *, stale: bool = False) -> None:
         self.process = _FakeProcess(returncode=1 if stale else None)
         self.terminal_path = terminal_path
+        self.reader_join_timed_out = False
+        self.recording_incomplete = False
+        self.reader_error = None
+        self.recording_lock_timed_out = False
+        self.reader_wake_timed_out = False
+        self.master_close_timed_out = False
         terminal_path.parent.mkdir(parents=True, exist_ok=True)
         terminal_path.write_text("execution owner\n" if stale else "", encoding="utf-8")
+        self.reader_wake_timed_out = False
+        self.master_close_timed_out = False
 
     @classmethod
     def start(cls, *, terminal_path: Path, **kwargs):
@@ -387,6 +395,7 @@ def test_opencode_entrypoint_retains_send_before_runtime_steer_failure(monkeypat
                 "__init__": lambda self, *a, **k: setattr(self, "process", _FakeProcess(returncode=0)),
                 "alive": lambda self: False,
                 "close": lambda self: None,
+                "finalize_recording": lambda self: False,
             },
         ),
     )
@@ -444,6 +453,8 @@ def test_opencode_entrypoint_retains_send_before_runtime_steer_failure(monkeypat
     assert "steer" not in observation
 
     assert result["status"] == "fail"
+    assert result["failure_code"] == "opencode_helm_lifecycle_failed"
+    assert result["error"] == "RuntimeError: late OpenCode runtime steer failure"
     assert payload["status"] == "fail"
     assert observation["send"]["dispatch_accepted"] is True
     assert observation["error"] == "RuntimeError: late OpenCode runtime steer failure"

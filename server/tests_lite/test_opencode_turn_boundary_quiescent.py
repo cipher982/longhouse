@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -229,7 +230,7 @@ class _FakeLaunchedProcess:
     ``_wait_session_quiescence`` are monkeypatched separately in the
     end-to-end tests below, so this fake only needs to satisfy the small
     surface ``run_turn_boundary_quiescent`` calls directly: ``.process.poll()``,
-    ``.drain()``, ``.send()``, ``.pid``, ``.close()``.
+    ``.drain()``, ``.send()``, ``.pid``, ``.finalize_recording()``, ``.close()``.
     """
 
     def __init__(self, argv: list[str], *, cwd: Path, env: dict[str, str], recording: Path) -> None:
@@ -242,6 +243,7 @@ class _FakeLaunchedProcess:
         self.pid = 4242
         self.process = argparse.Namespace(poll=lambda: None, pid=self.pid)
         self.closed = False
+        self.recording_finalized = False
 
     def drain(self) -> bytes:
         return b""
@@ -249,7 +251,12 @@ class _FakeLaunchedProcess:
     def send(self, _text: str) -> None:
         return None
 
+    def finalize_recording(self) -> bool:
+        self.recording_finalized = True
+        return False
+
     def close(self) -> None:
+        self.finalize_recording()
         self.closed = True
 
 
@@ -596,3 +603,63 @@ def test_a_serve_log_that_cannot_be_written_is_reported_not_raised(tmp_path: Pat
 
     assert receipt["error"].startswith("FileNotFoundError")
     assert receipt["bytes_retained"] == 0
+
+
+def test_startup_failure_finalizes_pty_before_redacting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    secret = b"qualification-secret"
+    late_output = b"late-unscanned-secret"
+    redaction_finished = threading.Event()
+    process_box: dict[str, Any] = {}
+    args = _args(tmp_path)
+    _install_common_fakes(monkeypatch, tmp_path, correlation_timed_out=False)
+
+    class _LateWritingPty(_FakeLaunchedProcess):
+        def __init__(self, argv: list[str], *, cwd: Path, env: dict[str, str], recording: Path) -> None:
+            super().__init__(argv, cwd=cwd, env=env, recording=recording)
+            recording.write_bytes(secret)
+            self.finalized = False
+            self.writer_finished = threading.Event()
+
+            def write_after_redaction() -> None:
+                redaction_finished.wait(timeout=2.0)
+                if not self.finalized:
+                    with recording.open("ab") as stream:
+                        stream.write(late_output)
+                self.writer_finished.set()
+
+            self.writer = threading.Thread(target=write_after_redaction, daemon=True)
+            self.writer.start()
+            process_box["process"] = self
+
+        def finalize_recording(self) -> bool:
+            self.finalized = True
+            return False
+
+        def close(self) -> None:
+            self.finalize_recording()
+            redaction_finished.set()
+            self.writer.join(timeout=2.0)
+            super().close()
+
+    monkeypatch.setattr(m, "PtyProcess", _LateWritingPty)
+    monkeypatch.setattr(m, "prepare_opencode_qualification_profile", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(m, "qualification_secrets", lambda *_args, **_kwargs: (secret.decode(),))
+    monkeypatch.setattr(m, "wait_state", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("startup failed")))
+    redact = m._redact_retained_secrets
+
+    def redact_after_recording(root: Path, secrets: list[str]) -> list[str]:
+        redacted = redact(root, secrets)
+        redaction_finished.set()
+        assert process_box["process"].writer_finished.wait(timeout=2.0)
+        return redacted
+
+    monkeypatch.setattr(m, "_redact_retained_secrets", redact_after_recording)
+    result = m.run_turn_boundary_quiescent(args)
+
+    recording = args.evidence_root / "initial.tty"
+    assert result["status"] == "fail"
+    assert result["failure_code"] == "direct_turn_boundary_quiescent_failed"
+    assert result["recording_incomplete"] is True
+    assert b"<redacted>" in recording.read_bytes()
+    assert secret not in recording.read_bytes()
+    assert late_output not in recording.read_bytes()

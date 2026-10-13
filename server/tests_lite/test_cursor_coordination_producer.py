@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
+import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from zerg.qa import cursor_coordination_producer as m
+from zerg.qa import live_session_toolkit
 from zerg.qa.resume_assurance import execution_variant_key
 
 
@@ -853,3 +858,406 @@ def test_awareness_visibility_is_not_decided_by_how_the_model_phrases_it(tmp_pat
     observation = result["observation"]
     assert observation["model_recited_untrusted_peer_guidance"] is True
     assert observation["coordination_tool_invoked"] is False
+
+
+def test_cursor_launch_reaps_and_finalizes_when_readiness_fails(tmp_path: Path, monkeypatch) -> None:
+    args = _base_args(tmp_path, evidence_root=tmp_path / "evidence")
+    machine = argparse.Namespace(home=tmp_path / "home", environment={})
+    root = tmp_path / "artifacts"
+    socket_path = tmp_path / "cursor.sock"
+    socket_path.write_text("stale endpoint", encoding="utf-8")
+    state = {"session_id": "s", "provider_session_id": "t", "cursor_pid": 2345, "socket_path": str(socket_path)}
+    calls: list[str] = []
+    cleanup_calls = []
+    cleanup_receipt = {
+        "verified": False,
+        "orphan_count": 0,
+        "processes": [],
+        "provider_processes": [],
+        "attach_processes": [],
+        "control_endpoints": [{"kind": "unix_socket", "endpoint": str(socket_path), "absent": False}],
+        "final_socket_absent": False,
+    }
+
+    class FakePtyProcess:
+        pid = 1234
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.finalized = False
+            self.closed = False
+
+        def finalize_recording(self) -> bool:
+            calls.append("finalize")
+            self.finalized = True
+            return False
+
+        def close(self) -> None:
+            assert self.finalized
+            calls.append("close")
+            self.closed = True
+
+    process = FakePtyProcess()
+    monkeypatch.setattr(m, "initialize_cursor_workspace", lambda _workspace: None)
+    monkeypatch.setattr(m.subprocess, "run", lambda *_args, **_kwargs: argparse.Namespace(returncode=0, stderr=""))
+    monkeypatch.setattr(m, "state_candidates", lambda *_args: [])
+    monkeypatch.setattr(m, "launch_command", lambda *_args, **_kwargs: ["cursor"])
+    monkeypatch.setattr(m, "PtyProcess", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(m, "wait_state", lambda *_args, **_kwargs: state)
+
+    def fail_readiness(*_args, **_kwargs) -> None:
+        calls.append("readiness")
+        raise RuntimeError("Cursor input surface never became ready")
+
+    def cleanup(spec, processes, states):
+        calls.append("cleanup")
+        cleanup_calls.append((spec, processes, states))
+        process.finalize_recording()
+        process.close()
+        return cleanup_receipt
+
+    monkeypatch.setattr(m, "wait_cursor_tui_ready", fail_readiness)
+    monkeypatch.setattr(m, "cleanup_processes", cleanup)
+    with pytest.raises(RuntimeError, match="Cursor input surface never became ready") as failure:
+        m._launch_cursor_session(args, root, machine, label="source", prompt="start")
+
+    assert cleanup_calls == [(m._SPEC, (process,), [state])]
+    assert calls == ["readiness", "cleanup", "finalize", "close"]
+    assert process.finalized is True
+    assert process.closed is True
+    assert not socket_path.exists()
+    assert failure.value.cursor_launch_cleanup_receipt == cleanup_receipt
+    assert cleanup_receipt["final_socket_absent"] is True
+    assert cleanup_receipt["verified"] is True
+    recorded = m._session_cleanup_receipt(
+        "source",
+        args,
+        None,
+        launch_attempted=True,
+        launch_cleanup_receipt=cleanup_receipt,
+    )
+    assert recorded["cleanup_attempted"] is True
+    assert recorded["diagnostics"] is cleanup_receipt
+    assert recorded["no_orphan_provider_processes"] is True
+
+
+def test_cursor_readiness_rollback_escalates_a_sets_id_child_ignoring_sigterm(tmp_path: Path, monkeypatch) -> None:
+    args = _base_args(tmp_path, evidence_root=tmp_path / "evidence")
+    machine_home = tmp_path / "machine-home"
+    machine_home.mkdir()
+    machine = argparse.Namespace(home=machine_home, environment={"PATH": os.defpath})
+    root = tmp_path / "artifacts"
+    socket_path = tmp_path / "cursor.sock"
+    socket_path.touch()
+    child_pid_path = tmp_path / "cursor-child-pid"
+    child_ready_path = tmp_path / "cursor-child-ready"
+    signal_seen_path = tmp_path / "cursor-child-ignored-sigterm"
+    child_script = (
+        "import pathlib, signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, lambda *_: pathlib.Path(sys.argv[1]).write_text('ignored', encoding='utf-8'))\n"
+        "pathlib.Path(sys.argv[2]).write_text('ready', encoding='utf-8')\n"
+        "time.sleep(30)\n"
+    )
+    script = (
+        "import pathlib, subprocess, sys, time\n"
+        f"child = subprocess.Popen([sys.executable, '-c', {child_script!r}, {str(signal_seen_path)!r}, {str(child_ready_path)!r}], start_new_session=True)\n"
+        f"ready = pathlib.Path({str(child_ready_path)!r})\n"
+        "deadline = time.monotonic() + 5\n"
+        "while not ready.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.01)\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding='utf-8')\n"
+        "time.sleep(30)\n"
+    )
+    original_pty_process = m.PtyProcess
+    original_subprocess_run = m.subprocess.run
+    started_processes = []
+    child_pids: list[int] = []
+    cleanup_calls = 0
+    sigterm_was_ignored: list[bool] = []
+
+    def track_process(*process_args, **process_kwargs):
+        process = original_pty_process(*process_args, **process_kwargs)
+        started_processes.append(process)
+        return process
+
+    def observed_state(*_args, **_kwargs):
+        deadline = time.monotonic() + 3.0
+        child_pid_text = ""
+        while not child_pid_text and time.monotonic() < deadline:
+            if child_pid_path.exists():
+                child_pid_text = child_pid_path.read_text(encoding="utf-8").strip()
+            if not child_pid_text:
+                time.sleep(0.01)
+        assert child_pid_text, "fake Cursor launcher did not start its setsid child"
+        child_pid = int(child_pid_text)
+        child_pids.append(child_pid)
+        return {"session_id": "s", "provider_session_id": "t", "cursor_pid": child_pid, "socket_path": str(socket_path)}
+
+    def first_cleanup_reports_a_survivor(spec, processes, states):
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        if cleanup_calls > 1:
+            process = processes[0]
+            child_pid = states[0]["cursor_pid"]
+            deadline = time.monotonic() + 2.0
+            while process.process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            process_exited = process.process.poll() is not None
+            process_group_dead = process_exited
+            provider_process_dead = live_session_toolkit.wait_pid_dead(child_pid, timeout=5.0)
+            orphan_count = int(not process_exited or not process_group_dead) + int(not provider_process_dead)
+            process.finalize_recording()
+            process.close()
+            return {
+                "verified": orphan_count == 0,
+                "orphan_count": orphan_count,
+                "processes": [{"pid": process.pid, "process_exited": process_exited, "process_group_dead": process_group_dead}],
+                "provider_processes": [{"pid": child_pid, "process_dead": provider_process_dead}],
+                "attach_processes": [],
+                "control_endpoints": [{"kind": "unix_socket", "endpoint": str(socket_path), "absent": False}],
+                "final_socket_absent": False,
+            }
+        child_pid = states[0]["cursor_pid"]
+        os.kill(child_pid, signal.SIGTERM)
+        deadline = time.monotonic() + 2.0
+        while not signal_seen_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        try:
+            os.kill(child_pid, 0)
+            child_is_alive = True
+        except ProcessLookupError:
+            child_is_alive = False
+        except PermissionError:
+            child_is_alive = True
+        sigterm_was_ignored.append(signal_seen_path.exists() and child_is_alive)
+        return {
+            "verified": False,
+            "orphan_count": 2,
+            "processes": [{"pid": processes[0].pid, "process_exited": False, "process_group_dead": False}],
+            "provider_processes": [{"pid": child_pid, "process_dead": False}],
+            "attach_processes": [],
+            "control_endpoints": [{"kind": "unix_socket", "endpoint": str(socket_path), "absent": False}],
+            "final_socket_absent": False,
+        }
+
+    def run_hook_config(command, *process_args, **process_kwargs):
+        if isinstance(command, list) and len(command) >= 3 and command[1:3] == ["cursor-helm", "configure-hooks"]:
+            return argparse.Namespace(returncode=0, stderr="")
+        return original_subprocess_run(command, *process_args, **process_kwargs)
+
+    monkeypatch.setattr(m, "initialize_cursor_workspace", lambda _workspace: None)
+    monkeypatch.setattr(m.subprocess, "run", run_hook_config)
+    monkeypatch.setattr(m, "state_candidates", lambda *_args: [])
+    monkeypatch.setattr(m, "launch_command", lambda *_args, **_kwargs: [sys.executable, "-c", script, str(child_pid_path)])
+    monkeypatch.setattr(m, "PtyProcess", track_process)
+    monkeypatch.setattr(m, "wait_state", observed_state)
+    monkeypatch.setattr(m, "wait_cursor_tui_ready", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("not ready")))
+    monkeypatch.setattr(m, "cleanup_processes", first_cleanup_reports_a_survivor)
+    try:
+        with pytest.raises(RuntimeError, match="not ready") as failure:
+            m._launch_cursor_session(args, root, machine, label="source", prompt="start")
+
+        assert len(child_pids) == 1
+        assert sigterm_was_ignored == [True]
+        assert cleanup_calls == 2
+        cleanup_receipt = failure.value.cursor_launch_cleanup_receipt
+        assert cleanup_receipt["escalated"] is True
+        assert cleanup_receipt["initial_cleanup"]["orphan_count"] == 2
+        assert live_session_toolkit.wait_pid_dead(child_pids[0], timeout=5.0) is True
+        if cleanup_receipt.get("recheck_error"):
+            assert cleanup_receipt["verified"] is False
+            assert cleanup_receipt["orphan_count"] == cleanup_receipt["initial_cleanup"]["orphan_count"]
+        else:
+            assert cleanup_receipt["orphan_count"] == 0
+            assert cleanup_receipt["verified"] is True
+        assert cleanup_receipt.get("recheck_error") is None, cleanup_receipt.get("recheck_error")
+        assert not cleanup_receipt.get("recheck_error"), cleanup_receipt.get("recheck_error")
+        assert not socket_path.exists(), (
+            cleanup_receipt.get("orphan_count"),
+            cleanup_receipt.get("recheck_error"),
+            cleanup_receipt.get("final_socket_absent"),
+            cleanup_receipt.get("endpoint_cleanup_errors"),
+            cleanup_receipt.get("control_endpoints"),
+        )
+        assert cleanup_receipt["final_socket_absent"] is True
+        cleanup_proof = m._session_cleanup_receipt(
+            "source",
+            args,
+            None,
+            launch_attempted=True,
+            launch_cleanup_receipt=cleanup_receipt,
+        )
+        assert cleanup_proof["no_orphan_provider_processes"] is True
+        assert cleanup_proof["diagnostics"]["final_socket_absent"] is True
+        assert len(started_processes) == 1
+        assert started_processes[0].process.poll() is not None
+        assert started_processes[0]._reader.closed is True
+        recorded = m._session_cleanup_receipt(
+            "source",
+            args,
+            None,
+            launch_attempted=True,
+            launch_cleanup_receipt=cleanup_receipt,
+        )
+        assert recorded["diagnostics"] is cleanup_receipt
+        assert recorded["cleanup_attempted"] is True
+    finally:
+        for child_pid in child_pids:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        for process in started_processes:
+            if process.process.poll() is None:
+                try:
+                    os.killpg(process.process.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                process.process.wait(timeout=2.0)
+            if not process._closed:
+                try:
+                    process.close()
+                except Exception:
+                    pass
+
+
+def test_cursor_readiness_rollback_kills_state_pid_in_its_own_session(tmp_path: Path, monkeypatch) -> None:
+    args = _base_args(tmp_path, evidence_root=tmp_path / "evidence")
+    machine_home = tmp_path / "machine-home"
+    machine_home.mkdir()
+    machine = argparse.Namespace(home=machine_home, environment={"PATH": os.defpath})
+    root = tmp_path / "artifacts"
+    child_pid_path = tmp_path / "cursor-child-pid"
+    script = (
+        "import pathlib, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], start_new_session=True)\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding='utf-8')\n"
+        "time.sleep(30)\n"
+    )
+    original_pty_process = m.PtyProcess
+    started_processes = []
+    child_pids: list[int] = []
+
+    def track_process(*process_args, **process_kwargs):
+        process = original_pty_process(*process_args, **process_kwargs)
+        started_processes.append(process)
+        return process
+
+    def observed_state(*_args, **_kwargs):
+        deadline = time.monotonic() + 3.0
+        child_pid_text = ""
+        while not child_pid_text and time.monotonic() < deadline:
+            if child_pid_path.exists():
+                child_pid_text = child_pid_path.read_text(encoding="utf-8").strip()
+            if not child_pid_text:
+                time.sleep(0.01)
+        assert child_pid_text, "fake Cursor launcher did not start its setsid child"
+        child_pid = int(child_pid_text)
+        child_pids.append(child_pid)
+        return {"session_id": "s", "provider_session_id": "t", "cursor_pid": child_pid}
+
+    monkeypatch.setattr(m, "initialize_cursor_workspace", lambda _workspace: None)
+    monkeypatch.setattr(m.subprocess, "run", lambda *_args, **_kwargs: argparse.Namespace(returncode=0, stderr=""))
+    monkeypatch.setattr(m, "state_candidates", lambda *_args: [])
+    monkeypatch.setattr(m, "launch_command", lambda *_args, **_kwargs: [sys.executable, "-c", script, str(child_pid_path)])
+    monkeypatch.setattr(m, "PtyProcess", track_process)
+    monkeypatch.setattr(m, "wait_state", observed_state)
+    monkeypatch.setattr(m, "wait_cursor_tui_ready", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("not ready")))
+    try:
+        with pytest.raises(RuntimeError, match="not ready"):
+            m._launch_cursor_session(args, root, machine, label="source", prompt="start")
+
+        assert len(child_pids) == 1
+        assert live_session_toolkit.wait_pid_dead(child_pids[0], timeout=5.0) is True
+        assert len(started_processes) == 1
+        assert started_processes[0].process.poll() is not None
+        assert started_processes[0]._reader.closed is True
+    finally:
+        for child_pid in child_pids:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        for process in started_processes:
+            if process.process.poll() is None:
+                try:
+                    os.killpg(process.process.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                process.process.wait(timeout=2.0)
+            if not process._closed:
+                try:
+                    process.close()
+                except Exception:
+                    pass
+
+
+def test_launch_cleanup_receipt_survives_missing_session_handle(tmp_path: Path, monkeypatch) -> None:
+    args = _base_args(tmp_path, evidence_root=tmp_path / "evidence")
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    machine = argparse.Namespace(home=tmp_path / "home", environment={})
+    cleanup_receipt = {
+        "verified": False,
+        "orphan_count": 1,
+        "session_id": "launched-session",
+        "processes": [{"pid": 1234, "process_exited": True, "process_group_dead": False}],
+        "provider_processes": [{"pid": 5678, "process_dead": False}],
+        "attach_processes": [],
+        "final_socket_absent": False,
+    }
+    error = RuntimeError("Cursor readiness failed after launch")
+    error.cursor_launch_cleanup_receipt = cleanup_receipt
+    monkeypatch.setattr(m, "_start_cursor_machine", lambda *_args: machine)
+    monkeypatch.setattr(m, "_launch_cursor_session", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(
+        m,
+        "_teardown_cursor_machine",
+        lambda _machine: {"stopped": True, "process_dead": True, "process_group_dead": True},
+    )
+
+    with pytest.raises(RuntimeError, match="Cursor readiness failed after launch"):
+        m._run_awareness_create(args, root, tmp_path / "isolation")
+
+    recorded = json.loads((root / "cleanup-receipt-awareness.json").read_text(encoding="utf-8"))
+    assert recorded["cleanup_attempted"] is True
+    assert recorded["session_id"] == "launched-session"
+    assert recorded["diagnostics"] == cleanup_receipt
+    assert recorded["no_orphan_provider_processes"] is False
+
+
+def test_source_launch_failure_does_not_duplicate_cleanup_on_unlaunched_target(tmp_path: Path, monkeypatch) -> None:
+    args = _base_args(tmp_path, evidence_root=tmp_path / "evidence")
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    machine = argparse.Namespace(home=tmp_path / "home", environment={})
+    launch_cleanup_receipt = {
+        "verified": False,
+        "orphan_count": 2,
+        "session_id": "source-session",
+        "processes": [{"pid": 101, "process_exited": False, "process_group_dead": False}],
+        "provider_processes": [{"pid": 202, "process_dead": False}],
+        "attach_processes": [],
+        "final_socket_absent": False,
+    }
+    error = RuntimeError("source readiness failed")
+    error.cursor_launch_cleanup_receipt = launch_cleanup_receipt
+    monkeypatch.setattr(m, "_start_cursor_machine", lambda *_args, **_kwargs: machine)
+    monkeypatch.setattr(m, "_launch_cursor_session", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(
+        m,
+        "_teardown_cursor_machine",
+        lambda _machine: {"stopped": True, "process_dead": True, "process_group_dead": True},
+    )
+
+    with pytest.raises(RuntimeError, match="source readiness failed"):
+        m._run_directed_input(args, root, tmp_path / "isolation")
+
+    source = json.loads((root / "cleanup-receipt-source.json").read_text(encoding="utf-8"))
+    target = json.loads((root / "cleanup-receipt-target.json").read_text(encoding="utf-8"))
+    aggregate = json.loads((root / "cleanup-receipt.json").read_text(encoding="utf-8"))
+    assert source["diagnostics"] == launch_cleanup_receipt
+    assert source["orphan_count"] == 2
+    assert target["diagnostics"] == {"skipped": True, "reason": "not_launched"}
+    assert target["cleanup_attempted"] is False
+    assert target["orphan_count"] == 0
+    assert aggregate["orphan_count"] == 2

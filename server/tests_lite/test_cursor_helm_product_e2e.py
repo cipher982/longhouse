@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
+import sys
+import threading
+import time
 from types import SimpleNamespace
 
 import httpx
 
+from zerg.qa import cursor_helm_product_e2e as e2e
+from zerg.qa.cursor_helm_product_e2e import _PtyProcess
 from zerg.qa.cursor_helm_product_e2e import _accept_workspace_trust_if_prompted
 from zerg.qa.cursor_helm_product_e2e import _answered_in
 from zerg.qa.cursor_helm_product_e2e import _assistant_texts
@@ -190,3 +197,96 @@ def test_a_hosted_reply_is_the_event_that_answers_with_the_marker():
     for reply in (marker, f"`{marker}`\n", f"The command finished.\n\n{marker}"):
         answered = page(reply)
         assert _answered_in(answered, marker) is answered
+
+
+def test_close_wakes_reader_select_for_pty_slave_holding_descendant(tmp_path) -> None:
+    child_pid_path = tmp_path / "child-pid"
+    release_path = tmp_path / "release-child"
+    script = (
+        "import os, pathlib, sys, time\n"
+        "child = os.fork()\n"
+        "if child == 0:\n"
+        "    os.setsid()\n"
+        "    pathlib.Path(sys.argv[1]).write_text(str(os.getpid()), encoding='utf-8')\n"
+        "    while not pathlib.Path(sys.argv[2]).exists():\n"
+        "        time.sleep(0.01)\n"
+        "    os._exit(0)\n"
+        "os._exit(0)\n"
+    )
+    session = _PtyProcess.start(
+        [sys.executable, "-c", script, str(child_pid_path), str(release_path)],
+        cwd=tmp_path,
+        terminal_path=tmp_path / "terminal.raw",
+    )
+    child_pid: int | None = None
+    try:
+        deadline = time.monotonic() + 3.0
+        child_pid_text = ""
+        while not child_pid_text and time.monotonic() < deadline:
+            if child_pid_path.exists():
+                child_pid_text = child_pid_path.read_text(encoding="utf-8").strip()
+            if not child_pid_text:
+                time.sleep(0.01)
+        assert child_pid_text, "fake provider did not fork its PTY-holding child"
+        child_pid = int(child_pid_text)
+        assert session.process.wait(timeout=2.0) == 0
+        assert session.reader.closed is False
+
+        started = time.monotonic()
+        session.close()
+
+        assert session.recording_incomplete is True
+        assert session.reader_join_timed_out is False
+        assert session.master_fd == -1
+        assert session.reader._reader_fd == -1
+        assert session.reader._wake_read_fd == -1
+        assert session.reader._wake_write_fd == -1
+        assert session.reader.closed is True
+    finally:
+        release_path.write_text("release", encoding="utf-8")
+        if child_pid is not None:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if not session.reader.closed or session.master_fd >= 0:
+            session.close()
+
+
+def test_close_before_cursor_reader_runs_cannot_recreate_recording(tmp_path, monkeypatch) -> None:
+    reader_waiting = threading.Event()
+    release_reader = threading.Event()
+    original_run = threading.Thread.run
+
+    def gated_run(thread: threading.Thread) -> None:
+        if thread.name == "cursor-product-pty-recorder":
+            reader_waiting.set()
+            release_reader.wait()
+        original_run(thread)
+
+    monkeypatch.setattr(threading.Thread, "run", gated_run)
+    terminal_path = tmp_path / "terminal.raw"
+    session = _PtyProcess.start(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        cwd=tmp_path,
+        terminal_path=terminal_path,
+    )
+    try:
+        assert reader_waiting.wait(timeout=2.0)
+        assert terminal_path.exists()
+        started = time.monotonic()
+        session.close()
+        assert time.monotonic() - started < 5.0
+        assert session.reader_join_timed_out is True
+        assert session.recording_incomplete is True
+        assert not terminal_path.exists()
+
+        release_reader.set()
+        assert session.reader.join(timeout=2.0) is True
+        assert session.reader.closed is True
+        assert not terminal_path.exists()
+    finally:
+        release_reader.set()
+        if not session.reader.closed or session.master_fd >= 0:
+            session.close()
+        session.reader.join(timeout=2.0)
