@@ -443,6 +443,7 @@ FAMILY = Family(
     terminate_proves_owners_dead=True,
     rebind_command="send_live",
     local_health=True,
+    settles_between_turns=True,
     records_misses=True,
     refused_command_ends_run=True,
     strict_resume_state=True,

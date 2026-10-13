@@ -12,6 +12,7 @@ import importlib
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +21,7 @@ from tests_lite._factory_envelope import assert_result_conforms
 from zerg.qa import omp_background_producer
 from zerg.qa.failed_results import reached_only
 from zerg.qa.openrouter_routing import OPENROUTER_QUALIFICATION_ROUTING
+from zerg.qa.pi_family_helm import Lifecycle
 from zerg.qa.pi_family_turn_oracle import NEGATIVE_CONTROLS
 
 # A whole lifecycle of real waits and process exits; the suite's 60 s guard is for a hang, not for this.
@@ -34,6 +36,28 @@ def longhouse(tmp_path, monkeypatch):
     monkeypatch.delenv(fake.FAULT_ENV, raising=False)
     with fake.longhouse(tmp_path, monkeypatch.setenv) as made:
         yield made
+
+
+def test_wait_for_idle_update_rejects_a_stale_idle_snapshot() -> None:
+    lifecycle = object.__new__(Lifecycle)
+    lifecycle.f = SimpleNamespace(is_idle=lambda state: state.get("phase") == "idle")
+    states = [
+        {"phase": "idle", "updated_at": "before"},
+        {"phase": "running", "updated_at": "during"},
+        {"phase": "idle", "updated_at": "after"},
+    ]
+    lifecycle.wait_state = lambda predicate, timeout=30: next(state for state in states if predicate(state))
+
+    assert lifecycle.wait_for_idle_update(states[0]) == states[2]
+
+
+def test_begin_rejects_a_queued_input_as_an_active_turn() -> None:
+    lifecycle = object.__new__(Lifecycle)
+    lifecycle.f = SimpleNamespace(name="Pi", refused_command_ends_run=True)
+    lifecycle.control = lambda *_args, **_kwargs: {"accepted": True, "payload": {"outcome": "queued"}}
+
+    with pytest.raises(RuntimeError, match="was queued, so it started no turn"):
+        lifecycle.begin("busy-turn setup", "start the active turn")
 
 
 @pytest.fixture(scope="module")
@@ -69,6 +93,7 @@ def test_a_whole_lifecycle_holds_every_cell(provider, whole):
     code, result, root, left_isolated = whole(provider)
     module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
 
+    assert module.FAMILY.settles_between_turns
     not_held = [name for name, held in result.get("assertions", {}).items() if not held]
     assert not not_held and result.get("assertions"), {"not held": not_held, "error": result.get("error")}
     assert (code, result["status"]) == (0, "pass")
@@ -163,6 +188,10 @@ def test_scripted_model_lifecycle_calls_the_profile_endpoint_for_every_turn(prov
 
     fixture = json.loads((root / "scripted-model-fixture.json").read_text(encoding="utf-8"))
     turns = {turn["id"]: turn for turn in fixture["turns"]}
+    if provider == "omp":
+        assert "omp-title" not in expected_turns
+        assert turns["omp-title"] == {"id": "omp-title", "match": "<title-request>", "reply": "<title/>"}
+        assert "omp-title" not in receipt["matched_turns"]
     assert turns[f"{provider}-steer-tool"]["tool_call"]["command"] == f"sleep 30 && echo scripted-steer-result"
     assert turns[f"{provider}-abort-tool"]["tool_call"]["command"] == f"sleep 300 && echo scripted-abort-result"
     assert turns[f"{provider}-replacement"]["reply"] == "sable-harbor-729 {{input_marker}}"

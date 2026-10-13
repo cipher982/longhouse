@@ -144,7 +144,7 @@ class Family:
     local_health: bool = False  # the engine's local health is snapshotted after launch
 
     # Which unmet conditions end the run (a failure of the run) and which are recorded for a cell to judge.
-    settles_between_turns: bool = False  # the session is waited idle before the steer and abort turns
+    settles_between_turns: bool = False  # require a fresh idle state before starting the next input turn
     records_misses: bool = False  # an unseen busy state, an unanswered stale frame: recorded, not raised
     flush_must_complete: bool = False  # a flush that did not ship cleanly ends the run where it happens
     refused_command_ends_run: bool = False  # a host input or a final terminate that is not accepted ends the run
@@ -201,6 +201,11 @@ def _scripted_model_fixture(family: Family, proof_file: Path | None) -> tuple[li
             tool_call={"name": "read", "arguments": {"path": str(proof_file)}},
         )
         add("launch-answer", proof_file.read_text(encoding="utf-8").strip(), reply="{{input_marker}}")
+
+    if provider == "omp":
+        # OMP's TUI makes a separate title request. It is not a Helm turn, but
+        # the scripted endpoint must answer it rather than echoing its prompt.
+        add("title", "<title-request>", reply="<title/>", expected_request=False)
 
     if provider == "pi":
         add("local-send", f"{prefix}_LOCAL_SEND_", reply="{{input_marker}}")
@@ -2285,6 +2290,16 @@ class Lifecycle:
     def wait_state(self, predicate: Any = None, *, timeout: float = 30) -> dict[str, Any]:
         return _wait_state(self.home, self.f, session_id=self.session_id or None, predicate=predicate, timeout=timeout)
 
+    def wait_for_idle_update(self, before: Mapping[str, Any], *, timeout: float = 30) -> dict[str, Any]:
+        """Wait for a new idle observation, not a stale idle state from before the turn."""
+
+        previous = before.get("updated_at")
+
+        def updated_idle(state: Mapping[str, Any]) -> bool:
+            return self.f.is_idle(state) and (not isinstance(previous, str) or state.get("updated_at") != previous)
+
+        return self.wait_state(updated_idle, timeout=timeout)
+
     def or_missing(self, wait: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         """What a wait saw. Where the family records a miss, a wait that expired saw nothing, and a cell judges that."""
 
@@ -2319,16 +2334,18 @@ class Lifecycle:
         return _host_control(self.api_url, self.token, self.f, command, self.session_id, text=text)
 
     def begin(self, what: str, prompt: str, *, local: bool = False) -> dict[str, Any]:
-        """Send the prompt that starts a turn.
+        """Send a prompt that must start a turn now, not remain in the host's queue.
 
-        A send that was not accepted starts no turn. Where a refused command
-        ends the run, it ends it here and says which send it was, instead of
-        at whatever later step first misses the turn.
+        Where a refused command ends the run, it ends it here and says which
+        send it was, instead of at whatever later step first misses the turn.
         """
 
         sent = self.control("send", prompt, local=local)
+        payload = sent.get("payload")
+        if isinstance(payload, Mapping) and payload.get("outcome") == "queued":
+            raise RuntimeError(f"{self.f.name} Helm {what} was queued, so it started no turn: {payload}")
         if self.f.refused_command_ends_run and sent.get("accepted") is not True:
-            detail = sent.get("payload") or sent.get("stderr") or sent.get("error")
+            detail = payload or sent.get("stderr") or sent.get("error")
             raise RuntimeError(f"{self.f.name} Helm {what} was not accepted, so it started no turn: {detail}")
         return sent
 
@@ -2510,6 +2527,9 @@ class Lifecycle:
             )
         self.own("initial", self.state, marker=marker, controls=() if self.background else ("send", "follow_up", "steer", "abort"))
         row, evidence = self.reply(marker, 0, timeout=_first_turn_timeout(background=self.background))
+        if f.settles_between_turns and not f.channel_terminal:
+            # Readiness can be observed after Pi's first prompt has already settled.
+            self.wait_state(f.is_idle, timeout=f.timeouts["launch"])
         launch = self.controls["launch"] = {
             "action_label": "launch",
             "prompt": prompt,
@@ -2594,6 +2614,7 @@ class Lifecycle:
     def send_idle(self, *, local: bool = False) -> None:
         name = "local_send" if local else "send"
         marker = self.marker(name.upper())
+        before_state = self.wait_state(self.f.is_idle, timeout=30) if self.f.settles_between_turns else dict(self.state)
         offset = _read_source_size(self.session_file)
         prompt = self.prompt("send", marker)
         command = self.control("send", prompt, local=local)
@@ -2627,6 +2648,8 @@ class Lifecycle:
                 answered=record["marker_wait"]["status"] == "answered",
             )
         record.update(marker_row=row, evidence=evidence)
+        if self.f.settles_between_turns:
+            self.wait_for_idle_update(before_state)
         # Serving a reply does not depend on how the prompt was sent: the local command's turn is not shown served again.
         if not local:
             record["served"] = self.converge("send", marker, row, flush=self.flush("send"))
@@ -2635,12 +2658,15 @@ class Lifecycle:
         """Start a busy turn and send into it: a send made mid-turn is queued and delivered when the turn is over."""
 
         active_marker, marker = self.marker("ACTIVE"), self.marker("FOLLOW_UP")
+        before_state = self.wait_state(self.f.is_idle, timeout=30) if self.f.settles_between_turns else dict(self.state)
         offset = _read_source_size(self.session_file)
         active = self.begin("busy turn's send", self.prompt("busy", active_marker))
-        active_state = self.busy_state()
+        active_state = self.busy_state(after=before_state if self.f.provider == "omp" else None)
         prompt = self.prompt("follow_up", marker)
         command = self.host("send", prompt)
         row, evidence = self.reply(marker, offset)
+        if self.f.settles_between_turns:
+            self.wait_for_idle_update(active_state)
         payload = command.get("payload")
         record = self.controls["follow_up"] = {
             "action_label": "follow_up",
