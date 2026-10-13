@@ -237,9 +237,20 @@ pub(super) fn managed_state_changes_require_full_reconciliation(
     observations: &ManagedObservationSnapshot,
     paths: &[PathBuf],
 ) -> bool {
-    paths
-        .iter()
-        .any(|path| !observations.contains_state_file(path))
+    // These claim roots invalidate OMP source-binding snapshots, but their
+    // contents are not part of the managed-session observation projection.
+    let ownership_claim_dirs = config::get_longhouse_home().ok().map(|home| {
+        [
+            home.join("managed-local").join("claims"),
+            home.join("agent").join("turn-claims"),
+        ]
+    });
+    paths.iter().any(|path| {
+        let is_ownership_claim = ownership_claim_dirs
+            .as_ref()
+            .is_some_and(|dirs| dirs.iter().any(|dir| path.starts_with(dir)));
+        !is_ownership_claim && !observations.contains_state_file(path)
+    })
 }
 
 /// Whether the certificate the next beat would carry is about to age out.

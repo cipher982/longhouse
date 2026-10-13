@@ -536,10 +536,21 @@ fn canonical_path(path: &Path) -> PathBuf {
 }
 
 fn provider_matches_path(provider: &ProviderConfig, path: &Path) -> bool {
+    let mut physical_path = None;
+    provider_matches_path_with_physical(provider, path, &mut physical_path)
+}
+
+fn provider_matches_path_with_physical(
+    provider: &ProviderConfig,
+    path: &Path,
+    physical_path: &mut Option<PathBuf>,
+) -> bool {
     if path.starts_with(&provider.root) && is_provider_session_file(provider, path) {
         return true;
     }
-    let physical = canonical_path(path);
+    let physical = physical_path
+        .get_or_insert_with(|| canonical_path(path))
+        .as_path();
     let root = canonical_path(&provider.root);
     if physical == path && root == provider.root {
         return false;
@@ -551,14 +562,15 @@ fn provider_matches_path(provider: &ProviderConfig, path: &Path) -> bool {
                 root,
                 extension: provider.extension,
             },
-            &physical,
+            physical,
         )
 }
 
 fn matching_provider_names(path: &Path, providers: &[ProviderConfig]) -> Vec<&'static str> {
+    let mut physical_path = None;
     providers
         .iter()
-        .filter(|provider| provider_matches_path(provider, path))
+        .filter(|provider| provider_matches_path_with_physical(provider, path, &mut physical_path))
         .map(|provider| provider.name)
         .collect()
 }

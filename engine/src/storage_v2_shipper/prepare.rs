@@ -119,8 +119,7 @@ pub(super) fn prepare_next_envelope_with_limit(
         }
     }
     if provider.eq_ignore_ascii_case("omp") {
-        let claims = crate::turn_claims::default_registry()?.list_all_shared()?;
-        match crate::omp_session::bind_discovered_source(conn, &canonical_path, &claims)? {
+        match crate::omp_session::bind_discovered_source(conn, &canonical_path)? {
             crate::omp_session::SourceOwnership::Managed(session_id) => {
                 if durable_session_id
                     .as_deref()

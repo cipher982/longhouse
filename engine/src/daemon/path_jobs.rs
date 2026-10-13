@@ -660,7 +660,7 @@ impl DaemonState {
             } else {
                 tracing::debug!(
                     event_count = managed_state_changes.len(),
-                    "Known managed state changed; bounded periodic observation owns refresh"
+                    "Managed state or ownership claims changed; bounded periodic observation owns refresh"
                 );
             }
         }

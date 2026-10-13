@@ -55,6 +55,9 @@ pub(super) async fn handle_live_transcript_file_events(
     let events = watcher.collect_ready_batch(first_event);
     let (managed_state_changes, transcript_events) =
         partition_managed_state_events(events, managed_state_dirs);
+    if !managed_state_changes.is_empty() {
+        crate::omp_session::invalidate_discovered_source_cache();
+    }
     // Read once per batch: the scope is a file a person can change while the
     // daemon runs, and one read is cheaper than a stat per event.
     let import_scope = crate::config::import_scope();

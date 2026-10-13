@@ -36,7 +36,7 @@ pub struct OmpSessionHeader {
 }
 
 /// Ownership established before the parser is allowed to prepare an envelope.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceOwnership {
     Managed(String),
     Pending,
@@ -966,14 +966,12 @@ pub fn reserve_source_for_thread(
     )
 }
 
-/// Resolve OMP ownership before parsing. A missing/partial native header is
-/// always pending, including when a managed claim has already written early
-/// state, so it cannot mint a provisional Shadow identity.
-pub fn bind_discovered_source(
+fn bind_discovered_source_with_state(
     conn: &rusqlite::Connection,
     path: &Path,
     claims: &[impl std::borrow::Borrow<crate::turn_claims::TurnClaim>],
-) -> Result<SourceOwnership> {
+    cached_state_ownership: Option<SourceOwnership>,
+) -> Result<(SourceOwnership, Option<SourceOwnership>)> {
     let path = normalized_source_path(path)?;
     let path_text = path.to_string_lossy().into_owned();
     let existing = existing_binding(conn, &path_text)?;
@@ -984,7 +982,7 @@ pub fn bind_discovered_source(
         );
     }
     let Some(header) = read_session_header(&path).ok() else {
-        return Ok(SourceOwnership::Pending);
+        return Ok((SourceOwnership::Pending, None));
     };
     if let Some((_, _, Some(existing_native_id))) = existing.as_ref() {
         anyhow::ensure!(
@@ -992,7 +990,12 @@ pub fn bind_discovered_source(
             "OMP source binding native id changed"
         );
     }
-    match crate::managed_omp_helm_scan::source_ownership(&path)? {
+    let state_ownership = match cached_state_ownership {
+        Some(ownership) => ownership,
+        None => crate::managed_omp_helm_scan::source_ownership(&path)?,
+    };
+    let cached_state_ownership = state_ownership.clone();
+    match state_ownership {
         SourceOwnership::Managed(session_id) => {
             if let Some((existing_owner, _, _)) = existing.as_ref() {
                 anyhow::ensure!(
@@ -1001,9 +1004,14 @@ pub fn bind_discovered_source(
                 );
             }
             bind_source_for_thread(conn, &path, &session_id, &header.native_id)?;
-            return Ok(SourceOwnership::Managed(session_id));
+            return Ok((
+                SourceOwnership::Managed(session_id),
+                Some(cached_state_ownership),
+            ));
         }
-        SourceOwnership::Pending if existing.is_none() => return Ok(SourceOwnership::Pending),
+        SourceOwnership::Pending if existing.is_none() => {
+            return Ok((SourceOwnership::Pending, Some(cached_state_ownership)));
+        }
         SourceOwnership::Pending | SourceOwnership::Unclaimed => {}
     }
 
@@ -1062,13 +1070,181 @@ pub fn bind_discovered_source(
     }
 
     if pending || (provider_ids.len() > 1 && existing.is_none()) {
-        return Ok(SourceOwnership::Pending);
+        return Ok((SourceOwnership::Pending, Some(cached_state_ownership)));
     }
     if let Some(session_id) = owner {
         bind_source_for_thread(conn, &path, &session_id, &header.native_id)?;
-        return Ok(SourceOwnership::Managed(session_id));
+        return Ok((
+            SourceOwnership::Managed(session_id),
+            Some(cached_state_ownership),
+        ));
     }
-    Ok(SourceOwnership::Unclaimed)
+    Ok((SourceOwnership::Unclaimed, Some(cached_state_ownership)))
+}
+/// Resolve source and launch ownership once per source identity. Watcher events
+/// for managed claims and state invalidate both snapshots without changing the
+/// binding checks performed for each envelope.
+pub(crate) fn bind_discovered_source(
+    conn: &rusqlite::Connection,
+    path: &Path,
+) -> Result<SourceOwnership> {
+    let metadata = fs::symlink_metadata(path)
+        .ok()
+        .filter(|metadata| metadata.file_type().is_file());
+    let generation = discovered_source_cache::generation();
+    if let Some(metadata) = metadata.as_ref() {
+        if let Some((state_ownership, claims)) =
+            discovered_source_cache::lookup(path, metadata, generation)
+        {
+            if discovered_source_cache::generation() == generation {
+                let cached =
+                    bind_discovered_source_with_state(conn, path, &claims, Some(state_ownership));
+                if discovered_source_cache::generation() == generation {
+                    return cached.map(|(ownership, _)| ownership);
+                }
+            }
+        }
+    }
+
+    let claims = crate::turn_claims::default_registry()?.list_all_shared()?;
+    let (ownership, state_ownership) =
+        bind_discovered_source_with_state(conn, path, &claims, None)?;
+    if let (Some(metadata), Some(state_ownership)) = (metadata.as_ref(), state_ownership.as_ref()) {
+        discovered_source_cache::store(path, metadata, generation, state_ownership, &claims);
+    }
+    Ok(ownership)
+}
+
+pub(crate) fn invalidate_discovered_source_cache() {
+    discovered_source_cache::invalidate();
+}
+
+mod discovered_source_cache {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use super::SourceOwnership;
+    use crate::turn_claims::TurnClaim;
+
+    const MAX_ENTRIES: usize = 4096;
+
+    struct Entry {
+        generation: u64,
+        device: u64,
+        inode: u64,
+        len: u64,
+        source_ownership: SourceOwnership,
+        claims: Arc<Vec<Arc<TurnClaim>>>,
+    }
+
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
+    static CACHE: Mutex<Option<HashMap<PathBuf, Entry>>> = Mutex::new(None);
+
+    #[cfg(unix)]
+    fn identity(metadata: &std::fs::Metadata) -> (u64, u64) {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.dev(), metadata.ino())
+    }
+
+    #[cfg(not(unix))]
+    fn identity(_metadata: &std::fs::Metadata) -> (u64, u64) {
+        (0, 0)
+    }
+
+    pub(super) fn generation() -> u64 {
+        GENERATION.load(Ordering::Acquire)
+    }
+
+    pub(super) fn invalidate() {
+        GENERATION.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(super) fn lookup(
+        path: &Path,
+        metadata: &std::fs::Metadata,
+        generation: u64,
+    ) -> Option<(SourceOwnership, Arc<Vec<Arc<TurnClaim>>>)> {
+        if !cfg!(unix) {
+            return None;
+        }
+        let (device, inode) = identity(metadata);
+        let mut cache = CACHE.lock().ok()?;
+        let entry = cache.as_mut()?.get_mut(path)?;
+        if entry.generation != generation
+            || entry.device != device
+            || entry.inode != inode
+            || metadata.len() < entry.len
+        {
+            return None;
+        }
+        entry.len = metadata.len();
+        Some((entry.source_ownership.clone(), Arc::clone(&entry.claims)))
+    }
+
+    pub(super) fn store(
+        path: &Path,
+        metadata: &std::fs::Metadata,
+        generation: u64,
+        source_ownership: &SourceOwnership,
+        claims: &Arc<Vec<Arc<TurnClaim>>>,
+    ) {
+        if !cfg!(unix) || generation != GENERATION.load(Ordering::Acquire) {
+            return;
+        }
+        let (device, inode) = identity(metadata);
+        let Ok(mut cache) = CACHE.lock() else {
+            return;
+        };
+        if generation != GENERATION.load(Ordering::Acquire) {
+            return;
+        }
+        let cache = cache.get_or_insert_with(HashMap::new);
+        if cache.len() >= MAX_ENTRIES && !cache.contains_key(path) {
+            cache.clear();
+        }
+        cache.insert(
+            path.to_path_buf(),
+            Entry {
+                generation,
+                device,
+                inode,
+                len: metadata.len(),
+                source_ownership: source_ownership.clone(),
+                claims: Arc::clone(claims),
+            },
+        );
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn managed_state_change_invalidates_cached_ownership_for_same_source() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("session.jsonl");
+            std::fs::write(&path, b"unchanged source").unwrap();
+            let metadata = std::fs::symlink_metadata(&path).unwrap();
+            let generation_before = generation();
+            let ownership =
+                SourceOwnership::Managed("11111111-2222-3333-4444-555555555555".to_string());
+            let claims = Arc::new(Vec::new());
+
+            store(&path, &metadata, generation_before, &ownership, &claims);
+            assert_eq!(
+                lookup(&path, &metadata, generation_before).map(|(value, _)| value),
+                Some(ownership)
+            );
+
+            invalidate();
+            assert!(
+                lookup(&path, &metadata, generation()).is_none(),
+                "cache invalidated"
+            );
+        }
+    }
 }
 
 fn record_owner(

@@ -710,6 +710,8 @@ fn managed_provider_state_dirs() -> Vec<PathBuf> {
     .flatten()
     .collect();
     if let Ok(longhouse_home) = config::get_longhouse_home() {
+        dirs.push(longhouse_home.join("managed-local").join("claims"));
+        dirs.push(longhouse_home.join("agent").join("turn-claims"));
         for dir in managed_resume_scan::resume_contract_dirs(&longhouse_home) {
             // Create the evidence roots before starting notify. A provider may
             // write its first retained contract after daemon startup; watching
