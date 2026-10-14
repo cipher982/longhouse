@@ -366,7 +366,7 @@ class _Launcher:
             if "sleep " in command:
                 steering = "steer-result" in command
                 aborting = "abort-result" in command
-                deadline = time.monotonic() + (2.0 if steering or aborting else 0.25)
+                deadline = time.monotonic() + (2.0 if steering or aborting else 0.75)
                 while time.monotonic() < deadline:
                     with self.lock:
                         aborted, steered = self.abort, self.steer is not None
@@ -780,18 +780,29 @@ class FakeRuntimeHost:
     """The agents API the producers call, over the owners the fake launchers register."""
 
     def __init__(
-        self, token: str, *, reconnecting: int = 0, never_hides: bool = False, page_size: int = 0, pages_never_end: bool = False
+        self,
+        token: str,
+        *,
+        reconnecting: int = 0,
+        never_hides: bool = False,
+        page_size: int = 0,
+        pages_never_end: bool = False,
+        queue_busy_sends: bool = False,
+        stuck_busy_sends: bool = False,
     ) -> None:
         """``reconnecting`` control requests are first refused as a control channel that is reconnecting;
         ``never_hides`` leaves a session visible however it is retired (a cleanup that cannot be proven);
         ``page_size`` serves the events that many to a page; ``pages_never_end`` says there are more and gives
-        no cursor to read them with."""
+        no cursor to read them with; ``queue_busy_sends`` queues busy/task setup sends and drains them;
+        ``stuck_busy_sends`` queues busy/task setup sends without ever starting their turn."""
 
         self.token = token
         self.reconnecting = reconnecting
         self.never_hides = never_hides
         self.page_size = page_size
         self.pages_never_end = pages_never_end
+        self.queue_busy_sends = queue_busy_sends
+        self.stuck_busy_sends = stuck_busy_sends
         self.sessions: dict[str, dict[str, Any]] = {}
         self.processes: set[int] = set()
         self.lock = threading.RLock()
@@ -848,10 +859,12 @@ class FakeRuntimeHost:
 
         while not self._closed.wait(0.1):
             with self.lock:
-                waiting = [session for session in self.sessions.values() if session["queue"]]
-            for session in waiting:
-                if self._command(session, "send", session["queue"][0]).get("ok") is True:
-                    session["queue"].pop(0)
+                waiting = [(session, session["queue"][0]) for session in self.sessions.values() if session["queue"]]
+            for session, text in waiting:
+                if self._command(session, "send", text).get("ok") is True:
+                    with self.lock:
+                        if session["queue"] and session["queue"][0] == text:
+                            session["queue"].pop(0)
 
     # -- what it serves
 
@@ -941,11 +954,24 @@ class FakeRuntimeHost:
             return 409, {"detail": "no live Longhouse control channel for this session"}
         if action == "input":
             steer = body.get("intent") == "steer"
+            text = str(body.get("text") or "")
+            busy_setup = not steer and (_STEP_TASK.search(text) is not None or "_ACTIVE_" in text)
+            if busy_setup and (self.queue_busy_sends or self.stuck_busy_sends):
+                if not self.stuck_busy_sends:
+                    with self.lock:
+                        session["queue"].append(text)
+                return 200, {
+                    "outcome": "queued",
+                    "disposition": "accepted",
+                    "live_input_id": f"input_{uuid.uuid4().hex[:12]}",
+                    "client_request_id": body.get("client_request_id"),
+                }
             answer = self._command(session, "steer" if steer else "send", body.get("text"))
             outcome = "sent" if answer.get("ok") is True else None
             if outcome is None and not steer and (answer.get("error") or {}).get("code") == "turn_active":
                 # A send to a busy provider is kept and delivered at the turn boundary: the answer is "queued".
-                session["queue"].append(body.get("text"))
+                with self.lock:
+                    session["queue"].append(body.get("text"))
                 outcome = "queued"
             if outcome is None:
                 return 502, {"detail": {"error_code": "input_failed", "message": json.dumps(answer.get("error"))}}

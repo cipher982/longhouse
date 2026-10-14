@@ -2207,12 +2207,15 @@ class Lifecycle:
         self.retirement_claims: list[dict[str, Any]] = []
         self.served_run_inventory: dict[str, Any] = {}
         self.failure: Exception | None = None
+        self.queued_sends: list[dict[str, Any]] = []
+        self._last_begin: tuple[str, dict[str, Any]] | None = None
         self.controls: dict[str, dict[str, Any]] = {}
         self.observation: dict[str, Any] = {
             "observation_scope": "scenario",
             "provider": family.provider,
             "owners": {},
             "controls": self.controls,
+            "queued_sends": self.queued_sends,
             "convergence": {},
             "control_identity": {},
             "flush": {},
@@ -2364,13 +2367,42 @@ class Lifecycle:
         except RuntimeError:
             return {}
 
-    def busy_state(self, *, after: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    def busy_state(
+        self,
+        *,
+        after: Mapping[str, Any] | None = None,
+        sent: Mapping[str, Any] | None = None,
+        what: str | None = None,
+    ) -> dict[str, Any]:
         """The state of a turn in progress, and a later one than ``after`` when that is given."""
 
-        def busy(state: Mapping[str, Any]) -> bool:
-            return state.get("phase") in {"running", "thinking"} and (after is None or _turn_sequence(state) > _turn_sequence(after))
+        last_begin = getattr(self, "_last_begin", None)
+        if sent is None and last_begin is not None:
+            last_what, sent = last_begin
+            if what is None:
+                what = last_what
+        self._last_begin = None
+        payload = sent.get("payload") if isinstance(sent, Mapping) else None
+        queued = bool(isinstance(sent, Mapping) and sent.get("queued")) or (
+            isinstance(payload, Mapping) and payload.get("outcome") == "queued"
+        )
+        timeout = self.f.timeouts["busy"]
 
-        return self.or_missing(lambda: self.wait_state(busy, timeout=self.f.timeouts["busy"]))
+        def busy(state: Mapping[str, Any]) -> bool:
+            if state.get("phase") not in {"running", "thinking"}:
+                return False
+            if after is None or self.f.provider != "omp":
+                return True
+            return _turn_sequence(state) > _turn_sequence(after)
+
+        if queued:
+            try:
+                return self.wait_state(busy, timeout=timeout)
+            except RuntimeError as exc:
+                label = what or "busy turn's send"
+                raise RuntimeError(f"{self.f.name} Helm {label} stayed queued and started no turn within {timeout:g}s: {payload}") from exc
+
+        return self.or_missing(lambda: self.wait_state(busy, timeout=timeout))
 
     def settle(self) -> dict[str, Any]:
         """Wait for the turn to be over, without making that a condition: a turn that never settles shows in what follows."""
@@ -2388,19 +2420,25 @@ class Lifecycle:
         return _host_control(self.api_url, self.token, self.f, command, self.session_id, text=text)
 
     def begin(self, what: str, prompt: str, *, local: bool = False) -> dict[str, Any]:
-        """Send a prompt that must start a turn now, not remain in the host's queue.
+        """Send a prompt that starts a turn, or is queued while the host's turn-end view catches up.
 
         Where a refused command ends the run, it ends it here and says which
         send it was, instead of at whatever later step first misses the turn.
         """
 
-        sent = self.control("send", prompt, local=local)
+        sent = dict(self.control("send", prompt, local=local))
         payload = sent.get("payload")
-        if isinstance(payload, Mapping) and payload.get("outcome") == "queued":
-            raise RuntimeError(f"{self.f.name} Helm {what} was queued, so it started no turn: {payload}")
         if self.f.refused_command_ends_run and sent.get("accepted") is not True:
             detail = payload or sent.get("stderr") or sent.get("error")
             raise RuntimeError(f"{self.f.name} Helm {what} was not accepted, so it started no turn: {detail}")
+        queued = isinstance(payload, Mapping) and payload.get("outcome") == "queued"
+        sent["queued"] = queued
+        if queued:
+            queued_sends = getattr(self, "queued_sends", None)
+            if queued_sends is None:
+                queued_sends = self.queued_sends = []
+            queued_sends.append({"what": what, "payload": dict(payload)})
+        self._last_begin = (what, sent)
         return sent
 
     def host(self, command: str, text: str) -> dict[str, Any]:
@@ -2739,12 +2777,11 @@ class Lifecycle:
     def steer(self, *, local: bool = False) -> None:
         f = self.f
         name = "local_steer" if local else "steer"
-        if self.scripted_turn_barrier:
-            self.wait_state(f.is_idle, timeout=30)
+        before_state = self.wait_state(f.is_idle, timeout=30) if self.scripted_turn_barrier else None
         offset = _read_source_size(self.session_file)
         task, done, marker = (self.marker(f"{name.upper()}{part}") for part in ("_TASK", "_TASK_DONE", ""))
         active = self.begin(f"{name} turn's send", step_task_prompt(task, done), local=local)
-        active_state = self.busy_state()
+        active_state = self.busy_state(after=before_state if f.provider == "omp" else None)
         boundary_wait = _wait_task_tool_call_boundary if self.scripted_model else _wait_task_tool_boundary
         self.observation[f"{name}_tool_boundary"] = boundary_wait(self.session_file, task)
         prompt = self.prompt("steer", marker)
@@ -2774,10 +2811,10 @@ class Lifecycle:
     def abort(self, *, local: bool = False) -> None:
         f = self.f
         name = "local_abort" if local else "abort"
-        idle = self.wait_state(f.is_idle, timeout=30) if self.scripted_turn_barrier and f.channel_terminal else None
+        before_state = self.wait_state(f.is_idle, timeout=30) if self.scripted_turn_barrier else None
         task, done, after = (self.marker(f"{name.upper()}{part}") for part in ("_TASK", "_TASK_DONE", "_AFTER"))
         active = self.begin(f"{name} turn's send", step_task_prompt(task, done), local=local)
-        active_state = self.busy_state(after=idle)
+        active_state = self.busy_state(after=before_state if f.provider == "omp" else None)
         offset = _read_source_size(self.session_file)
         boundary_wait = _wait_task_tool_call_boundary if self.scripted_model else _wait_task_tool_boundary
         self.observation[f"{name}_tool_boundary"] = boundary_wait(self.session_file, task)

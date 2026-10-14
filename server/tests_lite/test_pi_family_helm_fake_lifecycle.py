@@ -103,13 +103,47 @@ def test_omp_turn_barrier_uses_the_next_terminal_sequence(monkeypatch, tmp_path)
     assert state["live_turn_seq"] == 12
 
 
-def test_begin_rejects_a_queued_input_as_an_active_turn() -> None:
+def test_begin_records_queued_input_and_still_rejects_refused_input() -> None:
     lifecycle = object.__new__(Lifecycle)
     lifecycle.f = SimpleNamespace(name="Pi", refused_command_ends_run=True)
-    lifecycle.control = lambda *_args, **_kwargs: {"accepted": True, "payload": {"outcome": "queued"}}
+    queued_payload = {"outcome": "queued", "disposition": "accepted", "live_input_id": "input_123"}
+    lifecycle.control = lambda *_args, **_kwargs: {"accepted": True, "payload": queued_payload}
 
-    with pytest.raises(RuntimeError, match="was queued, so it started no turn"):
-        lifecycle.begin("busy-turn setup", "start the active turn")
+    sent = lifecycle.begin("busy turn's send", "start the active turn")
+    assert sent["queued"] is True
+    assert lifecycle.queued_sends == [{"what": "busy turn's send", "payload": queued_payload}]
+
+    lifecycle.control = lambda *_args, **_kwargs: {"accepted": False, "payload": {"detail": "refused"}}
+    with pytest.raises(RuntimeError, match="Pi Helm busy turn's send was not accepted, so it started no turn"):
+        lifecycle.begin("busy turn's send", "start the active turn")
+
+
+def test_busy_state_waits_for_queued_omp_turn_sequence_and_pi_never_consults_it(monkeypatch) -> None:
+    helm = importlib.import_module("zerg.qa.pi_family_helm")
+    omp = object.__new__(Lifecycle)
+    omp.f = SimpleNamespace(provider="omp", name="OMP", records_misses=False, refused_command_ends_run=False, timeouts={"busy": 5})
+    omp.control = lambda *_args, **_kwargs: {"accepted": True, "payload": {"outcome": "queued", "live_input_id": "in-omp"}}
+    omp_states = [
+        {"phase": "idle", "live_turn_seq": 3},
+        {"phase": "running", "live_turn_seq": 3},
+        {"phase": "running", "live_turn_seq": 4},
+    ]
+    omp.wait_state = lambda predicate, timeout=30: next(state for state in omp_states if predicate(state))
+
+    active = omp.begin("busy turn's send", "start the active turn")
+    state = omp.busy_state(after={"phase": "idle", "live_turn_seq": 3})
+    assert active["queued"] is True
+    assert state == {"phase": "running", "live_turn_seq": 4}
+
+    pi = object.__new__(Lifecycle)
+    pi.f = SimpleNamespace(provider="pi", name="Pi", records_misses=True, refused_command_ends_run=True, timeouts={"busy": 5})
+    pi.control = lambda *_args, **_kwargs: {"accepted": True, "payload": {"outcome": "queued", "live_input_id": "in-pi"}}
+    pi_states = [{"phase": "idle"}, {"phase": "running"}]
+    pi.wait_state = lambda predicate, timeout=30: next(state for state in pi_states if predicate(state))
+    monkeypatch.setattr(helm, "_turn_sequence", lambda *_args: (_ for _ in ()).throw(AssertionError("Pi consulted live_turn_seq")))
+
+    pi.begin("busy turn's send", "start the active turn")
+    assert pi.busy_state(after=None) == {"phase": "running"}
 
 
 @pytest.fixture(scope="module")
@@ -283,6 +317,75 @@ def test_scripted_pi_barrier_waits_past_an_early_idle_update(tmp_path, monkeypat
     assert "live_turn_seq" not in controls["launch"]["state"]
     assert controls["follow_up"]["active_command"]["payload"]["outcome"] == "sent"
     assert controls["follow_up"]["command"]["payload"]["outcome"] == "queued"
+
+
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_scripted_model_lifecycle_proceeds_when_busy_sends_are_queued_then_started(provider, tmp_path, monkeypatch, capsys) -> None:
+    module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
+    monkeypatch.delenv(module.FAMILY.live_env, raising=False)
+    root = tmp_path / "scripted-queued-evidence"
+
+    with fake.longhouse(tmp_path, monkeypatch.setenv, queue_busy_sends=True) as (cli, isolation):
+        code = module.main(fake.scripted_model_arguments(provider, cli, root))
+        result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+        assert list(isolation.iterdir()) == []
+    capsys.readouterr()
+
+    assert (code, result["status"], result["evidence_class"]) == (0, "pass", "scripted_model")
+    assert all(result["assertions"].values())
+    queued_sends = result["observation"]["queued_sends"]
+    assert [entry["what"] for entry in queued_sends] == [
+        "busy turn's send",
+        "steer turn's send",
+        "abort turn's send",
+    ]
+    assert all(
+        entry["payload"]["outcome"] == "queued"
+        and entry["payload"]["disposition"] == "accepted"
+        and entry["payload"]["live_input_id"].startswith("input_")
+        for entry in queued_sends
+    )
+    controls = result["observation"]["controls"]
+    for step in ("follow_up", "steer", "abort"):
+        assert controls[step]["active_command"]["queued"] is True
+        assert controls[step]["active_command"]["payload"]["outcome"] == "queued"
+        assert controls[step]["active_state"]["phase"] == "running"
+    if provider == "omp":
+        assert (
+            controls["launch"]["state"]["live_turn_seq"]
+            < controls["follow_up"]["active_state"]["live_turn_seq"]
+            < controls["steer"]["active_state"]["live_turn_seq"]
+            < controls["abort"]["active_state"]["live_turn_seq"]
+        )
+        assert controls["steer"]["settled_state"]["live_turn_seq"] < controls["abort"]["active_state"]["live_turn_seq"]
+    else:
+        assert all("live_turn_seq" not in controls[step]["active_state"] for step in ("follow_up", "steer", "abort"))
+
+
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_scripted_model_lifecycle_fails_when_queued_busy_send_starts_no_turn(provider, tmp_path, monkeypatch, capsys) -> None:
+    import dataclasses
+
+    module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
+    monkeypatch.delenv(module.FAMILY.live_env, raising=False)
+    monkeypatch.setattr(
+        module,
+        "FAMILY",
+        dataclasses.replace(module.FAMILY, timeouts={**module.FAMILY.timeouts, "busy": 0.5}),
+    )
+    root = tmp_path / "scripted-stuck-evidence"
+
+    with fake.longhouse(tmp_path, monkeypatch.setenv, stuck_busy_sends=True) as (cli, isolation):
+        code = module.main(fake.scripted_model_arguments(provider, cli, root))
+        result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+        assert list(isolation.iterdir()) == []
+    capsys.readouterr()
+
+    assert (code, result["status"], result["failure_code"]) == (1, "fail", f"{provider}_helm_lifecycle_failed")
+    assert f"{module.FAMILY.name} Helm busy turn's send stayed queued and started no turn within 0.5s" in result["error"]
+    assert "was queued, so it started no turn" not in result["error"]
+    partial = result.get("observation") or result.get("partial_observation") or {}
+    assert partial["queued_sends"][0]["what"] == "busy turn's send"
 
 
 @pytest.mark.parametrize("provider", ["omp", "pi"])
