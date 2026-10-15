@@ -81,7 +81,7 @@ jobs:
       packages: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -159,7 +159,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -184,7 +184,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -281,7 +281,7 @@ jobs:
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -358,7 +358,7 @@ jobs:
             PROVIDER_EXECUTABLE_IDENTITY=sha256:hermetic-fixture
 
       - name: Upload provider capability proof bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: provider-capability-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/test-isolation/**/files/1/provider-capability-proof/**
@@ -367,7 +367,7 @@ jobs:
 
       - name: Upload provider release proof artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: provider-release-proof-validation-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/test-isolation/**/files/1/provider-release-proof-universal-smoke/**
@@ -393,7 +393,7 @@ jobs:
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref_lean || needs.prepare-test-image.outputs.image_ref_lean }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -409,7 +409,7 @@ jobs:
 
       - name: Upload lifecycle failure artifacts
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: managed-launch-lifecycle-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/test-isolation/**/files/1/reliability-kernel/managed-launch-lifecycle-failure.*/**
@@ -439,7 +439,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -486,7 +486,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -509,7 +509,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -551,12 +551,12 @@ jobs:
     name: "Engine compatibility (previous release)"
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
 
       - name: Ship a transcript with the last released engine against the candidate server
         # `make engine-compat` downloads the newest published release that
@@ -571,7 +571,7 @@ jobs:
       # promotion accepts it (scripts/qa/engine_compat_receipt.py).
       - name: Upload the engine-compat receipt
         if: ${{ github.event_name != 'pull_request' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: engine-compat-${{ github.sha }}
           path: .build/engine-compat/receipt.json
@@ -590,7 +590,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -623,7 +623,7 @@ jobs:
       LONGHOUSE_TEST_CPUS: "4"
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -634,7 +634,7 @@ jobs:
 
       - name: Upload the sweep's frames and reports (on failure)
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-sweep-${{ matrix.viewport }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/test-isolation
@@ -675,7 +675,7 @@ jobs:
             filter: "LonghouseSmoke:only:LonghouseIOSUITests/SessionChatUITests LonghouseSmoke:skip:LonghouseIOSUITests/SessionChatUITests/testCaptureToolsTranscriptLightScreenshot LonghouseSmoke:skip:LonghouseIOSUITests/SessionChatUITests/testCaptureToolsTranscriptDarkScreenshot"
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -697,7 +697,7 @@ jobs:
 
       - name: Upload native iOS evidence
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-xcresult-${{ strategy.job-index }}
           if-no-files-found: ignore
@@ -715,7 +715,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -736,7 +736,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -747,7 +747,7 @@ jobs:
 
       - name: Upload isolated E2E artifacts (on failure)
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: core-e2e-artifacts
           path: artifacts/test-isolation
@@ -767,13 +767,13 @@ jobs:
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
 
       - name: Smoke test all models
         run: uv run --with openai python scripts/qa/smoke_models.py --ci
@@ -790,7 +790,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -805,7 +805,7 @@ jobs:
 
       - name: Upload OSS isolation evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: oss-isolation-evidence
           path: artifacts/test-isolation
