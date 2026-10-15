@@ -38,6 +38,7 @@ use crate::omp_helm_control::OMP_HELM_TRANSPORT;
 
 const STATE_DIR_NAME: &str = "managed-local/omp-helm";
 const EXTENSION_FILE_NAME: &str = "longhouse-omp-helm.ts";
+const HELM_CONFIG_OVERLAY_FILE_NAME: &str = "omp-helm-config.yml";
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(8);
 /// A Helm launch is not adopted until OMP binds its native session identity.
 /// Keep the wait bounded so a provider that never opens cannot leave a pending
@@ -946,12 +947,18 @@ impl OmpHelmServer {
         }
         let adoption = self.adoption_target(&session_id, Path::new(source), native_id)?;
         if previous.is_empty() && !replacement && adoption.is_none() {
+            // The launch supplied no session flag or directory, and its
+            // `autoResume` overlay keeps OMP from adopting an existing
+            // transcript, so the first source OMP reports is the one it just
+            // created. This keeps that source inside the archive root the
+            // launch was configured with rather than trusting a path anywhere
+            // on disk.
             anyhow::ensure!(
                 crate::omp_session::session_file_path_in_session_dir(
                     Path::new(&launch_session_dir),
                     Path::new(source)
                 ),
-                "OMP fresh native source is outside its launch-scoped session directory"
+                "OMP fresh native source is outside its launch session root"
             );
         }
         let bind_session = adoption
@@ -2648,6 +2655,15 @@ fn write_extension_file(dir: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
+fn write_config_overlay(dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(dir)?;
+    set_private_dir(dir)?;
+    let path = dir.join(HELM_CONFIG_OVERLAY_FILE_NAME);
+    fs::write(&path, HELM_CONFIG_OVERLAY)?;
+    set_private_file(&path)?;
+    Ok(path)
+}
+
 fn registration_credentials(config: &LaunchConfig) -> Result<(String, String, String)> {
     let machine = home_state()?.join("machine");
     let state: Value = fs::read(machine.join("state.json"))
@@ -2785,9 +2801,21 @@ fn initial_prompt_delivered(prompt: Option<&str>) -> bool {
 struct SelectedSessionStorage {
     session_dir: PathBuf,
     session_file: Option<PathBuf>,
-    fresh_directory: Option<crate::omp_session::FreshSessionDirectory>,
+    explicit_session_dir: bool,
 }
 
+/// Choose the OMP archive root for this launch.
+///
+/// A Helm launch passes `--session-dir` only when Longhouse redirects that root
+/// itself. OMP writes every transcript flat into an explicit session directory,
+/// which hides Helm sessions from OMP's own session picker: the picker's
+/// current-folder scope reads exactly that directory, and a per-launch directory
+/// holds nothing but the live session. Without the flag OMP files each
+/// transcript under its canonical-cwd bucket in the archive root, exactly as an
+/// interactive session does, so the same folder shows the whole folder's
+/// history. An operator redirection (`--session-dir`, `LONGHOUSE_OMP_SESSION_DIR`
+/// or `LONGHOUSE_OMP_DATA_DIR`) keeps the explicit flag: isolation is the reason
+/// it exists, and the picker never sees a redirected root as a project anyway.
 fn select_session_storage(
     resume_state: Option<&OmpHelmStateFile>,
     configured_session_dir: Option<&Path>,
@@ -2802,33 +2830,41 @@ fn select_session_storage(
         },
     };
     crate::omp_session::ensure_session_dir_is_disjoint_from_pi(cwd, &session_root)?;
-    if let Some(state) = resume_state {
-        return Ok(SelectedSessionStorage {
-            session_dir: session_root,
-            session_file: Some(PathBuf::from(&state.session_file)),
-            fresh_directory: None,
-        });
+    // A fresh launch may need an operator-redirected root that does not exist
+    // yet; OMP creates the canonical-cwd bucket inside it itself. A resume must
+    // not create anything: its validated transcript already lives there.
+    if resume_state.is_none() {
+        fs::create_dir_all(&session_root).with_context(|| {
+            format!("creating OMP session directory: {}", session_root.display())
+        })?;
     }
-    let fresh_directory = crate::omp_session::FreshSessionDirectory::create(&session_root)?;
     Ok(SelectedSessionStorage {
-        session_dir: fresh_directory.path().to_path_buf(),
-        session_file: None,
-        fresh_directory: Some(fresh_directory),
+        session_dir: session_root,
+        session_file: resume_state.map(|state| PathBuf::from(&state.session_file)),
+        explicit_session_dir: crate::omp_session::session_dir_flag_required(configured_session_dir),
     })
 }
 
 fn build_omp_helm_args(
     session_dir: &Path,
+    explicit_session_dir: bool,
     resume_file: Option<&Path>,
+    config_overlay: &Path,
     extension: &Path,
     profile: Option<&str>,
     model: Option<&str>,
 ) -> Vec<std::ffi::OsString> {
-    let mut args = vec!["--session-dir".into(), session_dir.as_os_str().to_owned()];
+    let mut args = Vec::new();
+    if explicit_session_dir {
+        args.push("--session-dir".into());
+        args.push(session_dir.as_os_str().to_owned());
+    }
     if let Some(resume_file) = resume_file {
         args.push("--resume".into());
         args.push(resume_file.as_os_str().to_owned());
     }
+    args.push("--config".into());
+    args.push(config_overlay.as_os_str().to_owned());
     args.push("-e".into());
     args.push(extension.as_os_str().to_owned());
     if let Some(profile) = profile {
@@ -2841,6 +2877,14 @@ fn build_omp_helm_args(
     }
     args
 }
+
+/// A Helm launch supplies no session flag or directory, which is the only thing
+/// that otherwise pins OMP's `autoResume` setting. With `autoResume` on, a fresh
+/// launch would adopt the cwd's newest transcript instead of creating one, and
+/// the extension would report a session this launch never created. The overlay
+/// loads after global and project settings for this process only, so a Helm
+/// launch stays fresh and its bind is always to a transcript OMP just wrote.
+const HELM_CONFIG_OVERLAY: &str = "autoResume: false\n";
 
 /// Environment every Helm OMP launch carries. OMP's TTY onboarding wizard skips
 /// itself only when resuming, and a fresh launch passes no `--resume` (OMP 18.7
@@ -3014,7 +3058,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     let SelectedSessionStorage {
         session_dir,
         session_file,
-        fresh_directory: _fresh_session_directory,
+        explicit_session_dir,
     } = select_session_storage(
         resume_state.as_ref(),
         config.session_dir.as_deref(),
@@ -3200,16 +3244,21 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         machine_name: machine_name.clone(),
         register: Arc::new(register_adoption),
     });
-    let extension = write_extension_file(&state_root.join("extensions").join(&session_id))?;
+    let extension_root = state_root.join("extensions").join(&session_id);
+    let extension = write_extension_file(&extension_root)?;
+    let config_overlay = write_config_overlay(&extension_root)?;
     let mut command = Command::new(&binary);
-    // Fresh launches let OMP create its native session in the scoped directory.
-    // Cold resumes pass only the validated retained exact file. In both cases,
+    // A fresh launch lets OMP create its native session in this launch's
+    // canonical-cwd bucket, with the overlay keeping a fresh launch fresh. A
+    // cold resume passes only the validated retained exact file. In both cases,
     // the extension's session_start binds the provider-authored identity before
     // the launch becomes ready.
     command
         .args(build_omp_helm_args(
             &session_dir,
+            explicit_session_dir,
             session_file.as_deref(),
+            &config_overlay,
             &extension,
             profile.as_deref(),
             model.as_deref(),
@@ -5704,6 +5753,38 @@ mod tests {
     }
 
     #[test]
+    fn helm_args_leave_the_session_dir_to_omp_and_pin_auto_resume() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("sessions");
+        let extension = temp.path().join("extension.ts");
+        let overlay = write_config_overlay(&temp.path().join("overlay")).unwrap();
+        assert_eq!(
+            fs::read_to_string(&overlay).unwrap(),
+            "autoResume: false\n",
+            "the overlay OMP parses must pin a fresh launch"
+        );
+        let has = |args: &[std::ffi::OsString], flag: &str, value: &Path| {
+            args.windows(2)
+                .any(|pair| pair[0].to_string_lossy() == flag && Path::new(&pair[1]) == value)
+        };
+        let exact = temp.path().join("sessions/exact.jsonl");
+
+        let args = build_omp_helm_args(&root, false, None, &overlay, &extension, None, None);
+        assert!(
+            !args.iter().any(|arg| arg == "--session-dir"),
+            "OMP files the transcript in its own canonical-cwd bucket: {args:?}"
+        );
+        assert!(has(&args, "--config", &overlay));
+        assert!(has(&args, "-e", &extension));
+
+        let redirected =
+            build_omp_helm_args(&root, true, Some(&exact), &overlay, &extension, None, None);
+        assert!(has(&redirected, "--session-dir", &root));
+        assert!(has(&redirected, "--resume", &exact));
+        assert!(has(&redirected, "--config", &overlay));
+    }
+
+    #[test]
     fn cold_resume_reuses_retained_storage_and_provider_settings() {
         let temp = tempfile::tempdir().unwrap();
         let mut retained = state();
@@ -5743,7 +5824,7 @@ mod tests {
             storage.session_file.as_deref(),
             Some(Path::new(&retained.session_file))
         );
-        assert!(storage.fresh_directory.is_none());
+        assert!(storage.explicit_session_dir);
         assert!(!temp.path().join("original-sessions").exists());
         assert!(!temp.path().join("new-sessions").exists());
     }
@@ -5772,17 +5853,34 @@ mod tests {
     }
 
     #[test]
-    fn fresh_launch_reserves_only_a_scoped_directory_not_a_transcript() {
+    fn fresh_launch_leaves_the_archive_root_to_omp() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("sessions");
-        let storage = select_session_storage(None, Some(&root), None, temp.path()).unwrap();
-        assert!(storage.session_dir.starts_with(&root));
-        assert!(storage.session_file.is_none());
-        assert_eq!(fs::read_dir(&storage.session_dir).unwrap().count(), 0);
-        assert!(storage.fresh_directory.is_some());
-        let path = storage.session_dir.clone();
-        drop(storage);
-        assert!(!path.exists(), "unused fresh directory is removed");
+        temp_env::with_vars(
+            [
+                (crate::omp_session::OMP_SESSION_DIR_ENV, None::<&str>),
+                (crate::omp_session::OMP_DATA_DIR_ENV, None::<&str>),
+            ],
+            || {
+                let default = select_session_storage(None, None, None, temp.path()).unwrap();
+                assert_eq!(
+                    default.session_dir,
+                    crate::omp_session::session_dir_for_launch(temp.path(), None).unwrap()
+                );
+                assert!(default.session_file.is_none());
+                assert!(
+                    !default.explicit_session_dir,
+                    "OMP files the transcript in its own cwd bucket"
+                );
+
+                let redirected =
+                    select_session_storage(None, Some(&root), None, temp.path()).unwrap();
+                assert!(redirected.explicit_session_dir);
+                assert_eq!(redirected.session_dir, root);
+                assert!(redirected.session_file.is_none());
+                assert_eq!(fs::read_dir(&redirected.session_dir).unwrap().count(), 0);
+            },
+        );
     }
 
     #[test]
@@ -5856,7 +5954,17 @@ print(json.dumps({
         let lease_generation = "fresh-generation";
         let native_id = "native-fresh";
         let extension = temp.path().join("extension.ts");
-        let args = build_omp_helm_args(&storage.session_dir, None, &extension, None, None);
+        let config_overlay = temp.path().join("omp-helm-config.yml");
+        fs::write(&config_overlay, HELM_CONFIG_OVERLAY).unwrap();
+        let args = build_omp_helm_args(
+            &storage.session_dir,
+            storage.explicit_session_dir,
+            None,
+            &config_overlay,
+            &extension,
+            None,
+            None,
+        );
         let fresh = Command::new(&fake_omp)
             .args(args)
             .current_dir(&cwd)
@@ -5956,7 +6064,9 @@ print(json.dumps({
         let resumed = Command::new(&fake_omp)
             .args(build_omp_helm_args(
                 &storage.session_dir,
+                storage.explicit_session_dir,
                 Some(&source),
+                &config_overlay,
                 &extension,
                 None,
                 None,

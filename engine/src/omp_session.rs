@@ -683,9 +683,28 @@ pub fn deterministic_session_id(native_id: &str) -> String {
     .to_string()
 }
 
+/// Whether a launch must pass OMP's `--session-dir` explicitly.
+///
+/// OMP files a session under its canonical-cwd bucket (`<root>/<encoded-cwd>/
+/// <timestamp>_<id>.jsonl`) only while no session directory is supplied; an
+/// explicit directory makes it write the transcript flat into that directory,
+/// outside its own session picker's current-folder scope. Longhouse therefore
+/// leaves the choice to OMP unless Longhouse itself redirects the archive root,
+/// which only its own configuration knobs do.
+pub fn session_dir_flag_required(configured_session_dir: Option<&Path>) -> bool {
+    configured_session_dir.is_some()
+        || nonempty_env_path(OMP_SESSION_DIR_ENV).is_some()
+        || nonempty_env_path(OMP_DATA_DIR_ENV).is_some()
+}
+
 /// A unique, launch-scoped directory in OMP's selected archive root. OMP
 /// creates the native transcript itself; dropping this guard removes only an
 /// unused empty directory, never a provider-authored source.
+///
+/// The headless Console path (`omp_print`) stages a fresh transcript here, so
+/// its run owns a directory nothing else writes to. The interactive Helm path
+/// does not: it leaves OMP's own canonical-cwd bucket in charge of placement,
+/// and proves ownership from OMP's reported identity instead.
 pub struct FreshSessionDirectory {
     path: PathBuf,
 }
@@ -1503,38 +1522,26 @@ mod tests {
     }
 
     #[test]
-    fn fresh_session_directory_contains_only_provider_created_sources() {
-        let root = tempfile::tempdir().unwrap();
-        let empty_dir = {
-            let staging = FreshSessionDirectory::create(root.path()).unwrap();
-            assert!(staging.path().starts_with(root.path()));
-            assert_eq!(fs::read_dir(staging.path()).unwrap().count(), 0);
-            staging.path().to_path_buf()
-        };
-        assert!(!empty_dir.exists(), "unused staging directory is removed");
+    fn session_dir_flag_is_only_required_for_a_redirected_root() {
+        assert!(!session_dir_flag_required(None));
+        assert!(session_dir_flag_required(Some(Path::new(
+            "/tmp/omp-sessions"
+        ))));
+    }
 
-        let staging = FreshSessionDirectory::create(root.path()).unwrap();
-        let source = staging
-            .path()
-            .join("2026-10-06T10-00-00-000Z_native-id.jsonl");
+    #[test]
+    fn native_source_scope_follows_the_session_root() {
+        let root = tempfile::tempdir().unwrap();
+        let bucket = root.path().join("cwd-bucket");
+        fs::create_dir(&bucket).unwrap();
+        let source = bucket.join("2026-10-06T10-00-00-000Z_native-id.jsonl");
         fs::write(&source, format!("{}\n", session_line("native-id"))).unwrap();
         let header = verify_session_header(&source, "native-id", Some("/workspace")).unwrap();
         assert_eq!(header.native_id, "native-id");
         assert!(verify_session_header(&source, "other-id", Some("/workspace")).is_err());
         assert!(verify_session_header(&source, "native-id", Some("/elsewhere")).is_err());
         assert!(is_session_path(root.path(), &source));
-        let bucket = staging.path().join("cwd-bucket");
-        fs::create_dir(&bucket).unwrap();
-        let bucket_source = bucket.join("2026-10-06T10-00-00-000Z_bucket-native.jsonl");
-        fs::write(
-            &bucket_source,
-            format!("{}\n", session_line("bucket-native")),
-        )
-        .unwrap();
-        assert!(session_file_path_in_session_dir(
-            staging.path(),
-            &bucket_source
-        ));
+        assert!(session_file_path_in_session_dir(root.path(), &source));
     }
 
     #[test]
