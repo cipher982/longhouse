@@ -38,7 +38,6 @@ use crate::omp_helm_control::OMP_HELM_TRANSPORT;
 
 const STATE_DIR_NAME: &str = "managed-local/omp-helm";
 const EXTENSION_FILE_NAME: &str = "longhouse-omp-helm.ts";
-const HELM_CONFIG_OVERLAY_FILE_NAME: &str = "omp-helm-config.yml";
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(8);
 /// A Helm launch is not adopted until OMP binds its native session identity.
 /// Keep the wait bounded so a provider that never opens cannot leave a pending
@@ -2655,15 +2654,6 @@ fn write_extension_file(dir: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn write_config_overlay(dir: &Path) -> Result<PathBuf> {
-    fs::create_dir_all(dir)?;
-    set_private_dir(dir)?;
-    let path = dir.join(HELM_CONFIG_OVERLAY_FILE_NAME);
-    fs::write(&path, HELM_CONFIG_OVERLAY)?;
-    set_private_file(&path)?;
-    Ok(path)
-}
-
 fn registration_credentials(config: &LaunchConfig) -> Result<(String, String, String)> {
     let machine = home_state()?.join("machine");
     let state: Value = fs::read(machine.join("state.json"))
@@ -2877,14 +2867,6 @@ fn build_omp_helm_args(
     }
     args
 }
-
-/// A Helm launch supplies no session flag or directory, which is the only thing
-/// that otherwise pins OMP's `autoResume` setting. With `autoResume` on, a fresh
-/// launch would adopt the cwd's newest transcript instead of creating one, and
-/// the extension would report a session this launch never created. The overlay
-/// loads after global and project settings for this process only, so a Helm
-/// launch stays fresh and its bind is always to a transcript OMP just wrote.
-const HELM_CONFIG_OVERLAY: &str = "autoResume: false\n";
 
 /// Environment every Helm OMP launch carries. OMP's TTY onboarding wizard skips
 /// itself only when resuming, and a fresh launch passes no `--resume` (OMP 18.7
@@ -3246,7 +3228,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     });
     let extension_root = state_root.join("extensions").join(&session_id);
     let extension = write_extension_file(&extension_root)?;
-    let config_overlay = write_config_overlay(&extension_root)?;
+    let config_overlay = crate::omp_session::write_auto_resume_overlay(&extension_root)?;
     let mut command = Command::new(&binary);
     // A fresh launch lets OMP create its native session in this launch's
     // canonical-cwd bucket, with the overlay keeping a fresh launch fresh. A
@@ -3947,19 +3929,17 @@ mod tests {
         let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
-        let storage =
-            crate::omp_session::FreshSessionDirectory::create(&temp.path().join("sessions"))
-                .unwrap();
-        let source = storage
-            .path()
-            .join("2026-10-07T00-00-00-000Z_lazy-native.jsonl");
+        let storage = temp.path().join("sessions");
+        let bucket = storage.join("cwd-bucket");
+        fs::create_dir_all(&bucket).unwrap();
+        let source = bucket.join("2026-10-07T00-00-00-000Z_lazy-native.jsonl");
         temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
             let mut initial = state();
             initial.session_id = Uuid::new_v4().to_string();
             initial.run_id = Uuid::new_v4().to_string();
             initial.native_session_id.clear();
             initial.session_file.clear();
-            initial.session_dir = storage.path().display().to_string();
+            initial.session_dir = storage.display().to_string();
             initial.cwd = temp.path().display().to_string();
             initial.ready = false;
             initial.status = "starting".into();
@@ -5757,7 +5737,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("sessions");
         let extension = temp.path().join("extension.ts");
-        let overlay = write_config_overlay(&temp.path().join("overlay")).unwrap();
+        let overlay =
+            crate::omp_session::write_auto_resume_overlay(&temp.path().join("overlay")).unwrap();
         assert_eq!(
             fs::read_to_string(&overlay).unwrap(),
             "autoResume: false\n",
@@ -5860,6 +5841,7 @@ mod tests {
             [
                 (crate::omp_session::OMP_SESSION_DIR_ENV, None::<&str>),
                 (crate::omp_session::OMP_DATA_DIR_ENV, None::<&str>),
+                (crate::omp_session::OMP_CONFIG_DIR_ENV, None::<&str>),
             ],
             || {
                 let default = select_session_storage(None, None, None, temp.path()).unwrap();
@@ -5954,8 +5936,8 @@ print(json.dumps({
         let lease_generation = "fresh-generation";
         let native_id = "native-fresh";
         let extension = temp.path().join("extension.ts");
-        let config_overlay = temp.path().join("omp-helm-config.yml");
-        fs::write(&config_overlay, HELM_CONFIG_OVERLAY).unwrap();
+        let config_overlay =
+            crate::omp_session::write_auto_resume_overlay(&temp.path().join("overlay")).unwrap();
         let args = build_omp_helm_args(
             &storage.session_dir,
             storage.explicit_session_dir,

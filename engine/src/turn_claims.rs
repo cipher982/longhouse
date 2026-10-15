@@ -617,6 +617,9 @@ impl TurnClaimRegistry {
         claim.provider_identity_confirmed = false;
         claim.source_path = Some(source_path.to_string_lossy().into_owned());
         if let Some(result) = claim.result.as_mut().and_then(Value::as_object_mut) {
+            if let Some(parent) = source_path.parent() {
+                result.insert("session_dir".into(), serde_json::json!(parent));
+            }
             result.insert("session_file".into(), serde_json::json!(source_path));
         }
         claim.updated_at = Utc::now().to_rfc3339();

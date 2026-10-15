@@ -168,40 +168,41 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         Some(path) => path,
         None => crate::omp_session::session_dir_for_launch(&config.cwd, config.profile.as_deref())?,
     };
+    let explicit_session_dir =
+        crate::omp_session::session_dir_flag_required(config.session_dir.as_deref());
     let expected_provider_thread_id = config
         .resume_provider_thread_id
         .clone()
         .filter(|value| !value.trim().is_empty());
-    let (session_dir, mut session_file, fresh_directory) =
-        if let Some(path) = config.resume_session_file.clone() {
-            let expected = expected_provider_thread_id
-                .as_deref()
-                .context("OMP exact resume requires a native session id")?;
-            crate::omp_session::verify_exact_session_file(
-                &path,
-                expected,
-                Some(&config.cwd.display().to_string()),
-            )?;
-            let retained_dir = path
-                .parent()
-                .context("OMP exact resume file has no session directory")?;
-            anyhow::ensure!(
-                retained_dir.is_absolute(),
-                "OMP exact resume requires an absolute session directory"
-            );
-            crate::omp_session::ensure_session_dir_is_disjoint_from_pi(&config.cwd, retained_dir)?;
-            (retained_dir.to_path_buf(), Some(path), None)
-        } else {
-            anyhow::ensure!(
-                expected_provider_thread_id.is_none(),
-                "OMP native resume id has no exact session file"
-            );
-            crate::omp_session::ensure_session_dir_is_disjoint_from_pi(&config.cwd, &session_root)?;
-            std::fs::create_dir_all(&session_root)?;
-            set_private_dir(&session_root)?;
-            let fresh = crate::omp_session::FreshSessionDirectory::create(&session_root)?;
-            (fresh.path().to_path_buf(), None, Some(fresh))
-        };
+    let (mut session_dir, mut session_file) = if let Some(path) = config.resume_session_file.clone()
+    {
+        let expected = expected_provider_thread_id
+            .as_deref()
+            .context("OMP exact resume requires a native session id")?;
+        crate::omp_session::verify_exact_session_file(
+            &path,
+            expected,
+            Some(&config.cwd.display().to_string()),
+        )?;
+        let retained_dir = path
+            .parent()
+            .context("OMP exact resume file has no session directory")?;
+        anyhow::ensure!(
+            retained_dir.is_absolute(),
+            "OMP exact resume requires an absolute session directory"
+        );
+        crate::omp_session::ensure_session_dir_is_disjoint_from_pi(&config.cwd, retained_dir)?;
+        (retained_dir.to_path_buf(), Some(path))
+    } else {
+        anyhow::ensure!(
+            expected_provider_thread_id.is_none(),
+            "OMP native resume id has no exact session file"
+        );
+        crate::omp_session::ensure_session_dir_is_disjoint_from_pi(&config.cwd, &session_root)?;
+        std::fs::create_dir_all(&session_root)?;
+        set_private_dir(&session_root)?;
+        (session_root, None)
+    };
     let mut source_start_len = session_file
         .as_ref()
         .and_then(|path| std::fs::metadata(path).ok())
@@ -279,11 +280,13 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     let stdout_file = private_output_file(&stdout_path)?;
     let stderr_file = private_output_file(&stderr_path)?;
     let runtime_events_outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
+    let config_overlay = crate::omp_session::write_auto_resume_overlay(&run_dir)?;
     let args = build_omp_args(
         config.model.as_deref(),
         config.profile.as_deref(),
-        &session_dir,
+        explicit_session_dir.then_some(session_dir.as_path()),
         session_file.as_deref(),
+        Some(config_overlay.as_path()),
         omp_supports_no_ui(&config.omp_bin),
     );
     // RPC stdin: see `console_rpc`. The prompt and a later steer are written
@@ -486,7 +489,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         } else {
             anyhow::ensure!(
                 crate::omp_session::session_file_path_in_session_dir(&session_dir, &reported),
-                "OMP RPC source is outside its launch-scoped session directory"
+                "OMP RPC source is outside its launch session root"
             );
         }
         Ok(reported)
@@ -515,7 +518,11 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
             .map(|metadata| metadata.len())
             .unwrap_or(0);
     }
+    if let Some(parent) = exact_session_file.parent() {
+        session_dir = parent.to_path_buf();
+    }
     session_file = Some(exact_session_file.clone());
+    sink.session_dir = session_dir.clone();
     sink.session_file = exact_session_file.clone();
     sink.source_start_len = source_start_len;
     sink.provider_thread_id = Some(provider_thread_id.clone());
@@ -591,9 +598,6 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     #[cfg(test)]
     let test_monitor_launch_id = launch_id.clone();
     let monitor_task = tokio::spawn(async move {
-        // The source directory remains execution-owned while OMP's JSONL is
-        // still lazy; returning the launch summary must not remove it.
-        let _fresh_directory = fresh_directory;
         monitor_omp_print(
             &mut child,
             &monitor_stderr_path,
@@ -2683,8 +2687,9 @@ fn help_advertises_no_ui(help: &str) -> bool {
 pub fn build_omp_args(
     model: Option<&str>,
     profile: Option<&str>,
-    session_dir: &Path,
+    session_dir: Option<&Path>,
     session_file: Option<&Path>,
+    config_overlay: Option<&Path>,
     headless_extensions: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
@@ -2692,16 +2697,24 @@ pub fn build_omp_args(
         // Extensions run headless: no extension_ui_request dialogs for a host.
         args.push("--no-ui".into());
     }
-    args.extend([
-        "--session-dir".into(),
-        session_dir.to_string_lossy().into_owned(),
-    ]);
+    if let Some(session_dir) = session_dir {
+        args.extend([
+            "--session-dir".into(),
+            session_dir.to_string_lossy().into_owned(),
+        ]);
+    }
     if let Some(session_file) = session_file {
         args.extend([
             "--resume".into(),
             session_file.to_string_lossy().into_owned(),
         ]);
         args.push("--continue".into());
+    }
+    if let Some(config_overlay) = config_overlay {
+        args.extend([
+            "--config".into(),
+            config_overlay.to_string_lossy().into_owned(),
+        ]);
     }
     if let Some(profile) = profile.map(str::trim).filter(|value| !value.is_empty()) {
         args.extend(["--profile".into(), profile.into()]);
@@ -3930,15 +3943,17 @@ mod tests {
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {
             std::env::set_var("LONGHOUSE_HOME", temp.path().join("longhouse"));
+            std::env::remove_var(crate::omp_session::OMP_SESSION_DIR_ENV);
+            std::env::remove_var(crate::omp_session::OMP_DATA_DIR_ENV);
+            std::env::remove_var(crate::omp_session::OMP_CONFIG_DIR_ENV);
         }
         let omp_bin = std::env::var("LONGHOUSE_OMP_BIN").unwrap_or_else(|_| "omp".to_string());
         let model = std::env::var("LONGHOUSE_OMP_CANARY_MODEL")
-            .unwrap_or_else(|_| "gpt-6-luna".to_string());
+            .unwrap_or_else(|_| "openrouter/deepseek/deepseek-v4.1-flash".to_string());
         let marker = format!("LH_OMP_CONSOLE_{}", Uuid::new_v4().simple());
         let session_id = Uuid::new_v4().to_string();
         let thread_id = Uuid::new_v4().to_string();
-        let session_dir = temp.path().join("omp-sessions");
-
+        let session_root = crate::omp_session::session_dir_for_launch(temp.path(), None).unwrap();
         struct Turn {
             summary: OmpPrintRunSummary,
             provider_thread_id: String,
@@ -3949,7 +3964,7 @@ mod tests {
             omp_bin: &str,
             model: &str,
             cwd: &Path,
-            session_dir: &Path,
+            session_dir: Option<&Path>,
             session_id: &str,
             thread_id: &str,
             prompt: String,
@@ -3988,7 +4003,7 @@ mod tests {
                 image_paths: Vec::new(),
                 model: Some(model.to_string()),
                 profile: None,
-                session_dir: Some(session_dir.to_path_buf()),
+                session_dir: session_dir.map(Path::to_path_buf),
                 resume_provider_thread_id,
                 resume_session_file,
                 permission_mode: "provider_local".to_string(),
@@ -4033,7 +4048,7 @@ mod tests {
             &omp_bin,
             &model,
             temp.path(),
-            &session_dir,
+            None,
             &session_id,
             &thread_id,
             format!("Remember {marker}. Reply with exactly {marker} and nothing else. Do not use tools."),
@@ -4053,11 +4068,26 @@ mod tests {
             "fresh Console launch must let OMP create its native session"
         );
         assert!(
-            crate::omp_session::session_file_path_in_session_dir(
-                Path::new(&first.summary.session_dir),
-                &first_file,
-            ),
-            "fresh OMP source must remain inside its launch-scoped directory"
+            !first
+                .summary
+                .argv
+                .iter()
+                .any(|argument| argument == "--session-dir"),
+            "unredirected Console launch must let OMP file in its canonical-cwd bucket"
+        );
+        assert!(
+            crate::omp_session::session_file_path_in_session_dir(&session_root, &first_file),
+            "fresh OMP source must live in a bucket under the archive root"
+        );
+        assert_eq!(
+            first_file.parent(),
+            Some(Path::new(&first.summary.session_dir)),
+            "summary session_dir narrows to the canonical-cwd bucket"
+        );
+        assert_ne!(
+            Path::new(&first.summary.session_dir),
+            session_root.as_path(),
+            "transcript must be inside the cwd bucket, not flat in the root"
         );
         let workspace = temp.path().display().to_string();
         crate::omp_session::verify_exact_session_file(
@@ -4071,7 +4101,7 @@ mod tests {
             &omp_bin,
             &model,
             temp.path(),
-            &session_dir,
+            None,
             &session_id,
             &thread_id,
             "Reply with exactly the marker from the previous turn and nothing else. Do not use tools."
@@ -4105,6 +4135,7 @@ mod tests {
             )
             .await;
         }
+        let _ = std::fs::remove_dir_all(&first.summary.session_dir);
         match previous_home {
             Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },
             None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
@@ -4133,11 +4164,13 @@ mod tests {
     };
     #[test]
     fn stock_omp_console_builds_rpc_args_for_exact_resume() {
+        let overlay = Path::new("/run/omp-helm-config.yml");
         let args = build_omp_args(
             Some("gpt-5.2"),
             Some("work"),
-            Path::new("/sessions"),
+            Some(Path::new("/sessions")),
             Some(Path::new("/sessions/exact.jsonl")),
+            Some(overlay),
             true,
         );
         assert_eq!(
@@ -4151,6 +4184,8 @@ mod tests {
                 "--resume",
                 "/sessions/exact.jsonl",
                 "--continue",
+                "--config",
+                "/run/omp-helm-config.yml",
                 "--profile",
                 "work",
                 "--model",
@@ -4165,6 +4200,18 @@ mod tests {
             arg.as_str(),
             "--no-tools" | "--no-extensions" | "--no-skills"
         )));
+
+        let default_fresh = build_omp_args(None, None, None, None, Some(overlay), true);
+        assert_eq!(
+            default_fresh,
+            vec![
+                "--mode",
+                "rpc",
+                "--no-ui",
+                "--config",
+                "/run/omp-helm-config.yml"
+            ]
+        );
     }
 
     #[test]
@@ -4492,7 +4539,6 @@ if "--version" in args:
     print("18.7.0")
     sys.exit(0)
 
-session_dir = args[args.index("--session-dir") + 1]
 if "--resume" in args:
     source = args[args.index("--resume") + 1]
     if not os.path.isfile(source) or os.path.getsize(source) == 0:
@@ -4505,6 +4551,20 @@ if "--resume" in args:
         sys.exit(24)
     native_id = session_header["id"]
 else:
+    if "--session-dir" in args:
+        session_dir = args[args.index("--session-dir") + 1]
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME") or os.path.join(os.environ.get("HOME", "/tmp"), ".local", "share")
+        omp_data = os.path.join(xdg, "omp")
+        profile = args[args.index("--profile") + 1] if "--profile" in args else os.environ.get("OMP_PROFILE", "")
+        if os.path.isdir(omp_data):
+            root = os.path.join(omp_data, "profiles", profile, "sessions") if profile else os.path.join(omp_data, "sessions")
+        else:
+            home_omp = os.path.join(os.environ.get("HOME", "/tmp"), ".omp")
+            root = os.path.join(home_omp, "profiles", profile, "agent", "sessions") if profile else os.path.join(home_omp, "agent", "sessions")
+        bucket = "--" + os.path.realpath(os.getcwd()).strip("/").replace("/", "-") + "--"
+        session_dir = os.path.join(root, bucket)
+        os.makedirs(session_dir, exist_ok=True)
     native_id = str(uuid.uuid4())
     source = os.path.join(
         session_dir,
@@ -5798,12 +5858,19 @@ for line in sys.stdin:
         let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        let previous_user_home = std::env::var_os("HOME");
+        let previous_xdg = std::env::var_os("XDG_DATA_HOME");
         unsafe {
             std::env::set_var("LONGHOUSE_HOME", temp.path().join("longhouse"));
+            std::env::set_var("HOME", temp.path());
+            std::env::remove_var("XDG_DATA_HOME");
+            std::env::remove_var(crate::omp_session::OMP_SESSION_DIR_ENV);
+            std::env::remove_var(crate::omp_session::OMP_DATA_DIR_ENV);
+            std::env::remove_var(crate::omp_session::OMP_CONFIG_DIR_ENV);
         }
         let fake_omp = temp.path().join("omp");
         write_fake_omp(&fake_omp);
-        let session_dir = temp.path().join("omp-sessions");
+        let expected_root = temp.path().join(".omp/profiles/work/agent/sessions");
         let local_db_path = temp.path().join("agent.db");
         let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -5829,7 +5896,7 @@ for line in sys.stdin:
             image_paths: Vec::new(),
             model: Some("gpt-5.2".into()),
             profile: Some("work".into()),
-            session_dir: Some(session_dir.clone()),
+            session_dir: None,
             resume_provider_thread_id: None,
             resume_session_file: None,
             permission_mode: "provider_local".into(),
@@ -5844,6 +5911,29 @@ for line in sys.stdin:
         assert!(
             !first.argv.iter().any(|argument| argument == "--resume"),
             "a fresh Console session must use native provider creation"
+        );
+        assert!(
+            !first
+                .argv
+                .iter()
+                .any(|argument| argument == "--session-dir"),
+            "an unredirected Console launch must leave the cwd bucket to OMP: {:?}",
+            first.argv
+        );
+        assert!(
+            first.argv.iter().any(|argument| argument == "--config"),
+            "a Console launch must pin autoResume off via --config: {:?}",
+            first.argv
+        );
+        assert!(
+            Path::new(&first.session_file).starts_with(&expected_root),
+            "transcript must live under the profile archive root: {}",
+            first.session_file
+        );
+        assert_ne!(
+            Path::new(&first.session_dir),
+            expected_root.as_path(),
+            "session_dir narrows to the canonical-cwd bucket inside the archive root"
         );
         let first_claim = wait_for_terminal(&first_run).await;
         wait_for_process_group_exit(first.process_group_id.unwrap()).await;
@@ -5908,7 +5998,7 @@ for line in sys.stdin:
             image_paths: Vec::new(),
             model: Some("gpt-5.2".into()),
             profile: Some("work".into()),
-            session_dir: Some(session_dir.clone()),
+            session_dir: None,
             resume_provider_thread_id: Some(native_id.clone()),
             resume_session_file: Some(PathBuf::from(&first.session_file)),
             permission_mode: "provider_local".into(),
@@ -5929,6 +6019,14 @@ for line in sys.stdin:
             second.provider_thread_id.as_deref(),
             Some(native_id.as_str())
         );
+        assert!(
+            !second
+                .argv
+                .iter()
+                .any(|argument| argument == "--session-dir"),
+            "an unredirected Console resume must omit --session-dir: {:?}",
+            second.argv
+        );
         assert!(second
             .argv
             .windows(2)
@@ -5937,6 +6035,16 @@ for line in sys.stdin:
         assert_eq!(source.matches("OMP_FIRST").count(), 2);
         assert_eq!(source.matches("OMP_SECOND").count(), 2);
 
+        if let Some(home) = previous_user_home {
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+        }
+        if let Some(xdg) = previous_xdg {
+            unsafe {
+                std::env::set_var("XDG_DATA_HOME", xdg);
+            }
+        }
         if let Some(home) = previous_home {
             unsafe {
                 std::env::set_var("LONGHOUSE_HOME", home);

@@ -18,7 +18,8 @@ pub const OMP_DATA_DIR_ENV: &str = "LONGHOUSE_OMP_DATA_DIR";
 pub const OMP_SESSION_DIR_ENV: &str = "LONGHOUSE_OMP_SESSION_DIR";
 pub const OMP_SESSION_DIR_NAME: &str = "sessions";
 const OMP_DATA_DIR_NAME: &str = "omp";
-const OMP_CONFIG_DIR_ENV: &str = "LONGHOUSE_OMP_CONFIG_DIR";
+pub const OMP_CONFIG_DIR_ENV: &str = "LONGHOUSE_OMP_CONFIG_DIR";
+const AUTO_RESUME_OVERLAY_FILE_NAME: &str = "omp-helm-config.yml";
 const OMP_PROFILE_ENV: &str = "OMP_PROFILE";
 const MAX_HEADER_SCAN_BYTES: u64 = 1024 * 1024;
 const MAX_RECORD_BYTES: usize = 8 * 1024 * 1024;
@@ -695,57 +696,31 @@ pub fn session_dir_flag_required(configured_session_dir: Option<&Path>) -> bool 
     configured_session_dir.is_some()
         || nonempty_env_path(OMP_SESSION_DIR_ENV).is_some()
         || nonempty_env_path(OMP_DATA_DIR_ENV).is_some()
+        || nonempty_env_path(OMP_CONFIG_DIR_ENV).is_some()
 }
 
-/// A unique, launch-scoped directory in OMP's selected archive root. OMP
-/// creates the native transcript itself; dropping this guard removes only an
-/// unused empty directory, never a provider-authored source.
-///
-/// The headless Console path (`omp_print`) stages a fresh transcript here, so
-/// its run owns a directory nothing else writes to. The interactive Helm path
-/// does not: it leaves OMP's own canonical-cwd bucket in charge of placement,
-/// and proves ownership from OMP's reported identity instead.
-pub struct FreshSessionDirectory {
-    path: PathBuf,
-}
+/// Both interactive Helm launches and headless Console (`--mode rpc`) runs omit
+/// `--session-dir` so OMP files the transcript in its canonical-cwd bucket.
+/// Without that flag or `--resume`, OMP's `autoResume` setting adopts the cwd's
+/// newest transcript instead of creating one. Passing this overlay via
+/// `--config` pins `autoResume: false` for the launched process only.
+pub const AUTO_RESUME_OVERLAY: &str = "autoResume: false\n";
 
-impl FreshSessionDirectory {
-    pub fn create(session_root: &Path) -> Result<Self> {
-        if !session_root.is_absolute() {
-            bail!("OMP session directory must be absolute");
-        }
-        fs::create_dir_all(session_root).with_context(|| {
-            format!("creating OMP session directory: {}", session_root.display())
-        })?;
-        for _ in 0..8 {
-            let path = session_root.join(format!("longhouse-{}", Uuid::new_v4()));
-            match fs::create_dir(&path) {
-                Ok(()) => {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
-                    }
-                    return Ok(Self { path });
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error.into()),
-            }
-        }
-        bail!("unable to create a unique OMP session directory")
+pub fn write_auto_resume_overlay(dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
     }
-
-    pub fn path(&self) -> &Path {
-        &self.path
+    let path = dir.join(AUTO_RESUME_OVERLAY_FILE_NAME);
+    fs::write(&path, AUTO_RESUME_OVERLAY)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     }
-}
-
-impl Drop for FreshSessionDirectory {
-    fn drop(&mut self) {
-        // The directory is intentionally retained once OMP has created its
-        // transcript. Only remove an unused staging directory.
-        let _ = fs::remove_dir(&self.path);
-    }
+    Ok(path)
 }
 
 /// Compare workspace identities after resolving harmless symlink aliases.
@@ -1057,9 +1032,12 @@ fn bind_discovered_source_with_state(
             .flatten()
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        let exact_source = claim
+        let recorded_source = claim
             .source_path
             .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let exact_source = recorded_source
             .and_then(|source| normalized_source_path(Path::new(source)).ok())
             .is_some_and(|source| source == path);
         let in_session_dir = claim
@@ -1083,7 +1061,7 @@ fn bind_discovered_source_with_state(
                 None if active => pending = true,
                 _ => {}
             }
-        } else if native_id.is_none() && in_session_dir && active {
+        } else if recorded_source.is_none() && native_id.is_none() && in_session_dir && active {
             pending = true;
         }
     }
@@ -1523,10 +1501,20 @@ mod tests {
 
     #[test]
     fn session_dir_flag_is_only_required_for_a_redirected_root() {
-        assert!(!session_dir_flag_required(None));
-        assert!(session_dir_flag_required(Some(Path::new(
-            "/tmp/omp-sessions"
-        ))));
+        let _guard = crate::console_adapter::agent_state_guard();
+        temp_env::with_vars(
+            [
+                (OMP_SESSION_DIR_ENV, None::<&str>),
+                (OMP_DATA_DIR_ENV, None::<&str>),
+                (OMP_CONFIG_DIR_ENV, None::<&str>),
+            ],
+            || {
+                assert!(!session_dir_flag_required(None));
+                assert!(session_dir_flag_required(Some(Path::new(
+                    "/tmp/omp-sessions"
+                ))));
+            },
+        );
     }
 
     #[test]

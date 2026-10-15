@@ -58,6 +58,8 @@ struct OmpHelmStateFile {
     session_dir: Option<String>,
     #[serde(default)]
     ready: bool,
+    #[serde(default)]
+    pending_transition: bool,
 }
 
 /// Resolve a launch-scoped source before the claim projector reaches the DB.
@@ -158,7 +160,26 @@ fn source_ownership_in(
                 Some("starting" | "running" | "ready" | "degraded" | "switching")
             )
         {
-            pending = true;
+            // Once a Helm launch has named its transcript (and is not mid-switch),
+            // it is pending only on that transcript, never on every sibling session
+            // in the shared archive root.
+            let switching =
+                state.pending_transition || state.status.as_deref() == Some("switching");
+            let claimed_elsewhere = claim
+                .filter(|claim| {
+                    claim.provider == "omp"
+                        && claim.state != crate::managed_source_claim::ClaimState::Released
+                })
+                .is_some_and(|claim| stable(Path::new(&claim.source_path)) != stable_path);
+            let recorded_elsewhere = state
+                .session_file
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_some_and(|recorded| stable(Path::new(recorded)) != stable_path);
+            if switching || (!claimed_elsewhere && !recorded_elsewhere) {
+                pending = true;
+            }
         }
     }
     Ok(if let Some(owner) = owner {
@@ -561,6 +582,21 @@ mod tests {
             assert_eq!(
                 source_ownership_in(&state_dir, &source).unwrap(),
                 crate::omp_session::SourceOwnership::Managed(session_id)
+            );
+            // A sibling transcript in the same archive root is not held pending by
+            // a launch that has already bound its own transcript.
+            state["session_file"] = serde_json::json!(source);
+            fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+            fs::remove_file(state_dir.join(format!("{stale_session}.json"))).unwrap();
+            let sibling = session_dir.join("2026-10-06T10-01-00-000Z_sibling.jsonl");
+            fs::write(
+                &sibling,
+                "{\"type\":\"session\",\"version\":3,\"id\":\"sibling\",\"cwd\":\"/workspace\"}\n",
+            )
+            .unwrap();
+            assert_eq!(
+                source_ownership_in(&state_dir, &sibling).unwrap(),
+                crate::omp_session::SourceOwnership::Unclaimed
             );
         });
     }
