@@ -44,7 +44,7 @@ prune_stale_mirrors() {
     for dir in \"\$HOME\"/bench/*/; do \
       dir=\${dir%/}; [ \"\$dir\" = \"\$HOME/\$mirror\" ] && continue; \
       stamp=\$dir/.bench-used; [ -e \"\$stamp\" ] || stamp=\$dir; \
-      age=\$(( (now - \$(stat -f %m \"\$stamp\")) / 86400 )); \
+      mtime=\$(stat -c %Y \"\$stamp\" 2>/dev/null || stat -f %m \"\$stamp\"); age=\$(( (now - mtime) / 86400 )); \
       if [ \"\$age\" -ge \"\$days\" ]; then echo \"bench: pruned \$dir (\$age days unused)\" >&2; rm -r \"\$dir\"; fi; \
     done" || true
 }
