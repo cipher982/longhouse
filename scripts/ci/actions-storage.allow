@@ -1,10 +1,3 @@
 # Uses of GitHub Actions artifact/cache storage that remain, one per line:
 #   <file> <pattern>
-# See scripts/ci/check-actions-storage.py. This list only shrinks.
-
-# `make test-ios`, `make ios-previews`, `make ios-ui-shot` and `make simlab-run` dispatch to
-# a hosted macOS VM, which cannot reach the receipt store, and hand the dispatcher its
-# screenshots and verdicts. A one-day result for a person at a workstation, not a record:
-# scripts/qa/native-test-isolation.py downloads it by request id.
-.github/workflows/native-test-isolation.yml upload-artifact
-scripts/qa/native-test-isolation.py gh-run-download
+# See scripts/ci/check-actions-storage.py. This list only shrinks. It is empty.

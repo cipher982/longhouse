@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Recognize a live isolated invocation, not a stale global marker.
 
-The container or hosted VM is the isolation boundary. This private child-only
-record prevents ordinary host commands from accidentally bypassing dispatch.
+The container, the GitHub-hosted VM or the wisp bench runner is the isolation boundary.
+This private child-only record prevents ordinary host commands from accidentally
+bypassing dispatch.
 """
 
 from __future__ import annotations
@@ -16,14 +17,23 @@ from collections.abc import MutableMapping
 from pathlib import Path
 
 
+# The one Mac that is a fixture machine rather than a person's login: the iOS bench.
+BENCH_RUNNER_NAME = "wisp"
+
+
+def native_runner() -> bool:
+    """A macOS Actions job on GitHub's hosted VM or on the bench runner, never a developer login."""
+    if sys.platform != "darwin" or os.environ.get("GITHUB_ACTIONS") != "true":
+        return False
+    environment = os.environ.get("RUNNER_ENVIRONMENT")
+    return environment == "github-hosted" or (
+        environment == "self-hosted" and os.environ.get("RUNNER_NAME") == BENCH_RUNNER_NAME
+    )
+
+
 def create_boundary(root: Path, environment: MutableMapping[str, str]) -> None:
     container = sys.platform == "linux" and Path("/.dockerenv").is_file()
-    native = (
-        sys.platform == "darwin"
-        and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
-        and os.environ.get("GITHUB_ACTIONS") == "true"
-    )
-    if not (container or native):
+    if not (container or native_runner()):
         raise RuntimeError("test boundaries can only be created in an isolated worker")
     token = secrets.token_hex(32)
     path = root / f"boundary-{token}.json"

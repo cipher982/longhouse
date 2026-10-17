@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Run native fixture tests only inside an ephemeral GitHub-hosted macOS VM."""
+"""Run native fixture tests only on a native runner: a GitHub-hosted macOS VM or the wisp bench."""
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import shutil
@@ -13,7 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from test_boundary import boundary_active, create_boundary
+from test_boundary import boundary_active, create_boundary, native_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGETS = {
@@ -47,19 +48,31 @@ OPTIONS = {
 }
 
 
+BENCH_LOCK = "/tmp/longhouse-bench.lock"
+_bench_lock_handle = None
+
+
+def hold_bench_lock() -> None:
+    """Take the lock `bench.sh` runs under: wisp has 8 GB and one simulator, so one job at a time.
+
+    The lock lasts until this process exits.
+    """
+    global _bench_lock_handle
+    _bench_lock_handle = open(BENCH_LOCK, "a")
+    fcntl.flock(_bench_lock_handle, fcntl.LOCK_EX)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True, choices=sorted(TARGETS))
     args = parser.parse_args()
-    if (
-        sys.platform != "darwin"
-        or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"
-        or os.environ.get("GITHUB_ACTIONS") != "true"
-        or boundary_active()
-    ):
+    if not native_runner() or boundary_active():
         parser.error(
-            "native tests require a fresh GitHub-hosted macOS VM; never the developer login"
+            "native tests require a GitHub-hosted macOS VM or the wisp bench runner; never the developer login"
         )
+    hosted = os.environ["RUNNER_ENVIRONMENT"] == "github-hosted"
+    if not hosted:
+        hold_bench_lock()
     options = json.loads(os.environ.get("NATIVE_OPTIONS_JSON", "{}"))
     if not isinstance(options, dict) or any(
         key not in OPTIONS or not isinstance(value, str)
@@ -148,8 +161,8 @@ def main() -> int:
         "source_sha": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
-        "lane": "github-standard-macos",
-        "network": "github-hosted",
+        "lane": "github-standard-macos" if hosted else "wisp-macos",
+        "network": "github-hosted" if hosted else "wisp",
         "cleanup": False,
     }
 
@@ -262,8 +275,17 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 os.killpg(child.pid, signal.SIGKILL)
                 child.wait()
-        # No host files or GUI resources are shared with this VM. The hosted runner
-        # lifetime is the final descendant/simulator cleanup boundary, even on SIGKILL.
+        # A hosted VM is discarded after the job, which ends every descendant and simulator even
+        # on SIGKILL. Wisp is not, so shut down and delete the simulators this run created in its
+        # scratch HOME (its own device set) before the scratch is removed.
+        for simctl in ("shutdown", "delete"):
+            subprocess.run(
+                ["xcrun", "simctl", simctl, "all"],
+                env=environment,
+                check=False,
+                timeout=120,
+                capture_output=True,
+            )
         try:
             for name, source in (
                 ("native", scratch / "artifacts"),

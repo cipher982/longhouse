@@ -9,8 +9,8 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
 - Always use Make targets. Never run pytest/bun/playwright directly.
 - `test*`, `validate*`, `qa-*`, `provider-*`, `ci-*` and the other goals in
   `ISOLATED_GOALS` (top of the Makefile) never run on the host: they dispatch to
-  a disposable Docker container, or for native iOS/macOS targets to a hosted macOS
-  VM (below). Receipts and collected files land under
+  a disposable Docker container, or for native iOS/macOS targets to the wisp bench
+  runner (below). Receipts and collected files land under
   `artifacts/test-isolation/<run-id>/`. Run them on their own, never in the same
   `make` invocation as a host goal such as `dev` or `ship`.
 - One heavy build at a time on this Mac (cargo, Docker, xcodebuild, release
@@ -93,18 +93,17 @@ make test-full           # test, frontend, runner, engine, shipper E2E, E2E
 ## The iOS lane is a dispatch, not a local run
 
 `make test-ios`, `make ios-previews`, `make ios-ui-shot`, `make simlab-run` and
-`make menubar-harness` submit the work to a fresh GitHub-hosted macOS VM. They need an **authenticated `gh` on the machine
-that runs them** (repo visibility, pushed-SHA proof, submission, run
-reconciliation) and a **clean, pushed revision**; an uncommitted worktree is
+`make menubar-harness` submit the work to the wisp bench runner (a self-hosted Actions runner on the bench Mac, one
+job at a time under the bench lock, in a scratch HOME). They need an **authenticated `gh` on the machine
+that runs them** (pushed-SHA proof, submission, run reconciliation) and ssh to `wisp`, which the
+evidence comes back over and a **clean, pushed revision**; an uncommitted worktree is
 refused by design, and there is no local native fallback for fixtures.
 
-- Run dispatched targets from the laptop, which holds the `gh` auth, or from the
-  bench once its credential file is provisioned: `bench.sh` loads
-  `~/.config/longhouse/bench.env` on that host when it exists (a GitHub
-  credential; rotate by rewriting the file). The
-  bench is otherwise for the lanes that build and boot locally: `sim.sh`,
-  `simlab.py up/run`, `phone.sh`.
-- A dispatched run's own `head_sha` is `main` while the VM checks out your
+- Run dispatched targets from the laptop, which holds the `gh` auth. Never through
+  `bench.sh`: that command holds the bench lock the dispatched job waits for on the same
+  Mac, so the dispatcher refuses it. The bench is for the lanes that build and boot locally:
+  `sim.sh`, `simlab.py up/run`, `phone.sh`.
+- A dispatched run's own `head_sha` is `main` while wisp checks out your
   `source_sha`. Read the `source=<sha>` line the dispatcher prints, not the run's
   SHA, when asking what was tested.
 - CI splits the merge gate over two class-split lanes with `IOS_TEST_SCHEMES` /
@@ -114,7 +113,7 @@ refused by design, and there is no local native fallback for fixtures.
   `scripts/tests/ios-test-lanes.test.py` (run by `make test-ios-helper`) fails when
   the lanes stop covering the merge gate. `make test-ios IOS_TEST_FILTER=...`
   runs part of it and says so (`PARTIAL run`); only the unfiltered run is the gate.
-- Hermetic unit tests do not need the VM: `make ios-unit` runs them on a local
+- Hermetic unit tests do not need the dispatch: `make ios-unit` runs them on a local
   simulator in ~35s of tests (~80s cold). It is a host development goal beside
   `sim-deploy` and `phone-deploy`, and an iteration loop, not the gate -- the
   dispatched lane above owns the merge and also runs the smoke scheme and the

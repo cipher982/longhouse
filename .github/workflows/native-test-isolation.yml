@@ -43,8 +43,10 @@ permissions:
 
 jobs:
   native:
-    # Standard public-repository runners: no billed larger runner or self-hosted Mac.
-    runs-on: macos-15
+    # The wisp bench Mac (a MacBook Neo that is a fixture machine, not a login): hosted macOS is
+    # metered 10x for a private repository. Jobs run one at a time under the bench lock, in a
+    # scratch HOME; scripts/qa/native-test-bootstrap.py refuses any other runner.
+    runs-on: wisp
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -72,11 +74,13 @@ jobs:
           NATIVE_TARGET: ${{ inputs.target }}
           NATIVE_OPTIONS_JSON: ${{ inputs.options_json }}
         run: python3 scripts/qa/native-test-bootstrap.py --target "$NATIVE_TARGET"
-      - name: Upload isolated evidence
+      - name: Keep isolated evidence on the runner
+        # The dispatcher (scripts/qa/native-test-isolation.py) copies this directory back over ssh.
+        # It is evidence about one run, so it stays on the machine that ran it, in /tmp, which
+        # macOS ages out by itself.
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-isolation-${{ inputs.request_id }}
-          path: ${{ runner.temp }}/native-isolation-evidence
-          if-no-files-found: ignore
-          retention-days: 1
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: |
+          mkdir -p "/tmp/longhouse-native-evidence/$REQUEST_ID"
+          cp -R "$RUNNER_TEMP/native-isolation-evidence/." "/tmp/longhouse-native-evidence/$REQUEST_ID/" || true

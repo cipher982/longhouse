@@ -26,12 +26,12 @@ shown to you. Use it.
 | Every menu opened, at every size | `make ui-sweep` (`ONLY=`, `JOBS=`); CI runs it as "UI popover sweep" | Here, ~5 min | Fails when any menu, popover or dialog lands off-screen, covered or clipped; each frame's `<page>-popovers.json` lists what opened. `ui-capture ... --sweep` (with `SWEEP_SHOTS=1` for a PNG per opened overlay) checks one scene. A new popup or scene needs no new test, but a control that only exists in one session mode needs a fixture scene (as `session-console` does for the model chip) |
 
 **Dispatched targets** (`ios-previews`, `ios-ui-shot`, `simlab-run`, `test-ios`,
-`menubar-harness`) run in a fresh GitHub-hosted macOS VM and refuse a dirty or
+`menubar-harness`) run on the wisp bench runner and refuse a dirty or
 unpushed worktree: commit and push first, from a host with an authenticated `gh`
-(the laptop, or the bench once its credential file is provisioned). The dispatcher
-prints the run URL and a `source=<sha>` line, and downloads the VM's `artifacts/`
-tree to `artifacts/test-isolation/<id>/evidence/<target>/project/` (CI keeps the
-artifact one day). Nothing in this skill's PNG paths below exists locally for a
+and ssh to wisp (the laptop; not through `bench.sh`, which holds the lock the job waits for). The dispatcher
+prints the run URL and a `source=<sha>` line, and copies the run's `artifacts/`
+tree from wisp to `artifacts/test-isolation/<id>/evidence/<target>/project/` (wisp keeps it
+in /tmp until macOS ages it out). Nothing in this skill's PNG paths below exists locally for a
 dispatched target until that download lands.
 
 Look at more than one when the change spans surfaces. The simulator shot

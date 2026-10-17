@@ -102,11 +102,10 @@ jobs:
 
   perf-soak-macos:
     name: "macOS engine and Desktop soak"
-    runs-on: macos-15
+    runs-on: wisp
     timeout-minutes: 45
-    # By hand only while the repository is private: hosted macOS minutes are metered
-    # 10x, and a hosted macOS runner cannot reach the receipt store, so this soak
-    # reports no baseline (its summary says so).
+    # By hand only: a steady-state soak is a measurement, and wisp is shared with the iOS lanes.
+    # The soak reports no baseline (its summary says so): the receipt store holds Linux baselines only.
     if: ${{ github.repository == 'cipher982/longhouse' && github.event_name == 'workflow_dispatch' }}
     env:
       PERF_SOAK_OUTPUT: artifacts/perf-proof/perf-soak-macos-${{ github.sha }}.json

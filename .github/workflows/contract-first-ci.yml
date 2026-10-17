@@ -443,8 +443,11 @@ jobs:
   ios-tests:
     needs: changes
     if: ${{ needs.changes.outputs.ios == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: macos-latest
-    # One VM ran both merge schemes back to back: 10 to 25 minutes depending on
+    # The wisp bench Mac: hosted macOS is metered 10x for a private repository. The runner takes
+    # one job at a time, so the two lanes below run back to back. Measured on wisp, warm: compile
+    # 31 s, unit 32 s, all 35 UI tests 398 s.
+    runs-on: wisp
+    # One hosted VM ran both merge schemes back to back: 10 to 25 minutes depending on
     # the hosted VM (measured 2026-09-20..29: 106 successes, median 17.7 min, max
     # 24.8). Two lanes: the unit scheme plus the small UI test classes, and
     # SessionChatUITests (26 of the 35 enabled UI tests, about 75% of their time) by itself.
@@ -489,7 +492,7 @@ jobs:
       - name: Check these lanes cover the merge gate
         run: python3 scripts/tests/ios-test-lanes.test.py
 
-      - name: Run iOS fixture in the isolated GitHub-hosted macOS VM
+      - name: Run iOS fixture on the wisp bench runner
         env:
           NATIVE_OPTIONS_JSON: >-
             {"IOS_TEST_SCHEMES": "${{ matrix.schemes }}", "IOS_TEST_FILTER": "${{ matrix.filter }}"}

@@ -62,12 +62,10 @@ cmd_sync() {
 # the bench lock with its output locations in the environment. Its exit code
 # lands in $out/exit so a detached job can be collected later.
 #
-# The bench loads its own dispatch credential when one is provisioned: the
-# native dispatcher needs an authenticated gh (repo visibility, pushed-SHA
-# proof, workflow submission, run reconciliation) and the bench has no
-# interactive login. Keeping it in a host-local file rather than the repo keeps
-# the source provider-agnostic; a host without the file still runs every lane
-# that does not dispatch.
+# The bench loads its own credential file when one is provisioned, for commands
+# that need an authenticated gh. The native dispatcher is not one of them: it
+# submits to a job on this same Mac that waits for the lock this command holds,
+# so it refuses to run under bench.sh (dispatch from the workstation).
 remote_job() {
   local out="$1"; shift
   printf '%s' "mkdir -p '$out' && cd '$REMOTE_DIR' && \

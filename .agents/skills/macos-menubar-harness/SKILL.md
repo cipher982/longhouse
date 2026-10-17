@@ -23,9 +23,9 @@ For menu bar/dashboard information architecture work, treat the harness as a **m
 
 ## Commands
 
-`make menubar-harness` is a native target: from a developer machine it dispatches a
-fresh GitHub-hosted macOS VM (a clean, pushed revision and an authenticated `gh`,
-as in the `zerg-ui` skill) and downloads the VM's evidence. The dispatcher accepts
+`make menubar-harness` is a native target: from a developer machine it dispatches to
+the wisp bench runner (a clean, pushed revision and an authenticated `gh`,
+as in the `zerg-ui` skill) and copies the run's evidence back over ssh. The dispatcher accepts
 only the fixture modes; the live modes (`snapshot-live`, `window-live`,
 `menubar-live`, `full`) use a live Runtime Host and are refused.
 

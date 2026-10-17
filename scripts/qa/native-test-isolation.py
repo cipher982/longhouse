@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Dispatch native tests to a fresh, standard GitHub-hosted macOS VM.
+"""Dispatch native tests to the wisp bench runner (a Mac that is a fixture machine, not a login).
 
-Requires a clean, pushed revision in a public repository. No local Xcode,
-provider, simulator, Keychain, paid larger runner, or VM networking fallback.
+Requires a clean, pushed revision. No local Xcode, provider, simulator, Keychain,
+paid larger runner, or VM networking fallback. The run's evidence stays on wisp and
+is copied back over ssh; nothing goes through GitHub Actions storage.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -18,6 +20,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = "native-test-isolation.yml"
+# The runner host (its ssh alias) and where the workflow leaves each run's evidence. macOS ages
+# files out of /tmp on its own, so nothing here deletes. Both are named in the workflow too.
+RUNNER_HOST = os.environ.get("BENCH_HOST", "wisp")
+EVIDENCE_DIR = "/tmp/longhouse-native-evidence"
 TARGETS = {
     "test-install",
     "test-ios",
@@ -97,7 +103,7 @@ def require_authenticated_gh() -> None:
         ) from exc
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise ValueError(
-            "native dispatch needs an authenticated gh on this host (`gh auth login`): it checks repo visibility, "
+            "native dispatch needs an authenticated gh on this host (`gh auth login`): it reads the repository, "
             "proves the revision is pushed, dispatches the workflow, and reconciles its own run."
         ) from exc
 
@@ -133,20 +139,20 @@ def run(args: argparse.Namespace) -> int:
         "xcuitest",
     ):
         raise ValueError("native fixture mode cannot use a live Runtime Host")
+    if os.environ.get("BENCH_OUT"):
+        raise ValueError(
+            "native dispatch runs on wisp, and this command already holds the bench lock on it: "
+            "dispatch from the workstation, not through bench.sh"
+        )
     if capture("git", "status", "--porcelain", "--untracked-files=normal"):
         raise ValueError(
             "native CI needs a clean source revision; commit and push the worktree first"
         )
     sha = capture("git", "rev-parse", "HEAD")
     require_authenticated_gh()
-    repo = json.loads(
-        capture("gh", "repo", "view", "--json", "nameWithOwner,visibility")
-    )
-    if repo["visibility"] != "PUBLIC":
-        raise ValueError(
-            "native dispatch requires a public repository to avoid billed macOS minutes"
-        )
-    repository = repo["nameWithOwner"]
+    repository = json.loads(capture("gh", "repo", "view", "--json", "nameWithOwner"))[
+        "nameWithOwner"
+    ]
     capture("gh", "api", f"repos/{repository}/commits/{sha}", "--jq", ".sha")
     request_id = uuid.uuid4().hex
     title = f"Native isolation {request_id}"
@@ -157,7 +163,7 @@ def run(args: argparse.Namespace) -> int:
         "repository": repository,
         "request_id": request_id,
         "target": args.target,
-        "lane": "github-standard-macos",
+        "lane": "wisp-macos",
         "run_id": None,
         "dispatch_accepted": False,
         "cleanup": False,
@@ -314,18 +320,15 @@ def run(args: argparse.Namespace) -> int:
         )
         receipt.update(result)
         receipt["cleanup"] = result["status"] == "completed"
+        # The workflow leaves the evidence on the runner host under this request id.
         download = subprocess.run(
             [
-                "gh",
-                "run",
-                "download",
-                run_id,
-                "--repo",
-                repository,
-                "--name",
-                f"native-isolation-{request_id}",
-                "--dir",
-                str(artifacts / "evidence"),
+                "rsync",
+                "-a",
+                "-e",
+                "ssh -o BatchMode=yes",
+                f"{RUNNER_HOST}:{EVIDENCE_DIR}/{request_id}/",
+                str(artifacts / "evidence") + "/",
             ],
             check=False,
             timeout=120,

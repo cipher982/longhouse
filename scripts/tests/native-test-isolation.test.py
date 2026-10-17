@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -38,6 +40,64 @@ class AuthenticatedGhBoundaryTests(unittest.TestCase):
     def test_authenticated_gh_passes_through(self):
         with mock.patch.object(native.subprocess, "run", return_value=None):
             native.require_authenticated_gh()
+
+
+boundary_spec = importlib.util.spec_from_file_location(
+    "test_boundary", ROOT / "scripts/qa/test_boundary.py"
+)
+boundary = importlib.util.module_from_spec(boundary_spec)
+boundary_spec.loader.exec_module(boundary)
+
+
+class NativeRunnerBoundaryTests(unittest.TestCase):
+    def runner(self, **environment: str) -> bool:
+        with mock.patch.dict(os.environ, environment, clear=True):
+            with mock.patch.object(boundary.sys, "platform", "darwin"):
+                return boundary.native_runner()
+
+    def test_a_github_hosted_vm_and_the_wisp_runner_are_native_runners(self):
+        self.assertTrue(
+            self.runner(GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="github-hosted")
+        )
+        self.assertTrue(
+            self.runner(
+                GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="self-hosted", RUNNER_NAME="wisp"
+            )
+        )
+
+    def test_any_other_self_hosted_runner_and_a_plain_login_are_not(self):
+        self.assertFalse(
+            self.runner(
+                GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="self-hosted", RUNNER_NAME="cinder"
+            )
+        )
+        self.assertFalse(self.runner(RUNNER_ENVIRONMENT="self-hosted", RUNNER_NAME="wisp"))
+        self.assertFalse(self.runner())
+
+
+class DispatchRunsOnTheBenchTests(unittest.TestCase):
+    def test_dispatch_from_inside_the_bench_lock_is_refused_not_deadlocked(self):
+        """bench.sh holds the lock the dispatched job waits for on the same Mac."""
+
+        with tempfile.TemporaryDirectory() as scratch:
+            options = Path(scratch) / "options.json"
+            options.write_text("{}")
+            args = native.argparse.Namespace(
+                target="test-ios",
+                options_json=options,
+                artifact_dir=Path(scratch) / "out",
+                timeout=1,
+            )
+            with mock.patch.dict(os.environ, {"BENCH_OUT": scratch}):
+                with self.assertRaises(ValueError) as context:
+                    native.run(args)
+        self.assertIn("bench lock", str(context.exception))
+
+    def test_the_workflow_runs_on_wisp_and_leaves_no_actions_artifact(self):
+        workflow = (ROOT / ".github/workflows/native-test-isolation.yml").read_text()
+        self.assertIn("runs-on: wisp", workflow)
+        self.assertNotIn("upload-artifact", workflow)
+        self.assertIn(native.EVIDENCE_DIR, workflow)
 
 
 class DispatchTargetsTheCallerRevisionTests(unittest.TestCase):

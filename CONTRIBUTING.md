@@ -108,21 +108,25 @@ and statuses, then attach a frame through `make ios-ui-shot TEST=<Suite>/<test>`
 ### Native test isolation
 
 Native iOS, macOS packaging, installer, and WebKit onboarding fixtures run
-only for an exact pushed SHA on a fresh standard GitHub-hosted macOS runner.
-CI invokes `python3 scripts/qa/native-test-bootstrap.py --target TARGET` with
-explicit `NATIVE_OPTIONS_JSON`; it creates a disposable home and records
-`$RUNNER_TEMP/native-isolation-evidence/`. There is no local native fallback and
-no self-hosted Mac or paid-runner substitute. Inspect the one-day CI artifact
-and its receipt when a native fixture fails.
+only for an exact pushed SHA on a native runner: the `wisp` bench Mac (a self-hosted Actions
+runner; hosted macOS is metered 10x for a private repository, and a GitHub-hosted VM is still
+accepted if the repository goes public again). CI invokes
+`python3 scripts/qa/native-test-bootstrap.py --target TARGET` with explicit
+`NATIVE_OPTIONS_JSON`; it takes the bench lock (one job at a time), creates a disposable home,
+shuts down and deletes the simulators it created, and records
+`$RUNNER_TEMP/native-isolation-evidence/`. There is no local native fallback: the bootstrap
+refuses any other self-hosted Mac. Dispatched runs leave their evidence in
+`/tmp/longhouse-native-evidence/<request id>/` on wisp, which the dispatcher copies back over
+ssh; inspect it and its receipt when a native fixture fails.
 
 Dispatching one of these lanes from a workstation (`make test-ios`,
 `make ios-previews`, `make ios-ui-shot`, `make simlab-run`,
 `make menubar-harness`) requires an **authenticated `gh` on the
-dispatching host**: the dispatcher reads the repository visibility, proves the
-revision is pushed, submits the workflow, and reconciles the run it owns. Run
-dispatched targets from the machine that holds that credential; a host without
-it (a fresh box) can still run the local container and simulator lanes, and the
-bench loads one from `~/.config/longhouse/bench.env` when that file exists.
+dispatching host** and ssh to `wisp`: the dispatcher proves the revision is pushed, submits
+the workflow, reconciles the run it owns and copies the evidence back. Run dispatched targets
+from the machine that holds that credential, never through `bench.sh` (it holds the lock the
+dispatched job waits for on the same Mac, so the dispatcher refuses it); a host without it
+(a fresh box) can still run the local container and simulator lanes.
 The workflow definition is always taken from `main` while the VM checks out your
 `source_sha`, so a dispatched run's own `head_sha` is `main` — read the
 `source=<sha>` line the dispatcher prints, not the run's SHA, when asking what
