@@ -1,7 +1,8 @@
 name: Publish Runtime Image
 
 # "Published" means: the image is in GHCR by digest and this run uploaded its
-# publication receipt (scripts/ops/ci_receipts.py). Deploy and Verify, Promote Rings (dogfood fast lane) and
+# publication receipt in the artifact object store (scripts/ops/ci_receipts.py; cube
+# MinIO, `runtime-publication/<run id>/`). Deploy and Verify, Promote Rings (dogfood fast lane) and
 # the promote scripts read exactly that. The OCI archive in the object store
 # follows in Archive Runtime Image (runtime-image-archive.yml), off this path;
 # production promotion requires it (scripts/ops/promotion_gates.py, gate
