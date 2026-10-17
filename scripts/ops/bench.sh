@@ -8,6 +8,7 @@
 #   scripts/ops/bench.sh run <command...>     sync, then run it in the mirror
 #   scripts/ops/bench.sh start <command...>   same, detached on the bench; prints a job id
 #   scripts/ops/bench.sh collect <job> [--wait]  fetch a job's outputs (wait for it first)
+#   scripts/ops/bench.sh prune                remove mirrors unused for BENCH_MIRROR_DAYS (14); sync does this too
 #   scripts/ops/bench.sh ssh                  a shell in the mirror
 #
 #   scripts/ops/bench.sh run make test-ios
@@ -30,6 +31,23 @@ NAME="$(basename "$ROOT_DIR")"
 REMOTE_DIR="${BENCH_DIR:-bench/$NAME}"
 
 die() { echo "bench: $*" >&2; exit 1; }
+
+# Every checkout name gets its own mirror (2 to 4 GB with build output), and agents leave them
+# behind: 34 of them, 27 GB, by 2026-10-17. A mirror's last sync is stamped in `.bench-used`;
+# one not synced for BENCH_MIRROR_DAYS (a mirror that predates the stamp counts by its
+# directory's mtime) is a copy of a tree that exists elsewhere, so it is removed here.
+# This mirror is never removed, and nothing runs in another one while a sync is in progress
+# (one command at a time under the bench lock, and a job's own sync stamps its mirror).
+prune_stale_mirrors() {
+  ssh -o BatchMode=yes "$HOST" "mirror='$REMOTE_DIR'; days='${BENCH_MIRROR_DAYS:-14}'; \
+    touch \"\$mirror/.bench-used\"; now=\$(date +%s); \
+    for dir in \"\$HOME\"/bench/*/; do \
+      dir=\${dir%/}; [ \"\$dir\" = \"\$HOME/\$mirror\" ] && continue; \
+      stamp=\$dir/.bench-used; [ -e \"\$stamp\" ] || stamp=\$dir; \
+      age=\$(( (now - \$(stat -f %m \"\$stamp\")) / 86400 )); \
+      if [ \"\$age\" -ge \"\$days\" ]; then echo \"bench: pruned \$dir (\$age days unused)\" >&2; rm -r \"\$dir\"; fi; \
+    done" || true
+}
 
 cmd_sync() {
   local started=$SECONDS git_dir head excludes
@@ -55,6 +73,7 @@ cmd_sync() {
   rsync -a --delete --exclude=index --exclude='*.lock' --exclude=worktrees/ \
     "$git_dir/" "$HOST:$REMOTE_DIR/.git/"
   ssh -o BatchMode=yes "$HOST" "cd '$REMOTE_DIR' && git update-ref --no-deref HEAD $head && git reset -q"
+  prune_stale_mirrors
   echo "bench: synced $NAME to $HOST:$REMOTE_DIR in $((SECONDS - started))s" >&2
 }
 
@@ -123,6 +142,7 @@ cmd_start() {
 
 case "${1:-}" in
   sync) cmd_sync ;;
+  prune) prune_stale_mirrors ;;
   run) shift; cmd_run "$@" ;;
   start) shift; cmd_start "$@" ;;
   collect) shift; cmd_collect "$@" ;;

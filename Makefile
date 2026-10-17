@@ -912,6 +912,7 @@ validate-ops-scripts: ## @internal Ops script contracts (backup/restore retentio
 	@cd server && uv run python ../scripts/tests/testflight.test.py
 	@python3 scripts/tests/ios-upload-preconditions.test.py
 	@python3 scripts/tests/ci-profile.test.py
+	@python3 scripts/tests/bench-prune.test.py
 	@python3 scripts/tests/transcript-coverage.test.py
 	@python3 scripts/tests/session-propagation-sla.test.py
 
