@@ -261,7 +261,29 @@ class EngineCompatGateTests(unittest.TestCase):
     def test_the_newest_receipt_decides(self) -> None:
         world = w.green_world()
         world["artifacts"].append(w.artifact(103, self.name, w.compat_receipt(result="skipped"), run=36000000010, created="2026-09-29T23:40:00Z"))
+        world["runs"]["36000000010"] = w.compat_run(id=36000000010)
         self.assertIn("'skipped'", refused(evaluate(world))["engine_compat"])
+
+    def test_a_receipt_from_a_run_that_is_not_this_commits_ci_is_not_evidence(self) -> None:
+        # The store cannot vouch for who wrote an object: the stamped run is resolved through GitHub.
+        for changes, why in (
+            ({"path": ".github/workflows/hosted-live-qa.yml"}, "not a CI run"),
+            ({"head_sha": w.OTHER_SHA}, "another commit"),
+            ({"head_repository": {"full_name": "someone/fork"}}, "a fork"),
+        ):
+            world = w.green_world()
+            world["runs"][str(w.COMPAT_RUN)] = w.compat_run(**changes)
+            self.assertIn("no usable engine-compat receipt", refused(evaluate(world))["engine_compat"], why)
+
+    def test_an_unresolvable_run_is_not_evidence(self) -> None:
+        world = w.green_world()
+        del world["runs"][str(w.COMPAT_RUN)]
+        self.assertIn("cannot read CI run", refused(evaluate(world))["engine_compat"])
+
+    def test_an_unverifiable_newer_receipt_does_not_hide_a_verified_older_one(self) -> None:
+        world = w.green_world()
+        world["artifacts"].append(w.artifact(103, self.name, w.compat_receipt(result="failed"), run=36000000010, created="2026-09-29T23:40:00Z"))
+        self.assertEqual(evaluate(world)["gates"]["engine_compat"]["ok"], True)
 
     def test_names_the_previous_release_it_tested(self) -> None:
         evidence = evaluate(w.green_world())["gates"]["engine_compat"]["evidence"]

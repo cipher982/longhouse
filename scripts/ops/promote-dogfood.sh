@@ -25,17 +25,15 @@ if [[ "${1:-}" == "--fast-lane" ]]; then
   shift
 fi
 SHA="${1:-}"
-receipt_zip=""
 receipt_path=""
 . "$ROOT/scripts/lib/ring-lock.sh"
 cleanup() {
-  [[ -z "$receipt_zip" ]] || rm -f "$receipt_zip"
   [[ -z "$receipt_path" ]] || rm -f "$receipt_path"
   lh_ring_lock_release
 }
 trap cleanup EXIT
 
-for tool in gh jq python3 curl unzip; do
+for tool in gh jq python3 curl; do
   command -v "$tool" >/dev/null 2>&1 || { echo "promote-dogfood needs '$tool' on PATH." >&2; exit 1; }
 done
 if [[ -z "$SHA" ]]; then
@@ -73,21 +71,11 @@ lh_ring_lock_acquire "dogfood-${SUBDOMAIN,,}" "$SHA" 1200 "promote-dogfood ($lan
 lh_ring_lock_keepalive 60 1200
 
 HEALTH_URL="https://${SUBDOMAIN}.longhouse.ai/api/health"
-receipt_zip="$(mktemp)"
 receipt_path="$(mktemp)"
 
-# Download one artifact of a run and extract FILE from it into $receipt_path.
-fetch_artifact_file() {
-  local artifact_id="$1" file="$2" gh_token
-  gh_token="${GH_TOKEN:-$(gh auth token)}"
-  curl --fail-with-body --silent --show-error --location \
-    --header "Authorization: Bearer $gh_token" \
-    --header "Accept: application/vnd.github+json" \
-    --header "X-GitHub-Api-Version: 2022-11-28" \
-    --output "$receipt_zip" \
-    "https://api.github.com/repos/$REPO/actions/artifacts/$artifact_id/zip"
-  unzip -p "$receipt_zip" "$file" > "$receipt_path"
-}
+# CI receipts live in the artifact object store (scripts/ops/ci_receipts.py), configured by the
+# CI_RECEIPTS_S3_* environment values; secret loading stays external.
+ci_receipt() { python3 "$ROOT/scripts/ops/ci_receipts.py" "$@"; }
 
 if [[ "$FAST_LANE" == "1" ]]; then
   served="$(curl -sfL --max-time 15 "$HEALTH_URL" | jq -r '.build.commit // empty' 2>/dev/null || true)"
@@ -126,14 +114,11 @@ if [[ "$FAST_LANE" == "1" ]]; then
     echo "Refusing $SHA: no successful $PUBLISH_WORKFLOW run for it (the image is not published yet)." >&2
     exit 1
   fi
-  artifact_json="$(gh api "repos/$REPO/actions/runs/$publish_run_id/artifacts?per_page=100")"
-  artifact_id="$(jq -r --arg name "runtime-publication-${publish_run_id}-${publish_attempt}" \
-    '[.artifacts[] | select(.expired == false and .name == $name)] | first | .id // empty' <<<"$artifact_json")"
-  if [[ ! "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
+  ci_receipt get runtime-publication "$publish_run_id" --instance "${publish_run_id}-${publish_attempt}" \
+    --file runtime-publication.json >"$receipt_path" || {
     echo "Refusing $SHA: $PUBLISH_WORKFLOW run $publish_run_id has no publication receipt." >&2
     exit 1
-  fi
-  fetch_artifact_file "$artifact_id" runtime-publication.json
+  }
   verification_json="$(
     python3 "$ROOT/scripts/ops/release-artifacts.py" verify-publication \
       --receipt "$receipt_path" \
@@ -145,7 +130,7 @@ else
   deploy_run_ids="$(jq -r --arg sha "$SHA" \
     '.[] | select(.headSha == $sha and (.event == "push" or .event == "workflow_dispatch")) | .databaseId' \
     <<<"$deploy_json")"
-  artifact_id=""
+  found_receipt=0
   while IFS= read -r deploy_run_id; do
     [[ -n "$deploy_run_id" ]] || continue
     if [[ ! "$deploy_run_id" =~ ^[1-9][0-9]*$ ]]; then
@@ -169,24 +154,18 @@ else
     # conclusion is what counts; the receipt may come from any attempt up to it, newest first.
     # Whichever attempt it comes from, the receipt must match the exact SHA (verify-publication
     # below) and the publishing run it names must be the same successful publication (gh run view).
-    artifact_json="$(gh api "repos/$REPO/actions/runs/$deploy_run_id/artifacts?per_page=100")"
-    artifact_id="$(jq -r --arg prefix "runtime-verification-${deploy_run_id}-" --argjson final "$deploy_attempt" \
-      '[.artifacts[] | select(.expired == false and (.name | startswith($prefix)))
-        | {id, attempt: (.name[($prefix | length):] | if test("^[1-9][0-9]*$") then tonumber else empty end)}
-        | select(.attempt <= $final)]
-       | sort_by(.attempt) | last | .id // empty' \
-      <<<"$artifact_json")"
     # A successful path-filtered run may not have deployed anything.
     # Only a canary receipt of this run can authorize promotion.
-    if [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
+    if ci_receipt get runtime-verification "$deploy_run_id" --max-attempt "$deploy_attempt" \
+         --file runtime-verification.json >"$receipt_path" 2>/dev/null; then
+      found_receipt=1
       break
     fi
   done <<<"$deploy_run_ids"
-  if [[ ! "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
+  if [[ "$found_receipt" != 1 ]]; then
     echo "Refusing $SHA: no successful $DEPLOY_WORKFLOW run has a usable canary verification receipt (any attempt)." >&2
     exit 1
   fi
-  fetch_artifact_file "$artifact_id" runtime-verification.json
   verification_json="$(
     python3 "$ROOT/scripts/ops/release-artifacts.py" verify-publication \
       --receipt "$receipt_path" \

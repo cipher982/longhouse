@@ -65,9 +65,9 @@ class HostedLiveQaIsolationTests(unittest.TestCase):
         self.assertIn('RUNTIME_SOURCE_ORDER="$(date +%s)"', WORKFLOW)
         self.assertIn('export RUNTIME_SOURCE_SHA="$expected"', WORKFLOW)
 
-    def test_only_a_run_that_deployed_its_own_image_uploads_promotion_evidence(self) -> None:
-        upload = re.search(r"- name: Upload verdict receipt\n\s+if: (.+)\n", WORKFLOW)
-        assert upload, "no verdict receipt upload step"
+    def test_only_a_run_that_deployed_its_own_image_records_promotion_evidence(self) -> None:
+        upload = re.search(r"- name: Record verdict receipt\n\s+if: (.+)\n", WORKFLOW)
+        assert upload, "no verdict receipt step"
         self.assertIn("steps.deploy_qa.outcome == 'success'", upload.group(1))
 
     def test_the_verdict_watches_the_run_s_own_deployment_to_the_qa_instance(self) -> None:

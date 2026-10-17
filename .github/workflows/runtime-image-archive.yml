@@ -2,7 +2,7 @@ name: Archive Runtime Image
 
 # Copies every published runtime image's complete OCI closure (manifests, config,
 # layers) into the immutable object store, then uploads the sealed archive
-# receipt as `runtime-oci-archive-<source sha>`. It runs after Publish Runtime
+# receipt (kind `runtime-oci-archive`, subject the source sha; scripts/ops/ci_receipts.py). It runs after Publish Runtime
 # Image instead of inside it, so the archive is off the path to "published"
 # (dogfood's fast lane and the canary need only the registry digest), and
 # production promotion requires the receipt: scripts/ops/promotion_gates.py,
@@ -11,7 +11,7 @@ name: Archive Runtime Image
 # Archive (or re-receipt) one publication by hand:
 #   gh workflow run runtime-image-archive.yml --ref main -f publish_run_id=<run id>
 # A publication from before this workflow existed was archived inside its own
-# run and its receipt artifact has no build inputs; for it this reads the
+# run and its publication receipt has no build inputs; for it this reads the
 # sealed manifest back from the store instead of publishing.
 
 on:
@@ -29,6 +29,14 @@ permissions:
   actions: read
   contents: read
   packages: write  # moving `latest`
+
+env:
+  # CI receipts live in the artifact object store (scripts/ops/ci_receipts.py).
+  CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
+  CI_RECEIPTS_S3_BUCKET: ${{ secrets.CI_RECEIPTS_S3_BUCKET }}
+  CI_RECEIPTS_S3_PREFIX: ${{ secrets.CI_RECEIPTS_S3_PREFIX }}
+  CI_RECEIPTS_S3_ACCESS_KEY_ID: ${{ secrets.CI_RECEIPTS_S3_ACCESS_KEY_ID }}
+  CI_RECEIPTS_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_RECEIPTS_S3_SECRET_ACCESS_KEY }}
 
 concurrency:
   group: runtime-image-archive-${{ github.event.workflow_run.id || inputs.publish_run_id }}
@@ -78,15 +86,11 @@ jobs:
           sha="$(jq -r '.head_sha' <<<"$run")"
           attempt="$(jq -r '.run_attempt' <<<"$run")"
           number="$(jq -r '.run_number' <<<"$run")"
-          name="runtime-publication-${PUBLISH_RUN_ID}-${attempt}"
-          artifact_id="$(api "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${PUBLISH_RUN_ID}/artifacts?per_page=100" \
-            | jq -r --arg name "$name" '[.artifacts[] | select(.expired == false and .name == $name)] | if length == 1 then .[0].id else empty end')"
-          [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]] || { echo "run $PUBLISH_RUN_ID has no artifact $name" >&2; exit 1; }
           dir="$RUNNER_TEMP/publication"
-          mkdir -p "$dir"
-          api --output "$RUNNER_TEMP/publication.zip" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip"
-          unzip -q -o "$RUNNER_TEMP/publication.zip" -d "$dir"
-          [[ -s "$dir/runtime-publication.json" ]] || { echo "artifact $name has no runtime-publication.json" >&2; exit 1; }
+          python3 scripts/ops/ci_receipts.py get runtime-publication "$PUBLISH_RUN_ID" \
+            --instance "${PUBLISH_RUN_ID}-${attempt}" --dir "$dir" >/dev/null \
+            || { echo "run $PUBLISH_RUN_ID has no publication receipt" >&2; exit 1; }
+          [[ -s "$dir/runtime-publication.json" ]] || { echo "the publication receipt of run $PUBLISH_RUN_ID has no runtime-publication.json" >&2; exit 1; }
           validated="$(python3 scripts/ops/release-artifacts.py verify-publication \
             --receipt "$dir/runtime-publication.json" \
             --source-sha "$sha" \
@@ -143,15 +147,10 @@ jobs:
           }
           jq -c '{image_digest, source_sha, blob_count, blobs_written, manifest_reused, manifest_key}' "$out"
 
-      - name: Upload the archive receipt
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: runtime-oci-archive-${{ steps.pub.outputs.sha }}
-          path: ${{ runner.temp }}/runtime-oci-archive/runtime-oci-archive.json
-          if-no-files-found: error
-          retention-days: 90
-          # A re-run attempt of this run re-uploads the same name.
-          overwrite: true
+      - name: Record the archive receipt
+        env:
+          SOURCE_SHA: ${{ steps.pub.outputs.sha }}
+        run: python3 scripts/ops/ci_receipts.py put runtime-oci-archive "$SOURCE_SHA" "$RUNNER_TEMP/runtime-oci-archive/runtime-oci-archive.json"
 
       # `latest` is a convenience tag (every ring deploys by digest). Builds
       # finish out of order, so it moves only to main's head, checked a moment

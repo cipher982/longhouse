@@ -11,7 +11,7 @@ permissions:
 jobs:
   matrix:
     timeout-minutes: 30
-    runs-on: ubuntu-latest
+    runs-on: crunch
     outputs:
       providers: ${{ steps.matrix.outputs.providers }}
     steps:
@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix.outputs.providers) }}
-    runs-on: ubuntu-latest
+    runs-on: crunch
     continue-on-error: ${{ matrix.allow_failure }}
     name: ${{ matrix.provider }} unconditional full column
     timeout-minutes: 30
@@ -47,11 +47,3 @@ jobs:
           python3 scripts/qa/test-isolation.py \
             --target provider-release-proof-universal-smoke \
             --set "UNIVERSAL_PROVIDER=${{ matrix.provider }}"
-      - name: Upload evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: provider-release-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/test-isolation/**/files/1/provider-release-proof-universal-smoke/**
-          if-no-files-found: error
-          retention-days: 14

@@ -73,17 +73,22 @@ its local selection can be broader than CI's committed diff. Unmatched paths
 require explicit review; they are not treated as a green test. Full `make
 test-ci` is an intentional broad cutover check, not the default pre-push tax.
 
-Trusted push CI publishes a manifest-keyed dependency image to GHCR and
-hands its fixture jobs an immutable digest. Pull credentials stay in the
-supervisor's temporary Docker config and never enter the fixture container.
-A missing or mismatched requested digest fails instead of falling back to a
-cold build. Local runs and standalone manual/weekly fresh-clone workflows
-without an explicit digest keep their original manifest-only local
-preparation; those proofs are not claims about the push CI warm path.
-Hosted post-deploy QA resolves the published digest for its exact source
-SHA. Fork PRs do not get the trusted fixture image: the `Fork PR requires
-trusted replay` job fails by design, and a maintainer replays the patch on a
-trusted branch to qualify it.
+Push CI runs its container fixtures on a self-hosted runner that builds the
+manifest-keyed dependency image once with the same local-build path a workstation
+uses and keeps it in its Docker image cache, so each job starts from it without a
+pull; the image is also published to GHCR by its manifest tag for the lanes that
+pull it (hosted post-deploy QA resolves the digest for its exact source SHA).
+Pull credentials stay in the supervisor's temporary Docker config and never enter
+the fixture container. A missing or mismatched requested digest fails instead of
+falling back to a cold build.
+
+CI does not use GitHub Actions artifacts or caches. A fact one run records for a
+later gate (the QA verdict, the engine-compat result, the image publication) is a
+CI receipt in the artifact object store (`scripts/ops/ci_receipts.py`); evidence
+about a failed run stays on the runner that produced it, and build caches live on
+the runner's disk. `make validate-actions-storage` fails on a new
+`upload-artifact`, `download-artifact`, `actions/cache` or `type=gha`; the one
+allowed exception is listed in `scripts/ci/actions-storage.allow`.
 
 For an already-pushed maintainer SHA, `make ship-watch SHA=<full-sha>
 ARGS=--json` waits for the exact workflow/deployment disposition and returns

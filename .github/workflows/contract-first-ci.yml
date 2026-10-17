@@ -35,14 +35,20 @@ env:
   # so setup-python's pip step doesn't fail.
   PIP_INDEX_URL: https://pypi.org/simple
   PIP_EXTRA_INDEX_URL: ""
-  # Test jobs run on GitHub-hosted arm64 runners (ubuntu-24.04-arm): free for
-  # this public repo, no queue, a whole 4-core VM per job, and measured ~2x
-  # the per-core speed of ubuntu-latest's x64 vCPUs on this suite. The
-  # isolated guest gets the whole VM (test-isolation.py defaults to 2 CPU /
-  # 4 GiB for shared machines). Deploy, gate and image-publish work stays on
-  # cube. Profile of 2026-09-25: Linux CI ~3 min from first job to last.
+  # Test jobs run on the crunch VM (runs-on: crunch: 14 vCPU, 3 runner slots for this
+  # repo; control-plane docs/specs/build-compute-pipeline.md 6.2). The
+  # repository is private, where GitHub-hosted runners are 2-CPU and metered, and no
+  # job here uploads an Actions artifact: receipts go to the object store
+  # (scripts/ops/ci_receipts.py) and evidence stays on the runner. Each isolated
+  # guest gets 4 CPUs / 8 GiB; three at once fit crunch-docker.slice (30 GiB).
   LONGHOUSE_TEST_CPUS: "4"
-  LONGHOUSE_TEST_MEMORY: "13g"
+  LONGHOUSE_TEST_MEMORY: "8g"
+  # CI receipts live in the artifact object store (scripts/ops/ci_receipts.py).
+  CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
+  CI_RECEIPTS_S3_BUCKET: ${{ secrets.CI_RECEIPTS_S3_BUCKET }}
+  CI_RECEIPTS_S3_PREFIX: ${{ secrets.CI_RECEIPTS_S3_PREFIX }}
+  CI_RECEIPTS_S3_ACCESS_KEY_ID: ${{ secrets.CI_RECEIPTS_S3_ACCESS_KEY_ID }}
+  CI_RECEIPTS_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_RECEIPTS_S3_SECRET_ACCESS_KEY }}
   # One Cargo profile for every engine build in this workflow (Engine tests and
   # the Validation job's managed-launch lifecycle proof): an unoptimized engine
   # crate over opt-3 dependencies (engine/Cargo.toml). The fixture image ships
@@ -56,7 +62,7 @@ jobs:
   # -----------------------------------------------------------------------
   changes:
     timeout-minutes: 10
-    runs-on: ubuntu-24.04-arm
+    runs-on: crunch
     name: "Changed paths"
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
@@ -71,14 +77,8 @@ jobs:
       models: ${{ steps.filter.outputs.models }}
       scripts: ${{ steps.filter.outputs.scripts }}
       image_tag: ${{ steps.image.outputs.tag }}
-      image_manifest: ${{ steps.image.outputs.manifest_sha }}
-      image_arm64_exists: ${{ steps.image.outputs.arm64_exists }}
-      image_ref: ${{ steps.image.outputs.image_ref }}
-      image_ref_lean: ${{ steps.image.outputs.image_ref_lean }}
-      image_index_complete: ${{ steps.image.outputs.index_complete }}
     permissions:
       contents: read
-      packages: read
       pull-requests: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -93,67 +93,19 @@ jobs:
           # A branch push qualifies that push, not every commit since main.
           # PRs still use GitHub's changed-file API against their base branch.
           base: ${{ github.ref_name }}
-      - name: Authenticate to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-      - name: Which fixture image variants are already published?
-        # Here rather than in its own job: these answers gate the native image
-        # builds, and every extra job in the chain costs a runner start.
+      - name: Fixture image key
         id: image
-        env:
-          IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/longhouse-test
-        run: |
-          set -euo pipefail
-          key="$(python3 scripts/qa/test-isolation.py --print-image-key)"
-          tag="$(jq -r '.tag' <<< "$key")"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "manifest_sha=$(jq -r '.manifest_sha256' <<< "$key")" >> "$GITHUB_OUTPUT"
-          # CI tests run on arm64 and wait only for that arch: the full image
-          # and the lean one (docker/test.dockerfile), which are built together.
-          digest_of() {
-            docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' 2>/dev/null \
-              | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))'
-          }
-          if digest="$(digest_of "$IMAGE_NAME:$tag-arm64")" && lean="$(digest_of "$IMAGE_NAME:$tag-lean-arm64")"; then
-            echo "arm64_exists=true" >> "$GITHUB_OUTPUT"
-            # The common case resolves the pinned digests right here, so tests
-            # start without waiting on a separate prepare job.
-            echo "image_ref=$IMAGE_NAME@$digest" >> "$GITHUB_OUTPUT"
-            echo "image_ref_lean=$IMAGE_NAME@$lean" >> "$GITHUB_OUTPUT"
-            echo "fixture images $IMAGE_NAME@$digest, lean $IMAGE_NAME@$lean (arm64, already published)"
-          else
-            echo "arm64_exists=false" >> "$GITHUB_OUTPUT"
-          fi
-          # The plain tag is the multi-arch index cube's amd64 lanes pull.
-          platforms="$(docker buildx imagetools inspect --raw "$IMAGE_NAME:$tag" 2>/dev/null \
-            | jq -r '[.manifests[]?.platform | select(.os == "linux") | .architecture] | sort | join(",")' || true)"
-          if [[ "$platforms" == "amd64,arm64" ]]; then
-            echo "index_complete=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "index_complete=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "fixture image $IMAGE_NAME:$tag index platforms: ${platforms:-none}"
+        run: echo "tag=$(python3 scripts/qa/test-isolation.py --print-image-key | jq -r '.tag')" >> "$GITHUB_OUTPUT"
 
-  fork-qualification:
-    name: "Fork PR requires trusted replay"
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - run: |
-          echo "::error::This workflow does not run for fork PRs: its jobs publish the fixture image to GHCR with this repository's token. Replay the patch on a trusted branch before merge."
-          exit 1
-
-  # Only when the dependency manifests changed. CI tests wait only for arm64;
-  # amd64 and the joined multi-arch tag (pulled by cube's amd64 lanes, e.g.
-  # hosted-live-qa) finish off the critical path in test-image-index.
-  test-image-arm64:
-    name: "Build fixture image (arm64)"
+  # The fixture image (docker/test.dockerfile) is built once on this runner by
+  # test-isolation's own local-build path and kept in the runner's Docker image
+  # cache, so every test job on the machine starts from it without a pull. Cube's
+  # amd64 lanes (Hosted Live QA) pull the same image by tag from GHCR, so it is
+  # also published there when the tag is absent (only after a dependency change).
+  test-image:
+    name: "Fixture image"
     needs: changes
-    if: ${{ needs.changes.outputs.image_arm64_exists != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: crunch
     timeout-minutes: 45
     permissions:
       contents: read
@@ -162,101 +114,27 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-      - uses: ./.github/actions/build-test-image
-        with:
-          arch: arm64
-          lean: "true"
-          tag: ${{ needs.changes.outputs.image_tag }}
-          manifest_sha: ${{ needs.changes.outputs.image_manifest }}
-
-  test-image-amd64:
-    name: "Build fixture image (amd64)"
-    needs: changes
-    if: ${{ needs.changes.outputs.image_index_complete != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          fetch-depth: 1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-      - uses: ./.github/actions/build-test-image
-        with:
-          arch: amd64
-          tag: ${{ needs.changes.outputs.image_tag }}
-          manifest_sha: ${{ needs.changes.outputs.image_manifest }}
-
-  test-image-index:
-    name: "Publish multi-arch fixture tag"
-    needs: [changes, test-image-arm64, test-image-amd64]
-    # The arm64 tag may predate this run (skipped build); amd64 must be fresh.
-    if: ${{ !cancelled() && needs.test-image-amd64.result == 'success' && needs.test-image-arm64.result != 'failure' }}
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      packages: write
-    steps:
+      - name: Build or reuse the fixture image on this runner
+        id: prepare
+        run: echo "ref=$(python3 scripts/qa/test-isolation.py --prepare)" >> "$GITHUB_OUTPUT"
       - name: Authenticate to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Join the per-arch tags
+      - name: Publish the image for cube's lanes when its tag is absent
         env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/longhouse-test:${{ needs.changes.outputs.image_tag }}
-        run: docker buildx imagetools create -t "$IMAGE" "$IMAGE-amd64" "$IMAGE-arm64"
-
-  prepare-test-image:
-    name: "Prepare immutable fixture image"
-    # Waits for the arm64 build only; the amd64 build never delays tests.
-    needs: [changes, test-image-arm64]
-    # Only after a fresh arm64 build; otherwise Changed paths already
-    # resolved the digest and this job is skipped (Deploy and Verify treats a
-    # skipped required job as passed).
-    if: ${{ !cancelled() && needs.test-image-arm64.result == 'success' }}
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      packages: read
-    outputs:
-      image_ref: ${{ steps.resolve.outputs.image_ref }}
-      image_ref_lean: ${{ steps.resolve.outputs.image_ref_lean }}
-    steps:
-      - name: Authenticate to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-      - name: Resolve the arm64 fixture image digest
-        id: resolve
-        env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/longhouse-test:${{ needs.changes.outputs.image_tag }}-arm64
-          LEAN: ghcr.io/${{ github.repository_owner }}/longhouse-test:${{ needs.changes.outputs.image_tag }}-lean-arm64
+          LOCAL_REF: ${{ steps.prepare.outputs.ref }}
+          PUBLISHED: ghcr.io/${{ github.repository_owner }}/longhouse-test:${{ needs.changes.outputs.image_tag }}
         run: |
           set -euo pipefail
-          # Pin the digest: a concurrent tag update cannot change this run's input.
-          digest="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"
-          lean="$(docker buildx imagetools inspect "$LEAN" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"
-          echo "image_ref=${IMAGE%:*}@$digest" >> "$GITHUB_OUTPUT"
-          echo "image_ref_lean=${LEAN%:*}@$lean" >> "$GITHUB_OUTPUT"
-          echo "Lean fixture image ${LEAN%:*}@$lean"
-          echo "Fixture image ${IMAGE%:*}@$digest"
+          if docker buildx imagetools inspect "$PUBLISHED" >/dev/null 2>&1; then
+            echo "$PUBLISHED is already published."
+          else
+            docker tag "$LOCAL_REF" "$PUBLISHED"
+            docker push "$PUBLISHED"
+          fi
 
   validate:
     # No path gate for `make validate` itself: it is cross-cutting by
@@ -266,26 +144,21 @@ jobs:
     # date, which is exactly how twelve of its members went dark. The live
     # lifecycle proof has a real dependency boundary, so it is gated and runs as
     # its own job ("Managed launch lifecycle") in parallel with this one.
-    needs: [changes, prepare-test-image]
+    needs: [changes, test-image]
     # !cancelled() and not the default `success()`: `Changed paths` runs a git
     # fetch against GitHub, and a network timeout there used to fail it -- which
     # would now skip this whole job, because it needs that job's outputs.
-    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-24.04-arm
+    if: ${{ !cancelled() && needs.test-image.result == 'success' }}
+    runs-on: crunch
     name: "Validation"
     # Must exceed the sum of the step budgets below, or the job kills a healthy
     # run before any step reaches its own limit.
     timeout-minutes: 50
 
-    env:
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
-      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-
-      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Validate contracts
         # The producer above passes an exact digest; this runs from the offline
@@ -357,47 +230,24 @@ jobs:
             PROVIDER_VERSION=hermetic-fixture \
             PROVIDER_EXECUTABLE_IDENTITY=sha256:hermetic-fixture
 
-      - name: Upload provider capability proof bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: provider-capability-proof-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/test-isolation/**/files/1/provider-capability-proof/**
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload provider release proof artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: provider-release-proof-validation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/test-isolation/**/files/1/provider-release-proof-universal-smoke/**
-          if-no-files-found: ignore
-          retention-days: 7
-
   lifecycle:
     # Split out of Validation, where it ran serially after `make validate` and
     # was the longest single stretch of the CI critical path (~73 s of a 161 s
     # job). As its own job it runs alongside Validation for one extra image pull.
-    needs: [changes, prepare-test-image]
+    needs: [changes, test-image]
     # Gated on the surfaces that can invalidate it. This proof starts a real
     # Runtime Host, real SQLite, real device-token auth and scripted provider
     # binaries, so only a change to those surfaces can fail it; a docs,
     # iOS-only or web-only push cannot, and paid ~6 minutes for the privilege
     # until 2026-09-24.
-    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true') }}
-    runs-on: ubuntu-24.04-arm
+    if: ${{ !cancelled() && needs.test-image.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true') }}
+    runs-on: crunch
     name: "Managed launch lifecycle"
     timeout-minutes: 20
-    env:
-      # Lean fixture: no browsers or node_modules (docker/test.dockerfile).
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref_lean || needs.prepare-test-image.outputs.image_ref_lean }}
-      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-
-      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Managed launch lifecycle against a real Runtime Host
         timeout-minutes: 15
@@ -407,22 +257,13 @@ jobs:
         # catch a provider gate -- the exact hole the cursor outage fell through.
         run: make test-managed-launch-lifecycle
 
-      - name: Upload lifecycle failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: managed-launch-lifecycle-failure-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/test-isolation/**/files/1/reliability-kernel/managed-launch-lifecycle-failure.*/**
-          if-no-files-found: ignore
-          retention-days: 7
-
   backend-shards:
     timeout-minutes: 30
-    needs: [changes, prepare-test-image]
+    needs: [changes, test-image]
     # !cancelled(): an image build skipped upstream (tag already published)
     # must not skip this job; the prepare result is the real gate.
-    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-24.04-arm
+    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') }}
+    runs-on: crunch
     name: "Backend tests shard ${{ matrix.shard }}/3"
     # A hosted runner's four vCPUs take ~5 min for the whole suite even under
     # xdist; three runners take ~2. "Backend tests" below is the one name that
@@ -434,16 +275,11 @@ jobs:
     env:
       LONGHOUSE_TEST_SHARD: ${{ matrix.shard }}/3
       PYTEST_ADDOPTS: "--durations=25 --durations-min=2.0"
-      # Lean fixture: no browsers or node_modules (docker/test.dockerfile).
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref_lean || needs.prepare-test-image.outputs.image_ref_lean }}
-      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-
-      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Run Python Backend Tests
         run: make test
@@ -461,7 +297,7 @@ jobs:
     needs: backend-shards
     # Skipped shards (backend unchanged) leave this skipped too, as before.
     if: ${{ !cancelled() && needs.backend-shards.result != 'skipped' }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: crunch
     timeout-minutes: 5
     steps:
       - name: Every backend shard passed
@@ -476,21 +312,15 @@ jobs:
     # proves the source-only provider assertions that do not belong in the
     # provider-launch factory matrix.
     timeout-minutes: 15
-    needs: [changes, prepare-test-image]
-    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-24.04-arm
+    needs: [changes, test-image]
+    if: ${{ !cancelled() && needs.test-image.result == 'success' }}
+    runs-on: crunch
     name: "Provider contract tests"
-    env:
-      # Lean fixture: no browsers or node_modules (docker/test.dockerfile).
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref_lean || needs.prepare-test-image.outputs.image_ref_lean }}
-      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-
-      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Run exact-SHA provider contract assertions
         env:
@@ -499,21 +329,15 @@ jobs:
 
   engine-tests:
     timeout-minutes: 45
-    needs: [changes, prepare-test-image]
-    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-24.04-arm
+    needs: [changes, test-image]
+    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') }}
+    runs-on: crunch
     name: "Engine tests"
-    env:
-      # Lean fixture: no browsers or node_modules (docker/test.dockerfile).
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref_lean || needs.prepare-test-image.outputs.image_ref_lean }}
-      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-
-      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Rust toolchain for the format gate
         if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -546,8 +370,7 @@ jobs:
     # (cheap: no cargo build, no fixture image) rather than gating on engine/
     # backend paths, because a server-only change can just as easily break
     # what an old engine expects from it.
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: crunch
     name: "Engine compatibility (previous release)"
     timeout-minutes: 10
     steps:
@@ -566,44 +389,33 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: make engine-compat
 
-      # `make promote-production` reads this artifact by name, per commit.
-      # `passed` needs a test that ran; a skip is recorded as skipped and no
-      # promotion accepts it (scripts/qa/engine_compat_receipt.py).
-      - name: Upload the engine-compat receipt
+      # `make promote-production` reads this receipt per commit (kind engine-compat,
+      # scripts/ops/promotion_gates.py). `passed` needs a test that ran; a skip is
+      # recorded as skipped and no promotion accepts it (scripts/qa/engine_compat_receipt.py).
+      - name: Record the engine-compat receipt
         if: ${{ github.event_name != 'pull_request' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: engine-compat-${{ github.sha }}
-          path: .build/engine-compat/receipt.json
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 90
+        run: python3 scripts/ops/ci_receipts.py put engine-compat "$GITHUB_SHA" .build/engine-compat/receipt.json
 
   frontend-tests:
     timeout-minutes: 20
-    needs: [changes, prepare-test-image]
-    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-24.04-arm
+    needs: [changes, test-image]
+    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') }}
+    runs-on: crunch
     name: "Frontend + runner tests"
-    env:
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
-      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
 
-      - uses: ./.github/actions/hosted-docker-disk
-
       - name: Run Frontend and Runner Tests in one isolated container
         run: make test-frontend-runner
 
   ui-sweep:
     timeout-minutes: 15
-    needs: [changes, prepare-test-image]
-    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-24.04-arm
+    needs: [changes, test-image]
+    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') }}
+    runs-on: crunch
     # Opens every menu on every fixture scene at three sizes and fails when one
     # lands off-screen, covered or clipped (scripts/ui/popover-sweep.ts). A
     # browser check verifies after the fact: it is not in Deploy and Verify's
@@ -617,8 +429,6 @@ jobs:
         viewport: [desktop, wide, mobile]
     name: "UI popover sweep (${{ matrix.viewport }})"
     env:
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
-      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
       # The hosted arm64 runner has 4 vCPUs; the guest defaults to 2.
       LONGHOUSE_TEST_CPUS: "4"
 
@@ -627,18 +437,8 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: ./.github/actions/hosted-docker-disk
-
       - name: Open every menu at this size
         run: make test-ui-sweep ARGS=--viewports=${{ matrix.viewport }}
-
-      - name: Upload the sweep's frames and reports (on failure)
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ui-sweep-${{ matrix.viewport }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/test-isolation
-          retention-days: 3
 
   ios-tests:
     needs: changes
@@ -695,69 +495,43 @@ jobs:
             {"IOS_TEST_SCHEMES": "${{ matrix.schemes }}", "IOS_TEST_FILTER": "${{ matrix.filter }}"}
         run: python3 scripts/qa/native-test-bootstrap.py --target test-ios
 
-      - name: Upload native iOS evidence
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ios-xcresult-${{ strategy.job-index }}
-          if-no-files-found: ignore
-          path: ${{ runner.temp }}/native-isolation-evidence
-          retention-days: 1
-
   wheel-package:
     timeout-minutes: 20
-    needs: [changes, prepare-test-image]
-    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-24.04-arm
+    needs: [changes, test-image]
+    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch') }}
+    runs-on: crunch
     name: "CLI wheel packaging"
-    env:
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
-      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-
-      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Verify CLI wheel packaging
         run: make test-wheel-package
 
   e2e-core:
     timeout-minutes: 30
-    needs: [changes, prepare-test-image]
-    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-24.04-arm
+    needs: [changes, test-image]
+    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') }}
+    runs-on: crunch
     name: "Core E2E tests"
     env:
       CI: "1"
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
-      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
 
-      - uses: ./.github/actions/hosted-docker-disk
-
       - name: Run Core E2E Tests in the portable isolation boundary
         run: make test-e2e-core
-
-      - name: Upload isolated E2E artifacts (on failure)
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: core-e2e-artifacts
-          path: artifacts/test-isolation
-          retention-days: 1
 
   model-smoke:
     timeout-minutes: 20
     needs: changes
-    if: ${{ (needs.changes.outputs.models == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-24.04-arm
+    if: ${{ (needs.changes.outputs.models == 'true' || github.event_name == 'workflow_dispatch') }}
+    runs-on: crunch
     name: "Model smoke tests"
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -780,21 +554,17 @@ jobs:
 
   oss-qa:
     timeout-minutes: 30
-    needs: [changes, prepare-test-image]
-    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-24.04-arm
+    needs: [changes, test-image]
+    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') }}
+    runs-on: crunch
     name: "OSS onboarding smoke"
     env:
       CI: "1"
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
-      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-
-      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Run OSS onboarding fixture in the portable isolation boundary
         run: |
@@ -802,12 +572,3 @@ jobs:
             --target qa-oss \
             --command env ONBOARDING_PLAYWRIGHT_PROJECT=onboarding-chromium \
               ./scripts/qa/qa-oss.sh --workdir /work --no-unit --no-e2e
-
-      - name: Upload OSS isolation evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: oss-isolation-evidence
-          path: artifacts/test-isolation
-          if-no-files-found: ignore
-          retention-days: 1

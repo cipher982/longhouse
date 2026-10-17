@@ -477,17 +477,6 @@ jobs:
             fi
           fi
 
-      - name: Upload evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: console-served-state-${{ github.run_id }}
-          path: |
-            artifacts/console-served-state.json
-            artifacts/console-fixture
-          if-no-files-found: ignore
-
-
       - name: Stop loopback fake LLM
         if: always()
         run: |

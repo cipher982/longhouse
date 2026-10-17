@@ -1,7 +1,7 @@
 name: Publish Runtime Image
 
 # "Published" means: the image is in GHCR by digest and this run uploaded its
-# publication receipt. Deploy and Verify, Promote Rings (dogfood fast lane) and
+# publication receipt (scripts/ops/ci_receipts.py). Deploy and Verify, Promote Rings (dogfood fast lane) and
 # the promote scripts read exactly that. The OCI archive in the object store
 # follows in Archive Runtime Image (runtime-image-archive.yml), off this path;
 # production promotion requires it (scripts/ops/promotion_gates.py, gate
@@ -53,6 +53,14 @@ concurrency:
 permissions:
   contents: read
   packages: write
+
+env:
+  # CI receipts live in the artifact object store (scripts/ops/ci_receipts.py).
+  CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
+  CI_RECEIPTS_S3_BUCKET: ${{ secrets.CI_RECEIPTS_S3_BUCKET }}
+  CI_RECEIPTS_S3_PREFIX: ${{ secrets.CI_RECEIPTS_S3_PREFIX }}
+  CI_RECEIPTS_S3_ACCESS_KEY_ID: ${{ secrets.CI_RECEIPTS_S3_ACCESS_KEY_ID }}
+  CI_RECEIPTS_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_RECEIPTS_S3_SECRET_ACCESS_KEY }}
 
 jobs:
   build-and-push:
@@ -122,7 +130,7 @@ jobs:
             org.longhouse.catalog-schema.min-reader=${{ steps.schema.outputs.schema_min_reader }}
             org.longhouse.catalog-schema.max-reader=${{ steps.schema.outputs.schema_max_reader }}
 
-      # The receipt directory is uploaded as one artifact. runtime-publication.json
+      # The receipt directory is recorded as one receipt. runtime-publication.json
       # is what every consumer reads; build-identity.json and qualification.json
       # are the inputs Archive Runtime Image needs to seal the OCI archive.
       - name: Write immutable publication receipt
@@ -193,10 +201,5 @@ jobs:
               )
               handle.write("\n")
           PY
-      - name: Upload immutable publication receipt
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: runtime-publication-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/runtime-publication/
-          if-no-files-found: error
-          retention-days: 90
+      - name: Record immutable publication receipt
+        run: python3 scripts/ops/ci_receipts.py put runtime-publication "$GITHUB_RUN_ID" "$RUNNER_TEMP"/runtime-publication/*

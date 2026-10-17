@@ -68,8 +68,6 @@ on:
       - "README.md"
   release:
     types: [published]
-  schedule:
-    - cron: "17 8 * * *"
   workflow_dispatch:
     inputs:
       run_public_canary:
@@ -106,7 +104,9 @@ jobs:
   installer-smoke:
     # Scheduled runs get the public canary below instead: building the pair
     # locally proves nothing new once a release is out.
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'release' || github.event.release.prerelease == false) }}
+    # Native installer + upgrade proof on hosted Linux and macOS: release candidates and by hand only
+    # while the repository is private (hosted macOS minutes are metered 10x).
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && github.event.release.prerelease == false) }}
     strategy:
       fail-fast: false
       matrix:
@@ -243,18 +243,10 @@ jobs:
           fi
           ./scripts/ci/native-installer-smoke.sh
 
-      - name: Retain installer and upgrade evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-installer-${{ matrix.os }}
-          path: artifacts/native-installer
-          if-no-files-found: ignore
-
   installer-public-canary:
     # Installs what the world actually gets: the latest published release,
     # against the default branch, with no locally built pair.
-    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_public_canary) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_public_canary }}
     env:
       GITHUB_TOKEN: ${{ github.token }}
     strategy:
@@ -304,16 +296,8 @@ jobs:
           export LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG="$previous_tag"
           ./scripts/ci/native-installer-smoke.sh
 
-      - name: Retain public upgrade evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: public-installer-upgrade-${{ matrix.os }}
-          path: artifacts/native-installer
-          if-no-files-found: ignore
-
   runtime-packaging-macos:
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ (github.event_name == 'release' || github.event_name == 'workflow_dispatch') }}
     runs-on: macos-latest
     timeout-minutes: 30
     name: "launch-gate--runtime-packaging--macos-latest"
@@ -333,21 +317,12 @@ jobs:
           NATIVE_OPTIONS_JSON: "{}"
         run: python3 scripts/qa/native-test-bootstrap.py --target test-runtime-packaging-macos
 
-      - name: Upload native packaging evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: runtime-packaging-macos
-          if-no-files-found: ignore
-          path: ${{ runner.temp }}/native-isolation-evidence
-          retention-days: 1
-
   onboarding-browsers:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: crunch
             project: all
             browsers: "chromium firefox webkit"
     runs-on: ${{ matrix.os }}
@@ -367,17 +342,8 @@ jobs:
             make test-e2e-onboarding PROJECT=${{ matrix.project }}
           fi
 
-      - name: Upload isolated onboarding artifacts
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: onboarding-artifacts-${{ matrix.os }}-${{ matrix.project }}
-          if-no-files-found: ignore
-          path: artifacts/test-isolation
-          retention-days: 1
-
   onboarding-browsers-extended:
-    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_extended_hosted_matrix) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_extended_hosted_matrix }}
     strategy:
       fail-fast: false
       matrix:
@@ -418,29 +384,11 @@ jobs:
           NATIVE_OPTIONS_JSON: '{"PROJECT":"onboarding-webkit"}'
         run: python3 scripts/qa/native-test-bootstrap.py --target test-e2e-onboarding
 
-      - name: Upload portable onboarding artifacts
-        if: ${{ failure() && runner.os == 'Linux' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: onboarding-artifacts-${{ matrix.os }}-${{ matrix.project }}
-          if-no-files-found: ignore
-          path: artifacts/test-isolation
-          retention-days: 1
-
-      - name: Upload native onboarding evidence
-        if: ${{ failure() && runner.os == 'macOS' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: onboarding-artifacts-${{ matrix.os }}-${{ matrix.project }}
-          if-no-files-found: ignore
-          path: ${{ runner.temp }}/native-isolation-evidence
-          retention-days: 1
-
   onboarding-funnel:
     # `make onboarding-funnel` always git-clones the repo into the README
     # contract's workdir, so this is the fresh-clone first-user path. Launch
     # Gate and the onboarding ring each used to run it; once is enough.
-    runs-on: ubuntu-latest
+    runs-on: crunch
     timeout-minutes: 30
     name: "launch-gate--onboarding-funnel"
 
@@ -456,18 +404,8 @@ jobs:
       - name: Run fresh-clone onboarding funnel in the portable isolation boundary
         run: make onboarding-funnel
 
-      - name: Upload onboarding funnel artifacts
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: onboarding-funnel-artifacts
-          if-no-files-found: ignore
-          path: |
-            artifacts/test-isolation
-          retention-days: 1
-
   self-hosted-cube-linux-x64:
-    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_cube_self_hosted) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_cube_self_hosted }}
     runs-on: cube-browser
     timeout-minutes: 30
     name: "launch-gate--self-hosted-onboarding--linux-x64--cube"
@@ -482,15 +420,6 @@ jobs:
 
       - name: Run onboarding smoke on cube in the portable isolation boundary
         run: make test-e2e-onboarding PROJECT=onboarding-chromium
-
-      - name: Upload isolated cube onboarding artifacts
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: onboarding-self-hosted-cube-linux-x64
-          if-no-files-found: ignore
-          path: artifacts/test-isolation
-          retention-days: 1
 
   self-hosted-linux-x64:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_linux_x64 && inputs.linux_x64_runner_label != '' }}
@@ -508,12 +437,3 @@ jobs:
 
       - name: Run onboarding smoke on Linux x64 in the portable isolation boundary
         run: make test-e2e-onboarding PROJECT=onboarding-chromium
-
-      - name: Upload isolated Linux x64 onboarding artifacts
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: onboarding-self-hosted-linux-x64
-          if-no-files-found: ignore
-          path: artifacts/test-isolation
-          retention-days: 1

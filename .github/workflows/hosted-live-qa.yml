@@ -34,6 +34,14 @@ on:
 permissions:
   contents: read
   packages: read
+env:
+  # CI receipts live in the artifact object store (scripts/ops/ci_receipts.py).
+  CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
+  CI_RECEIPTS_S3_BUCKET: ${{ secrets.CI_RECEIPTS_S3_BUCKET }}
+  CI_RECEIPTS_S3_PREFIX: ${{ secrets.CI_RECEIPTS_S3_PREFIX }}
+  CI_RECEIPTS_S3_ACCESS_KEY_ID: ${{ secrets.CI_RECEIPTS_S3_ACCESS_KEY_ID }}
+  CI_RECEIPTS_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_RECEIPTS_S3_SECRET_ACCESS_KEY }}
+
 concurrency:
   # QA owns one dedicated hosted instance (HOSTED_QA_SUBDOMAIN) for the whole
   # run: it deploys the exact commit under test there itself, so a push
@@ -423,49 +431,28 @@ jobs:
 
       # The verdict, not the run's conclusion, is the QA evidence: a superseded
       # run also concludes success. `make promote-production` reads this
-      # artifact by name, per commit, and accepts only verdict "passed"
-      # (scripts/ops/promotion_gates.py). A re-run of the same commit replaces it.
+      # receipt per commit (kind hosted-live-qa-verdict, scripts/ops/ci_receipts.py),
+      # newest first, and accepts only verdict "passed" (scripts/ops/promotion_gates.py).
+      # A re-run of the same commit writes a newer receipt.
       # Only a run that deployed its own image uploads one: the receipt names
       # the digest it tested, and the promotion compares it with the digest it
       # promotes. A scheduled run re-measures whatever the instance last served
       # (drift detection, not qualification) and would replace a digest-bearing
       # receipt with one that names none.
-      - name: Upload verdict receipt
+      - name: Record verdict receipt
         if: always() && steps.verdict.outcome != 'skipped' && steps.deploy_qa.outcome == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: hosted-live-qa-verdict-${{ steps.runtime_before.outputs.runtime_sha }}
-          path: ${{ runner.temp }}/hosted-live-qa-verdict.json
-          if-no-files-found: ignore
-          overwrite: true
-          retention-days: 90
+        env:
+          QA_SHA: ${{ steps.runtime_before.outputs.runtime_sha }}
+        run: |
+          if [[ -s "$RUNNER_TEMP/hosted-live-qa-verdict.json" ]]; then
+            python3 scripts/ops/ci_receipts.py put hosted-live-qa-verdict "$QA_SHA" "$RUNNER_TEMP/hosted-live-qa-verdict.json"
+          else
+            echo "No verdict file was written; nothing to record."
+          fi
 
       - name: Stand down, QA instance redeployed by someone else
         if: always() && steps.verdict.outputs.verdict == 'superseded'
         run: echo "Something other than this run deployed to the QA instance while it ran, so QA says nothing about this commit. Re-run it; see the summary."
-
-      - name: Upload privacy-safe cohort journey artifact
-        # A failed journey writes no artifact; its failure is already reported
-        # (and its evidence uploaded below), so a second "no files" failure here
-        # would only bury the first.
-        if: always() && steps.cohort_journey.outcome == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: cohort-journey-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/test-isolation/**/files/1/cohort-journey/*.json
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload live QA artifacts
-        # QA steps are continue-on-error so a superseded run can stand down;
-        # their failures reach here through the verdict step's output.
-        if: failure() || steps.verdict.outputs.failed_steps != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: hosted-live-qa-failure-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/test-isolation/**
-          if-no-files-found: ignore
-          retention-days: 14
 
   # A passed verdict on the commit QA deployed can unblock production, so wake
   # the promoter. Its workflow_run trigger never fires for this workflow: Deploy

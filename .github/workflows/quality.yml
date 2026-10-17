@@ -20,10 +20,13 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  build-frontend:
-    timeout-minutes: 20
-    runs-on: ubuntu-latest
-    name: "🏗️ Build frontend once"
+  # One job, so the built frontend is a directory on this runner and not a
+  # handed-off artifact. Runs on the crunch VM (Chrome for Lighthouse is
+  # installed on the guest, control-plane scripts/ops/crunch/guest).
+  web-quality:
+    timeout-minutes: 30
+    runs-on: crunch
+    name: "Web quality (build, bundle size, Lighthouse)"
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -44,32 +47,8 @@ jobs:
       - name: Build frontend
         run: cd web && bun run build
 
-      - name: Upload built frontend
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: web-dist-${{ github.run_id }}
-          path: web/dist
-          retention-days: 3
-
-  lighthouse:
-    timeout-minutes: 20
-    runs-on: ubuntu-latest
-    name: "🔦 Lighthouse CI"
-    needs: build-frontend
-
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-
-      - name: Setup Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: "20"
-
-      - name: Download built frontend
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: web-dist-${{ github.run_id }}
-          path: web/dist
+      - name: Check bundle size
+        run: cd web && node ./scripts/check-bundle-size.mjs
 
       - name: Install Lighthouse CI
         run: npm install -g @lhci/cli
@@ -78,32 +57,9 @@ jobs:
         run: lhci autorun
         working-directory: web
 
-  bundle-size:
-    timeout-minutes: 20
-    runs-on: ubuntu-latest
-    name: "📦 Bundle Size"
-    needs: build-frontend
-
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-
-      - name: Setup Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: "20"
-
-      - name: Download built frontend
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: web-dist-${{ github.run_id }}
-          path: web/dist
-
-      - name: Check bundle size
-        run: cd web && node ./scripts/check-bundle-size.mjs
-
   image-size:
     timeout-minutes: 20
-    runs-on: ubuntu-latest
+    runs-on: crunch
     name: "🖼️ Image Size Check"
 
     steps:

@@ -24,6 +24,8 @@ from typing import Any, Sequence
 import perf_soak_fixtures
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts" / "ops"))
+import ci_receipts  # noqa: E402 - found through the path line above
 DEFAULT_OUTPUT = ROOT / "artifacts" / "perf-proof" / "perf-soak.json"
 SAMPLE_SECONDS = 0.05
 MAC_CHILD_SAMPLE_SECONDS = 0.1
@@ -1174,8 +1176,14 @@ def _previous_run_baseline(platform_name: str, work_dir: Path) -> tuple[dict[str
     current_run = os.environ.get("GITHUB_RUN_ID")
     if not repo or not current_run or os.environ.get("GITHUB_ACTIONS") != "true":
         return None, {"status": "unavailable", "reason": "no GitHub Actions main-run context or no baseline supplied"}
+    if platform_name != "Linux":
+        return None, {"status": "unavailable", "reason": "baselines are CI receipts and a hosted macOS runner cannot reach the receipt store"}
     if not shutil.which("gh"):
         return None, {"status": "unavailable", "reason": "gh CLI is not installed"}
+    try:
+        store = ci_receipts.store_from_environment()
+    except ci_receipts.ReceiptError as exc:
+        return None, {"status": "unavailable", "reason": str(exc)}
     endpoint = f"repos/{repo}/actions/workflows/perf-proof.yml/runs?branch=main&status=completed&per_page=50"
     result = subprocess.run(["gh", "api", endpoint], text=True, capture_output=True, check=False)
     if result.returncode != 0:
@@ -1207,23 +1215,17 @@ def _previous_run_baseline(platform_name: str, work_dir: Path) -> tuple[dict[str
         sha = str(run.get("head_sha") or "")
         if not sha:
             continue
-        artifact_name = f"perf-proof-{sha}" if platform_name == "Linux" else f"perf-proof-macos-{sha}"
-        destination = work_dir / f"baseline-{run['id']}"
-        download = subprocess.run(
-            ["gh", "run", "download", str(run["id"]), "--repo", repo, "--name", artifact_name, "--dir", str(destination)],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        baseline_path = destination / f"perf-soak-{platform_name.lower()}-{sha}.json"
-        if download.returncode == 0 and baseline_path.is_file():
-            try:
-                loaded.append(json.loads(baseline_path.read_text(encoding="utf-8")))
-            except (OSError, ValueError):
+        try:
+            receipts = store.instances("perf-proof", sha)
+            receipt = next((r for r in receipts if r.run_id == int(run["id"])), None)
+            if receipt is None:
                 continue
-            sources.append({"run_id": str(run["id"]), "run_url": run.get("html_url"), "sha": sha})
+            loaded.append(receipt.json(f"perf-soak-{platform_name.lower()}-{sha}.json"))
+        except (ci_receipts.ReceiptError, ValueError):
+            continue
+        sources.append({"run_id": str(run["id"]), "run_url": run.get("html_url"), "sha": sha})
     if not loaded:
-        return None, {"status": "unavailable", "reason": "no previous successful main run has this platform's soak artifact"}
+        return None, {"status": "unavailable", "reason": "no previous successful main run has a perf-proof receipt for this platform"}
     return median_baseline(loaded), {"status": "loaded", "aggregate": "median", "runs": sources}
 
 

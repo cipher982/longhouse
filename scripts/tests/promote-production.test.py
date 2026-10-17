@@ -50,7 +50,7 @@ class PromoteProductionTests(unittest.TestCase):
             ops, library = root / "scripts" / "ops", root / "scripts" / "lib"
             ops.mkdir(parents=True)
             library.mkdir(parents=True)
-            for name in ("promote-production.sh", "promotion_gates.py", "ring_lock.py"):
+            for name in ("promote-production.sh", "promotion_gates.py", "ci_receipts.py", "ring_lock.py"):
                 shutil.copyfile(ROOT / "scripts" / "ops" / name, ops / name)
             (ops / "promote-production.sh").chmod(0o755)
             (library / "hosted-instance.sh").write_text(LIBRARY_STUB)

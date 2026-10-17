@@ -124,7 +124,7 @@ jobs:
           curl -fsSL "${base}/gh_${GH_VERSION}_checksums.txt" | grep " ${name}.tar.gz\$" | sha256sum -c -
           tar -xzf "${name}.tar.gz"
           echo "$RUNNER_TEMP/${name}/bin" >> "$GITHUB_PATH"
-          for tool in jq python3 curl unzip ssh docker; do command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }; done
+          for tool in jq python3 curl ssh docker; do command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }; done
 
       # promote-production pins the public demo over ssh (deploy-host, the
       # Runtime Host that serves it), as blog-publish.yml does.
@@ -142,16 +142,13 @@ jobs:
           CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
           REGISTRY_USERNAME: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ github.token }}
+          # The promote scripts and gates read CI receipts (scripts/ops/ci_receipts.py).
+          CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
+          CI_RECEIPTS_S3_BUCKET: ${{ secrets.CI_RECEIPTS_S3_BUCKET }}
+          CI_RECEIPTS_S3_PREFIX: ${{ secrets.CI_RECEIPTS_S3_PREFIX }}
+          CI_RECEIPTS_S3_ACCESS_KEY_ID: ${{ secrets.CI_RECEIPTS_S3_ACCESS_KEY_ID }}
+          CI_RECEIPTS_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_RECEIPTS_S3_SECRET_ACCESS_KEY }}
           SUBDOMAIN: ${{ vars.LONGHOUSE_DEFAULT_SUBDOMAIN }}
           DEMO_SSH_HOST: deploy-host
           PROMOTER_TRIGGER: ${{ github.event_name }}${{ (github.event.workflow_run.name || needs.wake.outputs.woken_by) && format(':{0}', github.event.workflow_run.name || needs.wake.outputs.woken_by) || '' }}
         run: python3 scripts/ops/ring_promoter.py --json "$RUNNER_TEMP/ring-decision.json"
-
-      - name: Upload decision
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ring-decision-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ring-decision.json
-          if-no-files-found: ignore
-          retention-days: 14

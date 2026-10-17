@@ -36,6 +36,12 @@ jobs:
     timeout-minutes: 30
     if: ${{ github.repository == 'cipher982/longhouse' }}
     env:
+      # The soak's baseline is the median of the last runs' receipts (scripts/ops/ci_receipts.py).
+      CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
+      CI_RECEIPTS_S3_BUCKET: ${{ secrets.CI_RECEIPTS_S3_BUCKET }}
+      CI_RECEIPTS_S3_PREFIX: ${{ secrets.CI_RECEIPTS_S3_PREFIX }}
+      CI_RECEIPTS_S3_ACCESS_KEY_ID: ${{ secrets.CI_RECEIPTS_S3_ACCESS_KEY_ID }}
+      CI_RECEIPTS_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_RECEIPTS_S3_SECRET_ACCESS_KEY }}
       PERF_PROOF_OUTPUT: artifacts/perf-proof/perf-proof-${{ github.sha }}.json
       PERF_PROOF_STARTUP_ITERATIONS: ${{ inputs.startup_iterations || '20' }}
       PERF_SOAK_OUTPUT: artifacts/perf-proof/perf-soak-linux-${{ github.sha }}.json
@@ -83,21 +89,25 @@ jobs:
             fi
           done
 
-      - name: Upload perf proof artifact
+      # A measurement kept over time is a receipt: the next soak reads the last runs'
+      # receipts for its baseline.
+      - name: Record perf proof receipt
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: perf-proof-${{ github.sha }}
-          path: |
-            artifacts/perf-proof/*.json
-            artifacts/perf-proof/*.md
-          if-no-files-found: warn
+        run: |
+          if compgen -G "artifacts/perf-proof/*.json" >/dev/null; then
+            python3 scripts/ops/ci_receipts.py put perf-proof "$GITHUB_SHA" artifacts/perf-proof/*.json artifacts/perf-proof/*.md
+          else
+            echo "No perf proof files were written; nothing to record."
+          fi
 
   perf-soak-macos:
     name: "macOS engine and Desktop soak"
     runs-on: macos-15
     timeout-minutes: 45
-    if: ${{ github.repository == 'cipher982/longhouse' }}
+    # By hand only while the repository is private: hosted macOS minutes are metered
+    # 10x, and a hosted macOS runner cannot reach the receipt store, so this soak
+    # reports no baseline (its summary says so).
+    if: ${{ github.repository == 'cipher982/longhouse' && github.event_name == 'workflow_dispatch' }}
     env:
       PERF_SOAK_OUTPUT: artifacts/perf-proof/perf-soak-macos-${{ github.sha }}.json
 
@@ -138,13 +148,3 @@ jobs:
           else
             echo "macOS soak summary missing: $summary" >> "$GITHUB_STEP_SUMMARY"
           fi
-
-      - name: Upload macOS perf proof artifact
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: perf-proof-macos-${{ github.sha }}
-          path: |
-            artifacts/perf-proof/*.json
-            artifacts/perf-proof/*.md
-          if-no-files-found: warn

@@ -44,6 +44,14 @@ permissions:
   contents: read
   packages: read
 
+env:
+  # CI receipts live in the artifact object store (scripts/ops/ci_receipts.py).
+  CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
+  CI_RECEIPTS_S3_BUCKET: ${{ secrets.CI_RECEIPTS_S3_BUCKET }}
+  CI_RECEIPTS_S3_PREFIX: ${{ secrets.CI_RECEIPTS_S3_PREFIX }}
+  CI_RECEIPTS_S3_ACCESS_KEY_ID: ${{ secrets.CI_RECEIPTS_S3_ACCESS_KEY_ID }}
+  CI_RECEIPTS_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_RECEIPTS_S3_SECRET_ACCESS_KEY }}
+
 concurrency:
   # Each exact source SHA has its own durable deployment graph, ordered by its
   # publishing run number. Pushes to main share one group: a running deploy
@@ -231,7 +239,7 @@ jobs:
           # this gate for 30m41s and then failed it with no runtime mutation.
           # Path detection and fixture publication are prerequisites for every
           # filtered suite; a failed prerequisite cannot turn skipped tests green.
-          required_jobs: Changed paths,Prepare immutable fixture image,Backend tests,Engine tests,Frontend + runner tests,Provider contract tests
+          required_jobs: Changed paths,Fixture image,Backend tests,Engine tests,Frontend + runner tests,Provider contract tests
           ignored_failure_jobs: Core E2E tests,Model smoke tests,OSS onboarding smoke
 
       - name: Wait for full CI gate (temporary opt-in)
@@ -244,7 +252,7 @@ jobs:
           superseded_branch: ${{ github.event_name == 'push' && github.ref_name || '' }}
           github_token: ${{ github.token }}
           event: ""
-          required_jobs: Changed paths,Prepare immutable fixture image,Backend tests,Engine tests,Core E2E tests,CLI wheel packaging,Provider contract tests
+          required_jobs: Changed paths,Fixture image,Backend tests,Engine tests,Core E2E tests,CLI wheel packaging,Provider contract tests
           ignored_failure_jobs: OSS onboarding smoke
 
       - name: Wait for exact runtime image publication
@@ -280,7 +288,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Resolve publishing workflow and publication artifact
+      - name: Resolve publishing workflow and its publication receipt
         id: source
         if: ${{ needs.changes.outputs.runtime_image == 'true' && steps.superseded.outputs.by == '' }}
         env:
@@ -309,22 +317,16 @@ jobs:
             echo "Successful runtime-image publishing run has incomplete identity metadata." >&2
             exit 1
           }
-          artifact_id="$(curl --fail-with-body --silent --show-error \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "Accept: application/vnd.github+json" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs/$run_id/artifacts?per_page=100" \
-            | jq -r --arg run_id "$run_id" --arg run_attempt "$run_attempt" \
-              '[.artifacts[] | select(.expired == false and .name == ("runtime-publication-" + $run_id + "-" + $run_attempt))] | if length == 1 then .[0].id else empty end')"
-          [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]] || {
-            echo "Publishing run $run_id does not have its immutable publication receipt artifact." >&2
+          python3 scripts/ops/ci_receipts.py list runtime-publication "$run_id" \
+            | jq -e --argjson run_id "$run_id" --argjson attempt "$run_attempt" \
+              'any(.[]; .run_id == $run_id and .run_attempt == $attempt)' >/dev/null || {
+            echo "Publishing run $run_id does not have its immutable publication receipt." >&2
             exit 1
           }
           {
             echo "source_run_id=$run_id"
             echo "source_order=$run_number"
             echo "source_attempt=$run_attempt"
-            echo "source_artifact_id=$artifact_id"
             echo "source_workflow=Publish Runtime Image"
             echo "qualification_id=runtime-image-${run_id}-${run_attempt}"
           } >> "$GITHUB_OUTPUT"
@@ -336,20 +338,13 @@ jobs:
           SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
           SOURCE_ORDER: ${{ steps.source.outputs.source_order }}
           SOURCE_ATTEMPT: ${{ steps.source.outputs.source_attempt }}
-          SOURCE_ARTIFACT_ID: ${{ steps.source.outputs.source_artifact_id }}
           SOURCE_SHA: ${{ steps.meta.outputs.runtime_image_tag }}
           IMAGE_NAME: ${{ steps.meta.outputs.runtime_image_name }}
         run: |
           set -euo pipefail
-          receipt_zip="$RUNNER_TEMP/runtime-publication.zip"
-          curl --fail-with-body --silent --show-error --location \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "Accept: application/vnd.github+json" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            --output "$receipt_zip" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$SOURCE_ARTIFACT_ID/zip"
           receipt_path="$RUNNER_TEMP/runtime-publication.json"
-          unzip -p "$receipt_zip" runtime-publication.json > "$receipt_path"
+          python3 scripts/ops/ci_receipts.py get runtime-publication "$SOURCE_RUN_ID" \
+            --instance "${SOURCE_RUN_ID}-${SOURCE_ATTEMPT}" --file runtime-publication.json > "$receipt_path"
           validated="$(python3 scripts/ops/release-artifacts.py verify-publication \
             --receipt "$receipt_path" \
             --source-sha "$SOURCE_SHA" \
@@ -675,26 +670,9 @@ jobs:
             --build-attempt "$RUNTIME_SOURCE_ATTEMPT" \
             --require-verification >/dev/null
 
-      - name: Upload successful canary verification receipt
+      - name: Record successful canary verification receipt
         if: steps.fast_smoke.outcome == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: runtime-verification-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/runtime-verification.json
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Upload live QA artifacts
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: hosted-live-qa-failure-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            /tmp/qa-live-fail-*.png
-            e2e/test-results
-            e2e/playwright-report
-          if-no-files-found: ignore
-          retention-days: 14
+        run: python3 scripts/ops/ci_receipts.py put runtime-verification "$GITHUB_RUN_ID" "$RUNNER_TEMP/runtime-verification.json"
 
       - name: Create GitHub issue on failure
         if: failure()

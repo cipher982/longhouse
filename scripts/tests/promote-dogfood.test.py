@@ -13,6 +13,10 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts" / "ops"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ci_receipts  # noqa: E402
+import fake_s3  # noqa: E402
 SHA = "a" * 40
 DIGEST = "sha256:" + "b" * 64
 
@@ -31,6 +35,9 @@ class PromotionAuthorizationTests(unittest.TestCase):
         sensitive_rc: int = 0,
         ancestor: bool = True,
     ):
+        s3 = fake_s3.FakeS3()
+        s3.__enter__()
+        self.addCleanup(s3.__exit__)
         with tempfile.TemporaryDirectory(prefix="longhouse-promotion-test-") as directory:
             root = Path(directory)
             ops = root / "scripts" / "ops"
@@ -38,7 +45,7 @@ class PromotionAuthorizationTests(unittest.TestCase):
             binaries = root / "bin"
             for path in (ops, library, binaries):
                 path.mkdir(parents=True)
-            for name in ("promote-dogfood.sh", "release-artifacts.py", "ring_lock.py"):
+            for name in ("promote-dogfood.sh", "release-artifacts.py", "ci_receipts.py", "ring_lock.py"):
                 shutil.copyfile(ROOT / "scripts" / "ops" / name, ops / name)
             shutil.copyfile(ROOT / "scripts" / "lib" / "ring-lock.sh", library / "ring-lock.sh")
             locks = root / "locks"
@@ -65,6 +72,21 @@ class PromotionAuthorizationTests(unittest.TestCase):
                 receipt = {key: value for key, value in receipt.items() if key != "verification"}
                 receipt["schema"] = "longhouse.runtime-publication.v1"
             (root / "receipt.json").write_text(json.dumps(receipt))
+            # CI receipts, as the producers record them (scripts/ops/ci_receipts.py).
+            if fast_lane:
+                seeded = [("runtime-publication", "10", 10, 1, "runtime-publication.json")]
+            elif receipt_available:
+                seeded = [("runtime-verification", "20", 20, attempt, "runtime-verification.json") for attempt in receipt_attempts]
+            else:
+                seeded = []
+            for kind, subject, run_id, attempt, member in seeded:
+                base = f"{fake_s3.PREFIX}/{kind}/{subject}/{run_id}-{attempt}"
+                s3.objects[f"{base}/{member}"] = json.dumps(receipt).encode()
+                s3.objects[f"{base}/_receipt.json"] = json.dumps({
+                    "schema": ci_receipts.STAMP_SCHEMA, "kind": kind, "subject": subject, "run_id": run_id,
+                    "run_attempt": attempt, "repository": "o/r", "workflow_ref": "", "sha": receipt_sha,
+                    "files": [member], "written_at": f"2026-09-18T12:0{attempt}:00+00:00",
+                }).encode()
             (library / "hosted-instance.sh").write_text(
                 'lh_hosted_prepare_control_plane_auth() { :; }\n'
                 'lh_hosted_resolve_instance() { LH_INSTANCE_ID=fixture; }\n'
@@ -102,33 +124,10 @@ elif name == 'gh':
         attempt = 1 if publish else int(os.environ['FIXTURE_FINAL_ATTEMPT'])
         print(json.dumps({'headSha':sha,'attempt':attempt,'number':10,'status':'completed',
                          'conclusion':'success','workflowName':'Publish Runtime Image' if publish else 'Deploy and Verify'}))
-    elif args[0] == 'api' and '/runs/10/' in args[1]:
-        print(json.dumps({'artifacts':[{'id':300,'expired':False,'name':'runtime-publication-10-1'},
-                                       {'id':301,'expired':False,'name':'runtime-publication-10-2'}]}))
-    elif args[0] == 'api':
-        available = '/runs/20/' in args[1] and os.environ['FIXTURE_HAS_RECEIPT'] == '1'
-        artifacts = []
-        if available:
-            for attempt in (int(n) for n in os.environ['FIXTURE_RECEIPT_ATTEMPTS'].split(',')):
-                artifacts.append({'id':100+attempt,'expired':False,'name':f'runtime-verification-20-{attempt}'})
-            # Artifacts that are not canary receipts never count, whatever their attempt suffix.
-            artifacts.append({'id':900,'expired':False,'name':'hosted-live-qa-failure-20-1'})
-            artifacts.append({'id':901,'expired':False,'name':'runtime-verification-20-x'})
-        print(json.dumps({'artifacts':artifacts}))
     else:
         raise AssertionError(args)
 elif name == 'curl' and args[-1].endswith('/api/health'):
     print(json.dumps({'build': {'commit': os.environ['FIXTURE_SERVED']}}))
-elif name == 'curl':
-    destination = args[args.index('--output')+1]
-    with open(root/'downloads', 'a') as log:
-        log.write(args[-1].rsplit('/artifacts/', 1)[1].split('/')[0] + '\n')
-    with zipfile.ZipFile(destination, 'w') as archive:
-        archive.write(root/'receipt.json','runtime-verification.json')
-        archive.write(root/'receipt.json','runtime-publication.json')
-elif name == 'unzip':
-    with zipfile.ZipFile(args[1]) as archive:
-        sys.stdout.buffer.write(archive.read(args[2]))
 elif name == 'python3':
     if args and args[0].endswith('dogfood_sensitive_paths.py'):
         with open(root/'sensitive_calls', 'a') as log:
@@ -141,7 +140,7 @@ elif name == 'python3':
 else:
     raise AssertionError(name)
 '''
-            for name in ("git", "gh", "curl", "unzip", "python3"):
+            for name in ("git", "gh", "curl", "python3"):
                 path = binaries / name
                 path.write_text(stub)
                 path.chmod(0o755)
@@ -150,9 +149,7 @@ else:
                 "PATH": f"{binaries}:{os.environ['PATH']}",
                 "FIXTURE_ROOT": str(root),
                 "FIXTURE_SHA": SHA,
-                "FIXTURE_HAS_RECEIPT": "1" if receipt_available else "0",
                 "FIXTURE_FINAL_ATTEMPT": str(final_attempt),
-                "FIXTURE_RECEIPT_ATTEMPTS": ",".join(str(n) for n in receipt_attempts),
                 "FIXTURE_PYTHON": sys.executable,
                 "SUBDOMAIN": "fixture-owner",
                 "GH_TOKEN": "fixture-not-a-credential",
@@ -160,6 +157,7 @@ else:
                 "FIXTURE_SERVED": served,
                 "FIXTURE_SENSITIVE": str(sensitive_rc),
                 "FIXTURE_ANCESTOR": "1" if ancestor else "0",
+                **s3.env(),
             }
             result = subprocess.run(
                 ["bash", str(ops / "promote-dogfood.sh"), *(["--fast-lane"] if fast_lane else []), SHA],
@@ -169,8 +167,10 @@ else:
                 timeout=20,
             )
             promotions = root / "promotions"
-            downloads = root / "downloads"
-            self.downloaded_artifacts = downloads.read_text().splitlines() if downloads.exists() else []
+            # The receipt instances the script actually read (run-attempt), in order.
+            self.read_receipts = [
+                key.split("/")[-2] for key in s3.reads if key.endswith(("runtime-verification.json", "runtime-publication.json"))
+            ]
             during = root / "locks_during"
             self.locks_during = during.read_text().split() if during.exists() else []
             sensitive_calls = root / "sensitive_calls"
@@ -218,18 +218,18 @@ else:
         result, promotions = self.run_promotion(final_attempt=2, receipt_attempts=(1,))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(promotions, [f"ghcr.io/cipher982/longhouse-runtime@{DIGEST}"])
-        self.assertEqual(self.downloaded_artifacts, ["101"])
+        self.assertEqual(self.read_receipts, ["20-1"])
 
     def test_newest_attempt_receipt_wins_when_several_attempts_uploaded_one(self):
         result, _ = self.run_promotion(final_attempt=3, receipt_attempts=(1, 3, 2))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.downloaded_artifacts, ["103"])
+        self.assertEqual(self.read_receipts, ["20-3"])
 
     def test_receipt_from_an_attempt_after_the_final_one_is_not_used(self):
         result, promotions = self.run_promotion(final_attempt=1, receipt_attempts=(2,))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(promotions, [])
-        self.assertEqual(self.downloaded_artifacts, [])
+        self.assertEqual(self.read_receipts, [])
 
     def test_an_earlier_attempt_receipt_for_another_source_cannot_promote(self):
         result, promotions = self.run_promotion(final_attempt=2, receipt_attempts=(1,), receipt_sha="c" * 40)
@@ -254,7 +254,7 @@ else:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(promotions, [f"ghcr.io/cipher982/longhouse-runtime@{DIGEST}"])
         self.assertEqual(self.sensitive_calls, [f"{'d' * 40} {SHA}"])
-        self.assertEqual(self.downloaded_artifacts, ["300"])  # the publication receipt of the final attempt
+        self.assertEqual(self.read_receipts, ["10-1"])  # the publication receipt of the publishing attempt
         self.assertIn("(fast-lane)", result.stdout)
         self.assertEqual(self.locks_during, ["dogfood-fixture-owner.json"])
         self.assertEqual(self.locks_left, [])

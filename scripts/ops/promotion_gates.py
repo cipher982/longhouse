@@ -37,7 +37,6 @@ every gate passed and the target list could be read.
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import os
 import re
@@ -47,22 +46,29 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
+from pathlib import Path
 from typing import Any
 from typing import Callable
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ci_receipts  # noqa: E402 - sibling module, found through the path line above
+
 RECEIPT_SCHEMA = "longhouse.production-promotion-receipt.v1"
 QA_SCHEMA = "longhouse.hosted-qa-verdict.v1"
+QA_KIND = "hosted-live-qa-verdict"
 QA_MEMBER = "hosted-live-qa-verdict.json"
 QA_WORKFLOW = "Hosted Live QA"
 QA_WORKFLOW_PATH = ".github/workflows/hosted-live-qa.yml"
 DEFAULT_BRANCH = "main"
 COMPAT_SCHEMA = "longhouse.engine-compat.v1"
+COMPAT_KIND = "engine-compat"
 COMPAT_MEMBER = "receipt.json"
+COMPAT_WORKFLOW_PATH = ".github/workflows/contract-first-ci.yml"
 ARCHIVE_SCHEMA = "longhouse.runtime-oci-archive.v1"
+ARCHIVE_KIND = "runtime-oci-archive"
 ARCHIVE_MEMBER = "runtime-oci-archive.json"
 ARCHIVE_WORKFLOW = "Archive Runtime Image"
 ARCHIVE_WORKFLOW_PATH = ".github/workflows/runtime-image-archive.yml"
@@ -98,7 +104,8 @@ class Sources:
     def github(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         raise NotImplementedError
 
-    def artifact_zip(self, repo: str, artifact_id: int) -> bytes:
+    def receipts(self, kind: str, subject: str) -> list[ci_receipts.Receipt]:
+        """CI receipts for the subject, newest first (scripts/ops/ci_receipts.py)."""
         raise NotImplementedError
 
 
@@ -184,27 +191,27 @@ def gate_dogfood(cfg: Config, sources: Sources, sha: str) -> dict[str, Any]:
 # --- gates 2 and 3: receipts CI recorded per commit -------------------------------------------------------------------
 
 
-def _receipts(cfg: Config, sources: Sources, name: str, member: str) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], int]:
-    """(artifact, receipt) newest first, and how many artifacts could not be read."""
+def _receipts(sources: Sources, kind: str, subject: str, member: str) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], int]:
+    """(stamp, receipt) newest first, and how many receipts could not be read.
+
+    The stamp is the writing run's identity as the store recorded it: it names a run,
+    and the gate that trusts a receipt verifies that run through the GitHub API.
+    """
     try:
-        listing = sources.github(f"repos/{cfg.repo}/actions/artifacts", {"name": name, "per_page": "100"})
+        listed = sources.receipts(kind, subject)
     except SourceError as exc:
-        raise Refusal(f"cannot list GitHub artifacts named {name}: {exc}") from exc
-    artifacts = [a for a in listing.get("artifacts") or [] if isinstance(a, dict) and a.get("name") == name and not a.get("expired")]
-    artifacts.sort(key=lambda a: str(a.get("created_at") or ""), reverse=True)
+        raise Refusal(f"cannot list {kind} receipts for {subject}: {exc}") from exc
     found: list[tuple[dict[str, Any], dict[str, Any]]] = []
     unreadable = 0
-    for artifact in artifacts:
+    for item in listed:
         try:
-            raw = sources.artifact_zip(cfg.repo, int(artifact["id"]))
-            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-                receipt = json.loads(archive.read(member))
-        except (SourceError, KeyError, ValueError, zipfile.BadZipFile) as exc:
+            receipt = item.json(member)
+        except ci_receipts.ReceiptError as exc:
             unreadable += 1
-            print(f"warning: unreadable {name} artifact {artifact.get('id')}: {exc}", file=sys.stderr)
+            print(f"warning: unreadable {kind} receipt {item.instance}: {exc}", file=sys.stderr)
             continue
         if isinstance(receipt, dict):
-            found.append((artifact, receipt))
+            found.append((item.stamp, receipt))
         else:
             unreadable += 1
     return found, unreadable
@@ -212,41 +219,40 @@ def _receipts(cfg: Config, sources: Sources, name: str, member: str) -> tuple[li
 
 def gate_hosted_qa(cfg: Config, sources: Sources, sha: str, digest: str | None) -> dict[str, Any]:
     """The newest decisive Hosted Live QA verdict for this exact commit is `passed`, from a completed run."""
-    name = f"hosted-live-qa-verdict-{sha}"
-    found, unreadable = _receipts(cfg, sources, name, QA_MEMBER)
+    found, unreadable = _receipts(sources, QA_KIND, sha, QA_MEMBER)
     if not found:
         raise Refusal(
-            f"no Hosted Live QA verdict receipt for {_short(sha)} (artifact {name}"
+            f"no Hosted Live QA verdict receipt for {_short(sha)} ({QA_KIND}/{sha}"
             f"{f', {unreadable} unreadable' if unreadable else ''}); QA has not run on this commit since receipts began, "
-            f"or its artifact expired. QA deploys the commit's image to its own instance and queues behind other runs "
+            f"or its receipt was never written. QA deploys the commit's image to its own instance and queues behind other runs "
             f"(no push can replace it), so dispatch it and watch it finish: "
             f"gh workflow run hosted-live-qa.yml --ref main -f source_sha={sha}"
         )
     decisive: list[tuple[dict[str, Any], dict[str, Any]]] = []
     superseded = 0
-    for artifact, receipt in found:
+    for stamp, receipt in found:
         if receipt.get("schema") != QA_SCHEMA or receipt.get("verified_sha") != sha:
             continue
         if receipt.get("verdict") == "superseded":
             superseded += 1
         else:
-            decisive.append((artifact, receipt))
+            decisive.append((stamp, receipt))
     if not decisive:
         raise Refusal(
             f"Hosted Live QA has no decisive run for {_short(sha)}: {superseded} superseded "
             f"(something other than the QA workflow deployed to the QA instance mid-run; a superseded run is not qualification). "
             f"Re-run it: gh workflow run hosted-live-qa.yml --ref main -f source_sha={sha}"
         )
-    artifact, receipt = decisive[0]
+    stamp, receipt = decisive[0]
     if receipt.get("verdict") != "passed":
         raise Refusal(
             f"the latest Hosted Live QA verdict for {_short(sha)} is {receipt.get('verdict')!r}: {receipt.get('reason')}"
         )
     if receipt.get("canary_sha") != sha or receipt.get("failed_steps"):
         raise Refusal(f"the Hosted Live QA receipt for {_short(sha)} says passed but is partial: {receipt.get('failed_steps')}")
-    run_id = (artifact.get("workflow_run") or {}).get("id")
+    run_id = stamp.get("run_id")
     if run_id is None or str((receipt.get("run") or {}).get("id")) != str(run_id):
-        raise Refusal(f"the Hosted Live QA receipt does not belong to the run that uploaded it (artifact run {run_id})")
+        raise Refusal(f"the Hosted Live QA receipt does not belong to the run that wrote it (stamped run {run_id})")
     try:
         run = sources.github(f"repos/{cfg.repo}/actions/runs/{run_id}")
     except SourceError as exc:
@@ -286,34 +292,41 @@ def gate_hosted_qa(cfg: Config, sources: Sources, sha: str, digest: str | None) 
 
 def gate_engine_compat(cfg: Config, sources: Sources, sha: str) -> dict[str, Any]:
     """The previous released engine shipped to this commit's server and was served."""
-    name = f"engine-compat-{sha}"
-    found, unreadable = _receipts(cfg, sources, name, COMPAT_MEMBER)
-    found = [
-        (a, r)
-        for a, r in found
-        if r.get("schema") == COMPAT_SCHEMA
-        and r.get("source_sha") == sha
-        and (a.get("workflow_run") or {}).get("head_sha") in (None, sha)
-    ]
+    found, unreadable = _receipts(sources, COMPAT_KIND, sha, COMPAT_MEMBER)
+    found = [(a, r) for a, r in found if r.get("schema") == COMPAT_SCHEMA and r.get("source_sha") == sha and a.get("sha") == sha]
     if not found:
         raise Refusal(
-            f"no engine-compat receipt for {_short(sha)} (artifact {name}"
+            f"no engine-compat receipt for {_short(sha)} ({COMPAT_KIND}/{sha}"
             f"{f', {unreadable} unreadable' if unreadable else ''}): the previous-release engine smoke has not "
             f"reported on this commit; it is the CI job 'Engine compatibility (previous release)'"
         )
-    artifact, receipt = found[0]
-    if receipt.get("result") != "passed":
-        raise Refusal(
-            f"engine-compat for {_short(sha)} is {receipt.get('result')!r}, not passed: {receipt.get('reason') or 'no reason recorded'}"
-        )
-    return {
-        "run_id": (artifact.get("workflow_run") or {}).get("id"),
-        "previous_release_tag": receipt.get("previous_release_tag"),
-        "previous_engine": receipt.get("previous_engine"),
-        "counts": receipt.get("counts"),
-        "recorded_at": receipt.get("recorded_at"),
-        "subject": receipt.get("subject"),
-    }
+    reasons = []
+    for stamp, receipt in found:
+        run_id = stamp.get("run_id")
+        try:
+            run = sources.github(f"repos/{cfg.repo}/actions/runs/{run_id}")
+        except SourceError as exc:
+            reasons.append(f"cannot read CI run {run_id}: {exc}")
+            continue
+        # The smoke is a CI job on the commit under test, so only a run of the CI workflow file for exactly this
+        # commit in this repository wrote it. The run's overall conclusion is not read: CI may be red elsewhere.
+        origin = (run.get("path"), run.get("head_sha"), (run.get("head_repository") or {}).get("full_name"), (run.get("repository") or {}).get("full_name"))
+        if origin != (COMPAT_WORKFLOW_PATH, sha, cfg.repo, cfg.repo):
+            reasons.append(f"run {run_id} is not a CI run ({COMPAT_WORKFLOW_PATH}) of {_short(sha)} in {cfg.repo} (path={origin[0]!r} head_sha={origin[1]!r})")
+            continue
+        if receipt.get("result") != "passed":
+            raise Refusal(
+                f"engine-compat for {_short(sha)} is {receipt.get('result')!r}, not passed: {receipt.get('reason') or 'no reason recorded'}"
+            )
+        return {
+            "run_id": run_id,
+            "previous_release_tag": receipt.get("previous_release_tag"),
+            "previous_engine": receipt.get("previous_engine"),
+            "counts": receipt.get("counts"),
+            "recorded_at": receipt.get("recorded_at"),
+            "subject": receipt.get("subject"),
+        }
+    raise Refusal(f"no usable engine-compat receipt for {_short(sha)}: {'; '.join(reasons)}")
 
 
 # --- gate 4: soak ---------------------------------------------------------------------------------------------------
@@ -361,12 +374,11 @@ def gate_archive(cfg: Config, sources: Sources, sha: str, digest: str | None) ->
     if not digest:
         raise Refusal("not evaluated: there is no digest to look for until the dogfood gate passes")
     image_digest = digest.rsplit("@", 1)[-1]
-    name = f"runtime-oci-archive-{sha}"
     redo = f"gh workflow run runtime-image-archive.yml --ref {DEFAULT_BRANCH} -f publish_run_id=<the Publish Runtime Image run of {_short(sha)}>"
-    found, unreadable = _receipts(cfg, sources, name, ARCHIVE_MEMBER)
+    found, unreadable = _receipts(sources, ARCHIVE_KIND, sha, ARCHIVE_MEMBER)
     sealed = [
-        (artifact, receipt)
-        for artifact, receipt in found
+        (stamp, receipt)
+        for stamp, receipt in found
         if receipt.get("schema") == ARCHIVE_SCHEMA
         and receipt.get("sealed") is True
         and receipt.get("source_sha") == sha
@@ -374,13 +386,13 @@ def gate_archive(cfg: Config, sources: Sources, sha: str, digest: str | None) ->
     ]
     if not sealed:
         raise Refusal(
-            f"no sealed OCI archive receipt for {image_digest} (artifact {name}: {len(found)} found"
+            f"no sealed OCI archive receipt for {image_digest} ({ARCHIVE_KIND}/{sha}: {len(found)} found"
             f"{f', {unreadable} unreadable' if unreadable else ''}); Archive Runtime Image runs after every publication. "
             f"If it failed or never ran: {redo}"
         )
     reasons = []
-    for artifact, receipt in sealed:
-        run_id = (artifact.get("workflow_run") or {}).get("id")
+    for stamp, receipt in sealed:
+        run_id = stamp.get("run_id")
         try:
             run = sources.github(f"repos/{cfg.repo}/actions/runs/{run_id}")
         except SourceError as exc:
@@ -563,8 +575,11 @@ class LiveSources(Sources):
             raise SourceError(f"gh api {path} returned {type(payload).__name__}, not an object")
         return payload
 
-    def artifact_zip(self, repo: str, artifact_id: int) -> bytes:
-        return self._gh([f"repos/{repo}/actions/artifacts/{artifact_id}/zip"])
+    def receipts(self, kind: str, subject: str) -> list[ci_receipts.Receipt]:
+        try:
+            return ci_receipts.store_from_environment().instances(kind, subject)
+        except ci_receipts.ReceiptError as exc:
+            raise SourceError(str(exc)) from exc
 
 
 def main(argv: list[str] | None = None) -> int:

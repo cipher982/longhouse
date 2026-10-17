@@ -52,7 +52,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-opencode-console-steer-live-canary
 .PHONY: test-antigravity-conversation-reset test-claude-conversation-reset test-codex-conversation-reset test-cursor-conversation-reset test-opencode-conversation-reset
 .PHONY: provider-fidelity-coverage test-provider-fidelity-coverage fidelity-coverage-gate
-.PHONY: validate-dogfood-runtime test-storage-v2-b2 test-shipper-synthetic-live-bench
+.PHONY: validate-dogfood-runtime validate-actions-storage test-storage-v2-b2 test-shipper-synthetic-live-bench
 .PHONY: phone-shot phone-deploy phone-logs sim-deploy sim-shot sim-logs simlab-run ios-ui-shot ios-previews
 .PHONY: validate-playwright-install
 .PHONY: validate-deploy-window-probe
@@ -791,6 +791,7 @@ VALIDATE_MEMBERS := \
 	validate-affected-check \
 	validate-ship-monitor \
 	validate-dogfood-runtime \
+	validate-actions-storage \
 	validate-web-layout \
 	validate-ios-transcript \
 	lint-test-patterns
@@ -858,10 +859,15 @@ validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 	@python3 scripts/tests/dogfood-refresh-exact.test.py
 	@python3 scripts/tests/dogfood-server-cli-install.test.py
 	@python3 scripts/tests/promote-dogfood.test.py
+	@python3 scripts/tests/ci-receipts.test.py
 	@python3 scripts/tests/promotion-gates.test.py
 	@python3 scripts/tests/promote-production.test.py
 	@python3 scripts/tests/ring-promoter.test.py
 	@python3 scripts/tests/crunch.test.py
+
+validate-actions-storage: ## @internal No GitHub Actions artifact/cache storage; receipts live in the object store
+	@python3 scripts/tests/check-actions-storage.test.py
+	@python3 scripts/ci/check-actions-storage.py
 
 validate-build-identity: ## @internal Build identity freshness check
 	@python3 scripts/build/generate_build_identity.py >/dev/null

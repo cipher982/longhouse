@@ -10,13 +10,11 @@ tests) and over HTTP plus stubbed `gh`/`ssh` (`Wire`, for the script tests).
 from __future__ import annotations
 
 import copy
-import io
 import json
 import os
 import stat
 import sys
 import threading
-import zipfile
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -26,7 +24,11 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "ops"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ci_receipts  # noqa: E402
 import promotion_gates as gates  # noqa: E402
+from fake_s3 import FakeS3  # noqa: E402
+from fake_s3 import PREFIX  # noqa: E402
 
 SHA = "a" * 40
 OTHER_SHA = "d" * 40
@@ -102,6 +104,24 @@ def archive_receipt(*, sha: str = SHA, digest: str = DIGEST, sealed: bool = True
         "sealed": sealed,
         "manifest_key": "images/sha256/" + digest.rsplit(":", 1)[-1] + "/manifest.json",
         "blob_count": 9,
+    }
+
+
+def compat_run(**changes: Any) -> dict:
+    """The CI run of the commit under test whose engine-compat job wrote the receipt."""
+    return {
+        "id": COMPAT_RUN,
+        "name": "CI",
+        "path": gates.COMPAT_WORKFLOW_PATH,
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": SHA,
+        "head_repository": {"full_name": REPO},
+        "repository": {"full_name": REPO},
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.test/ci",
+        **changes,
     }
 
 
@@ -184,6 +204,7 @@ def green_world() -> dict[str, Any]:
         ],
         "runs": {
             str(QA_RUN): qa_run(),
+            str(COMPAT_RUN): compat_run(),
             str(ARCHIVE_RUN): archive_run(),
         },
         "publish_runs": [
@@ -206,19 +227,45 @@ def add_real_tenant(world: dict[str, Any], *, satisfied: bool, soaked_by: dict |
     world["instances"].append({"id": 7, "subdomain": "customer", "status": "active"})
 
 
-def zip_bytes(member: str, receipt: dict) -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr(member, json.dumps(receipt))
-    return buffer.getvalue()
+_KINDS = (
+    (f"{gates.QA_KIND}-", gates.QA_MEMBER),
+    (f"{gates.ARCHIVE_KIND}-", gates.ARCHIVE_MEMBER),
+    (f"{gates.COMPAT_KIND}-", gates.COMPAT_MEMBER),
+)
 
 
-def _member(name: str) -> str:
-    if name.startswith("hosted-live-qa-verdict-"):
-        return gates.QA_MEMBER
-    if name.startswith("runtime-oci-archive-"):
-        return gates.ARCHIVE_MEMBER
-    return gates.COMPAT_MEMBER
+def _kind_subject_member(name: str) -> tuple[str, str, str]:
+    for prefix, member in _KINDS:
+        if name.startswith(prefix):
+            return prefix[:-1], name[len(prefix) :], member
+    raise AssertionError(f"unknown fixture receipt {name}")
+
+
+def _stamp(art: dict, kind: str, subject: str, member: str) -> dict:
+    run = art["workflow_run"]["id"]
+    return {
+        "schema": ci_receipts.STAMP_SCHEMA,
+        "kind": kind,
+        "subject": subject,
+        "run_id": run,
+        "run_attempt": 1,
+        "repository": REPO,
+        "workflow_ref": "",
+        "sha": art["workflow_run"]["head_sha"],
+        "files": [member],
+        "written_at": art["created_at"],
+    }
+
+
+def seed_receipts(objects: dict[str, bytes], world: dict[str, Any]) -> None:
+    """Write the world's fixture receipts into a fake object store, as the CI producers would."""
+    for art in world["artifacts"]:
+        if art["expired"]:
+            continue
+        kind, subject, member = _kind_subject_member(art["name"])
+        base = f"{PREFIX}/{kind}/{subject}/{art['workflow_run']['id']}-1"
+        objects[f"{base}/{member}"] = json.dumps(art["receipt"]).encode()
+        objects[f"{base}/{ci_receipts.STAMP_NAME}"] = json.dumps(_stamp(art, kind, subject, member)).encode()
 
 
 class InProcessSources(gates.Sources):
@@ -254,15 +301,6 @@ class InProcessSources(gates.Sources):
         raise AssertionError(path)
 
     def github(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
-        if path == f"repos/{REPO}/actions/artifacts":
-            name = (params or {})["name"]
-            return {
-                "artifacts": [
-                    {key: value for key, value in art.items() if key != "receipt"}
-                    for art in self.world["artifacts"]
-                    if art["name"] == name
-                ]
-            }
         if path.startswith(f"repos/{REPO}/actions/runs/"):
             run = self.world["runs"].get(path.rsplit("/", 1)[1])
             if run is None:
@@ -270,9 +308,18 @@ class InProcessSources(gates.Sources):
             return run
         raise AssertionError(path)
 
-    def artifact_zip(self, repo: str, artifact_id: int) -> bytes:
-        art = next(a for a in self.world["artifacts"] if a["id"] == artifact_id)
-        return zip_bytes(_member(art["name"]), art["receipt"])
+    def receipts(self, kind: str, subject: str) -> list[ci_receipts.Receipt]:
+        found = []
+        for art in sorted(self.world["artifacts"], key=lambda a: a["created_at"], reverse=True):
+            if art["expired"] or art["name"] != f"{kind}-{subject}":
+                continue
+            _, _, member = _kind_subject_member(art["name"])
+            stamp = _stamp(art, kind, subject, member)
+            body = json.dumps(art["receipt"]).encode()
+            found.append(
+                ci_receipts.Receipt(kind, subject, f"{stamp['run_id']}-1", stamp, lambda name, body=body: body, (member,))
+            )
+        return found
 
 
 GH_STUB = f'''#!{sys.executable}
@@ -300,11 +347,7 @@ elif args[:1] == ["api"]:
             i += 1
     source = pw.InProcessSources(world)
     try:
-        if path.endswith("/zip"):
-            artifact_id = int(path.split("/")[-2])
-            sys.stdout.buffer.write(source.artifact_zip(pw.REPO, artifact_id))
-        else:
-            print(json.dumps(source.github(path, params)))
+        print(json.dumps(source.github(path, params)))
     except pw.gates.SourceError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
@@ -358,6 +401,7 @@ class Wire:
                 except gates.SourceError:
                     return self._send(404, {"detail": "not found"})
 
+        self.s3 = FakeS3()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=lambda: self.server.serve_forever(poll_interval=0.02), daemon=True)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -370,10 +414,13 @@ class Wire:
             path = bin_dir / name
             path.write_text(content)
             path.chmod(path.stat().st_mode | stat.S_IEXEC)
+        seed_receipts(self.s3.objects, self.world)
+        self.s3.__enter__()
         self.thread.start()
         return self
 
     def __exit__(self, *_exc: Any) -> None:
+        self.s3.__exit__()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
@@ -393,6 +440,7 @@ class Wire:
             "DEMO_POLL_SECONDS": "0.2",
             "PROMOTION_RECEIPT_DIR": str(self.root / "receipts"),
             "GITHUB_REPOSITORY": REPO,
+            **self.s3.env(),
         }
 
 

@@ -57,15 +57,12 @@ jobs:
           cp "$(python3 scripts/build/cargo.py artifact --profile release --bin longhouse-engine)" binaries/longhouse-engine-linux-x64
           chmod +x binaries/longhouse-linux-x64 binaries/longhouse-engine-linux-x64 binaries/longhouse-sqlite3-linux-x64
 
-      - name: Upload runtime artifacts
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: runtime-longhouse-engine-linux-x64
-          path: |
-            binaries/longhouse-linux-x64
-            binaries/longhouse-engine-linux-x64
-            binaries/longhouse-sqlite3-linux-x64
-          retention-days: 7
+      # Each build leg attaches its own binaries to the release; the release job reads
+      # them back from there. There is no intermediate artifact.
+      - name: Attach linux x64 binaries to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" binaries/longhouse-linux-x64 binaries/longhouse-engine-linux-x64 binaries/longhouse-sqlite3-linux-x64 --clobber --repo "${{ github.repository }}"
 
   build-engine-linux-arm64:
     timeout-minutes: 45
@@ -103,15 +100,10 @@ jobs:
           cp "$(python3 scripts/build/cargo.py artifact --profile release --bin longhouse-engine)" binaries/longhouse-engine-linux-arm64
           chmod +x binaries/longhouse-linux-arm64 binaries/longhouse-engine-linux-arm64 binaries/longhouse-sqlite3-linux-arm64
 
-      - name: Upload runtime artifacts
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: runtime-longhouse-engine-linux-arm64
-          path: |
-            binaries/longhouse-linux-arm64
-            binaries/longhouse-engine-linux-arm64
-            binaries/longhouse-sqlite3-linux-arm64
-          retention-days: 7
+      - name: Attach linux arm64 binaries to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" binaries/longhouse-linux-arm64 binaries/longhouse-engine-linux-arm64 binaries/longhouse-sqlite3-linux-arm64 --clobber --repo "${{ github.repository }}"
 
   build-macos:
     runs-on: macos-latest
@@ -587,14 +579,12 @@ jobs:
           KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
         run: security delete-keychain "$KEYCHAIN_PATH" || true
 
-      - name: Upload runtime artifacts
-        if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: runtime-macos
-          if-no-files-found: ignore
-          path: binaries/*
-          retention-days: 7
+      # Only a successful, signed and notarized build is attached to a release.
+      - name: Attach macOS binaries to the release
+        if: ${{ success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" binaries/* --clobber --repo "${{ github.repository }}"
 
   release:
     timeout-minutes: 30
@@ -618,17 +608,17 @@ jobs:
             echo "tier=smoke" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Download macOS runtime artifacts
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
-        with:
-          path: binaries
-          name: runtime-macos
-
-      - name: Download linux x64 runtime artifacts
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
-        with:
-          path: binaries
-          name: runtime-longhouse-engine-linux-x64
+      # Exactly the nine files the build legs attached; never the checksum manifest
+      # (a rerun would otherwise fold an old manifest and the arm64 files into the new one).
+      - name: Read the attached runtime binaries back from the release
+        run: |
+          mkdir -p binaries
+          for name in \
+            longhouse-engine-darwin-arm64 longhouse-darwin-arm64 longhouse-sqlite3-darwin-arm64 \
+            Longhouse-macos-arm64.dmg Longhouse-macos-arm64.zip local-runtime-macos-packaging.json \
+            longhouse-engine-linux-x64 longhouse-linux-x64 longhouse-sqlite3-linux-x64; do
+            gh release download "$RELEASE_TAG" --pattern "$name" --dir binaries --clobber --repo "${{ github.repository }}"
+          done
 
       - name: List runtime artifacts
         run: ls -la binaries
@@ -659,8 +649,8 @@ jobs:
               )
           PY
 
-      - name: Upload runtime assets to release
-        run: gh release upload "$RELEASE_TAG" binaries/* --clobber --repo "${{ github.repository }}"
+      - name: Upload the checksum manifest to the release
+        run: gh release upload "$RELEASE_TAG" binaries/local-runtime-checksums.txt --clobber --repo "${{ github.repository }}"
 
       - name: Attest runtime release artifacts
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
@@ -689,11 +679,12 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
     steps:
-      - name: Download linux arm64 runtime artifact
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
-        with:
-          name: runtime-longhouse-engine-linux-arm64
-          path: binaries
+      - name: Read the attached linux arm64 binaries back from the release
+        run: |
+          mkdir -p binaries
+          for name in longhouse-linux-arm64 longhouse-engine-linux-arm64 longhouse-sqlite3-linux-arm64; do
+            gh release download "$RELEASE_TAG" --pattern "$name" --dir binaries --clobber --repo "${{ github.repository }}"
+          done
 
       - name: List arm64 artifacts
         run: ls -la binaries
