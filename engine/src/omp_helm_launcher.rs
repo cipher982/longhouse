@@ -624,7 +624,7 @@ impl OmpHelmServer {
         let socket = match reader.get_ref().try_clone() {
             Ok(socket) => socket,
             Err(error) => {
-                eprintln!("[omp-helm] cannot retain extension transport: {error}");
+                tracing::warn!("cannot retain OMP extension transport: {error}");
                 return;
             }
         };
@@ -1299,14 +1299,15 @@ impl OmpHelmServer {
                     run_id = %ended.run_id,
                     "adopted OMP run no longer owns the status slot"
                 ),
-                Err(error) => eprintln!(
-                    "[omp-helm] status slot retirement failed for adopted-from {} run {}: {error}",
-                    ended.session_id, ended.run_id
+                Err(error) => tracing::warn!(
+                    session_id = %ended.session_id,
+                    run_id = %ended.run_id,
+                    "status slot retirement failed for adopted-from run: {error}"
                 ),
             },
-            Err(error) => eprintln!(
-                "[omp-helm] terminal record enqueue failed for adopted-from {}: {error}",
-                ended.session_id
+            Err(error) => tracing::warn!(
+                session_id = %ended.session_id,
+                "terminal record enqueue failed for adopted-from session: {error}"
             ),
         }
         (context.register)(launch_registration(
@@ -1320,9 +1321,9 @@ impl OmpHelmServer {
             json!({"session_dir": adopted.session_dir, "session_file": adopted.session_file, "profile": adopted.profile, "model": adopted.model, "native_session_id": adopted.native_session_id}),
             Some(&adoption.resume_attempt_id),
         ));
-        eprintln!(
-            "Longhouse: OMP resumed managed session {}; this terminal is now its run",
-            adopted.session_id
+        tracing::info!(
+            session_id = %adopted.session_id,
+            "OMP resumed managed session; this terminal is now its run"
         );
         Ok(())
     }
@@ -1370,7 +1371,7 @@ impl OmpHelmServer {
             if let Err(error) =
                 self.update_identity(connection_id, &frame, false, BindingAttempt::Reconcile)
             {
-                eprintln!("Longhouse: OMP activity identity binding failed: {error:#}");
+                tracing::warn!("OMP activity identity binding failed: {error:#}");
                 return;
             }
         }
@@ -1381,7 +1382,7 @@ impl OmpHelmServer {
             if let Err(error) =
                 self.update_identity(connection_id, &frame, false, BindingAttempt::Reconcile)
             {
-                eprintln!("Longhouse: OMP activity identity binding failed: {error:#}");
+                tracing::warn!("OMP activity identity binding failed: {error:#}");
                 return;
             }
             // The binding performs its own connection/lease checks. Recheck
@@ -1449,7 +1450,7 @@ impl OmpHelmServer {
                     if self.identity_failure_is_current(connection_id, &frame, false) {
                         self.mark_degraded(&error);
                     }
-                    eprintln!("Longhouse: OMP native identity binding failed: {error:#}");
+                    tracing::warn!("OMP native identity binding failed: {error:#}");
                 } else if kind == "session_reconnect" {
                     self.reconcile_turn_generation(&frame);
                     self.reconcile_terminal_snapshot(&frame);
@@ -1491,7 +1492,7 @@ impl OmpHelmServer {
                     if self.identity_failure_is_current(connection_id, &frame, replacement) {
                         self.mark_degraded(&error);
                     }
-                    eprintln!("Longhouse: OMP native replacement binding failed: {error:#}");
+                    tracing::warn!("OMP native replacement binding failed: {error:#}");
                 }
             }
             "session_transition_cancelled" => {
@@ -1567,7 +1568,7 @@ impl OmpHelmServer {
                     .get("message")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown error");
-                eprintln!("Longhouse: OMP initial prompt was not delivered: {message}");
+                tracing::warn!("OMP initial prompt was not delivered: {message}");
             }
             _ => {}
         }
@@ -1702,9 +1703,9 @@ impl OmpHelmServer {
         let turn_id = live_turn_id(&current.run_id, live_turn_seq, live_message_seq);
         let publish_live = live_delta.is_some() || (turn_completed && !live_text.is_empty());
         if let Err(error) = write_json_private(&self.state_path(), &current) {
-            eprintln!(
-                "[omp-helm] state persistence failed for {}: {error}",
-                current.session_id
+            tracing::warn!(
+                session_id = %current.session_id,
+                "OMP Helm state persistence failed: {error}"
             );
         }
         drop(state);
@@ -1785,9 +1786,9 @@ impl OmpHelmServer {
             shared.state.updated_at = Utc::now().to_rfc3339();
             let snapshot = shared.state.clone();
             if let Err(error) = write_json_private(&self.state_path(), &snapshot) {
-                eprintln!(
-                    "[omp-helm] state persistence failed for {}: {error}",
-                    snapshot.session_id
+                tracing::warn!(
+                    session_id = %snapshot.session_id,
+                    "OMP Helm state persistence failed: {error}"
                 );
             }
             (
@@ -1996,9 +1997,7 @@ impl OmpHelmServer {
             match crate::outbox::enqueue_runtime_event(&outbox, &event_value) {
                 Ok(()) => coalescer.record_success(&state, &items, &recent_items, Instant::now()),
                 Err(error) => {
-                    eprintln!(
-                        "Longhouse: OMP background observation could not be retained: {error}"
-                    );
+                    tracing::warn!("OMP background observation could not be retained: {error}");
                 }
             }
         }

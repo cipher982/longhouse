@@ -1670,7 +1670,9 @@ where
 
 /// Commands that hand the invoking terminal to a full-screen provider TUI.
 /// Their stderr is the TUI's screen, so a log line written there is drawn over
-/// it; they log to the daily engine log file like the daemon does.
+/// it; they log to the daily engine log file like the daemon does. Code that
+/// runs while the TUI is up must use `tracing` (or `DeferredNotices` for text
+/// the user needs after exit), never `eprintln!`.
 fn owns_terminal(command: &Commands) -> bool {
     matches!(
         command,
@@ -1688,6 +1690,14 @@ fn owns_terminal(command: &Commands) -> bool {
     )
 }
 
+/// Log to the rolling daily engine log file, pruning week-old files.
+fn init_file_tracing(log_dir: Option<&std::path::Path>) -> anyhow::Result<()> {
+    let log_path = resolve_log_dir(log_dir);
+    std::fs::create_dir_all(&log_path)?;
+    prune_old_logs(&log_path, 7);
+    init_tracing_subscriber(daily_log::DailyLogFile::new(log_path, "engine.log"), false)
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -1698,21 +1708,11 @@ fn main() -> anyhow::Result<()> {
         crate::input_attachments::cleanup_orphan_console_staging();
     }
 
-    // For Connect (daemon) mode: use rolling file appender.
-    // For all other commands: log to stderr as usual.
+    // The daemon and terminal-owning commands use the rolling log file; every
+    // other command logs to stderr as usual.
     match &cli.command {
-        Commands::Connect { log_dir, .. } => {
-            let log_path = resolve_log_dir(log_dir.as_deref());
-            std::fs::create_dir_all(&log_path)?;
-            prune_old_logs(&log_path, 7);
-
-            init_tracing_subscriber(daily_log::DailyLogFile::new(log_path, "engine.log"), false)?;
-        }
-        command if owns_terminal(command) => {
-            let log_path = resolve_log_dir(None);
-            std::fs::create_dir_all(&log_path)?;
-            init_tracing_subscriber(daily_log::DailyLogFile::new(log_path, "engine.log"), false)?;
-        }
+        Commands::Connect { log_dir, .. } => init_file_tracing(log_dir.as_deref())?,
+        command if owns_terminal(command) => init_file_tracing(None)?,
         _ => {
             init_tracing_subscriber(std::io::stderr, true)?;
         }

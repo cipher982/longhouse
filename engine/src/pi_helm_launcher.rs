@@ -1031,9 +1031,7 @@ fn run_pi_provider(
             if server.is_ready() {
                 startup_observed = true;
             } else if startup_started.elapsed() >= CONTROL_READY_NOTICE_DELAY {
-                eprintln!(
-                    "Longhouse: Pi control is not ready yet; native startup remains interactive."
-                );
+                tracing::warn!("Pi control is not ready yet; native startup remains interactive");
                 startup_observed = true;
             }
         }
