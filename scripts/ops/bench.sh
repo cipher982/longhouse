@@ -35,14 +35,15 @@ die() { echo "bench: $*" >&2; exit 1; }
 # Every checkout name gets its own mirror (2 to 4 GB with build output), and agents leave them
 # behind: 34 of them, 27 GB, by 2026-10-17. A mirror's last sync is stamped in `.bench-used`;
 # one not synced for BENCH_MIRROR_DAYS (a mirror that predates the stamp counts by its
-# directory's mtime) is a copy of a tree that exists elsewhere, so it is removed here.
+# directory's mtime) is a copy of a tree that exists elsewhere, so it is removed here. Only a
+# mirror (a directory with a `.git`) is ever touched: `~/bench/corpus` is data, not a mirror.
 # This mirror is never removed, and nothing runs in another one while a sync is in progress
 # (one command at a time under the bench lock, and a job's own sync stamps its mirror).
 prune_stale_mirrors() {
   ssh -o BatchMode=yes "$HOST" "mirror='$REMOTE_DIR'; days='${BENCH_MIRROR_DAYS:-14}'; \
     touch \"\$mirror/.bench-used\"; now=\$(date +%s); \
     for dir in \"\$HOME\"/bench/*/; do \
-      dir=\${dir%/}; [ \"\$dir\" = \"\$HOME/\$mirror\" ] && continue; \
+      dir=\${dir%/}; [ \"\$dir\" = \"\$HOME/\$mirror\" ] && continue; [ -e \"\$dir/.git\" ] || continue; \
       stamp=\$dir/.bench-used; [ -e \"\$stamp\" ] || stamp=\$dir; \
       mtime=\$(stat -c %Y \"\$stamp\" 2>/dev/null || stat -f %m \"\$stamp\"); age=\$(( (now - mtime) / 86400 )); \
       if [ \"\$age\" -ge \"\$days\" ]; then echo \"bench: pruned \$dir (\$age days unused)\" >&2; rm -r \"\$dir\"; fi; \

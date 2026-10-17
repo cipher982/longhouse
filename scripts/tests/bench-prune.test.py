@@ -35,18 +35,21 @@ class PruneTests(unittest.TestCase):
             bench = home / "bench"
             for name in ("current", "synced-recently", "stamped-old", "predates-stamp-old", "predates-stamp-new"):
                 (bench / name / "src").mkdir(parents=True)
+                (bench / name / ".git").mkdir()
                 (bench / name / "src" / "file").write_text("x")
             (bench / "synced-recently" / ".bench-used").touch()
             (bench / "stamped-old" / ".bench-used").touch()
             age(bench / "stamped-old" / ".bench-used", 20)
             age(bench / "predates-stamp-old", 30)
             age(bench / "predates-stamp-new", 3)
+            (bench / "corpus" / "home").mkdir(parents=True)  # data, not a mirror: no .git
+            age(bench / "corpus", 90)
             age(bench / "current", 90)  # the mirror being synced is stamped first, so its age does not matter
             result = self.prune(home, "bench/current")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(
                 sorted(p.name for p in bench.iterdir()),
-                ["current", "predates-stamp-new", "synced-recently"],
+                ["corpus", "current", "predates-stamp-new", "synced-recently"],
             )
             self.assertIn("pruned", result.stderr)
             self.assertTrue((bench / "current" / ".bench-used").exists())
