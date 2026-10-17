@@ -1668,6 +1668,26 @@ where
     Ok(())
 }
 
+/// Commands that hand the invoking terminal to a full-screen provider TUI.
+/// Their stderr is the TUI's screen, so a log line written there is drawn over
+/// it; they log to the daily engine log file like the daemon does.
+fn owns_terminal(command: &Commands) -> bool {
+    matches!(
+        command,
+        Commands::OmpHelm {
+            command: OmpHelmCommands::Launch { .. }
+        } | Commands::PiHelm {
+            command: PiHelmCommands::Launch { .. }
+        } | Commands::CursorHelm {
+            command: CursorHelmCommands::Launch { .. }
+        } | Commands::CodexBridge {
+            command: CodexBridgeCommands::Attach { .. }
+        } | Commands::OpencodeBridge {
+            command: OpencodeBridgeCommands::Attach { .. }
+        }
+    )
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -1686,6 +1706,11 @@ fn main() -> anyhow::Result<()> {
             std::fs::create_dir_all(&log_path)?;
             prune_old_logs(&log_path, 7);
 
+            init_tracing_subscriber(daily_log::DailyLogFile::new(log_path, "engine.log"), false)?;
+        }
+        command if owns_terminal(command) => {
+            let log_path = resolve_log_dir(None);
+            std::fs::create_dir_all(&log_path)?;
             init_tracing_subscriber(daily_log::DailyLogFile::new(log_path, "engine.log"), false)?;
         }
         _ => {
@@ -2978,6 +3003,21 @@ mod tests {
         let targeted = log_filter(Some("reqwest=debug"));
         assert!(targeted.would_enable("reqwest::connect", &Level::DEBUG));
         assert!(!targeted.would_enable("hyper", &Level::ERROR));
+    }
+
+    #[test]
+    fn terminal_owning_commands_log_to_file_not_stderr() {
+        let owns = |args: &[&str]| {
+            let argv = std::iter::once("longhouse-engine").chain(args.iter().copied());
+            owns_terminal(&Cli::try_parse_from(argv).unwrap().command)
+        };
+        assert!(owns(&["omp-helm", "launch"]));
+        assert!(owns(&["pi-helm", "launch"]));
+        assert!(owns(&["cursor-helm", "launch"]));
+        assert!(owns(&["codex-bridge", "attach", "--session-id", "s"]));
+        assert!(owns(&["opencode-bridge", "attach", "--session-id", "s"]));
+        assert!(!owns(&["disk-guard", "status"]));
+        assert!(!owns(&["build-identity"]));
     }
 
     #[test]

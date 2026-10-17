@@ -933,7 +933,11 @@ impl OmpHelmServer {
             // moving its own session. Refusing it marked a live session
             // degraded with no recovery path, and the Runtime Host then closed
             // a session whose terminal was still open.
-            if source != previous_source || (!previous.is_empty() && previous != native_id) {
+            // A fresh launch has no recorded source or native id yet, so OMP's
+            // first report is the session being created, not a move.
+            let moved = (!previous_source.is_empty() && source != previous_source)
+                || (!previous.is_empty() && previous != native_id);
+            if moved {
                 tracing::info!(
                     session_id = %session_id,
                     launched_source = %previous_source,
