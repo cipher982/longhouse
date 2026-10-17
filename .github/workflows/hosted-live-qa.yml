@@ -92,6 +92,7 @@ jobs:
           path: .qa-tools
           sparse-checkout: |
             scripts/lib/hosted-instance.sh
+            scripts/ops/ci_receipts.py
             scripts/ops/release-artifacts.py
             scripts/ops/runtime-deploy.sh
             scripts/qa/hosted-qa-verdict.py
@@ -445,7 +446,7 @@ jobs:
           QA_SHA: ${{ steps.runtime_before.outputs.runtime_sha }}
         run: |
           if [[ -s "$RUNNER_TEMP/hosted-live-qa-verdict.json" ]]; then
-            python3 scripts/ops/ci_receipts.py put hosted-live-qa-verdict "$QA_SHA" "$RUNNER_TEMP/hosted-live-qa-verdict.json"
+            python3 .qa-tools/scripts/ops/ci_receipts.py put hosted-live-qa-verdict "$QA_SHA" "$RUNNER_TEMP/hosted-live-qa-verdict.json"
           else
             echo "No verdict file was written; nothing to record."
           fi

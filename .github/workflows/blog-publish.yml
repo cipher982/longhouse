@@ -30,7 +30,9 @@ jobs:
     name: Publish static blog files
     runs-on: cube-deploy
     needs: validate
-    if: github.repository == 'cipher982/longhouse'
+    # By hand only while Longhouse is paused: longhouse.ai is dark (HTTP 410), and
+    # publishing is public-facing work (control-plane docs/workspace-agents.md).
+    if: github.repository == 'cipher982/longhouse' && github.event_name == 'workflow_dispatch'
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0

@@ -166,6 +166,7 @@ jobs:
           sparse-checkout: |
             .github/actions
             scripts/lib/hosted-instance.sh
+            scripts/ops/ci_receipts.py
             scripts/ops/release-artifacts.py
           sparse-checkout-cone-mode: false
           fetch-depth: 1
