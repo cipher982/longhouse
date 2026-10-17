@@ -653,6 +653,9 @@ jobs:
         run: gh release upload "$RELEASE_TAG" binaries/local-runtime-checksums.txt --clobber --repo "${{ github.repository }}"
 
       - name: Attest runtime release artifacts
+        # GitHub refuses attestations for a user-owned private repository (probed 2026-10-17:
+        # "Feature not available for user-owned private repositories"); nothing verifies them.
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-path: |
@@ -702,6 +705,9 @@ jobs:
         run: gh release upload "$RELEASE_TAG" binaries/longhouse-linux-arm64 binaries/longhouse-engine-linux-arm64 binaries/longhouse-sqlite3-linux-arm64 binaries/local-runtime-checksums.txt --clobber --repo "${{ github.repository }}"
 
       - name: Attest arm64 release artifacts
+        # GitHub refuses attestations for a user-owned private repository (probed 2026-10-17:
+        # "Feature not available for user-owned private repositories"); nothing verifies them.
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-path: |

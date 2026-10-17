@@ -29,6 +29,7 @@ class World:
     def __init__(self, dogfood=A, production=A, published=C):
         self.served = {promoter.DOGFOOD_HEALTH: dogfood, promoter.PRODUCTION_HEALTH: production}
         self.published = published
+        self.gone: set[str] = set()  # ring health URLs that answer 410 Gone
         self.answers: dict[str, tuple[int, str, str]] = {}  # script key -> (rc, stdout, stderr)
         self.gates: dict | None = None  # the receipt promote-production saves
         self.calls: list[list[str]] = []
@@ -54,6 +55,7 @@ class PromoterTests(unittest.TestCase):
         self.world = World()
         patches = {
             "served": lambda url: self.world.served.get(url),
+            "gone": lambda url: url in self.world.gone,
             "newest_published": lambda main: self.world.published,
             "is_ancestor": self.world.is_ancestor,
             "run_script": self.world.run_script,
@@ -106,6 +108,18 @@ class PromoterTests(unittest.TestCase):
         d = promoter.decide_production(dry_run=False)
         self.assertEqual((d["action"], d["waiting_on"]), ("waiting", ["engine_compat", "hosted_qa"]))
         self.assertIn("waiting on engine_compat, hosted_qa", promoter.describe(d))
+
+    def test_a_production_that_answers_410_is_paused_not_unreadable(self):
+        self.world.served[promoter.DOGFOOD_HEALTH] = C
+        self.world.served[promoter.PRODUCTION_HEALTH] = None
+        self.world.gone.add(promoter.PRODUCTION_HEALTH)
+        d = promoter.decide_production(dry_run=False)
+        self.assertEqual(d["action"], "paused")
+        self.assertEqual(promoter.STATE["paused"], "pending")
+        self.assertIn("410 Gone", promoter.describe(d))
+        self.assertEqual(self.world.calls, [])
+        self.world.gone.clear()
+        self.assertEqual(promoter.decide_production(dry_run=False)["action"], "waiting")
 
     def test_production_never_moves_backwards(self):
         self.world.served[promoter.PRODUCTION_HEALTH] = C

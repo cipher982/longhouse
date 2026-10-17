@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -72,6 +73,18 @@ def served(url: str) -> str | None:
         return None
     sha = str(((body or {}).get("build") or {}).get("commit") or "")
     return sha if SHA_RE.match(sha) else None
+
+
+def gone(url: str) -> bool:
+    """True when the ring answers 410 Gone: taken down on purpose, which is not an unreadable ring."""
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "longhouse-ring-promoter/1"})
+        urllib.request.urlopen(request, timeout=15).close()  # noqa: S310 - fixed ring health URLs
+    except urllib.error.HTTPError as exc:
+        return exc.code == 410
+    except OSError:
+        return False
+    return False
 
 
 def gh_json(*args: str):
@@ -142,6 +155,8 @@ def decide_production(dry_run: bool) -> dict:
     dogfood = served(DOGFOOD_HEALTH)
     current = served(PRODUCTION_HEALTH)
     d = {"ring": "production", "served": current, "target": dogfood}
+    if dogfood is not None and current is None and gone(PRODUCTION_HEALTH):
+        return {**d, "action": "paused", "reason": "production is paused: its health answers 410 Gone"}
     if dogfood is None or current is None:
         return {**d, "action": "waiting", "reason": "a ring's health is unreadable"}
     if current == dogfood:
@@ -173,7 +188,7 @@ def decide_production(dry_run: bool) -> dict:
 
 
 STATE = {"promoted": "success", "up_to_date": "success", "would_promote": "pending",
-         "waiting": "pending", "refused": "failure", "failed": "failure"}
+         "waiting": "pending", "paused": "pending", "refused": "failure", "failed": "failure"}
 
 
 def describe(d: dict) -> str:
@@ -185,7 +200,7 @@ def describe(d: dict) -> str:
         text = action.replace("_", " ") + lane
         if d.get("target") and action in ("promoted", "would_promote"):
             text += f" {d['target'][:12]}"
-        elif d.get("reason") and action in ("failed", "refused"):
+        elif d.get("reason") and action in ("failed", "refused", "paused"):
             text += ": " + d["reason"]
     return text[:140]
 
