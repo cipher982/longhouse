@@ -2423,11 +2423,24 @@ async fn fail_omp_invocation(
     let run_id = invocation.latest_turn().run_id;
     let _ = invocation.close_input().await;
     let cleanup_verified = cleanup_owned_child(child, &run_id).await;
-    let mut reason = error;
+    let cancel_requested = crate::turn_claims::default_registry()
+        .and_then(|registry| registry.read(&run_id))
+        .ok()
+        .is_some_and(|claim| claim.cancel_requested_at.is_some());
+    let terminal_state = if cancel_requested && cleanup_verified {
+        "run_cancelled"
+    } else {
+        "run_failed"
+    };
+    let mut reason = if terminal_state == "run_cancelled" {
+        "OMP Console invocation was interrupted by the user".to_string()
+    } else {
+        error
+    };
     if !cleanup_verified {
         reason.push_str("; owned process-group cleanup was not verified");
     }
-    settle_omp_invocation_turns(invocation, sink, "run_failed", &reason, exit_code).await;
+    settle_omp_invocation_turns(invocation, sink, terminal_state, &reason, exit_code).await;
     invocation.process_exited();
     crate::console_lifecycle::unregister(&invocation.launch_id);
     if !cleanup_verified {

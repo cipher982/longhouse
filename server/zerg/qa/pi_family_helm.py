@@ -69,6 +69,7 @@ from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
 from zerg.qa.pi_family_turn_oracle import control_made_its_observation
 from zerg.qa.pi_family_turn_oracle import control_run_assertions
 from zerg.qa.pi_family_turn_oracle import fault_name
+from zerg.qa.pi_family_turn_oracle import is_aborted_assistant_message
 from zerg.qa.pi_family_turn_oracle import negative_control_verdict
 from zerg.qa.pi_family_turn_oracle import pi_family_steer_noncompliance
 from zerg.qa.pi_family_turn_oracle import provider_holds_prompt
@@ -233,6 +234,12 @@ def _scripted_model_fixture(family: Family, proof_file: Path | None) -> tuple[li
             tool_call={"name": "bash", "command": f"sleep 30 && echo scripted-{label}-result"},
         )
         add(f"{label}-answer", f"{prefix}_{'LOCAL_' if local else ''}STEER_", reply="{{input_marker}}")
+        add(
+            f"{label}-settled",
+            f"scripted-{label}-result",
+            reply=f"scripted-{label}-settled",
+            expected_request=False,
+        )
 
     for local in (False, True) if provider == "pi" else (False,):
         label = "local-abort" if local else "abort"
@@ -1275,10 +1282,8 @@ def _wait_native_abort(session_file: Path, *, minimum_offset: int, timeout: floa
 
     def observe() -> dict[str, Any] | None:
         for row in _native_rows(session_file, minimum_offset):
-            message = row.get("message") if isinstance(row.get("message"), Mapping) else {}
-            if row.get("type") == "message" and message.get("role") == "assistant":
-                if str(message.get("stopReason") or "").strip().lower() in {"aborted", "cancelled", "canceled"}:
-                    return row
+            if is_aborted_assistant_message(row):
+                return row
         return None
 
     return _wait(observe, timeout=timeout, description="native aborted message")

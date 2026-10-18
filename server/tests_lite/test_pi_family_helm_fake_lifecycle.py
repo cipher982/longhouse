@@ -675,3 +675,83 @@ def test_the_background_scope_ends_after_its_first_turn(longhouse, tmp_path, mon
     assert result["observation"]["cleanup"]["status"] == "pass"
     # What the background producer asks of the lifecycle it rode on: launch, shipper, convergence, archive, cleanup.
     assert omp_background_producer.background_run_healthy({"provider": "omp", "observation_scope": "scenario", **result})
+
+
+def test_abort_oracle_and_scripted_fixture_handle_pi_abort_error_and_omp_steer_settle() -> None:
+    from zerg.qa import omp_helm_lifecycle
+    from zerg.qa import pi_family_helm
+    from zerg.qa import pi_family_turn_oracle as oracle
+    from zerg.qa import scripted_model_server
+
+    aborted_error_entry = {
+        "type": "message",
+        "id": "aborted-err-1",
+        "parentId": "tool-res-1",
+        "message": {
+            "role": "assistant",
+            "content": [],
+            "stopReason": "error",
+            "errorMessage": "This operation was aborted",
+        },
+    }
+    unrelated_error_entry = {
+        "type": "message",
+        "id": "other-err-1",
+        "parentId": "tool-res-1",
+        "message": {
+            "role": "assistant",
+            "content": [],
+            "stopReason": "error",
+            "errorMessage": "Connection reset by peer",
+        },
+    }
+    assert oracle.is_aborted_assistant_message(aborted_error_entry) is True
+    assert oracle.is_aborted_assistant_message(unrelated_error_entry) is False
+
+    entries = [
+        {
+            "type": "message",
+            "id": "u-task",
+            "parentId": "root",
+            "message": {"role": "user", "content": [{"type": "text", "text": "Task PI_TASK_1"}]},
+        },
+        {"type": "message", "id": "a-tool", "parentId": "u-task", "message": {"role": "assistant", "stopReason": "toolUse", "content": []}},
+        {
+            "type": "message",
+            "id": "tool-res-1",
+            "parentId": "a-tool",
+            "message": {"role": "toolResult", "content": [{"type": "text", "text": "Command aborted"}]},
+        },
+        aborted_error_entry,
+        {
+            "type": "message",
+            "id": "u-after",
+            "parentId": "aborted-err-1",
+            "message": {"role": "user", "content": [{"type": "text", "text": "Reply PI_AFTER_1"}]},
+        },
+        {
+            "type": "message",
+            "id": "a-after",
+            "parentId": "u-after",
+            "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "PI_AFTER_1"}]},
+        },
+    ]
+    verdict = oracle.abort_then_send_verdict(entries, task_marker="PI_TASK_1", task_done_marker="PI_DONE_1", after_marker="PI_AFTER_1")
+    assert verdict["passed"] is True
+    assert verdict["aborted_rows"] == 1
+
+    turns, expected = pi_family_helm._scripted_model_fixture(omp_helm_lifecycle.FAMILY, None)
+    assert "omp-steer-settled" not in expected
+    plan = scripted_model_server._scripted_plan(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "<system-notice>\nBackground job bg_1 has completed.\nscripted-steer-result\n</system-notice>",
+                }
+            ]
+        },
+        turns,
+    )
+    assert plan is not None
+    assert plan.turn_id == "omp-steer-settled"

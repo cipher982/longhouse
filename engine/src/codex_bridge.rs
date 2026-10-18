@@ -4846,6 +4846,7 @@ async fn process_notification(
             if context.state.last_turn_status.as_deref() == Some("failed") {
                 if let Some(error_message) = extract_string(&params, &["turn", "error", "message"])
                 {
+                    eprintln!("[codex-bridge] turn completed with status failed: {error_message}");
                     context.state.last_error = Some(error_message);
                 }
             }

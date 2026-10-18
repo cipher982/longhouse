@@ -57,6 +57,16 @@ def _stop_reason(entry: Mapping[str, Any]) -> str:
     return str(_message(entry).get("stopReason") or "").strip().lower()
 
 
+def is_aborted_assistant_message(entry: Mapping[str, Any]) -> bool:
+    if _role(entry) != "assistant":
+        return False
+    reason = _stop_reason(entry)
+    if reason in _ABORT_STOP_REASONS:
+        return True
+    error = str(_message(entry).get("errorMessage") or "").strip().lower()
+    return reason == "error" and "abort" in error
+
+
 def _text(entry: Mapping[str, Any]) -> str:
     content = _message(entry).get("content")
     if isinstance(content, str):
@@ -287,7 +297,7 @@ def abort_then_send_verdict(
     if task is None:
         return {**verdict, "passed": False, "code": "task_prompt_not_unique"}
     task_turn = _descendants(task, list(entries))
-    aborted = [item for item in task_turn if _role(item) == "assistant" and _stop_reason(item) in _ABORT_STOP_REASONS]
+    aborted = [item for item in task_turn if is_aborted_assistant_message(item)]
     completed = [item for item in entries if _role(item) == "assistant" and marker_answered(_text(item), task_done_marker)]
     verdict.update({"aborted_rows": len(aborted), "task_done_rows": len(completed)})
     if completed or not aborted:
