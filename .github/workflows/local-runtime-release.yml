@@ -226,7 +226,7 @@ jobs:
           security list-keychains -d user -s "${SEARCH_KEYCHAINS[@]}"
           security default-keychain -d user -s "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          if ! security find-identity -v -p codesigning | grep -F "$MACOS_SIGNING_IDENTITY" >/dev/null; then
+          if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "$MACOS_SIGNING_IDENTITY" >/dev/null; then
             echo "Configured signing identity is not available in the signing keychain." >&2
             exit 1
           fi
@@ -594,9 +594,11 @@ jobs:
           PY
 
       - name: Remove temporary signing keychain
-        if: ${{ always() && steps.macos_signing.outputs.enabled == 'true' }}
+        # Whatever the signing step managed to do before it failed, put the runner user's keychain
+        # setup back (the saved copies exist once the step began) and delete our keychain.
+        if: ${{ always() }}
         env:
-          KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
+          KEYCHAIN_PATH: ${{ runner.temp }}/longhouse-release.keychain-db
         run: |
           # Restore the runner user's keychain list and default first, then delete ours.
           if [[ -s "$RUNNER_TEMP/keychains.before" ]]; then
