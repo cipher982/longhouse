@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if ! python3 "$(dirname "${BASH_SOURCE[0]}")/../qa/test_boundary.py"; then
-  echo "Native harnesses run in a disposable hosted macOS VM. Use make menubar-harness MODE=test." >&2
+  echo "Native harnesses run on the wisp runner. Use make menubar-harness MODE=test." >&2
   exit 2
 fi
 

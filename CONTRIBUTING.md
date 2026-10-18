@@ -109,8 +109,10 @@ and statuses, then attach a frame through `make ios-ui-shot TEST=<Suite>/<test>`
 
 Native iOS, macOS packaging, installer, and WebKit onboarding fixtures run
 only for an exact pushed SHA on a native runner: the `wisp` bench Mac (a self-hosted Actions
-runner; hosted macOS is metered 10x for a private repository, and a GitHub-hosted VM is still
-accepted if the repository goes public again). CI invokes
+runner; hosted macOS is out of budget for a private repository, and a GitHub-hosted VM is still
+accepted if the repository goes public again). The credentialed macOS jobs (signing, notarization,
+TestFlight) run there too: the release build restores the runner user's keychain list when it ends,
+and TestFlight signs with Apple's cloud-managed certificate, so no signing identity lives on wisp. CI invokes
 `python3 scripts/qa/native-test-bootstrap.py --target TARGET` with explicit
 `NATIVE_OPTIONS_JSON`; it takes the bench lock (one job at a time), creates a disposable home,
 shuts down and deletes the simulators it created, and records

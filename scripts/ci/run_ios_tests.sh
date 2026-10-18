@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if ! python3 "$(dirname "${BASH_SOURCE[0]}")/../qa/test_boundary.py"; then
-  echo "Native tests run in a disposable hosted macOS VM. Use make test-ios." >&2
+  echo "Native tests run on the wisp runner. Use make test-ios." >&2
   exit 2
 fi
 

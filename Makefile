@@ -400,7 +400,7 @@ test-ios-helper: ## iOS simulator and native-dispatch helper script tests
 	@python3 scripts/tests/native-test-isolation.test.py
 	@python3 scripts/tests/ios-test-lanes.test.py
 
-testflight: ## Ship a main revision to TestFlight via CI (SHA=<sha>, default HEAD; WHATS_NEW="tester note"; INTERNAL_ONLY=1)
+testflight: ## Ship a main revision to TestFlight via CI on wisp (SHA=<sha>, default HEAD; WHATS_NEW="tester note"; INTERNAL_ONLY=1; DRY_RUN=1 archives and exports only)
 	@scripts/ops/testflight-ship.sh $(SHA)
 
 testflight-status: ## TestFlight builds, review state and public link (needs ASC_API_* in the environment)
@@ -1384,7 +1384,7 @@ qa-visual-compare: ## Compare current app screenshots against baselines; set SKI
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=chromium tests/visual_compare.spec.ts --workers=1
 
-menubar-harness: ## macOS menu bar harness, dispatched to a hosted macOS VM (MODE=test|render-fixtures|render-trust-states|smoke|xcuitest)
+menubar-harness: ## macOS menu bar harness, dispatched to the wisp runner (MODE=test|render-fixtures|render-trust-states|smoke|xcuitest)
 	@./scripts/qa/menubar-harness.sh $(or $(MODE),test)
 
 qa-oss: ## Full OSS QA (prepared isolated workspace + onboarding)

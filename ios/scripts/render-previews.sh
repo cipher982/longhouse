@@ -10,7 +10,7 @@
 set -euo pipefail
 
 if ! python3 "$(dirname "${BASH_SOURCE[0]}")/../../scripts/qa/test_boundary.py"; then
-  echo "Use make ios-previews to render inside a disposable hosted macOS VM." >&2
+  echo "Use make ios-previews to render on the wisp runner." >&2
   exit 2
 fi
 

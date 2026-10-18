@@ -55,8 +55,8 @@ Do not blur these lanes:
   rerunning the same `VERSION` resumes and skips validation for an
   already-validated candidate (`RELEASE_REVALIDATE=1` forces it).
 - **iOS TestFlight** — `make testflight [SHA=<sha>] [WHATS_NEW="tester note"]`
-  dispatches `ios-testflight.yml` (archive on a hosted macOS runner with the
-  iOS 26 SDK, upload and wait for processing). By default it submits for Beta
+  dispatches `ios-testflight.yml` (archive on the wisp runner with the Xcode 27 GM,
+  upload and wait for processing; `DRY_RUN=1` archives and exports only and uploads nothing). By default it submits for Beta
   App Review when needed and publishes to both the public group and the internal
   group. Set `INTERNAL_ONLY=1` to skip public-group and Beta App Review setup;
   the build is made available only through the all-builds internal group. The SHA

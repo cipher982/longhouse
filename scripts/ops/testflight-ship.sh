@@ -6,6 +6,7 @@
 #   scripts/ops/testflight-ship.sh [sha]        # default: HEAD (must be on origin/main)
 #   WHATS_NEW="note for testers" scripts/ops/testflight-ship.sh
 #   INTERNAL_ONLY=1 scripts/ops/testflight-ship.sh   # internal group only: no public link, no Beta App Review
+#   DRY_RUN=1 scripts/ops/testflight-ship.sh         # archive and export on wisp; upload and publish nothing
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -24,7 +25,9 @@ git merge-base --is-ancestor "$SHA" origin/main \
 before="$(gh run list -R "$REPO" -w "$WORKFLOW" --limit 1 --json databaseId -q '.[0].databaseId // 0')"
 INTERNAL_ONLY_INPUT=false
 if [ "${INTERNAL_ONLY:-}" = "1" ]; then INTERNAL_ONLY_INPUT=true; fi
-gh workflow run "$WORKFLOW" -R "$REPO" --ref main -f source_sha="$SHA" ${WHATS_NEW:+-f whats_new="$WHATS_NEW"} -f internal_only="$INTERNAL_ONLY_INPUT"
+DRY_RUN_INPUT=false
+if [ "${DRY_RUN:-}" = "1" ]; then DRY_RUN_INPUT=true; fi
+gh workflow run "$WORKFLOW" -R "$REPO" --ref main -f source_sha="$SHA" ${WHATS_NEW:+-f whats_new="$WHATS_NEW"} -f internal_only="$INTERNAL_ONLY_INPUT" -f dry_run="$DRY_RUN_INPUT"
 
 run_id=""
 for _ in $(seq 1 24); do

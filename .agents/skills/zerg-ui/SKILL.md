@@ -16,10 +16,10 @@ shown to you. Use it.
 
 | You changed | Render it with | Where it runs | Sees |
 | --- | --- | --- | --- |
-| A SwiftUI view or its states | `make ios-previews` | Hosted macOS VM (dispatched), minutes | Every `#Preview` in dark/light and edge states, no server |
+| A SwiftUI view or its states | `make ios-previews` | wisp runner (dispatched), minutes | Every `#Preview` in dark/light and edge states, no server |
 | iOS screen against real data | `make sim-deploy SESSION=<id>` then `make sim-shot LABEL=<name>` | Simulator on the bench: `scripts/ops/bench.sh run ...` (cold build ~70 s, then seconds per shot) | The real pipeline: hosted data, real fonts, real chrome |
-| iOS screen in a deterministic state | `make ios-ui-shot TEST=<Suite>/<test>` | Hosted macOS VM (dispatched) | A fixture-driven frame the UI test attaches, exported to PNG |
-| iOS ingest/recovery without a phone | `make simlab-run` | Hosted macOS VM (dispatched); `simlab.py up/run` on the bench for iteration | Scratch Runtime Host + Machine Agent + iOS app; client-render convergence and network recovery |
+| iOS screen in a deterministic state | `make ios-ui-shot TEST=<Suite>/<test>` | wisp runner (dispatched) | A fixture-driven frame the UI test attaches, exported to PNG |
+| iOS ingest/recovery without a phone | `make simlab-run` | wisp runner (dispatched); `simlab.py up/run` on the bench for iteration | Scratch Runtime Host + Machine Agent + iOS app; client-render convergence and network recovery |
 | Web page or row | `make ui-capture PAGE=<page> SCENE=<scene>` | Here, ~7s from cold, nothing needs to be running | Playwright screenshot plus accessibility snapshot |
 | Web composer in every live state | `make ui-capture PAGE=session-detail SCENE=session-tones` | Here, ~7s, one PNG per tone | running, thinking, active, idle, stalled, blocked, closed, unknown side by side |
 | Every web page and state at once | `make ui-gallery` (`ONLY=session` narrows it) | Here, ~3 min for ~105 captures, one Vite, 4 at a time | One `index.html` contact sheet under `/tmp/agents/ui-gallery/<stamp>/`: each fixture scene at 1440x900, 2000x1200 and phone, plus the newest downloaded iOS renders |
@@ -70,7 +70,7 @@ If a check is interrupted, inspect and clean its exact process group before doin
 ### Autonomous recovery dogfood (simlab)
 
 Use this before asking a user to reproduce transcript-delivery or reconnect
-problems on a phone. The gate form is the dispatched hosted-VM job; iterate on
+problems on a phone. The gate form is the dispatched wisp job; iterate on
 the bench:
 
 ```bash

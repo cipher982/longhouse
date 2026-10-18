@@ -18,7 +18,7 @@
 #         exported too, so a failing run still leaves a frame to look at.
 set -euo pipefail
 if ! python3 "$(dirname "${BASH_SOURCE[0]}")/../qa/test_boundary.py"; then
-  echo "Use make ios-ui-shot TEST=... to run in a disposable hosted macOS VM." >&2
+  echo "Use make ios-ui-shot TEST=... to run on the wisp runner." >&2
   exit 2
 fi
 TEST="${1:?test id required, e.g. SessionChatUITests/testName}"
