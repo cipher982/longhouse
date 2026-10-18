@@ -10,12 +10,19 @@ readonly SQLITE_SOURCE_URL="https://www.sqlite.org/2026/sqlite-autoconf-${SQLITE
 readonly SQLITE_SOURCE_SHA256="81f5be397049b0cae1b167f2225af7646fc0f82e4a9b3c48c9ea3a533e21d77a"
 
 usage() {
-    printf 'Usage: %s --output PATH\n' "$0" >&2
+    printf 'Usage: %s --output PATH [--host TRIPLE]\n' "$0" >&2
 }
 
 output_path=""
+host_triple=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --host)
+            # Cross-compile for TRIPLE (for example aarch64-linux-gnu) with its `<triple>-gcc`.
+            [[ $# -ge 2 ]] || { usage; exit 2; }
+            host_triple="$2"
+            shift 2
+            ;;
         --output)
             [[ $# -ge 2 ]] || { usage; exit 2; }
             output_path="$2"
@@ -70,6 +77,7 @@ fi
     CFLAGS="${CFLAGS:-} -DSQLITE_ENABLE_DBPAGE_VTAB -DSQLITE_ENABLE_RECOVER" \
     LDFLAGS="${LDFLAGS:-}${static_ldflags}" \
     ./configure \
+        ${host_triple:+--host="$host_triple"} \
         --disable-readline \
         --disable-shared \
         --enable-static
@@ -78,4 +86,9 @@ fi
 
 mkdir -p "$(dirname "$output_path")"
 install -m 0755 "$source_dir/sqlite3" "$output_path"
-"$output_path" :memory: ".recover" >/dev/null
+if [[ -n "$host_triple" ]]; then
+    # A cross-built shell cannot run here; the target's own checks cover it.
+    echo "cross-built for $host_triple; skipping the .recover smoke check" >&2
+else
+    "$output_path" :memory: ".recover" >/dev/null
+fi

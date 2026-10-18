@@ -21,7 +21,7 @@ jobs:
   # directory on this runner, not artifacts handed between jobs.
   release:
     timeout-minutes: 45
-    runs-on: ubuntu-latest
+    runs-on: crunch
 
     steps:
       - name: Checkout

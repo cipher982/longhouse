@@ -112,7 +112,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: crunch
             shell_path: /bin/bash
           - os: wisp
             shell_path: /bin/zsh
@@ -166,7 +166,7 @@ jobs:
                 "Longhouse-macos-arm64.zip"
               )
               ;;
-            ubuntu-latest)
+            crunch)
               required_assets+=(
                 "longhouse-engine-linux-x64"
               )
@@ -254,7 +254,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: crunch
             shell_path: /bin/bash
           - os: wisp
             shell_path: /bin/zsh
@@ -349,6 +349,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Hosted arm64: out of budget while the repository is private; opt-in only.
           - os: ubuntu-24.04-arm
             project: onboarding-chromium
             browsers: "chromium"
