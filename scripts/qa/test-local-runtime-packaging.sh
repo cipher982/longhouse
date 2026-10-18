@@ -131,9 +131,13 @@ required_names = {
     "Longhouse.app/Contents/Info.plist",
     "Longhouse.app/Contents/MacOS/Longhouse",
     "Longhouse.app/Contents/Resources/AppIcon.icns",
-    "Longhouse.app/Contents/Resources/LonghouseMenuBarHarness_LonghouseMenuBarCore.bundle/LonghouseMenuIcon.png",
-    "Longhouse.app/Contents/Resources/LonghouseMenuBarHarness_LonghouseMenuBarCore.bundle/desktop-app-setup.sh",
 }
+# SwiftPM from Xcode 27 nests a resource bundle's files under Contents/Resources; older toolchains
+# left them flat. Either layout is a good bundle.
+resource_bundle = "Longhouse.app/Contents/Resources/LonghouseMenuBarHarness_LonghouseMenuBarCore.bundle"
+for resource in ("LonghouseMenuIcon.png", "desktop-app-setup.sh"):
+    if not {f"{resource_bundle}/{resource}", f"{resource_bundle}/Contents/Resources/{resource}"} & names:
+        required_names.add(f"{resource_bundle}/{resource}")
 missing = sorted(required_names - names)
 if missing:
     raise SystemExit(f"Archive missing expected paths: {missing}")

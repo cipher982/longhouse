@@ -322,8 +322,12 @@ jobs:
         timeout-minutes: 2
         run: |
           RESOURCE_BUNDLE="$RUNNER_TEMP/macos-app-bundles/Longhouse.app/Contents/Resources/LonghouseMenuBarHarness_LonghouseMenuBarCore.bundle"
-          test -f "$RESOURCE_BUNDLE/LonghouseMenuIcon.png"
-          test -f "$RESOURCE_BUNDLE/desktop-app-setup.sh"
+          # SwiftPM from Xcode 27 nests a resource bundle's files under Contents/Resources;
+          # older toolchains left them flat. Either layout is a good bundle.
+          for resource in LonghouseMenuIcon.png desktop-app-setup.sh; do
+            test -n "$(find "$RESOURCE_BUNDLE" -type f -name "$resource" | head -1)" \
+              || { echo "resource bundle lacks $resource: $RESOURCE_BUNDLE" >&2; exit 1; }
+          done
           "$RUNNER_TEMP/macos-app-bundles/Longhouse.app/Contents/MacOS/Longhouse" \
             --input desktop/LonghouseMenuBarHarness/Fixtures/healthy.json \
             --quit-after 1
