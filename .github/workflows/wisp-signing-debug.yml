@@ -51,6 +51,31 @@ jobs:
           cp /bin/echo "$RUNNER_TEMP/t1"
           echo "sign after importing the AIA issuer:"; codesign --force --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$RUNNER_TEMP/t1"; echo "rc=$?"
           codesign -dv --verbose=2 "$RUNNER_TEMP/t1" 2>&1 | grep -E "Authority|Timestamp|Signature" | sed 's/^/  /'
+          echo "--- trust evaluation and session"
+          launchctl managername; id
+          security verify-cert -c "$RUNNER_TEMP/cert1.pem" -p codesigning -r "$RUNNER_TEMP/issuer.bin" -v 2>&1 | sed 's/^/  /'
+          echo "verify-cert (no explicit intermediate), keychain search list:"
+          security verify-cert -c "$RUNNER_TEMP/cert1.pem" -p codesigning -k "$KC" -v 2>&1 | sed 's/^/  /'
+          echo "--- self-signed identity in the same keychain (key access without a chain)"
+          cat > "$RUNNER_TEMP/ss.cnf" <<'CNF'
+          [req]
+          distinguished_name=dn
+          x509_extensions=ext
+          prompt=no
+          [dn]
+          CN=wisp-selfsigned-probe
+          [ext]
+          keyUsage=critical,digitalSignature
+          extendedKeyUsage=critical,codeSigning
+          CNF
+          sed -i '' 's/^          //' "$RUNNER_TEMP/ss.cnf"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -config "$RUNNER_TEMP/ss.cnf" -keyout "$RUNNER_TEMP/ss.key" -out "$RUNNER_TEMP/ss.crt" 2>&1 | tail -1
+          openssl pkcs12 -export -inkey "$RUNNER_TEMP/ss.key" -in "$RUNNER_TEMP/ss.crt" -out "$RUNNER_TEMP/ss.p12" -passout pass:probe -legacy 2>&1 | tail -1
+          security import "$RUNNER_TEMP/ss.p12" -k "$KC" -P probe -T /usr/bin/codesign > /dev/null; echo "import ss=$?"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PW" "$KC" > /dev/null
+          cp /bin/echo "$RUNNER_TEMP/t2"
+          codesign --force --sign wisp-selfsigned-probe "$RUNNER_TEMP/t2"; echo "self-signed sign rc=$?"
+          rm -f "$RUNNER_TEMP"/ss.*
           echo "--- restore"
           keychains=()
           while IFS= read -r line; do line="$(tr -d ' "' <<<"$line")"; [[ -n "$line" ]] && keychains+=("$line"); done < "$RUNNER_TEMP/keychains.before"
