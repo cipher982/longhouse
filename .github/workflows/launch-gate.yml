@@ -76,7 +76,7 @@ on:
         default: false
         type: boolean
       run_extended_hosted_matrix:
-        description: "Run the extra hosted ARM/macOS onboarding jobs"
+        description: "Run the extra macOS (wisp) WebKit onboarding job"
         required: false
         default: true
         type: boolean
@@ -349,10 +349,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Hosted arm64: out of budget while the repository is private; opt-in only.
-          - os: ubuntu-24.04-arm
-            project: onboarding-chromium
-            browsers: "chromium"
+          # The arm64 Chromium leg that used to sit here was a hosted runner, out of budget
+          # while the repository is private; the crunch job above runs the same ring on x86-64.
           - os: wisp
             project: onboarding-webkit
             browsers: "chromium firefox webkit"

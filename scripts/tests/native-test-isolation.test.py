@@ -114,11 +114,6 @@ class DispatchTargetsTheCallerRevisionTests(unittest.TestCase):
 
 
 class NoHostedRunnerTests(unittest.TestCase):
-    # The one opt-in leg that still names a hosted label: arm64 Chromium coverage, which no
-    # self-hosted machine of ours provides. It starts only on request and fails fast when the
-    # Actions budget refuses it.
-    HOSTED_ALLOWED = {"launch-gate.yml": "ubuntu-24.04-arm"}
-
     def test_no_workflow_asks_for_a_hosted_runner(self):
         """Hosted jobs are out of budget while the repository is private ("The job was not started
         because an Actions budget is preventing further use"): macOS runs on wisp, Linux on crunch
@@ -126,12 +121,11 @@ class NoHostedRunnerTests(unittest.TestCase):
 
         offenders = []
         for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
-            allowed = self.HOSTED_ALLOWED.get(workflow.name)
             for number, line in enumerate(workflow.read_text().splitlines(), 1):
                 code = line.split("#", 1)[0]
                 if not ("runs-on" in code or "os:" in code):
                     continue
-                if ("macos-" in code or "ubuntu-" in code or "windows-" in code) and not (allowed and allowed in code):
+                if "macos-" in code or "ubuntu-" in code or "windows-" in code:
                     offenders.append(f"{workflow.name}:{number}: {line.strip()}")
         self.assertEqual(offenders, [])
 
