@@ -22,6 +22,11 @@ on:
         required: false
         default: false
         type: boolean
+      dry_run:
+        description: Archive and export only; upload nothing and publish nothing
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -32,10 +37,11 @@ concurrency:
 
 jobs:
   testflight:
-    # Standard public-repository runner: no billed larger runner or self-hosted Mac.
-    # macos-26 because App Store Connect requires the iOS 26 SDK (macos-15 defaults to
-    # Xcode 16.4, whose builds it rejects at upload).
-    runs-on: macos-26
+    # The wisp runner (David's bench Mac): hosted macOS is out of budget for a private
+    # repository. App Store Connect needs a release Xcode with the iOS 26 SDK or later; wisp
+    # carries the Xcode 27 GM (licenseType GM), so check `xcodebuild -version` in the
+    # Toolchain step if an upload is ever rejected for its toolchain.
+    runs-on: wisp
     timeout-minutes: 60
     # Secrets are scoped to this environment, which is limited to the main branch.
     environment: testflight
@@ -57,18 +63,26 @@ jobs:
       - name: Install XcodeGen
         run: scripts/ci/install_xcodegen.sh
       - name: Toolchain
-        run: xcodebuild -version
+        run: |
+          xcodebuild -version
+          # A beta Xcode builds fine and App Store Connect then rejects the upload; fail early.
+          [[ "$(defaults read "$(dirname "$(xcode-select -p)")/Resources/LicenseInfo" licenseType)" == GM ]] \
+            || { echo "the selected Xcode is not a GM release; App Store Connect rejects beta toolchains" >&2; exit 1; }
       - name: Archive, export and upload
         id: build
         env:
           ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
           ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
           ASC_API_KEY_P8_B64: ${{ secrets.ASC_API_KEY_P8_B64 }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          ios/scripts/testflight-build.sh --upload | tee "$RUNNER_TEMP/build.out"
+          UPLOAD_FLAG="--upload"
+          if [ "$DRY_RUN" = "true" ]; then UPLOAD_FLAG=""; fi
+          scripts/ci/with-bench-lock.sh ios/scripts/testflight-build.sh $UPLOAD_FLAG | tee "$RUNNER_TEMP/build.out"
           echo "build=$(sed -n 's/^build_number=//p' "$RUNNER_TEMP/build.out")" >> "$GITHUB_OUTPUT"
       - name: Wait for processing and publish to TestFlight
+        if: ${{ !inputs.dry_run }}
         env:
           ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
           ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}

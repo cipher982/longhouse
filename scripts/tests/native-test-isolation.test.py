@@ -113,5 +113,32 @@ class DispatchTargetsTheCallerRevisionTests(unittest.TestCase):
         self.assertIn("ref: ${{ inputs.source_sha }}", checkout)
 
 
+class NoHostedMacRunnerTests(unittest.TestCase):
+    def test_no_workflow_asks_for_a_hosted_macos_runner(self):
+        """Hosted macOS is out of budget while the repository is private: every macOS job
+        runs on wisp, so a `macos-*` label would queue and never start."""
+
+        offenders = []
+        for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            for number, line in enumerate(workflow.read_text().splitlines(), 1):
+                code = line.split("#", 1)[0]
+                if ("runs-on" in code or "os:" in code) and "macos-" in code:
+                    offenders.append(f"{workflow.name}:{number}: {line.strip()}")
+        self.assertEqual(offenders, [])
+
+    def test_the_bench_lock_wrapper_only_locks_on_wisp(self):
+        wrapper = ROOT / "scripts/ci/with-bench-lock.sh"
+        elsewhere = subprocess.run(
+            [str(wrapper), "echo", "ran"],
+            env={"PATH": os.environ["PATH"]},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual((elsewhere.returncode, elsewhere.stdout.strip()), (0, "ran"))
+        body = wrapper.read_text()
+        self.assertIn("/tmp/longhouse-bench.lock", body)
+        self.assertIn('RUNNER_NAME:-}" == "wisp"', body)
+
+
 if __name__ == "__main__":
     unittest.main()

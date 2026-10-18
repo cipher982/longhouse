@@ -104,8 +104,9 @@ jobs:
   installer-smoke:
     # Scheduled runs get the public canary below instead: building the pair
     # locally proves nothing new once a release is out.
-    # Native installer + upgrade proof on hosted Linux and macOS: release candidates and by hand only
-    # while the repository is private (hosted macOS minutes are metered 10x).
+    # Native installer + upgrade proof on hosted Linux and on the wisp runner (a Mac of David's):
+    # release candidates and by hand only. The proof runs in a disposable HOME and keeps wisp's
+    # own launchd and Applications untouched.
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && github.event.release.prerelease == false) }}
     strategy:
       fail-fast: false
@@ -113,7 +114,7 @@ jobs:
         include:
           - os: ubuntu-latest
             shell_path: /bin/bash
-          - os: macos-latest
+          - os: wisp
             shell_path: /bin/zsh
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -159,7 +160,7 @@ jobs:
           deadline=$((SECONDS + 900))
           required_assets=("local-runtime-checksums.txt")
           case "$MATRIX_OS" in
-            macos-latest)
+            wisp)
               required_assets+=(
                 "longhouse-engine-darwin-arm64"
                 "Longhouse-macos-arm64.zip"
@@ -241,7 +242,7 @@ jobs:
                 sort_by(version) | last // error("No previous stable release")')"
             export LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG="$previous_tag"
           fi
-          ./scripts/ci/native-installer-smoke.sh
+          scripts/ci/with-bench-lock.sh ./scripts/ci/native-installer-smoke.sh
 
   installer-public-canary:
     # Installs what the world actually gets: the latest published release,
@@ -255,7 +256,7 @@ jobs:
         include:
           - os: ubuntu-latest
             shell_path: /bin/bash
-          - os: macos-latest
+          - os: wisp
             shell_path: /bin/zsh
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -294,7 +295,7 @@ jobs:
                 select(version < $target_version)] |
               sort_by(version) | last // error("No previous stable release")')"
           export LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG="$previous_tag"
-          ./scripts/ci/native-installer-smoke.sh
+          scripts/ci/with-bench-lock.sh ./scripts/ci/native-installer-smoke.sh
 
   runtime-packaging-macos:
     if: ${{ (github.event_name == 'release' || github.event_name == 'workflow_dispatch') }}
@@ -351,7 +352,7 @@ jobs:
           - os: ubuntu-24.04-arm
             project: onboarding-chromium
             browsers: "chromium"
-          - os: macos-latest
+          - os: wisp
             project: onboarding-webkit
             browsers: "chromium firefox webkit"
     runs-on: ${{ matrix.os }}

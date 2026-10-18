@@ -9,10 +9,8 @@ run-name: Private-input proof ${{ inputs.request_id }}
 # dispatch-only by construction: a push- or PR-triggered job that reads provider
 # credentials would hand them to any fork that opens a pull request.
 #
-# Cost and limits: standard public-repository runners only, so macOS minutes are free
-# here and no billed larger runner is used. GitHub Free allows 5 concurrent macOS jobs
-# and queues the rest, so an explicit concurrency group keeps a push burst from
-# stacking dispatches behind the deploy gate.
+# Cost and limits: it runs on the wisp runner (one job at a time), so the explicit
+# concurrency group keeps a push burst from stacking dispatches behind the deploy gate.
 
 on:
   workflow_dispatch:
@@ -36,7 +34,10 @@ concurrency:
 jobs:
   private-input:
     if: github.repository == 'cipher982/longhouse'
-    runs-on: macos-15
+    # The wisp runner (a Mac of David's; hosted macOS is out of budget while the repository is
+    # private). The provider CLI is installed into a job-owned HOME below and never touches
+    # the runner user's own.
+    runs-on: wisp
     timeout-minutes: 40
     env:
       LONGHOUSE_QA_HOSTED_TARGET: https://${{ vars.HOSTED_CANARY_SUBDOMAIN }}.longhouse.ai
@@ -95,7 +96,7 @@ jobs:
           # The engine refuses to build without a generated identity, and the file is
           # gitignored, so each job generates its own.
           python3 scripts/build/generate_build_identity.py
-          python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --profile ci --bin longhouse-engine --bin longhouse
+          scripts/ci/with-bench-lock.sh python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --profile ci --bin longhouse-engine --bin longhouse
           engine="$(python3 scripts/build/cargo.py artifact --profile ci --bin longhouse-engine)"
           cli="$(python3 scripts/build/cargo.py artifact --profile ci --bin longhouse)"
           test -x "$engine"

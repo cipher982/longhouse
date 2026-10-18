@@ -106,7 +106,10 @@ jobs:
         run: gh release upload "$RELEASE_TAG" binaries/longhouse-linux-arm64 binaries/longhouse-engine-linux-arm64 binaries/longhouse-sqlite3-linux-arm64 --clobber --repo "${{ github.repository }}"
 
   build-macos:
-    runs-on: macos-latest
+    # The wisp runner (a Mac of David's, see specs/private-repo-ci.md): hosted macOS is out of
+    # budget for a private repository. The job borrows the runner user's keychain search list
+    # for the signing keychain, so it restores that list at the end, whatever happened.
+    runs-on: wisp
     timeout-minutes: 360
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
@@ -136,10 +139,10 @@ jobs:
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch head 2026-08-05
 
       - name: Build pinned SQLite recovery shell
-        run: bash scripts/build/build-sqlite-shell.sh --output binaries/longhouse-sqlite3-darwin-arm64
+        run: scripts/ci/with-bench-lock.sh bash scripts/build/build-sqlite-shell.sh --output binaries/longhouse-sqlite3-darwin-arm64
 
       - name: Build native device binaries
-        run: python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
+        run: scripts/ci/with-bench-lock.sh python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
 
       - name: Collect engine binary
         run: |
@@ -151,7 +154,7 @@ jobs:
 
       - name: Build macOS ambient app payload
         run: |
-          PRODUCT_PATH="$(scripts/build/resolve-swift-product-path.sh \
+          PRODUCT_PATH="$(scripts/ci/with-bench-lock.sh scripts/build/resolve-swift-product-path.sh \
             --package-path desktop/LonghouseMenuBarHarness \
             --product LonghouseMenuBarHarnessMenuBar \
             --configuration release)"
@@ -176,6 +179,11 @@ jobs:
             echo "codesign_identity=-" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          # wisp is a persistent machine: remember the runner user's keychain setup so the
+          # cleanup step can put it back (a hosted VM never needed this).
+          security list-keychains -d user > "$RUNNER_TEMP/keychains.before"
+          security default-keychain -d user > "$RUNNER_TEMP/default-keychain.before"
 
           CERT_PATH="$RUNNER_TEMP/longhouse-release-cert.p12"
           G2_CERT_PATH="$RUNNER_TEMP/DeveloperIDG2CA.cer"
@@ -577,7 +585,21 @@ jobs:
         if: ${{ always() && steps.macos_signing.outputs.enabled == 'true' }}
         env:
           KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
-        run: security delete-keychain "$KEYCHAIN_PATH" || true
+        run: |
+          # Restore the runner user's keychain list and default first, then delete ours.
+          if [[ -s "$RUNNER_TEMP/keychains.before" ]]; then
+            keychains=()
+            while IFS= read -r line; do
+              line="$(tr -d ' "' <<<"$line")"
+              [[ -n "$line" ]] && keychains+=("$line")
+            done < "$RUNNER_TEMP/keychains.before"
+            security list-keychains -d user -s "${keychains[@]}" || true
+          fi
+          if [[ -s "$RUNNER_TEMP/default-keychain.before" ]]; then
+            security default-keychain -d user -s "$(tr -d ' "' < "$RUNNER_TEMP/default-keychain.before")" || true
+          fi
+          security delete-keychain "$KEYCHAIN_PATH" || true
+          security list-keychains -d user
 
       # Only a successful, signed and notarized build is attached to a release.
       - name: Attach macOS binaries to the release
@@ -726,7 +748,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-          - os: macos-latest
+          - os: wisp
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -734,6 +756,15 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
     steps:
+      - name: Use a scratch HOME on the wisp runner
+        # `uv tool install` and the release verification write into HOME; wisp is a
+        # persistent machine, so they land in a directory that goes away with the job.
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          scratch="$(mktemp -d "$RUNNER_TEMP/verify-home.XXXXXX")"
+          echo "HOME=$scratch" >> "$GITHUB_ENV"
+          echo "$scratch/.local/bin" >> "$GITHUB_PATH"
+
       - name: Checkout release source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
