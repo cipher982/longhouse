@@ -4843,6 +4843,12 @@ async fn process_notification(
                     .await;
             }
             context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
+            if context.state.last_turn_status.as_deref() == Some("failed") {
+                if let Some(error_message) = extract_string(&params, &["turn", "error", "message"])
+                {
+                    context.state.last_error = Some(error_message);
+                }
+            }
             context.state.active_turn_id = None;
             reset_live_transcript_turn(context);
             write_state_file(&context.state_file, &context.state)?;
@@ -12832,5 +12838,48 @@ mod tests {
             cases.push(json!({"ending": ending, "server_received": received, "events": events}));
         }
         assert_golden("bridge_websocket_pump", &Value::Array(cases));
+    }
+
+    #[tokio::test]
+    async fn process_notification_records_failed_turn_error_message_in_bridge_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-main".to_string());
+        context.state.active_turn_id = Some("turn-1".to_string());
+
+        let followup = process_notification(
+            &json!({
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thr-main",
+                    "turn": {
+                        "id": "turn-1",
+                        "status": "failed",
+                        "error": {
+                            "message": "Quota exceeded. Check your plan and billing details."
+                        }
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(followup, None);
+        assert_eq!(context.state.active_turn_id, None);
+        assert_eq!(context.state.last_turn_status.as_deref(), Some("failed"));
+        assert_eq!(
+            context.state.last_error.as_deref(),
+            Some("Quota exceeded. Check your plan and billing details.")
+        );
+        let persisted: Value =
+            serde_json::from_str(&fs::read_to_string(&context.state_file).unwrap()).unwrap();
+        assert_eq!(
+            persisted["last_error"].as_str(),
+            Some("Quota exceeded. Check your plan and billing details.")
+        );
     }
 }

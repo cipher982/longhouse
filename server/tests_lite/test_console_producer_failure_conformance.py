@@ -596,3 +596,93 @@ def test_transcript_search_main_retains_turn_and_cleanup_evidence_when_search_fa
     assert _json(root / "transcript-flush-receipt.json")["status"] == "pass"
     assert _json(root / "cleanup-receipt.json")["status"] == "pass"
     assert _json(root / "provider-binary-receipt.json")["version"] == "fixture-1"
+
+
+def test_transcript_search_main_surfaces_failed_console_turn_error_immediately(monkeypatch, tmp_path):
+    root = tmp_path / "transcript-run-failed"
+    provider_bin = tmp_path / "codex"
+    provider_bin.write_text("codex fixture\n", encoding="utf-8")
+    provider_bin.chmod(0o755)
+    engine = tmp_path / "engine"
+    engine.write_text("engine fixture\n", encoding="utf-8")
+    engine.chmod(0o755)
+    cli = tmp_path / "longhouse"
+    cli.write_text("cli fixture\n", encoding="utf-8")
+    cli.chmod(0o755)
+    monkeypatch.setenv(transcript_search_producer.RUNTIME_API_URL_ENV, "http://127.0.0.1:9")
+    monkeypatch.setenv(transcript_search_producer.RUNTIME_AGENTS_TOKEN_ENV, "runtime-token")
+    monkeypatch.setenv("LONGHOUSE_QUALIFICATION_SANDBOX", "provider-qualification-bwrap-v3")
+    qualification_home = tmp_path / "transcript-failed-home"
+    qualification_home.mkdir()
+    monkeypatch.setenv("LONGHOUSE_QUALIFICATION_HOME", str(qualification_home))
+    monkeypatch.setenv("HOME", str(qualification_home))
+    monkeypatch.setattr(
+        transcript_search_producer.console,
+        "_provider_environment",
+        lambda _provider, _args, home: {"LONGHOUSE_HOME": str(home), "CODEX_API_KEY": "fixture-key"},
+    )
+    monkeypatch.setattr(transcript_search_producer, "login_with_api_key", lambda *_args, **_kwargs: {"status": "pass"})
+    monkeypatch.setattr(transcript_search_producer, "require_disposable_runtime", lambda _url: None)
+    monkeypatch.setattr(transcript_search_producer.console, "_probe_version", lambda _provider, _binary: ("fixture-1", "fixture-1"))
+
+    class Shipper:
+        receipt = {"machine_name": "transcript-failure-machine"}
+
+        def stop(self):
+            return {"stopped": True, "process_dead": True, "process_group_dead": True}
+
+    monkeypatch.setattr(transcript_search_producer, "start_transcript_shipper", lambda *_args, **_kwargs: Shipper())
+    monkeypatch.setattr(
+        transcript_search_producer.console, "_create_session", lambda **_kwargs: {"session_id": "session-1", "thread_id": "thread-1"}
+    )
+    monkeypatch.setattr(transcript_search_producer.console, "_start_turn", lambda **_kwargs: {"run_id": "run-1", "turn_id": "turn-1"})
+    monkeypatch.setattr(transcript_search_producer.console, "_claim_path", lambda _home, _run_id: Path("claim.json"))
+    monkeypatch.setattr(
+        transcript_search_producer.console,
+        "_wait_claim",
+        lambda *_args, **_kwargs: {
+            "state": "terminal",
+            "run_id": "run-1",
+            "result": {
+                "terminal_state": "run_failed",
+                "error": "Codex turn ended with status failed: Quota exceeded. Check your plan and billing details.",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        transcript_search_producer.console,
+        "_terminate_live_qualification_session",
+        lambda *_args, **_kwargs: {"status": "pass", "dispatched": True},
+    )
+    monkeypatch.setattr(transcript_search_producer.console, "_force_cleanup", lambda _claims: None)
+    monkeypatch.setattr(transcript_search_producer.console, "_wait_owned_processes_dead", lambda _claims: True)
+    monkeypatch.setattr(transcript_search_producer.console, "_owned_process_evidence", lambda _claims: {"orphan_count": 0})
+    monkeypatch.setattr(
+        transcript_search_producer,
+        "retire_qualification_session",
+        lambda *_args, **_kwargs: {"status": "pass", "archived": True, "hidden": True, "present_in_served_inventory": False},
+    )
+
+    args = [
+        "--provider",
+        "codex",
+        "--evidence-root",
+        str(root),
+        "--repo-root",
+        str(tmp_path),
+        "--engine",
+        str(engine),
+        "--longhouse-cli",
+        str(cli),
+        "--provider-bin",
+        str(provider_bin),
+        "--provider-version",
+        "fixture-1",
+        "--model",
+        "fixture-model",
+    ]
+    assert transcript_search_producer.main(args) == 1
+    result = _json(root / "result.json")
+    assert result["status"] == "fail"
+    assert "console_run_not_completed" in result["error"]
+    assert "Quota exceeded. Check your plan and billing details." in result["error"]

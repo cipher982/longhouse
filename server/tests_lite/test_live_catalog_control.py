@@ -941,3 +941,62 @@ async def test_catalog_lock_watcher_survives_transient_catalog_timeout(tmp_path,
     assert catalog.calls == 2
     assert await session_lock_manager.get_lock_info(scope) is None
     assert wakes == [str(session_id)]
+
+
+@pytest.mark.asyncio
+async def test_catalog_lock_watcher_releases_when_fast_turn_updates_last_runtime_signal_at(tmp_path, monkeypatch):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
+    initialize_live_database(engine)
+    factory = make_sessionmaker(engine)
+    with factory() as db:
+        session_id = _seed_live_control(db)
+
+    import zerg.services.live_control_catalog as live_control
+    import zerg.services.session_chat_impl as chat_impl
+    from zerg.services.session_kernel_projection import session_lock_scope_id
+    from zerg.services.session_locks import session_lock_manager
+
+    request_id = "fast-turn-holder"
+    scope = session_lock_scope_id(session_id)
+    dispatched_at = datetime.now(timezone.utc)
+    prior_idle_at = dispatched_at - timedelta(milliseconds=500)
+    latest_signal_at = dispatched_at + timedelta(milliseconds=10)
+    assert await session_lock_manager.acquire(session_id=scope, holder=request_id, ttl_seconds=300)
+
+    class _CatalogClient:
+        calls = 0
+
+        async def call(self, method, params, **_kwargs):
+            assert method == "session.read.v2"
+            assert params == {"session_id": str(session_id)}
+            self.calls += 1
+            return {
+                "facts": {
+                    "runtime": {
+                        "phase": "idle",
+                        "phase_started_at": prior_idle_at.isoformat(),
+                        "last_runtime_signal_at": latest_signal_at.isoformat(),
+                    }
+                }
+            }
+
+    catalog = _CatalogClient()
+    wakes: list[str] = []
+
+    async def fake_wake(value):
+        wakes.append(str(value))
+        return False
+
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(live_control, "wake_next_live_catalog_input", fake_wake)
+
+    await chat_impl._release_catalog_lock_after_terminal(
+        session_id=session_id,
+        lock_scope_id=scope,
+        request_id=request_id,
+        dispatched_at=dispatched_at,
+    )
+
+    assert catalog.calls == 1
+    assert await session_lock_manager.get_lock_info(scope) is None
+    assert wakes == [str(session_id)]

@@ -731,6 +731,29 @@ async def _release_managed_local_lock_after_terminal(
         )
 
 
+def _latest_runtime_observed_at(*candidates: object, fallback: object = None) -> datetime | None:
+    """Newest runtime timestamp across phase_started_at and last_runtime_signal_at."""
+    parsed: list[datetime] = []
+    for value in candidates:
+        if isinstance(value, str) and value:
+            try:
+                value = datetime.fromisoformat(value)
+            except ValueError:
+                continue
+        if isinstance(value, datetime):
+            normalized = normalize_utc(value)
+            if normalized is not None:
+                parsed.append(normalized)
+    if parsed:
+        return max(parsed)
+    if isinstance(fallback, str) and fallback:
+        try:
+            fallback = datetime.fromisoformat(fallback)
+        except ValueError:
+            return None
+    return normalize_utc(fallback) if isinstance(fallback, datetime) else None
+
+
 def _runtime_terminal_result_after(*, db_bind, session_id: UUID, after: datetime) -> ManagedLocalTerminalResult | None:
     """Recover lock release from fresh runtime state when observation polling misses idle.
 
@@ -754,10 +777,10 @@ def _runtime_terminal_result_after(*, db_bind, session_id: UUID, after: datetime
         phase = str(getattr(state, "phase", "") or "").strip()
         if not phase or phase not in _MANAGED_LOCAL_TERMINAL_PHASES:
             return None
-        observed_at = (
-            normalize_utc(getattr(state, "phase_started_at", None))
-            or normalize_utc(getattr(state, "last_runtime_signal_at", None))
-            or normalize_utc(getattr(state, "updated_at", None))
+        observed_at = _latest_runtime_observed_at(
+            getattr(state, "phase_started_at", None),
+            getattr(state, "last_runtime_signal_at", None),
+            fallback=getattr(state, "updated_at", None),
         )
         after_utc = normalize_utc(after) or after
         if observed_at is None or observed_at < after_utc:
@@ -867,8 +890,11 @@ async def _release_catalog_lock_after_terminal(
         facts = snapshot.get("facts")
         state = facts.get("runtime") if isinstance(facts, dict) else None
         if isinstance(state, dict):
-            raw_observed_at = state.get("phase_started_at") or state.get("last_runtime_signal_at") or state.get("updated_at")
-            observed_at = normalize_utc(datetime.fromisoformat(raw_observed_at)) if isinstance(raw_observed_at, str) else None
+            observed_at = _latest_runtime_observed_at(
+                state.get("phase_started_at"),
+                state.get("last_runtime_signal_at"),
+                fallback=state.get("updated_at"),
+            )
             phase = str(state.get("phase") or "").strip()
             terminal = str(state.get("terminal_state") or "").strip()
             if observed_at is not None and observed_at >= dispatched_at and (phase in _MANAGED_LOCAL_TERMINAL_PHASES or terminal):

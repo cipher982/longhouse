@@ -127,6 +127,7 @@ def _search_turn(
     claims.append(claim)
     if claim.get("state") != "terminal":
         raise RuntimeError(f"search Console turn did not complete: {claim.get('state')}")
+    console._require_run_completed(provider, claim, turn="search", marker=marker["marker"])
     mismatches = console.turn_identity_mismatches(claim, provider=provider, session_id=session_id, thread_id=thread_id, run_id=run_id)
     if mismatches:
         raise RuntimeError(f"search Console turn lost its exact session identity: {json.dumps(mismatches, sort_keys=True, default=str)}")
