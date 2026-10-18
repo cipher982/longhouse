@@ -1,0 +1,62 @@
+name: wisp signing debug (temporary)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: wisp
+    timeout-minutes: 15
+    steps:
+      - name: Signing keychain diagnostics
+        env:
+          MACOS_SIGNING_CERT_P12_BASE64: ${{ secrets.MACOS_SIGNING_CERT_P12_BASE64 }}
+          MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set +e
+          security list-keychains -d user > "$RUNNER_TEMP/keychains.before"
+          security default-keychain -d user > "$RUNNER_TEMP/default-keychain.before"
+          KC="$RUNNER_TEMP/dbg.keychain-db"
+          PW="$(openssl rand -hex 18)"
+          printf '%s' "$MACOS_SIGNING_CERT_P12_BASE64" | base64 -D -o "$RUNNER_TEMP/c.p12"
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$RUNNER_TEMP/g2.cer"; echo "curl g2=$?"
+          openssl x509 -inform der -in "$RUNNER_TEMP/g2.cer" -noout -subject -issuer -dates
+          security create-keychain -p "$PW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$PW" "$KC"
+          security import "$RUNNER_TEMP/c.p12" -k "$KC" -P "$MACOS_SIGNING_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/productbuild > /dev/null; echo "import p12=$?"
+          security import "$RUNNER_TEMP/g2.cer" -k "$KC" -f x509 -t cert > /dev/null; echo "import g2=$?"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PW" "$KC" > /dev/null; echo "partition=$?"
+          echo "--- every certificate in the temp keychain"
+          security find-certificate -a -p "$KC" > "$RUNNER_TEMP/all.pem"
+          awk -v d="$RUNNER_TEMP" '/BEGIN CERT/{n++} {print > (d "/cert" n ".pem")}' "$RUNNER_TEMP/all.pem"
+          for f in "$RUNNER_TEMP"/cert*.pem; do openssl x509 -in "$f" -noout -subject -issuer -dates -ext authorityKeyIdentifier 2>&1 | sed 's/^/  /'; echo "  --"; done
+          echo "--- identities, explicit keychain"
+          security find-identity -v -p codesigning "$KC"
+          echo "--- try to list the system-supplied Apple roots and intermediates"
+          for kcf in /System/Library/Keychains/SystemRootCertificates.keychain /System/Library/Keychains/SystemCACertificates.keychain /Library/Keychains/System.keychain; do
+            [ -e "$kcf" ] && echo "$kcf: $(security find-certificate -a "$kcf" | grep -c '^keychain')" || echo "$kcf: absent"
+          done
+          security find-certificate -a -c "Apple Root CA" /System/Library/Keychains/SystemRootCertificates.keychain | grep -E '"labl"' | head
+          security find-certificate -a -c "Developer ID" /System/Library/Keychains/SystemCACertificates.keychain /System/Library/Keychains/SystemRootCertificates.keychain | grep -E '"labl"' | head
+          echo "--- set the search list the release job uses, then sign"
+          security list-keychains -d user -s "$KC" /System/Library/Keychains/SystemRootCertificates.keychain /Library/Keychains/System.keychain "$HOME/Library/Keychains/login.keychain-db"
+          security default-keychain -d user -s "$KC"
+          security list-keychains -d user
+          cp /bin/echo "$RUNNER_TEMP/t1"
+          echo "sign no timestamp:"; codesign --force --options runtime --sign "$MACOS_SIGNING_IDENTITY" "$RUNNER_TEMP/t1"; echo "rc=$?"
+          cp /bin/echo "$RUNNER_TEMP/t2"
+          echo "sign with timestamp:"; codesign --force --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$RUNNER_TEMP/t2"; echo "rc=$?"
+          cp /bin/echo "$RUNNER_TEMP/t3"
+          echo "sign with explicit keychain + timestamp:"; codesign --force --options runtime --timestamp --keychain "$KC" --sign "$MACOS_SIGNING_IDENTITY" "$RUNNER_TEMP/t3"; echo "rc=$?"
+          echo "--- restore"
+          keychains=()
+          while IFS= read -r line; do line="$(tr -d ' "' <<<"$line")"; [[ -n "$line" ]] && keychains+=("$line"); done < "$RUNNER_TEMP/keychains.before"
+          security list-keychains -d user -s "${keychains[@]}"
+          security default-keychain -d user -s "$(tr -d ' "' < "$RUNNER_TEMP/default-keychain.before")"
+          security delete-keychain "$KC"
+          rm -f "$RUNNER_TEMP/c.p12"
+          security list-keychains -d user
