@@ -34,24 +34,23 @@ jobs:
           security find-certificate -a -p "$KC" > "$RUNNER_TEMP/all.pem"
           awk -v d="$RUNNER_TEMP" '/BEGIN CERT/{n++} {print > (d "/cert" n ".pem")}' "$RUNNER_TEMP/all.pem"
           for f in "$RUNNER_TEMP"/cert*.pem; do openssl x509 -in "$f" -noout -subject -issuer -dates -ext authorityKeyIdentifier 2>&1 | sed 's/^/  /'; echo "  --"; done
-          echo "--- identities, explicit keychain"
-          security find-identity -v -p codesigning "$KC"
-          echo "--- try to list the system-supplied Apple roots and intermediates"
-          for kcf in /System/Library/Keychains/SystemRootCertificates.keychain /System/Library/Keychains/SystemCACertificates.keychain /Library/Keychains/System.keychain; do
-            [ -e "$kcf" ] && echo "$kcf: $(security find-certificate -a "$kcf" | grep -c '^keychain')" || echo "$kcf: absent"
-          done
-          security find-certificate -a -c "Apple Root CA" /System/Library/Keychains/SystemRootCertificates.keychain | grep -E '"labl"' | head
-          security find-certificate -a -c "Developer ID" /System/Library/Keychains/SystemCACertificates.keychain /System/Library/Keychains/SystemRootCertificates.keychain | grep -E '"labl"' | head
-          echo "--- set the search list the release job uses, then sign"
+          echo "--- does the downloaded G2 intermediate match the leaf's issuer key?"
+          echo "leaf AKI / AIA:"; openssl x509 -in "$RUNNER_TEMP/cert1.pem" -noout -ext authorityKeyIdentifier,authorityInfoAccess 2>&1 | sed 's/^/  /'
+          echo "downloaded G2 SKI:"; openssl x509 -inform der -in "$RUNNER_TEMP/g2.cer" -noout -ext subjectKeyIdentifier 2>&1 | sed 's/^/  /'
+          aia="$(openssl x509 -in "$RUNNER_TEMP/cert1.pem" -noout -ext authorityInfoAccess 2>/dev/null | sed -n 's/.*CA Issuers - URI://p' | head -1)"
+          echo "issuer url: $aia"
+          if [ -n "$aia" ]; then
+            curl -fsSL "$aia" -o "$RUNNER_TEMP/issuer.bin"; echo "curl issuer=$?"
+            if openssl x509 -inform der -in "$RUNNER_TEMP/issuer.bin" -noout -subject > /dev/null 2>&1; then enc=der; else enc=pem; fi
+            echo "encoding=$enc"
+            openssl x509 -inform $enc -in "$RUNNER_TEMP/issuer.bin" -noout -subject -issuer -dates -ext subjectKeyIdentifier 2>&1 | sed 's/^/  /'
+            security import "$RUNNER_TEMP/issuer.bin" -k "$KC" -f x509 -t cert > /dev/null; echo "import issuer=$?"
+          fi
           security list-keychains -d user -s "$KC" /System/Library/Keychains/SystemRootCertificates.keychain /Library/Keychains/System.keychain "$HOME/Library/Keychains/login.keychain-db"
           security default-keychain -d user -s "$KC"
-          security list-keychains -d user
           cp /bin/echo "$RUNNER_TEMP/t1"
-          echo "sign no timestamp:"; codesign --force --options runtime --sign "$MACOS_SIGNING_IDENTITY" "$RUNNER_TEMP/t1"; echo "rc=$?"
-          cp /bin/echo "$RUNNER_TEMP/t2"
-          echo "sign with timestamp:"; codesign --force --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$RUNNER_TEMP/t2"; echo "rc=$?"
-          cp /bin/echo "$RUNNER_TEMP/t3"
-          echo "sign with explicit keychain + timestamp:"; codesign --force --options runtime --timestamp --keychain "$KC" --sign "$MACOS_SIGNING_IDENTITY" "$RUNNER_TEMP/t3"; echo "rc=$?"
+          echo "sign after importing the AIA issuer:"; codesign --force --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$RUNNER_TEMP/t1"; echo "rc=$?"
+          codesign -dv --verbose=2 "$RUNNER_TEMP/t1" 2>&1 | grep -E "Authority|Timestamp|Signature" | sed 's/^/  /'
           echo "--- restore"
           keychains=()
           while IFS= read -r line; do line="$(tr -d ' "' <<<"$line")"; [[ -n "$line" ]] && keychains+=("$line"); done < "$RUNNER_TEMP/keychains.before"
