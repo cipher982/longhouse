@@ -56,7 +56,8 @@ jobs:
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
-          git fetch --no-tags origin main
+          # The checkout above is a full clone made with the job token and persists no
+          # credential (private repository), so origin/main is already here: no fetch.
           git merge-base --is-ancestor "$SOURCE_SHA" origin/main \
             || { echo "$SOURCE_SHA is not on main; only main ships to TestFlight" >&2; exit 1; }
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
