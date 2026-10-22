@@ -257,6 +257,9 @@ pub fn enqueue_runtime_event_for_handoff(dir: &Path, event: &Value) -> anyhow::R
     let nonce = uuid::Uuid::new_v4();
     let temporary = dir.join(format!(".{nonce}.tmp"));
     let ready = dir.join(format!("{nonce}.json"));
+    // Only lifecycle/control edges (binding, terminal, pause, wake, delegation)
+    // pay for hardware F_FULLFSYNC durability; replaceable phase/progress
+    // previews rely on atomic VFS rename so streaming tokens cannot stall Tokio.
     let critical = is_critical_runtime_event(event);
     let mut file = OpenOptions::new()
         .write(true)

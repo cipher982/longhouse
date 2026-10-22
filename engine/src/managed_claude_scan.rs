@@ -248,12 +248,23 @@ fn stamp_missing_tombstone_exit(path: &Path, now: DateTime<Utc>) {
     if obj.get("exited_at").is_some_and(|v| !v.is_null()) {
         return;
     }
+    let last_touch = obj
+        .get("updated_at")
+        .or_else(|| obj.get("started_at"))
+        .and_then(|v| v.as_str())
+        .and_then(parse_rfc3339);
+    if last_touch.is_some_and(|ts| now - ts < chrono::Duration::hours(1)) {
+        return;
+    }
     obj.insert(
         "exited_at".to_string(),
         serde_json::Value::String(now.to_rfc3339()),
     );
     if let Ok(encoded) = serde_json::to_vec(&value) {
-        let _ = fs::write(path, encoded);
+        let tmp = path.with_extension("json.tombstone.tmp");
+        if fs::write(&tmp, encoded).is_ok() {
+            let _ = fs::rename(&tmp, path);
+        }
     }
 }
 
@@ -632,5 +643,35 @@ mod tests {
 
         assert_eq!(observations.len(), 1);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn dead_state_without_exited_at_is_atomically_stamped_once_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session.json");
+        let stale = (Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+        fs::write(
+            &path,
+            format!(
+                r#"{{
+                  "session_id": "09b68f98-1e31-458e-b78a-6dfd062ead75",
+                  "claude_pid": 999991,
+                  "bridge_pid": 999992,
+                  "ready": true,
+                  "started_at": "{stale}",
+                  "updated_at": "{stale}"
+                }}"#
+            ),
+        )
+        .unwrap();
+        let process_facts = HashMap::from([(1, fact("/sbin/launchd", None))]);
+
+        let observations = collect_observations_from_processes(tmp.path(), &process_facts);
+
+        assert_eq!(observations.len(), 1);
+        let updated: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(updated.get("exited_at").and_then(|v| v.as_str()).is_some());
+        assert_eq!(updated["updated_at"].as_str(), Some(stale.as_str()));
     }
 }
