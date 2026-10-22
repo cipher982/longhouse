@@ -1618,3 +1618,40 @@ def test_shadow_parity_deltas_are_globally_bounded(tmp_path, monkeypatch):
         rows = connection.execute(FactParityDelta.__table__.select().order_by(FactParityDelta.commit_seq)).mappings()
         assert [row["commit_seq"] for row in rows] == [2, 3]
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_apply_machine_heartbeat_prunes_superseded_raw_json_past_one_hour(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    now = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
+    try:
+        for offset_minutes, digest in ((0, "d0"), (30, "d30"), (65, "d65")):
+            hb = {
+                **_heartbeat(device_id="cinder", received_at=now + timedelta(minutes=offset_minutes), digest=digest),
+                "raw_json": json.dumps({"digest": digest, "pad": "x" * 2048}),
+            }
+            await client.call(
+                "machine.heartbeat.apply.v2",
+                {
+                    "heartbeat": hb,
+                    "managed_leases": [],
+                    "managed_leases_present": True,
+                    "owner_id": 1,
+                },
+            )
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        rows = list(connection.execute(LiveHeartbeatStamp.__table__.select().order_by(LiveHeartbeatStamp.received_at.asc())).mappings())
+    engine.dispose()
+    assert len(rows) == 3
+    assert rows[0]["raw_json"] is None
+    assert rows[0]["catalog_result_json"] is not None
+    assert rows[1]["raw_json"] is not None
+    assert rows[2]["raw_json"] is not None

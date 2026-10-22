@@ -7033,4 +7033,76 @@ for line in sys.stdin:
             });
         });
     }
+
+    #[tokio::test]
+    async fn rpc_stream_thousand_deltas_coalesces_to_single_outbox_preview_file() {
+        use crate::console_sink_golden::*;
+        let home = GoldenHome::new("omp-budget");
+        let mut sink = golden_omp_sink(&home);
+        sink.binding_emitted = true;
+        std::fs::create_dir_all(sink.session_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &sink.session_file,
+            format!("{{\"type\":\"session\",\"id\":\"{PROVIDER_THREAD}\"}}\n"),
+        )
+        .unwrap();
+
+        let mut raw_stdout = String::new();
+        for i in 0..500 {
+            raw_stdout.push_str(&format!(
+                "{{\"type\":\"message_update\",\"message\":{{\"id\":\"m1\",\"role\":\"assistant\"}},\"assistantMessageEvent\":{{\"type\":\"thinking_delta\",\"delta\":\"t{i}\"}}}}\n"
+            ));
+        }
+        for i in 0..400 {
+            raw_stdout.push_str(&format!(
+                "{{\"type\":\"message_update\",\"message\":{{\"id\":\"m1\",\"role\":\"assistant\"}},\"assistantMessageEvent\":{{\"type\":\"toolcall_delta\",\"delta\":\"c{i}\"}}}}\n"
+            ));
+        }
+        for i in 0..100 {
+            raw_stdout.push_str(&format!(
+                "{{\"type\":\"message_update\",\"message\":{{\"id\":\"m1\",\"role\":\"assistant\"}},\"assistantMessageEvent\":{{\"type\":\"text_delta\",\"delta\":\"w{i} \"}}}}\n"
+            ));
+        }
+        std::fs::write(&sink.stdout_path, raw_stdout.as_bytes()).unwrap();
+
+        let mut projection = OmpStreamProjection {
+            current_assistant: Some(String::new()),
+            ..OmpStreamProjection::default()
+        };
+        let mut offset = 0_u64;
+        let mut pending = Vec::new();
+        let mut seq = 0_u64;
+        let stderr_path = home.temp.path().join("stderr.log");
+        publish_stdout_growth(
+            &mut sink,
+            &stderr_path,
+            &mut projection,
+            &mut offset,
+            &mut pending,
+            &mut seq,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let files: Vec<_> = std::fs::read_dir(home.outbox())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
+            .collect();
+        assert_eq!(seq, 1000);
+        assert_eq!(
+            files.len(),
+            1,
+            "1,000 RPC delta lines must coalesce to 1 outbox file, got {}",
+            files.len()
+        );
+        let event: Value =
+            serde_json::from_slice(&std::fs::read(files[0].path()).unwrap()).unwrap();
+        assert_eq!(event["payload"]["seq"], json!(1000));
+        assert!(event["payload"]["live_text"]
+            .as_str()
+            .unwrap()
+            .ends_with("w99 "));
+    }
 }

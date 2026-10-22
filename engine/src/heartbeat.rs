@@ -9336,4 +9336,172 @@ mod tests {
         assert_eq!(first.control[1].observed_at, second.control[1].observed_at);
         assert_ne!(first.control[0].observed_at, second.control[0].observed_at);
     }
+
+    #[test]
+    fn quiet_tick_heartbeat_idempotency_across_all_providers_never_starves_live_control() {
+        let now1 = DateTime::parse_from_rfc3339("2026-10-22T06:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let now2 = now1 + chrono::Duration::seconds(60);
+        let mut codex = Vec::new();
+        let mut claude = Vec::new();
+        let mut opencode = Vec::new();
+        let mut cursor = Vec::new();
+        let mut pi = Vec::new();
+        let mut omp = Vec::new();
+
+        for i in 0..51 {
+            let live = i == 50;
+            let suffix = format!("{i:04}");
+            let mut c = test_observation(
+                &format!("codex-{suffix}"),
+                &format!("ws://127.0.0.1:45000/{suffix}"),
+            );
+            c.bridge_pid = 10_000 + i;
+            c.app_server_pid = Some(20_000 + i);
+            c.thread_id = Some(format!("thread-codex-{suffix}"));
+            c.bridge_alive = live;
+            c.app_server_alive = live;
+            c.has_tui_attachment = live;
+            c.updated_at = "2026-10-22T05:00:00Z".to_string();
+            codex.push(c);
+
+            let mut cl = dead_claude_channel_observation(&format!("claude-{suffix}"), live, live);
+            cl.claude_pid = Some(30_000 + i);
+            cl.bridge_pid = Some(40_000 + i);
+            cl.provider_session_id = Some(format!("prov-claude-{suffix}"));
+            cl.run_id = Some(format!("run-claude-{suffix}"));
+            cl.connection_id = Some(format!("conn-claude-{suffix}"));
+            cl.lease_generation = Some(format!("gen-claude-{suffix}"));
+            cl.ready = live;
+            claude.push(cl);
+
+            let mut oc = test_opencode_observation(&format!("opencode-{suffix}"), "attached_tui");
+            oc.pid = Some(50_000 + i);
+            oc.server_alive = live;
+            oc.health_ready = live;
+            oc.has_tui_attachment = live;
+            oc.updated_at = "2026-10-22T05:00:00Z".to_string();
+            opencode.push(oc);
+
+            let mut cu = test_cursor_observation(&format!("cursor-{suffix}"));
+            cu.launcher_pid = Some(60_000 + i);
+            cu.cursor_pid = Some(70_000 + i);
+            cu.live = live;
+            cu.launcher_alive = live;
+            cu.updated_at = "2026-10-22T05:00:00Z".to_string();
+            cursor.push(cu);
+
+            pi.push(PiHelmObservation {
+                session_id: format!("pi-{suffix}"),
+                provider_session_id: Some(format!("prov-pi-{suffix}")),
+                run_id: Some(format!("run-pi-{suffix}")),
+                connection_id: Some(format!("conn-pi-{suffix}")),
+                lease_generation: Some(format!("gen-pi-{suffix}")),
+                state_file: PathBuf::from(format!("/tmp/pi-{suffix}.json")),
+                session_file: None,
+                socket_path: None,
+                cwd: Some("/repo".to_string()),
+                launcher_pid: Some(5000 + i),
+                launcher_process_start_time: Some("start".to_string()),
+                provider_pid: Some(6000 + i),
+                provider_process_start_time: Some("start".to_string()),
+                started_at: "2026-10-22T05:00:00Z".to_string(),
+                updated_at: "2026-10-22T05:00:00Z".to_string(),
+                phase: None,
+                tool_name: None,
+                status: if live { "ready" } else { "stopped" }.to_string(),
+                launcher_alive: live,
+                provider_alive: live,
+                live,
+            });
+
+            omp.push(OmpHelmObservation {
+                session_id: format!("omp-{suffix}"),
+                native_session_id: Some(format!("prov-omp-{suffix}")),
+                run_id: Some(format!("run-omp-{suffix}")),
+                connection_id: Some(format!("conn-omp-{suffix}")),
+                lease_generation: Some(format!("gen-omp-{suffix}")),
+                state_file: PathBuf::from(format!("/tmp/omp-{suffix}.json")),
+                session_file: None,
+                socket_path: None,
+                cwd: Some("/repo".to_string()),
+                launcher_pid: Some(7000 + i),
+                launcher_process_start_time: Some("start".to_string()),
+                provider_pid: Some(8000 + i),
+                provider_process_start_time: Some("start".to_string()),
+                started_at: "2026-10-22T05:00:00Z".to_string(),
+                updated_at: "2026-10-22T05:00:00Z".to_string(),
+                phase: None,
+                tool_name: None,
+                status: if live { "ready" } else { "stopped" }.to_string(),
+                launcher_alive: live,
+                provider_alive: live,
+                live,
+                control_ready: live,
+            });
+        }
+
+        let tick1 = machine_evidence_from_observations_with_omp(
+            "cinder-budget-test",
+            &codex,
+            &[],
+            &claude,
+            &opencode,
+            &cursor,
+            &pi,
+            &omp,
+            &[],
+            &[],
+            true,
+            true,
+            now1,
+            Some(&[]),
+            0,
+        );
+        let mut acknowledged = AcknowledgedEvidenceHashes::default();
+        let applied = applied_evidence_ack();
+        acknowledged.record_send_result(&applied, &tick1.candidate_identities);
+
+        let tick2 = machine_evidence_from_observations_with_omp(
+            "cinder-budget-test",
+            &codex,
+            &[],
+            &claude,
+            &opencode,
+            &cursor,
+            &pi,
+            &omp,
+            &[],
+            &[],
+            true,
+            true,
+            now2,
+            Some(&[]),
+            1,
+        );
+
+        // Only the 6 live control facts (1 per provider) may change hash on a quiet tick;
+        // all 300 dead control facts and all 300 dead run facts must have 0 hash churn.
+        let changed_on_tick2: Vec<&EvidenceIdentity> = tick2
+            .candidate_identities
+            .iter()
+            .filter(|id| acknowledged.identity_changed(id))
+            .collect();
+        assert_eq!(changed_on_tick2.len(), 6);
+        assert!(changed_on_tick2.iter().all(|id| id.fact_family == "control"));
+
+        let selected = changed_first_evidence_identities(
+            &tick2.candidate_identities,
+            &acknowledged.hashes,
+            1,
+        );
+        for changed in &changed_on_tick2 {
+            assert!(
+                selected.iter().any(|s| s.subject_key == changed.subject_key),
+                "live control fact {} was starved from the 256-fact window",
+                changed.subject_key
+            );
+        }
+    }
 }

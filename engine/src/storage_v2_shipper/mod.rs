@@ -8858,4 +8858,79 @@ mod tests {
         assert_eq!(third[0].start, 0);
         assert!(oc_drain_shipped(&mut fixture.state, &fixture.db_path).is_empty());
     }
+
+    #[test]
+    fn all_jsonl_providers_append_linearly_with_zero_epoch_rotations() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let pad = "x".repeat(2500);
+        let cases = [
+            (
+                "claude",
+                dir.path().join("claude-session.jsonl"),
+                format!("{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"{pad}\"}},\"timestamp\":\"2026-10-22T00:00:00Z\"}}\n"),
+                format!("{{\"type\":\"assistant\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{pad}\"}}]}},\"timestamp\":\"2026-10-22T00:00:01Z\"}}\n"),
+            ),
+            (
+                "codex",
+                dir.path().join("rollout-2026-10-22T00-00-00-11111111-1111-4111-8111-111111111111.jsonl"),
+                format!("{{\"type\":\"session_meta\",\"timestamp\":\"2026-10-22T00:00:00Z\",\"payload\":{{\"id\":\"11111111-1111-4111-8111-111111111111\",\"cwd\":\"/tmp\"}}}}\n{{\"type\":\"response_item\",\"timestamp\":\"2026-10-22T00:00:00Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{pad}\"}}]}}}}\n"),
+                format!("{{\"type\":\"response_item\",\"timestamp\":\"2026-10-22T00:00:01Z\",\"payload\":{{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":\"{pad}\"}}]}}}}\n"),
+            ),
+            (
+                "omp",
+                dir.path().join("omp-session.jsonl"),
+                format!("{{\"type\":\"session\",\"id\":\"22222222-2222-4222-8222-222222222222\",\"cwd\":\"/tmp\",\"timestamp\":\"2026-10-22T00:00:00Z\"}}\n{{\"type\":\"message\",\"id\":\"m1\",\"timestamp\":\"2026-10-22T00:00:00Z\",\"message\":{{\"role\":\"user\",\"content\":\"{pad}\"}}}}\n"),
+                format!("{{\"type\":\"message\",\"id\":\"m2\",\"timestamp\":\"2026-10-22T00:00:01Z\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{pad}\"}}]}}}}\n"),
+            ),
+            (
+                "pi",
+                dir.path().join("pi-session.jsonl"),
+                format!("{{\"type\":\"session\",\"id\":\"33333333-3333-4333-8333-333333333333\",\"cwd\":\"/tmp\",\"timestamp\":\"2026-10-22T00:00:00Z\"}}\n{{\"type\":\"message\",\"id\":\"m1\",\"timestamp\":\"2026-10-22T00:00:00Z\",\"message\":{{\"role\":\"user\",\"content\":\"{pad}\"}}}}\n"),
+                format!("{{\"type\":\"message\",\"id\":\"m2\",\"timestamp\":\"2026-10-22T00:00:01Z\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{pad}\"}}]}}}}\n"),
+            ),
+            (
+                "cursor",
+                dir.path()
+                    .join(".cursor/projects/workspace/agent-transcripts/44444444-4444-4444-8444-444444444444/44444444-4444-4444-8444-444444444444.jsonl"),
+                format!("{{\"role\":\"user\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{pad}\"}}]}}}}\n"),
+                format!("{{\"role\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{pad}\"}}]}}}}\n"),
+            ),
+        ];
+
+        for (provider, path, turn1, turn2) in cases {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, turn1.as_bytes()).unwrap();
+            let first = prepare_next_envelope(&mut conn, &capabilities(), &path, provider, None)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{provider} initial envelope missing"));
+            assert_eq!(first.range_start, 0, "{provider}");
+            assert_eq!(first.range_end, turn1.len() as u64, "{provider}");
+            acknowledge_prepared(&mut conn, &first);
+
+            // Append crosses the 4 KiB prefix boundary (~2.5 KiB -> ~5.1 KiB).
+            let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(turn2.as_bytes()).unwrap();
+            drop(file);
+
+            let second = prepare_next_envelope(&mut conn, &capabilities(), &path, provider, None)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{provider} appended envelope missing"));
+            assert_eq!(
+                second.source_epoch, first.source_epoch,
+                "{provider} rotated source_epoch on a pure append"
+            );
+            assert_eq!(
+                second.range_start,
+                turn1.len() as u64,
+                "{provider} re-shipped head bytes on append"
+            );
+            assert_eq!(
+                second.range_end,
+                (turn1.len() + turn2.len()) as u64,
+                "{provider}"
+            );
+        }
+    }
 }
