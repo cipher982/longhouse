@@ -385,13 +385,31 @@ fn pi_lineage_source_revision(path: &Path) -> Result<Option<String>> {
     let read = file.read(&mut bytes)?;
     let head = &bytes[..read];
     let mut hasher = Sha256::new();
-    if metadata.len() > PREFIX_BYTES as u64 {
+    if let Some(end) = head.iter().position(|byte| *byte == b'\n') {
+        hasher.update(&head[..=end]);
+    } else if metadata.len() > PREFIX_BYTES as u64 {
         hasher.update(head);
     } else {
-        let Some(end) = head.iter().position(|byte| *byte == b'\n') else {
-            return Ok(None);
-        };
+        return Ok(None);
+    }
+    Ok(Some(hex_hash(hasher.finalize().into())))
+}
+
+fn cursor_agent_transcript_source_revision(path: &Path) -> Result<Option<String>> {
+    const PREFIX_BYTES: usize = 4096;
+    let mut file =
+        File::open(path).with_context(|| format!("reading source revision: {}", path.display()))?;
+    let mut bytes = vec![0_u8; PREFIX_BYTES];
+    let read = file.read(&mut bytes)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    let head = &bytes[..read];
+    let mut hasher = Sha256::new();
+    if let Some(end) = head.iter().position(|byte| *byte == b'\n') {
         hasher.update(&head[..=end]);
+    } else {
+        hasher.update(head);
     }
     Ok(Some(hex_hash(hasher.finalize().into())))
 }
@@ -3113,6 +3131,37 @@ mod tests {
             replacement.envelope.predecessor_source_epoch.as_deref(),
             Some(initial_epoch.as_str())
         );
+    }
+
+    #[test]
+    fn cursor_agent_transcript_append_stays_in_same_epoch_without_reshipping_head() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join(".cursor")
+            .join("projects/workspace/agent-transcripts/session/transcript.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let first = b"{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n";
+        fs::write(&path, first).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let initial = prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
+            .unwrap()
+            .unwrap();
+        acknowledge_prepared(&mut conn, &initial);
+
+        let appended = b"{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"world\"}]}}\n";
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(appended).unwrap();
+        drop(file);
+
+        let next = prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.source_epoch, initial.source_epoch);
+        assert_eq!(next.range_start, first.len() as u64);
+        assert_eq!(next.range_end, (first.len() + appended.len()) as u64);
     }
 
     #[test]

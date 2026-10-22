@@ -371,6 +371,59 @@ pub fn runtime_stream_event(event: &Value) -> Value {
     Value::Object(reduced)
 }
 
+/// Whether a Pi/OMP RPC `message_update` frame only carries non-text deltas
+/// (`thinking_*` or `toolcall_*`) that `runtime_stream_event` strips to `[]`.
+pub fn is_non_text_rpc_message_update(event: &Value) -> bool {
+    event.get("type").and_then(Value::as_str) == Some("message_update")
+        && matches!(
+            event
+                .pointer("/assistantMessageEvent/type")
+                .and_then(Value::as_str),
+            Some(
+                "thinking_start"
+                    | "thinking_delta"
+                    | "thinking_end"
+                    | "toolcall_start"
+                    | "toolcall_delta"
+                    | "toolcall_end"
+            )
+        )
+}
+
+pub const MAX_RETAINED_RPC_STDOUT_BYTES: u64 = 4 * 1024 * 1024;
+const RETAINED_RPC_STDOUT_TAIL_BYTES: u64 = 1024 * 1024;
+
+/// Bound a finished RPC run's `stdout.log` to its trailing complete lines once
+/// the turn has closed so multi-hundred-MB token-delta logs do not accumulate.
+pub fn compact_retained_stdout_log(path: &Path) {
+    use std::io::{Seek, SeekFrom};
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() <= MAX_RETAINED_RPC_STDOUT_BYTES {
+        return;
+    }
+    let Ok(mut file) = File::open(path) else {
+        return;
+    };
+    let start = meta.len().saturating_sub(RETAINED_RPC_STDOUT_TAIL_BYTES);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return;
+    }
+    let mut tail = Vec::new();
+    if file.read_to_end(&mut tail).is_err() {
+        return;
+    }
+    let slice = match tail.iter().position(|&b| b == b'\n') {
+        Some(pos) if pos + 1 < tail.len() => &tail[pos + 1..],
+        _ => &tail[..],
+    };
+    let temp = path.with_extension("log.compact.tmp");
+    if std::fs::write(&temp, slice).is_ok() {
+        let _ = std::fs::rename(&temp, path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,5 +629,47 @@ mod tests {
             "isError": false
         });
         assert_eq!(runtime_stream_event(&tool), tool);
+    }
+
+    #[test]
+    fn non_text_rpc_message_updates_are_identified_for_outbox_elision() {
+        for kind in [
+            "thinking_start",
+            "thinking_delta",
+            "thinking_end",
+            "toolcall_start",
+            "toolcall_delta",
+            "toolcall_end",
+        ] {
+            let ev = json!({
+                "type": "message_update",
+                "assistantMessageEvent": {"type": kind, "delta": "x"}
+            });
+            assert!(is_non_text_rpc_message_update(&ev), "{kind}");
+        }
+        let text_delta = json!({
+            "type": "message_update",
+            "assistantMessageEvent": {"type": "text_delta", "delta": "hello"}
+        });
+        assert!(!is_non_text_rpc_message_update(&text_delta));
+        let bare_update = json!({"type": "message_update", "delta": "hello"});
+        assert!(!is_non_text_rpc_message_update(&bare_update));
+    }
+
+    #[test]
+    fn compact_retained_stdout_log_trims_oversized_logs_on_line_boundaries() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("stdout.log");
+        let line = format!("{}\n", "x".repeat(1023));
+        let count = (MAX_RETAINED_RPC_STDOUT_BYTES as usize / line.len()) + 512;
+        std::fs::write(&path, line.repeat(count)).unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() > MAX_RETAINED_RPC_STDOUT_BYTES);
+
+        compact_retained_stdout_log(&path);
+
+        let compacted = std::fs::read_to_string(&path).unwrap();
+        assert!(compacted.len() as u64 <= RETAINED_RPC_STDOUT_TAIL_BYTES);
+        assert!(compacted.starts_with('x'));
+        assert!(compacted.ends_with('\n'));
     }
 }

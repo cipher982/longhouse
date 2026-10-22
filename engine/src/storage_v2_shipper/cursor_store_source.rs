@@ -863,9 +863,16 @@ pub(super) fn prepare_next_cursor_envelope_outcome_with_limit(
             }
         }
     }
-    let metadata_before = db_path
-        .metadata()
-        .with_context(|| format!("reading Cursor store metadata {}", db_path.display()))?;
+    let metadata_before = match db_path.metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CursorPreparationOutcome::Current);
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reading Cursor store metadata {}", db_path.display()));
+        }
+    };
     let store_incarnation = identity_from_metadata(&metadata_before)
         .context("Cursor store has no stable file incarnation")?;
     // Stamped before anything is read from the store, so a write that lands

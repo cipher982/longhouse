@@ -257,15 +257,20 @@ pub fn enqueue_runtime_event_for_handoff(dir: &Path, event: &Value) -> anyhow::R
     let nonce = uuid::Uuid::new_v4();
     let temporary = dir.join(format!(".{nonce}.tmp"));
     let ready = dir.join(format!("{nonce}.json"));
+    let critical = is_critical_runtime_event(event);
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&temporary)?;
     file.write_all(&bytes)?;
-    file.sync_all()?;
+    if critical {
+        file.sync_all()?;
+    }
     drop(file);
     std::fs::rename(&temporary, &ready)?;
-    sync_directory(dir)?;
+    if critical {
+        sync_directory(dir)?;
+    }
     Ok(true)
 }
 

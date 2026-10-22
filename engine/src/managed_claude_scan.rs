@@ -138,6 +138,10 @@ pub(crate) fn collect_observations_from_paths(
         let bridge_alive = state
             .bridge_pid
             .is_some_and(|pid| claude_channel_bridge_alive(process_facts, pid, recorded_start));
+        if !claude_alive && !bridge_alive && state.exited_at.is_none() && !process_facts.is_empty()
+        {
+            stamp_missing_tombstone_exit(path, now);
+        }
         let claude_foreground_tui = claude_alive
             && state.claude_pid.is_some_and(|pid| {
                 process_facts
@@ -225,6 +229,31 @@ fn remove_expired_tombstone(path: &Path, now: DateTime<Utc>) {
         let _ = fs::remove_file(path);
         // The owner-input queue (`claude_owner_input`) goes with its session.
         let _ = fs::remove_dir_all(path.with_extension("owner-input"));
+    }
+}
+
+fn stamp_missing_tombstone_exit(path: &Path, now: DateTime<Utc>) {
+    let Ok(_lock) = crate::claude_channel_server::lock_state_path(path) else {
+        return;
+    };
+    let Ok(bytes) = fs::read(path) else {
+        return;
+    };
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return;
+    };
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    if obj.get("exited_at").is_some_and(|v| !v.is_null()) {
+        return;
+    }
+    obj.insert(
+        "exited_at".to_string(),
+        serde_json::Value::String(now.to_rfc3339()),
+    );
+    if let Ok(encoded) = serde_json::to_vec(&value) {
+        let _ = fs::write(path, encoded);
     }
 }
 

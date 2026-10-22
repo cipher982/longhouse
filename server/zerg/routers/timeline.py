@@ -918,15 +918,20 @@ async def get_timeline_session_subagents(
         raise HTTPException(status_code=400, detail="owner-scoped request required")
     catalog = get_catalogd_client()
     if catalog is None:
-        return {"session_id": str(session_id), "children": []}
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "catalog_unavailable", "message": "The live catalog is unavailable."},
+        )
     try:
         return await catalog.call(
             "session.subagents.list.v2",
             {"session_id": str(session_id), "owner_id": str(owner_id)},
         )
-    except (CatalogRemoteError, CatalogUnavailable):
-        # A missing child list must not break the transcript it hangs off.
-        return {"session_id": str(session_id), "children": []}
+    except (CatalogRemoteError, CatalogUnavailable) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "catalog_unavailable", "message": "The live catalog is unavailable."},
+        ) from exc
 
 
 @router.get("/sessions/{session_id}/events")

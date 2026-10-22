@@ -92,6 +92,7 @@ class LiveControlGrant:
     run_id: str
     lease_generation: str
     identity_source: Literal["adapter_bound", "legacy_synthetic"]
+    last_health_at: datetime | None = None
 
 
 def load_live_control_session(db: Session, session_id: UUID | str) -> LiveControlSession | None:
@@ -284,6 +285,7 @@ def get_bound_live_control_identity(
             LiveSessionConnection.run_id,
             LiveSessionConnection.adapter_connection_id,
             LiveSessionConnection.lease_generation,
+            LiveSessionConnection.last_health_at,
         )
         .join(LiveSessionRun, LiveSessionRun.id == LiveSessionConnection.run_id)
         .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
@@ -314,6 +316,7 @@ def get_bound_live_control_identity(
         run_id=str(row.run_id),
         lease_generation=generation,
         identity_source="adapter_bound",
+        last_health_at=normalize_utc(row.last_health_at),
     )
 
 
@@ -403,6 +406,7 @@ def get_canonical_live_control_grant(
         heads=heads,
         supported_operations=supported_operations,
         now=now,
+        asserted_at=grant.last_health_at,
     )
     if not authorization.allowed:
         return None, authorization.reason or "control_unavailable"

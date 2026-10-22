@@ -154,13 +154,12 @@ pub(crate) fn collect_observations_from_paths(
         if session_id.is_empty() {
             continue;
         }
-        let bridge_alive = bridge_lock_is_held(path)
-            && bridge_process_identity_matches(
-                process_facts,
-                state.pid,
-                state.bridge_process_start_time.as_deref(),
-                &state.session_id,
-            );
+        let bridge_alive = bridge_process_identity_matches(
+            process_facts,
+            state.pid,
+            state.bridge_process_start_time.as_deref(),
+            &state.session_id,
+        ) && bridge_lock_is_held(path);
         let has_tui_attachment = state
             .ws_url
             .as_deref()

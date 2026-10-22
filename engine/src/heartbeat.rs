@@ -1966,6 +1966,46 @@ struct ReusableMachineEvidence {
 static REUSABLE_MACHINE_EVIDENCE: LazyLock<std::sync::Mutex<Option<ReusableMachineEvidence>>> =
     LazyLock::new(Default::default);
 
+static DETACHED_CONTROL_OBSERVED_AT: LazyLock<
+    std::sync::Mutex<HashMap<(String, String, String, String), (DateTime<Utc>, String)>>,
+> = LazyLock::new(Default::default);
+
+fn control_observed_at(
+    machine_id: &str,
+    provider: &str,
+    session_id: &str,
+    run_id: Option<&str>,
+    updated_at: &str,
+    state: &str,
+    now: DateTime<Utc>,
+    envelope_observed_at: &str,
+) -> String {
+    let key = (
+        machine_id.to_string(),
+        provider.to_string(),
+        session_id.to_string(),
+        format!("{}:{}", run_id.unwrap_or_default(), updated_at.trim()),
+    );
+    let Ok(mut map) = DETACHED_CONTROL_OBSERVED_AT.lock() else {
+        return envelope_observed_at.to_string();
+    };
+    if state != "detached" {
+        map.remove(&key);
+        return envelope_observed_at.to_string();
+    }
+    if map.len() > 8192 {
+        map.clear();
+    }
+    if let Some((cached_now, cached_ts)) = map.get(&key) {
+        let delta = now.signed_duration_since(*cached_now);
+        if delta >= chrono::Duration::zero() && delta <= chrono::Duration::hours(24) {
+            return cached_ts.clone();
+        }
+    }
+    map.insert(key, (now, envelope_observed_at.to_string()));
+    envelope_observed_at.to_string()
+}
+
 /// Regroup the flattened candidate identities into their reducer families.
 fn family_identities(candidates: &[EvidenceIdentity]) -> [Vec<EvidenceIdentity>; 7] {
     let mut families: [Vec<EvidenceIdentity>; 7] = Default::default();
@@ -2160,7 +2200,7 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
             managed_snapshot_complete,
             obs.app_server_alive,
             "codex_bridge_scan",
-            &envelope_observed_at,
+            &at,
         ) {
             run.push(terminal);
         }
@@ -2238,7 +2278,16 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
                 thread_subscription_status: obs.thread_subscription_status.clone(),
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "codex_bridge_scan".to_string(),
-                observed_at: envelope_observed_at.clone(),
+                observed_at: control_observed_at(
+                    machine_id,
+                    "codex",
+                    &obs.session_id,
+                    obs.run_id.as_deref(),
+                    &obs.updated_at,
+                    state,
+                    now,
+                    &envelope_observed_at,
+                ),
             });
         }
         if let Some(provider_session_id) = obs
@@ -2356,7 +2405,16 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
                 thread_subscription_status: None,
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "claude_channel_scan".to_string(),
-                observed_at: envelope_observed_at.clone(),
+                observed_at: control_observed_at(
+                    machine_id,
+                    "claude",
+                    &obs.session_id,
+                    Some(run_id.as_str()),
+                    &obs.updated_at,
+                    state,
+                    now,
+                    &envelope_observed_at,
+                ),
             });
         }
         if let Some(provider_session_id) = obs
@@ -2394,7 +2452,7 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
             managed_snapshot_complete,
             obs.server_alive,
             "opencode_server_scan",
-            &envelope_observed_at,
+            &at,
         ) {
             run.push(terminal);
         }
@@ -2446,7 +2504,16 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
                 thread_subscription_status: None,
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "opencode_server_scan".to_string(),
-                observed_at: envelope_observed_at.clone(),
+                observed_at: control_observed_at(
+                    machine_id,
+                    "opencode",
+                    &obs.session_id,
+                    Some(run_id.as_str()),
+                    &obs.updated_at,
+                    state,
+                    now,
+                    &envelope_observed_at,
+                ),
             });
         }
         transcript.push(TranscriptEvidence {
@@ -2477,7 +2544,7 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
             managed_snapshot_complete,
             obs.launcher_alive,
             "cursor_helm_scan",
-            &envelope_observed_at,
+            &at,
         ) {
             run.push(terminal);
         }
@@ -2535,7 +2602,16 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
                 thread_subscription_status: None,
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "cursor_helm_scan".to_string(),
-                observed_at: envelope_observed_at.clone(),
+                observed_at: control_observed_at(
+                    machine_id,
+                    "cursor",
+                    &obs.session_id,
+                    Some(run_id.as_str()),
+                    &obs.updated_at,
+                    state,
+                    now,
+                    &envelope_observed_at,
+                ),
             });
         }
     }
@@ -2553,7 +2629,7 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
             managed_snapshot_complete,
             obs.provider_alive,
             "pi_helm_scan",
-            &envelope_observed_at,
+            &at,
         ) {
             run.push(terminal);
         }
@@ -2606,7 +2682,16 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
                 thread_subscription_status: None,
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "pi_helm_scan".to_string(),
-                observed_at: envelope_observed_at.clone(),
+                observed_at: control_observed_at(
+                    machine_id,
+                    "pi",
+                    &obs.session_id,
+                    obs.run_id.as_deref(),
+                    &obs.updated_at,
+                    state,
+                    now,
+                    &envelope_observed_at,
+                ),
             });
         }
         if let Some(provider_session_id) = obs
@@ -2645,7 +2730,7 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
             managed_snapshot_complete,
             obs.provider_alive,
             "omp_helm_scan",
-            &envelope_observed_at,
+            &at,
         ) {
             run.push(terminal);
         }
@@ -2710,7 +2795,16 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
                 thread_subscription_status: None,
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "omp_helm_scan".to_string(),
-                observed_at: envelope_observed_at.clone(),
+                observed_at: control_observed_at(
+                    machine_id,
+                    "omp",
+                    &obs.session_id,
+                    obs.run_id.as_deref(),
+                    &obs.updated_at,
+                    if control_ready { "attached" } else { "detached" },
+                    now,
+                    &envelope_observed_at,
+                ),
             });
         }
         if let Some(provider_session_id) = obs
@@ -2841,7 +2935,13 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
         ))
     });
     sort_activity_evidence(&mut activity);
-    control.sort_by(|a, b| (&a.provider, &a.session_id).cmp(&(&b.provider, &b.session_id)));
+    control.sort_by(|a, b| {
+        (a.state == "detached", &a.provider, &a.session_id).cmp(&(
+            b.state == "detached",
+            &b.provider,
+            &b.session_id,
+        ))
+    });
     transcript.sort_by(|a, b| {
         (&a.provider, &a.provider_session_id).cmp(&(&b.provider, &b.provider_session_id))
     });
@@ -9165,5 +9265,75 @@ mod tests {
                 .len(),
             3
         );
+    }
+
+    #[test]
+    fn dead_control_evidence_hashes_once_while_live_control_renews_every_beat() {
+        let now1 = DateTime::parse_from_rfc3339("2026-10-22T05:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let now2 = now1 + chrono::Duration::seconds(60);
+        let live_claude = ClaudeChannelObservation {
+            session_id: "zzzzzzzz-zzzz-4zzz-8zzz-zzzzzzzzzzzz".to_string(),
+            run_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
+            connection_id: Some("conn-live".to_string()),
+            lease_generation: Some("gen-live".to_string()),
+            provider_session_id: Some("prov-live".to_string()),
+            state_file: PathBuf::from("/tmp/live.json"),
+            cwd: Some("/repo".to_string()),
+            claude_pid: Some(1001),
+            bridge_pid: Some(1002),
+            ready: true,
+            started_at: "2026-10-22T04:50:00Z".to_string(),
+            updated_at: "2026-10-22T04:50:00Z".to_string(),
+            claude_alive: true,
+            bridge_alive: true,
+            claude_foreground_tui: true,
+        };
+        let dead_claude = dead_claude_channel_observation(
+            "00000000-0000-4000-8000-000000000000",
+            false,
+            false,
+        );
+        let observations = [dead_claude, live_claude];
+        let first = machine_evidence_from_observations(
+            "cinder-sol-test",
+            &[],
+            &[],
+            &observations,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            true,
+            true,
+            now1,
+            Some(&[]),
+            0,
+        );
+        let second = machine_evidence_from_observations(
+            "cinder-sol-test",
+            &[],
+            &[],
+            &observations,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            true,
+            true,
+            now2,
+            Some(&[]),
+            1,
+        );
+        // Live control sorts first even when its session UUID is lexicographically last.
+        assert_eq!(first.control[0].state, "attached");
+        assert_eq!(first.control[1].state, "detached");
+        // Dead control keeps its first-observed detached timestamp so its hash
+        // does not churn across subsequent scans, while live control renews.
+        assert_eq!(first.control[1].observed_at, second.control[1].observed_at);
+        assert_ne!(first.control[0].observed_at, second.control[0].observed_at);
     }
 }

@@ -1739,6 +1739,8 @@ async fn monitor_omp_print(
                     let _ = claims
                         .record_shutdown_survived(&binding.run_id, invocation.pending_count());
                 }
+            } else {
+                crate::console_rpc::compact_retained_stdout_log(&sink.stdout_path);
             }
             invocation.process_exited();
             crate::console_lifecycle::unregister(&invocation.launch_id);
@@ -1780,7 +1782,12 @@ async fn monitor_omp_print(
             }
         };
         let had_lines = !lines.is_empty();
-        for bytes in lines {
+        let mut pending_message_update: Option<(TurnBinding, u64, Value, OmpStreamProjection)> =
+            None;
+        for (line_idx, bytes) in lines.into_iter().enumerate() {
+            if line_idx > 0 && line_idx % 256 == 0 {
+                tokio::task::yield_now().await;
+            }
             seq += 1;
             let event = match serde_json::from_slice::<Value>(&bytes) {
                 Ok(event) => event,
@@ -1910,10 +1917,37 @@ async fn monitor_omp_print(
                 }
             }
 
-            if let Some((binding, routed)) = invocation.route_stream_event(seq, event.clone()) {
-                sink.for_binding(&binding)
-                    .post_stream_event(seq, &routed, &projection)
-                    .await;
+            if crate::console_rpc::is_non_text_rpc_message_update(&event) {
+                // Non-text thinking/toolcall deltas strip to an empty assistant
+                // message and do not advance live_text.
+            } else if event.get("type").and_then(Value::as_str) == Some("message_update") {
+                if let Some((binding, routed)) = invocation.route_stream_event(seq, event.clone()) {
+                    if let Some((prev_binding, prev_seq, prev_routed, prev_proj)) =
+                        pending_message_update.take()
+                    {
+                        if prev_binding.run_id != binding.run_id
+                            || prev_proj.assistant_message_index != projection.assistant_message_index
+                        {
+                            sink.for_binding(&prev_binding)
+                                .post_stream_event(prev_seq, &prev_routed, &prev_proj)
+                                .await;
+                        }
+                    }
+                    pending_message_update = Some((binding, seq, routed, projection.clone()));
+                }
+            } else {
+                if let Some((prev_binding, prev_seq, prev_routed, prev_proj)) =
+                    pending_message_update.take()
+                {
+                    sink.for_binding(&prev_binding)
+                        .post_stream_event(prev_seq, &prev_routed, &prev_proj)
+                        .await;
+                }
+                if let Some((binding, routed)) = invocation.route_stream_event(seq, event.clone()) {
+                    sink.for_binding(&binding)
+                        .post_stream_event(seq, &routed, &projection)
+                        .await;
+                }
             }
 
             if event.get("type").and_then(Value::as_str) == Some("agent_end")
@@ -1982,6 +2016,13 @@ async fn monitor_omp_print(
                     break;
                 }
             }
+        }
+        if let Some((prev_binding, prev_seq, prev_routed, prev_proj)) =
+            pending_message_update.take()
+        {
+            sink.for_binding(&prev_binding)
+                .post_stream_event(prev_seq, &prev_routed, &prev_proj)
+                .await;
         }
 
         if had_lines {
@@ -3202,6 +3243,7 @@ async fn publish_stdout_growth(
             .any(|item| item.id == OMP_ASYNC_WORK_PLACEHOLDER_ID)
     });
     let mut last_trigger = json!({"kind": "unknown", "task_ids": [], "summary": ""});
+    let mut pending_message_update: Option<(OmpPrintSink, u64, Value, OmpStreamProjection)> = None;
     for bytes in lines {
         *seq += 1;
         let event: Value = match serde_json::from_slice(&bytes) {
@@ -3275,10 +3317,38 @@ async fn publish_stdout_growth(
             }
         }
         if let Some(invocation) = invocation {
-            if let Some((binding, routed)) = invocation.route_stream_event(*seq, event.clone()) {
-                sink.for_binding(&binding)
-                    .post_stream_event(*seq, &routed, projection)
-                    .await;
+            if crate::console_rpc::is_non_text_rpc_message_update(&event) {
+                // Skip non-text delta events.
+            } else if event.get("type").and_then(Value::as_str) == Some("message_update") {
+                if let Some((binding, routed)) = invocation.route_stream_event(*seq, event.clone()) {
+                    let bound_sink = sink.for_binding(&binding);
+                    if let Some((prev_sink, prev_seq, prev_routed, prev_proj)) =
+                        pending_message_update.take()
+                    {
+                        if prev_sink.run_id != bound_sink.run_id
+                            || prev_proj.assistant_message_index != projection.assistant_message_index
+                        {
+                            prev_sink
+                                .post_stream_event(prev_seq, &prev_routed, &prev_proj)
+                                .await;
+                        }
+                    }
+                    pending_message_update =
+                        Some((bound_sink, *seq, routed, projection.clone()));
+                }
+            } else {
+                if let Some((prev_sink, prev_seq, prev_routed, prev_proj)) =
+                    pending_message_update.take()
+                {
+                    prev_sink
+                        .post_stream_event(prev_seq, &prev_routed, &prev_proj)
+                        .await;
+                }
+                if let Some((binding, routed)) = invocation.route_stream_event(*seq, event.clone()) {
+                    sink.for_binding(&binding)
+                        .post_stream_event(*seq, &routed, projection)
+                        .await;
+                }
             }
             if event.get("type").and_then(Value::as_str) == Some("agent_end")
                 && is_terminal_agent_end(&event)
@@ -3316,9 +3386,37 @@ async fn publish_stdout_growth(
                 apply_pending_snapshot(invocation, sink, Vec::new(), Vec::new()).await;
                 async_work_placeholder = false;
             }
-        } else {
-            event_sink.post_stream_event(*seq, &event, projection).await;
+        } else if !crate::console_rpc::is_non_text_rpc_message_update(&event) {
+            if event.get("type").and_then(Value::as_str) == Some("message_update") {
+                if let Some((prev_sink, prev_seq, prev_routed, prev_proj)) =
+                    pending_message_update.take()
+                {
+                    if prev_sink.run_id != event_sink.run_id
+                        || prev_proj.assistant_message_index != projection.assistant_message_index
+                    {
+                        prev_sink
+                            .post_stream_event(prev_seq, &prev_routed, &prev_proj)
+                            .await;
+                    }
+                }
+                pending_message_update =
+                    Some((event_sink, *seq, event, projection.clone()));
+            } else {
+                if let Some((prev_sink, prev_seq, prev_routed, prev_proj)) =
+                    pending_message_update.take()
+                {
+                    prev_sink
+                        .post_stream_event(prev_seq, &prev_routed, &prev_proj)
+                        .await;
+                }
+                event_sink.post_stream_event(*seq, &event, projection).await;
+            }
         }
+    }
+    if let Some((prev_sink, prev_seq, prev_routed, prev_proj)) = pending_message_update.take() {
+        prev_sink
+            .post_stream_event(prev_seq, &prev_routed, &prev_proj)
+            .await;
     }
     let _ = sink.ensure_transcript_binding().await?;
     if had_lines {

@@ -282,16 +282,20 @@ pub(super) fn prepare_next_envelope_with_limit(
         &path_text,
         &canonical_path,
     )?;
-    let source_revision =
-        if provider.eq_ignore_ascii_case("omp") || provider.eq_ignore_ascii_case("pi") {
-            pi_lineage_source_revision(path)?
-        } else if provider.eq_ignore_ascii_case("antigravity")
-            || is_cursor_agent_transcript_path(provider, path)
-        {
-            Some(hash_file(path)?)
-        } else {
-            None
-        };
+    if !path.exists() {
+        return Ok(None);
+    }
+    let source_revision = if provider.eq_ignore_ascii_case("omp")
+        || provider.eq_ignore_ascii_case("pi")
+    {
+        pi_lineage_source_revision(path)?
+    } else if is_cursor_agent_transcript_path(provider, path) {
+        cursor_agent_transcript_source_revision(path)?
+    } else if provider.eq_ignore_ascii_case("antigravity") {
+        Some(hash_file(path)?)
+    } else {
+        None
+    };
     let resolution = source_epoch::observe_file(
         conn,
         provider,

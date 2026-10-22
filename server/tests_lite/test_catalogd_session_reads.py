@@ -7,6 +7,7 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 from uuid import uuid4
 
@@ -36,6 +37,7 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.store import CatalogStore
 from zerg.routers import agents_sessions
+from zerg.routers import timeline
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveDeviceToken
@@ -211,6 +213,14 @@ async def test_session_subagents_serves_references_and_distinguishes_empty_from_
                 owner_id=42,
             )
         assert raised.value.status_code == 404
+
+        monkeypatch.setattr(timeline, "get_catalogd_client", lambda: None)
+        with pytest.raises(HTTPException) as timeline_unavailable:
+            await timeline.get_timeline_session_subagents(
+                session_id=UUID(parent_id),
+                current_user=SimpleNamespace(id=42),
+            )
+        assert timeline_unavailable.value.status_code == 503
     finally:
         await client.close()
         await daemon.close()

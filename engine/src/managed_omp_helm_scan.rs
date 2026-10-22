@@ -197,8 +197,30 @@ pub(crate) fn collect_observations_from_processes(
     state_dir: &Path,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<OmpHelmObservation> {
+    if let Ok(cached) = crate::dir_cache::parsed_json_dir(
+        state_dir,
+        parse_source_state,
+        |left, right| left.0.cmp(&right.0),
+    ) {
+        return collect_observations_from_parsed(cached.as_slice(), process_facts);
+    }
     let paths = crate::managed_scan::state_file_paths(state_dir);
     collect_observations_from_paths(&paths, process_facts)
+}
+
+fn collect_observations_from_parsed(
+    states: &[std::sync::Arc<(PathBuf, OmpHelmStateFile)>],
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> Vec<OmpHelmObservation> {
+    let mut observations = Vec::new();
+    for item in states {
+        let (path, state) = &**item;
+        if let Some(obs) = build_omp_helm_observation(path, state.clone(), process_facts) {
+            observations.push(obs);
+        }
+    }
+    observations.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+    observations
 }
 
 pub(crate) fn collect_observations_from_paths(
@@ -211,88 +233,92 @@ pub(crate) fn collect_observations_from_paths(
         let Ok(state) = serde_json::from_slice::<OmpHelmStateFile>(&bytes) else {
             continue;
         };
-        let session_id = state.session_id.unwrap_or_default().trim().to_string();
-        if session_id.is_empty() {
-            continue;
+        if let Some(obs) = build_omp_helm_observation(path, state, process_facts) {
+            observations.push(obs);
         }
-        let launcher_alive = state.launcher_pid.is_some_and(|pid| {
-            process_facts.get(&pid).is_some_and(|fact| {
-                (fact.command.contains("omp_helm")
-                    || fact.command.contains("omp-helm")
-                    || (fact.command.contains("longhouse") && fact.command.contains("omp")))
-                    && state
-                        .launcher_process_start_time
-                        .as_deref()
-                        .is_some_and(|recorded| {
-                            !recorded.is_empty() && lstart_matches_recorded(fact, recorded)
-                        })
-            })
-        });
-        let provider_alive = state.provider_pid.is_some_and(|pid| {
-            process_facts.get(&pid).is_some_and(|fact| {
-                state
-                    .provider_process_start_time
+    }
+    observations.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+    observations
+}
+
+fn build_omp_helm_observation(
+    path: &Path,
+    state: OmpHelmStateFile,
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> Option<OmpHelmObservation> {
+    let session_id = state.session_id.unwrap_or_default().trim().to_string();
+    if session_id.is_empty() {
+        return None;
+    }
+    let launcher_alive = state.launcher_pid.is_some_and(|pid| {
+        process_facts.get(&pid).is_some_and(|fact| {
+            (fact.command.contains("omp_helm")
+                || fact.command.contains("omp-helm")
+                || (fact.command.contains("longhouse") && fact.command.contains("omp")))
+                && state
+                    .launcher_process_start_time
                     .as_deref()
                     .is_some_and(|recorded| {
                         !recorded.is_empty() && lstart_matches_recorded(fact, recorded)
                     })
-            })
-        });
-        let socket_path = state
-            .socket_path
-            .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from);
-        let status = state.status.unwrap_or_else(|| "unknown".into());
-        // Process liveness and control readiness are separate axes. A degraded
-        // control path can still have a real provider writing its transcript,
-        // so `live` remains process evidence for cleanup and exit detection.
-        // Only `control_ready` may create a managed lease or advertise an
-        // attached terminal: OMP must have committed its native identity and
-        // the launch-scoped channel must still exist.
-        let run_over = status == "stopped"
-            || state
-                .terminal_state
+        })
+    });
+    let provider_alive = state.provider_pid.is_some_and(|pid| {
+        process_facts.get(&pid).is_some_and(|fact| {
+            state
+                .provider_process_start_time
                 .as_deref()
-                .is_some_and(|value| !value.trim().is_empty());
-        let live = !run_over && launcher_alive && provider_alive;
-        let control_ready = !run_over
-            && status == "ready"
-            && state.ready
-            && socket_path.as_ref().is_some_and(|path| path.exists());
-        observations.push(OmpHelmObservation {
-            session_id,
-            native_session_id: state
-                .native_session_id
-                .filter(|value| !value.trim().is_empty()),
-            run_id: state.run_id.filter(|value| !value.trim().is_empty()),
-            connection_id: state.connection_id.filter(|value| !value.trim().is_empty()),
-            lease_generation: state
-                .lease_generation
-                .filter(|value| !value.trim().is_empty()),
-            state_file: path.clone(),
-            session_file: state
-                .session_file
-                .filter(|value| !value.trim().is_empty())
-                .map(PathBuf::from),
-            socket_path,
-            cwd: state.cwd.filter(|value| !value.trim().is_empty()),
-            launcher_pid: state.launcher_pid,
-            launcher_process_start_time: state.launcher_process_start_time,
-            provider_pid: state.provider_pid,
-            provider_process_start_time: state.provider_process_start_time,
-            started_at: state.started_at.unwrap_or_default(),
-            updated_at: state.updated_at.unwrap_or_default(),
-            phase: state.phase,
-            tool_name: state.tool_name,
-            status,
-            launcher_alive,
-            provider_alive,
-            live,
-            control_ready,
-        });
-    }
-    observations.sort_by(|left, right| left.session_id.cmp(&right.session_id));
-    observations
+                .is_some_and(|recorded| {
+                    !recorded.is_empty() && lstart_matches_recorded(fact, recorded)
+                })
+        })
+    });
+    let socket_path = state
+        .socket_path
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
+    let status = state.status.unwrap_or_else(|| "unknown".into());
+    let run_over = status == "stopped"
+        || state
+            .terminal_state
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+    let live = !run_over && launcher_alive && provider_alive;
+    let control_ready = !run_over
+        && status == "ready"
+        && state.ready
+        && socket_path.as_ref().is_some_and(|path| path.exists());
+    Some(OmpHelmObservation {
+        session_id,
+        native_session_id: state
+            .native_session_id
+            .filter(|value| !value.trim().is_empty()),
+        run_id: state.run_id.filter(|value| !value.trim().is_empty()),
+        connection_id: state.connection_id.filter(|value| !value.trim().is_empty()),
+        lease_generation: state
+            .lease_generation
+            .filter(|value| !value.trim().is_empty()),
+        state_file: path.to_path_buf(),
+        session_file: state
+            .session_file
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from),
+        socket_path,
+        cwd: state.cwd.filter(|value| !value.trim().is_empty()),
+        launcher_pid: state.launcher_pid,
+        launcher_process_start_time: state.launcher_process_start_time,
+        provider_pid: state.provider_pid,
+        provider_process_start_time: state.provider_process_start_time,
+        started_at: state.started_at.unwrap_or_default(),
+        updated_at: state.updated_at.unwrap_or_default(),
+        phase: state.phase,
+        tool_name: state.tool_name,
+        status,
+        launcher_alive,
+        provider_alive,
+        live,
+        control_ready,
+    })
 }
 
 #[cfg(test)]

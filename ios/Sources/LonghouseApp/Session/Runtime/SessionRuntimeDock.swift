@@ -56,7 +56,7 @@ struct SessionLedgerNoticeState {
 func sessionRuntimeDockShouldExpand(detail: SessionDetail, ledger: SessionLedgerEvidence) -> Bool {
     ledger == .uncertain
         || detail.stateFacts.hasAnswerablePendingInteraction
-        || detail.controlBlock.isFault
+        || (detail.controlBlock.isFault && SessionComposerControlState.isVisible(for: detail))
         || detail.isTranscriptSyncing
 }
 
@@ -734,7 +734,9 @@ struct SessionRuntimeDock: View {
                 .foregroundStyle(.secondary)
                 .transaction { $0.animation = nil }
             }
-            if detail.controlBlock.isFault, let message = detail.controlHealthMessage {
+            if detail.controlBlock.isFault,
+               SessionComposerControlState.isVisible(for: detail),
+               let message = detail.controlHealthMessage {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.secondary)

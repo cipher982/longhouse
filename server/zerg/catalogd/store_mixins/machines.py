@@ -129,6 +129,16 @@ class MachinesMixin:
             timer.mark("previous_digest")
             cutoff = received_at - timedelta(days=30)
             connection.execute(stamp.delete().where(stamp.c.device_id == device_id, stamp.c.received_at < cutoff))
+            raw_cutoff = received_at - timedelta(hours=1)
+            connection.execute(
+                update(stamp)
+                .where(
+                    stamp.c.device_id == device_id,
+                    stamp.c.received_at < raw_cutoff,
+                    stamp.c.raw_json.is_not(None),
+                )
+                .values(raw_json=None)
+            )
             timer.mark("retention_delete")
             stamp_id = connection.execute(
                 insert(stamp).values(**heartbeat, request_sha256=request_sha256).returning(stamp.c.id)

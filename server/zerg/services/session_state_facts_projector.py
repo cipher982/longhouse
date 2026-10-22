@@ -182,6 +182,7 @@ def project_shadow_session_state_facts(
         expected_run_id=durable_run_id,
         require_run_binding=True,
         allowed_control_coordinates=_bound_control_coordinates(catalog_facts),
+        control_assertions=_bound_control_assertions(catalog_facts),
     )
     delegation_head, rejected_delegation = _effective_head(
         heads,
@@ -301,6 +302,7 @@ def authorize_exact_control_fact(
     heads: Collection[Mapping[str, Any]],
     supported_operations: Collection[str],
     now: datetime,
+    asserted_at: datetime | None = None,
 ) -> ControlFactAuthorization:
     """Authorize from the exact bound control subject, never a session-wide winner."""
 
@@ -313,6 +315,7 @@ def authorize_exact_control_fact(
         session_id=session_id,
         family="control",
         now=_aware(now, "now"),
+        asserted_at=_aware(asserted_at, "asserted_at") if asserted_at is not None else None,
     )
     if rejected:
         return ControlFactAuthorization(allowed=False, reason="control_head_rejected")
@@ -392,6 +395,8 @@ def _served_control(
         mode=mode,
         supported_operations=supported_operations,
         operation="reattach",
+        run=run,
+        observed=observed,
     )
     if mode == "console":
         return SessionControlFacts(
@@ -480,15 +485,32 @@ def _durable_action_availability(
     mode: SessionMode,
     supported_operations: set[str],
     operation: Literal["reattach"],
+    run: SessionRunFacts | None = None,
+    observed: SessionControlFacts | None = None,
 ) -> tuple[bool, str]:
     if mode != "helm" or operation not in supported_operations:
         return False, "unsupported" if operation not in supported_operations else "not_helm"
+    if observed is None and run is not None and run.lifecycle in ("starting", "running"):
+        return False, "run_active"
+    latest_run_id = _text(_mapping(catalog_facts.get("latest_run")).get("id"))
+    saw_attached = False
     for value in catalog_facts.get("connections") or ():
         connection = _mapping(value)
         if connection.get("released_at") is not None:
             continue
-        if _text(connection.get("state")) not in {"released", "ended"} and bool(connection.get("can_resume")):
+        conn_run_id = _text(connection.get("run_id"))
+        if latest_run_id is not None and conn_run_id is not None and conn_run_id != latest_run_id:
+            continue
+        state = (_text(connection.get("state")) or "").lower()
+        if state in {"released", "ended"}:
+            continue
+        if observed is None and state == "attached":
+            saw_attached = True
+            continue
+        if bool(connection.get("can_resume")):
             return True, "reattach_available"
+    if saw_attached:
+        return False, "already_connected"
     return False, f"{operation}_unavailable"
 
 
@@ -758,6 +780,7 @@ def _effective_head(
     allowed_control_coordinates: set[tuple[str, str, str]] | None = None,
     retain_expired: bool = False,
     asserted_at: datetime | None = None,
+    control_assertions: Mapping[tuple[str, str, str], tuple[str, datetime]] | None = None,
 ) -> tuple[tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None, int]:
     candidates: list[tuple[tuple[Any, ...], Mapping[str, Any], dict[str, Any], datetime, datetime]] = []
     rejected = 0
@@ -773,24 +796,30 @@ def _effective_head(
             if rank is None:
                 raise ValueError(f"unsupported {family} authority_class")
             observed_at = _wire_datetime(value.get("observed_at"), "observed_at")
-            valid_until = _valid_until(
-                family,
-                head=head,
-                value=value,
-                observed_at=observed_at,
-                asserted_at=asserted_at,
-            )
             run_id = _text(value.get("run_id"))
             if require_run_binding and (expected_run_id is None or run_id != expected_run_id):
                 raise ValueError(f"{family} run_id is not bound to the durable latest run")
-            if family == "control" and allowed_control_coordinates is not None:
+            effective_asserted_at = asserted_at
+            if family == "control":
                 coordinate = (
                     run_id or "",
                     _text(value.get("connection_id")) or "",
                     _text(value.get("lease_generation")) or "",
                 )
-                if coordinate not in allowed_control_coordinates:
+                if allowed_control_coordinates is not None and coordinate not in allowed_control_coordinates:
                     raise ValueError("control identity is not bound to a durable connection")
+                if effective_asserted_at is None and control_assertions is not None:
+                    assertion = control_assertions.get(coordinate)
+                    head_state = (_text(value.get("state")) or "").lower()
+                    if assertion is not None and assertion[0] == head_state and head_state in {"attached", "degraded"}:
+                        effective_asserted_at = assertion[1]
+            valid_until = _valid_until(
+                family,
+                head=head,
+                value=value,
+                observed_at=observed_at,
+                asserted_at=effective_asserted_at,
+            )
         except (TypeError, ValueError):
             rejected += 1
             continue
@@ -840,6 +869,34 @@ def _bound_control_coordinates(catalog_facts: Mapping[str, Any]) -> set[tuple[st
         if all(coordinate):
             coordinates.add(coordinate)
     return coordinates
+
+
+def _bound_control_assertions(
+    catalog_facts: Mapping[str, Any],
+) -> dict[tuple[str, str, str], tuple[str, datetime]]:
+    connections = catalog_facts.get("connections")
+    if not isinstance(connections, list):
+        return {}
+    assertions: dict[tuple[str, str, str], tuple[str, datetime]] = {}
+    for connection in connections:
+        row = _mapping(connection)
+        state = (_text(row.get("state")) or "").lower()
+        if row.get("released_at") is not None or state in {"released", "ended"}:
+            continue
+        coordinate = (
+            _text(row.get("run_id")) or "",
+            _text(row.get("adapter_connection_id")) or "",
+            _text(row.get("lease_generation")) or "",
+        )
+        if not all(coordinate):
+            continue
+        try:
+            last_health_at = _optional_wire_datetime(row.get("last_health_at"), "connections.last_health_at")
+        except ValueError:
+            continue
+        if last_health_at is not None:
+            assertions[coordinate] = (state, last_health_at)
+    return assertions
 
 
 def _project_activity(
@@ -1089,7 +1146,8 @@ def _valid_until(
         ttl_ms = value.get("lease_ttl_ms")
         if type(ttl_ms) is not int or ttl_ms <= 0:
             raise ValueError("control lease_ttl_ms must be positive")
-        return observed_at + timedelta(milliseconds=ttl_ms)
+        anchor = max(observed_at, asserted_at) if asserted_at is not None else observed_at
+        return anchor + timedelta(milliseconds=ttl_ms)
     raw = value.get("valid_until") or head.get("valid_until")
     declared = _wire_datetime(raw, "valid_until")
     if family != "activity":

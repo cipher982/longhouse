@@ -1230,3 +1230,64 @@ def test_exact_control_authorization_rejects_expiry_divergence_and_tampering():
     )
     assert rejected.allowed is False
     assert rejected.reason == "control_head_rejected"
+
+
+def test_control_head_renewed_by_durable_connection_last_health_at_prevents_false_reattach():
+    """When the machine's control lease heartbeat (`connections.last_health_at`)
+    is newer than the reducer head's `observed_at`, the bound control head stays
+    valid and does not flip an active Helm session to Reattach."""
+    catalog_facts = {
+        **BOUND_CONTROL_CATALOG_FACTS,
+        "connections": [
+            {
+                **BOUND_CONTROL_CATALOG_FACTS["connections"][0],
+                "can_resume": True,
+                "last_health_at": (NOW + timedelta(minutes=14)).isoformat(),
+            }
+        ],
+    }
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=90,
+        catalog_facts=catalog_facts,
+        heads=[
+            _activity(observed_at=NOW + timedelta(minutes=14, seconds=50), valid_until=NOW + timedelta(minutes=15, seconds=5)),
+            _control(observed_at=NOW, grants=["interrupt", "send_input"]),
+        ],
+        supported_operations={"send_input", "interrupt", "reattach", "resume"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW + timedelta(minutes=14)),
+        host=SessionHostFacts(state="online", observed_at=NOW + timedelta(minutes=14)),
+        now=NOW + timedelta(minutes=14, seconds=55),
+    )
+
+    assert served.control.connection == "connected"
+    assert served.control.actions.send_input.state == "available"
+    assert served.control.actions.reattach.state == "unavailable"
+    assert served.control.actions.reattach.reason == "already_connected"
+
+
+def test_served_projector_without_control_head_blocks_reattach_when_run_active_or_attached():
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=91,
+        catalog_facts={
+            **BOUND_CONTROL_CATALOG_FACTS,
+            "connections": [
+                {
+                    **BOUND_CONTROL_CATALOG_FACTS["connections"][0],
+                    "state": "attached",
+                    "can_resume": True,
+                }
+            ],
+        },
+        heads=[],
+        supported_operations={"send_input", "interrupt", "terminate", "reattach", "resume"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="unknown"),
+        host=SessionHostFacts(state="online", observed_at=NOW),
+        now=NOW,
+    )
+
+    assert served.control.actions.reattach.state == "unavailable"
+    assert served.control.actions.reattach.reason == "already_connected"

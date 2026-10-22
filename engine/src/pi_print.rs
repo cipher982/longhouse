@@ -1152,6 +1152,7 @@ async fn publish_stdout_growth(
 ) -> Result<()> {
     let lines = crate::console_adapter::read_growth(&sink.stdout_path, offset, pending)?;
     let had_lines = !lines.is_empty();
+    let mut pending_message_update: Option<(PiPrintSink, u64, Value, PiStreamProjection)> = None;
     for bytes in lines {
         *seq += 1;
         let mut event_sink = if let Some(invocation) = invocation {
@@ -1178,7 +1179,35 @@ async fn publish_stdout_growth(
         if let Some((phase, tool_name)) = pi_phase_from_event(&event) {
             event_sink.post_phase(phase, tool_name, *seq).await;
         }
-        event_sink.post_stream_event(*seq, &event, projection).await;
+        if crate::console_rpc::is_non_text_rpc_message_update(&event) {
+            continue;
+        }
+        if event.get("type").and_then(Value::as_str) == Some("message_update") {
+            if let Some((prev_sink, prev_seq, prev_event, prev_proj)) =
+                pending_message_update.take()
+            {
+                if prev_sink.run_id != event_sink.run_id {
+                    prev_sink
+                        .post_stream_event(prev_seq, &prev_event, &prev_proj)
+                        .await;
+                }
+            }
+            pending_message_update = Some((event_sink, *seq, event, projection.clone()));
+        } else {
+            if let Some((prev_sink, prev_seq, prev_event, prev_proj)) =
+                pending_message_update.take()
+            {
+                prev_sink
+                    .post_stream_event(prev_seq, &prev_event, &prev_proj)
+                    .await;
+            }
+            event_sink.post_stream_event(*seq, &event, projection).await;
+        }
+    }
+    if let Some((prev_sink, prev_seq, prev_event, prev_proj)) = pending_message_update.take() {
+        prev_sink
+            .post_stream_event(prev_seq, &prev_event, &prev_proj)
+            .await;
     }
     let _ = sink.ensure_transcript_binding().await?;
     if had_lines {

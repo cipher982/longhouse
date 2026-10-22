@@ -460,7 +460,8 @@ pub(super) async fn run_path_job(job: PathJob, task_context: PathTaskContext) ->
                     error = %error,
                     "Storage-v2 source preparation failed; retrying locally"
                 );
-                result.local_retry_after = Some(local_retry_delay(result.job.priority));
+                result.local_retry_priority = Some(WorkPriority::Retry);
+                result.local_retry_after = Some(local_retry_delay(WorkPriority::Retry));
                 return finish_path_task(result, task_started);
             }
             let backpressure =

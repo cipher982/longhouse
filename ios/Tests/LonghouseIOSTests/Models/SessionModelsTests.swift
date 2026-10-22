@@ -544,6 +544,24 @@ struct SessionModelsTests {
         }
     }
 
+    @Test
+    func runtimeDockDoesNotExpandForControlFaultWhenUnavailableFooterOwnsMessage() throws {
+        let detail = try makeConsoleDetail(
+            startTurnReason: "machine_offline",
+            controlConnection: "disconnected",
+            accessLabel: SessionStateLabel(
+                key: "machine_offline",
+                label: "Machine offline",
+                tone: "degraded",
+                observedAt: nil
+            ),
+            servedReason: "The machine running this session is offline. Sending resumes when it reconnects."
+        )
+        #expect(detail.controlBlock == .machineOffline)
+        #expect(!SessionComposerControlState.isVisible(for: detail))
+        #expect(!sessionRuntimeDockShouldExpand(detail: detail, ledger: .quiet))
+    }
+
 
     @Test
     func sessionDetailDoesNotOfferUnanswerablePauseRequest() throws {
