@@ -1926,7 +1926,8 @@ async fn monitor_omp_print(
                         pending_message_update.take()
                     {
                         if prev_binding.run_id != binding.run_id
-                            || prev_proj.assistant_message_index != projection.assistant_message_index
+                            || prev_proj.assistant_message_index
+                                != projection.assistant_message_index
                         {
                             sink.for_binding(&prev_binding)
                                 .post_stream_event(prev_seq, &prev_routed, &prev_proj)
@@ -3320,21 +3321,22 @@ async fn publish_stdout_growth(
             if crate::console_rpc::is_non_text_rpc_message_update(&event) {
                 // Skip non-text delta events.
             } else if event.get("type").and_then(Value::as_str) == Some("message_update") {
-                if let Some((binding, routed)) = invocation.route_stream_event(*seq, event.clone()) {
+                if let Some((binding, routed)) = invocation.route_stream_event(*seq, event.clone())
+                {
                     let bound_sink = sink.for_binding(&binding);
                     if let Some((prev_sink, prev_seq, prev_routed, prev_proj)) =
                         pending_message_update.take()
                     {
                         if prev_sink.run_id != bound_sink.run_id
-                            || prev_proj.assistant_message_index != projection.assistant_message_index
+                            || prev_proj.assistant_message_index
+                                != projection.assistant_message_index
                         {
                             prev_sink
                                 .post_stream_event(prev_seq, &prev_routed, &prev_proj)
                                 .await;
                         }
                     }
-                    pending_message_update =
-                        Some((bound_sink, *seq, routed, projection.clone()));
+                    pending_message_update = Some((bound_sink, *seq, routed, projection.clone()));
                 }
             } else {
                 if let Some((prev_sink, prev_seq, prev_routed, prev_proj)) =
@@ -3344,7 +3346,8 @@ async fn publish_stdout_growth(
                         .post_stream_event(prev_seq, &prev_routed, &prev_proj)
                         .await;
                 }
-                if let Some((binding, routed)) = invocation.route_stream_event(*seq, event.clone()) {
+                if let Some((binding, routed)) = invocation.route_stream_event(*seq, event.clone())
+                {
                     sink.for_binding(&binding)
                         .post_stream_event(*seq, &routed, projection)
                         .await;
@@ -3399,8 +3402,7 @@ async fn publish_stdout_growth(
                             .await;
                     }
                 }
-                pending_message_update =
-                    Some((event_sink, *seq, event, projection.clone()));
+                pending_message_update = Some((event_sink, *seq, event, projection.clone()));
             } else {
                 if let Some((prev_sink, prev_seq, prev_routed, prev_proj)) =
                     pending_message_update.take()

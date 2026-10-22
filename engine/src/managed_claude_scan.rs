@@ -669,8 +669,7 @@ mod tests {
         let observations = collect_observations_from_processes(tmp.path(), &process_facts);
 
         assert_eq!(observations.len(), 1);
-        let updated: serde_json::Value =
-            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let updated: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert!(updated.get("exited_at").and_then(|v| v.as_str()).is_some());
         assert_eq!(updated["updated_at"].as_str(), Some(stale.as_str()));
     }

@@ -2801,7 +2801,11 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
                     &obs.session_id,
                     obs.run_id.as_deref(),
                     &obs.updated_at,
-                    if control_ready { "attached" } else { "detached" },
+                    if control_ready {
+                        "attached"
+                    } else {
+                        "detached"
+                    },
                     now,
                     &envelope_observed_at,
                 ),
@@ -9290,11 +9294,8 @@ mod tests {
             bridge_alive: true,
             claude_foreground_tui: true,
         };
-        let dead_claude = dead_claude_channel_observation(
-            "00000000-0000-4000-8000-000000000000",
-            false,
-            false,
-        );
+        let dead_claude =
+            dead_claude_channel_observation("00000000-0000-4000-8000-000000000000", false, false);
         let observations = [dead_claude, live_claude];
         let first = machine_evidence_from_observations(
             "cinder-sol-test",
@@ -9489,16 +9490,17 @@ mod tests {
             .filter(|id| acknowledged.identity_changed(id))
             .collect();
         assert_eq!(changed_on_tick2.len(), 6);
-        assert!(changed_on_tick2.iter().all(|id| id.fact_family == "control"));
+        assert!(changed_on_tick2
+            .iter()
+            .all(|id| id.fact_family == "control"));
 
-        let selected = changed_first_evidence_identities(
-            &tick2.candidate_identities,
-            &acknowledged.hashes,
-            1,
-        );
+        let selected =
+            changed_first_evidence_identities(&tick2.candidate_identities, &acknowledged.hashes, 1);
         for changed in &changed_on_tick2 {
             assert!(
-                selected.iter().any(|s| s.subject_key == changed.subject_key),
+                selected
+                    .iter()
+                    .any(|s| s.subject_key == changed.subject_key),
                 "live control fact {} was starved from the 256-fact window",
                 changed.subject_key
             );

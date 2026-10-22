@@ -197,11 +197,11 @@ pub(crate) fn collect_observations_from_processes(
     state_dir: &Path,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<OmpHelmObservation> {
-    if let Ok(cached) = crate::dir_cache::parsed_json_dir(
-        state_dir,
-        parse_source_state,
-        |left, right| left.0.cmp(&right.0),
-    ) {
+    if let Ok(cached) =
+        crate::dir_cache::parsed_json_dir(state_dir, parse_source_state, |left, right| {
+            left.0.cmp(&right.0)
+        })
+    {
         return collect_observations_from_parsed(cached.as_slice(), process_facts);
     }
     let paths = crate::managed_scan::state_file_paths(state_dir);
