@@ -94,6 +94,11 @@ _COORDINATION_CONTRACT = json.loads(
             "default": 10,
             "minimum": 1,
             "maximum": 100
+          },
+          "include_automation": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include Hatch and background automation sessions (hidden by default)."
           }
         }
       }
@@ -137,6 +142,11 @@ _COORDINATION_CONTRACT = json.loads(
             ],
             "default": "auto",
             "description": "Which lanes to search. Prefer auto: it fuses both and degrades to whichever is available."
+          },
+          "include_automation": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include Hatch and background automation sessions in recall results."
           }
         },
         "required": [
@@ -528,6 +538,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         provider: str | None = None,
         days_back: int | None = None,
         limit: int = 10,
+        include_automation: bool = False,
     ) -> str:
         has_query = bool(query and query.strip())
         params: dict = {"limit": limit}
@@ -539,6 +550,8 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             params["project"] = project
         if provider:
             params["provider"] = provider
+        if include_automation:
+            params["include_automation"] = "true"
 
         try:
             resp = await client.get("/api/agents/sessions", params=params, **_optional_coordination_headers())
@@ -636,6 +649,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         since_days: int | None = None,
         max_results: int = 5,
         mode: str = "auto",
+        include_automation: bool = False,
     ) -> str:
         if mode not in {"auto", "lexical", "semantic"}:
             return json.dumps({"error": "mode must be one of: auto, lexical, semantic"})
@@ -651,6 +665,8 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             params["project"] = project
         if provider:
             params["provider"] = provider
+        if include_automation:
+            params["include_automation"] = "true"
 
         try:
             resp = await client.get("/api/agents/recall", params=params, **_optional_coordination_headers())

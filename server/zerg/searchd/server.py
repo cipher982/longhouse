@@ -870,7 +870,7 @@ def _index_object_params(value: dict) -> dict:
     if not isinstance(records, list) or len(records) > 10_000:
         raise ValueError("records must be a bounded list")
     parsed_records = []
-    expected_record_fields = {
+    required_record_fields = {
         "event_id",
         "record_ordinal",
         "order_time_us",
@@ -885,9 +885,15 @@ def _index_object_params(value: dict) -> dict:
         "thread_id",
         "branch_kind",
     }
+    optional_record_fields = {"tool_input_text"}
     for record in records:
-        if not isinstance(record, dict) or set(record) != expected_record_fields:
+        if (
+            not isinstance(record, dict)
+            or not required_record_fields.issubset(record)
+            or not set(record).issubset(required_record_fields | optional_record_fields)
+        ):
             raise ValueError("search record fields are invalid")
+        record.setdefault("tool_input_text", None)
         if (
             not isinstance(record["event_id"], str)
             or not 0 < len(record["event_id"].encode()) <= 255
@@ -906,6 +912,7 @@ def _index_object_params(value: dict) -> dict:
         for field, maximum in (
             ("content_text", 2_097_152),
             ("tool_name", 255),
+            ("tool_input_text", 65_536),
             ("tool_output_text", 2_097_152),
             ("tool_call_id", 255),
             ("thread_id", 255),

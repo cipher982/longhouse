@@ -725,7 +725,7 @@ class CatalogDaemon:
         ),
         "catalogd.session.reclassify_origin.v2": _Route(
             "_reclassify_session_origin",
-            frozenset({"observed_at", "origin_kind", "session_id"}),
+            None,
             "catalogd.session.reclassify_origin.v2 has invalid parameters",
         ),
         "catalogd.device.automation.set.v2": _Route(
@@ -1635,10 +1635,23 @@ class CatalogDaemon:
 
     async def _reclassify_session_origin(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         params = dict(request.params)
+        allowed = {"observed_at", "origin_kind", "session_id", "subagent_parent_session_id", "subagent_run_id"}
+        required = {"observed_at", "origin_kind", "session_id"}
+        if not required.issubset(params) or not set(params).issubset(allowed):
+            return self._error(request, "invalid_request", "catalogd.session.reclassify_origin.v2 has invalid parameters")
         if not isinstance(params["session_id"], str) or not params["session_id"]:
             return self._error(request, "invalid_request", "session_id must be a non-empty string")
         if params["origin_kind"] not in ("hatch_automation", "test_or_canary"):
             return self._error(request, "invalid_request", "origin_kind must be hatch_automation or test_or_canary")
+        parent_sid = params.get("subagent_parent_session_id")
+        if parent_sid is not None:
+            try:
+                params["subagent_parent_session_id"] = str(_canonical_uuid(parent_sid, "subagent_parent_session_id"))
+            except ValueError as exc:
+                return self._error(request, "invalid_request", str(exc))
+        run_id = params.get("subagent_run_id")
+        if run_id is not None and (not isinstance(run_id, str) or len(run_id) > 255):
+            return self._error(request, "invalid_request", "subagent_run_id must be a bounded string")
         try:
             params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
         except ValueError as exc:

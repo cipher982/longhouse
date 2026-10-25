@@ -680,6 +680,29 @@ def db_reconcile_session_visibility(
 
 db_app.command(name="repair-render-counts")(repair_render_counts)
 
+
+@db_app.command(name="backfill-hatch-lineage")
+def db_backfill_hatch_lineage(
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Hatch runs directory (defaults to ~/.local/state/hatch/runs)."),
+    apply_changes: bool = typer.Option(False, "--apply", help="Apply resolved Hatch parent lineage and automation origin."),
+    owner_id: int | None = typer.Option(None, "--owner-id", help="Owner ID override."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Link discovered Hatch child sessions to their caller_session_id from manifest.json."""
+    from zerg.services.agents.automation_backfill import backfill_hatch_run_lineage
+
+    result = backfill_hatch_run_lineage(runs_dir=runs_dir, apply=apply_changes, owner_id=owner_id)
+    if json_output:
+        typer.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+    typer.echo(
+        f"Scanned {result['manifests_scanned']} Hatch manifests; "
+        f"with lineage={result['manifests_with_lineage']}; "
+        f"resolved in catalog={result['resolved_children']}; "
+        f"applied={result['applied_count']}."
+    )
+
+
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(db_app, name="db", help="SQLite database diagnostics and maintenance")

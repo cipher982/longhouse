@@ -38,6 +38,7 @@ _WORKLOG_SNAPSHOT_MAX_PAGES = 200
 _WORKLOG_SNAPSHOT_TTL_SECONDS = 120.0
 _WORKLOG_SNAPSHOT_LIMIT = 8
 _EMBEDDING_SOURCE_PAGE_BYTES = 6 * 1024 * 1024
+_FTS_TOOL_OUTPUT_MAX_BYTES = 8 * 1024
 _RECALL_TRUNCATION_MARKER = " …[truncated]"
 _TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 _FAST_KEY_TIE_BITS = 11
@@ -1091,10 +1092,19 @@ class SearchStore:
                     ),
                 )
                 event_id = self.connection.execute("SELECT last_insert_rowid()").fetchone()[0]
-                self.connection.execute(
-                    "INSERT INTO events_fts(rowid, content_text, tool_output_text) VALUES (?, ?, ?)",
-                    (event_id, record.get("content_text"), record.get("tool_output_text")),
-                )
+                if _is_fts_indexable_event(
+                    role=str(record["role"]),
+                    interaction_kind=interaction["interaction_kind"],
+                    title_eligible=bool(interaction["title_eligible"]),
+                ):
+                    self.connection.execute(
+                        "INSERT INTO events_fts(rowid, content_text, tool_output_text) VALUES (?, ?, ?)",
+                        (
+                            event_id,
+                            record.get("content_text"),
+                            _fts_tool_text(record.get("tool_input_text"), record.get("tool_output_text")),
+                        ),
+                    )
             self.connection.execute(
                 """
                 INSERT INTO indexed_objects(
@@ -1455,9 +1465,10 @@ class SearchStore:
         provider: str,
         records: list[dict[str, Any]],
     ) -> None:
-        """Apply a semantic correction while preserving immutable event rows."""
+        """Apply a semantic correction and sync FTS rows while preserving immutable event rows."""
 
         for record in records:
+            ordinal = int(record["record_ordinal"])
             interaction = classify_provider_interaction(
                 provider,
                 role=str(record.get("role") or ""),
@@ -1465,6 +1476,17 @@ class SearchStore:
                 interaction_kind=record.get("interaction_kind"),
                 source_surface="provider_file",
             )
+            title_eligible_flag = 1 if interaction["title_eligible"] else 0
+            row = self.connection.execute(
+                """
+                SELECT id FROM events
+                 WHERE session_id = ?
+                   AND generation_id = ?
+                   AND source_object_id = ?
+                   AND record_ordinal = ?
+                """,
+                (session_id, generation_id, object_id, ordinal),
+            ).fetchone()
             self.connection.execute(
                 """
                 UPDATE events
@@ -1476,13 +1498,29 @@ class SearchStore:
                 """,
                 (
                     interaction["interaction_kind"],
-                    1 if interaction["title_eligible"] else 0,
+                    title_eligible_flag,
                     session_id,
                     generation_id,
                     object_id,
-                    int(record["record_ordinal"]),
+                    ordinal,
                 ),
             )
+            if row is not None:
+                event_id = int(row["id"])
+                self.connection.execute("DELETE FROM events_fts WHERE rowid = ?", (event_id,))
+                if _is_fts_indexable_event(
+                    role=str(record.get("role") or ""),
+                    interaction_kind=interaction["interaction_kind"],
+                    title_eligible=bool(interaction["title_eligible"]),
+                ):
+                    self.connection.execute(
+                        "INSERT INTO events_fts(rowid, content_text, tool_output_text) VALUES (?, ?, ?)",
+                        (
+                            event_id,
+                            record.get("content_text"),
+                            _fts_tool_text(record.get("tool_input_text"), record.get("tool_output_text")),
+                        ),
+                    )
 
     def _stored_object_projection_hash(self, *, existing: sqlite3.Row, object_id: str) -> str | None:
         session_id = str(existing["session_id"])
@@ -1874,12 +1912,21 @@ class SearchStore:
                     1 if tombstoned else 0,
                 ),
             )
-            hydrated = self._hydrator.hydrate([dict(row)], byte_budget=1 << 60).rows
-            if hydrated:
-                self.connection.execute(
-                    "INSERT INTO searchable_fts(rowid, content_text, tool_output_text) VALUES (?, ?, ?)",
-                    (fast_key, hydrated[0].get("content_text"), hydrated[0].get("tool_output_text")),
-                )
+            if _is_fts_indexable_event(
+                role=str(row["role"]),
+                interaction_kind=row["interaction_kind"],
+                title_eligible=bool(row["title_eligible"]),
+            ):
+                hydrated = self._hydrator.hydrate([dict(row)], byte_budget=1 << 60).rows
+                if hydrated:
+                    self.connection.execute(
+                        "INSERT INTO searchable_fts(rowid, content_text, tool_output_text) VALUES (?, ?, ?)",
+                        (
+                            fast_key,
+                            hydrated[0].get("content_text"),
+                            _fts_tool_text(hydrated[0].get("tool_input_text"), hydrated[0].get("tool_output_text")),
+                        ),
+                    )
         cutoff = _searchable_cutoff_us()
         self.connection.execute(
             "DELETE FROM searchable_fts WHERE rowid IN (SELECT fast_key FROM searchable_events WHERE order_time_us < ?)",
@@ -1980,7 +2027,9 @@ class SearchStore:
                     row["tool_output_snippet"] = None
                     continue
                 content_snippet = _query_excerpt(hydrated_row.get("content_text"), query)
-                output_snippet = _query_excerpt(hydrated_row.get("tool_output_text"), query)
+                output_snippet = _query_excerpt(hydrated_row.get("tool_output_text"), query) or _query_excerpt(
+                    hydrated_row.get("tool_input_text"), query
+                )
                 snippet_bytes = sum(len(value.encode()) for value in (content_snippet, output_snippet) if isinstance(value, str))
                 if excerpt_bytes + snippet_bytes > 4 * 1024 * 1024:
                     content_snippet = output_snippet = None
@@ -2560,10 +2609,45 @@ def _object_projection_hash(**value: object) -> str:
     records = normalized.get("records")
     if isinstance(records, list):
         normalized["records"] = [
-            {key: field_value for key, field_value in record.items() if key != "interaction_kind"} if isinstance(record, dict) else record
+            {key: field_value for key, field_value in record.items() if key not in ("interaction_kind", "tool_input_text")}
+            if isinstance(record, dict)
+            else record
             for record in records
         ]
     return hashlib.sha256(canonical_json(normalized).encode("utf-8")).hexdigest()
+
+
+def _is_fts_indexable_event(*, role: str, interaction_kind: str | None, title_eligible: bool) -> bool:
+    if interaction_kind == "provider_notification":
+        return False
+    if interaction_kind in ("provider_system", "provider_reasoning") and role in ("user", "system"):
+        return False
+    if role == "user" and (
+        not title_eligible
+        or interaction_kind
+        in (
+            "local_control",
+            "local_control_output",
+            "conversation_boundary",
+            "provider_system",
+            "provider_reasoning",
+            "provider_notification",
+        )
+    ):
+        return False
+    return True
+
+
+def _fts_tool_text(tool_input_text: object, tool_output_text: object) -> str | None:
+    inp = str(tool_input_text).strip() if isinstance(tool_input_text, str) and tool_input_text.strip() else ""
+    out = str(tool_output_text).strip() if isinstance(tool_output_text, str) and tool_output_text.strip() else ""
+    if out:
+        encoded = out.encode("utf-8")
+        if len(encoded) > _FTS_TOOL_OUTPUT_MAX_BYTES:
+            out = encoded[:_FTS_TOOL_OUTPUT_MAX_BYTES].decode("utf-8", errors="ignore")
+    if inp and out:
+        return f"{inp}\n{out}"
+    return inp or out or None
 
 
 def _searchable_cutoff_us() -> int:

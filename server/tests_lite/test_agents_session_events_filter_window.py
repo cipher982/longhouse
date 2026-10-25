@@ -277,3 +277,81 @@ async def test_search_branch_projects_instead_of_relying_on_response_model(monke
     served = result.sessions[0]
     assert served.title == "Implement Group C Spec", "the search branch must project, not defer to the response model"
     assert served.searchable is True
+
+
+@pytest.mark.asyncio
+async def test_query_filter_matches_tool_input_and_pairs_sibling_tool_result(monkeypatch):
+    session_id = uuid4()
+    call_event = {
+        **_event(1, "assistant"),
+        "content_text": None,
+        "tool_name": "bash",
+        "tool_input_json": {"command": 'search-hub sources "dynamic highlights" --num 5'},
+        "tool_call_id": "call-42",
+    }
+    result_event = {
+        **_event(2, "tool"),
+        "content_text": None,
+        "tool_name": "bash",
+        "tool_output_text": '{"results": [{"url": "https://exa.ai/blog/dynamic-highlights"}]}',
+        "tool_call_id": "call-42",
+    }
+    other_event = _event(3, "assistant")
+
+    async def build_workspace(**_kwargs):
+        return {
+            "thread": {
+                "root_session_id": str(session_id),
+                "head_session_id": str(session_id),
+                "sessions": [],
+            },
+            "projection": {
+                "root_session_id": str(session_id),
+                "focus_session_id": str(session_id),
+                "head_session_id": str(session_id),
+                "path_session_ids": [str(session_id)],
+                "items": [
+                    {
+                        "kind": "event",
+                        "session_id": str(session_id),
+                        "timestamp": ev["timestamp"],
+                        "event": ev,
+                        "action": None,
+                        "continued_from_session_id": None,
+                        "continuation_kind": None,
+                        "origin_label": None,
+                        "parent_origin_label": None,
+                        "parent_continuation_kind": None,
+                        "branched_from_event_id": None,
+                    }
+                    for ev in (call_event, result_event, other_event)
+                ],
+                "total": 3,
+                "page_offset": 0,
+                "branch_mode": "head",
+                "abandoned_events": 0,
+                "generation_id": str(uuid4()),
+                "next_cursor": "cursor-3",
+                "has_more": False,
+            },
+        }
+
+    monkeypatch.setattr(agents_sessions, "build_storage_v2_workspace", build_workspace)
+
+    res = await agents_sessions.get_session_events(
+        session_id=session_id,
+        thread_id=None,
+        roles=None,
+        tool_name=None,
+        query="search-hub sources",
+        context_mode="forensic",
+        branch_mode="head",
+        anchor="start",
+        limit=10,
+        offset=0,
+        cursor=None,
+        _auth=SimpleNamespace(owner_id=42),
+        _single=None,
+    )
+
+    assert [ev.id for ev in res.events] == ["legacy:1", "legacy:2"]

@@ -66,6 +66,7 @@ tools:
       provider: {type: string, description: Optional provider filter}
       days_back: {type: integer, minimum: 1, maximum: 90, description: "Days to look back. With a query, omit to search all history; without one, omit for the recent 14 days."}
       limit: {type: integer, default: 10, minimum: 1, maximum: 100}
+      include_automation: {type: boolean, default: false, description: "Include Hatch and background automation sessions (hidden by default)."}
     required: []
 
   - name: recall
@@ -84,6 +85,7 @@ tools:
       since_days: {type: integer, default: 90, minimum: 1, maximum: 365}
       max_results: {type: integer, default: 5, minimum: 1, maximum: 10}
       mode: {type: string, enum: [auto, lexical, semantic], default: auto, description: "Which lanes to search. Prefer auto: it fuses both and degrades to whichever is available."}
+      include_automation: {type: boolean, default: false, description: "Include Hatch and background automation sessions in recall results."}
     required: [query]
 
   - name: recall_context

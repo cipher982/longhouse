@@ -549,6 +549,13 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                     clamp_i64(arguments.get("days_back"), 14, 1, 90).to_string(),
                 )]);
             }
+            if arguments
+                .get("include_automation")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                request = request.query(&[("include_automation", "true")]);
+            }
             request.query(&[(
                 "limit",
                 clamp_i64(arguments.get("limit"), 10, 1, 100).to_string(),
@@ -578,6 +585,13 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
             }
             // Clamp to the route's documented bounds rather than forwarding a 422
             // that the advertised schema already told the caller to avoid.
+            if arguments
+                .get("include_automation")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                request = request.query(&[("include_automation", "true")]);
+            }
             request
                 .query(&[(
                     "since_days",

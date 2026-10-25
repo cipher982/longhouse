@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from zerg.catalogd.client import CatalogClient
 from zerg.runtime_boot import RUNTIME_BOOT_ID
+from zerg.searchd.hydration import format_tool_input_text
 from zerg.searchd.store import object_set_hash
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.services.raw_object_workers import get_raw_object_worker_pool
@@ -369,6 +370,7 @@ class SearchV2Projector:
                 "interaction_kind": (recovered_kinds[ordinal] if ordinal in recovered_kinds else getattr(record, "interaction_kind", None)),
                 "content_text": record.content_text,
                 "tool_name": record.tool_name,
+                "tool_input_text": format_tool_input_text(getattr(record, "tool_input_json", None)),
                 "tool_output_text": record.tool_output_text,
                 "tool_call_id": record.tool_call_id,
                 "thread_id": record.thread_id,

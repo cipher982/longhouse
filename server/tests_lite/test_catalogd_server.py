@@ -1152,3 +1152,96 @@ async def test_activation_receipt_survives_catalogd_restart_and_fences_mismatch(
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_backfill_hatch_run_lineage_binds_parent_session(daemon_paths, tmp_path, monkeypatch):
+    import json
+    from zerg.catalogd.models import StorageSession
+    from zerg.services.agents.automation_backfill import backfill_hatch_run_lineage
+
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    await daemon._projector_repair_task
+
+    parent_id = str(uuid4())
+    child_id = str(uuid4())
+    native_id = "ses_hatch_child_123"
+    now = datetime.now(UTC)
+
+    with daemon._engine.begin() as conn:
+        conn.execute(
+            StorageSession.__table__.insert(),
+            [
+                {
+                    "session_id": parent_id,
+                    "tenant_id": "1",
+                    "owner_id": "1",
+                    "machine_id": "cinder",
+                    "provider": "omp",
+                    "provider_session_id": "omp-parent-1",
+                    "environment": "local",
+                    "started_at": now,
+                    "last_activity_at": now,
+                    "created_at": now,
+                    "updated_at": now,
+                    "commit_seq": 1,
+                },
+                {
+                    "session_id": child_id,
+                    "tenant_id": "1",
+                    "owner_id": "1",
+                    "machine_id": "cinder",
+                    "provider": "opencode",
+                    "provider_session_id": native_id,
+                    "environment": "local",
+                    "started_at": now,
+                    "last_activity_at": now,
+                    "created_at": now,
+                    "updated_at": now,
+                    "commit_seq": 2,
+                },
+            ],
+        )
+
+    runs_dir = tmp_path / "runs"
+    run_folder = runs_dir / "hatch_20261025_test"
+    run_folder.mkdir(parents=True)
+    (run_folder / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "hatch_20261025_test",
+                "provenance": {"caller_session_id": parent_id},
+                "provider_state": {"native_id": native_id},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.catalogd_paths", lambda: (database_path, socket_path))
+
+    try:
+        res = await asyncio.to_thread(backfill_hatch_run_lineage, runs_dir=runs_dir, apply=True, owner_id=1)
+        assert res["manifests_scanned"] == 1
+        assert res["manifests_with_lineage"] == 1
+        assert res["resolved_children"] == 1
+        assert res["applied_count"] == 1
+
+        # Second run is a true no-op (applied_count == 0, already_converged_count == 1)
+        res2 = await asyncio.to_thread(backfill_hatch_run_lineage, runs_dir=runs_dir, apply=True, owner_id=1)
+        assert res2["applied_count"] == 0
+        assert res2["already_converged_count"] == 1
+
+        client = CatalogClient(socket_path)
+        try:
+            subagents = await client.call(
+                "session.subagents.list.v2",
+                {"session_id": parent_id, "owner_id": "1", "limit": 20},
+            )
+            assert len(subagents["children"]) == 1
+            assert subagents["children"][0]["session_id"] == child_id
+        finally:
+            await client.close()
+    finally:
+        await daemon.close()

@@ -39,6 +39,11 @@ const COORDINATION_CONTRACT = {
             "default": 10,
             "minimum": 1,
             "maximum": 100
+          },
+          "include_automation": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include Hatch and background automation sessions (hidden by default)."
           }
         }
       }
@@ -82,6 +87,11 @@ const COORDINATION_CONTRACT = {
             ],
             "default": "auto",
             "description": "Which lanes to search. Prefer auto: it fuses both and degrades to whichever is available."
+          },
+          "include_automation": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include Hatch and background automation sessions in recall results."
           }
         },
         "required": [
@@ -660,6 +670,8 @@ export function registerLonghouseCoordination(
           "days_back",
           String(Math.max(1, Math.min(90, Number(params.days_back) || 14))),
         );
+      if (params.include_automation === true)
+        query.set("include_automation", "true");
       query.set(
         "limit",
         String(Math.max(1, Math.min(100, Number(params.limit) || 10))),
@@ -693,6 +705,8 @@ export function registerLonghouseCoordination(
         query.set("project", params.project.trim());
       if (typeof params.provider === "string" && params.provider.trim())
         query.set("provider", params.provider.trim());
+      if (params.include_automation === true)
+        query.set("include_automation", "true");
       query.set("since_days", bounded(params.since_days, 90, 1, 365));
       query.set("max_results", bounded(params.max_results, 5, 1, 10));
       const response = await api(`/api/agents/recall?${query}`, {

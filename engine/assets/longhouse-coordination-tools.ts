@@ -334,6 +334,8 @@ export function registerLonghouseCoordination(
           "days_back",
           String(Math.max(1, Math.min(90, Number(params.days_back) || 14))),
         );
+      if (params.include_automation === true)
+        query.set("include_automation", "true");
       query.set(
         "limit",
         String(Math.max(1, Math.min(100, Number(params.limit) || 10))),
@@ -367,6 +369,8 @@ export function registerLonghouseCoordination(
         query.set("project", params.project.trim());
       if (typeof params.provider === "string" && params.provider.trim())
         query.set("provider", params.provider.trim());
+      if (params.include_automation === true)
+        query.set("include_automation", "true");
       query.set("since_days", bounded(params.since_days, 90, 1, 365));
       query.set("max_results", bounded(params.max_results, 5, 1, 10));
       const response = await api(`/api/agents/recall?${query}`, {

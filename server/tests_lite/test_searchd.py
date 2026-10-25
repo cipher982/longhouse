@@ -3450,3 +3450,18 @@ def test_publish_maintenance_refreshes_statistics_recorded_on_an_empty_store(tmp
     store._maintain_after_publish()
 
     assert events_fts_data_rows() > 2
+
+
+def test_fts_indexes_tool_input_text_and_prunes_provider_system_rows():
+    from zerg.searchd.store import _fts_tool_text
+    from zerg.searchd.store import _is_fts_indexable_event
+
+    assert _is_fts_indexable_event(role="system", interaction_kind="provider_system", title_eligible=False) is False
+    assert _is_fts_indexable_event(role="user", interaction_kind="provider_system", title_eligible=False) is False
+    assert _is_fts_indexable_event(role="assistant", interaction_kind="durable_assistant_message", title_eligible=False) is True
+    assert _is_fts_indexable_event(role="tool", interaction_kind="provider_system", title_eligible=False) is True
+
+    combined = _fts_tool_text('search-hub sources "Exa 3.0"', "x" * 20_000)
+    assert combined is not None
+    assert combined.startswith('search-hub sources "Exa 3.0"\n')
+    assert len(combined.encode("utf-8")) <= 8_192 + 64

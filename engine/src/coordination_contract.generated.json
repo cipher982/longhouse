@@ -32,6 +32,11 @@
             "default": 10,
             "minimum": 1,
             "maximum": 100
+          },
+          "include_automation": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include Hatch and background automation sessions (hidden by default)."
           }
         }
       }
@@ -75,6 +80,11 @@
             ],
             "default": "auto",
             "description": "Which lanes to search. Prefer auto: it fuses both and degrades to whichever is available."
+          },
+          "include_automation": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include Hatch and background automation sessions in recall results."
           }
         },
         "required": [

@@ -9,6 +9,7 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import Connection
 from sqlalchemy import and_
@@ -1017,32 +1018,104 @@ class SessionsMixin:
         session_id: str,
         origin_kind: str,
         observed_at: datetime,
+        subagent_parent_session_id: str | None = None,
+        subagent_run_id: str | None = None,
     ) -> dict[str, Any]:
         """Reclassify a session's hidden origin across the hot and durable stores.
 
         Operational backfill for already-archived automation rows: flips
         ``origin_kind`` + ``hidden_from_default_timeline`` on the live catalog,
         timeline card, thread rows, and the durable storage session in one write
-        transaction. Not content-derived and not a user-hide.
+        transaction. When ``subagent_parent_session_id`` is provided (e.g. from
+        a Hatch run manifest's ``provenance.caller_session_id``), binds the
+        child's parent lineage if not already set.
         """
-
         normalized = str(origin_kind or "").strip().lower().replace("-", "_")
         if normalized not in ("hatch_automation", "test_or_canary"):
             return {"invalid_origin_kind": True}
-        session_key = str(session_id)
+        try:
+            session_key = str(UUID(str(session_id)))
+        except ValueError:
+            session_key = str(session_id).strip()
+        parent_key = str(subagent_parent_session_id).strip() if subagent_parent_session_id else None
+        if parent_key:
+            try:
+                parent_key = str(UUID(parent_key))
+            except ValueError:
+                parent_key = None
+        if parent_key == session_key:
+            parent_key = None
+        run_key = str(subagent_run_id).strip() if subagent_run_id and str(subagent_run_id).strip() else None
+        expected_surface = "hatch" if normalized == "hatch_automation" else "test"
+        storage_table = StorageSession.__table__
         with _write_transaction(self.engine) as connection:
+            storage_current = (
+                connection.execute(
+                    select(
+                        storage_table.c.owner_id,
+                        storage_table.c.origin_kind,
+                        storage_table.c.hidden_from_default_timeline,
+                        storage_table.c.launch_actor,
+                        storage_table.c.launch_surface,
+                        storage_table.c.subagent_parent_session_id,
+                        storage_table.c.subagent_run_id,
+                        storage_table.c.is_subagent,
+                    ).where(storage_table.c.session_id == session_key)
+                )
+                .mappings()
+                .first()
+            )
+            parent_conflict = False
+            effective_parent = None
+            effective_run = None
+            if storage_current is not None:
+                existing_parent = str(storage_current["subagent_parent_session_id"] or "").strip() or None
+                existing_run = str(storage_current["subagent_run_id"] or "").strip() or None
+                if parent_key:
+                    if existing_parent is not None and existing_parent != parent_key:
+                        parent_conflict = True
+                    elif existing_parent is None:
+                        parent_row = connection.execute(
+                            select(storage_table.c.owner_id).where(storage_table.c.session_id == parent_key)
+                        ).first()
+                        if parent_row is not None and str(parent_row[0]) == str(storage_current["owner_id"]):
+                            effective_parent = parent_key
+                if run_key and existing_run is None and not parent_conflict:
+                    effective_run = run_key
+                already_converged = (
+                    storage_current["origin_kind"] == normalized
+                    and int(storage_current["hidden_from_default_timeline"] or 0) == 1
+                    and storage_current["launch_actor"] == "automation"
+                    and storage_current["launch_surface"] == expected_surface
+                    and effective_parent is None
+                    and effective_run is None
+                )
+                if already_converged:
+                    return {
+                        "reclassified": True,
+                        "changed": False,
+                        "conflict": parent_conflict,
+                        "rows_changed": 0,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+
             changed_rows = 0
             commit_seq = _advance_commit_seq(connection, observed_at)
-            for table in (LiveSessionCatalog.__table__, LiveTimelineCard.__table__, StorageSession.__table__):
+            for table in (LiveSessionCatalog.__table__, LiveTimelineCard.__table__, storage_table):
                 values: dict[str, Any] = {
                     "origin_kind": normalized,
                     "hidden_from_default_timeline": 1,
                     "launch_actor": "automation",
-                    "launch_surface": "hatch" if normalized == "hatch_automation" else "test",
+                    "launch_surface": expected_surface,
                     "updated_at": observed_at,
                 }
-                if table is StorageSession.__table__:
+                if table is storage_table:
                     values["commit_seq"] = commit_seq
+                    if effective_parent:
+                        values["subagent_parent_session_id"] = effective_parent
+                        values["is_subagent"] = 1
+                    if effective_run:
+                        values["subagent_run_id"] = effective_run
                 result = connection.execute(update(table).where(table.c.session_id == session_key).values(**values))
                 changed_rows += int(result.rowcount or 0)
             thread_result = connection.execute(
@@ -1055,7 +1128,13 @@ class SessionsMixin:
                 )
             )
             changed_rows += int(thread_result.rowcount or 0)
-        return {"reclassified": changed_rows > 0, "rows_changed": changed_rows, "commit_seq": str(commit_seq)}
+        return {
+            "reclassified": changed_rows > 0,
+            "changed": changed_rows > 0,
+            "conflict": parent_conflict,
+            "rows_changed": changed_rows,
+            "commit_seq": str(commit_seq),
+        }
 
     def reconcile_session_visibility(
         self,
@@ -1550,7 +1629,11 @@ class SessionsMixin:
                         ),
                         session_table.c.owner_id == owner_id,
                         session_table.c.machine_id == parent["machine_id"],
-                        session_table.c.provider == parent["provider"],
+                        or_(
+                            session_table.c.provider == parent["provider"],
+                            session_table.c.subagent_run_id.is_not(None),
+                            session_table.c.origin_kind == "hatch_automation",
+                        ),
                     )
                     .order_by(session_table.c.started_at.asc(), session_table.c.session_id.asc())
                     .limit(child_limit)
@@ -1570,10 +1653,8 @@ class SessionsMixin:
                     .select_from(alias.join(thread, thread.c.id == alias.c.thread_id))
                     .where(
                         thread.c.session_id.in_(child_ids),
-                        alias.c.provider == parent["provider"],
                         alias.c.alias_kind == "provider_session_id",
                     )
-                    .order_by(alias.c.id.asc())
                 ).mappings():
                     alias_map.setdefault(str(alias_row["session_id"]), str(alias_row["alias_value"]))
             spawn_facts = _delegation_fact_rows(connection, session_id=session_id)

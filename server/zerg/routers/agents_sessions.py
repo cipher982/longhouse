@@ -1321,15 +1321,40 @@ async def get_session_events(
     if workspace is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     projection = workspace["projection"]
-    events = [item["event"] for item in projection["items"] if item.get("kind") == "event" and item.get("event")]
-    if role_filter is not None:
-        events = [event for event in events if event.get("role") in role_filter]
+    all_events = [item["event"] for item in projection["items"] if item.get("kind") == "event" and item.get("event")]
+    events = list(all_events)
     if tool_name is not None:
         events = [event for event in events if event.get("tool_name") == tool_name]
     if query is not None:
         needle = query.casefold()
-        events = [event for event in events if needle in str(event.get("content_text") or "").casefold()]
 
+        def _matches_query(event: dict) -> bool:
+            for text_field in ("content_text", "tool_output_text"):
+                if needle in str(event.get(text_field) or "").casefold():
+                    return True
+            tool_inp = event.get("tool_input_json")
+            if tool_inp is not None:
+                try:
+                    serialized_inp = json.dumps(tool_inp, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    serialized_inp = str(tool_inp)
+                if needle in serialized_inp.casefold():
+                    return True
+            return False
+
+        matched_events = [event for event in events if _matches_query(event)]
+        matched_call_ids = {str(event["tool_call_id"]) for event in matched_events if event.get("tool_call_id")}
+        if matched_call_ids and role_filter is None:
+            matched_ids = {id(event) for event in matched_events}
+            events = [
+                event
+                for event in events
+                if id(event) in matched_ids or (event.get("tool_call_id") and str(event["tool_call_id"]) in matched_call_ids)
+            ]
+        else:
+            events = matched_events
+    if role_filter is not None:
+        events = [event for event in events if event.get("role") in role_filter]
     next_cursor = projection.get("next_cursor")
     has_more = projection.get("has_more") is True
     if filtered and len(events) > limit:

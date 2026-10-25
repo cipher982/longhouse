@@ -613,3 +613,170 @@ def set_automation_machine(
         "sessions_mirrored": len(sessions) - len(failures),
         "searchd_failures": failures,
     }
+
+
+def backfill_hatch_run_lineage(
+    *,
+    runs_dir: Path | None = None,
+    apply: bool = False,
+    owner_id: int | None = None,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Scan local Hatch run manifests and bind child sessions to caller_session_id."""
+
+    import json
+    from datetime import UTC
+    from datetime import datetime
+
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.catalogd.client import call_catalogd_sync
+    from zerg.services.catalogd_supervisor import catalogd_paths
+    from zerg.services.searchd_supervisor import searchd_paths
+
+    root = (runs_dir or Path("~/.local/state/hatch/runs")).expanduser().resolve()
+    if not root.exists():
+        return {
+            "runs_dir": str(root),
+            "manifests_scanned": 0,
+            "manifests_with_lineage": 0,
+            "resolved_children": 0,
+            "applied_count": 0,
+            "failed": [],
+        }
+
+    manifests_scanned = 0
+    lineage_items: list[dict[str, str]] = []
+    for manifest_path in sorted(root.glob("*/manifest.json")):
+        manifests_scanned += 1
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        prov = data.get("provenance") if isinstance(data.get("provenance"), dict) else {}
+        ps = data.get("provider_state") if isinstance(data.get("provider_state"), dict) else {}
+        caller_sid = str(prov.get("caller_session_id") or "").strip()
+        native_id = str(ps.get("native_id") or "").strip()
+        run_id = str(data.get("run_id") or manifest_path.parent.name).strip()
+        if not caller_sid or not native_id:
+            continue
+        try:
+            caller_uuid = str(UUID(caller_sid))
+        except ValueError:
+            continue
+        lineage_items.append(
+            {
+                "run_id": run_id,
+                "native_id": native_id,
+                "caller_session_id": caller_uuid,
+            }
+        )
+
+    try:
+        _, catalogd_socket = catalogd_paths()
+    except (RuntimeError, OSError) as exc:
+        return {
+            "runs_dir": str(root),
+            "manifests_scanned": manifests_scanned,
+            "manifests_with_lineage": len(lineage_items),
+            "resolved_children": 0,
+            "applied_count": 0,
+            "catalogd_unavailable": True,
+            "error": str(exc),
+        }
+
+    if owner_id is None:
+        try:
+            owner_resp = call_catalogd_sync(catalogd_socket, "auth.owner.get.v2", params={}, timeout_seconds=timeout_seconds)
+            owner_id = int(owner_resp["owner_id"]) if owner_resp.get("found") else 1
+        except (CatalogUnavailable, CatalogRemoteError, OSError) as exc:
+            return {
+                "runs_dir": str(root),
+                "manifests_scanned": manifests_scanned,
+                "manifests_with_lineage": len(lineage_items),
+                "resolved_children": 0,
+                "applied_count": 0,
+                "catalogd_unavailable": True,
+                "error": str(exc),
+            }
+
+    try:
+        _, searchd_socket = searchd_paths()
+    except (RuntimeError, OSError):
+        searchd_socket = None
+
+    resolved: list[dict[str, str]] = []
+    applied: list[str] = []
+    already_converged_count = 0
+    conflicts: list[str] = []
+    failed: list[dict[str, str]] = []
+
+    for item in lineage_items:
+        native_id = item["native_id"]
+        child_sid: str | None = None
+        try:
+            res = call_catalogd_sync(
+                catalogd_socket,
+                "session.alias.resolve.v2",
+                params={"provider_session_id": native_id, "owner_id": int(owner_id)},
+                timeout_seconds=timeout_seconds,
+            )
+            if res.get("found") and res.get("session_id"):
+                child_sid = str(res["session_id"])
+        except (CatalogUnavailable, CatalogRemoteError):
+            child_sid = None
+
+        if not child_sid or child_sid == item["caller_session_id"]:
+            continue
+        resolved.append({**item, "child_session_id": child_sid})
+        if not apply:
+            continue
+        observed_at = datetime.now(UTC).isoformat()
+        try:
+            reclass = call_catalogd_sync(
+                catalogd_socket,
+                "catalogd.session.reclassify_origin.v2",
+                params={
+                    "session_id": child_sid,
+                    "origin_kind": HATCH_AUTOMATION_ORIGIN_KIND,
+                    "observed_at": observed_at,
+                    "subagent_parent_session_id": item["caller_session_id"],
+                    "subagent_run_id": item["run_id"],
+                },
+                timeout_seconds=timeout_seconds,
+            )
+            if reclass.get("conflict"):
+                conflicts.append(child_sid)
+            if reclass.get("changed"):
+                applied.append(child_sid)
+                if searchd_socket is not None:
+                    try:
+                        call_catalogd_sync(
+                            searchd_socket,
+                            "search.session.reclassify_origin.v2",
+                            params={
+                                "session_id": child_sid,
+                                "origin_kind": HATCH_AUTOMATION_ORIGIN_KIND,
+                                "observed_at": observed_at,
+                                "source_commit_seq": int(reclass.get("commit_seq") or 0),
+                            },
+                            timeout_seconds=timeout_seconds,
+                        )
+                    except Exception as exc:
+                        failed.append({"session_id": child_sid, "error": f"searchd: {exc}"})
+            elif reclass.get("reclassified"):
+                already_converged_count += 1
+        except (CatalogUnavailable, CatalogRemoteError) as exc:
+            failed.append({"session_id": child_sid, "error": str(exc)})
+
+    return {
+        "runs_dir": str(root),
+        "manifests_scanned": manifests_scanned,
+        "manifests_with_lineage": len(lineage_items),
+        "resolved_children": len(resolved),
+        "applied_count": len(applied),
+        "already_converged_count": already_converged_count,
+        "conflict_count": len(conflicts),
+        "applied_session_ids": applied[:100],
+        "failed": failed,
+    }
