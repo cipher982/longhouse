@@ -376,13 +376,6 @@
   }
  },
  "catalogd.session.reclassify_origin.v2": {
-  "declared_nulls": {
-   "code": "invalid_request",
-   "details": {},
-   "message": "session_id must be a non-empty string",
-   "retry_after_ms": null,
-   "retryable": false
-  },
   "empty": {
    "code": "invalid_request",
    "details": {},
