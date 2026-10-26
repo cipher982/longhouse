@@ -94,7 +94,11 @@ def issue_managed_session_token(
     return MANAGED_SESSION_TOKEN_PREFIX + _encode_jwt(payload, JWT_SECRET)
 
 
-def validate_managed_session_token(token: str) -> ManagedSessionToken | None:
+def validate_managed_session_token(
+    token: str,
+    *,
+    verify_exp: bool = True,
+) -> ManagedSessionToken | None:
     """Validate signed managed-session authority."""
 
     raw = str(token or "").strip()
@@ -116,10 +120,10 @@ def validate_managed_session_token(token: str) -> ManagedSessionToken | None:
             algorithms=["HS256"],
             audience=expected_audience,
             issuer=MANAGED_SESSION_TOKEN_ISSUER,
+            options={"verify_exp": verify_exp},
         )
     except Exception:
         return None
-
     if str(payload.get("typ") or "") != MANAGED_SESSION_TOKEN_KIND:
         return None
     scope = str(payload.get("scp") or "").strip()

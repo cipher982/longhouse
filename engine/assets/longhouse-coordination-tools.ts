@@ -241,7 +241,10 @@ export function registerLonghouseCoordination(
         _onUpdate: unknown,
         ctx: unknown,
       ) {
-        if (settings.isSubagent(ctx)) {
+        if (
+          (name === "send" || name === "inbox" || name === "reply") &&
+          settings.isSubagent(ctx)
+        ) {
           return result(
             {
               error:

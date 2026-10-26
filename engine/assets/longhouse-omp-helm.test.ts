@@ -338,7 +338,7 @@ describe("coordination tools", () => {
     }
   });
 
-  it("refuses native child coordination before any HTTP request", async () => {
+  it("refuses native child write coordination before any HTTP request while allowing read-only lookup", async () => {
     const previousUrl = process.env.LONGHOUSE_OMP_HELM_URL;
     let requests = 0;
     const server = Bun.serve({
@@ -346,7 +346,7 @@ describe("coordination tools", () => {
       port: 0,
       fetch() {
         requests += 1;
-        return Response.json({ accepted: true });
+        return Response.json({ accepted: true, sessions: [] });
       },
     });
     try {
@@ -361,15 +361,12 @@ describe("coordination tools", () => {
         agent: { kind: "sub", depth: 0 },
         sessionManager: { getSessionFile: () => join(channelDir, "clone.jsonl") },
       };
-      const calls: Array<[string, Record<string, unknown>]> = [
-        ["peers", { repo: "/tmp/longhouse" }],
-        ["search_sessions", { query: "fixture" }],
-        ["tail", { session_id: "target" }],
+      const writeCalls: Array<[string, Record<string, unknown>]> = [
         ["send", { session_id: "target", text: "help", client_request_id: "child-send" }],
         ["inbox", {}],
         ["reply", { input_id: 7, text: "help", client_request_id: "child-reply" }],
       ];
-      for (const [name, params] of calls) {
+      for (const [name, params] of writeCalls) {
         const response = await tools.get(name)!.execute(
           `child-${name}`,
           params,
@@ -380,6 +377,17 @@ describe("coordination tools", () => {
         expect(response).toMatchObject({ isError: true });
       }
       expect(requests).toBe(0);
+
+      // Read-only tools are allowed for subagents.
+      const readResponse = await tools.get("peers")!.execute(
+        "child-peers",
+        { repo: "/tmp/longhouse" },
+        new AbortController().signal,
+        undefined,
+        child,
+      );
+      expect(readResponse).not.toMatchObject({ isError: true });
+      expect(requests).toBe(1);
     } finally {
       process.env.LONGHOUSE_OMP_HELM_URL = previousUrl;
       await server.stop(true);

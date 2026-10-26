@@ -203,7 +203,7 @@ async def test_recall_context_opens_one_ref_and_renders_turns():
 async def test_unscoped_python_coordination_tools_route_claude_to_native_server(monkeypatch, tool_name, arguments):
     monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-4111-8111-111111111111")
     monkeypatch.delenv("LONGHOUSE_COORDINATION_TOKEN", raising=False)
-    server = create_server("http://example.com", "test-token")
+    server = create_server("http://example.com", None)
     tool = server._tool_manager._tools[tool_name]
 
     with (
@@ -216,6 +216,40 @@ async def test_unscoped_python_coordination_tools_route_claude_to_native_server(
     assert payload["hint"] == f"In managed Claude sessions, use mcp__longhouse-coordination__{tool_name} instead."
     mock_get.assert_not_awaited()
     mock_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_python_coordination_tools_mint_and_refresh_session_authority_using_device_token(monkeypatch):
+    session_id = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", session_id)
+    monkeypatch.delenv("LONGHOUSE_COORDINATION_TOKEN", raising=False)
+    monkeypatch.delenv("LONGHOUSE_COORDINATION_TOKEN_FILE", raising=False)
+    server = create_server("http://example.com", "zdt_device_token")
+    reply_tool = server._tool_manager._tools["reply"]
+
+    mint_resp = _Response({"coordination_token": "zst_minted_fresh"}, status_code=200)
+    reply_resp = _Response({"id": 43, "reply_to_id": 42}, status_code=200)
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.post",
+        new=AsyncMock(side_effect=[mint_resp, reply_resp]),
+    ) as mock_post:
+        result = await reply_tool.run({"input_id": 42, "text": "done", "client_request_id": "reply-mint-1"})
+
+    assert json.loads(result) == {"id": 43, "reply_to_id": 42}
+    assert mock_post.await_count == 2
+    mock_post.assert_any_await(
+        f"/api/agents/sessions/{session_id}/coordination-token",
+        json={},
+        headers={"X-Agents-Token": "zdt_device_token"},
+    )
+    mock_post.assert_any_await(
+        "/api/agents/directed-inputs/42/reply",
+        json={"text": "done", "client_request_id": "reply-mint-1"},
+        headers={
+            "X-Longhouse-Session-Id": session_id,
+            "X-Agents-Token": "zst_minted_fresh",
+        },
+    )
 
 
 @pytest.mark.asyncio

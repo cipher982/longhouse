@@ -108,6 +108,7 @@ struct BridgeStateInner {
     provider_session_id: Option<String>,
     state_root: PathBuf,
     auth_token: String,
+    cached_coordination_token: Option<String>,
     port: u16,
     claude_pid: Option<i32>,
     bridge_pid: u32,
@@ -335,6 +336,35 @@ fn coordination_token() -> Option<String> {
         .filter(|token| !token.is_empty())
 }
 
+async fn mint_session_coordination_token(
+    client: &reqwest::Client,
+    base: &str,
+    device_token: Option<&str>,
+    session_id: &str,
+) -> Option<String> {
+    let device_token = device_token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())?;
+    let response = client
+        .post(format!(
+            "{base}/api/agents/sessions/{session_id}/coordination-token"
+        ))
+        .header("X-Agents-Token", device_token)
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let payload: Value = response.json().await.ok()?;
+    payload
+        .get("coordination_token")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+}
+
 async fn handle_rpc_line(
     raw: &str,
     state: &BridgeState,
@@ -467,14 +497,6 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         .expect("bridge state mutex poisoned")
         .session_id
         .clone();
-    // Only this session's own coordination authority may act here. The device
-    // token is owner-wide: the Runtime Host refuses it for directed input, but
-    // it would still read any session's history on this session's behalf. A
-    // session without authority yet gets a typed refusal instead.
-    let Some(request_token) = coordination_token() else {
-        return registration_pending_result(id, session_id.as_deref());
-    };
-    let mut peers_repo: Option<String> = None;
     let config = match crate::config::ShipperConfig::from_env() {
         Ok(config) => config,
         Err(error) => return tool_result(id, json!({"error": error.to_string()})),
@@ -490,6 +512,40 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         Ok(client) => client,
         Err(error) => return tool_result(id, json!({"error": error.to_string()})),
     };
+    let mut request_token = state.cached_coordination_token().or_else(coordination_token);
+    if request_token.is_none() {
+        if let Some(current) = session_id.as_deref() {
+            if let Some(minted) = mint_session_coordination_token(
+                &client,
+                base,
+                config.api_token.as_deref(),
+                current,
+            )
+            .await
+            {
+                state.set_cached_coordination_token(Some(minted.clone()));
+                request_token = Some(minted);
+            }
+        }
+    }
+    let request_token = match request_token {
+        Some(token) => token,
+        None => match session_id.as_deref() {
+            Some(current) => return registration_pending_result(id, Some(current)),
+            None => match config
+                .api_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+            {
+                Some(device_token) if !matches!(name, "send" | "inbox" | "reply") => {
+                    device_token.to_owned()
+                }
+                _ => return registration_pending_result(id, None),
+            },
+        },
+    };
+    let mut peers_repo: Option<String> = None;
     let mut request = match name {
         "peers" => {
             let mut repo = arguments
@@ -723,11 +779,32 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
             .is_some_and(|value| !value.trim().is_empty());
     let deadline = Instant::now() + COORDINATION_RETRY_BUDGET;
     let response = async {
+        let mut refreshed_on_401 = false;
         for attempt in 0..=COORDINATION_MAX_429_RETRIES {
-            let request = request
+            let request_attempt = request
                 .try_clone()
                 .context("failed to clone coordination request for retry")?;
-            let response = request.send().await?;
+            let response = request_attempt.send().await?;
+            if response.status().as_u16() == 401 && !refreshed_on_401 {
+                refreshed_on_401 = true;
+                if let Some(current) = session_id.as_deref() {
+                    if let Some(minted) = mint_session_coordination_token(
+                        &client,
+                        base,
+                        config.api_token.as_deref(),
+                        current,
+                    )
+                    .await
+                    {
+                        state.set_cached_coordination_token(Some(minted.clone()));
+                        request = request.header("X-Agents-Token", minted);
+                        let retry_req = request
+                            .try_clone()
+                            .context("failed to clone coordination request after token refresh")?;
+                        return Ok::<_, anyhow::Error>(retry_req.send().await?);
+                    }
+                }
+            }
             if response.status().as_u16() != 429
                 || !retry_safe
                 || attempt == COORDINATION_MAX_429_RETRIES
@@ -1159,6 +1236,7 @@ impl BridgeState {
                 provider_session_id,
                 state_root,
                 auth_token,
+                cached_coordination_token: None,
                 port: config.port,
                 claude_pid: config.claude_pid.or_else(parent_pid),
                 bridge_pid: std::process::id(),
@@ -1167,6 +1245,21 @@ impl BridgeState {
                 started_at: Utc::now(),
             })),
         })
+    }
+
+    fn cached_coordination_token(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .expect("bridge state mutex poisoned")
+            .cached_coordination_token
+            .clone()
+    }
+
+    fn set_cached_coordination_token(&self, token: Option<String>) {
+        self.inner
+            .lock()
+            .expect("bridge state mutex poisoned")
+            .cached_coordination_token = token;
     }
 
     fn has_managed_session(&self) -> bool {
@@ -1849,6 +1942,7 @@ mod tests {
         let token_file = temp.path().join("pending.coordination-token");
         temp_env::with_vars(
             [
+                ("LONGHOUSE_HOME", Some(temp.path().display().to_string())),
                 (MCP_ROLE_ENV, Some(MCP_ROLE_COORDINATION.to_string())),
                 ("LONGHOUSE_COORDINATION_TOKEN", None::<String>),
                 (
@@ -2243,5 +2337,87 @@ mod tests {
         assert_eq!(payload["provider_session_id"], "provider-456");
         assert_eq!(payload["auth_token"], "bridge-test-token");
         assert_eq!(payload["port"], 1234);
+    }
+
+    #[test]
+    fn coordination_tool_mints_session_authority_on_401_and_retries() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            // 1. First request with expired token -> 401
+            let (mut stream1, _) = listener.accept().unwrap();
+            let mut buf1 = [0u8; 2048];
+            let n1 = stream1.read(&mut buf1).unwrap();
+            let req1 = String::from_utf8_lossy(&buf1[..n1]);
+            assert!(req1.contains("POST /api/agents/directed-inputs/42/reply"));
+            assert!(req1.to_ascii_lowercase().contains("x-agents-token: expired-token"));
+            stream1
+                .write_all(
+                    b"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 53\r\n\r\n{\"detail\":\"Invalid or expired managed-session token\"}",
+                )
+                .unwrap();
+
+            // 2. Mint request -> 200 with fresh token
+            let (mut stream2, _) = listener.accept().unwrap();
+            let mut buf2 = [0u8; 2048];
+            let n2 = stream2.read(&mut buf2).unwrap();
+            let req2 = String::from_utf8_lossy(&buf2[..n2]);
+            assert!(req2.contains(&format!("POST /api/agents/sessions/{SESSION_ID}/coordination-token")));
+            assert!(req2.to_ascii_lowercase().contains("x-agents-token: zdt_test_device"));
+            stream2
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 36\r\n\r\n{\"coordination_token\":\"fresh-token\"}",
+                )
+                .unwrap();
+
+            // 3. Retried reply request with fresh token -> 200
+            let (mut stream3, _) = listener.accept().unwrap();
+            let mut buf3 = [0u8; 2048];
+            let n3 = stream3.read(&mut buf3).unwrap();
+            let req3 = String::from_utf8_lossy(&buf3[..n3]);
+            assert!(req3.contains("POST /api/agents/directed-inputs/42/reply"));
+            assert!(req3.to_ascii_lowercase().contains("x-agents-token: fresh-token"));
+            stream3
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 25\r\n\r\n{\"id\":43,\"reply_to_id\":42}",
+                )
+                .unwrap();
+        });
+
+        let machine_dir = temp.path().join("machine");
+        std::fs::create_dir_all(&machine_dir).unwrap();
+        std::fs::write(
+            machine_dir.join("state.json"),
+            format!("{{\"runtime_url\":\"http://{addr}\"}}"),
+        )
+        .unwrap();
+        std::fs::write(machine_dir.join("device-token"), "zdt_test_device\n").unwrap();
+
+        temp_env::with_vars(
+            [
+                ("LONGHOUSE_HOME", Some(temp.path().display().to_string())),
+                (MCP_ROLE_ENV, Some(MCP_ROLE_COORDINATION.to_string())),
+                ("LONGHOUSE_COORDINATION_TOKEN", Some("expired-token".to_string())),
+                ("LONGHOUSE_COORDINATION_TOKEN_FILE", None::<String>),
+            ],
+            || {
+                let state = BridgeState::new(test_config(temp.path())).unwrap();
+                let runtime = tokio::runtime::Runtime::new().unwrap();
+                let result = runtime
+                    .block_on(handle_rpc_line(
+                        r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"reply","arguments":{"input_id":42,"text":"ack","client_request_id":"req-42"}}}"#,
+                        &state,
+                        true,
+                    ))
+                    .unwrap()
+                    .unwrap();
+                let text = result["result"]["content"][0]["text"].as_str().unwrap();
+                assert!(text.contains("\"reply_to_id\":42"), "got: {text}");
+                assert_eq!(state.cached_coordination_token().as_deref(), Some("fresh-token"));
+            },
+        );
+        server.join().unwrap();
     }
 }

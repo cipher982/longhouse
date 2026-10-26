@@ -331,23 +331,51 @@ def _contract_description(name: str) -> str:
     raise KeyError(f"coordination contract has no tool {name}")
 
 
-def _coordination_token() -> str:
-    """This session's coordination authority: the variable, else the late-token file.
+def _coordination_token(session_id: str | None = None) -> str:
+    """This session's coordination authority: env, late-token file, or local MCP config.
 
     A launch that missed its registration budget receives authority later in
-    LONGHOUSE_COORDINATION_TOKEN_FILE, re-read on every call.
+    LONGHOUSE_COORDINATION_TOKEN_FILE, re-read on every call. In a managed Claude
+    session where the user-level ``longhouse`` MCP server runs alongside
+    ``longhouse-coordination``, the launch-scoped config under
+    ``~/.longhouse/run/claude-mcp/<session_id>-*.json`` also carries the token.
     """
 
     token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
     if token:
         return token
     path = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN_FILE") or "").strip()
-    if not path:
-        return ""
-    try:
-        return Path(path).read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
+    if path:
+        try:
+            file_token = Path(path).read_text(encoding="utf-8").strip()
+            if file_token:
+                return file_token
+        except OSError:
+            pass
+    resolved_session = str(session_id or get_managed_session_id() or "").strip()
+    if resolved_session and _UUID_RE.match(resolved_session):
+        try:
+            from zerg.services.longhouse_paths import resolve_longhouse_home
+
+            mcp_dir = resolve_longhouse_home() / "run" / "claude-mcp"
+            if mcp_dir.is_dir():
+                for candidate in sorted(mcp_dir.glob(f"{resolved_session}-*.json"), reverse=True):
+                    try:
+                        payload = json.loads(candidate.read_text(encoding="utf-8"))
+                        env = payload.get("mcpServers", {}).get("longhouse-coordination", {}).get("env", {})
+                        cfg_token = str(env.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
+                        if cfg_token:
+                            return cfg_token
+                        cfg_file = str(env.get("LONGHOUSE_COORDINATION_TOKEN_FILE") or "").strip()
+                        if cfg_file:
+                            late = Path(cfg_file).read_text(encoding="utf-8").strip()
+                            if late:
+                                return late
+                    except (OSError, ValueError, AttributeError):
+                        continue
+        except Exception:
+            pass
+    return ""
 
 
 def _format_error(exc: Exception, api_url: str) -> str:
@@ -508,10 +536,39 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
     aligned; the Rust one is what agents actually get.
     """
     client = LonghouseAPIClient(api_url, api_token)
+    cached_coordination_tokens: dict[str, str] = {}
+
+    async def _mint_coordination_token(session_id: str) -> str:
+        if not api_token or not session_id or not _UUID_RE.match(session_id):
+            return ""
+        try:
+            resp = await client.post(
+                f"/api/agents/sessions/{session_id}/coordination-token",
+                json={},
+                headers={"X-Agents-Token": api_token},
+            )
+            if resp.status_code == 200:
+                data = json.loads(resp.text)
+                minted = str(data.get("coordination_token") or "").strip()
+                if minted:
+                    cached_coordination_tokens[session_id] = minted
+                    return minted
+        except Exception:
+            logger.debug("Failed to mint coordination token for %s", session_id, exc_info=True)
+        return ""
+
+    async def _resolve_session_coordination_token(session_id: str) -> str:
+        cached = cached_coordination_tokens.get(session_id, "")
+        if cached:
+            return cached
+        token = _coordination_token(session_id)
+        if token:
+            return token
+        return await _mint_coordination_token(session_id)
 
     def _coordination_headers() -> dict[str, str]:
-        token = _coordination_token()
         session_id = str(get_managed_session_id() or "").strip()
+        token = cached_coordination_tokens.get(session_id, "") or _coordination_token(session_id)
         if not token or not session_id:
             return {}
         return {"X-Agents-Token": token, _CURRENT_SESSION_HEADER: session_id}
@@ -807,7 +864,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         from_session_id = get_managed_session_id()
         if not from_session_id or not _UUID_RE.match(from_session_id):
             return json.dumps({"error": "send requires a current managed session context"})
-        coordination_token = _coordination_token()
+        coordination_token = await _resolve_session_coordination_token(from_session_id)
         if not coordination_token:
             return json.dumps(
                 {
@@ -828,6 +885,14 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 json=body,
                 headers={_CURRENT_SESSION_HEADER: from_session_id, "X-Agents-Token": coordination_token},
             )
+            if resp.status_code == 401:
+                refreshed = await _mint_coordination_token(from_session_id)
+                if refreshed:
+                    resp = await client.post(
+                        "/api/agents/directed-inputs",
+                        json=body,
+                        headers={_CURRENT_SESSION_HEADER: from_session_id, "X-Agents-Token": refreshed},
+                    )
             if resp.status_code not in (200, 201):
                 return _format_api_error(resp)
             return resp.text
@@ -851,7 +916,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         current_session_id = get_managed_session_id()
         if not current_session_id or not _UUID_RE.match(current_session_id):
             return json.dumps({"error": "inbox requires a current managed session context"})
-        coordination_token = _coordination_token()
+        coordination_token = await _resolve_session_coordination_token(current_session_id)
         if not coordination_token:
             return json.dumps(
                 {
@@ -870,6 +935,18 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 },
                 headers={_CURRENT_SESSION_HEADER: current_session_id, "X-Agents-Token": coordination_token},
             )
+            if resp.status_code == 401:
+                refreshed = await _mint_coordination_token(current_session_id)
+                if refreshed:
+                    resp = await client.get(
+                        "/api/agents/directed-inputs",
+                        params={
+                            "direction": direction,
+                            "after_id": after_cursor,
+                            "limit": limit,
+                        },
+                        headers={_CURRENT_SESSION_HEADER: current_session_id, "X-Agents-Token": refreshed},
+                    )
             if resp.status_code != 200:
                 return _format_api_error(resp)
             return resp.text
@@ -891,7 +968,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         current_session_id = get_managed_session_id()
         if not current_session_id or not _UUID_RE.match(current_session_id):
             return json.dumps({"error": "reply requires a current managed session context"})
-        coordination_token = _coordination_token()
+        coordination_token = await _resolve_session_coordination_token(current_session_id)
         if not coordination_token:
             return json.dumps(
                 {
@@ -911,6 +988,14 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 json=body,
                 headers={_CURRENT_SESSION_HEADER: current_session_id, "X-Agents-Token": coordination_token},
             )
+            if resp.status_code == 401:
+                refreshed = await _mint_coordination_token(current_session_id)
+                if refreshed:
+                    resp = await client.post(
+                        f"/api/agents/directed-inputs/{input_id}/reply",
+                        json=body,
+                        headers={_CURRENT_SESSION_HEADER: current_session_id, "X-Agents-Token": refreshed},
+                    )
             if resp.status_code not in (200, 201):
                 return _format_api_error(resp)
             return resp.text

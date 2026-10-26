@@ -77,22 +77,22 @@ describe("Pi coordination tools", () => {
     }
   });
 
-  it("refuses without authority and never lends it to a native subagent", async () => {
+  it("refuses without authority and never lends write authority to a native subagent", async () => {
     delete process.env.LONGHOUSE_COORDINATION_TOKEN;
     const tools = register();
     const pending = await tools.get("tail")!.execute("tail-call", { session_id: "x" }, new AbortController().signal, undefined, {});
     expect(pending.isError).toBe(true);
     expect(pending.content[0].text).toContain("coordination authority is unavailable");
     const child = await tools
-      .get("tail")!
-      .execute("tail-call", { session_id: "x" }, new AbortController().signal, undefined, { agent: { kind: "sub" } });
+      .get("send")!
+      .execute("send-call", { session_id: "x", text: "hi", client_request_id: "1" }, new AbortController().signal, undefined, { agent: { kind: "sub" } });
     expect(child.isError).toBe(true);
     expect(child.content[0].text).toContain("Native subagents");
   });
 });
 
 describe("Pi coordination child-session fence", () => {
-  it("refuses a context whose session file sits under the owned session's artifacts", async () => {
+  it("refuses a write context whose session file sits under the owned session's artifacts", async () => {
     const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<void>>();
     const tools = new Map<string, RegisteredTool>();
     registerExtension({
@@ -104,8 +104,8 @@ describe("Pi coordination child-session fence", () => {
     // Only the ownership bookkeeping matters here; the channel connect is not under test.
     await handlers.get("session_start")!({ reason: "startup" }, { ...ctxFor(owned), isIdle: () => true }).catch(() => undefined);
     const child = await tools
-      .get("tail")!
-      .execute("t", { session_id: "x" }, new AbortController().signal, undefined, ctxFor(join(channelDir, "sessions", "main", "child.jsonl")));
+      .get("send")!
+      .execute("s", { session_id: "x", text: "hi", client_request_id: "1" }, new AbortController().signal, undefined, ctxFor(join(channelDir, "sessions", "main", "child.jsonl")));
     expect(child.isError).toBe(true);
     expect(child.content[0].text).toContain("Native subagents");
   });

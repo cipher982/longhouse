@@ -243,6 +243,92 @@ def _decode_catalog_datetime(value: object) -> datetime | None:
     return decoded
 
 
+_SESSION_LIFECYCLE_CACHE_TTL_SECONDS = 5.0
+_session_lifecycle_cache: dict[tuple[int, str, str], tuple[float, bool]] = {}
+_session_lifecycle_lock = threading.Lock()
+
+
+def _verify_managed_session_lifecycle(token: ManagedSessionToken) -> bool:
+    """Verify that a past-expiry session token belongs to an open session on an active device."""
+
+    device_id = str(token.device_id or "").strip()
+    if not device_id:
+        return False
+    cache_key = (int(token.owner_id), str(token.session_id), device_id)
+    now = time.monotonic()
+    with _session_lifecycle_lock:
+        cached = _session_lifecycle_cache.get(cache_key)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+
+    settings = get_settings()
+    valid = False
+    if live_store_configured() and (not settings.testing or settings.environment == "test:e2e"):
+        from zerg.auth.catalog_gateway import _call as call_auth_catalog
+        from zerg.services.catalog_read_gateway import CatalogReadError
+        from zerg.services.live_control_catalog import load_live_control_session_snapshot
+        from zerg.utils.time import normalize_utc
+
+        try:
+            session = load_live_control_session_snapshot(token.session_id, owner_id=int(token.owner_id))
+        except CatalogReadError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": exc.code, "message": exc.message},
+            ) from exc
+        if (
+            session is not None
+            and normalize_utc(getattr(session, "closed_at", None)) is None
+            and str(getattr(session, "device_id", "") or "").strip() == device_id
+        ):
+            devices = call_auth_catalog("auth.device.list.v2", {"owner_id": int(token.owner_id), "include_revoked": False})
+            tokens = devices.get("tokens")
+            valid = isinstance(tokens, list) and any(
+                isinstance(row, dict) and str(row.get("device_id") or "").strip() == device_id and row.get("is_valid") is not False
+                for row in tokens
+            )
+    else:
+        from zerg.models.agents import AgentSession
+        from zerg.utils.time import normalize_utc
+
+        db = get_session_factory()()
+        try:
+            active_device = (
+                db.query(DeviceToken.id)
+                .filter(
+                    DeviceToken.owner_id == int(token.owner_id),
+                    DeviceToken.device_id == device_id,
+                    DeviceToken.revoked_at.is_(None),
+                )
+                .first()
+            )
+            if active_device is not None:
+                session_row = db.query(AgentSession).filter(AgentSession.id == str(token.session_id)).first()
+                if session_row is not None:
+                    valid = (
+                        str(getattr(session_row, "device_id", "") or "").strip() == device_id
+                        and normalize_utc(getattr(session_row, "closed_at", None)) is None
+                    )
+        finally:
+            db.close()
+
+    with _session_lifecycle_lock:
+        if len(_session_lifecycle_cache) > 1024:
+            _session_lifecycle_cache.clear()
+        _session_lifecycle_cache[cache_key] = (now + _SESSION_LIFECYCLE_CACHE_TTL_SECONDS, valid)
+    return valid
+
+
+def _resolve_managed_session_token_for_request(provided_token: str) -> ManagedSessionToken | None:
+    session_token = validate_managed_session_token(provided_token)
+    if session_token is not None:
+        return session_token
+    unexpired_check = validate_managed_session_token(provided_token, verify_exp=False)
+    if unexpired_check is not None and _verify_managed_session_lifecycle(unexpired_check):
+        return unexpired_check
+    return None
+
+
 def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken | None:
     """Verify the agents API token for write operations."""
     settings = get_settings()
@@ -276,11 +362,10 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
                 request.state.principal = f"device:{device_token.id}"
                 return device_token
         if provided_token:
-            session_token = validate_managed_session_token(provided_token)
+            session_token = _resolve_managed_session_token_for_request(provided_token)
             if session_token is not None and _managed_session_token_allowed(request, session_token):
                 request.state.principal = f"session:{session_token.session_id}"
                 return session_token
-        return None
 
     provided_token = request.headers.get("X-Agents-Token")
     if not provided_token:
@@ -301,7 +386,7 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
                 _enforce_rate_limit(rate_key)
             return device_token
     else:
-        session_token = validate_managed_session_token(provided_token)
+        session_token = _resolve_managed_session_token_for_request(provided_token)
         if session_token:
             if not _managed_session_token_allowed(request, session_token):
                 raise HTTPException(
@@ -315,6 +400,11 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
             if not settings.testing and lane not in _UNCOUNTED_LANES:
                 _enforce_rate_limit(rate_key)
             return session_token
+        if provided_token.startswith("zst_"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired managed-session token",
+            )
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

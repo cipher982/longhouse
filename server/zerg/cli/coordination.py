@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from uuid import UUID
 
@@ -13,6 +12,7 @@ import typer
 from zerg.cli._common import git_output
 from zerg.cli._common import load_api_credentials
 from zerg.cli._common import parse_uuid_or_exit
+from zerg.mcp_server.server import _coordination_token
 from zerg.services.managed_session_env import CURRENT_SESSION_HEADER
 from zerg.services.managed_session_env import get_managed_session_id
 from zerg.services.shipper import get_zerg_url
@@ -209,7 +209,7 @@ def peers(
     """List peer sessions working around the same repo."""
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
-    coordination_token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
+    coordination_token = _coordination_token()
     peer_token = coordination_token or resolved_token
     resolved_repo, current_session_id = _resolve_repo_context(
         explicit_repo=repo,
@@ -315,7 +315,7 @@ def send(
     """Send durable attributed input to another managed session."""
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, _resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
-    coordination_token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
+    coordination_token = _coordination_token()
     if not coordination_token:
         typer.secho("send requires session-scoped coordination authority.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
@@ -524,7 +524,7 @@ def inbox(
     """Recover durable input for the current managed session."""
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, _resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
-    coordination_token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
+    coordination_token = _coordination_token()
     if not coordination_token:
         typer.secho("inbox requires session-scoped coordination authority.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
@@ -622,7 +622,7 @@ def reply(
     """Reply to inbound input without copying its source session id."""
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, _resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
-    coordination_token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
+    coordination_token = _coordination_token()
     if not coordination_token:
         typer.secho("reply requires session-scoped coordination authority.", fg=typer.colors.RED)
         raise typer.Exit(code=1)

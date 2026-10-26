@@ -143,3 +143,67 @@ def test_directed_actor_binds_signed_identity_not_ambient_header(monkeypatch):
         _resolve_directed_input_actor(db=None, request=request, token=token)
     assert denied.value.status_code == 403
     assert "does not match request header" in str(denied.value.detail)
+
+
+def test_expired_managed_session_token_succeeds_while_session_is_open_and_device_active(monkeypatch):
+    session_id = str(uuid4())
+    expired = issue_managed_session_token(
+        owner_id=7,
+        session_id=session_id,
+        project="longhouse",
+        device_id="device-7",
+        scope=MANAGED_SESSION_SCOPE_COORDINATION,
+        expires_delta=timedelta(seconds=-10),
+    )
+    monkeypatch.setattr("zerg.dependencies.agents_auth.get_settings", _settings)
+    monkeypatch.setattr("zerg.dependencies.agents_auth._verify_managed_session_lifecycle", lambda token: True)
+
+    resolved = verify_agents_token(_request("GET", "/api/agents/sessions", expired))
+    assert isinstance(resolved, ManagedSessionToken)
+    assert resolved.session_id == session_id
+
+
+def test_expired_managed_session_token_reports_accurate_401_when_session_closed_or_device_revoked(monkeypatch):
+    session_id = str(uuid4())
+    expired = issue_managed_session_token(
+        owner_id=7,
+        session_id=session_id,
+        project="longhouse",
+        device_id="device-7",
+        scope=MANAGED_SESSION_SCOPE_COORDINATION,
+        expires_delta=timedelta(seconds=-10),
+    )
+    monkeypatch.setattr("zerg.dependencies.agents_auth.get_settings", _settings)
+    monkeypatch.setattr("zerg.dependencies.agents_auth._verify_managed_session_lifecycle", lambda token: False)
+
+    with pytest.raises(HTTPException) as denied:
+        verify_agents_token(_request("GET", "/api/agents/sessions", expired))
+    assert denied.value.status_code == 401
+    assert denied.value.detail == "Invalid or expired managed-session token"
+
+
+def test_directed_actor_rejects_closed_session(monkeypatch):
+    from datetime import datetime, timezone
+
+    session_id = str(uuid4())
+    token = ManagedSessionToken(
+        owner_id=7,
+        session_id=session_id,
+        device_id="device-7",
+        scope=MANAGED_SESSION_SCOPE_COORDINATION,
+    )
+    closed_session = SimpleNamespace(
+        id=session_id,
+        device_id="device-7",
+        closed_at=datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        "zerg.services.live_control_catalog.load_live_control_session_snapshot",
+        lambda _sid, *, owner_id: closed_session,
+    )
+    request = _request("POST", "/api/agents/directed-inputs", "zst_test", session_id=session_id)
+
+    with pytest.raises(HTTPException) as denied:
+        _resolve_directed_input_actor(db=None, request=request, token=token)
+    assert denied.value.status_code == 409
+    assert denied.value.detail == "Session is closed"

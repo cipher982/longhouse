@@ -338,6 +338,11 @@ def _resolve_directed_input_actor(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Authenticated device cannot act as the requested session",
         )
+    if normalize_utc_datetime(getattr(session, "closed_at", None)) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Session is closed",
+        )
 
     return session
 

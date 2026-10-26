@@ -453,3 +453,45 @@ def test_deletion_removes_catalog_rows_search_entries_and_blob_bytes(live, monke
 
     # Only the owner learns the terminal state.
     assert live.loop.run(delete_session_data(session_id=doomed.session_id, owner_id=owner)).already_deleted is True
+
+
+def test_past_expiry_managed_session_token_follows_session_and_device_lifecycle(live, client):
+    """Guard: a managed-session token past its JWT exp stays valid while its
+    session is open and its device is active, and is immediately refused once
+    the session closes or the device is revoked.
+    """
+    from datetime import timedelta
+    from zerg.dependencies import agents_auth
+
+    owner = live.create_user("owner@contract.test")
+    live.create_device_token(owner_id=owner, device_id="cinder")
+    seeded = live.commit_session(owner_id=owner, device_id="cinder", project="longhouse")
+
+    past_exp_token = managed_tokens.issue_managed_session_token(
+        owner_id=owner,
+        session_id=str(seeded.session_id),
+        project="longhouse",
+        device_id="cinder",
+        scope=managed_tokens.MANAGED_SESSION_SCOPE_COORDINATION,
+        expires_delta=timedelta(seconds=-3600),
+    )
+    agents_auth._session_lifecycle_cache.clear()
+    accepted = client.get(
+        "/agents/sessions",
+        params={"project": "longhouse", "limit": 5, "days_back": 7},
+        headers={"X-Agents-Token": past_exp_token},
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    # Revoke the device token: the past-expiry session token is now refused.
+    devices = live.rpc("auth.device.list.v2", {"owner_id": owner, "include_revoked": False})["tokens"]
+    for row in devices:
+        live.rpc("auth.device.revoke.v2", {"owner_id": owner, "token_id": row["id"]})
+    agents_auth._session_lifecycle_cache.clear()
+    refused = client.get(
+        "/agents/sessions",
+        params={"project": "longhouse", "limit": 5, "days_back": 7},
+        headers={"X-Agents-Token": past_exp_token},
+    )
+    assert refused.status_code == 401, refused.text
+    assert refused.json()["detail"] == "Invalid or expired managed-session token"
