@@ -366,6 +366,7 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
             if session_token is not None and _managed_session_token_allowed(request, session_token):
                 request.state.principal = f"session:{session_token.session_id}"
                 return session_token
+        return None
 
     provided_token = request.headers.get("X-Agents-Token")
     if not provided_token:
