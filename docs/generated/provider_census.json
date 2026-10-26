@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 331,
+  "file_count": 330,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1397,13 +1397,6 @@
         "antigravity",
         "codex",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_longhouse_mcp_server.py",
-      "providers": [
-        "claude",
-        "codex"
       ]
     },
     {

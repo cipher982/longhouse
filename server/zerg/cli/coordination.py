@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from uuid import UUID
 
@@ -12,11 +13,37 @@ import typer
 from zerg.cli._common import git_output
 from zerg.cli._common import load_api_credentials
 from zerg.cli._common import parse_uuid_or_exit
-from zerg.mcp_server.server import _coordination_token
+from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.managed_session_env import CURRENT_SESSION_HEADER
 from zerg.services.managed_session_env import get_managed_session_id
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
+
+
+def _coordination_token(session_id: str | None = None) -> str:
+    """This session's coordination authority: env or launch-scoped MCP config."""
+
+    token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
+    if token:
+        return token
+    resolved_session = str(session_id or get_managed_session_id() or "").strip()
+    if resolved_session:
+        try:
+            UUID(resolved_session)
+            mcp_dir = resolve_longhouse_home() / "run" / "claude-mcp"
+            if mcp_dir.is_dir():
+                for candidate in sorted(mcp_dir.glob(f"{resolved_session}-*.json"), reverse=True):
+                    try:
+                        payload = json.loads(candidate.read_text(encoding="utf-8"))
+                        env = payload.get("mcpServers", {}).get("longhouse-coordination", {}).get("env", {})
+                        cfg_token = str(env.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
+                        if cfg_token:
+                            return cfg_token
+                    except (OSError, ValueError, AttributeError):
+                        continue
+        except Exception:
+            pass
+    return ""
 
 
 def _load_api_credentials(*, url: str | None, token: str | None, config_dir: Path | None) -> tuple[str, str]:

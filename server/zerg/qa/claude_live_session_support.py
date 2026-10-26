@@ -735,14 +735,6 @@ def _coordination_token_now(longhouse_home: Path, session_id: str) -> str | None
         token = env.get("LONGHOUSE_COORDINATION_TOKEN")
         if isinstance(token, str) and token.strip():
             return token.strip()
-        token_file = env.get("LONGHOUSE_COORDINATION_TOKEN_FILE")
-        if isinstance(token_file, str) and token_file:
-            try:
-                token = Path(token_file).read_text(encoding="utf-8").strip()
-            except OSError:
-                token = ""
-            if token:
-                return token
     return None
 
 

@@ -46,12 +46,9 @@ def import_check():
 
     modules = [
         ("FastAPI app + all routers", "zerg.main"),
-        ("MCP server factory", "zerg.mcp_server"),
-        ("MCP API client", "zerg.mcp_server.api_client"),
         ("CLI serve", "zerg.cli.serve"),
         ("CLI connect", "zerg.cli.connect"),
         ("CLI onboard", "zerg.cli.onboard"),
-        ("CLI mcp-server", "zerg.cli.mcp_serve"),
         ("Demo sessions", "zerg.services.demo_sessions"),
         ("Local health", "zerg.services.local_health"),
     ]

@@ -14,7 +14,6 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from zerg.mcp_server.server import COORDINATION_INSTRUCTIONS
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.managed_provider_contracts import contract_for_provider
@@ -22,6 +21,7 @@ from zerg.services.provider_capability_local_proof import executable_identity
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
 from zerg.services.shipper.hooks import CODEX_HOOK_SCRIPT
+from zerg.services.shipper.hooks import COORDINATION_BOOTSTRAP
 
 from .provider_capability_proof_publish import ScenarioProofIdentity
 from .provider_capability_proof_publish import publish_scenario_assertions
@@ -65,7 +65,7 @@ def observe_codex_post_compaction_bootstrap(*, compactions: int = 4) -> dict[str
     return {
         "coordination_instructions_model_visible_after_compaction": False,
         "visible_bootstrap_count": visible_bootstrap_count,
-        "mcp_coordination_instructions_present": "`peers` tool" in COORDINATION_INSTRUCTIONS,
+        "mcp_coordination_instructions_present": "`peers`" in COORDINATION_BOOTSTRAP,
     }
 
 

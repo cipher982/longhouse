@@ -33,7 +33,6 @@ providers:
   control_plane_aliases:
   - codex_app_server
   adapter_sources:
-  - server/zerg/mcp_server/server.py
   # CODEX_HOOK_SCRIPT -- the hook installed into ~/.codex/hooks -- lives here.
   # It is part of Codex's control surface, but only Claude claimed this file,
   # so a change to Codex's own hook left the Codex digest untouched.
@@ -1222,7 +1221,6 @@ providers:
   control_plane: opencode_server_bridge
   control_plane_aliases: []
   adapter_sources:
-  - server/zerg/mcp_server/server.py
   - engine/src/opencode_control.rs
   - engine/src/opencode_run.rs
   - engine/src/console_sink.rs

@@ -39,9 +39,6 @@ pub struct StartConfig {
     pub launch_mode: String,
     pub resume_provider_session_id: Option<String>,
     pub coordination_token: String,
-    /// Where a launch that started without authority receives it once
-    /// registration recovers; the launcher owns and writes the file.
-    pub coordination_token_file: Option<PathBuf>,
     pub model: Option<String>,
 }
 
@@ -131,7 +128,6 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
         &engine,
         &session_id,
         coordination_token,
-        config.coordination_token_file.as_deref(),
         model.as_deref(),
     );
     // OpenCode 1.18.x treats `--port 0` as the default server port (4096)
@@ -225,20 +221,17 @@ fn opencode_mcp_config(
     engine: &Path,
     session_id: &str,
     coordination_token: Option<&str>,
-    coordination_token_file: Option<&Path>,
     model: Option<&str>,
 ) -> serde_json::Value {
     // A launch without authority gets no token variable (an empty string would
-    // look like a credential); it names the launcher's late-token file instead,
-    // and calls answer registration_pending until that file is written.
+    // look like a credential); the coordination server mints authority on
+    // demand once registration recovers.
     let mut environment = json!({
         crate::claude_channel_server::MCP_ROLE_ENV: crate::claude_channel_server::MCP_ROLE_COORDINATION,
         "LONGHOUSE_MANAGED_SESSION_ID": session_id,
     });
     if let Some(token) = coordination_token {
         environment["LONGHOUSE_COORDINATION_TOKEN"] = json!(token);
-    } else if let Some(path) = coordination_token_file {
-        environment["LONGHOUSE_COORDINATION_TOKEN_FILE"] = json!(path.display().to_string());
     }
     let mut config = json!({
         "mcp": {
@@ -1232,21 +1225,16 @@ mod tests {
     }
 
     #[test]
-    fn mcp_config_without_authority_names_the_late_token_file() {
+    fn mcp_config_without_authority_omits_token() {
         let config = opencode_mcp_config(
             Path::new("/opt/longhouse-engine"),
             "11111111-1111-4111-8111-111111111111",
             None,
-            Some(Path::new("/run/late.coordination-token")),
             None,
         );
         let environment = &config["mcp"]["longhouse"]["environment"];
         assert_eq!(environment["LONGHOUSE_MCP_ROLE"], "coordination");
         assert!(environment["LONGHOUSE_COORDINATION_TOKEN"].is_null());
-        assert_eq!(
-            environment["LONGHOUSE_COORDINATION_TOKEN_FILE"],
-            "/run/late.coordination-token"
-        );
     }
 
     #[test]
@@ -1259,7 +1247,6 @@ mod tests {
             Path::new("/opt/longhouse-engine"),
             "11111111-1111-4111-8111-111111111111",
             Some("session-secret"),
-            None,
             None,
         );
         let server = &config["mcp"]["longhouse"];
@@ -1280,7 +1267,6 @@ mod tests {
             Path::new("/opt/longhouse-engine"),
             "11111111-1111-4111-8111-111111111111",
             Some("session-secret"),
-            None,
             Some("openrouter/deepseek/deepseek-v4-flash"),
         );
         assert_eq!(configured["model"], "openrouter/deepseek/deepseek-v4-flash");

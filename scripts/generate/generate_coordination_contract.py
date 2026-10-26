@@ -9,11 +9,10 @@ peers line vectors, pending and delivery wording). This writes:
 - server/zerg/config/coordination_contract.json      (delivery facts)
 - the generated block in engine/assets/longhouse-omp-helm.ts (the extension ships
   as one file, so it cannot import JSON)
-- the generated blocks in server/zerg/mcp_server/server.py and
-  server/zerg/services/shipper/hooks.py. The provider factory's verifier imports
-  both, and its pinned bundle may never gain a file (SUBJECT_PINNED only
-  shrinks), so they carry the contract inline instead of reading the JSON.
-
+- the generated block in server/zerg/services/shipper/hooks.py. The provider
+  factory's verifier imports it, and its pinned bundle may never gain a file
+  (SUBJECT_PINNED only shrinks), so it carries the contract inline instead of
+  reading the JSON.
 `--check` exits non-zero when any rendered copy differs from the schema.
 """
 
@@ -37,7 +36,6 @@ RUNTIME_BEGIN = "// BEGIN GENERATED COORDINATION RUNTIME (scripts/generate/gener
 RUNTIME_END = "// END GENERATED COORDINATION RUNTIME"
 OMP_BEGIN = "// BEGIN GENERATED COORDINATION CONTRACT (scripts/generate/generate_coordination_contract.py)"
 OMP_END = "// END GENERATED COORDINATION CONTRACT"
-MCP_SERVER = ROOT / "server" / "zerg" / "mcp_server" / "server.py"
 SHIPPER_HOOKS = ROOT / "server" / "zerg" / "services" / "shipper" / "hooks.py"
 PY_BEGIN = "# BEGIN GENERATED COORDINATION CONTRACT (scripts/generate/generate_coordination_contract.py)"
 PY_END = "# END GENERATED COORDINATION CONTRACT"
@@ -158,12 +156,6 @@ def main() -> int:
         SERVER_JSON: rendered,
         OMP_EXTENSION: render_extension(contract, omp_current, OMP_EXTENSION),
         PI_EXTENSION: render_extension(contract, PI_EXTENSION.read_text(encoding="utf-8"), PI_EXTENSION),
-        MCP_SERVER: render_python_block(
-            MCP_SERVER,
-            MCP_SERVER.read_text(encoding="utf-8"),
-            # Only what the MCP server reads: its instructions and tool descriptions.
-            f"_COORDINATION_CONTRACT = {_python_literal({'instructions': contract['instructions'], 'tools': contract['tools']})}",
-        ),
         SHIPPER_HOOKS: render_python_block(
             SHIPPER_HOOKS,
             SHIPPER_HOOKS.read_text(encoding="utf-8"),

@@ -1800,14 +1800,13 @@ impl Drop for PrivateTempFile {
 /// list is identical whether registration finished inside the foreground
 /// budget or recovers later. A launch that already holds coordination
 /// authority passes it in the environment; one that is still registering
-/// gets it through `token_path`, which the registration retry writes when it
-/// recovers. Changing the tool list after launch is not an option: Claude
-/// reads it once, and tool definitions head the prompt cache. The role names
-/// are `claude_channel_server::MCP_ROLE_*`; this binary does not link it.
+/// mints it on demand once registration recovers. Changing the tool list after
+/// launch is not an option: Claude reads it once, and tool definitions head
+/// the prompt cache. The role names are `claude_channel_server::MCP_ROLE_*`;
+/// this binary does not link it.
 fn write_claude_mcp_config(
     session_id: &str,
     coordination_token: Option<&str>,
-    token_path: &Path,
 ) -> anyhow::Result<PrivateTempFile> {
     let path = longhouse_home()?
         .join("run/claude-mcp")
@@ -1815,7 +1814,6 @@ fn write_claude_mcp_config(
     let mut coordination_env = json!({
         "LONGHOUSE_MCP_ROLE": "coordination",
         "LONGHOUSE_MANAGED_SESSION_ID": session_id,
-        "LONGHOUSE_COORDINATION_TOKEN_FILE": token_path.display().to_string(),
     });
     if let Some(token) = coordination_token
         .map(str::trim)
@@ -1844,84 +1842,6 @@ fn write_claude_mcp_config(
     });
     write_private_text(&path, &serde_json::to_string(&config)?)?;
     Ok(PrivateTempFile { path })
-}
-
-/// The file through which a launch that missed its registration budget
-/// receives coordination authority once the background retry recovers.
-///
-/// The launcher owns it: the retry that writes it lives in this process, so
-/// the file exists exactly as long as recovery can happen. Writer and cleanup
-/// share one lock, so a recovery landing during teardown cannot recreate a
-/// credential file after it was removed.
-struct LateCoordinationToken {
-    inner: Arc<LateCoordinationTokenFile>,
-}
-
-struct LateCoordinationTokenFile {
-    path: PathBuf,
-    open: std::sync::Mutex<bool>,
-}
-
-impl LateCoordinationToken {
-    fn new() -> anyhow::Result<Self> {
-        let path = longhouse_home()?
-            .join("run/coordination")
-            .join(format!("{}.coordination-token", Uuid::new_v4()));
-        Ok(Self {
-            inner: Arc::new(LateCoordinationTokenFile {
-                path,
-                open: std::sync::Mutex::new(true),
-            }),
-        })
-    }
-
-    fn path(&self) -> &Path {
-        &self.inner.path
-    }
-
-    /// The registration-recovery hook: write the token the Runtime Host
-    /// issued, or leave a notice explaining why coordination stays pending.
-    fn recovery_hook(
-        &self,
-        provider: &'static str,
-        notices: DeferredNotices,
-    ) -> Arc<dyn Fn(&ManagedLaunchResponse) + Send + Sync> {
-        let file = Arc::clone(&self.inner);
-        Arc::new(move |response: &ManagedLaunchResponse| {
-            let Some(token) = response.coordination_token() else {
-                notices.push(format!(
-                    "Longhouse: {provider} registration recovered without coordination authority; \
-                     send/inbox/reply stay pending until the session is relaunched."
-                ));
-                return;
-            };
-            let open = file
-                .open
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            if !*open {
-                return;
-            }
-            if let Err(error) = write_private_text(&file.path, token) {
-                notices.push(format!(
-                    "Longhouse: could not hand {provider} its coordination authority ({error:#}); \
-                     send/inbox/reply stay pending until the session is relaunched."
-                ));
-            }
-        })
-    }
-}
-
-impl Drop for LateCoordinationToken {
-    fn drop(&mut self) {
-        let mut open = self
-            .inner
-            .open
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        *open = false;
-        let _ = std::fs::remove_file(&self.inner.path);
-    }
 }
 
 fn claude_registration_issue(
@@ -2119,7 +2039,6 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             "Longhouse warning: starting Claude without Longhouse control because registration was unusable ({issue})"
         );
     }
-    let late_coordination_token = LateCoordinationToken::new()?;
     if response.is_none() && resume_target.is_none() {
         // The provider remains usable while registration retries. Logging and
         // control recovery must never delay or prevent the provider TUI.
@@ -2138,7 +2057,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
                 longhouse_home()
                     .map(|home| home.join("agent"))
                     .unwrap_or_else(|_| PathBuf::from(".")),
-                Some(late_coordination_token.recovery_hook("Claude", deferred_notices.clone())),
+                None,
             ),
         );
     }
@@ -2193,11 +2112,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .as_ref()
         .and_then(|response| response.coordination_token())
         .map(str::to_owned);
-    let mcp_config = write_claude_mcp_config(
-        &session_id,
-        coordination_token.as_deref(),
-        late_coordination_token.path(),
-    )?;
+    let mcp_config = write_claude_mcp_config(&session_id, coordination_token.as_deref())?;
     let mut command = Command::new(&binary);
     if permission_mode == "bypass" {
         command.arg("--dangerously-skip-permissions");
@@ -2545,17 +2460,9 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
                 "detached"
             },
         ]);
-    // A launch without authority yet still gets the coordination tools; they
-    // read the token from this file once registration recovers.
-    let late_coordination_token = LateCoordinationToken::new()?;
     match coordination_token.as_deref() {
-        Some(value) => start
-            .env("LONGHOUSE_COORDINATION_TOKEN", value)
-            .env_remove("LONGHOUSE_COORDINATION_TOKEN_FILE"),
-        None => start.env_remove("LONGHOUSE_COORDINATION_TOKEN").env(
-            "LONGHOUSE_COORDINATION_TOKEN_FILE",
-            late_coordination_token.path(),
-        ),
+        Some(value) => start.env("LONGHOUSE_COORDINATION_TOKEN", value),
+        None => start.env_remove("LONGHOUSE_COORDINATION_TOKEN"),
     };
     if let Some(name) = &args.name {
         start.args(["--display-name", name]);
@@ -2618,7 +2525,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
                 longhouse_home()
                     .map(|home| home.join("agent"))
                     .unwrap_or_else(|_| PathBuf::from(".")),
-                Some(late_coordination_token.recovery_hook("OpenCode", deferred_notices.clone())),
+                None,
             ),
         ),
     };
@@ -3355,7 +3262,6 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     if response.is_some() && run_id.trim().is_empty() {
         anyhow::bail!("Longhouse server did not return the managed run identity");
     }
-    let late_coordination_token = LateCoordinationToken::new()?;
     let degraded_registration = match response {
         Some(_) => None,
         None => Some(
@@ -3369,7 +3275,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
                 longhouse_home()
                     .map(|home| home.join("agent"))
                     .unwrap_or_else(|_| PathBuf::from(".")),
-                Some(late_coordination_token.recovery_hook("Codex", deferred_notices.clone())),
+                None,
             ),
         ),
     };
@@ -3413,13 +3319,8 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     // Never let an inherited token stand in for authority this launch does not
     // hold: the bridge treats an absent variable as "no coordination".
     match coordination_token.as_deref() {
-        Some(value) => bridge
-            .env("LONGHOUSE_COORDINATION_TOKEN", value)
-            .env_remove("LONGHOUSE_COORDINATION_TOKEN_FILE"),
-        None => bridge.env_remove("LONGHOUSE_COORDINATION_TOKEN").env(
-            "LONGHOUSE_COORDINATION_TOKEN_FILE",
-            late_coordination_token.path(),
-        ),
+        Some(value) => bridge.env("LONGHOUSE_COORDINATION_TOKEN", value),
+        None => bridge.env_remove("LONGHOUSE_COORDINATION_TOKEN"),
     };
     if !attach {
         bridge.arg("--create-initial-thread");
@@ -6637,12 +6538,9 @@ mod tests {
                 ("LONGHOUSE_ENGINE_BIN", Some(engine.display().to_string())),
             ],
             || {
-                let late = LateCoordinationToken::new().unwrap();
-                let token_path = late.path().to_path_buf();
                 let config = write_claude_mcp_config(
                     "11111111-1111-4111-8111-111111111111",
                     Some("session-secret"),
-                    &token_path,
                 )
                 .unwrap();
                 let path = config.path.clone();
@@ -6661,10 +6559,6 @@ mod tests {
                     coordination["LONGHOUSE_COORDINATION_TOKEN"],
                     "session-secret"
                 );
-                assert_eq!(
-                    coordination["LONGHOUSE_COORDINATION_TOKEN_FILE"],
-                    token_path.display().to_string()
-                );
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
@@ -6677,50 +6571,6 @@ mod tests {
                 assert!(!path.exists());
             },
         );
-    }
-
-    /// Recovery hands over the token; teardown removes it and a recovery that
-    /// lands afterwards cannot recreate it; a write failure or a recovery
-    /// without authority leaves a notice instead of silent pending tools.
-    #[test]
-    fn late_coordination_token_is_written_once_and_never_after_teardown() {
-        let temp = tempfile::tempdir().unwrap();
-        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
-            let response = |token: Option<&str>| ManagedLaunchResponse {
-                session_id: "11111111-1111-4111-8111-111111111111".to_string(),
-                run_id: "22222222-2222-4222-8222-222222222222".to_string(),
-                provider_session_id: None,
-                permission_mode: None,
-                hook_token: None,
-                managed_transport: None,
-                coordination_token: token.map(str::to_owned),
-            };
-            let notices = DeferredNotices::default();
-            let late = LateCoordinationToken::new().unwrap();
-            let path = late.path().to_path_buf();
-            let hook = late.recovery_hook("Claude", notices.clone());
-
-            hook(&response(None));
-            assert!(!path.exists());
-            assert!(notices.drain()[0].contains("without coordination authority"));
-
-            hook(&response(Some("late-secret")));
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), "late-secret");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                assert_eq!(
-                    std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                    0o600
-                );
-            }
-
-            drop(late);
-            assert!(!path.exists());
-            hook(&response(Some("late-secret")));
-            assert!(!path.exists());
-            assert!(notices.drain().is_empty());
-        });
     }
 
     /// The mod Claude loads is written once per content, so a running session's
@@ -6768,18 +6618,14 @@ mod tests {
                 ("LONGHOUSE_ENGINE_BIN", Some(engine.display().to_string())),
             ],
             || {
-                let late = LateCoordinationToken::new().unwrap();
-                let token_path = late.path().to_path_buf();
                 let registered = write_claude_mcp_config(
                     "11111111-1111-4111-8111-111111111111",
                     Some("session-secret"),
-                    &token_path,
                 )
                 .unwrap();
                 let pending = write_claude_mcp_config(
                     "11111111-1111-4111-8111-111111111111",
                     None,
-                    &token_path,
                 )
                 .unwrap();
                 let read = |path: &Path| -> serde_json::Value {
@@ -6798,10 +6644,6 @@ mod tests {
                 let env = &pending["mcpServers"]["longhouse-coordination"]["env"];
                 assert_eq!(env["LONGHOUSE_MCP_ROLE"], "coordination");
                 assert!(env["LONGHOUSE_COORDINATION_TOKEN"].is_null());
-                assert_eq!(
-                    env["LONGHOUSE_COORDINATION_TOKEN_FILE"],
-                    token_path.display().to_string()
-                );
             },
         );
     }

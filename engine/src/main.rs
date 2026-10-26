@@ -2243,8 +2243,6 @@ fn main() -> anyhow::Result<()> {
                     resume_provider_session_id,
                     coordination_token: std::env::var("LONGHOUSE_COORDINATION_TOKEN")
                         .unwrap_or_default(),
-                    coordination_token_file: std::env::var_os("LONGHOUSE_COORDINATION_TOKEN_FILE")
-                        .map(PathBuf::from),
                     model,
                 })?;
                 println!("{}", serde_json::to_string(&result)?);

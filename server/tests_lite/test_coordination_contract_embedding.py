@@ -8,10 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PINNED_READERS = (
-    ROOT / "server" / "zerg" / "mcp_server" / "server.py",
-    ROOT / "server" / "zerg" / "services" / "shipper" / "hooks.py",
-)
+PINNED_READERS = (ROOT / "server" / "zerg" / "services" / "shipper" / "hooks.py",)
 
 
 def test_pinned_contract_readers_read_no_file_at_import() -> None:
@@ -24,7 +21,6 @@ def test_pinned_contract_readers_read_no_file_at_import() -> None:
 def test_the_inline_copies_match_the_schema() -> None:
     import importlib.util
 
-    from zerg.mcp_server import server
     from zerg.services.shipper import hooks
 
     spec = importlib.util.spec_from_file_location(
@@ -33,5 +29,4 @@ def test_the_inline_copies_match_the_schema() -> None:
     generator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(generator)
     contract = generator.load_contract()
-    assert server._COORDINATION_CONTRACT == {"instructions": contract["instructions"], "tools": contract["tools"]}
     assert hooks.COORDINATION_BOOTSTRAP == contract["session_start"]

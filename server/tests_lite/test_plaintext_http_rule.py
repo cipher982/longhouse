@@ -317,16 +317,8 @@ def test_the_cli_commands_that_send_a_token_apply_the_rule(monkeypatch, tmp_path
     _expect_refusal(lambda: enforce_plaintext_rule("http://192.168.1.99:8080", tmp_path), capsys, "Refusing plaintext")
 
 
-def test_mcp_server_and_recall_refuse_a_cleartext_address_before_sending_the_token(monkeypatch, tmp_path: Path, capsys):
-    from zerg.cli import mcp_serve
-
+def test_recall_refuses_a_cleartext_address_before_sending_the_token(monkeypatch, tmp_path: Path, capsys):
     monkeypatch.delenv(OPT_IN_ENV, raising=False)
-    monkeypatch.setattr(mcp_serve, "load_token", lambda *args, **kwargs: "device-token")
-
-    _expect_refusal(
-        lambda: mcp_serve.mcp_server(url="http://demo.longhouse.ai", token=None, transport="stdio", port=8001), capsys, "Refusing plaintext"
-    )
-
     monkeypatch.setattr(connect, "load_token", lambda config_dir=None: "device-token")
     monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: "http://192.168.1.20:8080")
     sent = []

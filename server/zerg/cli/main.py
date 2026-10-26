@@ -20,7 +20,6 @@ from zerg.cli.coordination import peers
 from zerg.cli.coordination import reply
 from zerg.cli.coordination import send
 from zerg.cli.coordination import tail
-from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
 from zerg.cli.provider import app as provider_app
 from zerg.cli.render_counts import repair_render_counts
@@ -889,8 +888,6 @@ def rebuild_session(
 
 for command in (onboard,):
     app.command()(command)
-
-app.command(hidden=True)(mcp_server)
 
 
 def main():

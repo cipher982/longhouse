@@ -32,7 +32,6 @@
         "codex_app_server"
       ],
       "adapter_sources": [
-        "server/zerg/mcp_server/server.py",
         "server/zerg/services/shipper/hooks.py",
         "engine/src/claude_channel_server.rs",
         "engine/src/codex_bridge.rs",
@@ -1876,7 +1875,6 @@
       "control_plane": "opencode_server_bridge",
       "control_plane_aliases": [],
       "adapter_sources": [
-        "server/zerg/mcp_server/server.py",
         "engine/src/opencode_control.rs",
         "engine/src/opencode_run.rs",
         "engine/src/console_sink.rs",

@@ -67,7 +67,6 @@ server/zerg/qa/provider_adapters/omp.py -> server/zerg/services/provider_interac
 server/zerg/qa/provider_capability_proof_publish.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/provider_capability_proof_publish.py -> server/zerg/services/provider_capability_proof_store.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/provider_console_lifecycle.py -> server/zerg/services/provider_interaction_semantics.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
-server/zerg/qa/provider_coordination_scenarios.py -> server/zerg/mcp_server/server.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
 server/zerg/qa/provider_coordination_scenarios.py -> server/zerg/provider_cli_contract.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/provider_coordination_scenarios.py -> server/zerg/services/longhouse_paths.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
 server/zerg/qa/provider_coordination_scenarios.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
