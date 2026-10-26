@@ -6623,11 +6623,8 @@ mod tests {
                     Some("session-secret"),
                 )
                 .unwrap();
-                let pending = write_claude_mcp_config(
-                    "11111111-1111-4111-8111-111111111111",
-                    None,
-                )
-                .unwrap();
+                let pending =
+                    write_claude_mcp_config("11111111-1111-4111-8111-111111111111", None).unwrap();
                 let read = |path: &Path| -> serde_json::Value {
                     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
                 };

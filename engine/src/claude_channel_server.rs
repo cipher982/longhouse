@@ -512,16 +512,14 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         Ok(client) => client,
         Err(error) => return tool_result(id, json!({"error": error.to_string()})),
     };
-    let mut request_token = state.cached_coordination_token().or_else(coordination_token);
+    let mut request_token = state
+        .cached_coordination_token()
+        .or_else(coordination_token);
     if request_token.is_none() {
         if let Some(current) = session_id.as_deref() {
-            if let Some(minted) = mint_session_coordination_token(
-                &client,
-                base,
-                config.api_token.as_deref(),
-                current,
-            )
-            .await
+            if let Some(minted) =
+                mint_session_coordination_token(&client, base, config.api_token.as_deref(), current)
+                    .await
             {
                 state.set_cached_coordination_token(Some(minted.clone()));
                 request_token = Some(minted);
@@ -2352,7 +2350,9 @@ mod tests {
             let n1 = stream1.read(&mut buf1).unwrap();
             let req1 = String::from_utf8_lossy(&buf1[..n1]);
             assert!(req1.contains("POST /api/agents/directed-inputs/42/reply"));
-            assert!(req1.to_ascii_lowercase().contains("x-agents-token: expired-token"));
+            assert!(req1
+                .to_ascii_lowercase()
+                .contains("x-agents-token: expired-token"));
             stream1
                 .write_all(
                     b"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 53\r\n\r\n{\"detail\":\"Invalid or expired managed-session token\"}",
@@ -2364,8 +2364,12 @@ mod tests {
             let mut buf2 = [0u8; 2048];
             let n2 = stream2.read(&mut buf2).unwrap();
             let req2 = String::from_utf8_lossy(&buf2[..n2]);
-            assert!(req2.contains(&format!("POST /api/agents/sessions/{SESSION_ID}/coordination-token")));
-            assert!(req2.to_ascii_lowercase().contains("x-agents-token: zdt_test_device"));
+            assert!(req2.contains(&format!(
+                "POST /api/agents/sessions/{SESSION_ID}/coordination-token"
+            )));
+            assert!(req2
+                .to_ascii_lowercase()
+                .contains("x-agents-token: zdt_test_device"));
             stream2
                 .write_all(
                     b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 36\r\n\r\n{\"coordination_token\":\"fresh-token\"}",
@@ -2378,7 +2382,9 @@ mod tests {
             let n3 = stream3.read(&mut buf3).unwrap();
             let req3 = String::from_utf8_lossy(&buf3[..n3]);
             assert!(req3.contains("POST /api/agents/directed-inputs/42/reply"));
-            assert!(req3.to_ascii_lowercase().contains("x-agents-token: fresh-token"));
+            assert!(req3
+                .to_ascii_lowercase()
+                .contains("x-agents-token: fresh-token"));
             stream3
                 .write_all(
                     b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 25\r\n\r\n{\"id\":43,\"reply_to_id\":42}",
@@ -2399,7 +2405,10 @@ mod tests {
             [
                 ("LONGHOUSE_HOME", Some(temp.path().display().to_string())),
                 (MCP_ROLE_ENV, Some(MCP_ROLE_COORDINATION.to_string())),
-                ("LONGHOUSE_COORDINATION_TOKEN", Some("expired-token".to_string())),
+                (
+                    "LONGHOUSE_COORDINATION_TOKEN",
+                    Some("expired-token".to_string()),
+                ),
                 ("LONGHOUSE_COORDINATION_TOKEN_FILE", None::<String>),
             ],
             || {
@@ -2415,7 +2424,10 @@ mod tests {
                     .unwrap();
                 let text = result["result"]["content"][0]["text"].as_str().unwrap();
                 assert!(text.contains("\"reply_to_id\":42"), "got: {text}");
-                assert_eq!(state.cached_coordination_token().as_deref(), Some("fresh-token"));
+                assert_eq!(
+                    state.cached_coordination_token().as_deref(),
+                    Some("fresh-token")
+                );
             },
         );
         server.join().unwrap();

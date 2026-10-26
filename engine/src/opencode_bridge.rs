@@ -124,12 +124,8 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     // This process is the paired engine binary, so the registered command is
     // absolute and remains valid even when the facade is not on PATH.
     let model = configured_model(config.model.as_deref());
-    let mcp_config = opencode_mcp_config(
-        &engine,
-        &session_id,
-        coordination_token,
-        model.as_deref(),
-    );
+    let mcp_config =
+        opencode_mcp_config(&engine, &session_id, coordination_token, model.as_deref());
     // OpenCode 1.18.x treats `--port 0` as the default server port (4096)
     // instead of asking the OS for an ephemeral port. A Resume can therefore
     // reconnect to a dead/stale server or collide with another factory case.
