@@ -4429,13 +4429,15 @@ def _canonical_uuid(value: object, field: str) -> uuid.UUID:
 
 
 def _canonical_storage_text(value: object, *, field: str, maximum_bytes: int) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{field} must be a non-empty string")
-    if unicodedata.normalize("NFC", value) != value:
+    """Identity text is hashed and compared byte for byte, so it must be NFC.
+
+    Text a provider reports (paths, branch names, transcript previews) carries
+    no normalization contract and goes through `_bounded_text` instead.
+    """
+    text = _bounded_text(value, field, maximum_bytes)
+    if unicodedata.normalize("NFC", text) != text:
         raise ValueError(f"{field} must already be NFC-normalized")
-    if len(value.encode("utf-8")) > maximum_bytes:
-        raise ValueError(f"{field} exceeds {maximum_bytes} UTF-8 bytes")
-    return value
+    return text
 
 
 def _validate_storage_identity_fields(params: dict) -> None:
@@ -4788,6 +4790,11 @@ def _validate_storage_session_facts(value: object) -> dict:
         ("cwd", 4_096),
         ("git_repo", 500),
         ("git_branch", 255),
+    ):
+        raw = result[field]
+        if raw is not None:
+            result[field] = _bounded_text(raw, field, maximum)
+    for field, maximum in (
         ("origin_kind", 64),
         ("launch_actor", 32),
         ("launch_surface", 32),
@@ -4869,17 +4876,15 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
         raise ValueError("render_manifest.abandoned_events exceeds its bound")
     if type(result["semantic_projection_version"]) is not int or not 0 <= result["semantic_projection_version"] <= 1:
         raise ValueError("render_manifest.semantic_projection_version is invalid")
-    for field, maximum in (
-        ("first_order_key", 4_096),
-        ("last_order_key", 4_096),
-        ("first_user_message_preview", 2_000),
-        ("last_visible_text_preview", 2_000),
-    ):
+    for field in ("first_order_key", "last_order_key"):
         raw = result[field]
         if raw is not None:
-            result[field] = _canonical_storage_text(raw, field=f"render_manifest.{field}", maximum_bytes=maximum)
-            if field in {"first_order_key", "last_order_key"}:
-                _validate_render_order_key(result[field], field)
+            result[field] = _canonical_storage_text(raw, field=f"render_manifest.{field}", maximum_bytes=4_096)
+            _validate_render_order_key(result[field], field)
+    for field in ("first_user_message_preview", "last_visible_text_preview"):
+        raw = result[field]
+        if raw is not None:
+            result[field] = _bounded_text(raw, f"render_manifest.{field}", 2_000)
     if result["event_count"] == 0 and (result["first_order_key"] is not None or result["last_order_key"] is not None):
         raise ValueError("empty render object cannot have order keys")
     if result["event_count"] > 0 and (result["first_order_key"] is None or result["last_order_key"] is None):

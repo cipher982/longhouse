@@ -150,12 +150,12 @@ pub(crate) async fn ship_prepared_envelope(
                     &conflict.response_body,
                 );
             }
-            // A structurally invalid envelope is terminal. The stored request
-            // body is what gets retried, byte for byte, so re-sending it cannot
-            // change the verdict — it just retries until someone reads the log.
-            // Quarantining makes it visible in health and clearable through
-            // `longhouse shipping discard`, after which the source re-prepares
-            // from current code.
+            // The host called the envelope invalid. Blocking stops the hot
+            // retry loop and makes the verdict visible in health; reconcile
+            // still re-POSTs the stored body on a slow backoff, because the
+            // verdict can be the host's bug and a host fix clears it.
+            // `longhouse shipping discard` re-prepares from current code when
+            // the envelope itself is at fault.
             if let Some(rejected) =
                 error.downcast_ref::<crate::shipping::client::StorageV2EnvelopeRejected>()
             {
@@ -164,8 +164,9 @@ pub(crate) async fn ship_prepared_envelope(
                     prepared.source_epoch,
                     "envelope_rejected",
                     &format!(
-                        "Runtime Host rejected the envelope as invalid ({}: {}). Retrying the \
-                         stored body cannot change this. Details: {}",
+                        "Runtime Host rejected the envelope as invalid ({}: {}). The stored \
+                         body is retried on a slow backoff, so a host-side fix clears this by \
+                         itself. Details: {}",
                         rejected.code, rejected.message, rejected.response_body
                     ),
                 );

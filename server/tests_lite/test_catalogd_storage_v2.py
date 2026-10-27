@@ -944,6 +944,45 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
 
 
 @pytest.mark.asyncio
+async def test_provider_text_without_nfc_commits_verbatim(daemon_paths):
+    # U+0387 is its own NFC singleton (it normalizes to U+00B7); a lossy decode
+    # of binary tool output produced it in a real preview, and an NFD path
+    # component is ordinary on macOS. Neither is identity, so neither may
+    # block the envelope or be rewritten.
+    preview = "decoded: ·�"
+    cwd = "/Users/me/Café"
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = _catalog_client(socket_path)
+    try:
+        raw = _raw_params(
+            epoch=UUID("018f0c3a-7b2d-7f10-8a11-123456789abc"),
+            session_id=session_id,
+            start=0,
+            end=6,
+            records=(b"hello\n",),
+            sealed_at=now,
+        )
+        raw["session_facts"]["cwd"] = cwd
+        raw.update(
+            render_state="ready",
+            render_manifest={**_render_manifest(uuid4()), "last_visible_text_preview": preview},
+            projectors=["search-v2"],
+        )
+        committed = await client.call("storage.raw_object.commit.v2", raw)
+        assert committed["receipt"]["render_state"] == "ready"
+        session = (await client.call("storage.session.read.v2", {"session_id": str(session_id)}))["session"]
+        assert session["last_visible_text_preview"] == preview
+        assert session["cwd"] == cwd
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("semantic_version", [0, 1])
 async def test_render_abandoned_counts_cover_generation_and_repair_unknown_history(daemon_paths, semantic_version):
     database_path, socket_path = daemon_paths

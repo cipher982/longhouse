@@ -253,14 +253,24 @@ async def _admit_historical_storage(*, admitted_bytes: int, path: str, lane: str
         _raise_historical_storage_backpressure(decision, path=path, lane=lane)
 
 
-def _canonical_text(value: object, field: str, maximum_bytes: int) -> str:
+def _bounded_text(value: object, field: str, maximum_bytes: int) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field} must be a non-empty string")
-    if unicodedata.normalize("NFC", value) != value:
-        raise ValueError(f"{field} must already be NFC-normalized")
     if len(value.encode("utf-8")) > maximum_bytes:
         raise ValueError(f"{field} exceeds {maximum_bytes} UTF-8 bytes")
     return value
+
+
+def _canonical_text(value: object, field: str, maximum_bytes: int) -> str:
+    """Identity text is hashed and compared byte for byte, so it must be NFC.
+
+    Text a provider reports (paths, branch names, transcript content) carries
+    no normalization contract and goes through `_bounded_text` instead.
+    """
+    text = _bounded_text(value, field, maximum_bytes)
+    if unicodedata.normalize("NFC", text) != text:
+        raise ValueError(f"{field} must already be NFC-normalized")
+    return text
 
 
 def _canonical_uuid(value: object, field: str) -> UUID:
@@ -321,6 +331,11 @@ def _parse_session_facts(value: object) -> dict[str, object]:
         ("cwd", 4_096),
         ("git_repo", 500),
         ("git_branch", 255),
+    ):
+        raw = result[field]
+        if raw is not None:
+            result[field] = _bounded_text(raw, f"session.{field}", maximum)
+    for field, maximum in (
         ("origin_kind", 64),
         ("launch_actor", 32),
         ("launch_surface", 32),

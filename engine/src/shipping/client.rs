@@ -1114,7 +1114,8 @@ impl ShipperClient {
     }
 }
 
-/// Classify a structurally invalid envelope, which no retry can fix.
+/// Classify an envelope the host refused as invalid. The refusal is the host's
+/// verdict at one moment, not proof the envelope is wrong; see `reconcile`.
 fn parse_storage_v2_envelope_rejected(
     status: u16,
     body: &str,

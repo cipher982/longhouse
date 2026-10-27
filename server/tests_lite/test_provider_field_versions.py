@@ -88,6 +88,15 @@ def test_envelope_provider_version_is_kept_only_when_usable(raw, expected):
     assert parsed["provider_version"] == expected
 
 
+def test_reported_paths_keep_their_normalization_but_identity_must_be_nfc():
+    parsed = _parse_session_facts(_session_facts(cwd="/Users/me/Café", git_branch="café"))
+
+    assert parsed["cwd"] == "/Users/me/Café"
+    assert parsed["git_branch"] == "café"
+    with pytest.raises(ValueError, match="NFC"):
+        _parse_session_facts(_session_facts(provider_session_id="café"))
+
+
 def test_unusable_provider_version_never_rejects_the_envelope():
     parsed = _parse_session_facts(_session_facts(provider_version={"nested": True}))
 
