@@ -12,7 +12,6 @@ import re
 import stat
 import threading
 import time
-import unicodedata
 import uuid
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -38,6 +37,9 @@ from zerg.catalogd.schema import read_catalog_meta
 from zerg.catalogd.schema import read_deployment_activation
 from zerg.catalogd.store import CatalogStore
 from zerg.catalogd.store import adopt_orphan_subagents_once
+from zerg.storage_v2.fields import bounded_text
+from zerg.storage_v2.fields import canonical_text
+from zerg.storage_v2.fields import parse_session_facts
 
 logger = logging.getLogger(__name__)
 
@@ -1736,8 +1738,8 @@ class CatalogDaemon:
         if idle_seconds is not None and (type(idle_seconds) is not int or not 0 <= idle_seconds <= 86_400):
             return self._error(request, "invalid_request", "idle_seconds is invalid")
         try:
-            params["device_id"] = _bounded_text(params["device_id"], "device_id", 255)
-            params["source"] = _bounded_text(params["source"], "source", 64)
+            params["device_id"] = bounded_text(params["device_id"], "device_id", 255)
+            params["source"] = bounded_text(params["source"], "source", 64)
             params["measured_at"] = _parse_datetime(params["measured_at"], "measured_at")
             params["received_at"] = _parse_datetime(params["received_at"], "received_at")
         except ValueError as exc:
@@ -1757,9 +1759,9 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "APNs platform or environment is invalid")
         try:
             params["registration_id"] = str(_canonical_uuid(params["registration_id"], "registration_id"))
-            params["device_token"] = _bounded_text(params["device_token"], "device_token", 255)
+            params["device_token"] = bounded_text(params["device_token"], "device_token", 255)
             if params["app_build_id"] is not None:
-                params["app_build_id"] = _bounded_text(params["app_build_id"], "app_build_id", 255)
+                params["app_build_id"] = bounded_text(params["app_build_id"], "app_build_id", 255)
             params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
@@ -1776,10 +1778,10 @@ class CatalogDaemon:
         try:
             params["registration_id"] = str(_canonical_uuid(params["registration_id"], "registration_id"))
             params["session_id"] = str(_canonical_uuid(params["session_id"], "session_id"))
-            params["activity_id"] = _bounded_text(params["activity_id"], "activity_id", 255)
-            params["push_token"] = _bounded_text(params["push_token"], "push_token", 255)
+            params["activity_id"] = bounded_text(params["activity_id"], "activity_id", 255)
+            params["push_token"] = bounded_text(params["push_token"], "push_token", 255)
             if params["app_build_id"] is not None:
-                params["app_build_id"] = _bounded_text(params["app_build_id"], "app_build_id", 255)
+                params["app_build_id"] = bounded_text(params["app_build_id"], "app_build_id", 255)
             params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
@@ -1792,7 +1794,7 @@ class CatalogDaemon:
         if type(owner_id) is not int or owner_id <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
         try:
-            activity_id = _bounded_text(request.params["activity_id"], "activity_id", 255)
+            activity_id = bounded_text(request.params["activity_id"], "activity_id", 255)
             ended_at = _parse_datetime(request.params["ended_at"], "ended_at")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
@@ -1814,8 +1816,8 @@ class CatalogDaemon:
         try:
             params["source_session_id"] = str(_canonical_uuid(params["source_session_id"], "source_session_id"))
             params["target_session_id"] = str(_canonical_uuid(params["target_session_id"], "target_session_id"))
-            params["text"] = _bounded_text(params["text"], "text", 4_000)
-            params["client_request_id"] = _bounded_text(params["client_request_id"], "client_request_id", 64)
+            params["text"] = bounded_text(params["text"], "text", 4_000)
+            params["client_request_id"] = bounded_text(params["client_request_id"], "client_request_id", 64)
             params["created_at"] = _parse_datetime(params["created_at"], "created_at")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
@@ -3215,7 +3217,7 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "title completion has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
-            title = _bounded_text(request.params["title"], "title", 255)
+            title = bounded_text(request.params["title"], "title", 255)
             completed_at = _parse_datetime(request.params["completed_at"], "completed_at")
             source = request.params.get("source", "ai")
             if source not in {"ai", "provider"}:
@@ -3232,7 +3234,7 @@ class CatalogDaemon:
     async def _fail_storage_title(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
-            reason = _bounded_text(request.params["reason"], "reason", 128)
+            reason = bounded_text(request.params["reason"], "reason", 128)
             failed_at = _parse_datetime(request.params["failed_at"], "failed_at")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
@@ -3243,10 +3245,10 @@ class CatalogDaemon:
 
     def _storage_title_dependency_identity(self, params: dict) -> dict:
         return {
-            "provider": _bounded_text(params["provider"], "provider", 64),
-            "model": _bounded_text(params["model"], "model", 255),
-            "credential_binding": _bounded_text(params["credential_binding"], "credential_binding", 128),
-            "credential_generation": _bounded_text(params["credential_generation"], "credential_generation", 64),
+            "provider": bounded_text(params["provider"], "provider", 64),
+            "model": bounded_text(params["model"], "model", 255),
+            "credential_binding": bounded_text(params["credential_binding"], "credential_binding", 128),
+            "credential_generation": bounded_text(params["credential_generation"], "credential_generation", 64),
         }
 
     async def _reconcile_storage_title_dependency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -3284,11 +3286,11 @@ class CatalogDaemon:
             params = self._storage_title_dependency_identity(request.params)
             params["session_id"] = _canonical_uuid(request.params["session_id"], "session_id")
             params["probe_token"] = _canonical_uuid(request.params["probe_token"], "probe_token")
-            failure_class = _bounded_text(request.params["failure_class"], "failure_class", 64)
+            failure_class = bounded_text(request.params["failure_class"], "failure_class", 64)
             if failure_class not in {"authentication", "availability"}:
                 raise ValueError("failure_class must be authentication or availability")
             params["failure_class"] = failure_class
-            params["reason"] = _bounded_text(request.params["reason"], "reason", 255)
+            params["reason"] = bounded_text(request.params["reason"], "reason", 255)
             params["failed_at"] = _parse_datetime(request.params["failed_at"], "failed_at")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
@@ -3334,7 +3336,7 @@ class CatalogDaemon:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
             deletion_id = _canonical_uuid(request.params["deletion_id"], "deletion_id")
             reason_value = request.params["reason"]
-            reason = _bounded_text(reason_value, "reason", 64) if reason_value is not None else None
+            reason = bounded_text(reason_value, "reason", 64) if reason_value is not None else None
             deleted_at = _parse_datetime(request.params["deleted_at"], "deleted_at")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
@@ -3705,7 +3707,7 @@ class CatalogDaemon:
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
             generation_id = _canonical_uuid(request.params["generation_id"], "generation_id")
-            owner_id = _bounded_text(request.params["owner_id"], "owner_id", 64)
+            owner_id = bounded_text(request.params["owner_id"], "owner_id", 64)
             raw_objects = request.params["objects"]
             if not isinstance(raw_objects, list) or not 0 <= len(raw_objects) <= 1_000:
                 raise ValueError("objects must contain 0 through 1000 rows")
@@ -3737,7 +3739,7 @@ class CatalogDaemon:
                 for field in item.keys() & {"first_user_message_preview", "last_visible_text_preview"}:
                     value = item[field]
                     if value is not None:
-                        item[field] = _bounded_text(value, f"semantic repair {field}", 2_000)
+                        item[field] = bounded_text(value, f"semantic repair {field}", 2_000)
                 objects.append(dict(item))
             if len({str(item["object_id"]) for item in objects}) != len(objects):
                 raise ValueError("semantic repair objects must be unique")
@@ -3793,7 +3795,7 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "media_hash must be lowercase SHA-256 hex")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id") if request.params["session_id"] is not None else None
-            owner_id = _bounded_text(request.params["owner_id"], "owner_id", 64)
+            owner_id = bounded_text(request.params["owner_id"], "owner_id", 64)
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         limit = request.params["limit"]
@@ -3812,7 +3814,7 @@ class CatalogDaemon:
     async def _media_objects_exist_batch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         try:
             media_hashes = _validate_hash_batch(request.params["media_hashes"], field="media_hashes")
-            owner_id = _bounded_text(request.params["owner_id"], "owner_id", 64)
+            owner_id = bounded_text(request.params["owner_id"], "owner_id", 64)
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
@@ -3856,7 +3858,7 @@ class CatalogDaemon:
         params = dict(request.params)
         try:
             params["projector"] = _projector_name(params["projector"])
-            params["worker_id"] = _bounded_text(params["worker_id"], "worker_id", 255)
+            params["worker_id"] = bounded_text(params["worker_id"], "worker_id", 255)
             params["claim_token"] = str(_canonical_uuid(params["claim_token"], "claim_token"))
             params["now"] = _parse_datetime(params["now"], "now")
         except ValueError as exc:
@@ -3889,9 +3891,9 @@ class CatalogDaemon:
         try:
             params = _validate_projector_identity(request.params)
             params["claim_token"] = str(_canonical_uuid(request.params["claim_token"], "claim_token"))
-            params["error_code"] = _bounded_text(request.params["error_code"], "error_code", 64)
+            params["error_code"] = bounded_text(request.params["error_code"], "error_code", 64)
             error_message = request.params["error_message"]
-            params["error_message"] = _bounded_text(error_message, "error_message", 2_048) if error_message is not None else None
+            params["error_message"] = bounded_text(error_message, "error_message", 2_048) if error_message is not None else None
             params["failed_at"] = _parse_datetime(request.params["failed_at"], "failed_at")
             params["retry_at"] = _parse_datetime(request.params["retry_at"], "retry_at")
         except ValueError as exc:
@@ -3962,7 +3964,7 @@ class CatalogDaemon:
         try:
             projector = _projector_name(request.params["projector"])
             store_id = _canonical_uuid(request.params["store_id"], "store_id")
-            schema_generation = _bounded_text(
+            schema_generation = bounded_text(
                 request.params["schema_generation"],
                 "schema_generation",
                 128,
@@ -4428,22 +4430,10 @@ def _canonical_uuid(value: object, field: str) -> uuid.UUID:
     return parsed
 
 
-def _canonical_storage_text(value: object, *, field: str, maximum_bytes: int) -> str:
-    """Identity text is hashed and compared byte for byte, so it must be NFC.
-
-    Text a provider reports (paths, branch names, transcript previews) carries
-    no normalization contract and goes through `_bounded_text` instead.
-    """
-    text = _bounded_text(value, field, maximum_bytes)
-    if unicodedata.normalize("NFC", text) != text:
-        raise ValueError(f"{field} must already be NFC-normalized")
-    return text
-
-
 def _validate_storage_identity_fields(params: dict) -> None:
-    params["tenant_id"] = _canonical_storage_text(params["tenant_id"], field="tenant_id", maximum_bytes=255)
-    params["machine_id"] = _canonical_storage_text(params["machine_id"], field="machine_id", maximum_bytes=255)
-    params["opaque_source_id"] = _canonical_storage_text(params["opaque_source_id"], field="opaque_source_id", maximum_bytes=4_096)
+    params["tenant_id"] = canonical_text(params["tenant_id"], field="tenant_id", maximum_bytes=255)
+    params["machine_id"] = canonical_text(params["machine_id"], field="machine_id", maximum_bytes=255)
+    params["opaque_source_id"] = canonical_text(params["opaque_source_id"], field="opaque_source_id", maximum_bytes=4_096)
     provider = params["provider"]
     if not isinstance(provider, str) or _STORAGE_PROVIDER_RE.fullmatch(provider) is None:
         raise ValueError("provider must be canonical lowercase ASCII")
@@ -4482,7 +4472,7 @@ def _validate_delegation_metadata(value: object) -> dict[str, object]:
 
 
 def _validate_native_id(value: object, field: str) -> str:
-    return _canonical_storage_text(value, field=field, maximum_bytes=255)
+    return canonical_text(value, field=field, maximum_bytes=255)
 
 
 def _validate_delegation_payload(kind: str, payload: object) -> dict[str, object]:
@@ -4520,7 +4510,7 @@ def _validate_delegation_payload(kind: str, payload: object) -> dict[str, object
                 "metadata": _validate_delegation_metadata(child["metadata"]),
             }
             if "parent_tool_call_id" in child:
-                parsed_child["parent_tool_call_id"] = _canonical_storage_text(
+                parsed_child["parent_tool_call_id"] = canonical_text(
                     child["parent_tool_call_id"],
                     field="parent_tool_call_id",
                     maximum_bytes=255,
@@ -4535,11 +4525,11 @@ def _validate_delegation_payload(kind: str, payload: object) -> dict[str, object
             raise ValueError("delegation.activity payload is missing fields")
         parsed = {
             "provider_session_id": _validate_native_id(payload["provider_session_id"], "provider_session_id"),
-            "kind": _canonical_storage_text(payload["kind"], field="kind", maximum_bytes=255),
+            "kind": canonical_text(payload["kind"], field="kind", maximum_bytes=255),
             "metadata": _validate_delegation_metadata(payload["metadata"]),
         }
         if "event_id" in payload:
-            parsed["event_id"] = _canonical_storage_text(payload["event_id"], field="event_id", maximum_bytes=255)
+            parsed["event_id"] = canonical_text(payload["event_id"], field="event_id", maximum_bytes=255)
         if "occurred_at_ms" in payload:
             occurred_at_ms = payload["occurred_at_ms"]
             if type(occurred_at_ms) is not int or not -(1 << 63) <= occurred_at_ms < 1 << 63:
@@ -4666,7 +4656,7 @@ def _validate_raw_object_commit(params: dict) -> None:
             raise ValueError(f"{field} must be lowercase SHA-256 hex")
     if params["object_hash"] != params["compressed_hash"]:
         raise ValueError("object_hash must equal the compressed-file hash")
-    path = _canonical_storage_text(params["object_path"], field="object_path", maximum_bytes=2_048)
+    path = canonical_text(params["object_path"], field="object_path", maximum_bytes=2_048)
     path_parts = Path(path).parts
     if Path(path).is_absolute() or ".." in path_parts or path in {".", ""}:
         raise ValueError("object_path must be a safe relative path")
@@ -4700,7 +4690,7 @@ def _validate_raw_object_commit(params: dict) -> None:
         source_position = item["source_position"]
         if type(source_position) is not int or not params["range_start"] <= source_position < params["range_end"]:
             raise ValueError("media ref source_position is outside the envelope")
-        ref_key = _bounded_text(item["ref_key"], "media ref_key", 255)
+        ref_key = bounded_text(item["ref_key"], "media ref_key", 255)
         availability = item["availability"]
         if availability not in {"available", "missing"}:
             raise ValueError("media ref availability must be available or missing")
@@ -4727,8 +4717,12 @@ def _validate_raw_object_commit(params: dict) -> None:
     params["render_manifest"] = _validate_render_manifest(params["render_manifest"], render_state=params["render_state"])
     owner_id = params["owner_id"]
     if owner_id is not None:
-        params["owner_id"] = _canonical_storage_text(owner_id, field="owner_id", maximum_bytes=64)
-    params["session_facts"] = _validate_storage_session_facts(params["session_facts"])
+        params["owner_id"] = canonical_text(owner_id, field="owner_id", maximum_bytes=64)
+    session_facts = parse_session_facts(params["session_facts"])
+    for field in ("started_at", "last_activity_at", "ended_at"):
+        if session_facts[field] is not None:
+            session_facts[field] = datetime.fromisoformat(session_facts[field])
+    params["session_facts"] = session_facts
     params["conversation_resets"] = _validate_conversation_resets(params["conversation_resets"])
     params["sealed_at"] = _parse_datetime(params["sealed_at"], "sealed_at")
 
@@ -4742,78 +4736,12 @@ def _validate_conversation_resets(value: object) -> tuple[dict, ...]:
     for item in value:
         if not isinstance(item, dict) or set(item) != {"previous_provider_session_id", "provider_session_id"}:
             raise ValueError("conversation_resets contains an invalid rotation")
-        new_id = _canonical_storage_text(item["provider_session_id"], field="provider_session_id", maximum_bytes=255)
+        new_id = canonical_text(item["provider_session_id"], field="provider_session_id", maximum_bytes=255)
         previous = item["previous_provider_session_id"]
         if previous is not None:
-            previous = _canonical_storage_text(previous, field="previous_provider_session_id", maximum_bytes=255)
+            previous = canonical_text(previous, field="previous_provider_session_id", maximum_bytes=255)
         resets.append({"previous_provider_session_id": previous, "provider_session_id": new_id})
     return tuple(resets)
-
-
-def _validate_storage_session_facts(value: object) -> dict:
-    expected = {
-        "environment",
-        "project",
-        "cwd",
-        "git_repo",
-        "git_branch",
-        "started_at",
-        "last_activity_at",
-        "ended_at",
-        "origin_kind",
-        "hidden_from_default_timeline",
-        "launch_actor",
-        "launch_surface",
-    }
-    optional = {
-        "provider_session_id",
-        "provider_version",
-        "is_subagent",
-        "parent_provider_session_id",
-        "parent_tool_call_id",
-        "workflow_run_id",
-    }
-    if not isinstance(value, dict) or not expected.issubset(value) or set(value) - expected - optional:
-        raise ValueError("session_facts has invalid fields")
-    result = dict(value)
-    result.setdefault("provider_session_id", None)
-    # The router already reduced this to a short string or None; a value that
-    # reaches the RPC unusable is dropped, never a reason to refuse the envelope.
-    version = result.get("provider_version")
-    result["provider_version"] = version.strip() if isinstance(version, str) and 0 < len(version.strip()) <= 64 else None
-    result.setdefault("is_subagent", False)
-    for lineage_field in ("parent_provider_session_id", "parent_tool_call_id", "workflow_run_id"):
-        result.setdefault(lineage_field, None)
-    result["environment"] = _canonical_storage_text(result["environment"], field="environment", maximum_bytes=32)
-    for field, maximum in (
-        ("project", 255),
-        ("cwd", 4_096),
-        ("git_repo", 500),
-        ("git_branch", 255),
-    ):
-        raw = result[field]
-        if raw is not None:
-            result[field] = _bounded_text(raw, field, maximum)
-    for field, maximum in (
-        ("origin_kind", 64),
-        ("launch_actor", 32),
-        ("launch_surface", 32),
-        ("provider_session_id", 255),
-        ("parent_provider_session_id", 255),
-        ("parent_tool_call_id", 255),
-        ("workflow_run_id", 255),
-    ):
-        raw = result[field]
-        if raw is not None:
-            result[field] = _canonical_storage_text(raw, field=field, maximum_bytes=maximum)
-    for field in ("started_at", "last_activity_at"):
-        result[field] = _parse_datetime(result[field], field)
-    result["ended_at"] = _parse_datetime(result["ended_at"], "ended_at") if result["ended_at"] is not None else None
-    if type(result["hidden_from_default_timeline"]) is not bool:
-        raise ValueError("hidden_from_default_timeline must be a boolean")
-    if type(result["is_subagent"]) is not bool:
-        raise ValueError("is_subagent must be a boolean")
-    return result
 
 
 def _validate_render_manifest(value: object, *, render_state: str) -> dict | None:
@@ -4852,13 +4780,13 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
     result.setdefault("abandoned_events", None)
     result["generation_id"] = _canonical_uuid(result["generation_id"], "generation_id")
     for field in ("parser_revision", "ordering_revision"):
-        result[field] = _canonical_storage_text(result[field], field=field, maximum_bytes=128)
+        result[field] = canonical_text(result[field], field=field, maximum_bytes=128)
     for field in ("object_id", "object_hash", "payload_hash"):
         if not _is_hash(result[field]):
             raise ValueError(f"render_manifest.{field} must be lowercase SHA-256 hex")
     if result["object_id"] != result["object_hash"]:
         raise ValueError("render_manifest object_id must equal object_hash")
-    path = _canonical_storage_text(result["object_path"], field="render object_path", maximum_bytes=2_048)
+    path = canonical_text(result["object_path"], field="render object_path", maximum_bytes=2_048)
     if Path(path).is_absolute() or ".." in Path(path).parts or result["object_hash"] not in path:
         raise ValueError("render object_path must be safe and content-addressed")
     for field, maximum in (
@@ -4879,12 +4807,12 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
     for field in ("first_order_key", "last_order_key"):
         raw = result[field]
         if raw is not None:
-            result[field] = _canonical_storage_text(raw, field=f"render_manifest.{field}", maximum_bytes=4_096)
+            result[field] = canonical_text(raw, field=f"render_manifest.{field}", maximum_bytes=4_096)
             _validate_render_order_key(result[field], field)
     for field in ("first_user_message_preview", "last_visible_text_preview"):
         raw = result[field]
         if raw is not None:
-            result[field] = _bounded_text(raw, f"render_manifest.{field}", 2_000)
+            result[field] = bounded_text(raw, f"render_manifest.{field}", 2_000)
     if result["event_count"] == 0 and (result["first_order_key"] is not None or result["last_order_key"] is not None):
         raise ValueError("empty render object cannot have order keys")
     if result["event_count"] > 0 and (result["first_order_key"] is None or result["last_order_key"] is None):
@@ -4916,14 +4844,6 @@ def _validate_hash_batch(value: object, *, field: str) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _bounded_text(value: object, field: str, maximum_bytes: int) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{field} must be a non-empty string")
-    if len(value.encode("utf-8")) > maximum_bytes:
-        raise ValueError(f"{field} exceeds {maximum_bytes} UTF-8 bytes")
-    return value
-
-
 def _validate_media_commit(params: dict) -> None:
     if not _is_hash(params["media_hash"]):
         raise ValueError("media_hash must be lowercase SHA-256 hex")
@@ -4932,7 +4852,7 @@ def _validate_media_commit(params: dict) -> None:
         raise ValueError("media state must be present, missing, corrupt, or deleted")
     mime_type = params["mime_type"]
     if mime_type is not None:
-        params["mime_type"] = _bounded_text(mime_type, "mime_type", 255)
+        params["mime_type"] = bounded_text(mime_type, "mime_type", 255)
     byte_size = params["byte_size"]
     if byte_size is not None and (type(byte_size) is not int or not 0 <= byte_size <= 64 * 1024 * 1024):
         raise ValueError("byte_size must be null or an integer from 0 through 67108864")
@@ -4948,7 +4868,7 @@ def _validate_media_commit(params: dict) -> None:
             raise ValueError(f"{field} must be null or an integer from 1 through 100000")
     object_path = params["object_path"]
     if object_path is not None:
-        object_path = _canonical_storage_text(object_path, field="object_path", maximum_bytes=2_048)
+        object_path = canonical_text(object_path, field="object_path", maximum_bytes=2_048)
         if Path(object_path).is_absolute() or ".." in Path(object_path).parts or params["media_hash"] not in object_path:
             raise ValueError("object_path must be a safe content-addressed relative path")
         params["object_path"] = object_path
@@ -4970,7 +4890,7 @@ def _validate_media_commit(params: dict) -> None:
         envelope = item["envelope_id"]
         if envelope is not None and not _is_hash(envelope):
             raise ValueError("session ref envelope_id must be lowercase SHA-256 hex or null")
-        ref_key = _bounded_text(item["ref_key"], "session ref ref_key", 255)
+        ref_key = bounded_text(item["ref_key"], "session ref ref_key", 255)
         key = (str(session_id), envelope, ref_key)
         if key in keys:
             raise ValueError("session_refs must not contain duplicates")

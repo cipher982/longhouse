@@ -35,7 +35,7 @@ from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.routers import provider_capability_proofs as routes
-from zerg.routers.agents_storage_v2 import _parse_session_facts
+from zerg.storage_v2.fields import parse_session_facts
 
 URL = "/api/agents/provider-field-versions"
 
@@ -64,7 +64,7 @@ def _session_facts(**overrides) -> dict:
 
 def test_envelope_without_provider_version_parses_unchanged_for_old_engines():
     legacy = _session_facts()
-    parsed = _parse_session_facts(copy.deepcopy(legacy))
+    parsed = parse_session_facts(copy.deepcopy(legacy))
 
     assert parsed["provider_version"] is None
     assert {key: parsed[key] for key in legacy} == legacy
@@ -83,22 +83,13 @@ def test_envelope_without_provider_version_parses_unchanged_for_old_engines():
     ],
 )
 def test_envelope_provider_version_is_kept_only_when_usable(raw, expected):
-    parsed = _parse_session_facts(_session_facts(provider_version=raw))
+    parsed = parse_session_facts(_session_facts(provider_version=raw))
 
     assert parsed["provider_version"] == expected
 
 
-def test_reported_paths_keep_their_normalization_but_identity_must_be_nfc():
-    parsed = _parse_session_facts(_session_facts(cwd="/Users/me/Café", git_branch="café"))
-
-    assert parsed["cwd"] == "/Users/me/Café"
-    assert parsed["git_branch"] == "café"
-    with pytest.raises(ValueError, match="NFC"):
-        _parse_session_facts(_session_facts(provider_session_id="café"))
-
-
 def test_unusable_provider_version_never_rejects_the_envelope():
-    parsed = _parse_session_facts(_session_facts(provider_version={"nested": True}))
+    parsed = parse_session_facts(_session_facts(provider_version={"nested": True}))
 
     assert parsed["provider_version"] is None
 

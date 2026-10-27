@@ -2162,6 +2162,7 @@ async def test_console_provenance_survives_first_archived_provider_transcript(da
         after_reset["session_facts"]["provider_session_id"] = "provider-after-reset"
         # Coarse provider clocks may give both sides the same activity time;
         # insertion order must still make the new conversation the resume head.
+        after_reset["session_facts"]["started_at"] = raw["session_facts"]["last_activity_at"]
         after_reset["session_facts"]["last_activity_at"] = raw["session_facts"]["last_activity_at"]
         await client.call("storage.raw_object.commit.v2", after_reset)
         stored = await client.call("storage.session.read.v2", {"session_id": str(session_id)})

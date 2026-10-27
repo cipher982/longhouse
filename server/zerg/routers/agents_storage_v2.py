@@ -8,7 +8,6 @@ import binascii
 import hashlib
 import json
 import logging
-import unicodedata
 from datetime import UTC
 from datetime import datetime
 from time import monotonic
@@ -68,6 +67,9 @@ from zerg.storage_v2.contracts import hash_records
 from zerg.storage_v2.contracts import raw_export_cursor_token
 from zerg.storage_v2.contracts import render_detail_cursor_token
 from zerg.storage_v2.cutover import STORAGE_V2_CUTOVER
+from zerg.storage_v2.fields import canonical_text
+from zerg.storage_v2.fields import parse_session_facts
+from zerg.storage_v2.fields import utc_timestamp
 from zerg.storage_v2.media_objects import MAX_MEDIA_BYTES
 from zerg.storage_v2.media_objects import MediaObjectCorruptError
 from zerg.storage_v2.media_objects import MediaObjectSpec
@@ -134,32 +136,6 @@ _OPTIONAL_ENVELOPE_FIELDS = {"facts"}
 _EXPECTED_PROVIDER_FACT_FIELDS = {"kind", "at", "source_position", "payload"}
 _EXPECTED_RECORD_FIELDS = {"source_position", "data_b64"}
 _EXPECTED_MEDIA_REF_FIELDS = {"sha256", "source_position", "ref_key", "availability"}
-_EXPECTED_SESSION_FIELDS = {
-    "environment",
-    "project",
-    "cwd",
-    "git_repo",
-    "git_branch",
-    "started_at",
-    "last_activity_at",
-    "ended_at",
-    "origin_kind",
-    "hidden_from_default_timeline",
-    "launch_actor",
-    "launch_surface",
-}
-_OPTIONAL_SESSION_FIELDS = {
-    "provider_session_id",
-    # The provider CLI's own release (claude/codex). Optional so an engine that
-    # predates it still ships; a value that is not a usable version is dropped.
-    "provider_version",
-    # Subagent lineage. Optional so an engine that predates it still ships;
-    # absent means "not a subagent", which is what an older engine meant too.
-    "is_subagent",
-    "parent_provider_session_id",
-    "parent_tool_call_id",
-    "workflow_run_id",
-}
 _EXPECTED_RENDER_FIELDS = {"generation_id", "parser_revision", "ordering_revision", "records"}
 _LEGACY_RENDER_RECORD_FIELDS = {
     "event_id",
@@ -253,26 +229,6 @@ async def _admit_historical_storage(*, admitted_bytes: int, path: str, lane: str
         _raise_historical_storage_backpressure(decision, path=path, lane=lane)
 
 
-def _bounded_text(value: object, field: str, maximum_bytes: int) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{field} must be a non-empty string")
-    if len(value.encode("utf-8")) > maximum_bytes:
-        raise ValueError(f"{field} exceeds {maximum_bytes} UTF-8 bytes")
-    return value
-
-
-def _canonical_text(value: object, field: str, maximum_bytes: int) -> str:
-    """Identity text is hashed and compared byte for byte, so it must be NFC.
-
-    Text a provider reports (paths, branch names, transcript content) carries
-    no normalization contract and goes through `_bounded_text` instead.
-    """
-    text = _bounded_text(value, field, maximum_bytes)
-    if unicodedata.normalize("NFC", text) != text:
-        raise ValueError(f"{field} must already be NFC-normalized")
-    return text
-
-
 def _canonical_uuid(value: object, field: str) -> UUID:
     try:
         parsed = UUID(value) if isinstance(value, str) else None
@@ -283,87 +239,10 @@ def _canonical_uuid(value: object, field: str) -> UUID:
     return parsed
 
 
-def _aware_datetime(value: object, field: str) -> datetime:
-    if not isinstance(value, str):
-        raise ValueError(f"{field} must be an RFC3339 timestamp")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"{field} must be an RFC3339 timestamp") from exc
-    if parsed.tzinfo is None:
-        raise ValueError(f"{field} must include a timezone")
-    return parsed.astimezone(UTC)
-
-
 def _lower_hash(value: object, field: str) -> str:
     if not isinstance(value, str) or len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise ValueError(f"{field} must be lowercase SHA-256 hex")
     return value
-
-
-def _provider_version_or_none(value: object) -> str | None:
-    """Keep a provider CLI version only when it is a short, non-empty string.
-
-    The version is advisory evidence for the provider factory, never a reason
-    to refuse an envelope, so anything unusable is dropped rather than raised.
-    """
-    if not isinstance(value, str):
-        return None
-    version = value.strip()
-    if not version or len(version.encode("utf-8")) > 64:
-        return None
-    return version
-
-
-def _parse_session_facts(value: object) -> dict[str, object]:
-    if (
-        not isinstance(value, dict)
-        or not _EXPECTED_SESSION_FIELDS.issubset(value)
-        or set(value) - _EXPECTED_SESSION_FIELDS - _OPTIONAL_SESSION_FIELDS
-    ):
-        raise ValueError("session fields do not match protocol v2")
-    result = dict(value)
-    result.setdefault("provider_session_id", None)
-    result["provider_version"] = _provider_version_or_none(result.get("provider_version"))
-    result["environment"] = _canonical_text(result["environment"], "session.environment", 32)
-    for field, maximum in (
-        ("project", 255),
-        ("cwd", 4_096),
-        ("git_repo", 500),
-        ("git_branch", 255),
-    ):
-        raw = result[field]
-        if raw is not None:
-            result[field] = _bounded_text(raw, f"session.{field}", maximum)
-    for field, maximum in (
-        ("origin_kind", 64),
-        ("launch_actor", 32),
-        ("launch_surface", 32),
-        ("provider_session_id", 255),
-    ):
-        raw = result[field]
-        if raw is not None:
-            result[field] = _canonical_text(raw, f"session.{field}", maximum)
-    started_at = _aware_datetime(result["started_at"], "session.started_at")
-    last_activity_at = _aware_datetime(result["last_activity_at"], "session.last_activity_at")
-    ended_at = _aware_datetime(result["ended_at"], "session.ended_at") if result["ended_at"] is not None else None
-    if last_activity_at < started_at:
-        raise ValueError("session.last_activity_at cannot precede session.started_at")
-    if ended_at is not None and ended_at < started_at:
-        raise ValueError("session.ended_at cannot precede session.started_at")
-    result["started_at"] = started_at.isoformat()
-    result["last_activity_at"] = last_activity_at.isoformat()
-    result["ended_at"] = ended_at.isoformat() if ended_at is not None else None
-    if type(result["hidden_from_default_timeline"]) is not bool:
-        raise ValueError("session.hidden_from_default_timeline must be a boolean")
-    result.setdefault("is_subagent", False)
-    if type(result["is_subagent"]) is not bool:
-        raise ValueError("session.is_subagent must be a boolean")
-    for field in ("parent_provider_session_id", "parent_tool_call_id", "workflow_run_id"):
-        result.setdefault(field, None)
-        if result[field] is not None and not isinstance(result[field], str):
-            raise ValueError(f"session.{field} must be a string")
-    return result
 
 
 class _EnvelopeTooLarge(Exception):
@@ -489,7 +368,7 @@ def _parse_media_refs(value: object, *, range_start: int, range_end: int) -> lis
         position = item["source_position"]
         if type(position) is not int or not range_start <= position < range_end:
             raise ValueError("media.source_position is outside the raw envelope")
-        ref_key = _canonical_text(item["ref_key"], "media.ref_key", 255)
+        ref_key = canonical_text(item["ref_key"], "media.ref_key", 255)
         availability = item["availability"]
         if availability not in {"available", "missing"}:
             raise ValueError("media.availability must be available or missing")
@@ -519,8 +398,8 @@ def _parse_render_spec(
     if not isinstance(value, dict) or set(value) != _EXPECTED_RENDER_FIELDS:
         raise ValueError("render fields do not match protocol v2")
     generation_id = _canonical_uuid(value["generation_id"], "render.generation_id")
-    parser_revision = _canonical_text(value["parser_revision"], "render.parser_revision", 128)
-    ordering_revision = _canonical_text(value["ordering_revision"], "render.ordering_revision", 128)
+    parser_revision = canonical_text(value["parser_revision"], "render.parser_revision", 128)
+    ordering_revision = canonical_text(value["ordering_revision"], "render.ordering_revision", 128)
     wire_records = value["records"]
     if not isinstance(wire_records, list) or len(wire_records) > MAX_RECORDS:
         raise ValueError(f"render.records must contain at most {MAX_RECORDS} items")
@@ -662,13 +541,13 @@ def _parse_envelope(
         raise PermissionError("tenant_id does not match the authenticated Runtime Host")
     if payload["machine_id"] != machine_id:
         raise PermissionError("machine_id does not match the authenticated device token")
-    provider = _canonical_text(payload["provider"], "provider", 32)
-    opaque_source_id = _canonical_text(payload["opaque_source_id"], "opaque_source_id", 4_096)
+    provider = canonical_text(payload["provider"], "provider", 32)
+    opaque_source_id = canonical_text(payload["opaque_source_id"], "opaque_source_id", 4_096)
     session_id = _canonical_uuid(payload["session_id"], "session_id")
     source_epoch = _canonical_uuid(payload["source_epoch"], "source_epoch")
     predecessor_value = payload["predecessor_source_epoch"]
     predecessor = _canonical_uuid(predecessor_value, "predecessor_source_epoch") if predecessor_value is not None else None
-    opened_at = _aware_datetime(payload["epoch_opened_at"], "epoch_opened_at")
+    opened_at = utc_timestamp(payload["epoch_opened_at"], "epoch_opened_at")
     range_kind = payload["range_kind"]
     if range_kind not in {"byte_offset", "record_ordinal"}:
         raise ValueError("range_kind must be byte_offset or record_ordinal")
@@ -677,7 +556,7 @@ def _parse_envelope(
     if type(range_start) is not int or type(range_end) is not int:
         raise ValueError("source range must use integers")
     expected_envelope = _lower_hash(payload["expected_envelope_id"], "expected_envelope_id")
-    session_facts = _parse_session_facts(payload["session"])
+    session_facts = parse_session_facts(payload["session"])
     media_refs = _parse_media_refs(payload["media"], range_start=range_start, range_end=range_end)
 
     wire_records = payload["records"]
@@ -785,7 +664,7 @@ def _parse_provider_facts(value: object, *, range_start: int, range_end: int, se
             position = item["source_position"]
             if type(position) is not int or not range_start <= position < range_end:
                 raise ValueError("fact source_position must fall inside the envelope range")
-            at = _aware_datetime(item["at"], "fact at")
+            at = utc_timestamp(item["at"], "fact at")
             payload = item["payload"]
             if not isinstance(payload, dict):
                 raise ValueError("fact payload must be an object")
@@ -863,7 +742,7 @@ def _authenticated_machine_id(auth_token: DeviceToken | object | None, payload: 
         machine_id = getattr(auth_token, "device_id", None)
     else:
         machine_id = payload.get("machine_id")
-    return _canonical_text(machine_id, "machine_id", 255)
+    return canonical_text(machine_id, "machine_id", 255)
 
 
 def _validated_receipt(
@@ -1015,7 +894,7 @@ def _raise_catalog_error(exc: CatalogRemoteError) -> None:
 
 def _media_content_type(request: Request) -> str:
     value = (request.headers.get("content-type") or "application/octet-stream").split(";", 1)[0].strip().lower()
-    return _canonical_text(value, "Content-Type", 255)
+    return canonical_text(value, "Content-Type", 255)
 
 
 @router.post("/media/claims")
@@ -1043,7 +922,7 @@ async def claim_storage_v2_media(
             if not isinstance(item, dict) or set(item) != {"sha256", "mime_type", "byte_size"}:
                 raise ValueError("invalid_fields")
             media_hash = _lower_hash(item["sha256"], "sha256")
-            mime_type = _canonical_text(item["mime_type"], "mime_type", 255)
+            mime_type = canonical_text(item["mime_type"], "mime_type", 255)
             byte_size = item["byte_size"]
             if type(byte_size) is not int or not 0 < byte_size <= MAX_MEDIA_BYTES:
                 raise ValueError("unsupported_byte_size")
@@ -1431,7 +1310,7 @@ async def _commit_admitted_envelope(
     render_workers: RenderObjectWorkerPool,
 ) -> dict[str, object]:
     settings = get_settings()
-    tenant_id = _canonical_text(settings.archive_primary_tenant_id, "tenant_id", 255)
+    tenant_id = canonical_text(settings.archive_primary_tenant_id, "tenant_id", 255)
     sealed = None
     sealed_render = None
     try:
