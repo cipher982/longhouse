@@ -80,8 +80,8 @@ on:
         required: false
         default: true
         type: boolean
-      run_cube_self_hosted:
-        description: "Run cube self-hosted Linux x64 smoke"
+      run_grind_self_hosted:
+        description: "Run grind self-hosted Linux x64 smoke"
         required: false
         default: true
         type: boolean
@@ -410,11 +410,11 @@ jobs:
       - name: Run fresh-clone onboarding funnel in the portable isolation boundary
         run: make onboarding-funnel
 
-  self-hosted-cube-linux-x64:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_cube_self_hosted }}
-    runs-on: cube-browser
+  self-hosted-grind-linux-x64:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_grind_self_hosted }}
+    runs-on: grind-browser
     timeout-minutes: 30
-    name: "launch-gate--self-hosted-onboarding--linux-x64--cube"
+    name: "launch-gate--self-hosted-onboarding--linux-x64--grind"
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -424,7 +424,7 @@ jobs:
       - name: Ensure make available
         run: ./scripts/ci/ensure-make.sh
 
-      - name: Run onboarding smoke on cube in the portable isolation boundary
+      - name: Run onboarding smoke on grind in the portable isolation boundary
         run: make test-e2e-onboarding PROJECT=onboarding-chromium
 
   self-hosted-linux-x64:

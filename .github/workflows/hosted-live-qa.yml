@@ -59,7 +59,7 @@ concurrency:
 jobs:
   hosted-live-qa:
     name: "hosted-live-qa"
-    runs-on: cube-browser
+    runs-on: grind-browser
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 25
     outputs:
@@ -469,7 +469,7 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' && needs.hosted-live-qa.result == 'success' &&
       needs.hosted-live-qa.outputs.verdict == 'passed' && needs.hosted-live-qa.outputs.deployed == 'success'
-    runs-on: cube-gate
+    runs-on: grind-gate
     timeout-minutes: 5
     continue-on-error: true
     permissions:

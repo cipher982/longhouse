@@ -28,7 +28,7 @@ jobs:
 
   publish:
     name: Publish static blog files
-    runs-on: cube-deploy
+    runs-on: grind-deploy
     needs: validate
     # By hand only while Longhouse is paused: longhouse.ai is dark (HTTP 410), and
     # publishing is public-facing work (control-plane docs/workspace-agents.md).

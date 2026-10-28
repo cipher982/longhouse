@@ -65,7 +65,7 @@ concurrency:
 jobs:
   changes:
     timeout-minutes: 10
-    runs-on: cube-gate
+    runs-on: grind-gate
     name: "Detect runtime deploy scope"
     outputs:
       deploy_verify: ${{ steps.decide.outputs.deploy_verify }}
@@ -112,7 +112,7 @@ jobs:
 
   no_runtime_change:
     name: "No runtime mutation required"
-    runs-on: cube-gate
+    runs-on: grind-gate
     needs: changes
     if: ${{ needs.changes.outputs.no_runtime_change == 'true' }}
     steps:
@@ -138,7 +138,7 @@ jobs:
     # Waiting on CI and image publication must not occupy the two runners
     # reserved for actual canary/demo mutation. This gate still needs Docker
     # once the prerequisites finish to inspect the immutable image identity.
-    runs-on: cube-gate
+    runs-on: grind-gate
     needs: changes
     if: ${{ needs.changes.outputs.deploy_verify == 'true' }}
     outputs:
@@ -409,7 +409,7 @@ jobs:
 
   deploy_demo:
     name: "Deploy public demo runtime"
-    runs-on: cube-deploy
+    runs-on: grind-deploy
     if: github.repository == 'cipher982/longhouse' && needs.gate.outputs.superseded_by == ''
     timeout-minutes: 60
     needs: [changes, gate, fast_smoke, reprovision_canary]
@@ -486,7 +486,7 @@ jobs:
 
   reprovision_canary:
     name: "Reprovision hosted canary"
-    runs-on: cube-deploy
+    runs-on: grind-deploy
     if: github.repository == 'cipher982/longhouse' && needs.gate.outputs.superseded_by == ''
     timeout-minutes: 60
     needs: [changes, gate]
@@ -571,7 +571,7 @@ jobs:
 
   fast_smoke:
     name: "Canary qualification smoke"
-    runs-on: cube-deploy
+    runs-on: grind-deploy
     if: github.repository == 'cipher982/longhouse' && needs.gate.outputs.superseded_by == ''
     timeout-minutes: 20
     needs: [gate, reprovision_canary]
@@ -701,7 +701,7 @@ jobs:
     name: "Dispatch hosted live QA (async)"
     needs: [gate, reprovision_canary, fast_smoke, deploy_demo]
     if: github.repository == 'cipher982/longhouse' && needs.gate.outputs.superseded_by == ''
-    runs-on: cube-deploy
+    runs-on: grind-deploy
     permissions:
       actions: write
       contents: read
@@ -738,7 +738,7 @@ jobs:
   profile-deploy:
     timeout-minutes: 30
     name: "Profile deploy wall time"
-    runs-on: cube-gate
+    runs-on: grind-gate
     needs: [changes, deploy_demo, reprovision_canary, fast_smoke]
     if: ${{ always() && needs.changes.outputs.deploy_verify == 'true' }}
     steps:

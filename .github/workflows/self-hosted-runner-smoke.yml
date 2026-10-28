@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: cube-runner-canary
+  group: grind-runner-canary
   cancel-in-progress: true
 
 jobs:
@@ -15,10 +15,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [cube-fast, cube-browser, cube-maint, cube-gate, cube-deploy]
+        lane: [grind-fast, grind-browser, grind-maint, grind-gate, grind-deploy]
     runs-on: ${{ matrix.lane }}
     timeout-minutes: 10
-    if: ${{ github.event_name != 'schedule' || vars.CUBE_RUNNER_CANARY_ENABLED != 'false' }}
+    if: ${{ github.event_name != 'schedule' || vars.GRIND_RUNNER_CANARY_ENABLED != 'false' }}
 
     steps:
       - name: Basic host info

@@ -32,7 +32,7 @@ concurrency:
 jobs:
   perf-proof:
     name: "Perf proof artifact"
-    runs-on: cube-maint
+    runs-on: grind-maint
     timeout-minutes: 30
     if: ${{ github.repository == 'cipher982/longhouse' }}
     env:
