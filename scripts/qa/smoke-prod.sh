@@ -3,7 +3,7 @@
 # Production Smoke Test for Longhouse (split frontend/backend)
 #
 # Usage:
-#   ./scripts/smoke-prod.sh           # default: public demo + auth + basic LLM
+#   ./scripts/smoke-prod.sh           # default: hosted instance + auth + basic LLM
 #   ./scripts/smoke-prod.sh --quick   # public health only
 #   ./scripts/smoke-prod.sh --fast    # deploy-blocking health/config/auth-gate checks; no hosted login
 #   ./scripts/smoke-prod.sh --full    # default + CRUD + infra
@@ -51,7 +51,6 @@ FRONTEND_URL="$LH_TARGET_FRONTEND_URL"
 API_URL="$LH_TARGET_API_URL"
 INSTANCE_SUBDOMAIN="${LH_TARGET_SUBDOMAIN:-$INSTANCE_SUBDOMAIN}"
 
-PUBLIC_DEMO_URL="${PUBLIC_DEMO_URL:-${MARKETING_URL:-https://longhouse.ai}}"
 CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-${CP_URL:-https://control.longhouse.ai}}"
 CP_URL="${CP_URL:-$CONTROL_PLANE_URL}"
 WAIT_SECS="${WAIT_SECS:-90}"
@@ -400,35 +399,15 @@ run_frontend_checks() {
 }
 
 run_cross_service_checks() {
-    # Public demo runtime
-    run_test test_http "Public demo runtime" "$PUBLIC_DEMO_URL" "200"
-    run_test test_http "Public demo API health" "$PUBLIC_DEMO_URL/api/health" "200"
+    # The longhouse.ai apex and its public demo were retired on 2026-10-14
+    # (zerg's Caddyfile answers `respond 410` for the apex and www/demo; the
+    # longhouse-demo container is stopped). There is no public surface left to
+    # assert, so this suite checks the control plane and the hosted instance
+    # only. If the demo comes back, restore its checks from git history.
 
     # Control plane health
     run_test test_http "CP health endpoint" "$CP_URL/health" "200"
     run_test test_json_eventually "CP health status" "$CP_URL/health" ".status" "ok"
-
-    # Public demo JS references control plane URL
-    local js_urls
-    js_urls=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "$PUBLIC_DEMO_URL" 2>/dev/null | grep -oE 'src="/assets/[^"]+\.js"' | sed 's/src="//;s/"//' || true)
-    if [[ -n "$js_urls" ]]; then
-        local found_cp=0
-        for js_path in $js_urls; do
-            local js_content
-            js_content=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "${PUBLIC_DEMO_URL}${js_path}" 2>/dev/null || true)
-            if grep -q "control.longhouse.ai" <<< "$js_content"; then
-                found_cp=1
-                break
-            fi
-        done
-        if [[ $found_cp -eq 1 ]]; then
-            pass "Public demo JS contains CP URL"
-        else
-            warn "Public demo JS does not reference control.longhouse.ai"
-        fi
-    else
-        warn "No JS bundles found on public demo runtime"
-    fi
 }
 
 run_cors_checks() {
@@ -486,7 +465,6 @@ echo "  Longhouse Production Smoke Test"
 echo "================================================"
 echo "  Frontend:  $FRONTEND_URL"
 echo "  API:       $API_URL"
-echo "  Demo:      $PUBLIC_DEMO_URL"
 echo "  CP:        $CP_URL"
 echo "================================================"
 echo ""

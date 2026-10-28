@@ -10,8 +10,8 @@ updates:
     schedule:
       interval: "weekly"
     # Paused 2026-10-17 while the repository is private and Longhouse is paused: its PRs ran iOS
-    # tests on wisp and failed the docs-drift check for want of secrets. Security updates are
-    # unaffected. Set this back to the default (or remove it) to resume.
+    # tests on wisp. Security updates are unaffected. Set this back to the default (or remove it)
+    # to resume.
     open-pull-requests-limit: 0
     commit-message:
       prefix: "ci"
@@ -29,8 +29,8 @@ updates:
     schedule:
       interval: "weekly"
     # Paused 2026-10-17 while the repository is private and Longhouse is paused: its PRs ran iOS
-    # tests on wisp and failed the docs-drift check for want of secrets. Security updates are
-    # unaffected. Set this back to the default (or remove it) to resume.
+    # tests on wisp. Security updates are unaffected. Set this back to the default (or remove it)
+    # to resume.
     open-pull-requests-limit: 0
     commit-message:
       prefix: "docker"

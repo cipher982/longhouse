@@ -10,16 +10,9 @@ on:
         type: string
   schedule:
     - cron: "43 10 * * *"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/perf-proof.yml"
-      - "Makefile"
-      - "scripts/ci/perf-proof.py"
-      - "scripts/ci/perf-soak.py"
-      - "scripts/ci/perf_soak_fixtures.py"
-      - "scripts/tests/perf-proof.test.py"
-      - "desktop/LonghouseMenuBarHarness/**"
+  # No push trigger: the soak compares against the median of recent receipts, so
+  # one run a day plus an on-demand run answers the same question, and 78
+  # push-triggered runs over two months bought nothing the deploy gate did not.
 
 permissions:
   contents: read

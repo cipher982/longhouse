@@ -24,7 +24,6 @@ jobs:
     timeout-minutes: 10
     if: ${{ github.repository == 'cipher982/longhouse' && (github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false') }}
     env:
-      PUBLIC_DEMO_URL: https://longhouse.ai
       CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
       INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
       SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
@@ -61,38 +60,6 @@ jobs:
             echo "- **Instance:** $INSTANCE_SUBDOMAIN"
             echo "- **Frontend:** $FRONTEND_URL"
             echo "- **API:** $API_URL"
-            echo "- **Public demo:** $PUBLIC_DEMO_URL"
             echo "- **Triggered by:** ${{ github.event_name }}"
             echo "- **Commit:** ${{ github.sha }}"
-            echo "- **Email routing audit:** runs as a separate non-blocking job"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  email-routing-audit:
-    name: "📬 Email Routing Audit"
-    runs-on: grind-deploy
-    timeout-minutes: 5
-    continue-on-error: true
-    if: ${{ github.repository == 'cipher982/longhouse' && (github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false') }}
-    env:
-      PUBLIC_DEMO_URL: https://longhouse.ai
-
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-
-      - name: Check email routing (mailto → Cloudflare forward rules)
-        id: email_routing
-        env:
-          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN }}
-        run: |
-          chmod +x scripts/ops/check-email-routing.sh
-          ./scripts/ops/check-email-routing.sh
-
-      - name: Summary
-        if: always()
-        run: |
-          {
-            echo "## Email Routing Audit"
-            echo ""
-            echo "- **Site:** $PUBLIC_DEMO_URL"
-            echo "- **Result:** ${{ steps.email_routing.outcome }}"
           } >> "$GITHUB_STEP_SUMMARY"
