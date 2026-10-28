@@ -70,9 +70,19 @@ async def _terminate_and_wait(process: subprocess.Popen, timeout: float = 10.0) 
     catalogd's shutdown waits for every open connection to close (asyncio
     Server.wait_closed). A supervisor ping in flight on this loop is one of
     them, so a synchronous Popen.wait() here deadlocks the two until it times out.
+
+    The deadline is a budget, not the assertion. On a loaded two-vCPU runner the
+    graceful window can expire while the process is still closing, and these
+    tests only require that the predecessor is gone before the successor opens,
+    not that it was polite about it: escalate to SIGKILL rather than failing the
+    job on the wait.
     """
     process.terminate()
-    await asyncio.to_thread(process.wait, timeout)
+    try:
+        await asyncio.to_thread(process.wait, timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        await asyncio.to_thread(process.wait, timeout)
 
 
 async def _eventually_new_ping(client: CatalogClient, old_pid: int, timeout: float = 10.0):
