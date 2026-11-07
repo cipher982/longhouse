@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.metrics import managed_turn_wait_seconds
 from zerg.metrics import managed_turn_wait_total
@@ -884,7 +885,13 @@ async def _release_catalog_lock_after_terminal(
                 {"session_id": str(session_id)},
                 timeout_seconds=1.0,
             )
-        except CatalogUnavailable:
+        except Exception as exc:
+            # A busy catalog ("catalog read lane is full") answers with a remote
+            # error, not an outage. Any failed poll is retried until the
+            # deadline above; letting one escape left the SEND lock held for
+            # its whole 300 s TTL and parked every later input (2026-11-06).
+            if not isinstance(exc, (CatalogUnavailable, CatalogRemoteError)):
+                logger.warning("SEND lock watcher poll failed for %s", session_id, exc_info=True)
             await asyncio.sleep(MANAGED_LOCAL_POLL_INTERVAL_SECS)
             continue
         facts = snapshot.get("facts")

@@ -456,6 +456,46 @@ describe("SessionChat", () => {
     expect(multipartBody?.get("model")).toBe("gpt-5.6-luna");
     expect(multipartBody?.get("text")).toBe("use the chosen model");
   });
+  it("lets a user stage images while a turn runs and holds the send until the turn ends", async () => {
+    const user = userEvent.setup();
+    const view = renderSessionChat({
+      chatMode: "managed_local",
+      canSteerActiveTurn: true,
+      canQueueNextInput: true,
+      session: makeSession({
+        device_id: "cinder",
+        provider: "omp",
+        capabilities: { attach_images: true },
+        session_state: makeSessionStateFacts({
+          activity: "executing",
+          access: "live_control",
+          interruptAvailable: true,
+        }),
+      }),
+    });
+    const input = view.container.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement | null;
+    expect(input).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Attach images" })).toBeEnabled();
+    await user.upload(
+      input!,
+      new File([new Uint8Array([1, 2, 3])], "reference.png", {
+        type: "image/png",
+      }),
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Next instruction" }),
+      "look at this",
+    );
+    // The image is staged and the draft kept; sending waits for the turn.
+    expect(
+      await screen.findByRole("button", { name: "Remove reference.png" }),
+    ).toBeInTheDocument();
+    expect(
+      view.container.querySelector('button[type="submit"]'),
+    ).toBeDisabled();
+  });
   it("expires turn-specific actions without another update while retaining the draft", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-10T12:00:00Z"));

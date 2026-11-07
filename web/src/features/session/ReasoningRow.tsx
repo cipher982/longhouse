@@ -3,36 +3,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AgentEvent } from "@/shared/api/agents";
 
-/**
- * The collapsed thought is plain text, not a markdown renderer — a raw
- * "**Updating job commits**" reads as a formatting bug, not emphasis. Strip
- * the common inline markers (links first, so their visible text survives).
- */
-export function stripMarkdown(text: string): string {
-  return text
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/__([^_]+)__/g, "$1")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\*([^*]+)\*/g, "$1")
-    .replace(/(^|[^\w])_([^_]+)_(?!\w)/g, "$1$2");
-}
+import { stripMarkdown, thoughtProse } from "@/shared/session/model/thoughtProse";
 
-/**
- * The thought as it reads collapsed: the whole text, markdown stripped, with
- * blank lines folded so a paragraph break costs a line break, not a blank
- * line of the three the clamp allows. The clamp — not a character cap or a
- * first-line cut — decides how much shows, so the finding later in a thought
- * is still on screen when it fits (timeline-reading-experience.md, Change F).
- */
-export function thoughtProse(text: string): string {
-  return stripMarkdown(text)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
-}
+export { stripMarkdown, thoughtProse };
 
 export function reasoningText(event: AgentEvent): string {
   const rawText = event.content_text || "";

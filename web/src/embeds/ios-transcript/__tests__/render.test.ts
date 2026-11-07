@@ -159,6 +159,24 @@ describe("rows", () => {
     expect(root().querySelector(".bubble")?.textContent).toBe("<the whole thing>");
   });
 
+  describe("reasoning", () => {
+    it("shows a provider's reasoning summary as readable prose with the full thought behind a tap", () => {
+      render({
+        items: [
+          { id: "reasoning:1", kind: "reasoning", body: "**Checking the manifest**\nThe byte offset is 4 <b>bits</b>." },
+        ],
+      });
+
+      const row = root().querySelector("details.reasoning") as HTMLDetailsElement;
+      expect(row.getAttribute("data-testid")).toBe("session-reasoning");
+      expect(row.open).toBe(false);
+      expect(row.querySelector(".reasoning-prose")?.textContent).toBe(
+        "Checking the manifest\nThe byte offset is 4 <b>bits</b>.",
+      );
+      expect(row.querySelector("b")).toBeNull();
+    });
+  });
+
   describe("provider notifications", () => {
     const notice = (id: string, body: string): TranscriptItem => ({ id, kind: "providerNotification", body });
     const jobResult = notice(

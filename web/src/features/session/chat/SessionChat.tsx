@@ -1949,8 +1949,9 @@ export function SessionChat({
   // The server queues images only for Console-origin sessions; the projected
   // mode also says "console" for one-shot and web/iOS/API launches.
   const isConsoleSession = session.origin_kind === "console";
-  const attachmentInputEnabled =
-    attachImagesEnabled && (!isSendLocked || isConsoleSession);
+  // Staging images never waits on the turn (preparing a message should not
+  // block on the agent); only sending them does (`attachmentSendBlocked`).
+  const attachmentInputEnabled = attachImagesEnabled;
   // A parked Console invocation has no active turn, but its provider-owned
   // work is still live and the served interrupt action closes that invocation.
   const showInlineInterrupt =

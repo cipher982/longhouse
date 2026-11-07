@@ -424,6 +424,34 @@ summary::-webkit-details-marker {
   white-space: nowrap;
 }
 
+/* A provider's reasoning summary: quiet prose clamped to three lines, the whole
+   thought behind a tap. It is the step's narration for models that write no
+   prose between tool calls. */
+.reasoning summary {
+  display: block;
+  padding: 4px 10px;
+}
+
+.reasoning-prose {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  white-space: pre-line;
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.reasoning[open] .reasoning-prose {
+  display: none;
+}
+
+.reasoning .details-body {
+  color: var(--secondary);
+  font-size: 13px;
+}
+
 /* A background job's notice with no output to open: the header is the whole
    message, so it wraps instead of trailing off where a tap cannot reach. */
 .notice.static .tool-title {

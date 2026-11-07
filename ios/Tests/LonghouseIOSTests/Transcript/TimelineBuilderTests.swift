@@ -27,6 +27,24 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(items[0].id, "provider-notification:42")
     }
 
+    func testProviderReasoningIsAVisibleRowBetweenToolCalls() {
+        // Gemini through OMP writes no prose between tool calls; its reasoning
+        // summary is the only narration, so it must not vanish with other
+        // system-role rows.
+        let items = TimelineBuilder.build(events: [
+            event(id: 7, role: "system", text: "Thinking:\nChecking the manifest", interactionKind: "provider_reasoning"),
+            event(id: 8, role: "system", text: "Thinking:\n  \n", interactionKind: "provider_reasoning"),
+            event(id: 9, role: "system", text: "internal", interactionKind: "provider_system"),
+        ])
+
+        XCTAssertEqual(items.count, 1)
+        guard case .reasoning(let reasoning) = items[0] else {
+            return XCTFail("expected reasoning row")
+        }
+        XCTAssertEqual(reasoning.contentText, "Thinking:\nChecking the manifest")
+        XCTAssertEqual(items[0].id, "reasoning:7")
+    }
+
     func testUserMessageFragmentsMergeIntoOneRow() {
         // Pi/OMP store a pasted screenshot as an extra content block; the
         // engine used to emit it as its own `<native-id>-image-<n>` user event,

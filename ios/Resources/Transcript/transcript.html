@@ -430,6 +430,34 @@ summary::-webkit-details-marker {
   white-space: nowrap;
 }
 
+/* A provider's reasoning summary: quiet prose clamped to three lines, the whole
+   thought behind a tap. It is the step's narration for models that write no
+   prose between tool calls. */
+.reasoning summary {
+  display: block;
+  padding: 4px 10px;
+}
+
+.reasoning-prose {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  white-space: pre-line;
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.reasoning[open] .reasoning-prose {
+  display: none;
+}
+
+.reasoning .details-body {
+  color: var(--secondary);
+  font-size: 13px;
+}
+
 /* A background job's notice with no output to open: the header is the whole
    message, so it wraps instead of trailing off where a tap cannot reach. */
 .notice.static .tool-title {
@@ -841,6 +869,26 @@ summary::-webkit-details-marker {
 		return items ? `<div class="media-strip">${items}</div>` : "";
 	}
 	//#endregion
+	//#region src/shared/session/model/thoughtProse.ts
+	/**
+	* The collapsed thought is plain text, not a markdown renderer — a raw
+	* "**Updating job commits**" reads as a formatting bug, not emphasis. Strip
+	* the common inline markers (links first, so their visible text survives).
+	*/
+	function stripMarkdown(text) {
+		return text.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/\*([^*]+)\*/g, "$1").replace(/(^|[^\w])_([^_]+)_(?!\w)/g, "$1$2");
+	}
+	/**
+	* The thought as it reads collapsed: the whole text, markdown stripped, with
+	* blank lines folded so a paragraph break costs a line break, not a blank
+	* line of the three the clamp allows. The clamp — not a character cap or a
+	* first-line cut — decides how much shows, so the finding later in a thought
+	* is still on screen when it fits (timeline-reading-experience.md, Change F).
+	*/
+	function thoughtProse(text) {
+		return stripMarkdown(text).split("\n").map((line) => line.trim()).filter(Boolean).join("\n");
+	}
+	//#endregion
 	//#region src/shared/session/model/providerNotice.ts
 	/**
 	* A provider notification is a system row the provider itself displays: a
@@ -1105,11 +1153,22 @@ summary::-webkit-details-marker {
         </details>
       `;
 	}
+	function reasoning(item) {
+		const text = item.body || "";
+		const prose = escapeHtml(thoughtProse(text) || "No reasoning details");
+		return `
+        <details class="reasoning row" data-testid="session-reasoning" data-open-key="${escapeHtml(item.id)}">
+          <summary><span class="reasoning-prose">${prose}</span></summary>
+          <div class="details-body message-content">${markdownToHtml(text)}</div>
+        </details>
+      `;
+	}
 	function renderItemBody(item, index) {
 		if (item.kind === "message") return message(item, index);
 		if (item.kind === "submitted") return submitted(item);
 		if (item.kind === "action") return action(item);
 		if (item.kind === "providerNotification") return providerNotification(item);
+		if (item.kind === "reasoning") return reasoning(item);
 		if (item.kind === "question") return question(item);
 		if (item.kind === "tool") return toolDetails(item);
 		if (item.kind === "activityGroup") return activityGroup(item);

@@ -944,6 +944,74 @@ async def test_catalog_lock_watcher_survives_transient_catalog_timeout(tmp_path,
 
 
 @pytest.mark.asyncio
+async def test_catalog_lock_watcher_survives_catalog_read_lane_full(tmp_path, monkeypatch):
+    """A busy catalog is a remote error, not an outage; it must not strand the SEND lock."""
+
+    from types import SimpleNamespace
+
+    from zerg.catalogd.client import CatalogRemoteError
+
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
+    initialize_live_database(engine)
+    factory = make_sessionmaker(engine)
+    with factory() as db:
+        session_id = _seed_live_control(db)
+
+    import zerg.services.live_control_catalog as live_control
+    import zerg.services.session_chat_impl as chat_impl
+    from zerg.services.session_kernel_projection import session_lock_scope_id
+    from zerg.services.session_locks import session_lock_manager
+
+    request_id = "lane-full-holder"
+    scope = session_lock_scope_id(session_id)
+    dispatched_at = datetime.now(timezone.utc)
+    observed_at = dispatched_at + timedelta(milliseconds=1)
+    assert await session_lock_manager.acquire(session_id=scope, holder=request_id, ttl_seconds=300)
+
+    class _CatalogClient:
+        calls = 0
+
+        async def call(self, method, params, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise CatalogRemoteError(
+                    SimpleNamespace(
+                        message="catalog read lane is full",
+                        code="overloaded",
+                        retryable=True,
+                        retry_after_ms=None,
+                        details=None,
+                    )
+                )
+            return {"facts": {"runtime": {"phase": "idle", "phase_started_at": observed_at.isoformat()}}}
+
+    catalog = _CatalogClient()
+    wakes: list[str] = []
+
+    async def fake_wake(value):
+        wakes.append(str(value))
+        return False
+
+    async def no_wait(_seconds):
+        return None
+
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(chat_impl.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(live_control, "wake_next_live_catalog_input", fake_wake)
+
+    await chat_impl._release_catalog_lock_after_terminal(
+        session_id=session_id,
+        lock_scope_id=scope,
+        request_id=request_id,
+        dispatched_at=dispatched_at,
+    )
+
+    assert catalog.calls == 2
+    assert await session_lock_manager.get_lock_info(scope) is None
+    assert wakes == [str(session_id)]
+
+
+@pytest.mark.asyncio
 async def test_catalog_lock_watcher_releases_when_fast_turn_updates_last_runtime_signal_at(tmp_path, monkeypatch):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
     initialize_live_database(engine)

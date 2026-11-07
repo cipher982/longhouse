@@ -2,6 +2,7 @@ import { postToNative } from "./bridge";
 import { escapeHtml } from "./escape";
 import { markdownToHtml } from "./markdown";
 import { mediaStrip } from "./media";
+import { thoughtProse } from "../../shared/session/model/thoughtProse";
 import { summarizeProviderNotice } from "../../shared/session/model/providerNotice";
 import { activityGroup, question, toolDetails } from "./toolCards";
 import type { TranscriptItem } from "./types";
@@ -130,11 +131,26 @@ export function providerNotification(item: TranscriptItem): string {
       `;
 }
 
+/// A provider's reasoning summary. For a model that never writes prose between
+/// tool calls (Gemini through OMP) this is the only narration, so it leads its
+/// step as readable text clamped to three lines; a tap opens the whole thought.
+export function reasoning(item: TranscriptItem): string {
+  const text = item.body || "";
+  const prose = escapeHtml(thoughtProse(text) || "No reasoning details");
+  return `
+        <details class="reasoning row" data-testid="session-reasoning" data-open-key="${escapeHtml(item.id)}">
+          <summary><span class="reasoning-prose">${prose}</span></summary>
+          <div class="details-body message-content">${markdownToHtml(text)}</div>
+        </details>
+      `;
+}
+
 export function renderItemBody(item: TranscriptItem, index: number): string {
   if (item.kind === "message") return message(item, index);
   if (item.kind === "submitted") return submitted(item);
   if (item.kind === "action") return action(item);
   if (item.kind === "providerNotification") return providerNotification(item);
+  if (item.kind === "reasoning") return reasoning(item);
   if (item.kind === "question") return question(item);
   if (item.kind === "tool") return toolDetails(item);
   if (item.kind === "activityGroup") return activityGroup(item);

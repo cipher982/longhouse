@@ -37,7 +37,7 @@ struct LiteBodyState: Sendable, Equatable {
             return .activityGroup(calls: calls.map {
                 ActivityCall(call: merged($0.call), result: $0.result.map(merged), pairing: $0.pairing)
             })
-        case .user, .assistant, .providerNotification, .action:
+        case .user, .assistant, .providerNotification, .reasoning, .action:
             return item
         }
     }
@@ -65,7 +65,7 @@ extension TimelineItem {
             return [event.liteBodyCursor].compactMap { $0 }
         case .activityGroup(let calls):
             return calls.flatMap { [$0.call.liteBodyCursor, $0.result?.liteBodyCursor].compactMap { $0 } }.uniqued()
-        case .user, .assistant, .providerNotification, .action:
+        case .user, .assistant, .providerNotification, .reasoning, .action:
             return []
         }
     }

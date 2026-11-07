@@ -240,7 +240,7 @@ extension WebTranscriptView {
         switch item {
         case .user(let event), .assistant(let event), .orphanTool(let event):
             turnEnd = event.turnEnd
-        case .providerNotification:
+        case .providerNotification, .reasoning:
             turnEnd = nil
         case .tool(let call, let result, _):
             turnEnd = result?.turnEnd ?? call.turnEnd
@@ -289,6 +289,8 @@ extension WebTranscriptView {
             )
         case .providerNotification(let event):
             return providerNotificationPayload(id: item.id, text: event.contentText ?? "")
+        case .reasoning(let event):
+            return reasoningPayload(id: item.id, text: event.contentText ?? "")
         case .action(let action, _):
             return actionPayload(id: item.id, action: action)
         case .tool(let call, let result, _):
@@ -351,6 +353,27 @@ extension WebTranscriptView {
             fullBody: nil,
             collapsed: false,
             status: action.kind,
+            duration: nil,
+            input: nil,
+            output: nil,
+            calls: [],
+            origin: nil,
+            media: nil
+        )
+    }
+
+    private nonisolated static func reasoningPayload(id: String, text: String) -> WebTranscriptPayloadItem {
+        let prefix = "Thinking:\n"
+        return WebTranscriptPayloadItem(
+            id: id,
+            kind: "reasoning",
+            role: nil,
+            title: nil,
+            subtitle: nil,
+            body: text.hasPrefix(prefix) ? String(text.dropFirst(prefix.count)) : text,
+            fullBody: nil,
+            collapsed: false,
+            status: nil,
             duration: nil,
             input: nil,
             output: nil,

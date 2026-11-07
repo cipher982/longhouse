@@ -17,6 +17,10 @@ enum TimelineItem: Identifiable, Sendable {
     case user(SessionEvent)
     case assistant(SessionEvent)
     case providerNotification(SessionEvent)
+    /// A provider's own reasoning summary. Providers that narrate only here
+    /// (Gemini via OMP emits thinking plus tool calls, never prose) would
+    /// otherwise read as a transcript with the assistant missing.
+    case reasoning(SessionEvent)
     case action(SessionAction, timestamp: String)
     case tool(call: SessionEvent, result: SessionEvent?, pairing: ToolPairing)
     case orphanTool(SessionEvent)
@@ -27,6 +31,7 @@ enum TimelineItem: Identifiable, Sendable {
         case .user(let e): return "user:\(e.id)"
         case .assistant(let e): return "prose:\(e.id)"
         case .providerNotification(let e): return "provider-notification:\(e.id)"
+        case .reasoning(let e): return "reasoning:\(e.id)"
         case .action(let action, _): return action.id
         case .tool(let call, _, _): return "tool:\(call.id)"
         case .orphanTool(let e): return "orphan:\(e.id)"
@@ -40,7 +45,7 @@ enum TimelineItem: Identifiable, Sendable {
         switch self {
         case .user(let e), .assistant(let e), .orphanTool(let e):
             return e.timestamp
-        case .providerNotification(let e):
+        case .providerNotification(let e), .reasoning(let e):
             return e.timestamp
         case .action(_, let timestamp):
             return timestamp
@@ -456,6 +461,13 @@ enum TimelineBuilder {
         for event in events {
             if event.interactionKind == "provider_notification" {
                 raw.append(.providerNotification(event))
+                continue
+            }
+            if event.interactionKind == "provider_reasoning" {
+                let thought = (event.contentText ?? "").replacingOccurrences(of: "Thinking:", with: "", options: .anchored)
+                if !thought.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    raw.append(.reasoning(event))
+                }
                 continue
             }
             if event.role == "system" { continue }
