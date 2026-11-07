@@ -9,7 +9,7 @@ import {
   type LaunchProviderId,
 } from "../providers";
 
-type ProofAssertion = { acceptable_evidence?: string[] };
+type ProofAssertion = { acceptable_evidence?: string[]; required_evidence_classes?: string[] };
 type ProofDeclaration = { disposition?: string; required_assertions?: ProofAssertion[] };
 
 type ContractProvider = {
@@ -184,7 +184,12 @@ describe("providers launch support", () => {
       expect(support!.resume).toBe(contract.can_resume);
       // Landing chips follow live-token proof, never the runtime flags alone
       // (scripts/generate/provider_capabilities_ts.py).
-      const isLive = (a: ProofAssertion) => JSON.stringify(a.acceptable_evidence) === JSON.stringify(["live_token"]);
+      // Mirrors `_live` in server/zerg/services/provider_chip_edges.py: a cell that
+      // requires a live-token class counts even when it also accepts scripted evidence.
+      const isLive = (a: ProofAssertion) =>
+        Array.isArray(a.required_evidence_classes)
+          ? a.required_evidence_classes.includes("live_token") && (a.acceptable_evidence ?? []).includes("live_token")
+          : JSON.stringify(a.acceptable_evidence) === JSON.stringify(["live_token"]);
       const liveOnly = (assertions: ProofAssertion[] | undefined) =>
         Array.isArray(assertions) && assertions.length > 0 && assertions.every(isLive);
       const proven = (operation: "launch_local" | "send_input" | "interrupt" | "terminate" | "steer_active_turn") =>
