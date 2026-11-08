@@ -1,50 +1,135 @@
-// Stickiness is split by what each side can actually see. Native owns the
-// INTENT ("the user deliberately scrolled up") because only it observes the
-// drag. This side owns the GEOMETRY, because only it can read viewport
-// height and content height in the same frame.
+// One owner for where the transcript sits, and it is this file.
 //
-// The WebView's height is not constant: the floating control card, the
-// keyboard, and the safe area all resize it through SwiftUI. UIScrollView
-// does not re-clamp contentOffset when its bounds change, so a pinned
-// transcript silently ends up short of (or past) the last row until the
-// user drags. Nothing else in the app watches for that, so every viewport
-// or content-height change has to re-pin here.
+// Native owns the INTENT ("the reader deliberately dragged away from the
+// bottom") because only it observes the drag. This side owns the GEOMETRY and
+// every correction to it, because only the page can see a row change height
+// in the frame it happens:
+//
+//   pinned    the last row's bottom edge stays at the bottom of the viewport.
+//   reading   the row at the top of the viewport stays where it is on screen,
+//             whatever changes above it (history arriving, an image loading,
+//             a tool opening its output, a keyboard resizing the viewport).
+//
+// iOS WebKit has no scroll anchoring, so the second is done by hand. Both
+// corrections run in the same frame as the change that needs them (resize and
+// ResizeObserver callbacks run after layout and before paint), never a frame
+// later, so a correction is never visible as a jump.
 let stickToBottom = true;
+
+interface Anchor {
+  node: Element;
+  /**
+   * Where `node` sits in the document (top edge plus scroll offset). A reader
+   * scrolling does not change this; only layout above the node does, which is
+   * exactly the movement to cancel. Comparing viewport positions instead
+   * would undo a scroll that has not yet fired its event.
+   */
+  docY: number;
+  /** The next few rows, kept so a vanished anchor has a successor. */
+  fallbacks: { node: Element; docY: number }[];
+}
+
+let anchor: Anchor | null = null;
+/** Root height at the last ResizeObserver callback; a mismatch means a layout shift is pending. */
+let observedHeight = -1;
 
 export function isStickingToBottom(): boolean {
   return stickToBottom;
 }
 
-/// `window.setStickToBottom`: native publishes the user's scroll intent.
+/** `window.setStickToBottom`: native publishes the reader's scroll intent. */
 export function setStickToBottom(stick: unknown): void {
   stickToBottom = !!stick;
+  if (!stickToBottom) captureAnchor();
 }
 
-export function scrollToBottom(): void {
-  const pin = () => {
-    // WebKit can retain an out-of-range DOM scrollY even after UIKit
-    // clamps its native offset. Supply the real maximum, not document height.
-    if (stickToBottom && window.innerHeight > 0) {
-      window.scrollTo(0, Math.max(0, document.documentElement.scrollHeight - window.innerHeight));
-    }
-  };
-  pin();
-  requestAnimationFrame(pin);
+function root(): Element | null {
+  return document.getElementById("root");
 }
 
-export function repinIfSticky(): void {
-  if (stickToBottom) requestAnimationFrame(scrollToBottom);
+function maxScroll(): number {
+  return Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
 }
 
-/// Re-pin on every viewport resize (window and visual viewport) and every
-/// content-height change of the transcript root, not only on renders.
-export function installRepinObservers(root: Element): void {
-  window.addEventListener("resize", repinIfSticky);
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", repinIfSticky);
+export function pinToBottom(): void {
+  // WebKit can retain an out-of-range DOM scrollY even after UIKit clamps its
+  // native offset. Supply the real maximum, not the document height.
+  if (window.innerHeight <= 0) return;
+  const target = maxScroll();
+  if (Math.abs(window.scrollY - target) > 0.5) window.scrollTo(0, target);
+}
+
+/** Remember which row is at the top of the viewport and where. */
+export function captureAnchor(): void {
+  const el = root();
+  if (!el) return;
+  let found: Anchor | null = null;
+  const rows: { node: Element; docY: number }[] = [];
+  const scrollY = window.scrollY;
+  for (const child of el.children) {
+    const rect = child.getBoundingClientRect();
+    if (rect.bottom <= 0.5) continue;
+    rows.push({ node: child, docY: rect.top + scrollY });
+    if (rows.length >= 4) break;
   }
+  if (rows.length) found = { node: rows[0].node, docY: rows[0].docY, fallbacks: rows.slice(1) };
+  anchor = found;
+  observedHeight = el.getBoundingClientRect().height;
+}
+
+/** A rebuilt row keeps its place: the anchor follows it to its new node. */
+export function retargetAnchor(replaced: Map<Element, Element>): void {
+  if (!anchor || replaced.size === 0) return;
+  const to = (node: Element) => replaced.get(node) ?? node;
+  anchor = {
+    node: to(anchor.node),
+    docY: anchor.docY,
+    fallbacks: anchor.fallbacks.map((f) => ({ node: to(f.node), docY: f.docY })),
+  };
+}
+
+function restoreAnchor(): void {
+  if (!anchor) return;
+  const candidates = [{ node: anchor.node, docY: anchor.docY }, ...anchor.fallbacks];
+  const live = candidates.find((c) => c.node.isConnected);
+  if (!live) return;
+  const delta = live.node.getBoundingClientRect().top + window.scrollY - live.docY;
+  if (Math.abs(delta) > 0.5) window.scrollTo(0, window.scrollY + delta);
+  captureAnchor();
+}
+
+/** Bring the page to where the reader expects it after anything changed. */
+export function settle(): void {
+  if (stickToBottom) pinToBottom();
+  else restoreAnchor();
+}
+
+/** Test seam: a fresh document state, as after a document load. */
+export function resetScrollForTesting(): void {
+  stickToBottom = true;
+  anchor = null;
+  observedHeight = -1;
+}
+
+export function installScrollOwner(rootElement: Element): void {
+  window.addEventListener("resize", settle);
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", settle);
+  // Track where the reader holds still, unless a layout shift is waiting for
+  // its ResizeObserver callback: reading geometry now would bake the shift in.
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (stickToBottom) return;
+      if (rootElement.getBoundingClientRect().height !== observedHeight) return;
+      captureAnchor();
+    },
+    { passive: true },
+  );
   // WebKit always has ResizeObserver; the guard only spares jsdom.
   if (typeof ResizeObserver !== "undefined") {
-    new ResizeObserver(repinIfSticky).observe(root);
+    new ResizeObserver(() => {
+      settle();
+      observedHeight = rootElement.getBoundingClientRect().height;
+    }).observe(rootElement);
   }
 }

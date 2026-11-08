@@ -1,25 +1,20 @@
-import { escapeHtml } from "./escape";
+import { reconcile, resetReconciler } from "./reconcile";
 import { markdownToHtml } from "./markdown";
-import { attachSubmittedInputHandlers, renderItem } from "./rows";
-import { isStickingToBottom, scrollToBottom, setStickToBottom } from "./scroll";
-import { captureOpenKeys, restoreOpenKeys } from "./openState";
+import { attachSubmittedInputHandlers } from "./rows";
+import { captureAnchor, isStickingToBottom, resetScrollForTesting, retargetAnchor, setStickToBottom, settle } from "./scroll";
 import { attachSubagentHandlers } from "./subagents";
 import { attachToolBodyHandlers } from "./liteBodies";
 import type { FrameMetrics, RenderMetrics, TranscriptItem, TranscriptPayload } from "./types";
 
 let currentItems: TranscriptItem[] = [];
 const transcriptFrames = new Map<number, Promise<FrameMetrics>>();
-/// Retained mode (the "retained-webkit" benchmark renderer): one DOM node per
-/// item id, reused while the item's JSON signature is unchanged. Only the
-/// item's first root element is kept.
-const retainedItems = new Map<string, { signature: string; node: Element }>();
 
 /// Test seam: a fresh document state, as after a document load.
 export function resetTranscriptStateForTesting(): void {
   currentItems = [];
   transcriptFrames.clear();
-  retainedItems.clear();
-  setStickToBottom(true);
+  resetReconciler();
+  resetScrollForTesting();
 }
 
 /// `window.waitForTranscriptFrame`: resolves once the frame a render queued
@@ -60,129 +55,29 @@ function attachExpandHandlers(scope: ParentNode = document): void {
   }
 }
 
-function updateRetainedIndices(node: Element, index: number): void {
-  if (node.hasAttribute("data-message-index")) {
-    node.setAttribute("data-message-index", String(index));
-  }
-  for (const button of node.querySelectorAll("[data-expand-index]")) {
-    button.setAttribute("data-expand-index", String(index));
-  }
-}
-
-function retainedHTML(payload: TranscriptPayload, root: Element): { html_ms: number; dom_ms: number } {
-  let htmlMs = 0;
-  if (payload.errorMessage && currentItems.length === 0) {
-    retainedItems.clear();
-    const startedAt = performance.now();
-    const html = `<div class="error">${escapeHtml(payload.errorMessage)}</div>`;
-    htmlMs += performance.now() - startedAt;
-    const domStartedAt = performance.now();
-    root.innerHTML = html;
-    return { html_ms: htmlMs, dom_ms: performance.now() - domStartedAt };
-  }
-  if (currentItems.length === 0) {
-    retainedItems.clear();
-    const domStartedAt = performance.now();
-    root.innerHTML = '<div class="empty">No messages yet</div>';
-    return { html_ms: htmlMs, dom_ms: performance.now() - domStartedAt };
-  }
-
-  const nextItems = new Map<string, { signature: string; node: Element }>();
-  const fragment = document.createDocumentFragment();
-  if (payload.errorMessage) {
-    const startedAt = performance.now();
-    const error = document.createElement("div");
-    error.className = "error row";
-    error.textContent = payload.errorMessage;
-    htmlMs += performance.now() - startedAt;
-    fragment.appendChild(error);
-  }
-
-  currentItems.forEach((item, index) => {
-    const signature = JSON.stringify(item);
-    const cached = retainedItems.get(item.id);
-    let node: Element | null;
-    if (cached && cached.signature === signature) {
-      node = cached.node;
-      updateRetainedIndices(node, index);
-    } else {
-      const startedAt = performance.now();
-      const template = document.createElement("template");
-      template.innerHTML = renderItem(item, index).trim();
-      node = template.content.firstElementChild;
-      htmlMs += performance.now() - startedAt;
-      if (!node) return;
-      attachExpandHandlers(node);
-    }
-    nextItems.set(item.id, { signature, node });
-    fragment.appendChild(node);
-  });
-
-  const domStartedAt = performance.now();
-  root.replaceChildren(fragment);
-  const domMs = performance.now() - domStartedAt;
-  retainedItems.clear();
-  for (const [id, entry] of nextItems) retainedItems.set(id, entry);
-  return { html_ms: htmlMs, dom_ms: domMs };
-}
-
 /// `window.renderTranscript(base64, stick, sequence, mode)`: the only way
-/// native puts content on the page. `mode` is "retained" for the retained
-/// benchmark renderer; anything else rebuilds the root from HTML.
+/// native puts content on the page. `mode` is accepted for the benchmark
+/// harness and ignored: there is one renderer.
 export function renderTranscript(
   base64: string,
   shouldStickToBottom: unknown,
   sequence: number,
-  renderMode?: string,
+  _renderMode?: string,
 ): RenderMetrics {
   const startedAt = performance.now();
   // Native owns this decision. Re-reading geometry here is what let a stale
   // opinion override a deliberate scroll away from the bottom.
   setStickToBottom(shouldStickToBottom);
-  const wasAtBottom = isStickingToBottom();
-  const previousItems = currentItems;
-  const previousFirstId = previousItems.length > 0 ? previousItems[0].id : null;
-  const previousScrollHeight = document.documentElement.scrollHeight;
-  const previousScrollY = window.scrollY;
   const decodeStartedAt = performance.now();
   const payload = decodePayload(base64);
   const decodeMs = performance.now() - decodeStartedAt;
   currentItems = payload.items || [];
-  const newFirstId = currentItems.length > 0 ? currentItems[0].id : null;
-  const prepended =
-    previousFirstId && newFirstId && previousFirstId !== newFirstId && currentItems.some((item) => item.id === previousFirstId);
   const root = document.getElementById("root")!;
-  const openKeys = captureOpenKeys(root);
-  let htmlMs: number;
-  let domMs: number;
-  if (renderMode === "retained") {
-    const retainedMetrics = retainedHTML(payload, root);
-    htmlMs = retainedMetrics.html_ms;
-    domMs = retainedMetrics.dom_ms;
-  } else {
-    retainedItems.clear();
-    const htmlStartedAt = performance.now();
-    let html: string;
-    if (payload.errorMessage && currentItems.length === 0) {
-      html = `<div class="error">${escapeHtml(payload.errorMessage)}</div>`;
-    } else if (currentItems.length === 0) {
-      html = '<div class="empty">No messages yet</div>';
-    } else {
-      const error = payload.errorMessage ? `<div class="error row">${escapeHtml(payload.errorMessage)}</div>` : "";
-      html = error + currentItems.map(renderItem).join("");
-    }
-    htmlMs = performance.now() - htmlStartedAt;
-    const domStartedAt = performance.now();
-    root.innerHTML = html;
-    attachExpandHandlers(root);
-    domMs = performance.now() - domStartedAt;
-  }
-  restoreOpenKeys(root, openKeys);
-  if (wasAtBottom) scrollToBottom();
-  else if (prepended) {
-    const delta = document.documentElement.scrollHeight - previousScrollHeight;
-    window.scrollTo(0, previousScrollY + delta);
-  }
+  // The reader's place, taken before anything changes.
+  if (!isStickingToBottom()) captureAnchor();
+  const result = reconcile(root, currentItems, payload.errorMessage, attachExpandHandlers);
+  retargetAnchor(result.replaced);
+  settle();
   const rafStartedAt = performance.now();
   const frame = new Promise<FrameMetrics>((resolve) => {
     requestAnimationFrame(() => {
@@ -195,7 +90,7 @@ export function renderTranscript(
   transcriptFrames.set(sequence, frame);
   return {
     decode_ms: decodeMs,
-    html_ms: htmlMs,
-    dom_ms: domMs,
+    html_ms: result.html_ms,
+    dom_ms: result.dom_ms,
   };
 }

@@ -222,6 +222,7 @@ body {
 
 .media-item {
   display: block;
+  max-height: 240px;
   min-width: 0;
   border-radius: 8px;
   overflow: hidden;
@@ -232,7 +233,7 @@ body {
 .media-item img {
   display: block;
   width: 100%;
-  max-height: 240px;
+  height: 100%;
   object-fit: contain;
   background: rgba(0, 0, 0, 0.16);
 }
@@ -716,6 +717,13 @@ summary::-webkit-details-marker {
 		return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 	}
 	//#endregion
+	//#region src/embeds/ios-transcript/bridge.ts
+	function postToNative(message) {
+		try {
+			window.webkit.messageHandlers.longhouse.postMessage(message);
+		} catch {}
+	}
+	//#endregion
 	//#region src/embeds/ios-transcript/markdown.ts
 	function inlineMarkdown(value) {
 		let html = escapeHtml(value);
@@ -866,23 +874,18 @@ summary::-webkit-details-marker {
 		return html;
 	}
 	//#endregion
-	//#region src/embeds/ios-transcript/bridge.ts
-	function postToNative(message) {
-		try {
-			window.webkit.messageHandlers.longhouse.postMessage(message);
-		} catch {}
-	}
-	//#endregion
 	//#region src/embeds/ios-transcript/media.ts
 	function mediaStrip(media) {
 		const items = (media || []).map((ref) => {
 			if (!ref || !ref.url) return `<span class="media-placeholder">${escapeHtml(ref && ref.mediaState === "pending" ? "Media pending" : "Media unavailable")}</span>`;
 			const href = ref.blobUrl || ref.url;
 			const alt = "Session media " + String(ref.sha256 || "").slice(0, 12);
-			const dimensions = Number.isInteger(ref.width) && ref.width > 0 && Number.isInteger(ref.height) && ref.height > 0 ? ` width="${ref.width}" height="${ref.height}"` : "";
+			const hasDimensions = Number.isInteger(ref.width) && ref.width > 0 && Number.isInteger(ref.height) && ref.height > 0;
+			const dimensions = hasDimensions ? ` width="${ref.width}" height="${ref.height}"` : "";
+			const ratio = hasDimensions ? `${ref.width} / ${ref.height}` : "4 / 3";
 			const animated = String(ref.mimeType || "").toLowerCase().startsWith("image/gif") ? "<span class=\"media-animated\">Animated still</span>" : "";
 			return `
-          <a class="media-item" href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">
+          <a class="media-item" style="aspect-ratio: ${ratio}" href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">
             <img src="${escapeHtml(ref.url)}" alt="${escapeHtml(alt)}" loading="lazy"${dimensions} onerror="this.outerHTML='&lt;span class=&quot;media-placeholder&quot;&gt;Media unavailable&lt;/span&gt;'">
             ${animated}
           </a>
@@ -1214,39 +1217,229 @@ summary::-webkit-details-marker {
 		return template.innerHTML;
 	}
 	//#endregion
+	//#region src/embeds/ios-transcript/reconcile.ts
+	var STATE_KEY = "\0state";
+	var ERROR_KEY = "\0error";
+	var entries = /* @__PURE__ */ new Map();
+	var SCROLLERS = "pre, .table-wrap";
+	function captureUi(nodes) {
+		const open = /* @__PURE__ */ new Set();
+		const scrollLeft = [];
+		for (const node of nodes) {
+			if (node.matches("details[data-open-key][open]")) open.add(node.getAttribute("data-open-key"));
+			for (const d of node.querySelectorAll("details[data-open-key][open]")) open.add(d.getAttribute("data-open-key"));
+			for (const el of node.matches(SCROLLERS) ? [node] : []) scrollLeft.push(el.scrollLeft);
+			for (const el of node.querySelectorAll(SCROLLERS)) scrollLeft.push(el.scrollLeft);
+		}
+		return {
+			open,
+			scrollLeft
+		};
+	}
+	/** Needs the nodes attached: scroll offsets mean nothing without layout. */
+	function applyUi(nodes, state) {
+		let index = 0;
+		for (const node of nodes) {
+			const details = [...node.matches("details[data-open-key]") ? [node] : [], ...node.querySelectorAll("details[data-open-key]")];
+			for (const d of details) if (state.open.has(d.getAttribute("data-open-key") ?? "")) d.open = true;
+			const scrollers = [...node.matches(SCROLLERS) ? [node] : [], ...node.querySelectorAll(SCROLLERS)];
+			for (const el of scrollers) {
+				const left = state.scrollLeft[index++];
+				if (left) el.scrollLeft = left;
+			}
+		}
+	}
+	function updateIndices(nodes, index) {
+		for (const node of nodes) {
+			if (node.hasAttribute("data-message-index")) node.setAttribute("data-message-index", String(index));
+			for (const button of node.querySelectorAll("[data-expand-index]")) button.setAttribute("data-expand-index", String(index));
+		}
+	}
+	function build(html, attach) {
+		const template = document.createElement("template");
+		template.innerHTML = html.trim();
+		attach(template.content);
+		return Array.from(template.content.children);
+	}
+	/**
+	* Make `root` show `items` (or the empty/error document) with the fewest DOM
+	* operations. Nodes already in the right place are not touched.
+	*/
+	function reconcile(root, items, errorMessage, attach) {
+		let htmlMs = 0;
+		let domMs = 0;
+		const replaced = /* @__PURE__ */ new Map();
+		const desired = [];
+		const next = /* @__PURE__ */ new Map();
+		const place = (key, signature, render, index) => {
+			const cached = entries.get(key);
+			if (cached && cached.signature === signature) {
+				desired.push({
+					key,
+					entry: cached,
+					reused: true,
+					index
+				});
+				next.set(key, cached);
+				return;
+			}
+			const startedAt = performance.now();
+			const entry = {
+				signature,
+				nodes: build(render(), attach)
+			};
+			htmlMs += performance.now() - startedAt;
+			if (cached?.nodes.length && entry.nodes.length) replaced.set(cached.nodes[0], entry.nodes[0]);
+			desired.push({
+				key,
+				entry,
+				reused: false,
+				index
+			});
+			next.set(key, entry);
+		};
+		if (errorMessage && items.length === 0) place(STATE_KEY, "error:" + errorMessage, () => `<div class="error">${escapeHtml(errorMessage)}</div>`, 0);
+		else if (items.length === 0) place(STATE_KEY, "empty", () => "<div class=\"empty\">No messages yet</div>", 0);
+		else {
+			if (errorMessage) place(ERROR_KEY, "banner:" + errorMessage, () => `<div class="error row">${escapeHtml(errorMessage)}</div>`, 0);
+			const seen = /* @__PURE__ */ new Map();
+			items.forEach((item, index) => {
+				const count = seen.get(item.id) ?? 0;
+				seen.set(item.id, count + 1);
+				place(count ? `${item.id}#${count}` : item.id, JSON.stringify(item), () => renderItem(item, index), index);
+			});
+		}
+		const carried = /* @__PURE__ */ new Map();
+		for (const { key, reused } of desired) {
+			const old = entries.get(key);
+			if (!reused && old) carried.set(key, captureUi(old.nodes));
+		}
+		const domStartedAt = performance.now();
+		const want = /* @__PURE__ */ new Set();
+		for (const { entry } of desired) for (const node of entry.nodes) want.add(node);
+		let cursor = root.firstChild;
+		const dropUnwanted = () => {
+			while (cursor && !want.has(cursor)) {
+				const stale = cursor;
+				cursor = cursor.nextSibling;
+				stale.remove();
+			}
+		};
+		for (const { entry } of desired) for (const node of entry.nodes) {
+			dropUnwanted();
+			if (node === cursor) cursor = cursor.nextSibling;
+			else root.insertBefore(node, cursor);
+		}
+		dropUnwanted();
+		while (cursor) {
+			const stale = cursor;
+			cursor = cursor.nextSibling;
+			stale.remove();
+		}
+		for (const { key, entry, reused, index } of desired) if (reused) updateIndices(entry.nodes, index);
+		else {
+			const state = carried.get(key);
+			if (state) applyUi(entry.nodes, state);
+			updateIndices(entry.nodes, index);
+		}
+		domMs = performance.now() - domStartedAt;
+		entries = next;
+		return {
+			html_ms: htmlMs,
+			dom_ms: domMs,
+			replaced
+		};
+	}
+	//#endregion
 	//#region src/embeds/ios-transcript/scroll.ts
 	var stickToBottom = true;
+	var anchor = null;
+	/** Root height at the last ResizeObserver callback; a mismatch means a layout shift is pending. */
+	var observedHeight = -1;
 	function isStickingToBottom() {
 		return stickToBottom;
 	}
+	/** `window.setStickToBottom`: native publishes the reader's scroll intent. */
 	function setStickToBottom(stick) {
 		stickToBottom = !!stick;
+		if (!stickToBottom) captureAnchor();
 	}
-	function scrollToBottom() {
-		const pin = () => {
-			if (stickToBottom && window.innerHeight > 0) window.scrollTo(0, Math.max(0, document.documentElement.scrollHeight - window.innerHeight));
+	function root() {
+		return document.getElementById("root");
+	}
+	function maxScroll() {
+		return Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+	}
+	function pinToBottom() {
+		if (window.innerHeight <= 0) return;
+		const target = maxScroll();
+		if (Math.abs(window.scrollY - target) > .5) window.scrollTo(0, target);
+	}
+	/** Remember which row is at the top of the viewport and where. */
+	function captureAnchor() {
+		const el = root();
+		if (!el) return;
+		let found = null;
+		const rows = [];
+		const scrollY = window.scrollY;
+		for (const child of el.children) {
+			const rect = child.getBoundingClientRect();
+			if (rect.bottom <= .5) continue;
+			rows.push({
+				node: child,
+				docY: rect.top + scrollY
+			});
+			if (rows.length >= 4) break;
+		}
+		if (rows.length) found = {
+			node: rows[0].node,
+			docY: rows[0].docY,
+			fallbacks: rows.slice(1)
 		};
-		pin();
-		requestAnimationFrame(pin);
+		anchor = found;
+		observedHeight = el.getBoundingClientRect().height;
 	}
-	function repinIfSticky() {
-		if (stickToBottom) requestAnimationFrame(scrollToBottom);
+	/** A rebuilt row keeps its place: the anchor follows it to its new node. */
+	function retargetAnchor(replaced) {
+		if (!anchor || replaced.size === 0) return;
+		const to = (node) => replaced.get(node) ?? node;
+		anchor = {
+			node: to(anchor.node),
+			docY: anchor.docY,
+			fallbacks: anchor.fallbacks.map((f) => ({
+				node: to(f.node),
+				docY: f.docY
+			}))
+		};
 	}
-	function installRepinObservers(root) {
-		window.addEventListener("resize", repinIfSticky);
-		if (window.visualViewport) window.visualViewport.addEventListener("resize", repinIfSticky);
-		if (typeof ResizeObserver !== "undefined") new ResizeObserver(repinIfSticky).observe(root);
+	function restoreAnchor() {
+		if (!anchor) return;
+		const live = [{
+			node: anchor.node,
+			docY: anchor.docY
+		}, ...anchor.fallbacks].find((c) => c.node.isConnected);
+		if (!live) return;
+		const delta = live.node.getBoundingClientRect().top + window.scrollY - live.docY;
+		if (Math.abs(delta) > .5) window.scrollTo(0, window.scrollY + delta);
+		captureAnchor();
 	}
-	//#endregion
-	//#region src/embeds/ios-transcript/openState.ts
-	function captureOpenKeys(root) {
-		return new Set(Array.from(root.querySelectorAll("details[data-open-key][open]")).map((node) => node.getAttribute("data-open-key")).filter((key) => Boolean(key)));
+	/** Bring the page to where the reader expects it after anything changed. */
+	function settle() {
+		if (stickToBottom) pinToBottom();
+		else restoreAnchor();
 	}
-	function restoreOpenKeys(root, keys) {
-		if (!keys.size) return;
-		root.querySelectorAll("details[data-open-key]").forEach((node) => {
-			if (keys.has(node.getAttribute("data-open-key") ?? "")) node.open = true;
-		});
+	function installScrollOwner(rootElement) {
+		window.addEventListener("resize", settle);
+		if (window.visualViewport) window.visualViewport.addEventListener("resize", settle);
+		window.addEventListener("scroll", () => {
+			if (stickToBottom) return;
+			if (rootElement.getBoundingClientRect().height !== observedHeight) return;
+			captureAnchor();
+		}, { passive: true });
+		if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => {
+			settle();
+			observedHeight = rootElement.getBoundingClientRect().height;
+		}).observe(rootElement);
 	}
 	//#endregion
 	//#region src/embeds/ios-transcript/liteBodies.ts
@@ -1265,7 +1458,6 @@ summary::-webkit-details-marker {
 	//#region src/embeds/ios-transcript/render.ts
 	var currentItems = [];
 	var transcriptFrames = /* @__PURE__ */ new Map();
-	var retainedItems = /* @__PURE__ */ new Map();
 	async function waitForTranscriptFrame(sequence) {
 		const frame = transcriptFrames.get(sequence);
 		if (!frame) throw new Error(`missing transcript frame ${sequence}`);
@@ -1297,116 +1489,18 @@ summary::-webkit-details-marker {
 			button.remove();
 		});
 	}
-	function updateRetainedIndices(node, index) {
-		if (node.hasAttribute("data-message-index")) node.setAttribute("data-message-index", String(index));
-		for (const button of node.querySelectorAll("[data-expand-index]")) button.setAttribute("data-expand-index", String(index));
-	}
-	function retainedHTML(payload, root) {
-		let htmlMs = 0;
-		if (payload.errorMessage && currentItems.length === 0) {
-			retainedItems.clear();
-			const startedAt = performance.now();
-			const html = `<div class="error">${escapeHtml(payload.errorMessage)}</div>`;
-			htmlMs += performance.now() - startedAt;
-			const domStartedAt = performance.now();
-			root.innerHTML = html;
-			return {
-				html_ms: htmlMs,
-				dom_ms: performance.now() - domStartedAt
-			};
-		}
-		if (currentItems.length === 0) {
-			retainedItems.clear();
-			const domStartedAt = performance.now();
-			root.innerHTML = "<div class=\"empty\">No messages yet</div>";
-			return {
-				html_ms: htmlMs,
-				dom_ms: performance.now() - domStartedAt
-			};
-		}
-		const nextItems = /* @__PURE__ */ new Map();
-		const fragment = document.createDocumentFragment();
-		if (payload.errorMessage) {
-			const startedAt = performance.now();
-			const error = document.createElement("div");
-			error.className = "error row";
-			error.textContent = payload.errorMessage;
-			htmlMs += performance.now() - startedAt;
-			fragment.appendChild(error);
-		}
-		currentItems.forEach((item, index) => {
-			const signature = JSON.stringify(item);
-			const cached = retainedItems.get(item.id);
-			let node;
-			if (cached && cached.signature === signature) {
-				node = cached.node;
-				updateRetainedIndices(node, index);
-			} else {
-				const startedAt = performance.now();
-				const template = document.createElement("template");
-				template.innerHTML = renderItem(item, index).trim();
-				node = template.content.firstElementChild;
-				htmlMs += performance.now() - startedAt;
-				if (!node) return;
-				attachExpandHandlers(node);
-			}
-			nextItems.set(item.id, {
-				signature,
-				node
-			});
-			fragment.appendChild(node);
-		});
-		const domStartedAt = performance.now();
-		root.replaceChildren(fragment);
-		const domMs = performance.now() - domStartedAt;
-		retainedItems.clear();
-		for (const [id, entry] of nextItems) retainedItems.set(id, entry);
-		return {
-			html_ms: htmlMs,
-			dom_ms: domMs
-		};
-	}
-	function renderTranscript(base64, shouldStickToBottom, sequence, renderMode) {
+	function renderTranscript(base64, shouldStickToBottom, sequence, _renderMode) {
 		const startedAt = performance.now();
 		setStickToBottom(shouldStickToBottom);
-		const wasAtBottom = isStickingToBottom();
-		const previousItems = currentItems;
-		const previousFirstId = previousItems.length > 0 ? previousItems[0].id : null;
-		const previousScrollHeight = document.documentElement.scrollHeight;
-		const previousScrollY = window.scrollY;
 		const decodeStartedAt = performance.now();
 		const payload = decodePayload(base64);
 		const decodeMs = performance.now() - decodeStartedAt;
 		currentItems = payload.items || [];
-		const newFirstId = currentItems.length > 0 ? currentItems[0].id : null;
-		const prepended = previousFirstId && newFirstId && previousFirstId !== newFirstId && currentItems.some((item) => item.id === previousFirstId);
 		const root = document.getElementById("root");
-		const openKeys = captureOpenKeys(root);
-		let htmlMs;
-		let domMs;
-		if (renderMode === "retained") {
-			const retainedMetrics = retainedHTML(payload, root);
-			htmlMs = retainedMetrics.html_ms;
-			domMs = retainedMetrics.dom_ms;
-		} else {
-			retainedItems.clear();
-			const htmlStartedAt = performance.now();
-			let html;
-			if (payload.errorMessage && currentItems.length === 0) html = `<div class="error">${escapeHtml(payload.errorMessage)}</div>`;
-			else if (currentItems.length === 0) html = "<div class=\"empty\">No messages yet</div>";
-			else html = (payload.errorMessage ? `<div class="error row">${escapeHtml(payload.errorMessage)}</div>` : "") + currentItems.map(renderItem).join("");
-			htmlMs = performance.now() - htmlStartedAt;
-			const domStartedAt = performance.now();
-			root.innerHTML = html;
-			attachExpandHandlers(root);
-			domMs = performance.now() - domStartedAt;
-		}
-		restoreOpenKeys(root, openKeys);
-		if (wasAtBottom) scrollToBottom();
-		else if (prepended) {
-			const delta = document.documentElement.scrollHeight - previousScrollHeight;
-			window.scrollTo(0, previousScrollY + delta);
-		}
+		if (!isStickingToBottom()) captureAnchor();
+		const result = reconcile(root, currentItems, payload.errorMessage, attachExpandHandlers);
+		retargetAnchor(result.replaced);
+		settle();
 		const rafStartedAt = performance.now();
 		const frame = new Promise((resolve) => {
 			requestAnimationFrame(() => {
@@ -1419,8 +1513,8 @@ summary::-webkit-details-marker {
 		transcriptFrames.set(sequence, frame);
 		return {
 			decode_ms: decodeMs,
-			html_ms: htmlMs,
-			dom_ms: domMs
+			html_ms: result.html_ms,
+			dom_ms: result.dom_ms
 		};
 	}
 	//#endregion
@@ -1428,7 +1522,7 @@ summary::-webkit-details-marker {
 	window.waitForTranscriptFrame = waitForTranscriptFrame;
 	window.setStickToBottom = setStickToBottom;
 	window.renderTranscript = renderTranscript;
-	installRepinObservers(document.getElementById("root"));
+	installScrollOwner(document.getElementById("root"));
 	//#endregion
 })();
   </script>

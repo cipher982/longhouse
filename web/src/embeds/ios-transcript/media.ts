@@ -13,13 +13,18 @@ export function mediaStrip(media: MediaRef[] | null | undefined): string {
       const hasDimensions =
         Number.isInteger(ref.width) && (ref.width as number) > 0 && Number.isInteger(ref.height) && (ref.height as number) > 0;
       const dimensions = hasDimensions ? ` width="${ref.width}" height="${ref.height}"` : "";
+      // The box is sized before the image arrives and never again: declared
+      // dimensions give its true ratio, an undeclared image gets a 4:3 box the
+      // image is fitted into. Either way the row does not change height when
+      // the bytes land, so nothing the reader is looking at moves.
+      const ratio = hasDimensions ? `${ref.width} / ${ref.height}` : "4 / 3";
       const animated = String(ref.mimeType || "")
         .toLowerCase()
         .startsWith("image/gif")
         ? '<span class="media-animated">Animated still</span>'
         : "";
       return `
-          <a class="media-item" href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">
+          <a class="media-item" style="aspect-ratio: ${ratio}" href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">
             <img src="${escapeHtml(ref.url)}" alt="${escapeHtml(alt)}" loading="lazy"${dimensions} onerror="this.outerHTML='&lt;span class=&quot;media-placeholder&quot;&gt;Media unavailable&lt;/span&gt;'">
             ${animated}
           </a>

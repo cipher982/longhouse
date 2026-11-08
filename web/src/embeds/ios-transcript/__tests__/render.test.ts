@@ -76,17 +76,15 @@ describe("renderTranscript against the golden payload", () => {
     await expect(waitForTranscriptFrame(sequence)).rejects.toThrow(`missing transcript frame ${sequence}`);
   });
 
-  it("renders the same DOM in retained mode", () => {
+  it("renders the same DOM whether built fresh or updated in place", () => {
     render({ items: goldenItems });
-    const html = root().innerHTML;
-    resetTranscriptStateForTesting();
-    document.body.innerHTML = '<main id="root"></main>';
-    render({ items: goldenItems }, { mode: "retained" });
-    // Retained keeps each item's first root element; the golden has no
-    // sibling preview or worker list, so the text content matches exactly.
-    expect(root().textContent?.replace(/\s+/g, " ")).toBe(
-      new DOMParser().parseFromString(html, "text/html").body.textContent?.replace(/\s+/g, " "),
-    );
+    const fresh = root().innerHTML;
+    // A second, identical payload touches nothing.
+    const before = rows();
+    render({ items: goldenItems });
+    expect(rows()).toEqual(before);
+    rows().forEach((node, index) => expect(node).toBe(before[index]));
+    expect(root().innerHTML).toBe(fresh);
   });
 });
 
@@ -105,7 +103,7 @@ describe("empty and error documents", () => {
   });
 });
 
-describe("retained mode", () => {
+describe("in-place updates", () => {
   const item = (id: string, body: string, extra: Partial<TranscriptItem> = {}): TranscriptItem => ({
     id,
     kind: "message",
@@ -117,10 +115,10 @@ describe("retained mode", () => {
   });
 
   it("reuses a node while its item is unchanged and rebuilds it when it changes", () => {
-    render({ items: [item("a", "first"), item("b", "second")] }, { mode: "retained" });
+    render({ items: [item("a", "first"), item("b", "second")] });
     const [a, b] = rows();
 
-    render({ items: [item("a", "first"), item("b", "second, edited"), item("c", "third")] }, { mode: "retained" });
+    render({ items: [item("a", "first"), item("b", "second, edited"), item("c", "third")] });
     const [a2, b2, c2] = rows();
     expect(a2).toBe(a);
     expect(b2).not.toBe(b);
@@ -129,11 +127,11 @@ describe("retained mode", () => {
   });
 
   it("re-indexes a reused node when history is prepended", () => {
-    render({ items: [item("b", "later", { collapsed: true, fullBody: "later, in full" })] }, { mode: "retained" });
+    render({ items: [item("b", "later", { collapsed: true, fullBody: "later, in full" })] });
     const reused = rows()[0];
     expect(reused.getAttribute("data-message-index")).toBe("0");
 
-    render({ items: [item("a", "earlier"), item("b", "later", { collapsed: true, fullBody: "later, in full" })] }, { mode: "retained" });
+    render({ items: [item("a", "earlier"), item("b", "later", { collapsed: true, fullBody: "later, in full" })] });
     expect(rows()[1]).toBe(reused);
     expect(reused.getAttribute("data-message-index")).toBe("1");
     expect(reused.querySelector("[data-expand-index]")?.getAttribute("data-expand-index")).toBe("1");
@@ -145,10 +143,54 @@ describe("retained mode", () => {
   });
 
   it("drops nodes for items that left the payload", () => {
-    render({ items: [item("a", "one"), item("b", "two")] }, { mode: "retained" });
-    render({ items: [item("b", "two")] }, { mode: "retained" });
+    render({ items: [item("a", "one"), item("b", "two")] });
+    render({ items: [item("b", "two")] });
     expect(rows()).toHaveLength(1);
     expect(rows()[0].textContent).toContain("two");
+  });
+});
+
+describe("rows that render to several nodes", () => {
+  const tool = (id: string, extra: Partial<TranscriptItem> = {}): TranscriptItem => ({
+    id,
+    kind: "tool",
+    title: "Bash",
+    subtitle: "npm test",
+    status: "failed",
+    failurePreview: "boom",
+    input: "npm test",
+    ...extra,
+  });
+
+  it("keeps every node of an item (the tool and its failure preview) and replaces them together", () => {
+    render({ items: [tool("t")] });
+    expect(rows().map((n) => n.className)).toEqual(["tool row", "failure-preview"]);
+    const [details, preview] = rows();
+
+    render({ items: [tool("t"), { id: "m", kind: "message", role: "assistant", body: "after" }] });
+    expect(rows()[0]).toBe(details);
+    expect(rows()[1]).toBe(preview);
+
+    render({ items: [tool("t", { failurePreview: "boom, differently" }), { id: "m", kind: "message", role: "assistant", body: "after" }] });
+    expect(rows()[0]).not.toBe(details);
+    expect(rows().map((n) => n.className)).toEqual(["tool row", "failure-preview", "row message assistant"]);
+    expect(rows()[1].textContent).toContain("differently");
+  });
+
+  it("keeps a disclosure the reader opened when its row is rebuilt", () => {
+    render({ items: [tool("t", { status: "running", failurePreview: null })] });
+    rows()[0].setAttribute("open", "");
+    render({ items: [tool("t", { status: "ok", failurePreview: null, output: "done" })] });
+    expect((rows()[0] as HTMLDetailsElement).open).toBe(true);
+    expect(rows()[0].textContent).toContain("done");
+  });
+
+  it("keeps a message the reader expanded when an unrelated item changes", () => {
+    const collapsed = { id: "c", kind: "message", role: "assistant", body: "short", collapsed: true, fullBody: "short, then the rest" } as TranscriptItem;
+    render({ items: [collapsed, { id: "x", kind: "message", role: "assistant", body: "one" }] });
+    (rows()[0].querySelector(".expand") as HTMLButtonElement).click();
+    render({ items: [collapsed, { id: "x", kind: "message", role: "assistant", body: "two" }] });
+    expect(rows()[0].textContent).toContain("the rest");
   });
 });
 
@@ -460,12 +502,15 @@ describe("subagents and the native bridge", () => {
 
 describe("scroll pinning", () => {
   it("pins to the bottom only while native says to stick", () => {
+    // jsdom has no layout: give the document a height to be pinned to.
+    Object.defineProperty(document.documentElement, "scrollHeight", { configurable: true, value: 5000 });
     render({ items: goldenItems }, { stick: true });
     expect(scrollTo).toHaveBeenCalled();
     scrollTo.mockClear();
     setStickToBottom(false);
     render({ items: goldenItems }, { stick: false });
     expect(scrollTo).not.toHaveBeenCalled();
+    delete (document.documentElement as unknown as { scrollHeight?: number }).scrollHeight;
   });
 });
 

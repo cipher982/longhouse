@@ -288,7 +288,8 @@ export const scenarios: Scenario[] = [
   },
   {
     name: "stream_update_cost",
-    about: "Cost of one update on a 120-row transcript at streaming cadence (advisory; machine-dependent).",
+    about:
+      "Synchronous cost of one update (decode, DOM, forced layout) on a 120-row transcript. Advisory: machine-dependent, and paint is excluded because headless WebKit paces frames at 130-400 ms even for an empty page.",
     async run(h) {
       const base = conversation(60);
       await h.render(base, true);
@@ -296,19 +297,21 @@ export const scenarios: Scenario[] = [
       for (let step = 0; step < 40; step++) {
         const items = withLastAssistantBody(base, streamingBody(step));
         const b64 = Buffer.from(JSON.stringify({ errorMessage: null, items })).toString("base64");
-        const ms = await h.page.evaluate(async ([b, q]) => {
-          const t0 = performance.now();
-          const m = (window as any).renderTranscript(b, true, q, "snapshot");
-          const sync = performance.now() - t0;
-          await (window as any).waitForTranscriptFrame(q);
-          return { total: performance.now() - t0, sync, ...m };
-        }, [b64, 10_000 + step] as const);
-        costs.push(ms.total);
-        if (step === 20) console.log("  cost sample", JSON.stringify(ms));
-        await sleep(50);
+        costs.push(
+          await h.page.evaluate(
+            ([b, q]) => {
+              const t0 = performance.now();
+              (window as any).renderTranscript(b, true, q, "x");
+              document.body.offsetHeight;
+              return performance.now() - t0;
+            },
+            [b64, 10_000 + step] as const,
+          ),
+        );
+        await sleep(30);
       }
       costs.sort((a, b) => a - b);
-      return [le("p95 update to frame", costs[Math.floor(costs.length * 0.95)], 16.7, "ms", true)];
+      return [le("p95 sync update", costs[Math.floor(costs.length * 0.95)], 16.7, "ms", true)];
     },
   },
 ];

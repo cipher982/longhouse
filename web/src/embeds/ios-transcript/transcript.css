@@ -216,6 +216,7 @@ body {
 
 .media-item {
   display: block;
+  max-height: 240px;
   min-width: 0;
   border-radius: 8px;
   overflow: hidden;
@@ -226,7 +227,7 @@ body {
 .media-item img {
   display: block;
   width: 100%;
-  max-height: 240px;
+  height: 100%;
   object-fit: contain;
   background: rgba(0, 0, 0, 0.16);
 }
