@@ -105,7 +105,11 @@ export function reconcile(
     const startedAt = performance.now();
     const entry: Entry = { signature, nodes: build(render(), attach) };
     htmlMs += performance.now() - startedAt;
-    if (cached?.nodes.length && entry.nodes.length) replaced.set(cached.nodes[0], entry.nodes[0]);
+    // An item can render several sibling roots (tool row, failure preview,
+    // sub-agents); any of them can be the reader's anchor.
+    if (cached) {
+      for (let i = 0; i < Math.min(cached.nodes.length, entry.nodes.length); i++) replaced.set(cached.nodes[i], entry.nodes[i]);
+    }
     desired.push({ key, entry, reused: false, index });
     next.set(key, entry);
   };

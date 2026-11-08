@@ -1289,7 +1289,7 @@ summary::-webkit-details-marker {
 				nodes: build(render(), attach)
 			};
 			htmlMs += performance.now() - startedAt;
-			if (cached?.nodes.length && entry.nodes.length) replaced.set(cached.nodes[0], entry.nodes[0]);
+			if (cached) for (let i = 0; i < Math.min(cached.nodes.length, entry.nodes.length); i++) replaced.set(cached.nodes[i], entry.nodes[i]);
 			desired.push({
 				key,
 				entry,
@@ -1403,7 +1403,7 @@ summary::-webkit-details-marker {
 	function pinToBottom() {
 		if (window.innerHeight <= 0) return;
 		const target = maxScroll();
-		if (Math.abs(window.scrollY - target) > .5) window.scrollTo(0, target);
+		window.scrollTo(0, target);
 	}
 	/** Remember which row is at the top of the viewport and where. */
 	function captureAnchor() {

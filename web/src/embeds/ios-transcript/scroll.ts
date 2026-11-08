@@ -79,7 +79,9 @@ export function pinToBottom(): void {
   // native offset. Supply the real maximum, not the document height.
   if (window.innerHeight <= 0) return;
   const target = maxScroll();
-  if (Math.abs(window.scrollY - target) > 0.5) window.scrollTo(0, target);
+  // Always write: native's offset can be stale while the DOM already reads the
+  // target, and the write is what re-syncs UIScrollView.
+  window.scrollTo(0, target);
 }
 
 /** Remember which row is at the top of the viewport and where. */
