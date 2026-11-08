@@ -47,13 +47,13 @@ enum TranscriptBenchmarkTrace {
         "prepend_50_rows",
         "scroll_away_during_stream",
         "composer_focus_during_stream",
+        "measured_prepend_anchor_error",
     ]
 
     static let deferredOperations = [
         "delayed_media_resize",
         "tool_disclosure_expansion",
         "collapsed_message_expansion",
-        "measured_prepend_anchor_error",
     ]
 
     static func initialEvents() -> [SessionEvent] {

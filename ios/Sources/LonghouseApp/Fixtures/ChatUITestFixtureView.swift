@@ -204,10 +204,14 @@ struct ChatUITestFixtureView: View {
                         while !Task.isCancelled && !benchmarkScrollCompleted {
                             try? await Task.sleep(nanoseconds: 25_000_000)
                         }
+                        // The reader has scrolled away and holds still: from
+                        // here every layout change must leave their row alone.
+                        _ = await TranscriptStabilityProbe.start()
                         probe.recordBenchmark(phase: "running", updateCount: updateCount)
                     }
                 )
                 let rendered = await waitForBenchmarkRender(result.expectedLatestItemID)
+                probe.recordStability(await TranscriptStabilityProbe.stop())
                 let stalls = await MainThreadStallMonitor.shared.snapshot()
                 probe.recordMainThreadStalls(stalls)
                 probe.recordBenchmark(

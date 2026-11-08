@@ -111,6 +111,17 @@ final class TranscriptRendererBenchmarkUITests: XCTestCase {
 
         XCTAssertEqual(final.benchmarkUpdates, 128, readProbe(probeURL, status: status))
         XCTAssertEqual(final.traceRepeats, 0, readProbe(probeURL, status: status))
+        // The reader scrolled away and held still while 50 older rows, a
+        // streaming reply, tool transitions and the keyboard changed the page
+        // around them. The page measured how far their row moved (budget 2 pt).
+        print("TRANSCRIPT_STABILITY drift_pt=\(final.stabilityDriftPt) lost=\(final.stabilityLost) frames=\(final.stabilityFrames)")
+        XCTAssertTrue(final.stabilityRan, "The stability probe did not run. \(readProbe(probeURL, status: status))")
+        XCTAssertGreaterThan(final.stabilityFrames, 10, readProbe(probeURL, status: status))
+        XCTAssertEqual(final.stabilityLost, 0, "The reader's row vanished. \(readProbe(probeURL, status: status))")
+        XCTAssertLessThanOrEqual(
+            final.stabilityDriftPt, 2.0,
+            "The reader's row moved \(final.stabilityDriftPt) pt without their input. \(readProbe(probeURL, status: status))"
+        )
         XCTAssertEqual(final.stick, 0, "Streaming snapped back to bottom after an intentional upward scroll. \(readProbe(probeURL, status: status))")
         // The trace is deterministic: 50 prepended + 120 initial + the streamed
         // reply + one activity group (the three completed tool calls, grouped
@@ -269,6 +280,10 @@ private struct BenchmarkProbeMetrics {
     let lowPowerMode: Bool
     let batteryState: String
     let batteryLevelPercent: Int
+    let stabilityRan: Bool
+    let stabilityFrames: Int
+    let stabilityLost: Int
+    let stabilityDriftPt: Double
 
     init(_ label: String) {
         let values = Dictionary(uniqueKeysWithValues: label.split(separator: " ").compactMap { token -> (String, String)? in
@@ -320,6 +335,10 @@ private struct BenchmarkProbeMetrics {
         lowPowerMode = values["low_power"] == "1"
         batteryState = values["battery_state"] ?? "unknown"
         batteryLevelPercent = Int(values["battery_level_percent"] ?? "") ?? -1
+        stabilityRan = values["stability_ran"] == "1"
+        stabilityFrames = Int(values["stability_frames"] ?? "") ?? 0
+        stabilityLost = Int(values["stability_lost"] ?? "") ?? 0
+        stabilityDriftPt = (Double(values["stability_drift_tenths_pt"] ?? "") ?? 0) / 10
     }
 }
 

@@ -116,7 +116,13 @@ enum WebTranscriptWebViewPool {
     private static func configuredWebView() -> TranscriptWebView {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
+#if DEBUG
+        TranscriptStabilityProbe.install(on: configuration)
+#endif
         let webView = TranscriptWebView(frame: .zero, configuration: configuration)
+#if DEBUG
+        TranscriptStabilityProbe.attach(webView)
+#endif
         // A long press on a URL in transcript text otherwise fetches and
         // previews it — a load the navigation policy above never sees.
         webView.allowsLinkPreview = false

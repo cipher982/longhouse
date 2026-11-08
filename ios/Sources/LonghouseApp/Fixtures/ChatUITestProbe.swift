@@ -43,6 +43,10 @@ final class ChatUITestProbe {
     private var mainThreadStallMaxMs = 0
     private var coldMainThreadStallCount = 0
     private var coldMainThreadStallMaxMs = 0
+    private var stabilityFrames = 0
+    private var stabilityLost = 0
+    private var stabilityDriftTenthsPt = 0
+    private var stabilityRan = false
     private let buildCommit: String
     private let buildDirty: Bool
     private let deviceName: String
@@ -173,6 +177,15 @@ final class ChatUITestProbe {
         rebuildAndPersist()
     }
 
+    /// The page-measured movement of the reader's anchor row over the trace.
+    func recordStability(_ result: TranscriptStabilityProbe.Result?) {
+        stabilityRan = result != nil
+        stabilityFrames = result?.frames ?? 0
+        stabilityLost = result?.lost ?? 0
+        stabilityDriftTenthsPt = Int(((result?.maxDriftPt ?? 0) * 10).rounded())
+        rebuildAndPersist()
+    }
+
     func attachStatusLabel(_ label: UILabel) {
         statusLabel = label
         updateStatusLabel()
@@ -229,6 +242,10 @@ final class ChatUITestProbe {
             "main_stall_max_ms=\(mainThreadStallMaxMs)",
             "cold_main_stalls=\(coldMainThreadStallCount)",
             "cold_main_stall_max_ms=\(coldMainThreadStallMaxMs)",
+            "stability_ran=\(stabilityRan ? 1 : 0)",
+            "stability_frames=\(stabilityFrames)",
+            "stability_lost=\(stabilityLost)",
+            "stability_drift_tenths_pt=\(stabilityDriftTenthsPt)",
         ].joined(separator: " ")
         updateStatusLabel()
         persist()
