@@ -159,6 +159,12 @@ describe("rows", () => {
     expect(root().querySelector(".bubble")?.textContent).toBe("<the whole thing>");
   });
 
+  it("shows an attached-images chip instead of the engine instruction", () => {
+    render({ items: [{ id: "u", kind: "message", role: "user", body: "look", attachedImages: 2, collapsed: false }] });
+    expect(root().querySelector(".bubble")?.textContent).toBe("look");
+    expect(root().querySelector("[data-testid=session-attached-images]")?.textContent).toBe("2 images attached");
+  });
+
   describe("reasoning", () => {
     it("shows a provider's reasoning summary as readable prose with the full thought behind a tap", () => {
       render({

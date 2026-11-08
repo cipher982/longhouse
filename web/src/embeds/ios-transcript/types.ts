@@ -62,6 +62,7 @@ export interface TranscriptItem {
   media?: MediaRef[] | null;
   /** Bounded attachment metadata for optimistic submitted rows; bytes stay native. */
   attachments?: AttachmentSummary[] | null;
+  attachedImages?: number | null;
   failurePreview?: string | null;
   diff?: DiffLine[] | null;
   subagents?: Subagent[] | null;

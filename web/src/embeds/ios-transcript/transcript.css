@@ -677,3 +677,10 @@ summary::-webkit-details-marker {
   font-size: 11px;
   color: var(--secondary);
 }
+
+.attached-chip {
+  margin-top: 4px;
+  color: var(--secondary);
+  font-size: 12px;
+  text-align: right;
+}

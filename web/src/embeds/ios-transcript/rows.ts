@@ -12,6 +12,8 @@ export function message(item: TranscriptItem, index: number): string {
   const expand = item.collapsed ? `<button class="expand" data-expand-index="${index}">Show full message</button>` : "";
   const media = mediaStrip(item.media || []);
   if (item.role === "user") {
+    const n = item.attachedImages || 0;
+    const attached = n > 0 ? `<div class="attached-chip" data-testid="session-attached-images">${n === 1 ? "1 image attached" : `${n} images attached`}</div>` : "";
     const origin =
       item.origin === "longhouse"
         ? '<div id="session-chat-input-origin-longhouse" class="origin" aria-label="Sent via Longhouse">Longhouse</div>'
@@ -19,7 +21,8 @@ export function message(item: TranscriptItem, index: number): string {
     return `
           <div class="row message user">
             <div>
-              <div class="bubble">${body}</div>
+              ${item.body ? `<div class="bubble">${body}</div>` : ""}
+              ${attached}
               ${media}
               ${expand}
               ${origin}

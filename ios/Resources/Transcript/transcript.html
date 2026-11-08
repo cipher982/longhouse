@@ -683,6 +683,13 @@ summary::-webkit-details-marker {
   font-size: 11px;
   color: var(--secondary);
 }
+
+.attached-chip {
+  margin-top: 4px;
+  color: var(--secondary);
+  font-size: 12px;
+  text-align: right;
+}
   </style>
 </head>
 <body>
@@ -1066,16 +1073,22 @@ summary::-webkit-details-marker {
 		const body = item.role === "assistant" ? markdownToHtml(item.body || "") : escapeHtml(item.body || "");
 		const expand = item.collapsed ? `<button class="expand" data-expand-index="${index}">Show full message</button>` : "";
 		const media = mediaStrip(item.media || []);
-		if (item.role === "user") return `
+		if (item.role === "user") {
+			const n = item.attachedImages || 0;
+			const attached = n > 0 ? `<div class="attached-chip" data-testid="session-attached-images">${n === 1 ? "1 image attached" : `${n} images attached`}</div>` : "";
+			const origin = item.origin === "longhouse" ? "<div id=\"session-chat-input-origin-longhouse\" class=\"origin\" aria-label=\"Sent via Longhouse\">Longhouse</div>" : "";
+			return `
           <div class="row message user">
             <div>
-              <div class="bubble">${body}</div>
+              ${item.body ? `<div class="bubble">${body}</div>` : ""}
+              ${attached}
               ${media}
               ${expand}
-              ${item.origin === "longhouse" ? "<div id=\"session-chat-input-origin-longhouse\" class=\"origin\" aria-label=\"Sent via Longhouse\">Longhouse</div>" : ""}
+              ${origin}
             </div>
           </div>
         `;
+		}
 		return `
         <article class="row message assistant" data-message-index="${index}">
           <div class="message-content">${body}</div>

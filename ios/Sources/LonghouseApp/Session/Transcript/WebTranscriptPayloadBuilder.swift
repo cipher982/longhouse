@@ -321,7 +321,10 @@ extension WebTranscriptView {
         origin: SessionInputAuthoredVia?,
         mediaRefs: [WebTranscriptMediaRef]? = nil
     ) -> WebTranscriptPayloadItem {
-        let displayText = text
+        let split = role == "user"
+            ? TranscriptTextPolicy.splittingAttachmentsBlock(text)
+            : (text: text, imageCount: nil as Int?)
+        let displayText = split.text
         let collapsed = TranscriptTextPolicy.shouldCollapseMessage(displayText)
         return WebTranscriptPayloadItem(
             id: id,
@@ -338,7 +341,8 @@ extension WebTranscriptView {
             output: nil,
             calls: [],
             origin: origin?.payloadValue,
-            media: mediaRefs
+            media: mediaRefs,
+            attachedImages: split.imageCount
         )
     }
 
@@ -872,6 +876,8 @@ struct WebTranscriptPayloadItem: Encodable {
     /// Bounded attachment metadata for optimistic submitted rows. Full bytes
     /// never cross the WebView boundary.
     var attachments: [SubmittedInputAttachmentSummary]? = nil
+    /// Images the sender attached, taken from the engine's instruction block.
+    var attachedImages: Int? = nil
     /// Bounded preview shown without a tap on a failed row (R4).
     var failurePreview: String? = nil
     /// Rendered diff for edit rows (R3).
