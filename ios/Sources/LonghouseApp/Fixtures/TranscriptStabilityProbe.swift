@@ -1,5 +1,6 @@
 #if DEBUG
 import Foundation
+import OSLog
 import WebKit
 
 /// Measures, inside the real WKWebView, whether the row a reader is looking at
@@ -36,6 +37,20 @@ enum TranscriptStabilityProbe {
 
     static var isEnabled: Bool { UITestHooks.chatFixtureProbePath != nil }
 
+    /// `LONGHOUSE_STABILITY_LOG=1` makes the app log, when a session closes, how
+    /// many layout shifts the page absorbed for the reader (real-data tours).
+    static var isLogging: Bool { ProcessInfo.processInfo.environment["LONGHOUSE_STABILITY_LOG"] == "1" }
+
+    private static let logger = Logger(subsystem: "ai.longhouse.ios", category: "TranscriptStability")
+
+    /// Cumulative counters of the page's scroll owner since the document loaded.
+    static func logStats(reason: String, webView: WKWebView) {
+        guard isLogging else { return }
+        webView.evaluateJavaScript("window.__lhScrollStats ? JSON.stringify(window.__lhScrollStats()) : 'none'") { value, _ in
+            logger.info("stability stats reason=\(reason, privacy: .public) \((value as? String) ?? "unavailable", privacy: .public)")
+        }
+    }
+
     static func install(on configuration: WKWebViewConfiguration) {
         guard isEnabled else { return }
         configuration.userContentController.addUserScript(
@@ -44,7 +59,7 @@ enum TranscriptStabilityProbe {
     }
 
     static func attach(_ view: WKWebView) {
-        guard isEnabled else { return }
+        guard isEnabled || isLogging else { return }
         webView = view
     }
 

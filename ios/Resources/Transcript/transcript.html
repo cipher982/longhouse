@@ -1360,8 +1360,29 @@ summary::-webkit-details-marker {
 	* movement of the anchor row in the document minus this is drift the reader saw.
 	*/
 	var corrected = 0;
+	var shiftStats = {
+		render: {
+			count: 0,
+			total: 0,
+			max: 0
+		},
+		layout: {
+			count: 0,
+			total: 0,
+			max: 0
+		}
+	};
 	function scrollStats() {
-		return { corrected };
+		const round = (b) => ({
+			count: b.count,
+			total: Math.round(b.total),
+			max: Math.round(b.max)
+		});
+		return {
+			corrected,
+			render: round(shiftStats.render),
+			layout: round(shiftStats.layout)
+		};
 	}
 	/** Root height at the last ResizeObserver callback; a mismatch means a layout shift is pending. */
 	var observedHeight = -1;
@@ -1421,7 +1442,7 @@ summary::-webkit-details-marker {
 			}))
 		};
 	}
-	function restoreAnchor() {
+	function restoreAnchor(source) {
 		if (!anchor) return;
 		const live = [{
 			node: anchor.node,
@@ -1433,24 +1454,28 @@ summary::-webkit-details-marker {
 			const before = window.scrollY;
 			window.scrollTo(0, before + delta);
 			corrected += window.scrollY - before;
+			const bucket = shiftStats[source];
+			bucket.count += 1;
+			bucket.total += Math.abs(delta);
+			bucket.max = Math.max(bucket.max, Math.abs(delta));
 		}
 		captureAnchor();
 	}
 	/** Bring the page to where the reader expects it after anything changed. */
-	function settle() {
+	function settle(source = "layout") {
 		if (stickToBottom) pinToBottom();
-		else restoreAnchor();
+		else restoreAnchor(source);
 	}
 	function installScrollOwner(rootElement) {
-		window.addEventListener("resize", settle);
-		if (window.visualViewport) window.visualViewport.addEventListener("resize", settle);
+		window.addEventListener("resize", () => settle("layout"));
+		if (window.visualViewport) window.visualViewport.addEventListener("resize", () => settle("layout"));
 		window.addEventListener("scroll", () => {
 			if (stickToBottom) return;
 			if (rootElement.getBoundingClientRect().height !== observedHeight) return;
 			captureAnchor();
 		}, { passive: true });
 		if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => {
-			settle();
+			settle("layout");
 			observedHeight = rootElement.getBoundingClientRect().height;
 		}).observe(rootElement);
 	}
@@ -1513,7 +1538,7 @@ summary::-webkit-details-marker {
 		if (!isStickingToBottom()) captureAnchor();
 		const result = reconcile(root, currentItems, payload.errorMessage, attachExpandHandlers);
 		retargetAnchor(result.replaced);
-		settle();
+		settle("render");
 		const rafStartedAt = performance.now();
 		const frame = new Promise((resolve) => {
 			requestAnimationFrame(() => {

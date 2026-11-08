@@ -263,6 +263,9 @@ struct WebTranscriptView: UIViewRepresentable {
         // over) alive inside a pooled WebView.
         webView.configuration.userContentController.removeScriptMessageHandler(forName: bridgeName)
         coordinator.onOpenSubagent = nil
+#if DEBUG
+        TranscriptStabilityProbe.logStats(reason: "session_close", webView: webView)
+#endif
         let documentIsLoaded = coordinator.isLoaded
         coordinator.prepareForReuse()
         // The only navigation this coordinator permits is our transcript

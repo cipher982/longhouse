@@ -36,9 +36,22 @@ let anchor: Anchor | null = null;
  * movement of the anchor row in the document minus this is drift the reader saw.
  */
 let corrected = 0;
+/**
+ * Layout shifts the page absorbed, by cause. "render" is a payload changing
+ * rows above the reader (history arriving): the old renderer compensated for
+ * that case too. "layout" is anything else moving rows above them (an image
+ * arriving, a disclosure opening, the viewport resizing): nothing compensated
+ * for those before, so this is the movement a reader would have seen.
+ */
+type ShiftSource = "render" | "layout";
+const shiftStats = {
+  render: { count: 0, total: 0, max: 0 },
+  layout: { count: 0, total: 0, max: 0 },
+};
 
-export function scrollStats(): { corrected: number } {
-  return { corrected };
+export function scrollStats() {
+  const round = (b: { count: number; total: number; max: number }) => ({ count: b.count, total: Math.round(b.total), max: Math.round(b.max) });
+  return { corrected, render: round(shiftStats.render), layout: round(shiftStats.layout) };
 }
 /** Root height at the last ResizeObserver callback; a mismatch means a layout shift is pending. */
 let observedHeight = -1;
@@ -98,7 +111,7 @@ export function retargetAnchor(replaced: Map<Element, Element>): void {
   };
 }
 
-function restoreAnchor(): void {
+function restoreAnchor(source: ShiftSource): void {
   if (!anchor) return;
   const candidates = [{ node: anchor.node, docY: anchor.docY }, ...anchor.fallbacks];
   const live = candidates.find((c) => c.node.isConnected);
@@ -108,14 +121,18 @@ function restoreAnchor(): void {
     const before = window.scrollY;
     window.scrollTo(0, before + delta);
     corrected += window.scrollY - before;
+    const bucket = shiftStats[source];
+    bucket.count += 1;
+    bucket.total += Math.abs(delta);
+    bucket.max = Math.max(bucket.max, Math.abs(delta));
   }
   captureAnchor();
 }
 
 /** Bring the page to where the reader expects it after anything changed. */
-export function settle(): void {
+export function settle(source: ShiftSource = "layout"): void {
   if (stickToBottom) pinToBottom();
-  else restoreAnchor();
+  else restoreAnchor(source);
 }
 
 /** Test seam: a fresh document state, as after a document load. */
@@ -124,11 +141,16 @@ export function resetScrollForTesting(): void {
   anchor = null;
   observedHeight = -1;
   corrected = 0;
+  for (const bucket of Object.values(shiftStats)) {
+    bucket.count = 0;
+    bucket.total = 0;
+    bucket.max = 0;
+  }
 }
 
 export function installScrollOwner(rootElement: Element): void {
-  window.addEventListener("resize", settle);
-  if (window.visualViewport) window.visualViewport.addEventListener("resize", settle);
+  window.addEventListener("resize", () => settle("layout"));
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", () => settle("layout"));
   // Track where the reader holds still, unless a layout shift is waiting for
   // its ResizeObserver callback: reading geometry now would bake the shift in.
   window.addEventListener(
@@ -143,7 +165,7 @@ export function installScrollOwner(rootElement: Element): void {
   // WebKit always has ResizeObserver; the guard only spares jsdom.
   if (typeof ResizeObserver !== "undefined") {
     new ResizeObserver(() => {
-      settle();
+      settle("layout");
       observedHeight = rootElement.getBoundingClientRect().height;
     }).observe(rootElement);
   }

@@ -77,7 +77,7 @@ export function renderTranscript(
   if (!isStickingToBottom()) captureAnchor();
   const result = reconcile(root, currentItems, payload.errorMessage, attachExpandHandlers);
   retargetAnchor(result.replaced);
-  settle();
+  settle("render");
   const rafStartedAt = performance.now();
   const frame = new Promise<FrameMetrics>((resolve) => {
     requestAnimationFrame(() => {
