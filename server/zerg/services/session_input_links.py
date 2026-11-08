@@ -14,7 +14,6 @@ import re
 from datetime import UTC
 from datetime import datetime
 from typing import Any
-from urllib.parse import quote
 from uuid import UUID
 
 from zerg.catalogd.client import CatalogClient
@@ -22,6 +21,7 @@ from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 
 logger = logging.getLogger(__name__)
 
+_SAFE_REQUEST_ID = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
 _WHITESPACE = re.compile(r"\s+")
 _LINK_TIMEOUT_SECONDS = 2.0
 _LIST_TIMEOUT_SECONDS = 4.25
@@ -170,6 +170,7 @@ def input_origins_by_event(receipts: list[dict[str, Any]], session_id: UUID | st
 def _attachment_urls(session_id: UUID | str | None, receipt: dict[str, Any]) -> list[str]:
     client_request_id = receipt.get("client_request_id")
     count = int(receipt.get("attachment_count") or 0)
-    if session_id is None or not isinstance(client_request_id, str) or not client_request_id or count <= 0:
+    # One path segment that survives ASGI percent-decoding; clients send UUID-like ids.
+    if session_id is None or not isinstance(client_request_id, str) or not _SAFE_REQUEST_ID.fullmatch(client_request_id) or count <= 0:
         return []
-    return [f"/api/sessions/{session_id}/input-attachments/{quote(client_request_id, safe='')}/{i}" for i in range(count)]
+    return [f"/api/sessions/{session_id}/input-attachments/{client_request_id}/{i}" for i in range(count)]

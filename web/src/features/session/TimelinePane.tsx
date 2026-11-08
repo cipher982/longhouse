@@ -420,6 +420,27 @@ function turnEndForInteraction(interaction: ToolInteraction): AgentEventTurnEnd 
   return interaction.resultEvent?.turn_end ?? interaction.callEvent?.turn_end;
 }
 
+function AttachedImages({ urls, count }: { urls: string[]; count: number }) {
+  const [failed, setFailed] = useState<Set<string>>(new Set());
+  const live = urls.filter((url) => !failed.has(url));
+  if (live.length === 0) {
+    return (
+      <div className="tl-msg__attached" data-testid="session-attached-images">
+        {count === 1 ? "1 image attached" : `${count} images attached`}
+      </div>
+    );
+  }
+  return (
+    <div className="tl-msg__thumbs" data-testid="session-attached-thumbs">
+      {live.map((url) => (
+        <a key={url} href={url} target="_blank" rel="noreferrer noopener">
+          <img src={url} alt="Attached image" loading="lazy" onError={() => setFailed((prev) => new Set(prev).add(url))} />
+        </a>
+      ))}
+    </div>
+  );
+}
+
 function MessageRow({
   event,
   renderMedia,
@@ -506,20 +527,8 @@ function MessageRow({
         ) : (
           <div className="tl-msg__plain">{visible}</div>
         )}
-        {split && split.imageCount > 0 ? (
-          attachmentUrls.length > 0 ? (
-            <div className="tl-msg__thumbs" data-testid="session-attached-thumbs">
-              {attachmentUrls.map((url) => (
-                <a key={url} href={url} target="_blank" rel="noreferrer noopener">
-                  <img src={url} alt="Attached image" loading="lazy" onError={(e) => e.currentTarget.parentElement?.remove()} />
-                </a>
-              ))}
-            </div>
-          ) : (
-            <div className="tl-msg__attached" data-testid="session-attached-images">
-              {split.imageCount === 1 ? "1 image attached" : `${split.imageCount} images attached`}
-            </div>
-          )
+        {isUser && (attachmentUrls.length > 0 || (split?.imageCount ?? 0) > 0) ? (
+          <AttachedImages urls={attachmentUrls} count={Math.max(split?.imageCount ?? 0, attachmentUrls.length)} />
         ) : null}
         <MediaStrip mediaRefs={mediaRefs} />
         {isLong ? (

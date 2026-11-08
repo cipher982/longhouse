@@ -414,11 +414,13 @@ def test_input_origins_by_event_keeps_first_receipt_per_event():
 
 def test_input_origins_name_each_attached_image_when_the_session_is_known():
     origins = input_origins_by_event(
-        [{"client_request_id": "req a/1", "event_id": "e1", "attachment_count": 2}],
+        [{"client_request_id": "req-a.1", "event_id": "e1", "attachment_count": 2}],
         "11111111-1111-1111-1111-111111111111",
     )
     assert origins["e1"]["attachment_urls"] == [
-        "/api/sessions/11111111-1111-1111-1111-111111111111/input-attachments/req%20a%2F1/0",
-        "/api/sessions/11111111-1111-1111-1111-111111111111/input-attachments/req%20a%2F1/1",
+        "/api/sessions/11111111-1111-1111-1111-111111111111/input-attachments/req-a.1/0",
+        "/api/sessions/11111111-1111-1111-1111-111111111111/input-attachments/req-a.1/1",
     ]
+    unsafe = input_origins_by_event([{"client_request_id": "a/b", "event_id": "e", "attachment_count": 1}], "s")
+    assert unsafe["e"]["attachment_urls"] == []
     assert input_origins_by_event([{"client_request_id": "r", "event_id": "e", "attachment_count": 2}])["e"]["attachment_urls"] == []
