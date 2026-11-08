@@ -30,6 +30,16 @@ interface Anchor {
 }
 
 let anchor: Anchor | null = null;
+/**
+ * Points the page has scrolled itself to cancel layout shifts above the reader
+ * (never counting a pin or the reader's own scroll). A debug probe reads it:
+ * movement of the anchor row in the document minus this is drift the reader saw.
+ */
+let corrected = 0;
+
+export function scrollStats(): { corrected: number } {
+  return { corrected };
+}
 /** Root height at the last ResizeObserver callback; a mismatch means a layout shift is pending. */
 let observedHeight = -1;
 
@@ -94,7 +104,11 @@ function restoreAnchor(): void {
   const live = candidates.find((c) => c.node.isConnected);
   if (!live) return;
   const delta = live.node.getBoundingClientRect().top + window.scrollY - live.docY;
-  if (Math.abs(delta) > 0.5) window.scrollTo(0, window.scrollY + delta);
+  if (Math.abs(delta) > 0.5) {
+    const before = window.scrollY;
+    window.scrollTo(0, before + delta);
+    corrected += window.scrollY - before;
+  }
   captureAnchor();
 }
 
@@ -109,6 +123,7 @@ export function resetScrollForTesting(): void {
   stickToBottom = true;
   anchor = null;
   observedHeight = -1;
+  corrected = 0;
 }
 
 export function installScrollOwner(rootElement: Element): void {

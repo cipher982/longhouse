@@ -1354,6 +1354,15 @@ summary::-webkit-details-marker {
 	//#region src/embeds/ios-transcript/scroll.ts
 	var stickToBottom = true;
 	var anchor = null;
+	/**
+	* Points the page has scrolled itself to cancel layout shifts above the reader
+	* (never counting a pin or the reader's own scroll). A debug probe reads it:
+	* movement of the anchor row in the document minus this is drift the reader saw.
+	*/
+	var corrected = 0;
+	function scrollStats() {
+		return { corrected };
+	}
 	/** Root height at the last ResizeObserver callback; a mismatch means a layout shift is pending. */
 	var observedHeight = -1;
 	function isStickingToBottom() {
@@ -1420,7 +1429,11 @@ summary::-webkit-details-marker {
 		}, ...anchor.fallbacks].find((c) => c.node.isConnected);
 		if (!live) return;
 		const delta = live.node.getBoundingClientRect().top + window.scrollY - live.docY;
-		if (Math.abs(delta) > .5) window.scrollTo(0, window.scrollY + delta);
+		if (Math.abs(delta) > .5) {
+			const before = window.scrollY;
+			window.scrollTo(0, before + delta);
+			corrected += window.scrollY - before;
+		}
 		captureAnchor();
 	}
 	/** Bring the page to where the reader expects it after anything changed. */
@@ -1522,6 +1535,7 @@ summary::-webkit-details-marker {
 	window.waitForTranscriptFrame = waitForTranscriptFrame;
 	window.setStickToBottom = setStickToBottom;
 	window.renderTranscript = renderTranscript;
+	window.__lhScrollStats = scrollStats;
 	installScrollOwner(document.getElementById("root"));
 	//#endregion
 })();

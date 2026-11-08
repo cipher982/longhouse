@@ -287,6 +287,105 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    name: "stream_while_dragging",
+    about: "The reader drags toward older messages while the live message streams at 20 Hz. The row they read moves only with their finger.",
+    async run(h) {
+      const base = conversation(40, { mediaEvery: 3, media: "dims" });
+      await h.render(base, true);
+      await h.scrollAway(4200);
+      const token = await h.pickAnchor();
+      const top0 = (await h.snap(token)).top!;
+      await h.startSampling(token);
+      for (let step = 0; step < 40; step++) {
+        await h.dragBy(-35);
+        await h.render(withLastAssistantBody(base, streamingBody(step)), false);
+        await sleep(50);
+      }
+      await h.settle(3);
+      return [le("anchor drift", drift(await h.stopSampling(), top0), 1, "pt")];
+    },
+  },
+  {
+    name: "burst_updates_one_frame",
+    about: "Five renders land in one frame (a catch-up after the app resumes). Pinned stays pinned; a reader stays put.",
+    async run(h) {
+      const base = conversation(30);
+      await h.render(base, true);
+      await h.settle(2);
+      await h.startSampling("TOK_STREAM");
+      for (let step = 0; step < 5; step++) await h.render(withLastAssistantBody(base, streamingBody(step * 2)), true);
+      await h.settle(3);
+      const pinnedGap = maxGap(await h.stopSampling());
+      await h.scrollAway(2600);
+      const token = await h.pickAnchor();
+      const top0 = (await h.snap(token)).top!;
+      await h.startSampling(token);
+      for (let step = 0; step < 5; step++) await h.render(withLastAssistantBody(base, streamingBody(step * 2 + 1)), false);
+      await h.settle(3);
+      return [le("pinned gap", pinnedGap, 1, "pt"), le("reader anchor drift", drift(await h.stopSampling(), top0), 1, "pt")];
+    },
+  },
+  {
+    name: "error_banner_while_reading",
+    about: "A refresh-failed banner appears above the transcript while the reader is mid-history. Their row must not move.",
+    async run(h) {
+      const base = conversation(30);
+      await h.render(base, true);
+      await h.scrollAway(2600);
+      const token = await h.pickAnchor();
+      const top0 = (await h.snap(token)).top!;
+      await h.startSampling(token);
+      await h.render(base, false, "Refresh failed: the server did not answer");
+      await h.settle(3);
+      const shown = await h.page.evaluate(() => !!document.querySelector("#root > .error"));
+      await h.render(base, false, null);
+      await h.settle(3);
+      return [le("anchor drift", drift(await h.stopSampling(), top0), 1, "pt"), le("banner missing", shown ? 0 : 1, 0, "bool")];
+    },
+  },
+  {
+    name: "width_change_reading",
+    about: "The viewport widens (rotation, split view) and text reflows. The row at the top of the screen stays at the top.",
+    async run(h) {
+      await h.render(conversation(30), true);
+      await h.scrollAway(2600);
+      // The topmost visible row is the page's anchor; rows below it move when it reflows.
+      const token = await h.pickTopAnchor();
+      const top0 = (await h.snap(token)).top!;
+      await h.startSampling(token);
+      await h.page.setViewportSize({ width: 844, height: 390 });
+      await h.settle(4);
+      await h.page.setViewportSize({ width: 390, height: 640 });
+      await h.settle(4);
+      return [le("anchor drift", drift(await h.stopSampling(), top0), 1.5, "pt")];
+    },
+  },
+  {
+    name: "lite_body_arrives_above",
+    about: "A cut tool row above the reader gets its full body (a re-render with the open row's output grown). The reader's row stays put.",
+    async run(h) {
+      const build = (lines: number): Item[] => {
+        const out: Item[] = [];
+        for (let i = 0; i < 25; i++) {
+          out.push(userItem(i), assistantItem(i, { code: false, paragraphs: 1 }));
+          if (i === 3) out.push({ ...toolItem(3, "done", lines), bodyCursors: ["c1"], bodyState: lines > 3 ? null : "preview" });
+        }
+        return out;
+      };
+      await h.render(build(3), true);
+      await h.page.evaluate(() => ((document.querySelector("details.tool") as HTMLDetailsElement).open = true));
+      await h.settle(2);
+      const bottom = await h.page.evaluate(() => document.querySelector("details.tool")!.getBoundingClientRect().bottom + scrollY);
+      await h.scrollAway(bottom + 60);
+      const token = await h.pickAnchor();
+      const top0 = (await h.snap(token)).top!;
+      await h.startSampling(token);
+      await h.render(build(60), false);
+      await h.settle(3);
+      return [le("anchor drift", drift(await h.stopSampling(), top0), 1, "pt")];
+    },
+  },
+  {
     name: "stream_update_cost",
     about:
       "Synchronous cost of one update (decode, DOM, forced layout) on a 120-row transcript. Advisory: machine-dependent, and paint is excluded because headless WebKit paces frames at 130-400 ms even for an empty page.",

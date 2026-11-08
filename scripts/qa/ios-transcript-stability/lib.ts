@@ -2,7 +2,7 @@
 // ios/Resources/Transcript/transcript.html in Playwright WebKit at phone size
 // (the engine WKWebView uses), plays renderer calls the way the app makes
 // them, and samples where the reader's anchor row sits on every frame.
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { webkit, type Browser, type BrowserContext, type Page } from "playwright";
 
@@ -133,12 +133,45 @@ export class Harness {
     return token;
   }
 
+  /** Token of the topmost row still on screen: the one the page itself anchors to. */
+  async pickTopAnchor(): Promise<string> {
+    const token = await this.page.evaluate(() => (window as any).__s.pickTop());
+    if (!token) throw new Error("no row at the top of the viewport");
+    return token;
+  }
+
+  /** Set by the runner: a directory to film into while sampling. */
+  filmDir: string | null = null;
+  private filming: Promise<void> | null = null;
+  private filmOn = false;
+  filmFrames: string[] = [];
+
   async startSampling(token: string): Promise<void> {
     await this.page.evaluate((t) => (window as any).__s.start(t), token);
+    if (this.filmDir && !this.filming) {
+      mkdirSync(this.filmDir, { recursive: true });
+      this.filmOn = true;
+      this.filmFrames = [];
+      this.filming = (async () => {
+        while (this.filmOn && this.filmFrames.length < 400) {
+          const file = path.join(this.filmDir!, `${String(this.filmFrames.length).padStart(3, "0")}.png`);
+          try {
+            await this.page.screenshot({ path: file });
+            this.filmFrames.push(file);
+          } catch {
+            return;
+          }
+        }
+      })();
+    }
   }
 
   async stopSampling(): Promise<Frame[]> {
-    return this.page.evaluate(() => (window as any).__s.stop());
+    const frames: Frame[] = await this.page.evaluate(() => (window as any).__s.stop());
+    this.filmOn = false;
+    await this.filming;
+    this.filming = null;
+    return frames;
   }
 
   /** One synchronous measurement, taken before WebKit has had a frame. */
@@ -176,6 +209,10 @@ const SAMPLER = `
       const top = e.getBoundingClientRect().top;
       return top > 150 && top < 450 && /TOK_[AU]\\d+/.test(e.textContent);
     });
+    return el ? el.textContent.match(/TOK_[AU]\\d+/)[0] : null;
+  };
+  s.pickTop = () => {
+    const el = [...root().children].find((e) => e.getBoundingClientRect().bottom > 1 && /TOK_[AU]\\d+/.test(e.textContent));
     return el ? el.textContent.match(/TOK_[AU]\\d+/)[0] : null;
   };
   s.snap = (token) => frame(token, performance.now());

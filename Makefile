@@ -1326,7 +1326,7 @@ ios-transcript-stability: ## Replay content changes against the iOS transcript d
 	@$(MAKE) --no-print-directory ensure-js-deps
 	@$(MAKE) --no-print-directory generate-ios-transcript
 	@bunx playwright install webkit >/dev/null
-	@bun scripts/qa/ios-transcript-stability.ts $(if $(ONLY),--only=$(ONLY),) $(if $(DARK),--dark,) $(if $(OUT),--out=$(OUT),)
+	@bun scripts/qa/ios-transcript-stability.ts $(if $(ONLY),--only=$(ONLY),) $(if $(DARK),--dark,) $(if $(FILM),--film,) $(if $(OUT),--out=$(OUT),)
 
 ui-gallery: ## Render every fixture page/scene at desktop, wide and phone sizes into one HTML contact sheet (ONLY=substring, JOBS=n)
 	@bunx tsx scripts/ui/ui-gallery.ts $(if $(ONLY),--only=$(ONLY),) $(if $(JOBS),--jobs=$(JOBS),) $(if $(OUTPUT),--output=$(OUTPUT),)
