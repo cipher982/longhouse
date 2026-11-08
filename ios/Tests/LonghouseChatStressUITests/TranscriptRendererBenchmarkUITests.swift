@@ -114,7 +114,7 @@ final class TranscriptRendererBenchmarkUITests: XCTestCase {
         // The reader scrolled away and held still while 50 older rows, a
         // streaming reply, tool transitions and the keyboard changed the page
         // around them. The page measured how far their row moved (budget 2 pt).
-        print("TRANSCRIPT_STABILITY drift_pt=\(final.stabilityDriftPt) lost=\(final.stabilityLost) frames=\(final.stabilityFrames)")
+        print("TRANSCRIPT_STABILITY drift_pt=\(final.stabilityDriftPt) ledger_drift_pt=\(final.stabilityLedgerDriftPt) lost=\(final.stabilityLost) frames=\(final.stabilityFrames)")
         XCTAssertTrue(final.stabilityRan, "The stability probe did not run. \(readProbe(probeURL, status: status))")
         XCTAssertGreaterThan(final.stabilityFrames, 10, readProbe(probeURL, status: status))
         XCTAssertEqual(final.stabilityLost, 0, "The reader's row vanished. \(readProbe(probeURL, status: status))")
@@ -284,6 +284,7 @@ private struct BenchmarkProbeMetrics {
     let stabilityFrames: Int
     let stabilityLost: Int
     let stabilityDriftPt: Double
+    let stabilityLedgerDriftPt: Double
 
     init(_ label: String) {
         let values = Dictionary(uniqueKeysWithValues: label.split(separator: " ").compactMap { token -> (String, String)? in
@@ -339,6 +340,7 @@ private struct BenchmarkProbeMetrics {
         stabilityFrames = Int(values["stability_frames"] ?? "") ?? 0
         stabilityLost = Int(values["stability_lost"] ?? "") ?? 0
         stabilityDriftPt = (Double(values["stability_drift_tenths_pt"] ?? "") ?? 0) / 10
+        stabilityLedgerDriftPt = (Double(values["stability_ledger_drift_tenths_pt"] ?? "") ?? 0) / 10
     }
 }
 

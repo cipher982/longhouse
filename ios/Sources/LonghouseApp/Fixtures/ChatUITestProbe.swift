@@ -46,6 +46,7 @@ final class ChatUITestProbe {
     private var stabilityFrames = 0
     private var stabilityLost = 0
     private var stabilityDriftTenthsPt = 0
+    private var stabilityLedgerDriftTenthsPt = 0
     private var stabilityRan = false
     private let buildCommit: String
     private let buildDirty: Bool
@@ -183,6 +184,7 @@ final class ChatUITestProbe {
         stabilityFrames = result?.frames ?? 0
         stabilityLost = result?.lost ?? 0
         stabilityDriftTenthsPt = Int(((result?.maxDriftPt ?? 0) * 10).rounded())
+        stabilityLedgerDriftTenthsPt = Int(((result?.maxLedgerDriftPt ?? 0) * 10).rounded())
         rebuildAndPersist()
     }
 
@@ -246,6 +248,7 @@ final class ChatUITestProbe {
             "stability_frames=\(stabilityFrames)",
             "stability_lost=\(stabilityLost)",
             "stability_drift_tenths_pt=\(stabilityDriftTenthsPt)",
+            "stability_ledger_drift_tenths_pt=\(stabilityLedgerDriftTenthsPt)",
         ].joined(separator: " ")
         updateStatusLabel()
         persist()

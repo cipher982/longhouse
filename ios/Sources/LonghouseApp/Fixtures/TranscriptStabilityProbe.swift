@@ -5,15 +5,16 @@ import WebKit
 /// Measures, inside the real WKWebView, whether the row a reader is looking at
 /// moves when content changes around it (L2 of specs/ios-transcript-stability.md).
 ///
-/// The page's scroll owner counts every point it scrolls itself to cancel a
-/// layout shift (`window.__lhScrollStats().corrected`). The anchor row's
-/// position in the DOCUMENT (top edge plus scroll offset) changes only when
-/// layout above it changes, so
+/// The reader holds still once the probe starts (the UI test finishes its drag
+/// first), so the anchor row's position on screen must not change. That is the
+/// primary number, `maxDriftPt`, and it needs nothing from the renderer: it
+/// measures what a person looking at the screen would see, so it can judge any
+/// renderer, including an old one.
 ///
-///     drift = (docY - docY at start) - (corrected - corrected at start)
-///
-/// is the movement the reader saw, and it needs no knowledge of who scrolled:
-/// a finger, momentum, or XCUITest all change the scroll offset, not `docY`.
+/// `maxLedgerDriftPt` is a second view for renderers that keep a correction
+/// ledger (`window.__lhScrollStats().corrected`, the points the page scrolled
+/// itself): movement in the document minus corrections. It equals the first
+/// when the reader holds still and differs only if they scroll mid-probe.
 /// Only meaningful while the transcript is not pinned to the bottom.
 ///
 /// Installed only when the chat fixture asks for a probe file, so a normal
@@ -26,6 +27,7 @@ enum TranscriptStabilityProbe {
         /// Frames in which the anchor row could not be found.
         let lost: Int
         let maxDriftPt: Double
+        let maxLedgerDriftPt: Double
         /// Worst distance from the bottom while the probe ran (informational).
         let maxGapPt: Double
     }
@@ -64,6 +66,7 @@ enum TranscriptStabilityProbe {
             frames: object["frames"] as? Int ?? 0,
             lost: object["lost"] as? Int ?? 0,
             maxDriftPt: object["maxDrift"] as? Double ?? 0,
+            maxLedgerDriftPt: object["maxLedgerDrift"] as? Double ?? 0,
             maxGapPt: object["maxGap"] as? Double ?? 0
         )
     }
@@ -84,27 +87,30 @@ enum TranscriptStabilityProbe {
         var y = window.scrollY;
         var maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
         var corr = window.__lhScrollStats ? window.__lhScrollStats().corrected : 0;
-        return { docY: el ? el.getBoundingClientRect().top + y : null, gap: maxY - y, corr: corr };
+        var top = el ? el.getBoundingClientRect().top : null;
+        return { top: top, docY: el ? top + y : null, gap: maxY - y, corr: corr };
       }
       return {
         start: function () {
           var a = topRow();
           st = { sig: a ? sig(a) : null, frames: [], run: true, raf: 0 };
           var f = sample();
-          st.docY0 = f.docY; st.corr0 = f.corr; st.frames.push(f);
+          st.top0 = f.top; st.docY0 = f.docY; st.corr0 = f.corr; st.frames.push(f);
           (function loop() { if (!st.run) return; st.frames.push(sample()); st.raf = requestAnimationFrame(loop); })();
           return st.sig;
         },
         stop: function () {
           st.run = false; cancelAnimationFrame(st.raf);
-          var lost = 0, maxDrift = 0, maxGap = 0;
+          var lost = 0, maxDrift = 0, maxLedger = 0, maxGap = 0;
           st.frames.forEach(function (f) {
             if (Math.abs(f.gap) > maxGap) maxGap = Math.abs(f.gap);
             if (f.docY === null || st.docY0 === null) { lost++; return; }
-            var d = Math.abs((f.docY - st.docY0) - (f.corr - st.corr0));
+            var d = Math.abs(f.top - st.top0);
             if (d > maxDrift) maxDrift = d;
+            var l = Math.abs((f.docY - st.docY0) - (f.corr - st.corr0));
+            if (l > maxLedger) maxLedger = l;
           });
-          return JSON.stringify({ anchor: st.sig, frames: st.frames.length, lost: lost, maxDrift: maxDrift, maxGap: maxGap });
+          return JSON.stringify({ anchor: st.sig, frames: st.frames.length, lost: lost, maxDrift: maxDrift, maxLedgerDrift: maxLedger, maxGap: maxGap });
         }
       };
     })();
