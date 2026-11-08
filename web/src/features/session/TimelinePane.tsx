@@ -33,6 +33,7 @@ import {
   getEditStat,
   getFailurePreview,
   getTimelineMessagePreview,
+  splitAttachmentsBlock,
   getInteractionDisplayInfo,
   getToolDuration,
   getToolExitCode,
@@ -428,9 +429,11 @@ function MessageRow({
   renderMedia: boolean;
   provider: string | null;
 }) {
-  const preview = getTimelineMessagePreview(event);
-  const outside = isOutsideActiveContext(event);
   const isUser = event.role === "user";
+  const split = isUser ? splitAttachmentsBlock(getTimelineMessagePreview(event)) : null;
+  const preview = split && split.imageCount > 0 ? split.text.trim() : getTimelineMessagePreview(event);
+  const attachmentUrls = (isUser && event.input_origin?.attachment_urls) || [];
+  const outside = isOutsideActiveContext(event);
   const isAssistant = event.role === "assistant";
   const isLonghouseAuthored = event.input_origin?.authored_via === "longhouse";
   const isLong = messageLineCount(preview) > MESSAGE_COLLAPSE_LINE_LIMIT;
@@ -503,6 +506,21 @@ function MessageRow({
         ) : (
           <div className="tl-msg__plain">{visible}</div>
         )}
+        {split && split.imageCount > 0 ? (
+          attachmentUrls.length > 0 ? (
+            <div className="tl-msg__thumbs" data-testid="session-attached-thumbs">
+              {attachmentUrls.map((url) => (
+                <a key={url} href={url} target="_blank" rel="noreferrer noopener">
+                  <img src={url} alt="Attached image" loading="lazy" onError={(e) => e.currentTarget.parentElement?.remove()} />
+                </a>
+              ))}
+            </div>
+          ) : (
+            <div className="tl-msg__attached" data-testid="session-attached-images">
+              {split.imageCount === 1 ? "1 image attached" : `${split.imageCount} images attached`}
+            </div>
+          )
+        ) : null}
         <MediaStrip mediaRefs={mediaRefs} />
         {isLong ? (
           <button

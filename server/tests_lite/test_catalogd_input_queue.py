@@ -837,6 +837,9 @@ async def test_catalogd_attachment_metadata_is_receipt_scoped_and_bounded(daemon
         )
         # The drain replays a parked SEND's images: only unexpired ones, in order.
         assert [row["id"] for row in listed["attachments"]] == [attachment_id]
+        receipts = (await client.call("session.input.receipts.list.v2", {"session_id": str(session_id)}))["receipts"]
+        # Thumbnail URLs are derived from this count, so it must skip the expired image too.
+        assert {row["id"]: row["attachment_count"] for row in receipts}[receipt_id] == 1
         foreign = await client.call(
             "session.input.attachment.list.v2",
             {"owner_id": 8, "session_id": str(session_id), "input_receipt_id": receipt_id},

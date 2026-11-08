@@ -277,7 +277,10 @@ extension WebTranscriptView {
                 role: "user",
                 text: event.contentText ?? "",
                 origin: event.inputOrigin?.authoredVia,
-                mediaRefs: payloadMediaRefs(event.mediaRefs, serverURL: serverURL)
+                mediaRefs: payloadMediaRefs(event.mediaRefs, serverURL: serverURL),
+                attachmentThumbs: event.inputOrigin?.attachmentUrls?.compactMap {
+                    absoluteMediaURL($0, serverURL: serverURL)
+                }
             )
         case .assistant(let event):
             return messagePayload(
@@ -319,7 +322,8 @@ extension WebTranscriptView {
         role: String,
         text: String,
         origin: SessionInputAuthoredVia?,
-        mediaRefs: [WebTranscriptMediaRef]? = nil
+        mediaRefs: [WebTranscriptMediaRef]? = nil,
+        attachmentThumbs: [String]? = nil
     ) -> WebTranscriptPayloadItem {
         let split = role == "user"
             ? TranscriptTextPolicy.splittingAttachmentsBlock(text)
@@ -342,7 +346,8 @@ extension WebTranscriptView {
             calls: [],
             origin: origin?.payloadValue,
             media: mediaRefs,
-            attachedImages: split.imageCount
+            attachedImages: split.imageCount,
+            attachmentThumbs: attachmentThumbs?.isEmpty == false ? attachmentThumbs : nil
         )
     }
 
@@ -878,6 +883,8 @@ struct WebTranscriptPayloadItem: Encodable {
     var attachments: [SubmittedInputAttachmentSummary]? = nil
     /// Images the sender attached, taken from the engine's instruction block.
     var attachedImages: Int? = nil
+    /// Owner-authenticated image URLs for the same attachments, when still held.
+    var attachmentThumbs: [String]? = nil
     /// Bounded preview shown without a tap on a failed row (R4).
     var failurePreview: String? = nil
     /// Rendered diff for edit rows (R3).

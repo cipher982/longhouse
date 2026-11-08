@@ -442,6 +442,7 @@ export interface AgentEventInputOrigin {
   origin?: "user" | "wake" | null;
   session_input_id?: number | null;
   client_request_id?: string | null;
+  attachment_urls?: string[] | null;
 }
 
 export type AgentEventId = string | number;

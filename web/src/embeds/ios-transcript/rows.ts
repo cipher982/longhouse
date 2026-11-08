@@ -13,7 +13,17 @@ export function message(item: TranscriptItem, index: number): string {
   const media = mediaStrip(item.media || []);
   if (item.role === "user") {
     const n = item.attachedImages || 0;
-    const attached = n > 0 ? `<div class="attached-chip" data-testid="session-attached-images">${n === 1 ? "1 image attached" : `${n} images attached`}</div>` : "";
+    const thumbs = (item.attachmentThumbs || [])
+      .map(
+        (url) =>
+          `<a class="attached-thumb" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener"><img src="${escapeHtml(url)}" alt="Attached image" loading="lazy" onerror="this.parentNode.outerHTML='&lt;span class=&quot;attached-chip&quot;&gt;Image expired&lt;/span&gt;'"></a>`,
+      )
+      .join("");
+    const attached = thumbs
+      ? `<div class="attached-thumbs" data-testid="session-attached-thumbs">${thumbs}</div>`
+      : n > 0
+        ? `<div class="attached-chip" data-testid="session-attached-images">${n === 1 ? "1 image attached" : `${n} images attached`}</div>`
+        : "";
     const origin =
       item.origin === "longhouse"
         ? '<div id="session-chat-input-origin-longhouse" class="origin" aria-label="Sent via Longhouse">Longhouse</div>'

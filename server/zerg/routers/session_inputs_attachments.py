@@ -69,6 +69,7 @@ from zerg.services.session_input_attachments import MAX_ATTACHMENTS_PER_INPUT
 from zerg.services.session_input_attachments import attachment_ref_for_engine
 from zerg.services.session_input_attachments import delete_catalog_attachment_blobs
 from zerg.services.session_input_attachments import get_catalog_attachment
+from zerg.services.session_input_attachments import list_catalog_attachments
 from zerg.services.session_input_attachments import store_catalog_attachment_blob
 from zerg.services.session_inputs import INPUT_INTENT_AUTO
 from zerg.services.session_inputs import INPUT_INTENT_QUEUE
@@ -1131,6 +1132,62 @@ async def _create_session_input_with_attachments(
         client_request_id=request_id,
         intent=intent,
         queued=[],
+    )
+
+
+@router.get("/{session_id}/input-attachments/{client_request_id}/{index}")
+async def fetch_input_attachment_preview(
+    session_id: str,
+    client_request_id: str,
+    index: int,
+    db: Session | None = Depends(no_request_db),
+    current_user: Caller = Depends(get_current_browser_route_caller),
+) -> StreamingResponse:
+    """Stream one image the signed-in owner attached to a send, for the transcript thumbnail.
+
+    Addressed by the send's client request id and the image's upload position,
+    which is what a transcript row already carries. Bytes expire with the
+    attachment (24 h); after that this is a plain 404 and the row keeps its
+    "N images attached" label.
+    """
+    try:
+        session_uuid = uuid.UUID(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found") from exc
+    if index < 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+    owner_id = int(current_user.id)
+    try:
+        receipt = await load_live_input_receipt_by_client_request(
+            owner_id=owner_id, session_id=session_uuid, client_request_id=client_request_id
+        )
+        attachments = (
+            await list_catalog_attachments(owner_id=owner_id, session_id=session_uuid, input_receipt_id=receipt.id)
+            if receipt is not None
+            else []
+        )
+    except (RuntimeError, ValueError) as exc:
+        logger.warning("attachment preview lookup failed", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="attachment catalog unavailable") from exc
+    if index >= len(attachments):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+    row = attachments[index]
+    if row.session_id != session_uuid or not row.blob_path.is_file() or not row.mime_type.startswith("image/"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+
+    def _iter_blob():
+        with row.blob_path.open("rb") as fh:
+            while chunk := fh.read(64 * 1024):
+                yield chunk
+
+    return StreamingResponse(
+        _iter_blob(),
+        media_type=row.mime_type,
+        headers={
+            "Content-Length": str(int(row.byte_size)),
+            "Cache-Control": "private, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

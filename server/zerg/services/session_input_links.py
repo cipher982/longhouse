@@ -14,6 +14,7 @@ import re
 from datetime import UTC
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 from uuid import UUID
 
 from zerg.catalogd.client import CatalogClient
@@ -140,13 +141,18 @@ def input_receipts_from_rows(receipts: object) -> list[dict[str, Any]]:
                 "created_at": receipt.get("created_at"),
                 "event_id": receipt.get("durable_event_id"),
                 "turn_state": receipt.get("turn_state"),
+                "attachment_count": int(receipt.get("attachment_count") or 0),
             }
         )
     return projected
 
 
-def input_origins_by_event(receipts: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """`input_origin` payloads keyed by the durable event each receipt became."""
+def input_origins_by_event(receipts: list[dict[str, Any]], session_id: UUID | str | None = None) -> dict[str, dict[str, Any]]:
+    """`input_origin` payloads keyed by the durable event each receipt became.
+
+    With a session id, a send that carried images also names where the owner can
+    fetch each one (it expires 24 h after the send; clients treat a 404 as gone).
+    """
     origins: dict[str, dict[str, Any]] = {}
     for receipt in receipts:
         event_id = receipt.get("event_id")
@@ -156,5 +162,14 @@ def input_origins_by_event(receipts: list[dict[str, Any]]) -> dict[str, dict[str
                 "origin": str(receipt.get("origin") or "user"),
                 "session_input_id": None,
                 "client_request_id": receipt.get("client_request_id"),
+                "attachment_urls": _attachment_urls(session_id, receipt),
             }
     return origins
+
+
+def _attachment_urls(session_id: UUID | str | None, receipt: dict[str, Any]) -> list[str]:
+    client_request_id = receipt.get("client_request_id")
+    count = int(receipt.get("attachment_count") or 0)
+    if session_id is None or not isinstance(client_request_id, str) or not client_request_id or count <= 0:
+        return []
+    return [f"/api/sessions/{session_id}/input-attachments/{quote(client_request_id, safe='')}/{i}" for i in range(count)]

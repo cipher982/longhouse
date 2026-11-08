@@ -684,3 +684,18 @@ summary::-webkit-details-marker {
   font-size: 12px;
   text-align: right;
 }
+
+.attached-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+.attached-thumb img {
+  display: block;
+  max-width: 140px;
+  max-height: 140px;
+  border-radius: 10px;
+  object-fit: cover;
+}

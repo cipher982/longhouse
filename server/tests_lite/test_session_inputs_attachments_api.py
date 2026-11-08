@@ -2084,3 +2084,55 @@ async def test_a_turn_active_refusal_requeues_the_image_send_with_its_images(mon
     assert response.outcome == "queued"
     assert "cleaned" not in calls
     assert calls["finishes"][-1]["status_value"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_input_attachment_preview_streams_owner_image_by_request_and_position(monkeypatch, tmp_path):
+    import zerg.routers.session_inputs_attachments as route
+
+    session_id = uuid4()
+    blobs = []
+    for i, name in enumerate(("a.png", "b.png")):
+        path = tmp_path / name
+        path.write_bytes(_PNG_BYTES + bytes([i]))
+        blobs.append(
+            StoredAttachment(
+                id=uuid4(),
+                session_input_id="r",
+                session_id=session_id,
+                mime_type="image/png",
+                byte_size=path.stat().st_size,
+                sha256="x",
+                blob_path=path,
+                original_filename=name,
+                original_byte_size=None,
+            )
+        )
+    seen = {}
+
+    async def load_receipt(**kwargs):
+        seen["receipt"] = kwargs
+        return SimpleNamespace(id=str(uuid4())) if kwargs["client_request_id"] == "req-1" else None
+
+    async def list_attachments(**kwargs):
+        seen["list"] = kwargs
+        return blobs
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr(route, "list_catalog_attachments", list_attachments)
+
+    async def fetch(request_id, index):
+        return await route.fetch_input_attachment_preview(
+            session_id=str(session_id), client_request_id=request_id, index=index, db=None, current_user=SimpleNamespace(id=7)
+        )
+
+    response = await fetch("req-1", 1)
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    assert body == _PNG_BYTES + b"\x01"
+    assert response.media_type == "image/png"
+    assert seen["receipt"]["owner_id"] == 7 and seen["list"]["owner_id"] == 7
+
+    for request_id, index in (("req-1", 2), ("req-1", -1), ("other", 0)):
+        with pytest.raises(HTTPException) as exc:
+            await fetch(request_id, index)
+        assert exc.value.status_code == 404

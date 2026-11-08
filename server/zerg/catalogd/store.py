@@ -1897,9 +1897,32 @@ def _input_receipt_rows(connection: Connection, *, session_id: str, limit: int =
         .mappings()
         .all()
     )
+    # Uploaded images per send, so a transcript row can show thumbnails.
+    attachment_table = LiveSessionInputAttachment.__table__
+    counts: dict[str, int] = {}
+    if rows:
+        counts = {
+            str(receipt_id): int(count)
+            for receipt_id, count in connection.execute(
+                select(attachment_table.c.input_receipt_id, func.count())
+                .where(
+                    attachment_table.c.session_id == session_id,
+                    attachment_table.c.input_receipt_id.in_([row["id"] for row in rows]),
+                    attachment_table.c.expires_at > datetime.now(UTC),
+                )
+                .group_by(attachment_table.c.input_receipt_id)
+            )
+        }
     # The turn's state tells a client whether a delivered send that never became
     # a transcript row was lost (its run failed before the provider read it).
-    return [{**_input_receipt_dto(_RowReceipt(row), origin=row["turn_origin"]), "turn_state": row["turn_state"]} for row in rows]
+    return [
+        {
+            **_input_receipt_dto(_RowReceipt(row), origin=row["turn_origin"]),
+            "turn_state": row["turn_state"],
+            "attachment_count": counts.get(str(row["id"]), 0),
+        }
+        for row in rows
+    ]
 
 
 def _session_read_media_refs(connection: Connection, *, session_id: str) -> list[dict[str, Any]]:

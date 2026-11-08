@@ -1653,6 +1653,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/input-attachments/{client_request_id}/{index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch Input Attachment Preview
+         * @description Stream one image the signed-in owner attached to a send, for the transcript thumbnail.
+         *
+         *     Addressed by the send's client request id and the image's upload position,
+         *     which is what a transcript row already carries. Bytes expire with the
+         *     attachment (24 h); after that this is a plain 404 and the row keeps its
+         *     "N images attached" label.
+         */
+        get: operations["fetch_input_attachment_preview_sessions__session_id__input_attachments__client_request_id___index__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/sessions/{session_id}/inputs/{input_id}/attachments/{attachment_id}/blob": {
         parameters: {
             query?: never;
@@ -4850,6 +4875,11 @@ export interface components {
              * @description Client idempotency key when supplied by the Longhouse client
              */
             client_request_id?: string | null;
+            /**
+             * Attachment Urls
+             * @description Owner-authenticated URLs of images attached to this send, in upload order; they expire 24 h after the send
+             */
+            attachment_urls?: string[];
         };
         /**
          * LastTurnResponse
@@ -13026,6 +13056,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionInputResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_input_attachment_preview_sessions__session_id__input_attachments__client_request_id___index__get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+                client_request_id: string;
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

@@ -949,7 +949,8 @@ struct SessionModelsTests {
           "input_origin": {
             "authored_via": "longhouse",
             "session_input_id": 7,
-            "client_request_id": "ios-origin-1"
+            "client_request_id": "ios-origin-1",
+            "attachment_urls": ["/api/sessions/s/input-attachments/ios-origin-1/0"]
           }
         }
         """.data(using: .utf8)!
@@ -994,6 +995,7 @@ struct SessionModelsTests {
         #expect(longhouse.inputOrigin?.authoredVia == .longhouse)
         #expect(longhouse.inputOrigin?.sessionInputId == 7)
         #expect(longhouse.inputOrigin?.clientRequestId == "ios-origin-1")
+        #expect(longhouse.inputOrigin?.attachmentUrls == ["/api/sessions/s/input-attachments/ios-origin-1/0"])
         #expect(omitted.inputOrigin == nil)
         #expect(unknown.inputOrigin?.authoredVia == .unknown("watch"))
     }

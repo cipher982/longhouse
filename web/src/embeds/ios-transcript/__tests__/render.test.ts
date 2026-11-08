@@ -165,6 +165,17 @@ describe("rows", () => {
     expect(root().querySelector("[data-testid=session-attached-images]")?.textContent).toBe("2 images attached");
   });
 
+  it("shows attached images as thumbnails when their URLs are known", () => {
+    render({
+      items: [
+        { id: "u", kind: "message", role: "user", body: "look", attachedImages: 2, attachmentThumbs: ["https://h/a/0", "https://h/a/1"], collapsed: false },
+      ],
+    });
+    const imgs = root().querySelectorAll("[data-testid=session-attached-thumbs] img");
+    expect(Array.from(imgs).map((i) => i.getAttribute("src"))).toEqual(["https://h/a/0", "https://h/a/1"]);
+    expect(root().querySelector("[data-testid=session-attached-images]")).toBeNull();
+  });
+
   describe("reasoning", () => {
     it("shows a provider's reasoning summary as readable prose with the full thought behind a tap", () => {
       render({

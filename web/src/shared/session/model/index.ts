@@ -24,6 +24,7 @@ export {
   getProviderColor,
   getSessionOriginLabel,
   getTimelineMessagePreview,
+  splitAttachmentsBlock,
   normalizeSessionOriginLabel,
   truncatePath, formatTurnDuration } from "./formatters";
 

@@ -600,6 +600,7 @@ struct APIInputOriginResponse: Codable, Hashable, Sendable {
     let origin: String?
     let sessionInputId: Int?
     let clientRequestId: String?
+    let attachmentUrls: [String]?
 }
 
 enum APIToolCallState: String, Codable, Hashable, Sendable, CaseIterable {

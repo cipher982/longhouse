@@ -1230,6 +1230,10 @@ class InputOriginResponse(BaseModel):
         None,
         description="Client idempotency key when supplied by the Longhouse client",
     )
+    attachment_urls: List[str] = Field(
+        default_factory=list,
+        description="Owner-authenticated URLs of images attached to this send, in upload order; they expire 24 h after the send",
+    )
 
 
 class ToolCallState(str, Enum):

@@ -454,7 +454,8 @@ extension APIInputOriginResponse {
             authoredVia: SessionInputAuthoredVia(serverValue: authoredVia),
             origin: origin,
             sessionInputId: sessionInputId,
-            clientRequestId: clientRequestId
+            clientRequestId: clientRequestId,
+            attachmentUrls: attachmentUrls
         )
     }
 }

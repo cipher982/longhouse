@@ -373,16 +373,21 @@ struct SessionInputOrigin: Codable, Hashable, Sendable {
     let origin: String?
     let sessionInputId: Int?
     let clientRequestId: String?
+    /// Owner-authenticated paths of the images attached to this send, in order.
+    /// They expire 24 h after the send; a failed load just means they are gone.
+    let attachmentUrls: [String]?
 
     init(
         authoredVia: SessionInputAuthoredVia,
         origin: String? = nil,
         sessionInputId: Int?,
-        clientRequestId: String?
+        clientRequestId: String?,
+        attachmentUrls: [String]? = nil
     ) {
         self.authoredVia = authoredVia
         self.origin = origin
         self.sessionInputId = sessionInputId
         self.clientRequestId = clientRequestId
+        self.attachmentUrls = attachmentUrls
     }
 }
