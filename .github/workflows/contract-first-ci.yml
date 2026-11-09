@@ -440,6 +440,25 @@ jobs:
       - name: Open every menu at this size
         run: make test-ui-sweep ARGS=--viewports=${{ matrix.viewport }}
 
+  ios-transcript-stability:
+    timeout-minutes: 15
+    needs: [changes, test-image]
+    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ios == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') }}
+    runs-on: crunch
+    # Replays content changes (history arriving, images, streaming, keyboard,
+    # rotation) against the iOS transcript document in WebKit and fails when
+    # the row being read moves (specs/ios-transcript-stability.md, L1).
+    # A verification lane like ui-sweep: not in Deploy and Verify's required_jobs.
+    name: "iOS transcript stability"
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+
+      - name: Replay content changes against the transcript document
+        run: make test-ios-transcript-stability
+
   ios-tests:
     needs: changes
     if: ${{ needs.changes.outputs.ios == 'true' || github.event_name == 'workflow_dispatch' }}
