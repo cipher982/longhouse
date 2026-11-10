@@ -142,7 +142,9 @@ struct SessionComposerActionMenu: View {
     var onArmStop: (() -> Void)? = nil
 
     var body: some View {
-        let canAttachImages = attachmentInputEnabled
+        // Picking an image only prepares it on this device; whether it can be
+        // sent right now is the send button's concern, not the picker's.
+        let canAttachImages = detail.attachImagesEnabled
             && attachmentSlotsLeft > 0
             && !isProcessing
             && !isSending
@@ -153,7 +155,6 @@ struct SessionComposerActionMenu: View {
             if !detail.attachImagesEnabled {
                 return detail.canSendLive ? "Not available for this session" : "Waiting for live control"
             }
-            if !attachmentInputEnabled { return "Available between turns" }
             if attachmentSlotsLeft <= 0 { return "Attachment limit reached" }
             return nil
         }()
@@ -349,6 +350,12 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
 
             if detail.attachImagesEnabled && (detail.activePauseRequest == nil || !attachmentIsEmpty) {
                 attachmentTray
+                if !attachmentIsEmpty && !attachmentInputEnabled {
+                    Text("Images can be sent when this turn ends.")
+                        .font(.caption)
+                        .foregroundStyle(Ember.textSecondary)
+                        .accessibilityIdentifier("session-chat-attach-held-hint")
+                }
             }
 
             if inputRowVisible {

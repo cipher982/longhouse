@@ -27,6 +27,7 @@ from fastapi import File
 from fastapi import Form
 from fastapi import Header
 from fastapi import HTTPException
+from fastapi import Query
 from fastapi import Request
 from fastapi import UploadFile
 from fastapi import status
@@ -34,9 +35,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from zerg.auth.caller import Caller
+from zerg.auth.media_url_tokens import parse_media_url_token
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.browser_route_auth import get_current_browser_route_caller
+from zerg.dependencies.browser_route_auth import get_optional_browser_route_caller
 from zerg.dependencies.form_post_origin import reject_cross_origin_form_post
 from zerg.dependencies.request_db import no_request_db
 from zerg.metrics import session_input_attachment_blob_fetches_total
@@ -71,6 +74,7 @@ from zerg.services.session_input_attachments import delete_catalog_attachment_bl
 from zerg.services.session_input_attachments import get_catalog_attachment
 from zerg.services.session_input_attachments import list_catalog_attachments
 from zerg.services.session_input_attachments import store_catalog_attachment_blob
+from zerg.services.session_input_links import input_attachment_token_subject
 from zerg.services.session_inputs import INPUT_INTENT_AUTO
 from zerg.services.session_inputs import INPUT_INTENT_QUEUE
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
@@ -1140,8 +1144,9 @@ async def fetch_input_attachment_preview(
     session_id: str,
     client_request_id: str,
     index: int,
+    mt: str | None = Query(None, description="Signed read credential minted into the thumbnail URL."),
+    ambient: Caller | None = Depends(get_optional_browser_route_caller),
     db: Session | None = Depends(no_request_db),
-    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> StreamingResponse:
     """Stream one image the signed-in owner attached to a send, for the transcript thumbnail.
 
@@ -1156,7 +1161,16 @@ async def fetch_input_attachment_preview(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found") from exc
     if index < 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
-    owner_id = int(current_user.id)
+    # The thumbnail renders inside a document, which cannot send a header: the
+    # URL's signed credential (bound to this one image) or an ambient browser
+    # credential is the only authority available.
+    signed_owner = parse_media_url_token(mt, sha256=input_attachment_token_subject(session_uuid, client_request_id, index)) if mt else None
+    if signed_owner is not None:
+        owner_id = signed_owner
+    elif ambient is not None:
+        owner_id = int(ambient.id)
+    else:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
         receipt = await load_live_input_receipt_by_client_request(
             owner_id=owner_id, session_id=session_uuid, client_request_id=client_request_id

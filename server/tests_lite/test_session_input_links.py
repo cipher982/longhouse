@@ -424,3 +424,21 @@ def test_input_origins_name_each_attached_image_when_the_session_is_known():
     unsafe = input_origins_by_event([{"client_request_id": "a/b", "event_id": "e", "attachment_count": 1}], "s")
     assert unsafe["e"]["attachment_urls"] == []
     assert input_origins_by_event([{"client_request_id": "r", "event_id": "e", "attachment_count": 2}])["e"]["attachment_urls"] == []
+
+
+def test_input_origins_sign_each_attachment_url_for_the_owner(monkeypatch):
+    from zerg.auth.media_url_tokens import parse_media_url_token
+    from zerg.services.session_input_links import input_attachment_token_subject
+
+    monkeypatch.setenv("JWT_SECRET", "test-secret-for-attachment-url-tokens")
+    session_id = "11111111-1111-1111-1111-111111111111"
+    origins = input_origins_by_event([{"client_request_id": "req-a", "event_id": "e1", "attachment_count": 2}], session_id, 7)
+    urls = origins["e1"]["attachment_urls"]
+    assert [u.split("?mt=")[0] for u in urls] == [
+        f"/api/sessions/{session_id}/input-attachments/req-a/0",
+        f"/api/sessions/{session_id}/input-attachments/req-a/1",
+    ]
+    for index, url in enumerate(urls):
+        token = url.split("?mt=")[1]
+        assert parse_media_url_token(token, sha256=input_attachment_token_subject(session_id, "req-a", index)) == 7
+        assert parse_media_url_token(token, sha256=input_attachment_token_subject(session_id, "req-a", index + 1)) is None

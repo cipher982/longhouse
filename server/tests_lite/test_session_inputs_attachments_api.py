@@ -2123,7 +2123,7 @@ async def test_input_attachment_preview_streams_owner_image_by_request_and_posit
 
     async def fetch(request_id, index):
         return await route.fetch_input_attachment_preview(
-            session_id=str(session_id), client_request_id=request_id, index=index, db=None, current_user=SimpleNamespace(id=7)
+            session_id=str(session_id), client_request_id=request_id, index=index, mt=None, ambient=SimpleNamespace(id=7), db=None
         )
 
     response = await fetch("req-1", 1)
@@ -2136,3 +2136,59 @@ async def test_input_attachment_preview_streams_owner_image_by_request_and_posit
         with pytest.raises(HTTPException) as exc:
             await fetch(request_id, index)
         assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_input_attachment_preview_reads_with_a_signed_url_credential_and_no_ambient_caller(monkeypatch, tmp_path):
+    """The hosted iOS app has no cookie: the thumbnail URL itself carries the credential."""
+    import zerg.routers.session_inputs_attachments as route
+    from zerg.auth.media_url_tokens import media_url_token
+    from zerg.services.session_input_links import input_attachment_token_subject
+
+    monkeypatch.setenv("JWT_SECRET", "test-secret-for-attachment-url-tokens")
+    from zerg.config import get_settings
+
+    get_settings.cache_clear() if hasattr(get_settings, "cache_clear") else None
+
+    session_id = uuid4()
+    path = tmp_path / "a.png"
+    path.write_bytes(_PNG_BYTES)
+    blob = StoredAttachment(
+        id=uuid4(),
+        session_input_id="r",
+        session_id=session_id,
+        mime_type="image/png",
+        byte_size=path.stat().st_size,
+        sha256="x",
+        blob_path=path,
+        original_filename="a.png",
+        original_byte_size=None,
+    )
+    seen = {}
+
+    async def load_receipt(**kwargs):
+        seen["owner"] = kwargs["owner_id"]
+        return SimpleNamespace(id=str(uuid4()))
+
+    async def list_attachments(**kwargs):
+        return [blob]
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr(route, "list_catalog_attachments", list_attachments)
+
+    async def fetch(mt, index=0):
+        return await route.fetch_input_attachment_preview(
+            session_id=str(session_id), client_request_id="req-1", index=index, mt=mt, ambient=None, db=None
+        )
+
+    good = media_url_token(owner_id=7, sha256=input_attachment_token_subject(session_id, "req-1", 0))
+    response = await fetch(good)
+    assert b"".join([chunk async for chunk in response.body_iterator]) == _PNG_BYTES
+    assert seen["owner"] == 7
+
+    # No credential, a garbage one, and one minted for a different image all fail.
+    other = media_url_token(owner_id=7, sha256=input_attachment_token_subject(session_id, "req-1", 1))
+    for bad in (None, "garbage", other):
+        with pytest.raises(HTTPException) as exc:
+            await fetch(bad)
+        assert exc.value.status_code == 401

@@ -228,7 +228,7 @@ def _workspace_envelope(
     """Build one workspace shape; archive readiness only controls its event page."""
 
     control_only = storage is None
-    input_origins = input_origins_by_event(receipts, session_id)
+    input_origins = input_origins_by_event(receipts, session_id, owner_id)
     facts = facts or []
     media_by_owner = _media_refs_by_owner(media_refs or [], owner_id=owner_id)
     events = page.get("events") if page is not None else []

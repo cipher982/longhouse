@@ -16,6 +16,9 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from zerg.auth.media_url_tokens import MEDIA_URL_TOKEN_PARAMETER
+from zerg.auth.media_url_tokens import MediaUrlTokenError
+from zerg.auth.media_url_tokens import media_url_token
 from zerg.catalogd.client import CatalogClient
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 
@@ -147,11 +150,18 @@ def input_receipts_from_rows(receipts: object) -> list[dict[str, Any]]:
     return projected
 
 
-def input_origins_by_event(receipts: list[dict[str, Any]], session_id: UUID | str | None = None) -> dict[str, dict[str, Any]]:
+def input_origins_by_event(
+    receipts: list[dict[str, Any]],
+    session_id: UUID | str | None = None,
+    owner_id: int | None = None,
+) -> dict[str, dict[str, Any]]:
     """`input_origin` payloads keyed by the durable event each receipt became.
 
     With a session id, a send that carried images also names where the owner can
     fetch each one (it expires 24 h after the send; clients treat a 404 as gone).
+    With an owner id each URL also carries a signed read credential: a thumbnail
+    renders inside a document that cannot send a header, and the hosted iOS app
+    holds no session cookie, so without it every thumbnail read as "expired".
     """
     origins: dict[str, dict[str, Any]] = {}
     for receipt in receipts:
@@ -162,15 +172,31 @@ def input_origins_by_event(receipts: list[dict[str, Any]], session_id: UUID | st
                 "origin": str(receipt.get("origin") or "user"),
                 "session_input_id": None,
                 "client_request_id": receipt.get("client_request_id"),
-                "attachment_urls": _attachment_urls(session_id, receipt),
+                "attachment_urls": _attachment_urls(session_id, receipt, owner_id),
             }
     return origins
 
 
-def _attachment_urls(session_id: UUID | str | None, receipt: dict[str, Any]) -> list[str]:
+def input_attachment_token_subject(session_id: UUID | str, client_request_id: str, index: int) -> str:
+    """What an attachment URL credential is bound to: exactly one uploaded image."""
+    return f"input-attachment:{str(session_id).lower()}:{client_request_id}:{index}"
+
+
+def _attachment_urls(session_id: UUID | str | None, receipt: dict[str, Any], owner_id: int | None = None) -> list[str]:
     client_request_id = receipt.get("client_request_id")
     count = int(receipt.get("attachment_count") or 0)
     # One path segment that survives ASGI percent-decoding; clients send UUID-like ids.
     if session_id is None or not isinstance(client_request_id, str) or not _SAFE_REQUEST_ID.fullmatch(client_request_id) or count <= 0:
         return []
-    return [f"/api/sessions/{session_id}/input-attachments/{client_request_id}/{i}" for i in range(count)]
+    urls = []
+    for i in range(count):
+        url = f"/api/sessions/{session_id}/input-attachments/{client_request_id}/{i}"
+        if owner_id:
+            try:
+                token = media_url_token(owner_id=owner_id, sha256=input_attachment_token_subject(session_id, client_request_id, i))
+            except MediaUrlTokenError:
+                token = None  # no signing secret: readers need an ambient credential, as before
+            if token:
+                url = f"{url}?{MEDIA_URL_TOKEN_PARAMETER}={token}"
+        urls.append(url)
+    return urls
