@@ -42,12 +42,12 @@
 #
 # Up to CRUNCH_SLOTS runs (default 3) execute at once; a fourth waits for a free slot. Each run has its own
 # directory in the guest's tmpfs; the container image, Cargo dependencies and uv cache live in the image and
-# are shared, so runs are warm. The guest is reached through the hosted machine's ssh alias, then AF_VSOCK
+# are shared, so runs are warm. The guest is reached through its hypervisor's ssh alias (cube), then AF_VSOCK
 # (no network listener; the VM has no route from the tailnet): see control-plane
 # docs/specs/build-compute-pipeline.md 6.2.8.
 #
 # Environment:
-#   CRUNCH_VIA       ssh alias of the machine hosting the VM (default: zerg)
+#   CRUNCH_VIA       ssh alias of the machine hosting the VM (default: cube)
 #   CRUNCH_KEY       private key the guest's `crunch` user trusts (default: ~/.ssh/crunch_vm_ed25519)
 #   CRUNCH_SLOTS     concurrent runs (default: 3)
 #   CRUNCH_TIMEOUT   per-run limit in seconds (default: 3600)
@@ -55,7 +55,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NAME="$(basename "$ROOT_DIR" | tr -c 'A-Za-z0-9._\n-' '_')"
-VIA="${CRUNCH_VIA:-zerg}"
+VIA="${CRUNCH_VIA:-cube}"
 KEY="${CRUNCH_KEY:-$HOME/.ssh/crunch_vm_ed25519}"
 SLOTS="${CRUNCH_SLOTS:-3}"
 TIMEOUT="${CRUNCH_TIMEOUT:-3600}"
@@ -74,7 +74,7 @@ die() { echo "crunch: $*" >&2; exit 1; }
 
 write_ssh_config() {
   mkdir -p "$OUT_ROOT" && chmod 700 "$OUT_ROOT"
-  # One config per invocation: the ProxyCommand goes through the hosted machine (an ordinary `ssh zerg`,
+  # One config per invocation: the ProxyCommand goes through the hypervisor (an ordinary `ssh cube`,
   # so it uses this laptop's alias, key and multiplexing) and then AF_VSOCK to the guest's sshd.
   # The guest's host key is pinned on first use in its own file, never mixed into known_hosts.
   cat > "$SSH_CONFIG.$$" <<EOF
