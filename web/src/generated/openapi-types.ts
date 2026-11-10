@@ -13072,6 +13072,8 @@ export interface operations {
     fetch_input_attachment_preview_sessions__session_id__input_attachments__client_request_id___index__get: {
         parameters: {
             query?: {
+                /** @description Signed read credential minted into the thumbnail URL. */
+                mt?: string | null;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
