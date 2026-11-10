@@ -734,6 +734,34 @@ struct SessionViewModelTests {
         #expect(refreshRequest?.snapshotEventId == nil)
     }
 
+    /// A full tail refresh (a live session's tail moves every second and often
+    /// cannot be a delta) resets the older cursor to just before the tail while
+    /// older pages stay merged. The next older page is then rows already held;
+    /// paging must step over it instead of stalling there (the phone sat at 181
+    /// of 526 events and could not scroll higher).
+    @Test
+    func olderPagingStepsOverPagesAlreadyLoadedAfterFullTailRefresh() async throws {
+        let base = try makeWorkspace(eventId: 150, content: "Recent tail", total: 150, pageOffset: 100)
+        let api = FakeSessionWorkspaceClient(workspaces: [
+            workspacePage(from: base, items: conversationItems(101...150), total: 150, pageOffset: 100, nextCursor: "c100"),
+            workspacePage(from: base, items: conversationItems(51...100), total: 150, pageOffset: 50, nextCursor: "c50"),
+            workspacePage(from: base, items: conversationItems(102...151), total: 151, pageOffset: 101, nextCursor: "c101"),
+            workspacePage(from: base, items: conversationItems(51...100), total: 151, pageOffset: 50, nextCursor: "c50"),
+            workspacePage(from: base, items: conversationItems(1...50), total: 151, pageOffset: 0, nextCursor: nil)
+        ])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await model.loadOlder(sessionId: "session-1", appState: appState)
+        await model.reload(sessionId: "session-1", appState: appState)
+        await model.loadOlder(sessionId: "session-1", appState: appState)
+
+        let expectedIds = TimelineBuilder.build(items: conversationItems(1...151)).map(\.id)
+        #expect(model.items.map(\.id) == expectedIds)
+    }
+
     @Test
     func startRestoresCachedTailThenRefreshesInBackground() async throws {
         let cached = try makeWorkspace(eventId: 20, content: "Cached tail")

@@ -2734,7 +2734,7 @@ final class SessionViewModel: ObservableObject {
     /// the request or detached build became obsolete; only a real zero means
     /// the server returned no new history and may stall short-viewport fills.
     @discardableResult
-    private func loadOlder(api: SessionWorkspaceClient, sessionId: String) async -> Int? {
+    private func loadOlder(api: SessionWorkspaceClient, sessionId: String, overlapDepth: Int = 0) async -> Int? {
         guard activeSessionId == sessionId else { return nil }
         guard loadedProjectionItemCount < totalProjectionItemCount else { return 0 }
         guard !isLoadingOlder else {
@@ -2781,6 +2781,9 @@ final class SessionViewModel: ObservableObject {
                 "older_applied",
                 "source=prefetch page_items=\(prefetchedOlderTail.projection.items.count) added=\(added.map { String($0) } ?? "discarded") loaded=\(before)->\(loadedProjectionItemCount) total=\(totalProjectionItemCount)"
             )
+            if added == 0, tailNextCursor != requestCursor, overlapDepth < Self.maxOverlapPages {
+                return await loadOlder(api: api, sessionId: sessionId, overlapDepth: overlapDepth + 1)
+            }
             return added
         }
 
@@ -2805,6 +2808,9 @@ final class SessionViewModel: ObservableObject {
             if added != nil {
                 isLoadingOlder = false
                 scheduleOlderPrefetch(api: api, sessionId: sessionId)
+            }
+            if added == 0, tailNextCursor != requestCursor, overlapDepth < Self.maxOverlapPages {
+                return await loadOlder(api: api, sessionId: sessionId, overlapDepth: overlapDepth + 1)
             }
             return added
         } catch let LonghouseAPIError.structured(_, code, _) where code == "projection_drift" {
@@ -3369,6 +3375,10 @@ final class SessionViewModel: ObservableObject {
             cursor: cursor
         )
     }
+
+    /// Pages of already-loaded rows one older request may step over.
+    private static let maxOverlapPages = 8
+
     /// Returns how many projection items the page actually added. `nil` means
     /// that the page became obsolete while its rows were being built.
     @discardableResult
@@ -3387,6 +3397,18 @@ final class SessionViewModel: ObservableObject {
             // response to replace the cursor a newer tail already owns.
             totalProjectionItemCount = max(totalProjectionItemCount, tail.projection.total)
             lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint ?? lastWorkspaceRevisionFingerprint
+            // A full tail refresh moves the cursor back to just before the
+            // tail while older pages stay merged, so the next page can be
+            // entirely rows we already hold. Step over it (same snapshot, the
+            // cursor is still the one this request used) or paging never
+            // reaches history: the phone sat at 181 of 526 events, re-fetching
+            // the same page every second.
+            if let next = tail.projection.nextCursor,
+               next != expectedCursor,
+               tailNextCursor == expectedCursor,
+               tailSnapshotEventId == expectedSnapshotEventId {
+                tailNextCursor = next
+            }
             return 0
         }
 
