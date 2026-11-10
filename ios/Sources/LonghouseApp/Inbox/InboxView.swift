@@ -77,7 +77,7 @@ func timelineDisplayOrder(_ sessions: [SessionSummary]) -> [SessionSummary] {
 }
 
 private func timelineDisplayTime(for session: SessionSummary) -> Date {
-    let raw = session.isClosed ? (session.lastActivityAt ?? session.startedAt) : session.startedAt
+    let raw = session.isReceded ? (session.lastActivityAt ?? session.startedAt) : session.startedAt
     let base = raw.flatMap(LonghouseDateParser.parse) ?? .distantPast
     // Open work keeps launch order: live sessions take input constantly.
     guard !session.isOpen,

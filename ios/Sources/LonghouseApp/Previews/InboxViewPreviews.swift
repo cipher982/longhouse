@@ -25,22 +25,25 @@ private func previewStateFacts(
     let available = SessionStateAction(state: "available", reason: nil)
     let unavailable = SessionStateAction(state: "unavailable", reason: "preview_not_granted")
     let closed = statusLabel == "Closed"
+    let ended = statusLabel == "Ended"
     let activity: String = switch statusTone {
     case "thinking": "thinking"
     case "running": "executing"
     case "blocked": "quiescent"
     case "stalled": "stalled"
     case "idle": "quiescent"
-    default: closed ? "quiescent" : "unknown"
+    default: (closed || ended) ? "quiescent" : "unknown"
     }
     let pendingInteractionKind = explicitPendingInteraction
     let pendingInteractionCanRespond = explicitCanRespond ?? (pendingInteractionKind != nil)
     let answerableInteraction = pendingInteractionKind != nil && pendingInteractionCanRespond
     let isApproval = ["permission", "approval", "plan_approval"].contains(pendingInteractionKind ?? "")
-    let primaryKey = answerableInteraction ? (isApproval ? "needs_approval" : "needs_answer") : statusTone
+    let primaryKey = answerableInteraction
+        ? (isApproval ? "needs_approval" : "needs_answer")
+        : (ended ? "ended" : statusTone)
     let primaryLabel = answerableInteraction ? (isApproval ? "Needs approval" : "Needs answer") : statusLabel
     let workingSet = overrideWorkingSet
-        ?? ((!closed && (pendingInteractionKind != nil || activity == "thinking" || activity == "executing"))
+        ?? ((!(closed || ended) && (pendingInteractionKind != nil || activity == "thinking" || activity == "executing"))
             ? "open"
             : "history")
 
@@ -51,7 +54,7 @@ private func previewStateFacts(
         dispositionState: closed ? "closed" : "open",
         dispositionCloseReason: closed ? "user_closed" : nil,
         launchState: nil,
-        runLifecycle: closed ? "ended" : "running",
+        runLifecycle: (closed || ended) ? "ended" : "running",
         activityState: activity,
         activityRawKind: nil,
         activityTool: activityTool,
@@ -295,6 +298,21 @@ private func mockSession(
             anchorSecondsAgo: 18 * 60,
             seenAtSecondsAgo: nil,
             phaseExpiresInSeconds: -45 // server already declared this stale
+        ),
+        mockSession(
+            id: "6-ended",
+            project: "longhouse",
+            title: "Helm Terminal Exited After Deploy",
+            summary: "Managed Helm run exited cleanly while keeping the session open for resume.",
+            provider: "claude",
+            statusLabel: "Ended",
+            statusTone: "closed",
+            activityRecency: "none",
+            anchorSecondsAgo: 45 * 60,
+            seenAtSecondsAgo: 45 * 60,
+            seenAtPrefix: "Ended",
+            turns: 9,
+            tools: 38
         ),
         mockSession(
             id: "6",

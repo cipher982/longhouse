@@ -23,7 +23,9 @@ extension SessionStateFacts {
         delegationValidUntil: String?
     ) -> SessionStateSignal {
         guard let primary else { return SessionStateSignal(state: "unknown", validUntil: nil) }
-        if primary.key == "closed" { return SessionStateSignal(state: "closed", validUntil: nil) }
+        if primary.key == "closed" || primary.tone == "closed" {
+            return SessionStateSignal(state: "closed", validUntil: nil)
+        }
         if primary.tone == "blocked" || primary.tone == "stalled" {
             return SessionStateSignal(state: "attention", validUntil: primary.key == "stalled" ? activityValidUntil : nil)
         }
@@ -38,7 +40,7 @@ extension SessionStateFacts {
             }
             return SessionStateSignal(state: "working", validUntil: validUntil)
         }
-        if ["idle", "ready", "ended"].contains(primary.key) {
+        if ["idle", "ready"].contains(primary.key) {
             return SessionStateSignal(state: "quiet", validUntil: nil)
         }
         return SessionStateSignal(state: "unknown", validUntil: nil)

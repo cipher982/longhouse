@@ -38,7 +38,7 @@ export function mirrorServedSignal(
   } = {},
 ): ServedSignal {
   if (!primary) return { state: "unknown", valid_until: null };
-  if (primary.key === "closed") return { state: "closed", valid_until: null };
+  if (primary.key === "closed" || primary.tone === "closed") return { state: "closed", valid_until: null };
   if (primary.tone === "blocked" || primary.tone === "stalled") {
     return { state: "attention", valid_until: primary.key === "stalled" ? (evidence.activity?.valid_until ?? null) : null };
   }
@@ -51,7 +51,7 @@ export function mirrorServedSignal(
         : null;
     return { state: "working", valid_until: validUntil };
   }
-  if (primary.key === "idle" || primary.key === "ready" || primary.key === "ended") {
+  if (primary.key === "idle" || primary.key === "ready") {
     return { state: "quiet", valid_until: null };
   }
   return { state: "unknown", valid_until: null };

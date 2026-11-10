@@ -10,6 +10,7 @@ struct TimelineSessionCardRow: View {
     var body: some View {
         let signal = TimelineSignal.resolve(for: session, suppressed: connectivityBanner != .none)
         let isNewResult = role == .newResult
+        let isReceded = !isNewResult && (signal == .closed || session.isReceded)
         let dotColor = isNewResult ? newResultStatusColor(for: session) : signal.dotColor
         // Only the rows that want you carry an edge; everything else is a
         // quiet char card and lets the dot and status line speak. A new result
@@ -17,7 +18,7 @@ struct TimelineSessionCardRow: View {
         // stays the brand and the primary action.
         let edgeColor: Color? = role == .needsYou ? signal.dotColor : nil
         let dotPulses = !isNewResult && signal.pulses
-        let titleWeight: Font.Weight = isNewResult ? .bold : .semibold
+        let titleWeight: Font.Weight = isNewResult ? .bold : (isReceded ? .medium : .semibold)
         let titleLineLimit = role == .needsYou || isNewResult ? 2 : 1
 
         // Three-line row built for glanceability:
@@ -29,13 +30,15 @@ struct TimelineSessionCardRow: View {
         // No Managed badge, no turns/tools — that was the dead right half.
         HStack(alignment: .top, spacing: 11) {
             ProviderGlyph(provider: session.provider, size: 30)
+                .saturation(isReceded ? 0 : 1)
+                .opacity(isReceded ? 0.6 : 1.0)
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     if let project = session.projectLabel {
                         Text(project)
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(Ember.textSecondary)
+                            .foregroundStyle(isReceded ? Ember.textMuted : Ember.textSecondary)
                             .lineLimit(1)
                     }
                     if let machine = session.timelineMachineLabel {
@@ -62,11 +65,11 @@ struct TimelineSessionCardRow: View {
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    LivenessDot(color: dotColor, pulsing: dotPulses)
+                    LivenessDot(color: dotColor, pulsing: dotPulses, flattened: isReceded)
                         .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
                     Text(session.title)
                         .font(.subheadline.weight(titleWeight))
-                        .foregroundStyle(Ember.text)
+                        .foregroundStyle(isReceded ? Ember.textSecondary : Ember.text)
                         .lineLimit(titleLineLimit)
                 }
                 // The dot is color-only; fold its meaning into the headline so
@@ -99,7 +102,10 @@ struct TimelineSessionCardRow: View {
         }
         .padding(.vertical, 11)
         .padding(.horizontal, 12)
-        .background(Ember.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(
+            Ember.card.opacity(isReceded ? 0.5 : 1.0),
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
         .overlay(alignment: .leading) {
             if let edgeColor {
                 RoundedRectangle(cornerRadius: 1.5)
@@ -110,8 +116,12 @@ struct TimelineSessionCardRow: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(edgeColor?.opacity(0.28) ?? Ember.hairline, lineWidth: 0.8)
+                .stroke(
+                    edgeColor?.opacity(0.28) ?? (isReceded ? Ember.hairline.opacity(0.5) : Ember.hairline),
+                    lineWidth: 0.8
+                )
         }
+        .opacity(isReceded ? 0.72 : 1.0)
     }
 }
 
@@ -295,25 +305,32 @@ struct ConnectionStatusStrip: View {
 private struct LivenessDot: View {
     let color: Color
     let pulsing: Bool
+    var flattened: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var animate = false
 
     var body: some View {
-        let shouldPulse = pulsing && !reduceMotion
+        let shouldPulse = pulsing && !flattened && !reduceMotion
 
         ZStack {
-            if shouldPulse {
+            if flattened {
+                Capsule()
+                    .fill(color)
+                    .frame(width: 8, height: 2)
+            } else {
+                if shouldPulse {
+                    Circle()
+                        .stroke(color, lineWidth: 1.4)
+                        .scaleEffect(animate ? 2.0 : 1.0)
+                        .opacity(animate ? 0.0 : 0.55)
+                        .frame(width: 8, height: 8)
+                        .animation(.easeOut(duration: 1.2).repeatForever(autoreverses: false), value: animate)
+                }
                 Circle()
-                    .stroke(color, lineWidth: 1.4)
-                    .scaleEffect(animate ? 2.0 : 1.0)
-                    .opacity(animate ? 0.0 : 0.55)
+                    .fill(color)
                     .frame(width: 8, height: 8)
-                    .animation(.easeOut(duration: 1.2).repeatForever(autoreverses: false), value: animate)
             }
-            Circle()
-                .fill(color)
-                .frame(width: 8, height: 8)
         }
         .frame(width: 12, height: 12)
         // Drive `animate` from the `pulsing` prop directly so LazyVStack
@@ -414,9 +431,9 @@ private func parseLonghouseDate(_ value: String?) -> Date? {
 /// and progress signals (server/zerg/services/session_runtime.py).
 /// Returns nil for closed sessions (we don't want to show a counter there).
 func stateDurationLabel(for session: SessionSummary) -> String? {
-    // Use the lifecycle flag, the same "closed" source the signal uses, so the
-    // dot/accent and the duration never disagree about whether a row is closed.
-    if session.isClosed { return nil }
+    // Use the receded state (disposition closed or run ended), matching the
+    // dot/accent and signal so closed or exited rows never show a live counter.
+    if session.isReceded { return nil }
     guard let date = parseLonghouseDate(session.timelineAnchor) else { return nil }
     return compactDuration(since: date)
 }

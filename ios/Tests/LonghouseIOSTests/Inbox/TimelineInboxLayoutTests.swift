@@ -223,6 +223,62 @@ struct TimelineInboxLayoutTests {
     }
 
     @Test
+    func exitedHelmSessionSignalsClosedAndRecedesWithoutClosingDisposition() {
+        let now = LonghouseDateParser.parse("2026-08-01T12:15:00Z")!
+        let exitedHelm = SessionSummary(
+            id: "exited-helm",
+            title: "Session exited-helm",
+            presenceState: "quiescent",
+            provider: "claude",
+            project: "longhouse",
+            lastActivityAt: "2026-08-01T12:10:00Z",
+            startedAt: "2026-08-01T09:00:00Z",
+            homeLabel: "cinder",
+            timelineAnchorAt: "2026-08-01T12:10:00Z",
+            runtimeDisplay: runtimeDisplay(
+                for: makeSessionStateFacts(
+                    activity: "quiescent",
+                    runLifecycle: "ended",
+                    workingSet: "history",
+                    primaryOverride: SessionStateLabel(
+                        key: "ended",
+                        label: "Ended",
+                        tone: "closed",
+                        observedAt: "2026-08-01T12:10:00Z"
+                    )
+                )
+            ),
+            stateFacts: makeSessionStateFacts(
+                activity: "quiescent",
+                runLifecycle: "ended",
+                workingSet: "history",
+                primaryOverride: SessionStateLabel(
+                    key: "ended",
+                    label: "Ended",
+                    tone: "closed",
+                    observedAt: "2026-08-01T12:10:00Z"
+                )
+            )
+        )
+        let olderRecent = session(
+            id: "older-recent",
+            facts: makeSessionStateFacts(activity: "quiescent", workingSet: "history"),
+            startedAt: "2026-08-01T11:00:00Z",
+            anchorAt: "2026-08-01T11:00:00Z"
+        )
+
+        #expect(exitedHelm.isClosed == false)
+        #expect(exitedHelm.isReceded == true)
+        #expect(TimelineSignal.resolve(for: exitedHelm, asOf: now) == .closed)
+        #expect(exitedHelm.spokenStatusLabel(asOf: now) == "Ended")
+        #expect(stateDurationLabel(for: exitedHelm) == nil)
+        #expect(HearthSnapshot.from(session: exitedHelm, now: now).mode == .ended)
+
+        let layout = buildTimelineInboxLayout([olderRecent, exitedHelm])
+        #expect(layout.recent.map(\.id) == ["exited-helm", "older-recent"])
+    }
+
+    @Test
     func residentCapKeepsEveryOpenRowAndCutsHistoryInstead() {
         // The quiet-but-open Helm row carries the oldest anchor, so a naive
         // prefix(limit) drops exactly the session the server tiered into view.

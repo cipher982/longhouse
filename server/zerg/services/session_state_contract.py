@@ -1293,7 +1293,7 @@ def _primary(
 
 _ATTENTION_TONES = frozenset({"blocked", "stalled"})
 _WORKING_TONES = frozenset({"running", "thinking", "active"})
-_QUIET_PRIMARY_KEYS = frozenset({"idle", "ready", "ended"})
+_QUIET_PRIMARY_KEYS = frozenset({"idle", "ready"})
 
 
 def _signal(
@@ -1314,7 +1314,7 @@ def _signal(
 
     if primary is None:
         return SessionPresentationSignal(state="unknown")
-    if primary.key == "closed":
+    if primary.key == "closed" or primary.tone == "closed":
         return SessionPresentationSignal(state="closed")
     if primary.tone in _ATTENTION_TONES:
         return SessionPresentationSignal(

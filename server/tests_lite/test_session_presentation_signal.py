@@ -83,6 +83,28 @@ def test_closed_is_closed():
     assert signal.valid_until is None
 
 
+def test_exited_helm_run_is_closed_signal_but_open_disposition():
+    facts = assemble_session_state_facts(
+        mode="helm",
+        disposition=SessionDispositionFacts(state="open"),
+        launch=None,
+        run=SessionRunFacts(lifecycle="ended", ended_at=NOW),
+        activity=SessionActivityFacts(state="unknown"),
+        delegation=SessionDelegationFacts(),
+        control=_control(),
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current"),
+        host=SessionHostFacts(state="online"),
+    )
+    assert facts.disposition.state == "open"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == "ended"
+    assert facts.presentation.primary.label == "Ended"
+    assert facts.presentation.primary.tone == "closed"
+    assert facts.presentation.signal.state == "closed"
+    assert facts.presentation.signal.valid_until is None
+
+
 @pytest.mark.parametrize("kind,key", [("question", "needs_answer"), ("approval", "needs_approval")])
 def test_a_keyed_interaction_is_attention_without_a_clock(kind, key):
     primary, signal = _signal(

@@ -96,4 +96,29 @@ describe("SessionRow status label", () => {
     renderRow(card(facts));
     expect(screen.getByTestId("session-row").querySelector(".inbox-row-activity")).toHaveTextContent("Using Shell");
   });
+
+  it("renders an exited Helm run as a closed-signal receded row while keeping open disposition", () => {
+    const facts = makeSessionStateFacts({
+      activity: "quiescent",
+      mode: "helm",
+    });
+    facts.run = { lifecycle: "ended" };
+    facts.presentation.primary = {
+      key: "ended",
+      label: "Ended",
+      tone: "closed",
+      observed_at: "2026-05-19T15:50:00Z",
+    };
+    facts.presentation.signal = mirrorServedSignal(facts.presentation.primary, {
+      activity: { state: "quiescent", valid_until: null },
+    });
+    renderRow(card(facts));
+
+    const row = screen.getByTestId("session-row");
+    const activity = row.querySelector(".inbox-row-activity");
+    expect(facts.disposition.state).toBe("open");
+    expect(activity).toHaveTextContent("Ended");
+    expect(activity).toHaveAttribute("data-signal", "closed");
+    expect(row).toHaveAttribute("data-closed", "true");
+  });
 });

@@ -113,6 +113,13 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
 
     var isClosed: Bool { stateFacts.dispositionState == "closed" }
 
+    /// Timeline presentation: nothing is running here (disposition closed or run ended).
+    /// Keeps `isClosed` strictly disposition-only so composer, send, and resume
+    /// gating never treat an ended Helm run as an unresumable closed session.
+    var isReceded: Bool {
+        isClosed || stateFacts.servedSignal() == .closed || stateFacts.primary?.tone == "closed"
+    }
+
     /// Is this session part of what the user is currently carrying?
     ///
     /// Reads the server's `working_set` tier, never the disposition: a closed
@@ -294,6 +301,10 @@ extension SessionSummary {
         if isClosed { return "Closed" }
         if let failureLabel = stateFacts.terminalFailureLabel {
             return failureLabel
+        }
+        if stateFacts.primary?.tone == "closed" {
+            let label = timelineStatusLabel
+            return label.isEmpty ? "Ended" : label
         }
         if stateFacts.workClaimExpired(asOf: now) {
             return "Activity uncertain"

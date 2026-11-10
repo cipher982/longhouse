@@ -32,7 +32,12 @@ use uuid::Uuid;
 
 pub const ANTIGRAVITY_PRINT_ADAPTER: &str = "antigravity_print";
 pub const DEFAULT_ANTIGRAVITY_BIN: &str = "agy";
-pub const DEFAULT_PRINT_TIMEOUT_SECS: u64 = 600;
+/// Default `--print-timeout` passed to `agy` when no explicit limit is given.
+/// `0` instructs `agy` to wait until the turn completes (`--print-timeout 0s`),
+/// matching every other Console adapter; the 600s cap killed multi-step turns
+/// mid-flight (and terminated in-flight background tasks) as soon as a turn
+/// crossed 10 minutes.
+pub const DEFAULT_PRINT_TIMEOUT_SECS: u64 = 0;
 
 #[derive(Clone, Debug)]
 pub struct AntigravityPrintRunConfig {
@@ -2218,6 +2223,16 @@ elif prompt in ("restart-stop", "restart-mismatch"):
         assert!(args.contains(&"stream-json".to_string()));
         assert!(args.contains(&"120s".to_string()));
         assert!(!args.contains(&"--input-format".to_string()));
+    }
+
+    #[test]
+    fn default_print_timeout_waits_for_turn_completion() {
+        let args = console_turn_argv("ship it", None, None, DEFAULT_PRINT_TIMEOUT_SECS);
+        let timeout_index = args
+            .iter()
+            .position(|arg| arg == "--print-timeout")
+            .unwrap();
+        assert_eq!(args[timeout_index + 1], "0s");
     }
 
     #[test]
