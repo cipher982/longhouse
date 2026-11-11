@@ -45,6 +45,8 @@ DOGFOOD_HEALTH = os.environ.get("DOGFOOD_HEALTH_URL") or f"https://{DOGFOOD}.lon
 PRODUCTION_HEALTH = os.environ.get("DEMO_HEALTH_URL") or "https://longhouse.ai/api/health"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 FAST_LANE_NOT_ALLOWED = 3  # promote-dogfood.sh --fast-lane: the range has sensitive paths
+TERMINAL_TRUTH_WAITING = 4  # promote-dogfood.sh: a live-preview change has no terminal-truth status yet, or it is pending
+TERMINAL_TRUTH_REFUSED = 5  # promote-dogfood.sh: the terminal-truth status failed, errored or was not posted by Actions
 
 
 def log(message: str) -> None:
@@ -138,6 +140,12 @@ def decide_dogfood(main: str, dry_run: bool) -> dict:
     rc, out, err, elapsed = run_script(["bash", "scripts/ops/promote-dogfood.sh", target])
     if rc == 0:
         return {**d, "action": "promoted", "lane": "canary-qualified", "elapsed_s": elapsed, "reason": tail(out, 2)}
+    # A live-preview change needs its passing `longhouse/terminal-truth` status (promote-dogfood.sh): exit 4 is a
+    # missing or pending status (wait for the Terminal Truth run), exit 5 a failed one (a refusal, not a retry).
+    if rc == TERMINAL_TRUTH_WAITING:
+        return {**d, "action": "waiting", "lane": "canary-qualified", "waiting_on": ["terminal-truth"], "reason": tail(err, 2)}
+    if rc == TERMINAL_TRUTH_REFUSED:
+        return {**d, "action": "refused", "lane": "canary-qualified", "reason": tail(err, 2)}
     # A missing canary verification receipt means Deploy and Verify is still running
     # or a newer push superseded this target.
     waiting = []

@@ -2,7 +2,8 @@
 """Classify the dogfood range for fast-lane eligibility.
 
 A matching path means the change must use the canary-qualified dogfood path.
-This classifier is used only to choose between dogfood promotion lanes.
+This classifier is used only to choose between dogfood promotion lanes, and to find the commit whose
+`longhouse/terminal-truth` status promote-dogfood.sh requires (`live-preview`).
 """
 
 from __future__ import annotations
@@ -54,11 +55,22 @@ def compile_glob(pattern: str) -> re.Pattern[str]:
     return re.compile("".join(out))
 
 
+def _string_list(data: dict, key: str, policy: str | Path) -> list[str]:
+    value = data.get(key)
+    if not isinstance(value, list) or not value or not all(isinstance(path, str) and path for path in value):
+        raise ValueError(f"{policy} must contain a non-empty {key} list")
+    return value
+
+
+def load_live_preview_paths(policy: str | Path = POLICY) -> list[str]:
+    """The live-preview paths: sensitive, and gated on the terminal-truth commit status."""
+    return _string_list(tomllib.loads(Path(policy).read_text(encoding="utf-8")), "live_preview_paths", policy)
+
+
 def load_patterns(policy: str | Path = POLICY) -> tuple[list[str], list[re.Pattern[str]]]:
+    """Every sensitive path: the general list plus the live-preview paths."""
     data = tomllib.loads(Path(policy).read_text(encoding="utf-8"))
-    paths = data.get("paths")
-    if not isinstance(paths, list) or not paths or not all(isinstance(path, str) and path for path in paths):
-        raise ValueError(f"{policy} must contain a non-empty paths list")
+    paths = _string_list(data, "paths", policy) + _string_list(data, "live_preview_paths", policy)
     return paths, [compile_glob(path) for path in paths]
 
 
@@ -101,6 +113,28 @@ def matching_sensitive_paths(repo: str | Path, base: str, head: str,
             if any(pattern.fullmatch(path) for pattern in patterns)]
 
 
+def newest_live_preview_commit(repo: str | Path, base: str, head: str, policy: str | Path = POLICY) -> str | None:
+    """The newest commit in base..head that changes a live-preview path, or None.
+
+    A passing terminal-truth run on that commit tested the tree that contains every earlier live-preview change
+    in the range, so it is the one commit whose status the promotion needs. Merge commits count by their own
+    changes (``--remerge-diff``), as in changed_paths.
+    """
+    base_sha, head_sha = resolve(repo, base), resolve(repo, head)
+    patterns = [compile_glob(path) for path in load_live_preview_paths(policy)]
+    out = git(repo, "log", "--diff-merges=off", "--no-renames", "--name-only", "--format=%x01%H%x02%P", f"{base_sha}..{head_sha}")
+    for chunk in out.split("\x01")[1:]:  # newest first
+        header, _, names = chunk.partition("\n")
+        sha, parents = header.split("\x02", 1)
+        if len(parents.split()) > 1:
+            if len(parents.split()) > 2:
+                raise ValueError(f"{sha[:12]} is an octopus merge; its own changes cannot be measured")
+            names = git(repo, "show", "--remerge-diff", "--no-renames", "--name-only", "--format=", sha)
+        if any(pattern.fullmatch(name) for name in names.splitlines() for pattern in patterns):
+            return sha
+    return None
+
+
 def has_sensitive_paths(repo: str | Path, base: str, head: str,
                         policy: str | Path = POLICY) -> bool:
     return bool(matching_sensitive_paths(repo, base, head, policy))
@@ -113,7 +147,19 @@ def main(argv: list[str] | None = None) -> int:
     check = sub.add_parser("check", help="check whether base..head may use the dogfood fast lane")
     check.add_argument("--base", required=True)
     check.add_argument("--head", required=True)
+    preview = sub.add_parser("live-preview", help="print the newest commit in base..head that touches a live-preview path (nothing if none)")
+    preview.add_argument("--base", required=True)
+    preview.add_argument("--head", required=True)
     args = parser.parse_args(argv)
+    if args.command == "live-preview":
+        try:
+            commit = newest_live_preview_commit(args.repo, args.base, args.head)
+        except (OSError, ValueError, RuntimeError, tomllib.TOMLDecodeError) as exc:
+            print(f"dogfood-sensitive-paths: could not decide: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 2
+        if commit:
+            print(commit)
+        return 0
     try:
         matches = matching_sensitive_paths(args.repo, args.base, args.head)
     except (OSError, ValueError, RuntimeError, tomllib.TOMLDecodeError) as exc:

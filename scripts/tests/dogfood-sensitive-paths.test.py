@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -68,6 +69,42 @@ class DogfoodSensitivePathsTests(unittest.TestCase):
         unused = [path for path, pattern in zip(paths, patterns)
                   if not any(pattern.fullmatch(name) for name in tracked)]
         self.assertEqual(unused, [], "a path rename must not silently switch off a canary qualification")
+
+    # --- live-preview paths: sensitive, and the commit whose terminal-truth status a promotion needs ---
+
+    def test_live_preview_paths_are_sensitive_and_the_newest_touching_commit_is_found(self) -> None:
+        first = self.repo.commit({"engine/src/pi_print.rs": "a\n"}, "pi print")
+        docs = self.repo.commit({"README.md": "docs\n"}, "docs")
+        second = self.repo.commit({"server/zerg/services/session_live_previews.py": "b\n"}, "previews")
+        later = self.repo.commit({"README.md": "docs2\n"}, "docs again")
+        self.assertTrue(classifier.has_sensitive_paths(self.repo.path, self.base, first))
+        self.assertEqual(classifier.newest_live_preview_commit(self.repo.path, self.base, later), second)
+        self.assertEqual(classifier.newest_live_preview_commit(self.repo.path, self.base, docs), first)
+        self.assertIsNone(classifier.newest_live_preview_commit(self.repo.path, second, later))
+
+    def test_a_live_preview_edit_that_is_reverted_still_counts(self) -> None:
+        edit = self.repo.commit({"engine/src/codex_exec.rs": "x\n"}, "edit")
+        revert = self.repo.commit({"engine/src/codex_exec.rs": None}, "revert")
+        self.assertEqual(classifier.newest_live_preview_commit(self.repo.path, self.base, revert), revert)
+        self.assertTrue(classifier.has_sensitive_paths(self.repo.path, edit, revert))
+
+    def test_the_cli_prints_the_commit_or_nothing_and_exits_2_when_it_cannot_decide(self) -> None:
+        touched = self.repo.commit({"engine/src/omp_helm_launcher.rs": "x\n"}, "launcher")
+        script = ROOT / "scripts" / "ops" / "dogfood_sensitive_paths.py"
+        run = lambda base, head: subprocess.run(  # noqa: E731
+            [sys.executable, str(script), "--repo", str(self.repo.path), "live-preview", "--base", base, "--head", head],
+            capture_output=True, text=True)
+        hit = run(self.base, touched)
+        self.assertEqual((hit.returncode, hit.stdout.strip()), (0, touched))
+        miss = run(touched, touched)
+        self.assertEqual((miss.returncode, miss.stdout), (0, ""))
+        self.assertEqual(run("0" * 40, touched).returncode, 2)
+
+    def test_the_live_preview_list_is_a_copy_of_the_workflow_push_filter(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "terminal-truth.yml").read_text()
+        block = workflow.split("    paths:\n", 1)[1].split("  schedule:", 1)[0]
+        pushed = re.findall(r'^\s+- "([^"]+)"$', block, re.M)
+        self.assertEqual(classifier.load_live_preview_paths(), pushed)
 
 
 if __name__ == "__main__":
