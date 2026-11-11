@@ -56,6 +56,8 @@ from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_PA
 from zerg.services.workspace_suggestion_projection import WorkspaceSessionFacts
 from zerg.services.workspace_suggestion_projection import rank_human_workspace_candidates
 
+HEARTBEAT_PRUNE_BATCH = 5000
+
 
 class MachinesMixin:
     def apply_machine_heartbeat(
@@ -127,19 +129,6 @@ class MachinesMixin:
                 previous_sessions_digest = str(previous or "").strip() or None
 
             timer.mark("previous_digest")
-            cutoff = received_at - timedelta(days=30)
-            connection.execute(stamp.delete().where(stamp.c.device_id == device_id, stamp.c.received_at < cutoff))
-            raw_cutoff = received_at - timedelta(hours=1)
-            connection.execute(
-                update(stamp)
-                .where(
-                    stamp.c.device_id == device_id,
-                    stamp.c.received_at < raw_cutoff,
-                    stamp.c.raw_json.is_not(None),
-                )
-                .values(raw_json=None)
-            )
-            timer.mark("retention_delete")
             stamp_id = connection.execute(
                 insert(stamp).values(**heartbeat, request_sha256=request_sha256).returning(stamp.c.id)
             ).scalar_one()
@@ -232,6 +221,34 @@ class MachinesMixin:
         timer.log_if_slow()
         self._shadow_parity_delta_count = next_shadow_parity_delta_count
         return result
+
+    def prune_heartbeat_stamps(self, *, now: datetime | None = None, batch_size: int = HEARTBEAT_PRUNE_BATCH) -> dict[str, int]:
+        """Retention for heartbeat stamps, run from catalogd maintenance and never inside a heartbeat.
+
+        Inside the heartbeat transaction the raw_json sweep scanned every row a device
+        had in the last 30 days (about 260k at one heartbeat per 10 s) and held the
+        single writer for ~140 ms per heartbeat (measured on a synthetic catalog);
+        the 30-day delete is bounded per call instead of per heartbeat.
+
+        raw_json is only ever set on a stamp at insert, and every pass clears all
+        rows older than an hour, so rows still carrying it are newer than the last
+        pass's cutoff minus a day of slack for skewed device clocks. The first pass
+        after a restart has no watermark and sweeps everything once.
+        """
+
+        now = now or datetime.now(UTC)
+        stamp = LiveHeartbeatStamp.__table__
+        retention_cutoff = now - timedelta(days=30)
+        raw_cutoff = now - timedelta(hours=1)
+        with _write_transaction(self.engine) as connection:
+            expired_ids = select(stamp.c.id).where(stamp.c.received_at < retention_cutoff).limit(batch_size)
+            deleted = connection.execute(stamp.delete().where(stamp.c.id.in_(expired_ids))).rowcount or 0
+            raw_where = [stamp.c.received_at < raw_cutoff, stamp.c.raw_json.is_not(None)]
+            if self._raw_json_prune_floor is not None:
+                raw_where.append(stamp.c.received_at >= self._raw_json_prune_floor)
+            cleared = connection.execute(update(stamp).where(*raw_where).values(raw_json=None)).rowcount or 0
+        self._raw_json_prune_floor = raw_cutoff - timedelta(days=1)
+        return {"deleted": int(deleted), "raw_cleared": int(cleared), "backlog": int(deleted >= batch_size)}
 
     def apply_session_runtime(self, *, events: list[Any]) -> dict[str, Any]:
         """Atomically reduce one ordered runtime batch with bounded fact folds."""

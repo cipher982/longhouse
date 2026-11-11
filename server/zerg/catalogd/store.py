@@ -6047,6 +6047,8 @@ class CatalogStore(
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         self._shadow_parity_delta_count: int | None = None
+        # Lower bound of heartbeat stamps that may still carry raw_json; None sweeps all.
+        self._raw_json_prune_floor: datetime | None = None
         # Newest-first search claims resume their session walk below the
         # newest row the previous walk could claim; see SEARCH_CLAIM_WALK_RESTART.
         self._search_walk_floor: datetime | None = None

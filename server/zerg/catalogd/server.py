@@ -63,6 +63,7 @@ TITLE_HEALTH_CACHE_SECONDS = 10.0
 _WRITER_HISTOGRAM_WINDOW = 256
 # Recent executions across all labels, used to price the queue for Retry-After.
 _WRITER_RECENT_EXEC_WINDOW = 64
+_HEARTBEAT_PRUNE_MAX_BATCHES = 20
 _WRITER_RETRY_AFTER_MIN_MS = 1_000
 _WRITER_RETRY_AFTER_MAX_MS = 15_000
 
@@ -4392,6 +4393,14 @@ class CatalogDaemon:
                 # catalogd, so lease expiry must run here — not via the API's
                 # unconfigured live WriteSerializer.
                 await self._run_store(self._store.reap_stale_control_operations, now=datetime.now(UTC))
+                # Heartbeat retention lives here, not in the heartbeat transaction.
+                # A backlog (first run after the delete moved out) drains in bounded
+                # batches so no single hold exceeds one batch.
+                for _ in range(_HEARTBEAT_PRUNE_MAX_BATCHES):
+                    pruned = await self._run_store(self._store.prune_heartbeat_stamps)
+                    if not pruned["backlog"]:
+                        break
+                    await asyncio.sleep(0)
             except asyncio.CancelledError:
                 raise
             except Exception:

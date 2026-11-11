@@ -29,6 +29,7 @@ from zerg.catalogd.models import FactParityDelta
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
+from zerg.catalogd.store import CatalogStore
 from zerg.machine_evidence import canonical_evidence_hash
 from zerg.machine_evidence import validate_machine_evidence_identities
 from zerg.models.live_store import LiveArchiveOutbox
@@ -424,11 +425,14 @@ async def test_heartbeat_apply_is_atomic_replay_safe_and_reconciles_snapshot(dae
             .mappings()
             .all()
         )
+        # The heartbeat no longer sweeps stamps past retention; maintenance does.
         assert [(row["device_id"], row["sessions_digest"]) for row in stamps] == [
+            ("cinder", "stale"),
             ("cinder", "old-digest"),
             ("cinder", "new-digest"),
             ("other", "other-stale"),
         ]
+        assert CatalogStore(engine).prune_heartbeat_stamps()["deleted"] == 2
         assert connection.execute(LiveArchiveOutbox.__table__.select()).first() is None
         current_stamp = next(row for row in stamps if row["sessions_digest"] == "new-digest")
         assert len(current_stamp["request_sha256"]) == 64
@@ -1621,7 +1625,7 @@ def test_shadow_parity_deltas_are_globally_bounded(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_apply_machine_heartbeat_prunes_superseded_raw_json_past_one_hour(daemon_paths):
+async def test_heartbeat_retention_runs_in_maintenance_not_in_the_heartbeat(daemon_paths):
     database_path, socket_path = daemon_paths
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
@@ -1635,13 +1639,14 @@ async def test_apply_machine_heartbeat_prunes_superseded_raw_json_past_one_hour(
             }
             await client.call(
                 "machine.heartbeat.apply.v2",
-                {
-                    "heartbeat": hb,
-                    "managed_leases": [],
-                    "managed_leases_present": True,
-                    "owner_id": 1,
-                },
+                {"heartbeat": hb, "managed_leases": [], "managed_leases_present": True, "owner_id": 1},
             )
+        # A heartbeat 40 days later must not sweep the old stamps itself.
+        late = {**_heartbeat(device_id="cinder", received_at=now + timedelta(days=40), digest="late"), "raw_json": None}
+        await client.call(
+            "machine.heartbeat.apply.v2",
+            {"heartbeat": late, "managed_leases": [], "managed_leases_present": True, "owner_id": 1},
+        )
     finally:
         await client.close()
         await daemon.close()
@@ -1649,9 +1654,42 @@ async def test_apply_machine_heartbeat_prunes_superseded_raw_json_past_one_hour(
     engine = create_catalog_engine(database_path)
     with engine.connect() as connection:
         rows = list(connection.execute(LiveHeartbeatStamp.__table__.select().order_by(LiveHeartbeatStamp.received_at.asc())).mappings())
-    engine.dispose()
-    assert len(rows) == 3
-    assert rows[0]["raw_json"] is None
+    assert len(rows) == 4
+    assert all(row["raw_json"] is not None for row in rows[:3])
+
+    store = CatalogStore(engine)
+    first = store.prune_heartbeat_stamps(now=now + timedelta(minutes=65))
+    assert first == {"deleted": 0, "raw_cleared": 1, "backlog": 0}
+    with engine.connect() as connection:
+        rows = list(connection.execute(LiveHeartbeatStamp.__table__.select().order_by(LiveHeartbeatStamp.received_at.asc())).mappings())
+    assert [row["raw_json"] is None for row in rows[:3]] == [True, False, False]
     assert rows[0]["catalog_result_json"] is not None
-    assert rows[1]["raw_json"] is not None
-    assert rows[2]["raw_json"] is not None
+
+    # Later passes sweep only above the watermark yet still catch newly aged rows.
+    second = store.prune_heartbeat_stamps(now=now + timedelta(hours=3))
+    assert second["raw_cleared"] == 2
+    third = store.prune_heartbeat_stamps(now=now + timedelta(days=40, minutes=1))
+    assert third["deleted"] == 3 and third["backlog"] == 0
+    with engine.connect() as connection:
+        remaining = list(connection.execute(LiveHeartbeatStamp.__table__.select()).mappings())
+    assert len(remaining) == 1 and remaining[0]["sessions_digest"] == "late"
+    engine.dispose()
+
+
+def test_heartbeat_retention_deletes_in_bounded_batches(tmp_path):
+    engine = create_catalog_engine(tmp_path / "retention.db")
+    initialize_catalog_schema(engine)
+    stamp = LiveHeartbeatStamp.__table__
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            stamp.insert(),
+            [{"device_id": "cinder", "received_at": now - timedelta(days=31, seconds=i), "raw_json": None} for i in range(25)],
+        )
+    store = CatalogStore(engine)
+    first = store.prune_heartbeat_stamps(now=now, batch_size=10)
+    assert first["deleted"] == 10 and first["backlog"] == 1
+    assert store.prune_heartbeat_stamps(now=now, batch_size=10)["deleted"] == 10
+    last = store.prune_heartbeat_stamps(now=now, batch_size=10)
+    assert last["deleted"] == 5 and last["backlog"] == 0
+    engine.dispose()
