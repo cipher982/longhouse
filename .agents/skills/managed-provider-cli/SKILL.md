@@ -1,317 +1,233 @@
 ---
 name: managed-provider-cli
-description: Longhouse managed provider CLI control paths for Claude, Codex, Antigravity, and similar CLIs. Use when investigating or changing managed sessions, provider binary ownership, `longhouse claude`, `longhouse codex`, bridge/relay/hook behavior, local-health liveness, reattach behavior, stale provider runtimes, or AGENTS.md guidance about managed vs unmanaged sessions.
+description: Change or investigate how Longhouse launches, observes, steers, or repairs provider CLIs (Claude, Codex, OpenCode, Pi, OMP, Cursor, Antigravity). Use for managed vs unmanaged sessions, `longhouse claude|codex|opencode|pi|omp`, bridge/relay/hook/channel behavior, SEND vs STEER delivery, local-health liveness, reattach, provider binary drift, or stale Codex runtime artifacts.
 ---
 
 # Managed Provider CLI
 
-Use this skill when a task touches how Longhouse starts, observes, steers, or repairs provider CLIs. The core rule: Longhouse manages session control, not provider binary distribution.
+Longhouse manages session control, not provider binary distribution. The user
+installs the provider CLI; Longhouse wraps, observes and steers it.
 
-See [`ARCHITECTURE.md`'s Session modes section](../../../ARCHITECTURE.md#session-modes)
-for the canonical definitions of Shadow, Helm, Console, and managed/unmanaged
-sessions.
-
-## Mental Model
-
-- **Provider CLI**: an upstream executable the user installs separately, such as `claude`, `codex`, or `agy`.
-- **Machine Agent**: `longhouse-engine`; ships local events, owns runtime hooks/state, and may run provider-specific bridge processes.
-- **Runtime Host**: FastAPI/web/database product runtime. It stores session state and exposes `/api/agents/*`.
-
-## Probing a provider CLI
-
-Never run a provider CLI to see what it does on the maintainer's Mac: not
-`opencode run`, not `cursor-agent`, not a quick `claude -p`. The Machine Agent
-there ships whatever the provider writes to its real state (OpenCode's database
-is global, so a quick run lands on the real timeline), and on macOS a relocated
-`HOME` makes keychain-backed CLIs raise "Keychain Not Found" dialogs on the
-desktop (its "Reset To Defaults" button can wipe the login keychain). Live proofs run on the bench (`scripts/ops/bench.sh run ...`) or the
-provider factory; the Makefile marks canaries that must stay off the laptop
-(`test-opencode-console-steer-live-canary`). Fixture lanes (`make test-*`) need
-no provider at all. Whichever host runs it, a `cursor-agent` with a relocated
-`HOME` must set `AGENT_CLI_CREDENTIAL_STORE=file`. Certifying a provider change
-is the factory's job (workspace AGENTS.md, "Providers and the factory"), not a
-local run.
+- Mode definitions (Shadow, Helm, Console): `ARCHITECTURE.md`, "Session modes".
+- What each provider supports and how proven it is: `schemas/managed_providers.yml`
+  (read the provider's cell before investigating a gap).
+- Never run a provider CLI on the maintainer's Mac, even with a scratch `HOME`
+  (workspace `AGENTS.md`, "Providers and the factory"). Use fixture lanes
+  (`make test-*`), the bench (`scripts/ops/bench.sh run ...`) or the factory. On
+  the bench, a `cursor-agent` with a relocated `HOME` needs
+  `AGENT_CLI_CREDENTIAL_STORE=file`.
 
 ## Input semantics: SEND and STEER
 
-Two semantics exist and they are not interchangeable. The sender chooses; the
-target's phase never decides whether a message survives, only when it lands.
-`specs/peer-input-delivery-contract.md` (control-plane) owns the full story.
+The sender picks the semantic. The target's phase decides only when the message
+lands, never whether it survives. Full contract:
+`control-plane/docs/specs/peer-input-delivery-contract.md`.
 
-| semantic | intents | delivery | report |
+| Semantic | Intents | Delivery | Receipt |
 |---|---|---|---|
-| SEND | `queue`, `auto` | durable and ordered; dispatched only at a turn boundary | receipt `queued` → `delivered` when the provider accepted it |
-| STEER | `steer` | enters the turn running now; provider-bounded | receipt `delivered` on ack, or `409 steer_requires_active_turn` when nothing is running |
+| SEND | `queue`, `auto` | durable, ordered, dispatched at a turn boundary | `queued`, then `delivered` when the provider accepted it |
+| STEER | `steer` | enters the running turn, provider-bounded | `delivered` on ack, or `409 steer_requires_active_turn` when no turn is running |
 
-- A SEND to a mid-turn target parks a durable receipt and the turn-boundary drain
+- A SEND to a mid-turn target parks a durable receipt; the turn-boundary drain
   delivers it. The provider's own mid-turn queue (OMP/Pi `deliverAs: "followUp"`)
-  is in-process memory: a message parked there dies with the turn and can never
-  be reported as delivered, so Longhouse does not route to it.
-- `delivered` on a receipt means the provider accepted the input. It is not
-  evidence the model has seen it; read the target transcript
-  (`longhouse-server tail <id>`) to confirm.
-- Agent-to-agent messages go through the coordination tools (`send`, `inbox`,
-  `reply`), which carry the sending session's identity. Claude, Codex and
-  OpenCode Helm sessions list them from launch even when registration missed
-  its foreground budget: until the launcher's background retry recovers they
-  answer `registration_pending`, then work without a restart (the launcher
-  writes a late-token file; the tool list never changes). If the launcher
-  exits first (a detached launch), they stay pending until relaunch. OMP
-  receives the credential the same way through its extension; Cursor gets
-  its tools only when authority exists at launch.
-- `longhouse-server continue <session_id> <text>` (durable SEND) and
-  `continue --steer` (enters a running turn) send with the owner's device
-  credential, and the target reads the text as the owner typing. They are the
-  owner's verbs: inside a managed session `continue` refuses another target
-  unless `--as-owner` says the words are the owner's. Steer is best effort and
-  can change what the target's turn does.
+  lives in process memory and dies with the turn, so Longhouse does not use it.
+- `delivered` means the provider accepted the input, not that the model saw it.
+  Confirm with `longhouse-server tail <id>`.
+- Agent-to-agent messages use the coordination tools (`send`, `inbox`, `reply`),
+  which carry the sender's identity. Claude, Codex and OpenCode Helm sessions list
+  them from launch; until registration recovers they answer `registration_pending`,
+  then work without a restart (the launcher writes a late-token file). If the
+  launcher exits first (detached launch) they stay pending until relaunch. OMP gets
+  its credential through its extension; Cursor only when authority exists at launch.
+- `longhouse-server continue <session_id> <text>` (SEND) and `continue --steer`
+  send with the owner's device credential, so the target reads it as the owner
+  typing. Inside a managed session, `continue` to another target is refused unless
+  `--as-owner` says the words are the owner's.
 
-## Provider Paths
+## Provider paths
 
-### Claude
+### Claude (`longhouse claude`)
 
-- `longhouse claude` relies on Claude's native channel/MCP/stdin control path.
-- Claude channel send, interrupt, and active-turn steer are first-class local
-  control operations. Steer uses `claude-channel send --meta intent=steer` and
-  the Runtime Host gates explicit `intent=steer` on a fresh active runtime
-  phase (`session.input.activity.read.v2`, the same projection the queue drain
-  uses); idle channel injection is not steer, and the request is refused with
-  `409 steer_requires_active_turn` and `retry_with_intent: queue`.
-- Owner sends reach Claude as the user's own words through Longhouse's Claude
-  Code mod (`engine/assets/claude-mod`, loaded with `--plugin-dir` on Claude
-  Code 2.1.287+): it submits with `$.prompt.submit({ asUser: true })`, which
-  Claude Code does not label "NOT from your user" as it does channel messages.
-  The mod runs `longhouse-engine claude-owner-input watch`; the engine owns the
-  queue and the delivery ledger under
-  `~/.claude/channels/longhouse/sessions/<session>.owner-input/` (`route.json`
-  says which path the launch chose and why; `ledger.jsonl` records claimed,
-  submitted, delivered). Peer envelopes, steers and pause answers never take
-  this path. Without the mod (older Claude Code, settings that turn mods off,
-  the mod not attached) the send uses the channel, and every send result names
-  the path (`owner_input_path`, `owner_input_reason`). A leading `/` is refused
-  (`owner_input_leading_slash`): Claude Code reads it as a command.
-- Never SIGINT a Claude Helm process: Claude Code treats SIGINT as shutdown and
-  the session ends. With the mod attached, interrupt ends the turn at once
-  through `$.turn.abort` and terminates the foreground Bash tool's process
-  group (Esc kills it; the mod's abort alone would leave it running in the
-  background). Otherwise interrupt records `<session>.interrupt.json` beside
-  the channel state, terminates that process group, and the lifecycle hook
-  returns `continue: false` (plus a PreToolUse deny) until the turn ends.
-  Terminate is SIGTERM then SIGKILL on the recorded Claude pid.
-- Live Claude Helm proofs run on Linux (`claude.helm_lifecycle.v1`); on macOS a
-  relocated HOME risks Keychain prompts (see "Probing a provider CLI").
-- Helm creation is terminal-originated through `longhouse claude`; the Machine
-  Agent has no remote Helm-originating launch command.
-- Longhouse's channel is a private MCP server, not an Anthropic allowlisted
-  channel plugin. Because it arrives via `--mcp-config`, Claude's startup banner
+- Control is Claude's native channel/MCP/stdin path. Send, interrupt and
+  active-turn steer are first-class. The Runtime Host gates `intent=steer` on a
+  fresh active phase (`session.input.activity.read.v2`); otherwise it answers
+  `409 steer_requires_active_turn` with `retry_with_intent: queue`.
+- Owner sends arrive as the user's own words through the Longhouse Claude Code mod
+  (`engine/assets/claude-mod`, `--plugin-dir`, Claude Code 2.1.287+), which submits
+  with `$.prompt.submit({ asUser: true })`. The mod runs
+  `longhouse-engine claude-owner-input watch`; the engine owns the queue and ledger
+  in `~/.claude/channels/longhouse/sessions/<session>.owner-input/` (`route.json`
+  = chosen path and why; `ledger.jsonl` = claimed, submitted, delivered). Peer
+  envelopes, steers and pause answers never use this path. Without the mod, sends
+  use the channel; every send result names the path (`owner_input_path`,
+  `owner_input_reason`). A leading `/` is refused (`owner_input_leading_slash`).
+- Never SIGINT a Claude Helm process: Claude Code treats it as shutdown. Interrupt
+  with the mod calls `$.turn.abort` and terminates the foreground Bash tool's
+  process group. Without it, interrupt writes `<session>.interrupt.json` beside the
+  channel state, terminates that group, and the lifecycle hook returns
+  `continue: false` until the turn ends. Terminate is SIGTERM then SIGKILL on the
+  recorded pid.
+- Helm is terminal-originated only; the Machine Agent has no remote Helm launch.
+- The channel is a private MCP server passed with `--mcp-config`, so Claude's banner
   always prints `server:longhouse-channel · no MCP server configured with that
-  name` — its channel validator only enumerates the persisted config scopes.
-  The warning is cosmetic; delivery works. Prove liveness with
+  name`. That is cosmetic. Prove liveness with
   `longhouse-engine claude-channel inspect --session-id <id>` and a real
-  `claude-channel send`, never with the banner.
-- Claude hook tokens must be passed through process env, never embedded in
-  shell commands or PTY launch logs.
-- No detached bridge daemon, bridge state file, or flock sidecar should be required for Claude liveness.
-- Claude liveness in local health comes from process scanning, especially `local_health._collect_managed_sessions_by_process`.
+  `claude-channel send`.
+- Pass hook tokens through process env, never in shell commands or PTY launch logs.
+- Liveness comes from process scanning
+  (`local_health/process.py`, `_collect_managed_sessions_by_process`); no detached
+  bridge daemon, state file or flock sidecar is required.
+- Bedrock Claude needs a local binary patch for channels: `private-claude-bedrock-channels`
+  (local-only skill, not in git).
 
-### Codex
+### Codex (`longhouse codex`)
 
-- `longhouse codex` resolves the user's stock upstream `codex` from PATH by default.
-- `--codex-bin` and `LONGHOUSE_CODEX_BIN` are explicit debug/operator overrides, not the normal install path.
-- The Python CLI starts `longhouse-engine codex-bridge`.
-- The Python CLI passes the bridge device token to `codex-bridge start/run`
-  through `LONGHOUSE_CODEX_BRIDGE_TOKEN`; managed Codex bridge argv must not
-  contain the device token.
-- The Rust bridge starts `codex app-server`, fronts it with `engine/src/codex_ws_relay.rs`, and attaches the TUI with `codex --enable tui_app_server --remote ...`.
-- The bridge supplies the Longhouse coordination MCP through process-scoped
-  Codex `-c mcp_servers.longhouse.*` overrides. Managed launch must never add or
-  replace a Longhouse section in the user's `~/.codex/config.toml`.
-- Default managed Codex approval posture is `provider_local`: Codex owns its
-  local approval UI and Longhouse does not mint remote hook authority. The
-  explicit dangerous bypass flag records `bypass`; Codex has no
-  `remote_approve` path until a real remote permission transport exists.
-- Bridge state, logs, lock sidecars, and IPC sockets live under `~/.longhouse/managed-local/codex-bridge/` unless overridden.
-- Hook scripts such as `longhouse-codex-hook.sh` are Longhouse hook scripts, not provider binaries.
+- Uses the user's stock `codex` from PATH. `--codex-bin` / `LONGHOUSE_CODEX_BIN`
+  are debug overrides only.
+- The Python CLI starts `longhouse-engine codex-bridge` and passes the device token
+  through `LONGHOUSE_CODEX_BRIDGE_TOKEN`; bridge argv must never contain it.
+- The bridge starts `codex app-server`, fronts it with `engine/src/codex_ws_relay.rs`,
+  and attaches the TUI with `codex --enable tui_app_server --remote ...`.
+- The coordination MCP is supplied by process-scoped `-c mcp_servers.longhouse.*`
+  overrides. Launch must never edit the user's `~/.codex/config.toml`.
+- Approval posture is `provider_local` (Codex owns its approval UI); the dangerous
+  bypass flag records `bypass`. There is no `remote_approve` until a remote
+  permission transport exists.
+- State, logs, locks and sockets: `~/.longhouse/managed-local/codex-bridge/`.
+  Hook scripts such as `longhouse-codex-hook.sh` are Longhouse's, not provider binaries.
+- Helm is a long-running app-server with a visible TUI attached via `--remote`.
+  Console (`codex_exec`) runs one turn, exits, and resumes durable state later.
+  `launch_mode=detached_ui` is an internal no-attach posture, not a product mode or
+  a remote Helm grant; never infer Helm provenance from it.
+- A wrapper-observed `codex --remote` exit or terminal signal ends Helm ownership
+  and stops the bridge/app-server. A missing TUI without that evidence (for example
+  after SIGKILL) is degradation evidence, not permission to guess. Only an explicit
+  no-attach launch keeps a background bridge.
+- Do not ship a Codex runtime payload, install `longhouse-codex`, recreate
+  `~/.longhouse/runtimes/codex`, download Codex release assets, or patch a fork.
+  Install/repair code may conservatively remove old artifacts.
 
-Codex execution paths:
+### OpenCode (`longhouse opencode`)
 
-- For Helm, a terminal-originated long-running Codex app-server has a visible
-  `codex` TUI attached through `--remote`.
-- For Console, `codex_exec` runs one turn, exits, and resumes durable provider
-  state in a later invocation.
-- `launch_mode=detached_ui` is an internal bridge posture shared with local
-  no-attach operation. It is not a product mode or a remote Helm launch grant.
-- Any wrapper-observed `codex --remote` exit or terminal signal ends Helm process ownership and stops the bridge/app-server. Durable provider state remains resumable in a fresh invocation. Only an explicit no-attach launch may intentionally retain a background bridge.
+- Starts stock `opencode serve` on localhost through `opencode_server_bridge`, then
+  attaches with stock `opencode attach`. Send, interrupt and terminate are Helm
+  controls; steer is not advertised until a true mid-turn injection is proven.
+- State lives under `~/.claude/managed-local/opencode-server/`, with the server
+  password in a 0600 file. Hook tokens never go in the state file or server log.
+- Launch is idempotent per session id: a retry reuses a live state file. An attached
+  wrapper stops its `opencode serve` on any TUI exit or signal; no-attach launches
+  stay until explicitly stopped.
+- Advertise `opencode.*` control only when stock `opencode` is on PATH.
 
-Bridge state:
+### Pi (`longhouse pi`)
 
-- Supported Helm writers persist TUI sessions as `launch_mode=tui`.
-- Existing `launch_mode=detached_ui` state may come from local no-attach
-  operation. Do not infer Helm provenance or remote launch authority from it.
-- A wrapper-observed TUI exit or terminal signal is permission to stop the
-  wrapper-owned bridge/app-server. A missing TUI without wrapper evidence (for
-  example after uncatchable `SIGKILL`) remains degradation evidence rather than
-  permission to guess about provider execution.
+- Launches stock `pi` in the real terminal with a process-scoped `-e` extension;
+  nothing global is installed or rewritten. State: `~/.longhouse/managed-local/pi-helm/`.
+- Channel authority is bound to launch, native session, connection and lease
+  generation. Pi rewrites its process title, so judge liveness by recorded PID/birth
+  identity and authenticated channel evidence, not argv.
+- Idle send, boundary steer, follow-up, abort and process-group terminate are
+  distinct. Quiescence is `agent_settled`, never `agent_end`.
+- Cold resume verifies the retained native file/header and refuses a second owner.
+  There is no live TUI attach.
+- Console is `pi -p --mode json` with `provider_local` approvals. Native JSONL is
+  durable history; live previews never create archive rows.
 
-Hard Codex contract:
+### OMP (`longhouse omp`)
 
-- Do not ship a Codex runtime payload.
-- Do not install or generate `longhouse-codex`.
-- Do not keep or recreate `~/.longhouse/runtimes/codex`.
-- Do not download Codex release assets or patch a custom Codex fork.
-- Install/repair code may remove old managed-Codex artifacts conservatively.
-
-### OpenCode
-
-- `longhouse opencode` starts stock upstream `opencode serve` on localhost
-  through Longhouse's `opencode_server_bridge`, then attaches the TUI with
-  stock `opencode attach`.
-- OpenCode server-bridge send, interrupt, and terminate are first-class Helm
-  control operations after terminal launch. Active-turn steer is not
-  advertised until OpenCode exposes and proves a true mid-turn injection
-  semantic. There is no remote Helm-originating launch path.
-- Bridge state lives under `~/.claude/managed-local/opencode-server/` and
-  stores the local server password in a 0600 state file so `longhouse
-  opencode-channel attach` can reconnect without printing secrets. Runtime
-  hook tokens must not be written to the bridge state or server log.
-- OpenCode launch is idempotent per Longhouse session id. A retry must reuse a
-  live state file instead of spawning a second `opencode serve`.
-- An attached OpenCode Helm wrapper stops its owned `opencode serve` process on
-  every observed TUI exit or terminal signal. Explicit no-attach launches remain
-  background servers until an explicit stop.
-- Machine Agent should only advertise `opencode.*` control support when the
-  stock `opencode` binary is present on PATH.
-
-### Pi
-
-- `longhouse pi` launches stock upstream `pi` in the real terminal with a
-  process-scoped `-e` extension. No global Pi settings or provider binaries
-  are installed or rewritten.
-- Helm state lives under `~/.longhouse/managed-local/pi-helm/`. Channel
-  authority is bound to the launch, native session, connection, and lease
-  generation. Pi changes its process title; use recorded PID/birth identity
-  and authenticated channel evidence, not argv text, for liveness.
-- Native idle send, boundary-delivered steer, follow-up, abort, and owned
-  process-group termination are distinct operations. Quiescence comes from
-  `agent_settled`, never the earlier `agent_end`.
-- Cold resume verifies the retained exact native file/header and refuses a
-  second execution owner. Pi has no live TUI attach surface.
-- Console remains `pi -p --mode json`, with stock tools, context, auth, and
-  project trust. It uses `provider_local`, not remote permission approvals.
-- Native JSONL is durable history; live previews never create archive rows.
-  Preallocated native IDs and source bindings prevent duplicate Shadow rows.
-
-### OMP
-
-- `longhouse omp` manages stock `omp` as a distinct provider; it is not a Pi
-  alias even though OMP 18.1.18 accepts Pi-compatible `PI_CONFIG_DIR`,
-  `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, and `PI_PROFILE`
-  variables in its child environment. Preserve those variables for the stock
-  binary, but Longhouse's OMP discovery and launch roots MUST use
-  `LONGHOUSE_OMP_*`/explicit `--session-dir`, never Pi's `PI_*` roots. A
-  manually shared Pi/OMP archive is ambiguous and MUST NOT be dual-ingested.
-- Helm uses the stock OMP TUI plus a launch-scoped extension and authenticated
-  Unix channel. OMP normal completion may emit `agent_end` without
-  `isTerminal`/`willContinue`; treat that as terminal for OMP only. Explicit
-  `willContinue: true` remains continuation. Do not copy Pi's
-  `agent_settled`/boundary semantics into OMP.
-- Console is one stock `omp -p --mode json` process per turn with native tools,
-  context, extensions, skills, auth, and model settings. Use `provider_local`;
-  do not invent remote approval or auto-approval fallbacks.
-- Console RPC stdin: write nothing until OMP has printed its `ready` frame.
-  Stock OMP's stdin reader wedges for good when a byte is already pending while
-  it starts and a large frame (an image prompt) follows; the process stays alive
-  and idle and never acknowledges the prompt. Every write is stall-bounded and an
-  unacknowledged prompt fails the turn after 30 s (`console_rpc.rs`). Repro: the
-  bench, never this Mac.
-- Native JSONL is the durable OMP archive. Bind exact native identity,
-  workspace, and source file before claiming managed ownership; cold Resume
-  refuses a live prior owner and never creates a second source.
-
+- A distinct provider, not a Pi alias. OMP accepts Pi-style `PI_*` variables; keep
+  them for the stock binary, but Longhouse's own discovery and launch roots use
+  `LONGHOUSE_OMP_*` or an explicit `--session-dir`. Never dual-ingest a shared
+  Pi/OMP archive.
+- Helm is the stock TUI plus a launch-scoped extension and authenticated Unix
+  channel. OMP's `agent_end` without `isTerminal`/`willContinue` is terminal;
+  `willContinue: true` is continuation. Do not copy Pi's `agent_settled` semantics.
+- Console is one `omp -p --mode json` process per turn, `provider_local`; no remote
+  approval or auto-approval fallbacks.
+- Console RPC stdin: write nothing until OMP prints its `ready` frame. Stock OMP's
+  stdin reader wedges permanently if a byte is pending at startup and a large frame
+  follows; the process stays idle and never acknowledges. Writes are stall-bounded
+  and an unacknowledged prompt fails the turn after 30 s (`engine/src/console_rpc.rs`).
+  Reproduce on the bench only.
+- Bind exact native identity, workspace and source file before claiming ownership;
+  cold Resume refuses a live prior owner.
 
 ### Cursor
 
-- Helm is `cursor_helm` over stock `cursor-agent` (`LONGHOUSE_CURSOR_BIN`
-  overrides the binary): the launcher owns the PTY master and the child, and the
-  Machine Agent forwards send, interrupt, steer and terminate over a
-  per-session Unix socket, observed through a heartbeat lease. Console is the
-  separate `cursor_print` turn adapter. `cursor_acp` and `cursor_exec` are read
-  aliases for already archived sessions only; the Machine Agent no longer
-  executes ACP. Read the `cursor` cell in `schemas/managed_providers.yml` for
-  each operation's disposition.
+- Helm is `cursor_helm` over stock `cursor-agent` (`LONGHOUSE_CURSOR_BIN` overrides
+  the binary): the launcher owns the PTY, and the Machine Agent forwards send,
+  interrupt, steer and terminate over a per-session Unix socket with a heartbeat
+  lease. Console is `cursor_print`. `cursor_acp` and `cursor_exec` are read aliases
+  for archived sessions only. Per-operation status: `cursor` cell in
+  `schemas/managed_providers.yml`.
 
-### Antigravity And Future CLIs
+### Antigravity and future CLIs
 
-- Start from the same ownership rule: Longhouse can own the wrapper/control path, but the provider CLI remains user-owned unless the product decision explicitly changes.
-- Do not infer one provider's liveness/control model from another provider. Split behavior when the provider mechanics differ.
-- Antigravity supports managed launch and Console execution. Read
-  `schemas/managed_providers.yml` for each operation's current disposition;
-  maintenance-level investment does not mean Shadow-only.
-- Console ownership comes from stock stream-json `init.conversation_id`, not
-  terminal result timing or diagnostic log text. Pending identity must not let
-  its native transcript become an unrelated Shadow session. Keep historical
-  malformed claims isolated from unrelated source discovery.
-- Antigravity's source is `.system_generated/logs/transcript_full.jsonl`.
-  The shorter `transcript.jsonl` truncates tool output and stringifies arguments;
-  never ingest both as independent sources or prefer the lossy sibling.
+- Longhouse owns the wrapper and control path; the provider CLI stays user-owned.
+  Do not infer one provider's liveness or control model from another.
+- Antigravity Console ownership comes from stock stream-json `init.conversation_id`,
+  not result timing or log text. A pending identity must not let its transcript
+  become an unrelated Shadow session.
+- Its source is `.system_generated/logs/transcript_full.jsonl`. The shorter
+  `transcript.jsonl` truncates tool output; never ingest both or prefer it.
 
 ## Workflows
 
-### Debug Version Or Binary Drift
+### Version or binary drift
 
-1. Compare `command -v <provider>` and `<provider> --version` with the process actually attached to the managed session.
-2. For Codex, check whether `LONGHOUSE_CODEX_BIN` or `--codex-bin` is forcing a non-PATH binary.
-3. Check for stale legacy artifacts:
-   - `~/.local/bin/longhouse-codex`
-   - `~/.longhouse/runtimes/codex`
-4. Verify the wrapper is launching the provider binary directly, not a Longhouse-owned payload.
-5. If stale Codex runtime artifacts exist, prefer the existing local runtime cleanup path over ad hoc deletion.
-6. Treat external provider release status and local provider live proof as
-   separate feeds. Release-status warnings are advisory in local health and
-   provider support; concrete provider proof failures and CLI version-probe
-   failures still warn, and red release blockers remain hard.
+1. Compare `command -v <provider>` and `<provider> --version` with the process
+   attached to the managed session.
+2. For Codex, check whether `LONGHOUSE_CODEX_BIN` or `--codex-bin` forces a non-PATH binary.
+3. Look for legacy artifacts: `~/.local/bin/longhouse-codex`, `~/.longhouse/runtimes/codex`.
+   Remove them through the existing cleanup in `local_runtime_installer.py`, not by hand.
+4. Provider release status and local live proof are separate feeds. Release-status
+   warnings are advisory in local health; concrete proof failures and version-probe
+   failures still warn; red release blockers stay hard.
 
-### Debug Codex Bridge Failures
+### Codex bridge failures
 
-1. Inspect `~/.codex/log/codex-tui.log`.
-2. Inspect the bridge `.json` state and `.log` under `~/.longhouse/managed-local/codex-bridge/`.
-3. Inspect rollout JSONL for the thread before trusting `last_turn_status`.
-4. Check app-server `readyz` and whether the relay URL was logged.
-5. For `longhouse-engine codex-bridge start` repros, prefer `--isolation-root <tmp-dir>`. It maps bridge state to `<tmp-dir>/codex-bridge` and Longhouse state to `<tmp-dir>/longhouse`. If you use lower-level flags, set both `--state-root` and `--longhouse-home`; `--state-root` alone is intentionally rejected on start.
-6. Codex v0.133 can print `No active thread is available.` during fresh remote-TUI startup before `StartupThreadStarted` installs the active thread. Verify bridge state, thread id, readyz, and rollout progress before treating that line as a managed-control failure.
-7. Do not kill Codex processes by broad `ps | grep codex app-server` matches. Use the bridge state file's exact `session_id`, `pid`, `app_server_pid`, `app_server_pgid`, and `ws_url`, then stop through `longhouse-engine codex-bridge stop --session-id ...` or an isolated repro state root.
+1. Read `~/.codex/log/codex-tui.log`, the bridge `.json` state and `.log` under
+   `~/.longhouse/managed-local/codex-bridge/`, and the thread's rollout JSONL
+   (before trusting `last_turn_status`).
+2. Check app-server `readyz` and whether the relay URL was logged.
+3. For `longhouse-engine codex-bridge start` repros use `--isolation-root <tmp-dir>`
+   (bridge state to `<tmp>/codex-bridge`, Longhouse state to `<tmp>/longhouse`). With
+   lower-level flags set both `--state-root` and `--longhouse-home`; `--state-root`
+   alone is rejected.
+4. `No active thread is available.` during fresh remote-TUI startup is normal until
+   `StartupThreadStarted`. Check state, thread id, readyz and rollout progress first.
+5. Never kill by `ps | grep codex app-server`. Take `session_id`, `pid`,
+   `app_server_pid`, `app_server_pgid` and `ws_url` from the state file and stop with
+   `longhouse-engine codex-bridge stop --session-id ...`.
 
-### Change Managed Provider Code
+### Changing managed provider code
 
-Read the relevant path before editing:
+| Area | Where |
+|---|---|
+| Codex launcher (`launch_managed_codex`) | `engine/src/longhouse.rs` |
+| Codex bridge, WS relay | `engine/src/codex_bridge.rs`, `engine/src/codex_ws_relay.rs` |
+| Installer and cleanup | `server/zerg/services/local_runtime_installer.py` |
+| Local health and liveness | `server/zerg/services/local_health/` (`classifier.py`, `process.py`, per-provider files) |
+| Served state wording and facts | `session_state_contract.py`, `session_state_facts_projector.py` (`server/zerg/services/`) |
+| Phase ledger | `engine/src/state/session_phase.rs` |
 
-- Codex launcher (`longhouse codex`): `engine/src/longhouse.rs` (`launch_managed_codex`)
-- Codex bridge: `engine/src/codex_bridge.rs`
-- Codex WS relay: `engine/src/codex_ws_relay.rs`
-- Runtime installer/cleanup: `server/zerg/services/local_runtime_installer.py`
-- Local health/liveness: `server/zerg/services/local_health/` (`classifier.py`, per-provider `codex.py`, `claude.py`)
-- Served session state: `server/zerg/services/session_state_contract.py` (wording) and `server/zerg/services/session_state_facts_projector.py`
-- Phase ledger: `engine/src/state/session_phase.rs`
+Tests: `make test-engine` for launcher, bridge and relay changes;
+`cd server && uv run pytest tests_lite/test_local_runtime_installer.py` for installer
+changes; `make dogfood-refresh` to install into this Mac's runtime (`HERE=1` for a
+working tree).
 
-After changes:
+## Naming
 
-- Run focused tests for the touched layer.
-- For Codex launcher changes, run `make test-engine`; for runtime install or cleanup changes, run `cd server && uv run pytest tests_lite/test_local_runtime_installer.py`.
-- For bridge/relay changes, run `make test-engine`.
-- For local runtime install changes that affect the dogfood machine, run `make dogfood-refresh` (installs `origin/main`; `HERE=1` installs your working tree before it lands).
+- `managed`: Longhouse-owned control path. `unmanaged`: imported or discovered, no
+  live control. `Console`: product-owned, turn-scoped, no terminal. `one-shot` or
+  `batch`: prompt-and-exit.
+- `detached-ui` is an implementation name, not a mode.
+- Keep `live`, `reattachable`, `phase-known` and `running` separate, and keep
+  `control_path`, `liveness_model` and `state` separate in local-health JSON.
+- Do not name constants or paths as if Longhouse owns a provider binary.
 
-## Naming Rules
+## Fallbacks
 
-- Use `managed` for Longhouse-owned control paths.
-- Use `unmanaged` for imported/discovered sessions without live control ownership.
-- Use `one-shot` or `batch` for prompt-and-exit execution.
-- Use `Console` for product-owned, turn-scoped, no-terminal execution.
-- Treat `detached-ui` as an implementation name in obsolete compatibility
-  code, not a product mode or supported launch surface.
-- Use `live`, `reattachable`, `phase-known`, and `running` separately; do not collapse them into one status.
-- In local-health JSON, keep `control_path`, `liveness_model`, and `state` separate; do not infer managed/unmanaged ownership from process liveness or attached/detached state.
-- Avoid naming constants or paths as if Longhouse owns a provider binary when the behavior is only wrapper config or update-check suppression.
-
-## Fallback Rule
-
-Avoid hidden fallbacks. If a fallback remains necessary, make it explicit in logs/UI or gate it behind a named debug/operator path. Never use a fallback to silently switch from user-owned provider CLI execution to a Longhouse-owned provider runtime.
+No hidden fallbacks. A necessary one is explicit in logs or UI, or behind a named
+operator path, and never silently swaps a user-owned provider CLI for a
+Longhouse-owned runtime.
