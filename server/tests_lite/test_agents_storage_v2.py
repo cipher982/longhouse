@@ -123,6 +123,22 @@ def test_storage_v2_catalog_lane_saturation_preserves_retry_headers():
     }
 
 
+def test_storage_v2_writer_queue_full_sends_retry_after_header():
+    remote = CatalogRemoteError(
+        SimpleNamespace(
+            code="resource_exhausted",
+            message="catalog writer queue is full",
+            retryable=True,
+            retry_after_ms=2300,
+            details={},
+        )
+    )
+    with pytest.raises(storage_router.HTTPException) as raised:
+        storage_router._raise_catalog_error(remote)
+    assert raised.value.status_code == 503
+    assert raised.value.headers["Retry-After"] == "3"
+
+
 def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"hello\n") -> dict:
     identity = EnvelopeIdentity(
         tenant_id=tenant_id,

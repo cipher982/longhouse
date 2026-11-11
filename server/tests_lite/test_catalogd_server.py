@@ -1064,6 +1064,52 @@ async def test_writer_queue_rejects_work_beyond_admission_bound(daemon_paths):
         await daemon.close()
 
 
+def test_writer_retry_after_prices_the_queue_with_floor_and_cap():
+    from zerg.catalogd.server import CatalogWriterStats
+
+    stats = CatalogWriterStats()
+    assert stats.suggested_retry_after_ms() == 1000  # nothing measured: the floor
+    for _ in range(10):
+        stats.record("ingest", 0.0, 400.0)
+    for _ in range(5):
+        stats.record_enqueue()
+    assert stats.suggested_retry_after_ms() == 2000  # depth 5 x 400 ms mean
+    for _ in range(100):
+        stats.record_enqueue()
+    assert stats.suggested_retry_after_ms() == 15000  # capped
+
+
+@pytest.mark.asyncio
+async def test_writer_busy_rejection_carries_retry_after_to_the_caller(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    daemon._writer_max_depth = 1
+    await daemon.start()
+    await daemon._projector_repair_task
+    client = CatalogClient(socket_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def hold_writer():
+        entered.set()
+        assert release.wait(timeout=5)
+
+    blocked = asyncio.create_task(daemon._run_store(hold_writer))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        with pytest.raises(CatalogRemoteError) as raised:
+            await client.call("auth.device.list.v2", {"owner_id": 1, "include_revoked": False})
+        error = raised.value
+        assert error.code == "resource_exhausted"
+        assert error.retryable is True
+        assert error.retry_after_ms is not None and error.retry_after_ms >= 1000
+    finally:
+        release.set()
+        await blocked
+        await client.close()
+        await daemon.close()
+
+
 @pytest.mark.asyncio
 async def test_writer_admission_close_fences_late_work(daemon_paths):
     database_path, socket_path = daemon_paths

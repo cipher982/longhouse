@@ -61,6 +61,10 @@ TITLE_HEALTH_CACHE_SECONDS = 10.0
 # Rolling window per label. Bounded so a long-lived daemon cannot grow memory,
 # large enough that a percentile over it means something.
 _WRITER_HISTOGRAM_WINDOW = 256
+# Recent executions across all labels, used to price the queue for Retry-After.
+_WRITER_RECENT_EXEC_WINDOW = 64
+_WRITER_RETRY_AFTER_MIN_MS = 1_000
+_WRITER_RETRY_AFTER_MAX_MS = 15_000
 
 _REQUEST_DEADLINE_NS: ContextVar[int | None] = ContextVar("catalogd_request_deadline_ns", default=None)
 
@@ -82,6 +86,7 @@ class CatalogWriterStats:
         self._exec: dict[str, deque[float]] = {}
         self._counts: dict[str, int] = {}
         self._exec_total_ms: dict[str, float] = {}
+        self._recent_exec_ms: deque[float] = deque(maxlen=_WRITER_RECENT_EXEC_WINDOW)
         self._depth = 0
         self._peak_depth = 0
         self._active_label: str | None = None
@@ -102,6 +107,18 @@ class CatalogWriterStats:
             self._depth += 1
             self._peak_depth = max(self._peak_depth, self._depth)
             return "accepted"
+
+    def suggested_retry_after_ms(self) -> int:
+        """How long a rejected caller should wait: the queue ahead of it at the recent mean execution time.
+
+        Floored at one second (callers retry in whole seconds) and capped so a burst of
+        slow operations cannot park an agent for minutes.
+        """
+        with self._lock:
+            recent = self._recent_exec_ms
+            mean_ms = (sum(recent) / len(recent)) if recent else 0.0
+            estimate = int(self._depth * mean_ms)
+        return max(_WRITER_RETRY_AFTER_MIN_MS, min(_WRITER_RETRY_AFTER_MAX_MS, estimate))
 
     def close_admission(self) -> dict:
         with self._lock:
@@ -168,6 +185,7 @@ class CatalogWriterStats:
             self._exec.setdefault(label, deque(maxlen=_WRITER_HISTOGRAM_WINDOW)).append(exec_ms)
             self._counts[label] = self._counts.get(label, 0) + 1
             self._exec_total_ms[label] = self._exec_total_ms.get(label, 0.0) + exec_ms
+            self._recent_exec_ms.append(exec_ms)
             self._active_label = None
             self._active_since = None
 
@@ -504,6 +522,7 @@ class CatalogDaemon:
                         "resource_exhausted",
                         "catalog writer queue is full",
                         retryable=True,
+                        retry_after_ms=self._writer_stats.suggested_retry_after_ms(),
                     )
                 except CatalogWriterExpired:
                     response = self._error(
