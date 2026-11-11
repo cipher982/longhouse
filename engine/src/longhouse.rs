@@ -699,6 +699,7 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
         "PostToolUseFailure",
         "PermissionRequest",
         "Notification",
+        "MessageDisplay",
     ] {
         let entries = hooks
             .entry(event)

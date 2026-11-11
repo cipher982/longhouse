@@ -24,6 +24,7 @@ LIVE_PREVIEW_SOURCES = {
     "codex_console_live",
     "antigravity_print",
     "claude_print",
+    "claude_helm_hook",
     "cursor_print",
     "opencode_run",
     "opencode_server_bridge",
@@ -187,15 +188,17 @@ def live_preview_candidate_from_runtime_event(
 
 _CLAUDE_LIVE_TEXT_KINDS = {
     "claude_print": "claude_print_stream",
+    "claude_helm_hook": "claude_helm_live_text",
 }
 
 
 def is_claude_print_live_text_event(event: Any) -> bool:
     """A Claude runtime event that carries the reply text accumulated so far.
 
-    The Console engine attaches ``live_text`` only to ``--include-partial-messages``
+    Console: the engine attaches ``live_text`` only to ``--include-partial-messages``
     text deltas and the closing ``message_stop``; every other stream line stays
-    ordinary runtime progress evidence.
+    ordinary runtime progress evidence. Helm: the ``MessageDisplay`` hook sends
+    the lines drawn so far, as ``claude_helm_live_text``.
     """
 
     payload = event.payload or {}

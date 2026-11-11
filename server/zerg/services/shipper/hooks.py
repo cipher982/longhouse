@@ -751,6 +751,7 @@ def install_hooks(
         "PostToolUseFailure",
         "PermissionRequest",
         "Notification",
+        "MessageDisplay",
     ):
         raw = hooks_obj.get(event, [])
         event_list = raw if isinstance(raw, list) else []

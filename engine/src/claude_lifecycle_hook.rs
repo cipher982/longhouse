@@ -61,6 +61,9 @@ fn run_inner() -> anyhow::Result<()> {
 /// Split from `run_inner` so a test can hand it a payload instead of a stdin.
 fn handle_input(input: &Value) -> anyhow::Result<()> {
     let event = string(input, "hook_event_name").unwrap_or_default();
+    if event == "MessageDisplay" {
+        return handle_message_display(input);
+    }
     let observation = observation_for_event(&event, input);
     let occurred_at = Utc::now().to_rfc3339();
     // Stop and SubagentStop carry a complete registry scoped to the parent
@@ -233,6 +236,112 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Set by the Console launcher on the headless `claude --print` process. There
+/// `--include-partial-messages` already streams reply text, and the
+/// `MessageDisplay` hook fires once with the whole message, so the hook stays out.
+pub(crate) const HEADLESS_ENV: &str = "LONGHOUSE_CLAUDE_HEADLESS";
+
+const LIVE_TEXT_SOURCE: &str = "claude_helm_hook";
+
+/// What the previous `MessageDisplay` hooks of one session left for the next.
+/// Each hook is its own process, and the live preview shows the message's
+/// whole text so far, so the text accumulates here between them.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct MessageDisplayState {
+    message_id: String,
+    seq: u64,
+    text: String,
+}
+
+/// Claude's `MessageDisplay` hook delivers the lines of the reply it has just
+/// drawn (`delta`), and a closing call with `final` true. Fold each delta into
+/// the message's running text and hand the result to the runtime-events
+/// outbox, the same way the Console and Helm providers publish live text.
+/// Whole lines only: Claude holds an unfinished line until it ends.
+fn handle_message_display(input: &Value) -> anyhow::Result<()> {
+    if std::env::var_os(HEADLESS_ENV).is_some() || string(input, "agent_id").is_some() {
+        return Ok(());
+    }
+    let Some(session_id) = crate::managed_identity::managed_session_id_for(
+        crate::managed_identity_contract::ManagedProvider::Claude,
+    ) else {
+        return Ok(());
+    };
+    let Some(message_id) = string(input, "message_id") else {
+        return Ok(());
+    };
+    let is_final = input.get("final").and_then(Value::as_bool) == Some(true);
+    let delta = input.get("delta").and_then(Value::as_str).unwrap_or("");
+    let dir = crate::config::get_agent_dir()?.join("claude-live");
+    std::fs::create_dir_all(&dir)?;
+    let state_path = dir.join(format!("{}.json", session_state_file_stem(&session_id)));
+    let mut state = std::fs::read(&state_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<MessageDisplayState>(&bytes).ok())
+        .filter(|state| state.message_id == message_id)
+        .unwrap_or_else(|| MessageDisplayState {
+            message_id: message_id.clone(),
+            ..Default::default()
+        });
+    state.text.push_str(delta);
+    if state.text.is_empty() {
+        return Ok(());
+    }
+    state.seq += 1;
+    let event = live_text_runtime_event(&session_id, input, &message_id, &state, is_final);
+    crate::outbox::enqueue_runtime_event(
+        &crate::config::get_agent_runtime_events_outbox_dir()?,
+        &event,
+    )?;
+    if is_final {
+        let _ = std::fs::remove_file(&state_path);
+    } else {
+        std::fs::write(&state_path, serde_json::to_vec(&state)?)?;
+    }
+    Ok(())
+}
+
+fn session_state_file_stem(session_id: &str) -> String {
+    session_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn live_text_runtime_event(
+    session_id: &str,
+    input: &Value,
+    message_id: &str,
+    state: &MessageDisplayState,
+    is_final: bool,
+) -> Value {
+    json!({
+        "runtime_key": format!("claude:{session_id}"),
+        "session_id": session_id,
+        "provider": "claude",
+        "source": LIVE_TEXT_SOURCE,
+        "kind": "progress_signal",
+        "phase": Value::Null,
+        "tool_name": Value::Null,
+        "occurred_at": chrono::Utc::now().to_rfc3339(),
+        "dedupe_key": format!("claude-hook:live-text:{session_id}:{message_id}:{}", state.seq),
+        "payload": {
+            "progress_kind": "claude_helm_live_text",
+            "seq": state.seq,
+            "turn_id": string(input, "turn_id"),
+            "item_id": message_id,
+            "live_text": state.text,
+            "completed": is_final,
+        },
+    })
 }
 
 /// Managed sessions report under the Longhouse id, so without this the
@@ -1759,6 +1868,94 @@ mod tests {
             }
         }
         payload
+    }
+
+    fn live_text_events(home: &std::path::Path) -> Vec<Value> {
+        let dir = home.join("agent").join("runtime-events-outbox");
+        let mut events: Vec<Value> = std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| entry.ok())
+                    .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+                    .filter_map(|entry| std::fs::read(entry.path()).ok())
+                    .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        events.sort_by_key(|event| event["payload"]["seq"].as_u64());
+        events
+    }
+
+    fn message_display(message_id: &str, delta: &str, is_final: bool) -> Value {
+        json!({
+            "hook_event_name": "MessageDisplay",
+            "session_id": "claude-native",
+            "message_id": message_id,
+            "turn_id": "turn-1",
+            "delta": delta,
+            "final": is_final,
+        })
+    }
+
+    #[test]
+    fn message_display_lines_accumulate_into_one_growing_live_text() {
+        let home = tempfile::tempdir().unwrap();
+        let events = with_home(home.path(), || {
+            std::env::set_var("LONGHOUSE_MANAGED_SESSION_ID", "managed-1");
+            std::env::set_var("LONGHOUSE_MANAGED_PROVIDER", "claude");
+            handle_input(&message_display("msg-1", "first line\n", false)).unwrap();
+            handle_input(&message_display("msg-1", "second line\n", false)).unwrap();
+            handle_input(&message_display("msg-1", "", true)).unwrap();
+            // The next message starts from nothing.
+            handle_input(&message_display("msg-2", "other\n", true)).unwrap();
+            live_text_events(home.path())
+        });
+        let texts: Vec<(&str, &str, bool)> = events
+            .iter()
+            .map(|event| {
+                (
+                    event["payload"]["item_id"].as_str().unwrap(),
+                    event["payload"]["live_text"].as_str().unwrap(),
+                    event["payload"]["completed"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(events.len(), 4);
+        assert!(texts.contains(&("msg-1", "first line\n", false)));
+        assert!(texts.contains(&("msg-1", "first line\nsecond line\n", false)));
+        assert!(texts.contains(&("msg-1", "first line\nsecond line\n", true)));
+        assert!(texts.contains(&("msg-2", "other\n", true)));
+        for event in &events {
+            assert_eq!(event["provider"], "claude");
+            assert_eq!(event["source"], LIVE_TEXT_SOURCE);
+            assert_eq!(event["session_id"], "managed-1");
+            assert_eq!(event["payload"]["progress_kind"], "claude_helm_live_text");
+        }
+        // Finished messages leave no state behind.
+        assert_eq!(
+            std::fs::read_dir(home.path().join("agent/claude-live"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn message_display_stays_silent_for_unmanaged_headless_and_subagent_callers() {
+        let home = tempfile::tempdir().unwrap();
+        let events = with_home(home.path(), || {
+            // Unmanaged Claude: nothing to publish under.
+            handle_input(&message_display("m", "a\n", false)).unwrap();
+            std::env::set_var("LONGHOUSE_MANAGED_SESSION_ID", "managed-1");
+            std::env::set_var("LONGHOUSE_MANAGED_PROVIDER", "claude");
+            let mut child = message_display("m", "b\n", false);
+            child["agent_id"] = json!("agent-1");
+            handle_input(&child).unwrap();
+            std::env::set_var(HEADLESS_ENV, "1");
+            handle_input(&message_display("m", "c\n", true)).unwrap();
+            live_text_events(home.path())
+        });
+        assert!(events.is_empty(), "{events:?}");
     }
 
     #[test]

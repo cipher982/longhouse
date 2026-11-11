@@ -1378,3 +1378,37 @@ def test_claude_print_live_text_accumulates_into_one_preview_that_ends_complete(
     thinking = _claude_stream_event(session_id=session_id, seq=1, raw={"type": "content_block_delta", "delta": {"type": "thinking_delta"}})
     assert not is_claude_print_live_text_event(thinking)
     assert preview_payload_from_runtime_event(thinking, observation_id="t") is None
+
+
+def test_claude_helm_hook_live_text_is_a_preview_and_other_claude_sources_are_not():
+    from zerg.services.session_live_previews import is_claude_print_live_text_event
+    from zerg.services.session_live_previews import preview_payload_from_runtime_event
+
+    session_id = uuid4()
+    hook = RuntimeEventIngest(
+        runtime_key=f"claude:{session_id}",
+        session_id=session_id,
+        provider="claude",
+        device_id="cinder",
+        source="claude_helm_hook",
+        kind="progress_signal",
+        occurred_at=datetime.now(timezone.utc),
+        dedupe_key="claude-hook:live-text:1",
+        payload={
+            "progress_kind": "claude_helm_live_text",
+            "seq": 2,
+            "turn_id": "t",
+            "item_id": "msg-1",
+            "live_text": "a\nb\n",
+            "completed": True,
+        },
+    )
+    preview = preview_payload_from_runtime_event(hook, observation_id="o")
+    assert preview["text"] == "a\nb" and preview["is_complete"] is True
+
+    # The progress kind must belong to the source: a console kind from the hook source is nothing.
+    hook.payload["progress_kind"] = "claude_print_stream"
+    assert not is_claude_print_live_text_event(hook)
+    # And an unknown source with no kind must not match by both being empty.
+    odd = hook.model_copy(update={"source": "other", "payload": {"live_text": "x"}})
+    assert not is_claude_print_live_text_event(odd)

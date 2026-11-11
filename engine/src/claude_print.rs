@@ -1767,7 +1767,13 @@ fn spawn_claude(
         .stderr(Stdio::from(stderr));
     ManagedIdentity::new(ManagedProvider::Claude, &config.session_id)
         .with_run_id(&config.run_id)
-        .apply(&mut command, &[]);
+        // Tells Claude's own hooks this is the headless stream, whose live text
+        // already rides `stream_event`. The `MessageDisplay` hook would
+        // otherwise repeat the whole reply once at the end of each message.
+        .apply(
+            &mut command,
+            &[(crate::claude_lifecycle_hook::HEADLESS_ENV, "1")],
+        );
     #[cfg(unix)]
     crate::console_sink::own_process_group(&mut command, move || {
         // SAFETY: runs in the forked child before exec; open/dup2/close only.

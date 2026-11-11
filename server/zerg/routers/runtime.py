@@ -354,6 +354,7 @@ _PRINT_STREAM_OVERLAYS = {
     ("pi", "pi_print", "pi_print_stream"),
     ("omp", "omp_print", "omp_print_stream"),
     ("claude", "claude_print", "claude_print_stream"),
+    ("claude", "claude_helm_hook", "claude_helm_live_text"),
 }
 
 
