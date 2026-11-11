@@ -85,6 +85,7 @@ from zerg.qa.terminal_truth_pty import _new_scratch  # noqa: F401 - re-exported:
 from zerg.qa.terminal_truth_pty import _read_truth  # noqa: F401 - re-exported: this module is the entry point and the public surface
 from zerg.qa.terminal_truth_pty import _tail_text  # noqa: F401 - re-exported: this module is the entry point and the public surface
 from zerg.qa.terminal_truth_pty import _wait_ready  # noqa: F401 - re-exported: this module is the entry point and the public surface
+from zerg.qa.terminal_truth_pty import clean_environ  # noqa: F401 - re-exported: this module is the entry point and the public surface
 from zerg.qa.terminal_truth_pty import fake_tui  # noqa: F401 - re-exported: this module is the entry point and the public surface
 from zerg.qa.terminal_truth_pty import run_selfcheck  # noqa: F401 - re-exported: this module is the entry point and the public surface
 from zerg.qa.terminal_truth_pty import screen_text  # noqa: F401 - re-exported: this module is the entry point and the public surface

@@ -261,7 +261,7 @@ def outcome_for(first_failed: str | None, expectation: Expectation, mode: str) -
     """
 
     if mode == "shadow" or expectation.live_reply_text == "informational":
-        return "measured"
+        return "fail" if first_failed == "preflight" else "measured"  # a cell that never ran (or saw no request) measured nothing
     if expectation.live_reply_text == "not_measurable":
         return "not_measurable"
     if expectation.live_reply_text == "known_bad":

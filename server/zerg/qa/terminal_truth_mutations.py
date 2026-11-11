@@ -119,14 +119,24 @@ def mutated_text(mutation: Mutation, text: str) -> str:
 
 
 def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None, timeout: float = 1800) -> None:
-    subprocess.run(command, cwd=cwd, env=env, check=True, timeout=timeout, stdout=sys.stderr, stderr=sys.stderr)
+    subprocess.run(
+        command,
+        cwd=cwd,
+        env=env if env is not None else tt.clean_environ(),
+        check=True,
+        timeout=timeout,
+        stdout=sys.stderr,
+        stderr=sys.stderr,
+    )
 
 
 def _build_engine(worktree: Path, target: Path, out: Path) -> tuple[Path, Path]:
     """Build the engine and CLI of ``worktree`` into ``target`` (a clone of a warm cargo target) and copy both binaries to ``out``."""
 
     rust = Path.home() / ".rustup" / "toolchains" / "1.93.0-aarch64-apple-darwin" / "bin"
-    env = dict(os.environ, LONGHOUSE_CARGO_TARGET_DIR=str(target), PATH=f"{rust}{os.pathsep}{os.environ['PATH']}")
+    env = tt.clean_environ(
+        LONGHOUSE_CARGO_TARGET_DIR=str(target), PATH=f"{rust}{os.pathsep}{os.environ['PATH']}"
+    )  # no hook URL or token reaches a build
     _run([sys.executable, "scripts/build/generate_build_identity.py"], cwd=worktree, env=env)
     build = [
         sys.executable, "scripts/build/cargo.py", "exec", "--", "build", "--manifest-path", "engine/Cargo.toml",
@@ -145,7 +155,7 @@ def _clone_dir(source: Path, destination: Path) -> None:
         return
     flag = ["-c"] if sys.platform == "darwin" else ["--reflink=auto"]
     if source.exists():
-        subprocess.run(["cp", "-R", *flag, str(source), str(destination)], check=True)
+        subprocess.run(["cp", "-R", *flag, str(source), str(destination)], check=True, env=tt.clean_environ())
         (destination / ".longhouse-target.json").unlink(missing_ok=True)  # the clone belongs to the scratch worktree now
     else:
         destination.mkdir(parents=True)
@@ -232,7 +242,7 @@ def run_mutations(args: argparse.Namespace) -> int:
             )  # fmt: skip
     finally:
         if worktree.exists():
-            subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, check=False)
+            subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, check=False, env=tt.clean_environ())
         shutil.rmtree(SCRATCH, ignore_errors=True)
     print("| check | cell | baseline | expected | observed | stage | ok |")
     print("|---|---|---|---|---|---|---|")

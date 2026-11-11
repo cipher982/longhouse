@@ -2130,7 +2130,9 @@
         "antigravity",
         "claude",
         "codex",
-        "cursor"
+        "cursor",
+        "omp",
+        "pi"
       ]
     },
     {

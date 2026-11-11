@@ -21,7 +21,11 @@ from typing import Any
 
 from zerg.qa import scripted_model_profiles
 from zerg.qa.scripted_model_server import Pacing
+from zerg.qa.terminal_truth_pty import _AMBIENT_KEEP  # noqa: F401 - re-exported through terminal_truth
+from zerg.qa.terminal_truth_pty import _AMBIENT_PREFIXES  # noqa: F401 - re-exported through terminal_truth
 from zerg.qa.terminal_truth_pty import SERVER_ROOT
+from zerg.qa.terminal_truth_pty import clean_environ
+from zerg.qa.terminal_truth_pty import scrub_ambient_environment
 
 
 def _free_port() -> int:
@@ -119,7 +123,7 @@ class ScriptedModel:
 
     def start(self) -> None:
         port_file = self.root / "model.port"
-        environment = dict(os.environ, PYTHONPATH=str(SERVER_ROOT))
+        environment = clean_environ(PYTHONPATH=str(SERVER_ROOT))  # not the caller's shell: no hook URL or token
         self.process = subprocess.Popen(
             [
                 sys.executable,
@@ -219,26 +223,6 @@ PROVIDERS: dict[str, ProviderDriver] = {
 }
 
 
-# What the person or agent running the harness has in their shell, and a provider must never inherit: Longhouse hook and
-# session variables (a hook URL and token would send lifecycle events to a real Runtime Host under a real session id),
-# the secret store, ssh agents, terminal and agent-harness markers. ``credential_free_environment`` keeps these when
-# ``reject_ambient_credentials`` is off, so the harness removes them itself. The scripted-model variables are the harness's own.
-_AMBIENT_PREFIXES = ("LONGHOUSE_", "INFISICAL_", "SSH_", "WARP_", "GCP_", "__DR_", "CLAUDE_", "AI_AGENT", "ZETA_", "AWS_")
-
-
-_AMBIENT_KEEP = {
-    "LONGHOUSE_SCRIPTED_MODEL_BASE_URL",
-    "LONGHOUSE_SCRIPTED_MODEL_SCRIPT",
-    "AWS_EC2_METADATA_DISABLED",
-    "AWS_PAGER",
-}
-
-
-def scrub_ambient_environment(environment: dict[str, str]) -> None:
-    for name in [n for n in environment if n.startswith(_AMBIENT_PREFIXES) and n not in _AMBIENT_KEEP]:
-        environment.pop(name)
-
-
 def provider_environment(provider: str, endpoint: str, script: Path, home: Path) -> dict[str, str]:
     """A credential-free environment for ``provider`` whose only reachable model is the scripted endpoint at ``endpoint``."""
 
@@ -281,7 +265,7 @@ def provider_environment(provider: str, endpoint: str, script: Path, home: Path)
 
 def _version(binary: str) -> str | None:
     try:
-        out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=15).stdout.strip()
+        out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=15, env=clean_environ()).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
     return out.splitlines()[0] if out else None

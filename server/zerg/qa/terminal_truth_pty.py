@@ -33,6 +33,35 @@ SERVER_ROOT = Path(__file__).resolve().parents[2]
 REPO_ROOT = SERVER_ROOT.parent
 
 
+# What the person or agent running the harness has in their shell, and a provider must never inherit: Longhouse hook and
+# session variables (a hook URL and token would send lifecycle events to a real Runtime Host under a real session id),
+# the secret store, ssh agents, terminal and agent-harness markers. ``credential_free_environment`` keeps these when
+# ``reject_ambient_credentials`` is off, so the harness removes them itself. The scripted-model variables are the harness's own.
+_AMBIENT_PREFIXES = ("LONGHOUSE_", "INFISICAL_", "SSH_", "WARP_", "GCP_", "__DR_", "CLAUDE_", "AI_AGENT", "ZETA_", "AWS_")
+
+
+_AMBIENT_KEEP = {
+    "LONGHOUSE_SCRIPTED_MODEL_BASE_URL",
+    "LONGHOUSE_SCRIPTED_MODEL_SCRIPT",
+    "AWS_EC2_METADATA_DISABLED",
+    "AWS_PAGER",
+}
+
+
+def scrub_ambient_environment(environment: dict[str, str]) -> None:
+    for name in [n for n in environment if n.startswith(_AMBIENT_PREFIXES) and n not in _AMBIENT_KEEP]:
+        environment.pop(name)
+
+
+def clean_environ(**extra: str) -> dict[str, str]:
+    """The harness's own environment for any process it starts, minus what the caller's shell carries (see above)."""
+
+    environment = dict(os.environ)
+    scrub_ambient_environment(environment)
+    environment.update(extra)
+    return environment
+
+
 # Short on purpose: managed Helm binds unix sockets under HOME and macOS caps a socket path at 104 bytes.
 SCRATCH_ROOT = Path("/tmp/agents/tt")
 
@@ -242,7 +271,7 @@ def run_selfcheck(
                 str(truth),
             ],
             cwd=SERVER_ROOT,
-            env=dict(os.environ, PYTHONPATH=str(SERVER_ROOT)),
+            env=clean_environ(PYTHONPATH=str(SERVER_ROOT)),
             terminal_path=recording,
             timing_path=timing,
             rows=ROWS,

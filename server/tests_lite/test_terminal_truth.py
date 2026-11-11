@@ -400,3 +400,151 @@ def test_a_providers_environment_never_inherits_the_callers_longhouse_hooks_or_s
         environment = tt.provider_environment(provider, "http://127.0.0.1:1", script, tmp_path / f"home-{provider}")
         assert not (set(leaks) & set(environment)), (provider, sorted(set(leaks) & set(environment)))
         assert environment["LONGHOUSE_SCRIPTED_MODEL_BASE_URL"] == "http://127.0.0.1:1"
+
+
+# ---- safety properties of the gate: scoping on a shared host, ambient environment, informational cells ---------------------
+
+
+class _TwoCellHost:
+    """One Runtime Host holding two cells' sessions whose scripted replies differ. Each session serves only its own text."""
+
+    def __init__(self, workspaces: dict[str, str], texts: dict[str, str]) -> None:
+        import http.server
+        import json
+        import threading
+
+        listing = {"sessions": [{"id": sid, "cwd": cwd} for sid, cwd in workspaces.items()]}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                if self.path.startswith("/api/agents/sessions?"):
+                    return self._send(json.dumps(listing), "application/json")
+                session = next((sid for sid in texts if sid in self.path), None)
+                if session is None:
+                    return self._send("{}", "application/json")
+                if self.path.endswith("/workspace/stream"):
+                    frame = {"session_id": session, "transcript_preview": {"text": texts[session]}}
+                    return self._send(f"event: workspace\ndata: {json.dumps(frame)}\n\n", "text/event-stream")
+                return self._send(json.dumps({"events": [{"text": texts[session]}]}), "application/json")
+
+            def _send(self, body: str, kind: str) -> None:
+                payload = body.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", kind)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                return
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_port}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+
+
+def test_two_cells_on_one_host_with_different_replies_are_never_credited_with_each_others_markers(tmp_path) -> None:
+    import threading
+    import time
+
+    workspace_a, workspace_b = tmp_path / "a", tmp_path / "b"
+    workspace_a.mkdir()
+    workspace_b.mkdir()
+    markers_a = ["TTaaaaaa0000", "TTaaaaaa0001"]
+    markers_b = ["TTbbbbbb0000", "TTbbbbbb0001"]
+    host = _TwoCellHost(
+        {"sess-a": str(workspace_a), "sess-b": str(workspace_b)},
+        {"sess-a": " ".join(markers_a), "sess-b": " ".join(markers_b)},
+    )
+    try:
+        for workspace, own, foreign in ((workspace_a, markers_a, markers_b), (workspace_b, markers_b, markers_a)):
+            api = tt.RuntimeApi(host.url, "token", workspace=workspace)
+            stop = threading.Event()
+            watchers = [tt.LaneWatcher(lane, own + foreign, stop) for lane in api.poll_lanes()]
+            stream = tt.StreamWatcher("sse", lambda api=api, stop=stop: api.stream_lines(stop), own + foreign, stop)
+            watchers.append(stream)
+            for watcher in watchers:
+                watcher.start()
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and not all(set(own) <= set(w.first_seen) for w in watchers):
+                time.sleep(0.05)
+            stop.set()
+            for watcher in watchers:
+                watcher.join(timeout=5)
+            for watcher in watchers:
+                assert set(watcher.first_seen) == set(own), (watcher.lane.name, sorted(watcher.first_seen))  # all of its own, none foreign
+            assert set(stream.previews) <= {"sess-a" if workspace == workspace_a else "sess-b"}
+            assert api.known_sessions == {"sess-a" if workspace == workspace_a else "sess-b"}
+    finally:
+        host.close()
+
+
+def test_every_cell_gets_its_own_nonce_in_every_marker_and_turn_match() -> None:
+    from zerg.qa.scripted_model_server import parse_pacing
+
+    pace = parse_pacing({"rate": 20, "tokens": 100, "marker_every": 20, "initial_delay": 1.0, "marker_prefix": "TT", "reasoning_tokens": 5})
+    plans = [tt.plan_cell(tt.CellSpec(p, m), pace) for p in ("codex", "pi", "omp") for m in ("console", "helm")]
+    assert len({p.nonce for p in plans}) == len(plans)
+    for plan in plans:
+        markers = [word for _, word, _ in tt.plan_schedule(plan)]
+        assert markers and all(m.startswith(f"TT{plan.nonce}") for m in markers)
+        assert plan.prompt.startswith(f"TTRUTH{plan.nonce}") and plan.turns[0]["match"] == f"TTRUTH{plan.nonce}"
+        for other in plans:
+            if other is not plan:
+                assert not any(m.startswith(f"TT{other.nonce}") for m in markers)
+
+
+def test_no_process_the_harness_starts_inherits_the_callers_longhouse_hooks_or_secrets(monkeypatch, tmp_path) -> None:
+    import subprocess
+
+    leaks = {
+        "LONGHOUSE_HOOK_URL": "http://127.0.0.1:9/real",
+        "LONGHOUSE_HOOK_TOKEN": "real-token",
+        "LONGHOUSE_MANAGED_SESSION_ID": "real-session",
+        "INFISICAL_TOKEN": "real-secret",
+        "SSH_AUTH_SOCK": "/real/agent.sock",
+    }
+    for name, value in leaks.items():
+        monkeypatch.setenv(name, value)
+    assert not (set(leaks) & set(tt.clean_environ()))
+    assert tt.clean_environ(PYTHONPATH="x")["PYTHONPATH"] == "x"
+
+    # `--version` probes of a provider and of the engine
+    probe = tmp_path / "probe"
+    probe.write_text(
+        '#!/bin/sh\necho "version hook=[$LONGHOUSE_HOOK_URL] token=[$LONGHOUSE_HOOK_TOKEN] sess=[$LONGHOUSE_MANAGED_SESSION_ID]"\n'
+    )
+    probe.chmod(0o755)
+    assert tt._version(str(probe)) == "version hook=[] token=[] sess=[]"
+
+    # the scripted model server and the scratch Runtime Host are started with a scrubbed environment too
+    captured: list[dict[str, str]] = []
+
+    class _Stop(Exception):
+        pass
+
+    def fake_popen(*args, **kwargs):
+        captured.append(kwargs["env"])
+        raise _Stop
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    model = tt.ScriptedModel(tmp_path, [{"id": "x", "match": "x", "reply": "y"}])
+    host = tt.ScratchRuntimeHost(tmp_path)
+    for starter in (model.start, host.start):
+        try:
+            starter()
+        except _Stop:
+            pass
+    assert len(captured) == 2
+    for environment in captured:
+        assert not (set(leaks) & set(environment)), sorted(set(leaks) & set(environment))
+
+
+def test_an_informational_cell_that_never_got_ready_is_a_failure_not_a_measurement() -> None:
+    shadow = tt.Expectation("informational")
+    assert tt.outcome_for("preflight", shadow, "shadow") == "fail"
+    assert tt.outcome_for("stream_delivered", shadow, "shadow") == "measured"
+    assert tt.outcome_for(None, shadow, "shadow") == "measured"
