@@ -1,29 +1,85 @@
-# ROLE: measurement of live reply text, terminal to client, for the stock provider CLIs in Console
-# and Helm against the fake model on the Linux pool. Credential-free; manual dispatch only for now.
+# ROLE: gate and nightly measurement of live reply text, terminal to client, for the stock provider CLIs
+# in Console and Helm against the fake model on the Linux pool. Credential-free.
 name: Terminal Truth
 
-# How long after a provider paints (Helm) or the fake model writes (Console) a piece of reply
-# text does that text reach a Longhouse client? server/zerg/qa/terminal_truth.py measures it; this
-# workflow runs that harness on the same runner pool as console-served-state.yml. Plan:
-# control-plane/docs/specs/terminal-truth-ci-gate.md (step 1: prove the harness runs on Linux and
-# say where the time goes). It has no push trigger and no schedule until that proof is recorded.
+# How long after a provider paints (Helm) or the fake model writes (Console) a piece of reply text does
+# that text reach a Longhouse client? server/zerg/qa/terminal_truth.py measures it and judges each cell
+# (stage verdicts, a non-zero exit on any non-pass). Plan: control-plane/docs/specs/terminal-truth-ci-gate.md.
 #
-# Mock mode only. No provider secret is passed to this job; every provider talks to the loopback
-# scripted model, and a cell fails closed if that model served no request. The only secrets in the
-# environment are the CI receipt store's, used after the run to keep the results.
+# Triggers
+#   push to main, live-preview paths only   short pass of every declared cell; the verdict is the commit
+#                                            status `longhouse/terminal-truth` and a CI receipt. Nothing
+#                                            consumes the status yet (promotion is unchanged).
+#   schedule (nightly)                       400 tokens at 5/s, five repeats, long_reply and two_message
+#                                            scenarios, then the mutation tests. A red run is the finding:
+#                                            new failing cells are annotated as errors, and the Sauron job
+#                                            ci-scheduled-red pages after three red nights in a row.
+#   workflow_dispatch                        any of the above by hand (inputs below).
 #
-# Provider versions are NOT pinned here, same as console-served-state.yml: npm installs the
-# latest @openai/codex, @anthropic-ai/claude-code, opencode-ai and
-# @earendil-works/pi-coding-agent, and the vendors' own installers fetch the latest omp and
-# agy. The versions the job got are printed in the "Record provider versions" step and are in
-# every result row (`provider_version`).
+# THE LIVE-PREVIEW PATH LIST BELOW IS THE ONE COPY. It is the push filter. When the promotion requirement is
+# switched on (branch terminal-truth-promotion-gate), scripts/ops/dogfood-sensitive-paths.toml carries the same
+# list in a marked block and a test fails if the two differ.
 #
-# Evidence: results JSON, per-cell logs with a time stamp on each line, per-step timings and the
-# provider PTY recordings (terminal.raw and terminal.timing per cell) are kept as a CI receipt of
-# kind `terminal-truth` (scripts/ops/ci_receipts.py), not GitHub artifact storage, which
-# scripts/ci/check-actions-storage.py forbids. The same results are printed in the job log.
+# No provider secret is passed to this job; every provider talks to the loopback scripted model and a cell
+# fails closed if that model served no request. The only secrets in the environment are the CI receipt
+# store's, used after the run. Provider versions are pinned in scripts/ci/terminal-truth-providers.toml and
+# verified after install; a mismatch fails the job before any cell runs.
+#
+# Evidence: per-pass results JSON, logs, the verdict (gate.json) and, for the first pass and every failing
+# pass, the provider PTY recordings and host logs are kept as a CI receipt (scripts/ops/ci_receipts.py), not
+# GitHub artifact storage, which scripts/ci/check-actions-storage.py forbids.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      # --- engine: provider adapters and launchers, the runtime-event path (outbox, lanes, status slots)
+      - "engine/src/*_print.rs"
+      - "engine/src/*_helm_launcher.rs"
+      - "engine/src/*_bridge.rs"
+      - "engine/src/codex_exec.rs"
+      - "engine/src/codex_ws_relay.rs"
+      - "engine/src/opencode_run.rs"
+      - "engine/src/console_sink.rs"
+      - "engine/src/console_rpc.rs"
+      - "engine/src/status_slot.rs"
+      - "engine/src/outbox.rs"
+      - "engine/src/daemon/status_slots.rs"
+      - "engine/src/daemon/outbox_lanes.rs"
+      - "engine/src/daemon/managed_observation.rs"
+      # --- provider extensions and hooks
+      - "engine/assets/longhouse-pi-helm.ts"
+      - "engine/assets/longhouse-omp-helm.ts"
+      - "engine/assets/claude-mod/**"
+      - "server/zerg/services/antigravity_hook_inbox.py"
+      # --- host: runtime ingest, live preview and stream
+      - "server/zerg/routers/runtime.py"
+      - "server/zerg/routers/timeline.py"
+      - "server/zerg/services/session_live_previews.py"
+      - "server/zerg/services/session_runtime.py"
+      - "server/zerg/services/session_runtime_display.py"
+      - "server/zerg/services/session_pubsub.py"
+      - "server/zerg/services/session_workspace_revision.py"
+      - "server/zerg/services/timeline_session_stream.py"
+      # --- clients that render the live preview
+      - "web/src/features/session/useSessionWorkspace.ts"
+      - "web/src/features/session/sessionActivityFeed.ts"
+      - "web/src/features/session/TimelinePane.tsx"
+      - "web/src/features/session/SessionRuntimeStrip.tsx"
+      - "ios/Sources/Shared/Streams/SessionWorkspaceStream.swift"
+      - "ios/Sources/LonghouseApp/Session/Runtime/ActivityPulseStore.swift"
+      # --- the harness, the scripted model, the ledger it reads, the pinned versions, the budget and this lane
+      - "server/zerg/qa/terminal_truth*.py"
+      - "server/zerg/qa/terminal_screen.py"
+      - "server/zerg/qa/scripted_model_*.py"
+      - "server/zerg/qa/pty_*.py"
+      - "schemas/managed_providers.yml"
+      - "schemas/terminal-truth-budget.json"
+      - "scripts/ci/terminal-truth-*"
+      - "scripts/ci/terminal_truth_*.py"
+      - ".github/workflows/terminal-truth.yml"
+  schedule:
+    - cron: "43 7 * * *"
   workflow_dispatch:
     inputs:
       provider:
@@ -50,9 +106,34 @@ on:
         required: false
         default: "20"
         type: string
+      repeats:
+        description: "Consecutive passes in this one job (20 for the budget record)"
+        required: false
+        default: "1"
+        type: string
+      scenarios:
+        description: "Scenarios per pass"
+        required: false
+        default: "long_reply"
+        type: choice
+        options:
+          - long_reply
+          - two_message
+          - both
+      mutations:
+        description: "Also run the mutation tests (rebuilds the engine several times)"
+        required: false
+        default: false
+        type: boolean
+      publish_status:
+        description: "Publish the commit status for this SHA (only honoured on main with all providers, both modes, the short stream, one pass, long_reply)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: terminal-truth-${{ github.repository }}
@@ -63,12 +144,18 @@ jobs:
     name: "terminal-truth"
     runs-on: grind-browser
     if: github.repository == 'cipher982/longhouse'
-    timeout-minutes: 90
+    timeout-minutes: 330
     env:
+      TT_EVENT: ${{ github.event_name }}
       TT_PROVIDER: ${{ inputs.provider || 'all' }}
       TT_MODE: ${{ inputs.mode || 'both' }}
-      TT_TOKENS: ${{ inputs.tokens || '100' }}
-      TT_RATE: ${{ inputs.rate || '20' }}
+      TT_TOKENS: ${{ inputs.tokens || (github.event_name == 'schedule' && '400') || '100' }}
+      TT_RATE: ${{ inputs.rate || (github.event_name == 'schedule' && '5') || '20' }}
+      TT_REPEATS: ${{ inputs.repeats || (github.event_name == 'schedule' && '5') || '1' }}
+      TT_SCENARIO_INPUT: ${{ inputs.scenarios || (github.event_name == 'schedule' && 'both') || 'long_reply' }}
+      TT_MUTATIONS: ${{ (github.event_name == 'schedule' || inputs.mutations) && '1' || '0' }}
+      TT_PUBLISH_REQUEST: ${{ inputs.publish_status && '1' || '0' }}
+      GH_TOKEN: ${{ github.token }}
       CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
       CI_RECEIPTS_S3_BUCKET: ${{ secrets.CI_RECEIPTS_S3_BUCKET }}
       CI_RECEIPTS_S3_PREFIX: ${{ secrets.CI_RECEIPTS_S3_PREFIX }}
@@ -78,7 +165,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      - name: Validate inputs
+      - name: Validate inputs and decide what this run is
         run: |
           set -euo pipefail
           known=",codex,claude,opencode,pi,omp,antigravity,"
@@ -98,16 +185,56 @@ jobs:
             fi
           done
           case "$TT_MODE" in
-            both) modes="console helm" ;;
-            console|helm) modes="$TT_MODE" ;;
+            both|console|helm) ;;
             *) echo "::error::Unsupported mode: $TT_MODE" >&2; exit 1 ;;
           esac
           [[ "$TT_TOKENS" =~ ^[0-9]+$ ]] || { echo "::error::tokens must be an integer" >&2; exit 1; }
           [[ "$TT_RATE" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "::error::rate must be a number" >&2; exit 1; }
-          echo "TT_PROVIDERS=${providers}" >> "$GITHUB_ENV"
-          echo "TT_MODES=${modes}" >> "$GITHUB_ENV"
+          [[ "$TT_REPEATS" =~ ^[0-9]+$ && "$TT_REPEATS" -ge 1 && "$TT_REPEATS" -le 30 ]] || { echo "::error::repeats must be 1 to 30" >&2; exit 1; }
+          case "$TT_SCENARIO_INPUT" in
+            both) scenarios="long_reply,two_message" ;;
+            long_reply|two_message) scenarios="$TT_SCENARIO_INPUT" ;;
+            *) echo "::error::Unsupported scenarios: $TT_SCENARIO_INPUT" >&2; exit 1 ;;
+          esac
+          # The commit status means "the gate profile passed on this commit": every provider, both modes,
+          # the short stream, one pass, long_reply. A push always is that; a dispatch only when asked and
+          # only on main with those settings.
+          publish=0
+          if [[ "$TT_EVENT" == push ]]; then
+            publish=1
+          elif [[ "$TT_EVENT" == workflow_dispatch && "$TT_PUBLISH_REQUEST" == 1 && "$GITHUB_REF" == refs/heads/main \
+                  && "$TT_PROVIDER" == all && "$TT_MODE" == both && "$TT_TOKENS" == 100 && "$TT_RATE" == 20 \
+                  && "$TT_REPEATS" == 1 && "$scenarios" == long_reply ]]; then
+            publish=1
+          elif [[ "$TT_PUBLISH_REQUEST" == 1 ]]; then
+            echo "::warning::publish_status ignored: not main, or not the gate profile (all providers, both modes, 100 tokens at 20/s, one pass, long_reply)."
+          fi
+          # Providers and modes the pass covers: the harness runs every declared cell unless narrowed.
+          provider_args=""
+          if [[ "$TT_PROVIDER" != all ]]; then
+            for provider in "${requested[@]}"; do provider_args+=" --provider $provider"; done
+          fi
+          mode_args=""
+          if [[ "$TT_MODE" != both ]]; then mode_args=" --mode $TT_MODE"; fi
+          {
+            echo "TT_PROVIDERS=${providers}"
+            echo "TT_SCENARIOS=${scenarios}"
+            echo "TT_PUBLISH=${publish}"
+            echo "TT_PROVIDER_ARGS=${provider_args}"
+            echo "TT_MODE_ARGS=${mode_args}"
+          } >> "$GITHUB_ENV"
           mkdir -p artifacts/terminal-truth
           echo "TT_OUT=$GITHUB_WORKSPACE/artifacts/terminal-truth" >> "$GITHUB_ENV"
+          echo "this run: event=$TT_EVENT providers=$providers modes=$TT_MODE tokens=$TT_TOKENS rate=$TT_RATE repeats=$TT_REPEATS scenarios=$scenarios mutations=$TT_MUTATIONS publish_status=$publish"
+
+      - name: Status pending
+        if: env.TT_PUBLISH == '1'
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=pending -f context=longhouse/terminal-truth \
+            -f description="terminal truth running" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -131,8 +258,8 @@ jobs:
       - name: Sync server environment
         run: uv sync --project server
 
-      # The runner's own control: a fake TUI with a known schedule must be recovered by the
-      # screen reader, a prompt stub lane must read as prompt and a late stub lane as late.
+      # The runner's own control: a fake TUI with a known schedule must be recovered by the screen reader,
+      # a prompt stub lane must read as prompt and a late stub lane as late.
       - name: Harness self-check
         run: |
           set -euo pipefail
@@ -153,45 +280,26 @@ jobs:
           echo "TT_ENGINE=$engine" >> "$GITHUB_ENV"
           echo "TT_CLI=$cli" >> "$GITHUB_ENV"
 
-      - name: Stage stock providers in job-owned paths
+      # Exactly the versions in scripts/ci/terminal-truth-providers.toml, in job-owned paths, installed with an
+      # empty credential environment and a disposable HOME. `verify` fails the job if any binary reports a
+      # different version.
+      - name: Install pinned stock providers
         run: |
           set -euo pipefail
           fixture_root="$(mktemp -d "$RUNNER_TEMP/terminal-truth-fixture.XXXXXX")"
           chmod 700 "$fixture_root"
           echo "TT_FIXTURE_ROOT=$fixture_root" >> "$GITHUB_ENV"
-          provider_root="$fixture_root/providers"
-          home="$fixture_root/home"
-          mkdir -p "$provider_root" "$home/.local/bin"
-          # Installers are untrusted network inputs and run with an empty credential
-          # environment and a disposable HOME; nothing is written to the runner profile.
-          export HOME="$home"
-          export XDG_CONFIG_HOME="$home/.config"
-          export XDG_DATA_HOME="$home/.local/share"
-          wanted=",$TT_PROVIDERS,"
-          npm_packages=()
-          [[ "$wanted" == *,codex,* ]] && npm_packages+=(@openai/codex)
-          [[ "$wanted" == *,claude,* ]] && npm_packages+=(@anthropic-ai/claude-code)
-          [[ "$wanted" == *,opencode,* ]] && npm_packages+=(opencode-ai)
-          [[ "$wanted" == *,pi,* ]] && npm_packages+=(@earendil-works/pi-coding-agent)
-          if (( ${#npm_packages[@]} )); then
-            npm install --prefix "$provider_root" --no-save "${npm_packages[@]}"
-          fi
-          if [[ "$wanted" == *,omp,* ]]; then
-            curl -fsSL https://omp.sh/install | sh -s -- --binary
-          fi
-          if [[ "$wanted" == *,antigravity,* ]]; then
-            curl -fsSL https://antigravity.google/cli/install.sh -o "$fixture_root/antigravity-install.sh"
-            bash "$fixture_root/antigravity-install.sh" --dir "$home/.local/bin"
-          fi
-          mkdir -p "$fixture_root/bin"
+          mkdir -p "$fixture_root/providers" "$fixture_root/home/.local/bin" "$fixture_root/bin"
+          python3 scripts/ci/terminal_truth_providers.py install --providers "$TT_PROVIDERS" \
+            --root "$fixture_root/providers" --home "$fixture_root/home"
           install -m 755 "$TT_CLI" "$fixture_root/bin/longhouse"
           {
             echo "$fixture_root/bin"
-            echo "$provider_root/node_modules/.bin"
-            echo "$home/.local/bin"
+            echo "$fixture_root/providers/node_modules/.bin"
+            echo "$fixture_root/home/.local/bin"
           } >> "$GITHUB_PATH"
 
-      - name: Record provider versions
+      - name: Verify provider versions match the pins
         run: |
           set -uo pipefail
           out="$TT_OUT/versions.txt"
@@ -199,147 +307,140 @@ jobs:
             echo "uname: $(uname -srm)"
             echo "cpus: $(nproc)  load: $(cut -d' ' -f1-3 /proc/loadavg)"
             echo "memory: $(free -m | awk '/^Mem:/ {print $2 " MB total, " $7 " MB available"}')"
+            echo "runner: ${RUNNER_NAME:-unknown}"
             echo "python: $(python3 --version 2>&1)"
             echo "node: $(node --version 2>&1)"
             echo "engine: $("$TT_ENGINE" --version 2>&1 | head -1)"
             echo "longhouse: $(longhouse --version 2>&1 | head -1)"
-            for binary in codex claude opencode pi omp agy; do
-              if path="$(command -v "$binary" 2>/dev/null)"; then
-                echo "$binary: $(timeout 20 "$binary" --version 2>&1 | head -1)  ($path)"
-              else
-                echo "$binary: not installed"
-              fi
-            done
-            if [[ -f "$TT_FIXTURE_ROOT/providers/package-lock.json" ]]; then
-              python3 - "$TT_FIXTURE_ROOT/providers/node_modules" <<'PY'
-          import json, sys
-          from pathlib import Path
-          for pkg in ("@openai/codex", "@anthropic-ai/claude-code", "opencode-ai", "@earendil-works/pi-coding-agent"):
-              manifest = Path(sys.argv[1]) / pkg / "package.json"
-              if manifest.is_file():
-                  print(f"npm {pkg}: {json.loads(manifest.read_text())['version']}")
-          PY
-            fi
-          } | tee "$out"
-          { echo "## Provider versions (not pinned: latest at job time)"; echo '```'; cat "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            python3 scripts/ci/terminal_truth_providers.py verify --providers "$TT_PROVIDERS"
+            echo "verify-exit: $?"
+          } 2>&1 | tee "$out"
+          { echo "## Provider versions (pinned)"; echo '```'; cat "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if grep -q '^verify-exit: 0$' "$out"; then exit 0; fi
+          echo "::error::installed provider versions differ from scripts/ci/terminal-truth-providers.toml"
+          exit 1
 
-      # One harness invocation per cell: wall time per cell, a stable exit status per cell, and
-      # a failed cell does not hide the cells after it. The harness is run through make as a
-      # person would; its own scratch directories are kept (--keep) for the recordings.
-      - name: Run terminal-truth cells
+      # One harness invocation per pass and scenario: a stable exit status per pass, and a failed pass does not
+      # hide the passes after it. The harness judges every declared cell and exits non-zero on any non-pass, any
+      # declared cell that did not run and any stale known-bad declaration. Scratch (PTY recordings, host logs)
+      # is kept for the first pass and for every failing pass; other passes are deleted as they finish.
+      - name: Run passes
         run: |
           set +e
           scratch=/tmp/agents/tt
           mkdir -p "$scratch"
-          find "$scratch" -mindepth 1 -maxdepth 1 -printf '%f\n' > "$TT_OUT/scratch-before.txt"
-          timings="$TT_OUT/cell-timings.tsv"
-          printf 'cell\tstart_epoch\tend_epoch\texit\n' > "$timings"
-          # Prefix every output line with the epoch time it arrived, for the per-step breakdown.
-          cat > "$RUNNER_TEMP/tt-stamp.py" <<'PY'
-          import sys, time
-          for line in sys.stdin:
-              sys.stdout.write("%.3f %s" % (time.time(), line))
-              sys.stdout.flush()
-          PY
-          stamp() { python3 -u "$RUNNER_TEMP/tt-stamp.py"; }
-          # CPU, run queue and memory once a second while the cells run, to say whether the
-          # runner is the limit.
+          find "$scratch" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort > "$TT_OUT/scratch-before.txt"
+          : > "$TT_OUT/scratch-kept.txt"
+          timings="$TT_OUT/pass-timings.tsv"
+          printf 'pass\tscenario\tstart_epoch\tend_epoch\texit\n' > "$timings"
           vmstat -t 1 > "$TT_OUT/vmstat.log" 2>&1 &
           sampler=$!
           failed=0
-          IFS=',' read -r -a providers <<< "$TT_PROVIDERS"
-          for mode in $TT_MODES; do
-            for provider in "${providers[@]}"; do
-              cell="$provider-$mode"
-              echo "::group::cell $cell"
+          for i in $(seq 1 "$TT_REPEATS"); do
+            for scenario in ${TT_SCENARIOS//,/ }; do
+              name="pass-$i-$scenario"
+              echo "::group::$name"
+              find "$scratch" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort > "$RUNNER_TEMP/before.txt"
               start="$(date +%s.%N)"
-              make terminal-truth ARGS="run --provider $provider --mode $mode --tokens $TT_TOKENS --rate $TT_RATE --engine $TT_ENGINE --longhouse-cli $TT_CLI --keep --out $TT_OUT/$cell.json" 2>&1 | stamp | tee "$TT_OUT/$cell.log"
+              make terminal-truth ARGS="run$TT_PROVIDER_ARGS$TT_MODE_ARGS --scenario $scenario --tokens $TT_TOKENS --rate $TT_RATE --engine $TT_ENGINE --longhouse-cli $TT_CLI --keep --out $TT_OUT/$name.json" 2>&1 | tee "$TT_OUT/$name.log"
               rc="${PIPESTATUS[0]}"
               end="$(date +%s.%N)"
               echo "::endgroup::"
-              printf '%s\t%s\t%s\t%s\n' "$cell" "$start" "$end" "$rc" >> "$timings"
+              printf '%s\t%s\t%s\t%s\t%s\n' "$i" "$scenario" "$start" "$end" "$rc" >> "$timings"
+              find "$scratch" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | comm -13 "$RUNNER_TEMP/before.txt" - > "$TT_OUT/$name.scratch"
               if [[ "$rc" != 0 ]]; then
-                echo "::error::cell $cell exited $rc"
+                echo "::error::$name exited $rc"
                 failed=1
+              fi
+              if [[ "$rc" != 0 || "$i" == 1 ]]; then
+                sed "s|^|$name |" "$TT_OUT/$name.scratch" >> "$TT_OUT/scratch-kept.txt"
+              else
+                while IFS= read -r dir; do
+                  [[ "$dir" =~ ^[0-9a-f]{4}$ ]] && rm -rf -- "${scratch:?}/$dir"
+                done < "$TT_OUT/$name.scratch"
               fi
             done
           done
           kill "$sampler" 2>/dev/null
           echo "TT_FAILED=$failed" >> "$GITHUB_ENV"
 
-      # Fail closed: exit status alone is not trusted. Every selected cell must have a result
-      # row that was measured and whose scripted model served at least one request.
-      - name: Check every cell ran against the fake model
+      # The mutation tests put each 2026-11-11 defect back and require the gate to fail it. They rebuild the
+      # engine in a scratch worktree, so they run in the nightly (or when asked), not on every push.
+      - name: Mutation tests
+        if: env.TT_MUTATIONS == '1'
         run: |
-          set -uo pipefail
-          python3 - <<'PY'
-          import json, os, sys
-          from pathlib import Path
+          set +e
+          make terminal-truth-mutations ARGS="--engine $TT_ENGINE --longhouse-cli $TT_CLI" 2>&1 | tee "$TT_OUT/mutations.log"
+          rc="${PIPESTATUS[0]}"
+          echo "TT_MUTATIONS_RC=$rc" >> "$GITHUB_ENV"
+          if [[ "$rc" != 0 ]]; then echo "::error::mutation tests exited $rc (the gate no longer fails a defect it must fail)"; fi
 
-          out = Path(os.environ["TT_OUT"])
-          bad = []
-          print(f"{'cell':<22}{'status':<14}{'requests':>9}  {'first':>7}{'median':>8}{'worst':>7}  live markers")
-          for provider in os.environ["TT_PROVIDERS"].split(","):
-              for mode in os.environ["TT_MODES"].split():
-                  path = out / f"{provider}-{mode}.json"
-                  if not path.is_file():
-                      bad.append(f"{provider}-{mode}: no result file")
-                      continue
-                  for row in json.loads(path.read_text()):
-                      requests = (row.get("diagnostics") or {}).get("model_served_requests", 0)
-                      live = next((l for l in row.get("lanes", []) if "SSE" in l.get("lane", "")), {}) or {}
-                      fmt = lambda v: "-" if v is None else f"{v:.2f}"
-                      print(
-                          f"{provider + '-' + mode:<22}{row['status']:<14}{requests:>9}  "
-                          f"{fmt(live.get('first_marker_delay_s')):>7}{fmt(live.get('median_delay_s')):>8}{fmt(live.get('worst_delay_s')):>7}  "
-                          f"{len(row.get('markers', [])) - len(live.get('never_served', []))}/{len(row.get('markers', []))}"
-                      )
-                      if row["status"] != "measured" or requests < 1:
-                          bad.append(f"{provider}-{mode}: {row['status']}: {(row.get('reason') or '')[:300]}")
-          if bad:
-              print("\n".join(f"::error::{line}" for line in bad))
-              sys.exit(1)
-          PY
+      # Fail closed: the exit status alone is not trusted. Every pass must have a result file, every row a
+      # verdict that is a pass or a declared known-bad, and every measured cell's scripted model must have
+      # served a request. The previous nightly's verdict, when there is one, marks which failures are new.
+      - name: Verdict
+        id: verdict
+        run: |
+          set +e
+          previous=()
+          if [[ "$TT_EVENT" == schedule ]]; then
+            mkdir -p "$RUNNER_TEMP/previous-nightly"
+            if python3 scripts/ops/ci_receipts.py get terminal-truth-nightly nightly --file gate.json > "$RUNNER_TEMP/previous-nightly/gate.json" 2>/dev/null; then
+              previous=(--previous "$RUNNER_TEMP/previous-nightly")
+            fi
+          fi
+          python3 scripts/ci/terminal_truth_summary.py "$TT_OUT" --repeats "$TT_REPEATS" --scenarios "$TT_SCENARIOS" "${previous[@]}"
           rc=$?
-          if [[ "$rc" != 0 || "${TT_FAILED:-0}" != 0 ]]; then
+          cat "$TT_OUT/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$rc" != 0 || "${TT_FAILED:-0}" != 0 || "${TT_MUTATIONS_RC:-0}" != 0 ]]; then
+            echo "TT_STATE=failure" >> "$GITHUB_ENV"
             exit 1
           fi
-
-      - name: Summarise
-        if: always()
-        run: |
-          {
-            echo "## Terminal truth cells"
-            echo '```'
-            cat "$TT_OUT/cell-timings.tsv" 2>/dev/null || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "TT_STATE=success" >> "$GITHUB_ENV"
 
       - name: Collect recordings and keep the results
         if: always()
         run: |
           set -uo pipefail
           scratch=/tmp/agents/tt
-          if [[ -f "$TT_OUT/scratch-before.txt" && -d "$scratch" ]]; then
-            find "$scratch" -mindepth 1 -maxdepth 1 -printf '%f\n' | grep -vxFf "$TT_OUT/scratch-before.txt" > "$TT_OUT/scratch-new.txt" || true
-            # PTY recordings and host/model/engine logs per cell; never the provider home
-            # (h/) or the SQLite database.
-            if [[ -s "$TT_OUT/scratch-new.txt" ]]; then
-              (cd "$scratch" && xargs -a "$TT_OUT/scratch-new.txt" tar --exclude='*/h' --exclude='*.db' --exclude='*.db-*' -czf "$TT_OUT/scratch-recordings.tgz")
-              (cd "$scratch" && xargs -a "$TT_OUT/scratch-new.txt" -I{} sh -c 'echo "== {}"; find {} -maxdepth 2 -not -path "{}/h/*" -printf "%p %s birth=%B@ mtime=%T@\n" | sort')  > "$TT_OUT/scratch-listing.txt" || true
-            fi
+          if [[ -s "$TT_OUT/scratch-kept.txt" ]]; then
+            # PTY recordings and host/model/engine logs; never the provider home (h/) or the SQLite database.
+            awk '{print $2}' "$TT_OUT/scratch-kept.txt" | sort -u > "$TT_OUT/scratch-new.txt"
+            (cd "$scratch" && xargs -a "$TT_OUT/scratch-new.txt" tar --exclude='*/h' --exclude='*.db' --exclude='*.db-*' -czf "$TT_OUT/scratch-recordings.tgz")
           fi
           ls -la "$TT_OUT"
-          python3 scripts/ops/ci_receipts.py put terminal-truth "$GITHUB_SHA" "$TT_OUT"/* || echo "::warning::receipt not stored"
+          files=()
+          for f in "$TT_OUT"/*; do [[ -f "$f" && "$f" != *.scratch ]] && files+=("$f"); done
+          python3 scripts/ops/ci_receipts.py put terminal-truth "$GITHUB_SHA" "${files[@]}" || echo "::warning::receipt not stored"
+          if [[ "$TT_EVENT" == schedule ]]; then
+            python3 scripts/ops/ci_receipts.py put terminal-truth-nightly nightly "$TT_OUT/gate.json" "$TT_OUT/summary.md" || echo "::warning::nightly receipt not stored"
+          fi
+
+      - name: Status result
+        if: always() && env.TT_PUBLISH == '1'
+        run: |
+          set -uo pipefail
+          state="${TT_STATE:-error}"
+          [[ "$state" == success || "$state" == failure ]] || state=error
+          description="terminal truth: $state"
+          if [[ -f "$TT_OUT/gate.json" ]]; then
+            description="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["description"][:140])' "$TT_OUT/gate.json")"
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$state" -f context=longhouse/terminal-truth \
+            -f description="$description" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
       - name: Remove owned state
         if: always()
         run: |
           set -uo pipefail
-          if [[ -s "${TT_OUT:-/nonexistent}/scratch-new.txt" ]]; then
-            while IFS= read -r name; do
-              [[ "$name" =~ ^[0-9a-f]{4}$ ]] && rm -rf -- "/tmp/agents/tt/$name"
-            done < "$TT_OUT/scratch-new.txt"
+          if [[ -s "${TT_OUT:-/nonexistent}/scratch-before.txt" || -d /tmp/agents/tt ]]; then
+            for dir in /tmp/agents/tt/*; do
+              name="$(basename "$dir")"
+              [[ "$name" =~ ^[0-9a-f]{4}$ ]] || continue
+              grep -qxF "$name" "$TT_OUT/scratch-before.txt" 2>/dev/null || rm -rf -- "$dir"
+            done
           fi
           if [[ -n "${TT_FIXTURE_ROOT:-}" && "$TT_FIXTURE_ROOT" == "$RUNNER_TEMP"/* ]]; then
             rm -rf -- "$TT_FIXTURE_ROOT"

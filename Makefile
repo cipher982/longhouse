@@ -802,6 +802,7 @@ VALIDATE_MEMBERS := \
 	validate-ship-monitor \
 	validate-dogfood-runtime \
 	validate-actions-storage \
+	validate-terminal-truth-ci \
 	validate-web-layout \
 	validate-ios-transcript \
 	lint-test-patterns
@@ -875,6 +876,9 @@ validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 	@python3 scripts/tests/promote-production.test.py
 	@python3 scripts/tests/ring-promoter.test.py
 	@python3 scripts/tests/crunch.test.py
+
+validate-terminal-truth-ci: ## @internal Terminal-truth CI lane: pinned provider versions, verdict script, workflow shape
+	@python3 scripts/tests/terminal-truth-ci.test.py
 
 validate-actions-storage: ## @internal No GitHub Actions artifact/cache storage; receipts live in the object store
 	@python3 scripts/tests/check-actions-storage.test.py

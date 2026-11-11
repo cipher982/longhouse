@@ -147,6 +147,8 @@ class Pass:
     timing: dict[str, float] = field(default_factory=dict)
     prepared: dict[str, float] = field(default_factory=dict)  # provider -> seconds to prepare its home
     binaries: dict[str, str] = field(default_factory=dict)
+    # provider -> the environment only that provider's launches (Helm PTY) get; the engine's `environment` is the union
+    provider_environments: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 def build_pass(
@@ -201,7 +203,12 @@ def build_pass(
             for name, default in defaults.items():
                 if per_provider[provider].get(name) == str(default):
                     per_provider[provider].pop(name)
-        for provider in providers:  # one environment for the one Machine Agent (and the Helm launches): the union
+        # ONE environment, the union, only for the one Machine Agent. It has to be one: the engine reads HOME,
+        # CLAUDE_CONFIG_DIR, XDG_CONFIG_HOME and CODEX_HOME once at startup to find every provider's session roots
+        # (engine/src/discovery.rs:34-50, 113-118) and a Console turn's provider child inherits the engine's environment
+        # (engine/src/codex_exec.rs:1150-1166). A Helm launch does not use it: each Helm cell gets only its own provider's
+        # variables (run_cell_in), so one provider's variables never reach another provider's terminal.
+        for provider in providers:
             for key, value in per_provider[provider].items():
                 if key in environment and environment[key] != value:
                     log(f"environment conflict on {key} between providers; keeping the first value")
@@ -219,7 +226,10 @@ def build_pass(
         )
         engine_s = time.monotonic() - t0
         timing = {"boot_host_s": host_s, "boot_engine_s": engine_s, "setup_s": time.monotonic() - started}
-        return Pass(root, host, proxy, model, shipper, home, environment, cli, engine, timing, prepared, binaries)
+        # start_transcript_shipper adds LONGHOUSE_HOME to `environment` (the Helm launcher finds the engine through it)
+        for provider in providers:
+            per_provider[provider]["LONGHOUSE_HOME"] = environment["LONGHOUSE_HOME"]
+        return Pass(root, host, proxy, model, shipper, home, environment, cli, engine, timing, prepared, binaries, per_provider)
     except BaseException:
         if shipper is not None:
             with contextlib.suppress(Exception):
@@ -273,7 +283,9 @@ def run_cell_in(
     result.timing = {"prepare_home_s": pas.prepared.get(provider), "prepare_home_note": "per provider, shared by its cells"}
     schedule = plan_schedule(plan)
     markers = [word for _, word, _ in schedule]
-    obs = Observation(mode=mode, markers=markers, messages=plan.messages, scenario=spec.scenario, tool_token=plan.tool_token)
+    obs = Observation(
+        provider=provider, mode=mode, markers=markers, messages=plan.messages, scenario=spec.scenario, tool_token=plan.tool_token
+    )
     workspace = pas.root / "w" / provider / f"{mode}-{plan.nonce}"
     workspace.mkdir(parents=True)
     api = RuntimeApi(pas.host.url, pas.host.token, workspace=workspace)
@@ -300,7 +312,7 @@ def run_cell_in(
             session = ProviderPtySession.start(
                 argv=driver.argv(Path(binary), workspace) if mode == "shadow" else helm_argv,
                 cwd=workspace,
-                env=pas.environment,
+                env=pas.provider_environments[provider],
                 terminal_path=recording,
                 timing_path=timing_file,
                 rows=ROWS,

@@ -17,7 +17,21 @@ from zerg.qa.terminal_truth_pty import SERVER_ROOT
 STAGES = ("preflight", "provider_emitted", "engine_posted", "host_published", "stream_delivered")
 
 
-MEDIAN_DELAY_BUDGET_S = 0.75  # blocking; 4 x the worst median seen on 2026-11-11 (0.17 s), see terminal-truth-ci-gate.md
+MEDIAN_DELAY_BUDGET_S = (
+    0.75  # blocking default; a cell listed in BUDGET_PATH uses its own (derived on the CI runner, arithmetic in the file)
+)
+BUDGET_PATH = SERVER_ROOT.parent / "schemas" / "terminal-truth-budget.json"
+
+
+def median_budget_s(provider: str, mode: str) -> float:
+    """The blocking median live delay for one cell: its entry in BUDGET_PATH, else MEDIAN_DELAY_BUDGET_S."""
+
+    try:
+        cells = json.loads(BUDGET_PATH.read_text()).get("budget_s", {})
+    except (OSError, ValueError):
+        return MEDIAN_DELAY_BUDGET_S
+    value = cells.get(f"{provider}/{mode}")
+    return float(value) if isinstance(value, (int, float)) else MEDIAN_DELAY_BUDGET_S
 
 
 EARLY_FRACTION_MIN = 0.5  # blocking: this share of the markers must reach the client before the provider's last token
@@ -98,6 +112,7 @@ class Observation:
     tool_on_client: bool = False
     reasoning_word: str = REASONING_WORD
     scenario: str = "long_reply"
+    provider: str = ""  # selects the cell's median budget; empty means the default budget
 
 
 def preview_segments(texts: Sequence[str]) -> list[list[str]]:
@@ -176,9 +191,8 @@ def stream_checks(obs: Observation) -> list[tuple[str, bool, str]]:
     delays = [obs.stream_first_seen[m] - t for m in markers if m in obs.stream_first_seen and (t := obs.reference.get(m)) is not None]
     if delays:
         median = statistics.median(delays)
-        checks.append(
-            ("median_delay_within_budget", median <= MEDIAN_DELAY_BUDGET_S, f"median {median:.3f} s, budget {MEDIAN_DELAY_BUDGET_S} s")
-        )
+        budget = median_budget_s(obs.provider, obs.mode) if obs.provider else MEDIAN_DELAY_BUDGET_S
+        checks.append(("median_delay_within_budget", median <= budget, f"median {median:.3f} s, budget {budget} s"))
     else:
         checks.append(("median_delay_within_budget", False, "no marker delivered to compare"))
     return checks

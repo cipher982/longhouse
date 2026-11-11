@@ -548,3 +548,23 @@ def test_an_informational_cell_that_never_got_ready_is_a_failure_not_a_measureme
     assert tt.outcome_for("preflight", shadow, "shadow") == "fail"
     assert tt.outcome_for("stream_delivered", shadow, "shadow") == "measured"
     assert tt.outcome_for(None, shadow, "shadow") == "measured"
+
+
+def test_a_cells_median_budget_comes_from_the_budget_file_and_falls_back_to_the_default(monkeypatch, tmp_path) -> None:
+    from zerg.qa import terminal_truth_verdicts as verdicts
+
+    path = tmp_path / "budget.json"
+    path.write_text('{"budget_s": {"omp/helm": 1.5}}')
+    monkeypatch.setattr(verdicts, "BUDGET_PATH", path)
+    assert verdicts.median_budget_s("omp", "helm") == 1.5
+    assert verdicts.median_budget_s("codex", "helm") == verdicts.MEDIAN_DELAY_BUDGET_S
+    monkeypatch.setattr(verdicts, "BUDGET_PATH", tmp_path / "missing.json")
+    assert verdicts.median_budget_s("omp", "helm") == verdicts.MEDIAN_DELAY_BUDGET_S
+    # the stream check applies the cell's own budget: a 1.0 s median passes omp/helm at 1.5 s and fails the default
+    monkeypatch.setattr(verdicts, "BUDGET_PATH", path)
+    base = _good_observation()
+    slow = {m: 11.0 + i for i, m in enumerate(base.markers)}
+    for provider, expected in (("omp", True), ("codex", False)):
+        obs = _good_observation(provider=provider, stream_first_seen=slow)
+        medians = [c for c in verdicts.stream_checks(obs) if c[0] == "median_delay_within_budget"]
+        assert medians[0][1] is expected, (provider, medians)

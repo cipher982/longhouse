@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 338,
+  "file_count": 340,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -712,6 +712,13 @@
       ]
     },
     {
+      "path": "scripts/ci/terminal_truth_providers.py",
+      "providers": [
+        "antigravity",
+        "omp"
+      ]
+    },
+    {
       "path": "scripts/managed-local/profile_longhouse_hooks.py",
       "providers": [
         "claude",
@@ -923,6 +930,18 @@
       "providers": [
         "codex",
         "cursor"
+      ]
+    },
+    {
+      "path": "scripts/tests/terminal-truth-ci.test.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {
