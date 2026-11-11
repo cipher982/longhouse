@@ -58,9 +58,14 @@ struct SessionRests {
 
 struct SessionRest {
     version: u64,
-    lane: Option<(Uuid, u64)>,
+    shape: String,
+    lane: SessionLane,
     at: std::time::Instant,
 }
+
+/// A session's active epoch, how far its durable lane has reached, and the
+/// revision the epoch vouches for.
+type SessionLane = Option<(Uuid, u64, Option<String>)>;
 
 /// What every session's rest depends on beyond its own rows and lane: the
 /// managed-state files that bind sessions, the build, and the import scope.
@@ -74,13 +79,14 @@ fn session_rest_context(import_scope: &crate::import_scope::ImportScope) -> Opti
 }
 
 /// The durable lane of a session's active epoch, if it has one.
-fn opencode_session_lane(conn: &Connection, opaque_source_id: &str) -> Result<Option<(Uuid, u64)>> {
+fn opencode_session_lane(conn: &Connection, opaque_source_id: &str) -> Result<SessionLane> {
     let Some(epoch) = source_epoch::active_source_epoch(conn, "opencode", opaque_source_id)? else {
         return Ok(None);
     };
     Ok(Some((
         epoch,
         source_epoch::lane_position(conn, epoch, SourceLane::Durable)?,
+        source_epoch::active_source_revision(conn, "opencode", opaque_source_id)?,
     )))
 }
 
@@ -190,11 +196,14 @@ pub(super) fn walk_opencode_database(
                 return Ok(Some(pending));
             }
             let rest_key = (db_path.to_path_buf(), candidate.provider_session_id.clone());
-            let lane_before = if rest_context.is_some() {
+            // `Some(unread binding files when this session was reached)` while
+            // per-session rests are in use.
+            let unread_at_session_start = if rest_context.is_some() {
                 let lane = opencode_session_lane(conn, &opaque_source_id)?;
                 let at_rest = OPENCODE_SESSION_RESTS.lock().is_ok_and(|rests| {
                     rests.sessions.get(&rest_key).is_some_and(|rest| {
                         rest.version == candidate.version
+                            && rest.shape == candidate.shape
                             && rest.lane == lane
                             && rest.at.elapsed() < OPENCODE_SESSION_REST_TTL
                     })
@@ -202,7 +211,7 @@ pub(super) fn walk_opencode_database(
                 if at_rest {
                     continue;
                 }
-                Some(lane)
+                Some(crate::dir_cache::unread_files())
             } else {
                 None
             };
@@ -259,15 +268,20 @@ pub(super) fn walk_opencode_database(
             let range_start =
                 source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
             if range_start >= logical_len {
-                // Nothing to ship and nothing in flight: remember the rows and
-                // lane this was decided on.
-                if lane_before.is_some() && stream.next_wake_ms().is_none() {
+                // Nothing to ship, nothing in flight and every binding file
+                // read: remember the rows and lane this was decided on. A
+                // binding that could not be read is decided again next walk.
+                let saw_every_binding = unread_at_session_start
+                    .is_some_and(|unread| unread == crate::dir_cache::unread_files());
+                if saw_every_binding && stream.next_wake_ms().is_none() {
+                    let lane = opencode_session_lane(conn, &opaque_source_id)?;
                     if let Ok(mut rests) = OPENCODE_SESSION_RESTS.lock() {
                         rests.sessions.insert(
                             rest_key,
                             SessionRest {
                                 version: candidate.version,
-                                lane: Some((resolution.source_epoch, range_start)),
+                                shape: candidate.shape.clone(),
+                                lane,
                                 at: std::time::Instant::now(),
                             },
                         );

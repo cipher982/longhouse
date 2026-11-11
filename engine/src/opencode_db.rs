@@ -34,6 +34,10 @@ pub struct OpenCodeSessionCandidate {
     pub provider_session_id: String,
     pub source_key: String,
     pub version: u64,
+    /// The session's row and its message and part counts, read with the
+    /// listing: a cheap witness for changes `version` misses (a row written
+    /// with an older timestamp, a title set without touching `time_updated`).
+    pub shape: String,
     pub fingerprint: String,
     /// When OpenCode created the session, for the machine's import scope.
     pub created_ms: Option<i64>,
@@ -308,7 +312,11 @@ fn list_opencode_sessions_inner(
     )";
     let sql = format!(
         r#"
-        SELECT s.id, {version_expression} AS version_ms, s.time_created, s.directory
+        SELECT s.id, {version_expression} AS version_ms, s.time_created, s.directory,
+               (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id),
+               (SELECT COUNT(*) FROM part p WHERE p.session_id = s.id),
+               COALESCE(s.parent_id, ''), COALESCE(s.path, ''), COALESCE(s.title, ''),
+               COALESCE(s.version, ''), s.time_updated
         FROM session s
         ORDER BY version_ms DESC, s.id ASC
         {}
@@ -323,10 +331,23 @@ fn list_opencode_sessions_inner(
     let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<OpenCodeSessionCandidate> {
         let provider_session_id: String = row.get(0)?;
         let version_ms: i64 = row.get(1)?;
+        let mut shape = Fnv1a64::default();
+        for index in 6..10 {
+            shape.update_field(&row.get::<_, String>(index)?);
+        }
+        shape.update_field(&row.get::<_, Option<String>>(3)?.unwrap_or_default());
+        let shape = format!(
+            "{}|{}|{}|{:016x}",
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, i64>(10)?,
+            shape.finish()
+        );
         Ok(OpenCodeSessionCandidate {
             source_key: opencode_source_key(db_path, &provider_session_id),
             provider_session_id,
             version: version_from_ms(version_ms),
+            shape,
             fingerprint: String::new(),
             created_ms: row.get(2)?,
             directory: row.get(3)?,
