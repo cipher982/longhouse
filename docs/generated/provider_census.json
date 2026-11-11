@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 336,
+  "file_count": 337,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2451,20 +2451,30 @@
       ]
     },
     {
-      "path": "server/zerg/qa/terminal_truth.py",
+      "path": "server/zerg/qa/terminal_truth_mutations.py",
       "providers": [
-        "antigravity",
-        "claude",
         "codex",
-        "cursor",
         "omp",
         "opencode",
         "pi"
       ]
     },
     {
-      "path": "server/zerg/qa/terminal_truth_mutations.py",
+      "path": "server/zerg/qa/terminal_truth_providers.py",
       "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "omp",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/terminal_truth_scenarios.py",
+      "providers": [
+        "antigravity",
+        "claude",
         "codex",
         "omp",
         "opencode",
