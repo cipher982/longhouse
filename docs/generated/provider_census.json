@@ -1932,6 +1932,7 @@
       "path": "server/tests_lite/test_session_live_previews.py",
       "providers": [
         "antigravity",
+        "claude",
         "codex",
         "cursor",
         "omp",
@@ -2499,6 +2500,7 @@
     {
       "path": "server/zerg/routers/runtime.py",
       "providers": [
+        "claude",
         "omp",
         "opencode",
         "pi"
@@ -2670,6 +2672,7 @@
       "path": "server/zerg/services/session_live_previews.py",
       "providers": [
         "antigravity",
+        "claude",
         "codex",
         "cursor",
         "omp",

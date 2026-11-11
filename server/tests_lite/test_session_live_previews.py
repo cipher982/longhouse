@@ -1328,3 +1328,53 @@ def test_opencode_helm_stream_is_published_live_per_message():
     other = _live_transcript_preview_payload(helm("msg_b", 10, "Next"), now=now)
     assert other is not None and other["content_cursor"] != later["content_cursor"]
     assert _live_transcript_preview_payload(helm("msg_a", 11, "  "), now=now) is None
+
+
+def _claude_stream_event(*, session_id, seq: int, raw: dict, live_text=None, completed=False) -> RuntimeEventIngest:
+    payload = {
+        "progress_kind": "claude_print_stream",
+        "thread_id": "claude-thread-1",
+        "turn_id": "claude-turn-1",
+        "seq": seq,
+        "event": {"type": "stream_event", "event": raw},
+    }
+    if live_text is not None:
+        payload["item_id"] = "run-1:assistant:1"
+        payload["live_text"] = live_text
+    if completed:
+        payload["completed"] = True
+    return RuntimeEventIngest(
+        runtime_key=f"claude:{session_id}",
+        session_id=session_id,
+        provider="claude",
+        device_id="cinder",
+        source="claude_print",
+        kind="progress_signal",
+        occurred_at=datetime.now(timezone.utc),
+        dedupe_key=f"claude:stream:{session_id}:{seq}",
+        payload=payload,
+    )
+
+
+def test_claude_print_live_text_accumulates_into_one_preview_that_ends_complete():
+    from zerg.services.session_live_previews import is_claude_print_live_text_event
+    from zerg.services.session_live_previews import preview_payload_from_runtime_event
+
+    session_id = uuid4()
+    delta = {"type": "content_block_delta", "delta": {"type": "text_delta"}}
+    events = [
+        _claude_stream_event(session_id=session_id, seq=2, raw=delta, live_text="Hello"),
+        _claude_stream_event(session_id=session_id, seq=3, raw=delta, live_text="Hello, world"),
+        _claude_stream_event(session_id=session_id, seq=4, raw={"type": "message_stop"}, live_text="Hello, world", completed=True),
+    ]
+    previews = [preview_payload_from_runtime_event(event, observation_id=f"o{i}") for i, event in enumerate(events)]
+    assert [p["text"] for p in previews] == ["Hello", "Hello, world", "Hello, world"]
+    assert [p["is_complete"] for p in previews] == [False, False, True]
+    # One item: every update carries the same cursor key, so each replaces the last.
+    assert len({p["content_cursor"].rsplit(":", 1)[0] for p in previews}) == 1
+    assert all(p["role"] == "assistant" and p["tool_name"] is None for p in previews)
+
+    # Lines without accumulated reply text (thinking deltas, message_start) are not previews.
+    thinking = _claude_stream_event(session_id=session_id, seq=1, raw={"type": "content_block_delta", "delta": {"type": "thinking_delta"}})
+    assert not is_claude_print_live_text_event(thinking)
+    assert preview_payload_from_runtime_event(thinking, observation_id="t") is None

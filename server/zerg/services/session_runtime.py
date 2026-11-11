@@ -35,6 +35,7 @@ from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
+from zerg.services.session_live_previews import is_claude_print_live_text_event
 from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
 from zerg.services.session_live_previews import upsert_live_session_live_preview
 from zerg.services.session_live_previews import upsert_session_live_preview
@@ -600,6 +601,7 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
         or opencode_live
         or _is_pi_print_stream_event(event)
         or _is_omp_print_stream_event(event)
+        or is_claude_print_live_text_event(event)
         or _is_omp_helm_stream_event(event)
         or _is_pi_helm_stream_event(event)
     )
@@ -758,7 +760,7 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
             )
             ignored += 1
             continue
-        overlay_stream = _is_pi_print_stream_event(event) or _is_omp_print_stream_event(event)
+        overlay_stream = _is_pi_print_stream_event(event) or _is_omp_print_stream_event(event) or is_claude_print_live_text_event(event)
         preview_candidate = live_preview_candidate_from_runtime_event(
             event,
             observation_id=f"live:{event.source}:{event.dedupe_key}",

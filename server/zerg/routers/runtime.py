@@ -34,6 +34,7 @@ from zerg.dependencies.request_db import no_request_db
 from zerg.metrics import event_age_at_ingest_seconds
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.session_live_previews import admit_preview_publication
+from zerg.services.session_live_previews import is_claude_print_live_text_event
 from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
 from zerg.services.session_live_previews import preview_payload_from_runtime_event
 from zerg.services.session_runtime import RuntimeEventBatchIngest
@@ -349,13 +350,19 @@ async def apply_runtime_observation_batch(
         ) from exc
 
 
-_PRINT_STREAM_OVERLAYS = {("pi", "pi_print", "pi_print_stream"), ("omp", "omp_print", "omp_print_stream")}
+_PRINT_STREAM_OVERLAYS = {
+    ("pi", "pi_print", "pi_print_stream"),
+    ("omp", "omp_print", "omp_print_stream"),
+    ("claude", "claude_print", "claude_print_stream"),
+}
 
 
 def _print_overlay_key(event) -> tuple[tuple[str, str], int] | None:
     payload = event.payload or {}
     overlay = ((event.provider or "").strip().lower(), (event.source or "").strip().lower(), payload.get("progress_kind"))
     if event.kind != "progress_signal" or overlay not in _PRINT_STREAM_OVERLAYS:
+        return None
+    if overlay[0] == "claude" and not is_claude_print_live_text_event(event):
         return None
     candidate = live_preview_candidate_from_runtime_event(event, observation_id=event.dedupe_key)
     if candidate is None or candidate.seq is None:
@@ -460,6 +467,11 @@ def _publish_live_transcript_previews(events, *, now: datetime) -> None:
 
 
 def _live_transcript_preview_payload(event, *, now: datetime) -> dict | None:
+    if is_claude_print_live_text_event(event):
+        return preview_payload_from_runtime_event(
+            event,
+            observation_id=f"runtime:{event.source}:{event.dedupe_key}",
+        )
     if (
         (event.provider or "").strip().lower() in {"pi", "omp", "opencode"}
         and (event.source or "").strip().lower() in {"pi_print", "omp_print", "opencode_run", "opencode_server_bridge"}

@@ -23,6 +23,7 @@ LIVE_PREVIEW_SOURCES = {
     "codex_bridge_live",
     "codex_console_live",
     "antigravity_print",
+    "claude_print",
     "cursor_print",
     "opencode_run",
     "opencode_server_bridge",
@@ -112,7 +113,7 @@ def live_preview_candidate_from_runtime_event(
     if event.session_id is None:
         return None
     provider = (event.provider or "").strip().lower()
-    if provider not in {"antigravity", "codex", "cursor", "opencode", "pi", "omp"}:
+    if provider not in {"antigravity", "claude", "codex", "cursor", "opencode", "pi", "omp"}:
         return None
     source = (event.source or "").strip()
     if source.lower() not in LIVE_PREVIEW_SOURCES:
@@ -126,6 +127,8 @@ def live_preview_candidate_from_runtime_event(
         return _opencode_run_preview_candidate(event, payload, observation_id=observation_id)
     if provider == "pi" and source.lower() == "pi_print" and progress_kind == "pi_print_stream":
         return _pi_print_preview_candidate(event, payload, observation_id=observation_id)
+    if is_claude_print_live_text_event(event):
+        return _claude_print_preview_candidate(event, payload, observation_id=observation_id)
     if provider == "omp" and source.lower() == "omp_print" and progress_kind == "omp_print_stream":
         return _omp_print_preview_candidate(event, payload, observation_id=observation_id)
     if provider == "opencode" and source.lower() == "opencode_server_bridge" and progress_kind == "opencode_helm_stream":
@@ -179,6 +182,57 @@ def live_preview_candidate_from_runtime_event(
             if is_tool
             else None
         ),
+    )
+
+
+_CLAUDE_LIVE_TEXT_KINDS = {
+    "claude_print": "claude_print_stream",
+}
+
+
+def is_claude_print_live_text_event(event: Any) -> bool:
+    """A Claude runtime event that carries the reply text accumulated so far.
+
+    The Console engine attaches ``live_text`` only to ``--include-partial-messages``
+    text deltas and the closing ``message_stop``; every other stream line stays
+    ordinary runtime progress evidence.
+    """
+
+    payload = event.payload or {}
+    if (event.provider or "").strip().lower() != "claude" or event.kind != "progress_signal":
+        return False
+    if not isinstance(payload.get("live_text"), str):
+        return False
+    expected_kind = _CLAUDE_LIVE_TEXT_KINDS.get((event.source or "").strip().lower())
+    return expected_kind is not None and payload.get("progress_kind") == expected_kind
+
+
+def _claude_print_preview_candidate(event: Any, payload: dict[str, Any], *, observation_id: str) -> LivePreviewCandidate | None:
+    if event.session_id is None:
+        return None
+    text = str(payload.get("live_text") or "").strip()
+    if not text:
+        return None
+    source = (event.source or "").strip().lower()
+    thread_id = _optional_str(payload.get("thread_id") or event.thread_id)
+    turn_key = build_provisional_key(
+        source=source,
+        session_id=event.session_id,
+        thread_id=thread_id,
+        turn_id=_item_scoped_turn_id(_optional_str(payload.get("turn_id")), _optional_str(payload.get("item_id"))),
+    )
+    seq = _coerce_seq(payload.get("seq"))
+    return LivePreviewCandidate(
+        session_id=event.session_id,
+        thread_id=thread_id,
+        turn_key=turn_key,
+        seq=seq,
+        preview_text=text,
+        provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
+        provisional_complete=bool(payload.get("completed")),
+        preview_observed_at=normalize_utc(event.occurred_at) or datetime.now(timezone.utc),
+        source=source,
+        last_observation_id=observation_id,
     )
 
 

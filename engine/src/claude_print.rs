@@ -75,6 +75,82 @@ pub struct ClaudePrintRunSummary {
 struct ClaudePrintSink {
     run: ConsoleRun,
     provider_thread_id: String,
+    /// Reply text accumulated from `--include-partial-messages` deltas. Shared
+    /// by every per-turn clone of the sink so one assistant message keeps one
+    /// running text across the events that build it.
+    live: Arc<std::sync::Mutex<ClaudeLiveProjection>>,
+}
+
+/// Running reply text of the assistant message Claude is streaming.
+///
+/// `stream_event` lines wrap raw Messages API events. A `message_start` opens a
+/// new assistant item, `text_delta` blocks append to its text, and
+/// `message_stop` completes it. Thinking and tool-argument deltas are not reply
+/// text and never enter `text`.
+#[derive(Debug, Default)]
+struct ClaudeLiveProjection {
+    /// Assistant messages started so far on this sink; names the item.
+    message_index: u64,
+    open: bool,
+    text: String,
+}
+
+/// What a `stream_event` adds to the live preview: the accumulated reply text
+/// and whether the message just finished.
+struct ClaudeLiveUpdate {
+    item_index: u64,
+    text: String,
+    completed: bool,
+}
+
+impl ClaudeLiveProjection {
+    fn apply(&mut self, event: &Value) -> Option<ClaudeLiveUpdate> {
+        if event.get("type").and_then(Value::as_str) != Some("stream_event") {
+            return None;
+        }
+        // Subagent streams carry a parent tool use id; their text is not this
+        // session's reply.
+        if event
+            .get("parent_tool_use_id")
+            .is_some_and(|value| !value.is_null())
+        {
+            return None;
+        }
+        let inner = event.get("event")?;
+        match inner.get("type").and_then(Value::as_str) {
+            Some("message_start") => {
+                self.message_index += 1;
+                self.open = true;
+                self.text.clear();
+                None
+            }
+            Some("content_block_delta") if self.open => {
+                let delta = inner.get("delta")?;
+                if delta.get("type").and_then(Value::as_str) != Some("text_delta") {
+                    return None;
+                }
+                let text = delta.get("text").and_then(Value::as_str)?;
+                if text.is_empty() {
+                    return None;
+                }
+                self.text.push_str(text);
+                Some(ClaudeLiveUpdate {
+                    item_index: self.message_index,
+                    text: self.text.clone(),
+                    completed: false,
+                })
+            }
+            Some("message_stop") if self.open => {
+                self.open = false;
+                (!self.text.is_empty()).then(|| ClaudeLiveUpdate {
+                    item_index: self.message_index,
+                    text: std::mem::take(&mut self.text),
+                    completed: true,
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 static CLAUDE_CONSOLE: ConsoleProvider = ConsoleProvider {
@@ -431,6 +507,7 @@ fn make_sink(
             runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         },
         provider_thread_id: provider_thread_id.to_string(),
+        live: Default::default(),
     })
 }
 
@@ -975,6 +1052,7 @@ fn claude_sink_for_claim(
             runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         },
         provider_thread_id: claim.provider_thread_id.clone().unwrap_or_default(),
+        live: Default::default(),
     })
 }
 
@@ -1812,6 +1890,7 @@ impl ClaudePrintSink {
         Self {
             run: self.run.for_binding(binding),
             provider_thread_id: self.provider_thread_id.clone(),
+            live: Arc::clone(&self.live),
         }
     }
 
@@ -1843,19 +1922,28 @@ impl ClaudePrintSink {
         if let Some((phase, tool_name)) = claude_phase_from_event(&event) {
             self.post_phase(phase, tool_name).await;
         }
-        self.post_event(&self.run_event(
-            "progress_signal",
-            &format!("stdout:{seq}"),
-            self.with_transport(json!({
-                "progress_kind": "claude_print_stream",
-                "seq": seq,
-                "thread_id": self.thread_id,
-                "turn_id": self.turn_id,
-                "client_request_id": self.client_request_id,
-                "provider_thread_id": self.provider_thread_id,
-                "event": event,
-            })),
-        ));
+        let live = self
+            .live
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .apply(&event);
+        let mut payload = self.with_transport(json!({
+            "progress_kind": "claude_print_stream",
+            "seq": seq,
+            "thread_id": self.thread_id,
+            "turn_id": self.turn_id,
+            "client_request_id": self.client_request_id,
+            "provider_thread_id": self.provider_thread_id,
+            "event": event,
+        }));
+        if let Some(live) = live {
+            payload["item_id"] = json!(format!("{}:assistant:{}", self.run_id, live.item_index));
+            payload["live_text"] = json!(live.text);
+            if live.completed {
+                payload["completed"] = json!(true);
+            }
+        }
+        self.post_event(&self.run_event("progress_signal", &format!("stdout:{seq}"), payload));
     }
 
     async fn post_decode_gap(&self, seq: u64, error: &str, raw_line: &[u8]) {
@@ -2181,6 +2269,8 @@ fn build_claude_args(
         "--input-format".to_string(),
         "stream-json".to_string(),
         "--replay-user-messages".to_string(),
+        // Token deltas as `stream_event` lines: the live reply text source.
+        "--include-partial-messages".to_string(),
     ];
     args.extend([
         if is_resume {
@@ -2264,6 +2354,7 @@ mod tests {
                 runtime_events_outbox_dir: home.outbox(),
             },
             provider_thread_id: PROVIDER_THREAD.to_string(),
+            live: Default::default(),
         }
     }
 
@@ -2330,6 +2421,7 @@ mod tests {
                 "--input-format",
                 "stream-json",
                 "--replay-user-messages",
+                "--include-partial-messages",
                 "--session-id",
                 &provider_id,
                 "--model",
@@ -2340,9 +2432,90 @@ mod tests {
         assert!(!fresh.contains(&"secret prompt".to_string()));
 
         let (resume, _) = build_claude_args(&provider_id, true, None);
-        assert_eq!(resume[8], "--resume");
-        assert_eq!(resume[9], provider_id);
+        assert_eq!(resume[9], "--resume");
+        assert_eq!(resume[10], provider_id);
         assert!(!resume.iter().any(|arg| arg == "--"));
+    }
+
+    fn stream_event(inner: Value) -> Value {
+        json!({"type": "stream_event", "event": inner, "parent_tool_use_id": null})
+    }
+
+    fn text_delta(index: u64, text: &str) -> Value {
+        stream_event(json!({
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "text_delta", "text": text},
+        }))
+    }
+
+    #[test]
+    fn live_projection_accumulates_text_deltas_and_completes_on_message_stop() {
+        let mut live = ClaudeLiveProjection::default();
+        assert!(live
+            .apply(&stream_event(
+                json!({"type": "message_start", "message": {"id": "m1"}})
+            ))
+            .is_none());
+        let first = live.apply(&text_delta(0, "Hello")).unwrap();
+        assert_eq!(
+            (first.item_index, first.text.as_str(), first.completed),
+            (1, "Hello", false)
+        );
+        let second = live.apply(&text_delta(0, ", world")).unwrap();
+        assert_eq!(second.text, "Hello, world");
+        let done = live
+            .apply(&stream_event(json!({"type": "message_stop"})))
+            .unwrap();
+        assert_eq!(
+            (done.text.as_str(), done.completed, done.item_index),
+            ("Hello, world", true, 1)
+        );
+        // A repeated stop, or the whole-message events that follow, add nothing.
+        assert!(live
+            .apply(&stream_event(json!({"type": "message_stop"})))
+            .is_none());
+        assert!(live
+            .apply(&json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello, world"}]}}))
+            .is_none());
+    }
+
+    #[test]
+    fn live_projection_never_turns_thinking_tool_or_subagent_deltas_into_reply_text() {
+        let mut live = ClaudeLiveProjection::default();
+        live.apply(&stream_event(json!({"type": "message_start"})));
+        for delta in [
+            json!({"type": "thinking_delta", "thinking": "hmm"}),
+            json!({"type": "input_json_delta", "partial_json": "{\"a\""}),
+            json!({"type": "signature_delta", "signature": "sig"}),
+        ] {
+            assert!(live
+                .apply(&stream_event(
+                    json!({"type": "content_block_delta", "index": 0, "delta": delta})
+                ))
+                .is_none());
+        }
+        let mut sub = text_delta(0, "subagent");
+        sub["parent_tool_use_id"] = json!("toolu_1");
+        assert!(live.apply(&sub).is_none());
+        // Thinking only: nothing to complete.
+        assert!(live
+            .apply(&stream_event(json!({"type": "message_stop"})))
+            .is_none());
+    }
+
+    #[test]
+    fn live_projection_starts_each_assistant_message_as_its_own_item() {
+        let mut live = ClaudeLiveProjection::default();
+        live.apply(&stream_event(json!({"type": "message_start"})));
+        live.apply(&text_delta(0, "one"));
+        live.apply(&stream_event(json!({"type": "message_stop"})));
+        live.apply(&stream_event(json!({"type": "message_start"})));
+        let next = live.apply(&text_delta(0, "two")).unwrap();
+        assert_eq!((next.item_index, next.text.as_str()), (2, "two"));
+        // Deltas outside an open message are ignored.
+        let mut closed = ClaudeLiveProjection::default();
+        assert!(closed.apply(&text_delta(0, "stray")).is_none());
     }
 
     #[test]
@@ -3874,6 +4047,7 @@ for _ in sys.stdin:
                 runtime_events_outbox_dir: temp.path().join("outbox"),
             },
             provider_thread_id: "p-thread-1".to_string(),
+            live: Default::default(),
         };
 
         let started = std::time::Instant::now();
@@ -3925,6 +4099,7 @@ for _ in sys.stdin:
                         runtime_events_outbox_dir: outbox.clone(),
                     },
                     provider_thread_id: Uuid::new_v4().to_string(),
+                    live: Default::default(),
                 };
 
                 sink.post_phase("thinking", None).await;
