@@ -1,0 +1,509 @@
+{
+  "command": "bun scripts/qa/terminal_mirror_spike/run.ts --no-markers",
+  "mode": "byte-rate (no markers)",
+  "owner_terminal": "165x45 then 120x36",
+  "bytesPerPhase": [
+    {
+      "phase": "boot",
+      "seconds": 0.8,
+      "bytes": 1665,
+      "chunks": 2,
+      "bytesPerSecond": 2079,
+      "updates": null
+    },
+    {
+      "phase": "stream",
+      "seconds": 10.1,
+      "bytes": 66548,
+      "chunks": 238,
+      "bytesPerSecond": 6622,
+      "updates": 198
+    },
+    {
+      "phase": "idle-spinner",
+      "seconds": 6,
+      "bytes": 3700,
+      "chunks": 74,
+      "bytesPerSecond": 616,
+      "updates": 74
+    },
+    {
+      "phase": "full-redraw",
+      "seconds": 3,
+      "bytes": 123259,
+      "chunks": 121,
+      "bytesPerSecond": 40825,
+      "updates": 15
+    },
+    {
+      "phase": "alt-screen",
+      "seconds": 4.1,
+      "bytes": 291795,
+      "chunks": 322,
+      "bytesPerSecond": 71884,
+      "updates": 40
+    },
+    {
+      "phase": "after-alt",
+      "seconds": 0,
+      "bytes": 0,
+      "chunks": 0,
+      "bytesPerSecond": 0,
+      "updates": null
+    },
+    {
+      "phase": "phone-resize",
+      "seconds": 0,
+      "bytes": 0,
+      "chunks": 0,
+      "bytesPerSecond": 0,
+      "updates": null
+    }
+  ],
+  "stand_in_to_owner_terminal_ms": {
+    "n": 0,
+    "p50": null,
+    "p90": null,
+    "p99": null,
+    "max": null
+  },
+  "latency": {
+    "method": "marker text [Mnnnnnn <epoch us>] is stamped by the stand-in just before its write to the PTY; the browser finds it in the frame, then in the DOM (MutationObserver) and takes the first task after that. Same machine, same wall clock, loopback. Milliseconds.",
+    "markersEmitted": 0,
+    "markersSeenInBrowser": 0,
+    "markersPaintedInDom": 0,
+    "markersNeverPaintedBeforeOverwritten": 0,
+    "total_emit_to_paint_ms": {
+      "n": 0,
+      "p50": null,
+      "p90": null,
+      "p99": null,
+      "max": null
+    },
+    "byPhase": {},
+    "stages_ms": {
+      "emit_to_relay_read": {
+        "n": 0,
+        "p50": null,
+        "p90": null,
+        "p99": null,
+        "max": null
+      },
+      "relay_read_to_browser_recv": {
+        "n": 0,
+        "p50": null,
+        "p90": null,
+        "p99": null,
+        "max": null
+      },
+      "recv_to_xterm_parsed": {
+        "n": 0,
+        "p50": null,
+        "p90": null,
+        "p99": null,
+        "max": null
+      },
+      "parsed_to_dom_updated": {
+        "n": 0,
+        "p50": null,
+        "p90": null,
+        "p99": null,
+        "max": null
+      },
+      "dom_to_next_task": {
+        "n": 0,
+        "p50": null,
+        "p90": null,
+        "p99": null,
+        "max": null
+      }
+    }
+  },
+  "checks": [
+    {
+      "checkpoint": "after-stream",
+      "viewer": "viewer-from-start",
+      "expect": "equal",
+      "equal": true,
+      "cols": 165,
+      "rows": 45,
+      "refCols": 165,
+      "refRows": 45,
+      "alt": false
+    },
+    {
+      "checkpoint": "after-stream",
+      "viewer": "late-after-stream",
+      "expect": "equal",
+      "equal": true,
+      "cols": 165,
+      "rows": 45,
+      "refCols": 165,
+      "refRows": 45,
+      "alt": false,
+      "joinMs": 112
+    },
+    {
+      "checkpoint": "alt-screen",
+      "viewer": "viewer-from-start",
+      "expect": "equal",
+      "equal": true,
+      "cols": 165,
+      "rows": 45,
+      "refCols": 165,
+      "refRows": 45,
+      "alt": true
+    },
+    {
+      "checkpoint": "alt-screen",
+      "viewer": "late-after-stream",
+      "expect": "equal",
+      "equal": true,
+      "cols": 165,
+      "rows": 45,
+      "refCols": 165,
+      "refRows": 45,
+      "alt": true
+    },
+    {
+      "checkpoint": "alt-screen",
+      "viewer": "late-in-alt-screen",
+      "expect": "equal",
+      "equal": true,
+      "cols": 165,
+      "rows": 45,
+      "refCols": 165,
+      "refRows": 45,
+      "alt": true,
+      "joinMs": 109
+    },
+    {
+      "checkpoint": "after-alt",
+      "viewer": "viewer-from-start",
+      "expect": "equal",
+      "equal": true,
+      "cols": 165,
+      "rows": 45,
+      "refCols": 165,
+      "refRows": 45,
+      "alt": false
+    },
+    {
+      "checkpoint": "after-alt",
+      "viewer": "late-after-stream",
+      "expect": "equal",
+      "equal": true,
+      "cols": 165,
+      "rows": 45,
+      "refCols": 165,
+      "refRows": 45,
+      "alt": false
+    },
+    {
+      "checkpoint": "after-alt",
+      "viewer": "late-in-alt-screen",
+      "expect": "known-break",
+      "equal": false,
+      "cols": 165,
+      "rows": 45,
+      "refCols": 165,
+      "refRows": 45,
+      "alt": false,
+      "firstDiff": [
+        "row 0: browser=\"\" reference=\" standin-tui  model=fake  165x45  phase=full-redraw                                                                                                                  \"",
+        "row 1: browser=\"\" reference=\"the relay copies every byte the provider draws into a bounded queue and a sender thread forwards them so the browser can paint the same screen while the owner \"",
+        "row 2: browser=\"\" reference=\"keeps typing in their own terminal and nothing waits for anyone the relay copies every byte the provider draws into a bounded queue and a sender thread forwards \""
+      ]
+    },
+    {
+      "checkpoint": "after-alt",
+      "viewer": "late-after-alt",
+      "expect": "equal",
+      "equal": true,
+      "cols": 165,
+      "rows": 45,
+      "refCols": 165,
+      "refRows": 45,
+      "alt": false,
+      "joinMs": 112
+    },
+    {
+      "checkpoint": "after-resize",
+      "viewer": "viewer-from-start",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "after-resize",
+      "viewer": "late-after-stream",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "after-resize",
+      "viewer": "late-in-alt-screen",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "after-resize",
+      "viewer": "late-after-alt",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "after-resize",
+      "viewer": "late-after-resize",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false,
+      "joinMs": 113
+    },
+    {
+      "checkpoint": "after-input",
+      "viewer": "viewer-from-start",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "after-input",
+      "viewer": "late-after-stream",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "after-input",
+      "viewer": "late-in-alt-screen",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "after-input",
+      "viewer": "late-after-alt",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "after-input",
+      "viewer": "late-after-resize",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "after-input",
+      "viewer": "input-through-relay",
+      "expect": "equal",
+      "equal": true,
+      "cols": 0,
+      "rows": 0,
+      "refCols": 0,
+      "refRows": 0
+    },
+    {
+      "checkpoint": "phone-resize",
+      "viewer": "viewer-from-start",
+      "expect": "known-break",
+      "equal": false,
+      "cols": 52,
+      "rows": 57,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false,
+      "firstDiff": [
+        "row 35: browser=\"\" reference=\"└──────────────────────────────────────────────────┘\"",
+        "row 52: browser=\"⠋ ready   0.0s\" reference=undefined",
+        "row 53: browser=\"┌──────────────────────────────────────────────────┐\" reference=undefined"
+      ]
+    },
+    {
+      "checkpoint": "phone-resize",
+      "viewer": "late-after-stream",
+      "expect": "known-break",
+      "equal": false,
+      "cols": 52,
+      "rows": 57,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false,
+      "firstDiff": [
+        "row 35: browser=\"\" reference=\"└──────────────────────────────────────────────────┘\"",
+        "row 52: browser=\"⠋ ready   0.0s\" reference=undefined",
+        "row 53: browser=\"┌──────────────────────────────────────────────────┐\" reference=undefined"
+      ]
+    },
+    {
+      "checkpoint": "phone-resize",
+      "viewer": "late-in-alt-screen",
+      "expect": "known-break",
+      "equal": false,
+      "cols": 52,
+      "rows": 57,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false,
+      "firstDiff": [
+        "row 35: browser=\"\" reference=\"└──────────────────────────────────────────────────┘\"",
+        "row 52: browser=\"⠋ ready   0.0s\" reference=undefined",
+        "row 53: browser=\"┌──────────────────────────────────────────────────┐\" reference=undefined"
+      ]
+    },
+    {
+      "checkpoint": "phone-resize",
+      "viewer": "late-after-alt",
+      "expect": "known-break",
+      "equal": false,
+      "cols": 52,
+      "rows": 57,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false,
+      "firstDiff": [
+        "row 35: browser=\"\" reference=\"└──────────────────────────────────────────────────┘\"",
+        "row 52: browser=\"⠋ ready   0.0s\" reference=undefined",
+        "row 53: browser=\"┌──────────────────────────────────────────────────┐\" reference=undefined"
+      ]
+    },
+    {
+      "checkpoint": "phone-resize",
+      "viewer": "late-after-resize",
+      "expect": "known-break",
+      "equal": false,
+      "cols": 52,
+      "rows": 57,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false,
+      "firstDiff": [
+        "row 35: browser=\"\" reference=\"└──────────────────────────────────────────────────┘\"",
+        "row 52: browser=\"⠋ ready   0.0s\" reference=undefined",
+        "row 53: browser=\"┌──────────────────────────────────────────────────┐\" reference=undefined"
+      ]
+    },
+    {
+      "checkpoint": "end-of-run",
+      "viewer": "viewer-from-start",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "end-of-run",
+      "viewer": "late-after-stream",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "end-of-run",
+      "viewer": "late-in-alt-screen",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "end-of-run",
+      "viewer": "late-after-alt",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "end-of-run",
+      "viewer": "late-after-resize",
+      "expect": "equal",
+      "equal": true,
+      "cols": 120,
+      "rows": 36,
+      "refCols": 120,
+      "refRows": 36,
+      "alt": false
+    },
+    {
+      "checkpoint": "end-of-run",
+      "viewer": "engine-vt100-emulator (independent implementation)",
+      "expect": "equal",
+      "equal": true,
+      "cols": 0,
+      "rows": 0,
+      "refCols": 120,
+      "refRows": 36
+    }
+  ],
+  "phoneSizeSeen": {
+    "c": 52,
+    "r": 57
+  },
+  "screenshots": [
+    "scripts/qa/terminal_mirror_spike/results/phone-165x45-fit.png",
+    "scripts/qa/terminal_mirror_spike/results/phone-165x45-native.png",
+    "scripts/qa/terminal_mirror_spike/results/phone-165x45-native-panned-400px.png",
+    "scripts/qa/terminal_mirror_spike/results/desktop-165x45-native.png",
+    "scripts/qa/terminal_mirror_spike/results/phone-pty-resized-to-phone-viewer.png",
+    "scripts/qa/terminal_mirror_spike/results/owner-terminal-while-pty-phone-sized.png"
+  ]
+}

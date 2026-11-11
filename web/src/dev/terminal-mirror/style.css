@@ -1,0 +1,8 @@
+:root { color-scheme: dark; }
+body { margin: 0; background: #0b0d0f; color: #d8dde0; font: 12px/1.3 -apple-system, system-ui, sans-serif; }
+.mirror-bar { height: 24px; padding: 4px 8px; box-sizing: border-box; color: #8a949b; }
+.mirror-viewport { width: 100%; }
+.mode-native .mirror-viewport, .mode-phone .mirror-viewport { overflow-x: auto; overflow-y: hidden; }
+.mode-fit .mirror-viewport { overflow: hidden; }
+.mirror-scale { transform-origin: 0 0; }
+#mirror-term { display: inline-block; }

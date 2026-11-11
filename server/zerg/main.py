@@ -3,6 +3,7 @@
 # CRITICAL: Load environment variables FIRST - before ANY other imports that might use os.getenv()
 # A .env file supplies defaults only. Explicit process configuration always wins.
 import json
+import os as _os
 
 from dotenv import load_dotenv
 
@@ -335,6 +336,10 @@ api_app.include_router(health_router)
 # metrics on parent app (Prometheus expects /metrics at root)
 app.include_router(metrics_router)
 
+if _os.environ.get("LONGHOUSE_TERMINAL_MIRROR_SPIKE") == "1":
+    from zerg.routers.terminal_mirror import router as terminal_mirror_spike_router
+
+    api_app.include_router(terminal_mirror_spike_router)
 api_app.include_router(internal_deployments_router)
 api_app.include_router(internal_funnel_router)
 app.mount("/api", api_app)

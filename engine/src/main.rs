@@ -104,6 +104,7 @@ mod process_identity;
 mod provider_auth;
 mod provider_readiness;
 mod pty_relay;
+mod terminal_mirror;
 mod qa_fault;
 mod raw_records;
 mod report_bundle;
@@ -755,6 +756,19 @@ enum Commands {
 
     /// Native Claude lifecycle hook (installed by the device facade).
     ClaudeLifecycleHook,
+
+    /// Spike: run a command through the PTY relay and mirror its terminal to a Runtime Host.
+    #[command(hide = true)]
+    TerminalMirrorSpike {
+        /// ws:// URL of the Runtime Host's mirror ingest endpoint.
+        #[arg(long)]
+        mirror_url: Option<String>,
+        /// Write the sender's emulator screen text here when the run ends.
+        #[arg(long)]
+        dump_screen: Option<std::path::PathBuf>,
+        #[arg(trailing_var_arg = true, required = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
 
     /// Native managed Cursor Helm control utilities
     CursorHelm {
@@ -1719,6 +1733,14 @@ fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
+        Commands::TerminalMirrorSpike {
+            mirror_url,
+            dump_screen,
+            command,
+        } => {
+            let code = crate::terminal_mirror::run_spike(mirror_url, dump_screen, command)?;
+            std::process::exit(code);
+        }
         Commands::DiskGuard {
             command: DiskGuardCommands::Status { json },
         } => {

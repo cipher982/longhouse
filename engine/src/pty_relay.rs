@@ -413,6 +413,75 @@ impl PtyWriteGuard<'_> {
     }
 }
 
+/// One thing the relay saw, handed to whoever mirrors the terminal.
+pub enum TapFrame {
+    /// The bytes the user's terminal just received, stamped (microseconds
+    /// since the epoch) when the relay read them from the PTY.
+    Output { read_at_us: u64, bytes: Vec<u8> },
+    /// The PTY's size, sent once at the start and after every resize.
+    Size { cols: u16, rows: u16 },
+    /// Frames the tap could not queue since the last frame that was queued.
+    /// A mirror that sees this has lost bytes and must treat what it draws as
+    /// stale.
+    Gap { dropped: u64 },
+}
+
+/// A bounded, non-blocking copy of the relay's output. `try_send` on a full
+/// queue drops the frame and counts it: the relay never waits for a slow
+/// sender, so a stuck mirror cannot stall the user's terminal.
+pub struct OutputTap {
+    tx: tokio::sync::mpsc::Sender<TapFrame>,
+    dropped: std::sync::atomic::AtomicU64,
+}
+
+impl OutputTap {
+    /// A tap that holds at most `capacity` frames, and the receiving end.
+    pub fn new(capacity: usize) -> (Self, tokio::sync::mpsc::Receiver<TapFrame>) {
+        let (tx, rx) = tokio::sync::mpsc::channel(capacity);
+        (
+            Self {
+                tx,
+                dropped: std::sync::atomic::AtomicU64::new(0),
+            },
+            rx,
+        )
+    }
+
+    fn send(&self, frame: TapFrame) {
+        let pending = self.dropped.load(Ordering::Relaxed);
+        if pending > 0 {
+            // Tell the receiver about the hole before anything after it.
+            if self.tx.try_send(TapFrame::Gap { dropped: pending }).is_err() {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            self.dropped.fetch_sub(pending, Ordering::Relaxed);
+        }
+        if self.tx.try_send(frame).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn output(&self, bytes: &[u8]) {
+        let read_at_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_micros() as u64)
+            .unwrap_or(0);
+        self.send(TapFrame::Output {
+            read_at_us,
+            bytes: bytes.to_vec(),
+        });
+    }
+
+    fn size(&self, master: RawFd) {
+        let size = terminal_winsize(master);
+        self.send(TapFrame::Size {
+            cols: size.ws_col,
+            rows: size.ws_row,
+        });
+    }
+}
+
 /// Relay between the user's terminal and the provider until the provider
 /// exits, `stop` is set, or a side fails. Returns the child's wait status when
 /// the loop itself reaped it (macOS), or `None`.
@@ -424,7 +493,23 @@ pub fn relay(
     stop: &AtomicBool,
     resized: &AtomicBool,
 ) -> Option<libc::c_int> {
+    relay_tapped(child, writer, input, output, stop, resized, None)
+}
+
+/// `relay`, also handing a copy of what the user's terminal receives to `tap`.
+pub fn relay_tapped(
+    child: &PtyChild,
+    writer: &PtyWriter,
+    input: RawFd,
+    output: RawFd,
+    stop: &AtomicBool,
+    resized: &AtomicBool,
+    tap: Option<&OutputTap>,
+) -> Option<libc::c_int> {
     let master = child.master;
+    if let Some(tap) = tap {
+        tap.size(master);
+    }
     let mut input_buffer = [0u8; 8192];
     let mut output_buffer = [0u8; 65536];
     loop {
@@ -433,6 +518,9 @@ pub fn relay(
         }
         if resized.swap(false, Ordering::Relaxed) {
             sync_winsize(master);
+            if let Some(tap) = tap {
+                tap.size(master);
+            }
         }
         let mut fds = [
             libc::pollfd {
@@ -474,6 +562,9 @@ pub fn relay(
             if count > 0 {
                 if write_all(output, &output_buffer[..count as usize]).is_err() {
                     return None;
+                }
+                if let Some(tap) = tap {
+                    tap.output(&output_buffer[..count as usize]);
                 }
             } else {
                 return None;
@@ -663,6 +754,79 @@ mod tests {
                 output_write,
                 child.master,
             ] {
+                libc::close(fd);
+            }
+        }
+    }
+
+    /// A tap nobody drains fills up and drops frames; the relay keeps passing
+    /// every byte to the user's terminal and the drop is reported as a gap.
+    #[test]
+    fn a_full_tap_drops_frames_without_stalling_the_relay() {
+        let child = cat_child();
+        let writer = PtyWriter::new(child.master);
+        let (input_read, input_write) = pipe();
+        let (output_read, output_write) = pipe();
+        let stop = Arc::new(AtomicBool::new(false));
+        let resized = AtomicBool::new(false);
+        let (tap, mut frames) = OutputTap::new(2);
+        let relay_writer = writer.clone();
+        let relay_stop = stop.clone();
+        let (relay_pid, relay_master) = (child.pid, child.master);
+        let handle = std::thread::spawn(move || {
+            let child = PtyChild {
+                pid: relay_pid,
+                master: relay_master,
+                slave_hold: -1,
+            };
+            relay_tapped(
+                &child,
+                &relay_writer,
+                input_read,
+                output_write,
+                &relay_stop,
+                &resized,
+                Some(&tap),
+            )
+        });
+        // Many separate echoes, so the relay reads many chunks.
+        let mut seen = Vec::new();
+        for index in 0..40 {
+            let line = format!("line-{index}\r");
+            write_all(input_write, line.as_bytes()).unwrap();
+            let needle = format!("line-{index}");
+            seen.extend(read_until(output_read, needle.as_bytes(), Duration::from_secs(5)));
+            assert!(
+                seen.windows(needle.len()).any(|w| w == needle.as_bytes()),
+                "relay stalled at {needle}"
+            );
+        }
+        // Only now drain the tap: it kept the first frames and counted the rest.
+        let mut kept = 0;
+        while let Ok(frame) = frames.try_recv() {
+            assert!(!matches!(frame, TapFrame::Gap { .. }), "queue was full throughout");
+            kept += 1;
+        }
+        assert_eq!(kept, 2, "capacity 2 kept");
+        // The next frame that fits announces the hole before itself.
+        write_all(input_write, b"after-drain\r").unwrap();
+        read_until(output_read, b"after-drain", Duration::from_secs(5));
+        let mut gap = 0;
+        while let Ok(frame) = frames.try_recv() {
+            if let TapFrame::Gap { dropped } = frame {
+                gap += dropped;
+            }
+        }
+        assert!(gap > 0, "the dropped frames are reported as a gap");
+        stop.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+        child.release_slave_hold();
+        unsafe {
+            libc::kill(child.pid, libc::SIGKILL);
+        }
+        let _ = reap(&child, None, true);
+        unsafe {
+            for fd in [input_read, input_write, output_read, output_write, child.master] {
                 libc::close(fd);
             }
         }

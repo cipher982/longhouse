@@ -1,0 +1,74 @@
+{
+  "command": "bun scripts/qa/terminal_mirror_spike/run.ts --baseline",
+  "mode": "baseline (relay without tap, no host, no browser)",
+  "owner_terminal": "165x45 then 120x36",
+  "bytesPerPhase": [
+    {
+      "phase": "boot",
+      "seconds": 0.8,
+      "bytes": 1692,
+      "chunks": 2,
+      "bytesPerSecond": 2109,
+      "updates": null
+    },
+    {
+      "phase": "stream",
+      "seconds": 10,
+      "bytes": 71894,
+      "chunks": 238,
+      "bytesPerSecond": 7157,
+      "updates": 198
+    },
+    {
+      "phase": "idle-spinner",
+      "seconds": 6,
+      "bytes": 5698,
+      "chunks": 74,
+      "bytesPerSecond": 949,
+      "updates": 74
+    },
+    {
+      "phase": "full-redraw",
+      "seconds": 3,
+      "bytes": 122235,
+      "chunks": 120,
+      "bytesPerSecond": 40474,
+      "updates": 15
+    },
+    {
+      "phase": "alt-screen",
+      "seconds": 4.1,
+      "bytes": 293926,
+      "chunks": 323,
+      "bytesPerSecond": 72492,
+      "updates": 40
+    },
+    {
+      "phase": "after-alt",
+      "seconds": 0,
+      "bytes": 8,
+      "chunks": 1,
+      "bytesPerSecond": 59701,
+      "updates": null
+    },
+    {
+      "phase": "phone-resize",
+      "seconds": 0,
+      "bytes": 0,
+      "chunks": 0,
+      "bytesPerSecond": 0,
+      "updates": null
+    }
+  ],
+  "stand_in_to_owner_terminal_ms": {
+    "n": 329,
+    "p50": 0.1,
+    "p90": 0.2,
+    "p99": 0.5,
+    "max": 1
+  },
+  "latency": null,
+  "checks": [],
+  "phoneSizeSeen": null,
+  "screenshots": []
+}
