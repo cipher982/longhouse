@@ -89,7 +89,7 @@ revision; a dirty worktree is refused and there is no local fallback.
   Server counts or an early render do not prove the client got the final reply.
 - Real-provider terminal fidelity: `make test-console-served-state-e2e` with
   `make test-terminal-fidelity-web` and `make test-terminal-fidelity-ios`
-  ([CONTRIBUTING.md Tests](../../../CONTRIBUTING.md#tests)). Real execution,
+  ([maintainer testing runbook](../../../docs/runbooks/maintainer-testing.md)). Real execution,
   rendered pixels and connection recovery are separate proof obligations.
 
 ## Proof-run cleanup

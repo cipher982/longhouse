@@ -2,216 +2,148 @@
 
 Longhouse is mission control for CLI agent sessions that run on machines users own.
 
-The launch product is simple:
+The launch product:
 
-- bring every session into one timeline
-- make past work easy to find and recover
-- keep a real control path attached when a session is launched through Longhouse
+- one timeline of every session
+- past work that is easy to find and recover
+- a real control path kept attached to any session launched through Longhouse
 
-Works on your laptop. Shines on a machine that stays on.
+It works on a laptop and shines on a machine that stays on. This is the
+north-star document: a proposal that conflicts with it is wrong until this file
+changes. Install steps are in [`README.md`](README.md), the system map and
+vocabulary in [`ARCHITECTURE.md`](ARCHITECTURE.md), and the truth-plane contract
+in [`docs/contracts/truth-plane.md`](docs/contracts/truth-plane.md).
 
-This is the north-star document. It is intentionally short. If a proposal conflicts with this file, the proposal is wrong until this file changes.
+**Naming.** Longhouse is the product and brand. Zerg is the internal repo
+codename and stays out of product copy.
 
-## Read Next
+## Thesis
 
-- `README.md` for the install and demo loop
-- `ARCHITECTURE.md` for the system map and canonical vocabulary
-- `docs/contracts/truth-plane.md` for the public truth-plane contract
-- `docs/README.md` for public documentation and runbooks
+1. **Session sync and memory are table stakes.** A user can pull up any Claude,
+   Codex, Cursor, OpenCode, Pi, Oh My Pi, or Antigravity session from the web or
+   CLI without hunting through local logs.
+2. **The wedge is remote control over real sessions on user-owned machines.**
+   The product becomes compelling when the user can steer work after launch, not
+   just read a transcript.
+3. **Transcript plus a reacquirable control path is the strongest form.**
+   Imported history is valuable. A thread launched through Longhouse is better:
+   Longhouse can control its active turn and resume a later turn on the recorded
+   machine. An idle thread does not need an idle provider process.
+4. **Hosted is a convenience, not the core truth.** A user who wants durability
+   can run on a VPS, Mac mini, homelab box, or any always-on machine they control.
+5. **Provider clients stay the execution layer.** Longhouse standardizes
+   discovery, history, control and remote access. The installed Claude Code,
+   Codex, Cursor or other client keeps its agent loop, authentication, billing,
+   tools and semantics. Longhouse does not flatten them into a generic model API
+   or make users buy the same model access again.
 
-## Naming
-
-- **Longhouse** = product and brand
-- **Zerg** = repo/internal codename
-
-Use Longhouse in product copy. Keep Zerg internal.
-
-## Product Thesis
-
-1. **Session sync and memory are table stakes.**
-   Users should be able to pull up any relevant Claude, Codex, Cursor, OpenCode, Pi, Oh My Pi, or Antigravity session from the web or CLI without hunting through local logs.
-
-2. **The wedge is remote control over real sessions running on user-owned machines.**
-   The product becomes compelling when the user can steer work after launch, not just read a transcript.
-
-3. **Longhouse is strongest when it has both the transcript and a reacquirable control path.**
-   Imported history is valuable. A thread launched through Longhouse is better
-   because Longhouse can control its active turn and resume a later turn on the
-   recorded machine. An idle thread does not require an idle provider process.
-
-4. **Hosted is a convenience path, not the core truth.**
-   If a user wants durability, they should be able to run on a VPS, Mac mini, homelab box, or other always-on machine they control.
-
-5. **Provider clients remain the execution layer.**
-   Longhouse standardizes discovery, history, control, and remote access. The
-   installed Claude Code, Codex, Cursor, or other provider client still owns its
-   agent loop, authentication, subscription or API billing, tools, and provider
-   semantics. Longhouse should not flatten those clients into a generic model
-   API or require users to buy the same model access again.
-
-## Launch Story
-
-The launch story should fit in one paragraph:
+## Launch story
 
 Install the Longhouse agent on each machine where you run coding sessions. Point
-it at an always-on box where your Longhouse server lives — a VPS, homelab, or Mac
-mini. Longhouse imports sessions started directly in provider terminals, new
-ones by default; older history comes in only when the machine's owner chooses.
-From the web or iOS interface, users can also choose a provider and connected
-machine and launch Console work there; from a terminal, `longhouse <provider>`
-launches Helm with the provider's normal TUI. The installed provider client performs the
-work with its existing account and local environment while Longhouse keeps the
-session available from every client.
+it at an always-on box that runs your Longhouse server (a VPS, homelab, or Mac
+mini). Longhouse imports sessions started in provider terminals, new ones by
+default and older history only when the machine's owner chooses. From the web or
+iOS, a user can pick a provider and a connected machine and launch Console work
+there. From a terminal, `longhouse <provider>` launches Helm with the provider's
+normal TUI. The provider client does the work with its own account and local
+environment, and Longhouse keeps the session reachable from every client.
 
-That means the product should make these truths obvious:
+The product must make these plain:
 
-- the Machine Agent runs where work happens (your laptop, your dev box)
-- the Runtime Host runs where durability should live (an always-on machine or hosted)
-- a laptop can run both for trying it out, but it stops when the laptop sleeps — that is not a system failure
-- durability comes from where you put the server, not magic migration
+- the Machine Agent runs where work happens
+- the Runtime Host runs where durability should live (an always-on machine, or hosted)
+- a laptop can run both for a trial, and stops when it sleeps; that is not a failure
+- durability comes from where you put the server, not from migration
 
-## Acquisition Model
+## Acquisition
 
-Longhouse launches as one product with two components and multiple acquisition channels:
+One product with two components and several channels:
 
-- macOS humans should learn `Longhouse.app`
-- agents, non-GUI users, and power users should keep the CLI paths
-- hosted is a later convenience path — we run the server for you
+- macOS users learn `Longhouse.app`
+- agents, non-GUI users and power users keep the CLI paths
+- hosted, where we run the server, comes later
 
-All channels converge on the same topology:
+Every channel ends in the same topology: one Machine Agent per dev machine, one
+Runtime Host where durability lives, one machine-facing control path, and one
+health and repair surface. Nobody should need to understand shell bootstrap,
+launchd, or helper binaries to answer "is Longhouse installed and healthy here?"
 
-- one Machine Agent per dev machine, shipping sessions
-- one Runtime Host where durability lives
-- one machine-facing control path
-- one health and repair surface
+## Invariants
 
-The product should never make users understand shell bootstrap, launchd, or helper binaries just to answer "is Longhouse installed and healthy here?"
+1. **One session, one execution owner.** Longhouse may observe, control or
+   branch from a session. It never silently moves one.
+2. **Capability over type.** Every timeline item is a session. Some have live
+   control, some need host reattach, some are search-only. No separate species
+   of session in the product story.
+3. **Machine contract first.** CLI, HTTP, the browser and native wrappers sit on
+   the same primitives. The browser and native app are bundled views, not the boundary.
+4. **MCP is an adapter.** Useful capabilities must make sense without it.
+   Browser, native, MCP and future assistants are clients of the same session
+   model, not middlemen.
+5. **SQLite is the only core database.** Hosted account, billing and
+   provisioning state lives outside this public core.
+6. **Self-host first, hosted later.** The product is understandable and useful
+   before hosted provisioning exists.
+7. **Behavior is explicit.** No hidden fallbacks, silent mode switches, or
+   capability logic duplicated across frontend, backend and clients. One source
+   of truth per capability; clients do not infer different meanings from the same raw fields.
+8. **Separate realtime truth from durable archive.** The live lane answers
+   "what is happening right now". First visible output should reach the browser
+   over WebSocket or SSE in tens to hundreds of milliseconds under nominal
+   network. The durable lane answers "what provably happened": correct, ordered,
+   replayable and retryable, trailing the live lane by a small bounded window.
+   Never weaken archive correctness to chase the live-lane target.
+9. **Persist threads, not idle provider processes.** A Console invocation is
+   scoped to one nonterminal turn. Tool waits keep the turn active, and
+   `end_turn` starts a bounded output drain and releases the invocation. A later
+   message resumes the durable provider thread in a new invocation. Helm may
+   keep a process while the user's TUI is open, but process lifetime is never
+   session identity.
+10. **Prefer seams and deletion.** Different behaviors are different contracts.
+    A smaller honest product beats a broader confusing one. Design for cold
+    restarts: durable artifacts beat in-memory state.
 
-## Product Invariants
+## Scope
 
-1. **One session, one execution owner.**
-   A session runs somewhere real. Longhouse may observe it, control it, or branch from it, but it does not silently move it.
+**What Longhouse is:**
 
-2. **Capability over type.**
-   Every item in the timeline is a session. Some have live control, some need host reattach, some are search-only. Do not invent separate species of session in the product story.
-
-3. **Machine contract first.**
-   The canonical boundary is the machine-facing contract. CLI, HTTP, the browser, and native desktop wrappers all sit on top of the same primitives.
-
-4. **Human surfaces are bundled views, not the boundary.**
-   The browser and native local app are part of the product, but neither should become a separate source of truth.
-
-5. **MCP is an adapter, not the platform boundary.**
-   Useful capabilities must make sense without requiring MCP.
-
-6. **Assistant surfaces are clients, not middlemen.**
-   Browser, native, MCP, and future assistants consume the same session model.
-
-7. **SQLite is the only core database requirement.**
-   Hosted account, billing, and provisioning state belongs outside this public core.
-
-8. **Self-host first, hosted later.**
-   The product must be understandable and useful before hosted provisioning exists.
-
-9. **Keep behavior explicit.**
-   No hidden fallbacks, silent mode switches, or duplicated capability logic across frontend, backend, and clients.
-
-10. **Separate realtime truth from durable archive.**
-    Managed sessions have two lanes. The live lane answers "what is happening right now" and must feel terminal-class: first visible output should arrive in the browser over WebSocket/SSE in tens to hundreds of milliseconds under nominal network. The durable lane answers "what provably happened" and must be correct, ordered, replayable, and retryable; it can trail the live lane by a small bounded window. Do not weaken archive correctness to chase the live-lane SLA.
-
-11. **Persist threads, not idle provider processes.**
-    A Console provider invocation is scoped to one nonterminal turn. Tool waits
-    keep that turn active; `end_turn` starts a bounded output drain and then
-    releases the invocation. A later message resumes the durable provider
-    thread in a new invocation. Helm may keep a
-    process while the user's interactive TUI remains open, but process lifetime
-    is never session identity.
-
-## What Longhouse Is
-
-- one searchable timeline for agent sessions
-- raw session detail, search, and recall
-- remote control for sessions launched through Longhouse
-- one remote interface over installed provider clients and their existing accounts
-- coordination primitives such as wall, peers, tail, message, and continue
+- one searchable timeline, with raw session detail, search and recall
+- remote control for sessions launched through Longhouse, over the installed provider clients and their existing accounts
+- coordination primitives: wall, peers, tail, message, continue
 - runner-backed execution on user-owned machines
-- a bundled human UI over the same machine contract
-- a quiet native macOS app that can stay ambient and still open a clear status or repair path on demand
+- a bundled web UI over the machine contract, and a quiet macOS app that stays ambient and opens a clear status or repair path on demand
 
-## What Longhouse Is Not
+**What it is not:** an AI dashboard, a replacement agent runtime or model proxy,
+a reseller of provider subscriptions, a tool that silently moves running
+sessions between machines, a generic remote shell manager, a mailbox or jobs
+platform, or a product that needs an execution-home taxonomy in its user story.
 
-Longhouse is not:
+**Launch core:**
 
-- an AI dashboard
-- a replacement coding-agent runtime or model proxy
-- a reseller for provider subscriptions users already have
-- silently moving a running session between machines
-- a generic remote shell manager
-- a mailbox product before launch
-- a jobs platform before launch
-- a product that needs a complicated execution-home taxonomy in the user-facing story
-
-## Launch Surface
-
-### Core
-
-- session ingest for Claude Code, Codex CLI, Cursor Agent, OpenCode, Pi Agent, Oh My Pi, and Antigravity CLI
-- timeline, search, session detail, and recall
-- canonical `/api/agents/*` machine surface plus CLI parity
+- session ingest for Claude Code, Codex CLI, Cursor Agent, OpenCode, Pi Agent, Oh My Pi and Antigravity CLI
+- timeline, search, session detail and recall
+- the `/api/agents/*` machine surface with CLI parity
 - managed-local launch and remote control on user-owned machines
-- clear capability states for sessions:
-  - live control
-  - host reattach
-  - search-only
+- three capability states per session: live control, host reattach, search-only
 
-### Support
+**Launch support:** demo data and local onboarding that reach value fast; runner-backed execution.
 
-- demo data and local onboarding that get users to value fast
-- runner-backed execution on user-owned machines
+**Frozen or removed for launch:** implicit takeover of a running local session
+(explicit branch-from-session can come later as a new session); loop inbox and
+turn reviews; email surfaces (hidden from nav); jobs as a user-facing surface;
+briefings and insights pages; proactive operator mode; broad hosted self-serve.
 
-### Frozen or removed for launch
+**Later, only if it strengthens the same loop:** hosted as another explicit
+launch target, stronger provider parity, email or conversation surfaces, and
+workflow layers on the session kernel. None is part of the launch promise.
 
-- implicit takeover of a running local session (removed; explicit branch-from-session can be designed later as a new session)
-- loop inbox and turn reviews (removed); email surfaces (hidden from nav)
-- jobs as a user-facing product surface
-- briefings and insights as standalone pages
-- proactive operator mode
-- broad hosted self-serve
+## Priorities and decision filter
 
-## Architecture Constraints
+Prelaunch order: make ingest, search and memory boring and reliable; make
+managed-local remote control boring and reliable; remove ambiguous or
+half-supported surfaces before polishing; keep the hosted story narrow and
+explicit; ship one honest product loop.
 
-- **No Postgres in core/runtime.** SQLite only.
-- **Keep the machine surface canonical.** Do not make browser-only routes or MCP wrappers the source of truth.
-- **Prefer obvious seams over overloaded ones.** Different behaviors should be different contracts.
-- **Prefer deletion over half-supported surfaces.** A smaller honest product is better than a broader confusing one.
-- **Design for cold restarts.** Durable artifacts beat clever in-memory state.
-- **Keep one source of truth per capability.** Frontend, backend, and clients should not each infer different meanings from the same raw fields.
-
-## Prelaunch Priorities
-
-1. Make session ingest, search, and memory boring and reliable.
-2. Make managed-local remote control boring and reliable.
-3. Remove ambiguous or half-supported surfaces before adding polish.
-4. Keep the hosted story narrow and explicit.
-5. Ship one honest product loop, not three overlapping ones.
-
-## Later, If There Is Pull
-
-Later features are allowed only if they strengthen the same core loop:
-
-- hosted as another explicit launch target
-- stronger provider parity
-- email, inbox, or conversation surfaces
-- higher-level workflow layers on top of the session kernel
-
-None of those should be part of the core launch promise.
-
-## Decision Filter
-
-Before adding or keeping a feature, ask:
-
-1. Does it improve finding past work?
-2. Does it improve steering live work on user-owned machines?
-3. Does it simplify the product story?
-
-If the answer is no, freeze it or cut it.
+Before adding or keeping a feature, ask whether it improves finding past work,
+improves steering live work on user-owned machines, or simplifies the product
+story. If none, freeze or cut it.

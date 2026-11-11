@@ -107,7 +107,7 @@ longhouse-server migrate --database-url sqlite:////data/longhouse.db --apply --j
 ```
 
 Render branch-count upgrade (`db repair-render-counts`): procedure and maintenance
-window rules are in `CONTRIBUTING.md`, "Runtime data upgrades". On a tenant run it in
+window rules are in `docs/runbooks/runtime-data-upgrades.md`. On a tenant run it in
 the container, keep the cache on the data mount, and never infer readiness from
 process health (the API must stop returning `branch_projection_pending`).
 

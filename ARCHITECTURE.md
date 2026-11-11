@@ -1,23 +1,17 @@
 # Architecture
 
-A short map of how Longhouse fits together and what its nouns mean. For the
-product thesis and invariants, read [`VISION.md`](VISION.md).
+How Longhouse fits together, what its nouns mean, and where code lives. The
+product thesis and invariants are in [`VISION.md`](VISION.md).
 
-## The two components
+## Components
 
-Longhouse is one product with two public components:
+| Component | What it is | Runs on |
+|---|---|---|
+| Machine Agent | Rust engine (`longhouse-engine`). Drains the hook output provider CLIs write, ships session events to the Runtime Host with durable retry, sends heartbeats | each machine where you work |
+| Runtime Host | `longhouse-server serve`: FastAPI API, bundled web UI, SQLite state | an always-on box (VPS, homelab, Mac mini), or hosted |
 
-- **Machine Agent** — a Rust engine (`longhouse-engine`) that runs on each
-  machine where you do work. It drains the hook output that provider CLIs
-  write, ships session events to the Runtime Host with durable retry, and emits
-  heartbeats. This is the shipping path.
-- **Runtime Host** — the backend product: a FastAPI API, the bundled web UI,
-  and SQLite-backed state. It is what `longhouse-server serve` runs. It lives where
-  durability should live.
-
-On a laptop both run together so you can try it out, but the runtime stops when
-the laptop sleeps. For durability you run the Runtime Host on an always-on box
-(VPS, homelab, Mac mini) and point your dev machines' Machine Agents at it.
+On a laptop both run together as a trial, and stop when the laptop sleeps.
+Durability comes from where you put the Runtime Host.
 
 ```
   dev laptop ─┐
@@ -27,129 +21,95 @@ the laptop sleeps. For durability you run the Runtime Host on an always-on box
        └─ installed provider clients own execution, auth, tools, and billing
 ```
 
-## Core principles
-- **`/api/agents/*` is the canonical machine surface.** The browser, CLI, MCP,
-  and iOS all sit on top of the same primitives — none is a separate source of
-  truth.
-- **SQLite is the only core database requirement.** Hosted account, billing,
-  and provisioning state lives outside this repo.
-- **One session, one execution owner.** A session runs somewhere real;
-  Longhouse observes or controls it but never silently moves it.
-- **Normalize control, not provider execution.** Longhouse exposes a common
-  session and capability model while the installed provider client retains its
-  own agent loop, authentication, subscription or API billing, and tools.
-- **Capability over type.** Every item in the timeline is a session. Some have
-  live control, some need host reattach, some are search-only. Rely on
-  `session.capabilities`, not a session "species".
-- **Separate realtime truth from durable archive.** A live lane answers "what
-  is happening right now" and must feel terminal-fast; a durable lane answers
-  "what provably happened" and must be correct, ordered, and replayable.
-- **Keep observations out of control admission.** Replaceable runtime events
-  and presence have their own per-device quota. Launch and input use control
-  admission; heartbeat and machine presence use independent liveness admission.
-  Validated batches carrying bindings, interactions, wakes, or execution ends
-  use lifecycle admission and cooldowns, so telemetry cannot delay them.
-  Malformed runtime bodies spend observation quota, never lifecycle quota.
+## Design rules
 
-OMP's launch-scoped coordination authority belongs to the main managed session.
-Native subagents cannot use it to send as their parent; they report blockers and
-results through OMP's native parent channel. The extension checks the calling
-agent context before making a coordination request.
-Child lifecycle events leave the parent's turn identity and settlement unchanged.
-Child switch/branch operations stay provider-owned and bypass the managed
-parent's transition handshake.
+These add to the product invariants in `VISION.md`.
 
-## iOS session opening
-
-The iOS session route schedules opening as two client lanes over the same
-server-owned facts:
-
-- **Primary lane** fetches compact session identity and native controls first,
-  so the title, runtime state, and composer do not wait for transcript rendering.
-- **Transcript lane** hydrates the recent tail, reconciles any cached snapshot,
-  and renders the body in WebKit. A cached snapshot is instant paint only; the
-  first accepted server tail remains authoritative.
-
-The timeline warms an idle WebKit spare before navigation. Route transitions
-keep the title and trailing action slot bounded while the transcript lane is
-loading. This is scheduling for responsiveness, not a second source of truth:
-server facts, transcript watermarks, and stale-result fences remain canonical.
+- **`/api/agents/*` is the machine surface.** Browser, CLI, MCP and iOS sit on
+  the same primitives; none is a separate source of truth.
+- **Normalize control, not provider execution.** Longhouse exposes one session
+  and capability model. The installed provider client keeps its agent loop,
+  authentication, billing and tools.
+- **Rely on `session.capabilities`, not a session type.** Some sessions have
+  live control, some need host reattach, some are search-only.
+- **Two lanes.** The live lane answers what is happening now and must feel
+  terminal-fast. The durable lane answers what provably happened and must be
+  ordered and replayable.
+- **Observations never compete with control.** Runtime events and presence have
+  a per-device quota. Launch and input use control admission. Heartbeats and
+  machine presence use liveness admission. Batches carrying bindings,
+  interactions, wakes or execution ends use lifecycle admission with cooldowns.
+  A malformed runtime body spends observation quota, never lifecycle quota.
+- **OMP coordination belongs to the main managed session.** Native subagents
+  report blockers and results through OMP's parent channel and cannot send as
+  their parent. Child lifecycle events leave the parent's turn identity
+  unchanged, and child switch or branch operations stay provider-owned.
+- **iOS opens a session in two lanes** over the same server facts. The primary
+  lane fetches identity and native controls so the title, runtime state and
+  composer do not wait for the transcript. The transcript lane hydrates the
+  recent tail and renders it in WebKit. A cached snapshot is instant paint
+  only; the first accepted server tail is authoritative.
 
 ## Session modes
 
-Every session has exactly one mode. This vocabulary is canonical here and in
-the workspace `AGENTS.md`; nowhere else in this repo should redefine it —
-only link to this section.
+Every session has exactly one mode. This section is the canonical definition;
+other docs link here and do not redefine it.
 
-- **Shadow** — unmanaged, observe-only. The Machine Agent discovered a
-  session it did not launch (e.g. a bare `claude` run). Searchable and
-  sometimes partially live, but not steerable — Longhouse never owned its
-  control path.
-- **Helm** — managed, interactive, remote-steerable. A human starts Helm from
-  a physical terminal with `longhouse claude`, `longhouse codex`, or another
-  supported provider wrapper. Longhouse preserves the provider's normal TUI
-  and owns its control path. Once that terminal-originated session exists,
-  web/iOS may steer it remotely; web/iOS never originates a headless Helm
-  session. The provider process may persist while the interactive TUI remains
-  open.
-- **Console** — managed, headless, UI-dispatched. Web/iOS sends one-shot work
-  through the Machine Agent; the provider process runs one turn and exits,
-  state persists to disk, and nothing stays resident between turns.
+- **Shadow** - unmanaged, observe-only. The Machine Agent found a session it
+  did not launch (for example a bare `claude` run). It is searchable and
+  sometimes partly live, but Longhouse never owned its control path.
+- **Helm** - managed, interactive, remote-steerable. A human starts it from a
+  physical terminal with `longhouse claude`, `longhouse codex`, or another
+  provider wrapper. Longhouse keeps the provider's normal TUI and owns its
+  control path. Once the terminal-originated session exists, web and iOS may
+  steer it; they never originate a headless Helm session. The provider process
+  may persist while the TUI stays open.
+- **Console** - managed, headless, UI-dispatched. Web or iOS sends one-shot work
+  through the Machine Agent. The provider process runs one turn and exits, and
+  state persists to disk.
 
-`Managed session` / `Unmanaged session` (below) remain valid at the
-control-ownership level: Unmanaged == Shadow; Managed == Helm or Console.
-Both vocabularies are correct — they answer different questions (can
-Longhouse steer this at all, vs. exactly how).
+"Unmanaged" means Shadow and "managed" means Helm or Console. The two
+vocabularies answer different questions: can Longhouse steer this at all, and
+exactly how.
 
-### Mapping to code
+`schemas/managed_providers.yml` is the authority for what each provider
+supports. The modes map to its fields as follows.
 
-Read `schemas/managed_providers.yml` for the current, authoritative provider
-support declarations — they change independently of this document and this
-document does not restate them. The product terms above and the
-manifest/engine field names below refer to the same three modes:
-
-| Product term | Manifest/code fields |
+| Mode | Manifest and code fields |
 | --- | --- |
-| Shadow | discovered/unmanaged import; no `launch_*` capability involved |
+| Shadow | discovered or unmanaged import; no `launch_*` capability |
 | Helm | `launch_local`, plus adapter-proven live controls such as `steer_active_turn` and `send_input` |
-| Console | `turn_start` (current); `run_once` (legacy, being retired) |
+| Console | `turn_start`; `run_once` (legacy, being retired) |
 
-`launch_remote` / provider-facing `session.launch` was removed. Persistent
-no-terminal processes are not a fourth mode or a valid Helm launch surface.
+A persistent no-terminal process is not a fourth mode and not a valid Helm launch.
 
 ## Glossary
 
-The project uses some shorthand nouns. The important ones:
-
-- **Provider CLI** — an upstream binary you install yourself (`claude`, `codex`,
-  Antigravity, `opencode`). It retains its native authentication, account
-  entitlement, agent loop, and tools. Longhouse launches it through a control
-  path but does not vendor, pin, proxy, or update it.
-- **Wall** — a live overview of current sessions across your machines. It is a
-  query (`GET /api/agents/sessions/wall`) and the browser view over it, not a
-  CLI command.
-- **Recall** — semantic/full-text retrieval over past session history.
-- **Tail** — stream the recent events of a session.
-- **Peers** — other machines/agents reporting into the same Runtime Host.
-- **Runner** — an optional WebSocket command executor for remote execution on
-  a user-owned machine.
-- **Provider fact** — something the provider's own terminal shows that lives on
-  a transcript line the transcript view never renders: a turn's duration, an
-  away recap, the provider's own session title, model and context usage. The
-  Machine Agent parses these beside the transcript and ships them with the
-  bytes that carry them; the Runtime Host keeps one row per source line and
-  projects them as `turn_end`, `last_turn`, `recap`, and `usage_latest`. Which
-  signals each provider writes, and how proven each is, is declared per
-  provider under `transcript_signals` in `schemas/managed_providers.yml`;
+- **Provider CLI** - an upstream binary you install yourself (`claude`, `codex`,
+  `opencode`, Antigravity). It keeps its authentication, account entitlement,
+  agent loop and tools. Longhouse launches it through a control path and does
+  not vendor, pin, proxy or update it.
+- **Wall** - live overview of current sessions across machines. It is a query
+  (`GET /api/agents/sessions/wall`) and the browser view over it, not a CLI command.
+- **Recall** - semantic and full-text retrieval over past sessions.
+- **Tail** - stream a session's recent events.
+- **Peers** - other machines and agents reporting into the same Runtime Host.
+- **Runner** - optional WebSocket command executor on a user-owned machine.
+- **Provider fact** - something the provider's own terminal shows that sits on a
+  transcript line the transcript view never renders: turn duration, away recap,
+  the provider's session title, model and context usage. The Machine Agent
+  parses these beside the transcript and ships them with the bytes that carry
+  them. The Runtime Host keeps one row per source line and projects them as
+  `turn_end`, `last_turn`, `recap` and `usage_latest`. Each provider's signals
+  are declared under `transcript_signals` in `schemas/managed_providers.yml`.
   `schemas/transcript_shapes/` is the append-only catalog of every transcript
-  line shape seen per provider version and of every shape a parser's arms can
-  produce (`families`), and `scripts/qa/transcript_census.py` fails on a
-  shape nobody has classified.
+  line shape seen per provider version, and `scripts/qa/transcript_census.py`
+  fails on a shape nobody has classified.
 
 ## Code map
 
-Where things live. Every backticked path in this section must exist;
-`make validate` checks them (`scripts/ci/check-codemap-paths.py`).
+Every backticked path in this section must exist; `make validate` checks them
+(`scripts/ci/check-codemap-paths.py`). Update the map when you move code.
 
 ### Top level
 
@@ -190,7 +150,7 @@ Features import across folders with `@/`; within a folder, relative.
 | `web/src/features/runners/` | Runner detail page (optional shell-command tooling, shown under its machine) and the connect/add-runner modal |
 | `web/src/features/auth/` | Login, profile, settings, auth and token refresh |
 | `web/src/features/marketing/` | Landing, hero demo, remote scene, blog, docs, legal, share |
-| `web/scripts/prerender.mjs` | Build step after `vite build`: renders every sitemap route (`web/src/app/prerender.tsx`) to static HTML under `_prerender` in the build output, each with its own title, description, canonical and OpenGraph tags, so crawlers and link unfurlers get content; the browser hydrates it (`web/src/app/main.tsx`). A lazy route's chunk and CSS (the docs, `web/src/features/marketing/docs/DocsRoutes.tsx`) are linked into that route's page from Vite's build manifest and loaded before hydrating. `server/zerg/frontend_pages.py` serves those pages on the public (demo) site only |
+| `web/scripts/prerender.mjs` | Build step after `vite build`: renders every sitemap route (`web/src/app/prerender.tsx`) to static HTML with its own title and meta tags; the browser hydrates it (`web/src/app/main.tsx`). `server/zerg/frontend_pages.py` serves those pages on the public site only |
 | `web/src/shared/api/` | HTTP client and typed endpoints (`agents.ts`, `useAgentSessions.ts`) |
 | `web/src/shared/session/` | Session facts used by several features: status (`sessionStatus.ts`), activity freshness, labels; `web/src/shared/session/model/` is the transcript model |
 | `web/src/shared/instruments/` | Status lamp, sparkline, Nixie, Hearth |
@@ -277,7 +237,7 @@ Python modules stay flat by design; services group by file prefix.
 | `scripts/ops/install-precommit-autofix.sh` | Installs the self-staging pre-commit shims and retires only its own obsolete pre-push hook |
 | `scripts/ops/release.sh`, `scripts/ops/release-artifacts.py`, `scripts/ops/launch-readiness.py` | `make release`: bump, validate, push, exact-SHA gates, GitHub release, notarization checks |
 | `scripts/ops/crunch.sh`, `scripts/ops/bench.sh` | Remote executors: heavy Docker-dispatched goals on the crunch VM, iOS build and simulator work on the bench Mac |
-| `scripts/ci/perf-proof.py`, `scripts/ci/perf-soak.py`, `scripts/ci/perf_soak_fixtures.py`, `.github/workflows/perf-proof.yml` | Nightly perf lane: throughput proof, then a steady-state soak (Linux and hosted macOS, menu bar app included) of the engine against a sandboxed HOME shaped like a busy machine, with idle, Shadow-active and N live managed sessions; fails on a resource-budget breach or a regression against the median of recent runs |
+| `scripts/ci/perf-proof.py`, `scripts/ci/perf-soak.py`, `scripts/ci/perf_soak_fixtures.py`, `.github/workflows/perf-proof.yml` | Nightly perf lane: throughput proof, then a steady-state soak of the engine; fails on a resource-budget breach or a regression against recent runs |
 | `scripts/ops/testflight.py`, `scripts/ops/testflight-ship.sh` | `make testflight` and `make testflight-status` (workflow `.github/workflows/ios-testflight.yml`) |
 
 ### Generated files
@@ -319,9 +279,9 @@ Python projector, OpenAPI and both clients.
 | Plaintext-http rule (which Runtime Host addresses native clients may reach without https: loopback, Tailscale, an opted-in LAN address) | `server/zerg/services/plaintext_http.py`; engine `engine/src/plaintext_http.rs`; Desktop `desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/PlaintextHTTP.swift` (byte-identical to the iOS copy); shared cases `schemas/plaintext-http-vectors.json` | none | `ios/Sources/Shared/Auth/PlaintextHTTP.swift` |
 | Import scope (which local history a Machine Agent may ship) and uninstall | `server/zerg/cli/onboard.py` asks what to import; `server/zerg/routers/device_tokens.py` revokes a device token; engine `engine/src/import_scope.rs` and `engine/src/machine_scope.rs` enforce the scope, `engine/src/machine_uninstall.rs` implements `longhouse uninstall` | `web/src/features/machines/` (revoke a machine) | none |
 
-## Where to read next
+## Read next
 
-- [`VISION.md`](VISION.md) — product thesis and invariants (start here)
-- [`docs/README.md`](docs/README.md) — public documentation and runbooks
-- [`docs/contracts/truth-plane.md`](docs/contracts/truth-plane.md) — the public truth-plane contract
-- [`server/README.md`](server/README.md) / [`runner/README.md`](runner/README.md) — component detail
+- [`VISION.md`](VISION.md): product thesis and invariants
+- [`docs/README.md`](docs/README.md): public docs and runbooks
+- [`docs/contracts/truth-plane.md`](docs/contracts/truth-plane.md): truth-plane contract
+- [`server/README.md`](server/README.md), [`engine/README.md`](engine/README.md), [`runner/README.md`](runner/README.md): component detail

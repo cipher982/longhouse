@@ -10,6 +10,7 @@ public checkout.
 - [`../VISION.md`](../VISION.md) — product thesis and invariants (the north star)
 - [`../ARCHITECTURE.md`](../ARCHITECTURE.md) — system map + glossary
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — dev setup, test tiers, codegen
+- [`../RELEASE.md`](../RELEASE.md) — how releases are cut
 
 ## Public contracts and design context
 
@@ -26,5 +27,7 @@ as the routing map for those documents.
 
 Operational runbooks live in [`runbooks/`](runbooks/).
 
+- [`runbooks/maintainer-testing.md`](runbooks/maintainer-testing.md) — test isolation, native and live proof lanes, evidence
+- [`runbooks/runtime-data-upgrades.md`](runbooks/runtime-data-upgrades.md) — render-count backfill and indexing convergence checks
 - [`runbooks/production-logging.md`](runbooks/production-logging.md) — production stdout retention and journal queries
 - [`runbooks/provider-release-proof.md`](runbooks/provider-release-proof.md) — provider release-proof commands and artifact rules

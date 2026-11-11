@@ -9,17 +9,16 @@ Use this when working on the local-health menu bar utility or its shared SwiftUI
 
 ## Principle
 
-Do not start with fragile GUI scripting.
+Do not start with fragile GUI scripting. The inner loop is:
 
-The inner loop is:
 1. shared SwiftUI core
 2. fixture JSON in the shape of `longhouse local-health --json`
 3. PNG snapshot render
-4. full-frame visual inspection of the rendered PNGs
+4. full-frame visual inspection of the PNGs
 5. window-host app
 6. menu-bar-host app
 
-For menu bar/dashboard information architecture work, treat the harness as a **mini product surface**, not a screenshot tool. Start by deciding which user-facing states must be obvious at a glance, then encode those as fixtures.
+For menu bar or dashboard information architecture, treat the harness as a mini product surface, not a screenshot tool. Decide which user-facing states must be obvious at a glance, then encode them as fixtures.
 
 ## Commands
 
@@ -35,7 +34,7 @@ make menubar-harness MODE=render-fixtures  # render every fixture to a PNG
 make menubar-harness MODE=render-trust-states
 make menubar-harness MODE=smoke            # boot both app shells and dry-run all controls
 make menubar-harness MODE=xcuitest         # generate the Xcode wrapper and run macOS XCUITests
-make test-install                          # installer smoke through the hosted native worker
+make test-install                          # installer smoke (use when changing install path, launchd wiring or menu bar packaging)
 ```
 
 `scripts/qa/menubar-harness.sh` (its `snapshot-fixture <name>`, `window-fixture`,
@@ -78,12 +77,11 @@ desktop/LonghouseMenuBarHarness/
 - The key menu bar states for managed sessions are: `attached`, `detached`, `degraded`, and `orphan bridge`.
 - Keep orphaned background bridges separate from managed sessions in the UI. They are an attention surface, not a normal session card.
 - Do not hide managed session/process cards behind a generic blocker state. When the machine is broken, the specific managed sessions or orphan bridges causing it must stay visible and actionable.
-- Treat the downloaded fixture PNGs as required QA, not a side effect. Inspect the literal full-frame images before touching the installed app.
-- Do not accept “rendered successfully” or image dimensions as proof. Catch spacing, clipping, edge contact, and optical balance in the PNG stage.
+- The downloaded fixture PNGs are required QA. Look at the full-frame images before touching the installed app.
+- "Rendered successfully" and image dimensions are not proof. Catch spacing, clipping, edge contact and optical balance in the PNG stage.
 - Reinstall `Longhouse.app` only after the fixture PNGs look correct.
 - Treat the Xcode wrapper as generated harness infrastructure; regenerate it via the script instead of hand-editing `.xcodeproj` files.
 - Reuse the existing `longhouse local-health --json` contract. Do not teach the Swift code to parse launchd directly.
-- Use `make test-install` when changing the unified install path, launchd wiring, or menu bar runtime packaging.
 
 ## Recommended Iteration Loop For New States
 

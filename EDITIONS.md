@@ -2,45 +2,42 @@
 
 Longhouse is open-core.
 
-This public repository contains the Apache-2.0 core product:
+## This repository (Apache-2.0)
 
 - Python CLI and package layer
 - Runtime Host (`longhouse-server serve`): FastAPI API, bundled web UI, SQLite state
 - Rust Machine Agent (`longhouse-engine`)
-- macOS local status/setup surface
-- iOS read/steer client
-- Runner and machine-facing `/api/agents/*` contracts
-- self-host documentation, install, repair, and upgrade paths
+- macOS local status and setup app
+- iOS read and steer client
+- Runner and the machine-facing `/api/agents/*` contracts
+- self-host docs, install, repair and upgrade paths
 
-Longhouse Cloud is proprietary and lives outside this repository. It includes:
+## Longhouse Cloud (proprietary, outside this repository)
 
 - hosted signup and account management
-- billing, checkout, and webhook handling
+- billing, checkout and webhook handling
 - hosted instance provisioning and fleet operations
 - production deployment automation and private operator dashboards
-- abuse controls, quotas, and hosted-only infrastructure glue
+- abuse controls, quotas and hosted-only infrastructure glue
 
-Hosted Longhouse operates the Runtime Host and control plane. Provider execution
-continues through each user's installed provider clients and existing accounts;
+Hosted Longhouse runs the Runtime Host and control plane. Provider execution
+still goes through each user's installed provider clients and existing accounts;
 hosted plans do not bundle or resell model inference.
 
-The public Runtime Host can be configured to talk to a hosted control plane via
-`CONTROL_PLANE_URL`. That is a service boundary, not a source-code dependency.
-Self-hosted Longhouse does not need the control plane.
+A public Runtime Host can talk to a hosted control plane through
+`CONTROL_PLANE_URL`. That is a service boundary, not a source dependency, and
+self-hosted Longhouse does not need a control plane.
 
-## Contributor Boundary
+## Contributor boundary
 
-Contributions to this repository should strengthen the public core: session
-ingest, timeline, search, recall, managed local control, machine APIs,
-self-hosting, install/repair, and client surfaces over those contracts.
+Contributions should strengthen the public core: session ingest, timeline,
+search, recall, managed local control, machine APIs, self-hosting, install and
+repair, and client surfaces over those contracts. Do not add signup, billing,
+provisioning, fleet administration or hosted operator code here. Those changes
+belong in the private Longhouse Cloud codebase.
 
-Do not add signup, billing, provisioning, fleet administration, or hosted
-operator code to this public repository. Keep those changes in the private
-Longhouse Cloud codebase.
+## History and artifacts
 
-## History And Artifacts
-
-Removing hosted source from the current tree only protects future development.
-Older public Git history, release archives, PyPI artifacts, and container images
-may still contain files that were previously public. Treat that as a separate
-artifact/history cleanup decision.
+Removing hosted source from the current tree protects only future development.
+Older Git history, release archives, PyPI artifacts and container images may
+still contain files that were once public. Cleaning those is a separate decision.
