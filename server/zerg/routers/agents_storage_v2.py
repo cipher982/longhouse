@@ -12,6 +12,7 @@ from datetime import UTC
 from datetime import datetime
 from time import monotonic
 from typing import Any
+from typing import Literal
 from uuid import UUID
 from weakref import WeakValueDictionary
 
@@ -23,10 +24,14 @@ from fastapi import Query
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
 
 from zerg.auth.caller import caller_principal
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
+from zerg.catalogd.store import SOURCE_RESUME_MAX_SOURCES
 from zerg.catalogd.store import storage_projectors_for_provider
 from zerg.config import get_settings
 from zerg.dependencies.agents_auth import owner_id_from_caller
@@ -1216,11 +1221,81 @@ async def storage_v2_capabilities(
         "max_records": MAX_RECORDS,
         "media_claim_path": "/api/agents/storage/v2/media/claims",
         "media_upload_path_template": "/api/agents/storage/v2/media/{sha256}",
+        # A machine with no local shipping state asks here what the host already holds.
+        "source_resume_path": "/api/agents/storage/v2/sources/resume",
+        "max_source_resume_sources": SOURCE_RESUME_MAX_SOURCES,
         "max_media_bytes": MAX_MEDIA_BYTES,
         "max_media_claims": _MAX_MEDIA_CLAIMS,
         "range_kinds": ["byte_offset", "record_ordinal"],
         "lanes": ["live", "repair"],
         "lane_header": "X-Longhouse-Storage-Lane",
+    }
+
+
+class SourceResumeSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(min_length=1, max_length=32)
+    opaque_source_id: str = Field(min_length=1, max_length=4_096)
+    range_kind: Literal["byte_offset", "record_ordinal"]
+
+
+class SourceResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sources: list[SourceResumeSource] = Field(min_length=1, max_length=SOURCE_RESUME_MAX_SOURCES)
+
+
+@router.post("/sources/resume")
+async def storage_v2_source_resume(
+    body: SourceResumeRequest,
+    auth_token: DeviceToken | object | None = Depends(verify_agents_caller),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    """Report, per source, the open epoch and prefix evidence this machine already has on the host.
+
+    Read-only and scoped to the authenticated machine: a source that is not this
+    machine's reads as not found, so nothing about other machines is revealed.
+    """
+
+    machine_id = _authenticated_machine_id(auth_token, {})
+    tenant_id = canonical_text(get_settings().archive_primary_tenant_id, "tenant_id", 255)
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "catalog_unavailable",
+            "Storage-v2 catalog is temporarily unavailable.",
+        )
+    try:
+        result = await catalogd.call(
+            "storage.source_resume.read.v2",
+            {
+                "tenant_id": tenant_id,
+                "machine_id": machine_id,
+                "sources": [source.model_dump() for source in body.sources],
+            },
+        )
+    except CatalogRemoteError as exc:
+        _raise_catalog_error(exc)
+    except CatalogUnavailable as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "catalog_unavailable",
+            "Storage-v2 catalog is temporarily unavailable.",
+        ) from exc
+    sources = result.get("sources")
+    if not isinstance(sources, list) or len(sources) != len(body.sources):
+        raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "catalog_unavailable", "Source resume answer is invalid.")
+    for item in sources:
+        epoch = item.get("source_epoch") if isinstance(item, dict) else None
+        if isinstance(epoch, dict) and epoch.get("machine_id") != machine_id:
+            raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "catalog_unavailable", "Source resume answer is invalid.")
+    return {
+        "v": 1,
+        "sources": sources,
+        "commit_seq": result.get("commit_seq"),
+        "observed_at": result.get("observed_at"),
     }
 
 
@@ -1301,6 +1376,45 @@ async def storage_v2_source_epoch_manifest(
     }
 
 
+async def _precheck_source_epoch(*, tenant_id: str, machine_id: str, payload: dict[str, Any]) -> None:
+    """Refuse an envelope whose new source epoch cannot open, before parse, seal or a writer slot.
+
+    Same 409 and details the writer's commit would produce. Anything this cannot read
+    cheaply (malformed identity, older catalog) falls through to the normal path, which
+    stays authoritative.
+    """
+
+    if payload.get("tenant_id") != tenant_id or payload.get("machine_id") != machine_id:
+        return  # parse rejects an identity mismatch before any catalog work
+    try:
+        params = {
+            "tenant_id": tenant_id,
+            "machine_id": machine_id,
+            "provider": canonical_text(payload["provider"], "provider", 32),
+            "opaque_source_id": canonical_text(payload["opaque_source_id"], "opaque_source_id", 4_096),
+            "session_id": str(_canonical_uuid(payload["session_id"], "session_id")),
+            "source_epoch": str(_canonical_uuid(payload["source_epoch"], "source_epoch")),
+            "predecessor_source_epoch": (
+                str(_canonical_uuid(payload["predecessor_source_epoch"], "predecessor_source_epoch"))
+                if payload["predecessor_source_epoch"] is not None
+                else None
+            ),
+        }
+    except (KeyError, TypeError, ValueError):
+        return
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        return
+    try:
+        await catalogd.call("storage.source_epoch.precheck.v2", params)
+    except CatalogRemoteError as exc:
+        if exc.code == "source_epoch_conflict":
+            _raise_catalog_error(exc)
+        # Any other answer (invalid_request, busy lane) leaves the decision to the writer.
+    except CatalogUnavailable:
+        return
+
+
 async def _commit_admitted_envelope(
     request: Request,
     auth_token: DeviceToken | object | None,
@@ -1320,6 +1434,7 @@ async def _commit_admitted_envelope(
         async with raw_workers.admission(lane):
             payload = await _read_bounded_json(request)
             machine_id = _authenticated_machine_id(auth_token, payload)
+            await _precheck_source_epoch(tenant_id=tenant_id, machine_id=machine_id, payload=payload)
             spec, parsed = await asyncio.to_thread(
                 _parse_envelope,
                 payload,

@@ -2854,6 +2854,52 @@
    "retryable": false
   }
  },
+ "storage.source_epoch.precheck.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "tenant_id must be a non-empty string",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.source_epoch.precheck.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.source_epoch.precheck.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.source_resume.read.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "tenant_id must be a non-empty string",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.source_resume.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.source_resume.read.v2 has invalid parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
  "storage.telemetry.summary.v2": {
   "declared_nulls": {
    "ok": true

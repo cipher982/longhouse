@@ -3185,6 +3185,66 @@ async def test_session_accepts_native_source_after_machine_rename(daemon_paths):
 
 
 @pytest.mark.asyncio
+async def test_source_epoch_precheck_is_read_only_and_matches_the_writer_rule(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    open_epoch, other_epoch, session_id = uuid4(), uuid4(), uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    identity = {
+        "tenant_id": "tenant-a",
+        "machine_id": "cinder",
+        "provider": "codex",
+        "opaque_source_id": "history.jsonl",
+        "session_id": str(session_id),
+    }
+
+    async def precheck(epoch, predecessor=None, **override):
+        return await client.call(
+            "storage.source_epoch.precheck.v2",
+            {**identity, **override, "source_epoch": str(epoch), "predecessor_source_epoch": predecessor},
+        )
+
+    try:
+        assert (await precheck(open_epoch))["source_epoch_conflict"] is False  # nothing open yet
+        await client.call("storage.source_epoch.open.v2", _epoch_params(epoch=open_epoch, opened_at=now))
+        writer_before = daemon._writer_stats.snapshot()["labels"]
+
+        with pytest.raises(CatalogRemoteError) as initial:
+            await precheck(other_epoch)
+        assert initial.value.code == "source_epoch_conflict"
+        assert initial.value.details == {
+            "reason": "another_epoch_is_already_open_for_this_source",
+            "open_source_epochs": [str(open_epoch)],
+        }
+        with pytest.raises(CatalogRemoteError) as wrong_predecessor:
+            await precheck(other_epoch, str(uuid4()))
+        assert wrong_predecessor.value.details["reason"] == "predecessor_not_open_for_this_identity"
+
+        # The open epoch itself, its proper successor and another source are not refused here.
+        assert (await precheck(open_epoch))["source_epoch_conflict"] is False
+        assert (await precheck(other_epoch, str(open_epoch)))["source_epoch_conflict"] is False
+        assert (await precheck(other_epoch, opaque_source_id="elsewhere.jsonl"))["source_epoch_conflict"] is False
+
+        # The writer's own verdict for the same envelope is the same reason.
+        with pytest.raises(CatalogRemoteError) as writer:
+            await client.call(
+                "storage.raw_object.commit.v2",
+                _raw_params(epoch=other_epoch, session_id=session_id, start=0, end=4, records=(b"abc\n",), sealed_at=now),
+            )
+        assert writer.value.details == initial.value.details
+
+        labels = daemon._writer_stats.snapshot()["labels"]
+        assert {label: row["n"] for label, row in labels.items() if label != "commit_raw_object"} == {
+            label: row["n"] for label, row in writer_before.items()
+        }
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

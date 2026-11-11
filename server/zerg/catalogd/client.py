@@ -95,6 +95,8 @@ _SAFE_RETRY_METHODS = {
     "storage.source_epoch.open.v2",
     "storage.raw_object.commit.v2",
     "storage.source_epoch.manifest.v2",
+    "storage.source_epoch.precheck.v2",
+    "storage.source_resume.read.v2",
     "storage.raw_object.exists.batch.v2",
     "storage.session.read.v2",
     "storage.session.projector.read.v2",

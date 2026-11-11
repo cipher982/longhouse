@@ -35,6 +35,7 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.schema import read_catalog_meta
 from zerg.catalogd.schema import read_deployment_activation
+from zerg.catalogd.store import SOURCE_RESUME_MAX_SOURCES
 from zerg.catalogd.store import CatalogStore
 from zerg.catalogd.store import adopt_orphan_subagents_once
 from zerg.storage_v2.fields import bounded_text
@@ -936,6 +937,18 @@ class CatalogDaemon:
             "_read_source_epoch_manifest",
             frozenset({"after_position", "limit", "source_epoch"}),
             "storage.source_epoch.manifest.v2 has invalid parameters",
+        ),
+        "storage.source_resume.read.v2": _Route(
+            "_read_source_resume",
+            frozenset({"machine_id", "sources", "tenant_id"}),
+            "storage.source_resume.read.v2 has invalid parameters",
+        ),
+        "storage.source_epoch.precheck.v2": _Route(
+            "_precheck_source_epoch",
+            frozenset(
+                {"machine_id", "opaque_source_id", "predecessor_source_epoch", "provider", "session_id", "source_epoch", "tenant_id"}
+            ),
+            "storage.source_epoch.precheck.v2 has invalid parameters",
         ),
         "storage.raw_object.exists.batch.v2": _Route(
             "_raw_objects_exist_batch", frozenset({"envelope_ids"}), "storage.raw_object.exists.batch.v2 requires envelope_ids"
@@ -3165,6 +3178,71 @@ class CatalogDaemon:
             after_position=after_position,
             limit=limit,
         )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_source_resume(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        try:
+            tenant_id = canonical_text(request.params["tenant_id"], field="tenant_id", maximum_bytes=255)
+            machine_id = canonical_text(request.params["machine_id"], field="machine_id", maximum_bytes=255)
+            raw_sources = request.params["sources"]
+            if not isinstance(raw_sources, list) or not 1 <= len(raw_sources) <= SOURCE_RESUME_MAX_SOURCES:
+                raise ValueError(f"sources must be a list of 1 to {SOURCE_RESUME_MAX_SOURCES} items")
+            sources = []
+            for item in raw_sources:
+                if not isinstance(item, dict) or set(item) != {"provider", "opaque_source_id", "range_kind"}:
+                    raise ValueError("each source needs provider, opaque_source_id and range_kind")
+                provider = item["provider"]
+                if not isinstance(provider, str) or _STORAGE_PROVIDER_RE.fullmatch(provider) is None:
+                    raise ValueError("provider must be canonical lowercase ASCII")
+                if item["range_kind"] not in {"byte_offset", "record_ordinal"}:
+                    raise ValueError("range_kind must be byte_offset or record_ordinal")
+                sources.append(
+                    {
+                        "provider": provider,
+                        "opaque_source_id": canonical_text(item["opaque_source_id"], field="opaque_source_id", maximum_bytes=4_096),
+                        "range_kind": item["range_kind"],
+                    }
+                )
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        # Recovery/control evidence for a machine that lost its state: it must stay
+        # answerable while interactive readers are saturated.
+        result = await self._run_control_read_store(
+            self._store.read_source_resume,
+            tenant_id=tenant_id,
+            machine_id=machine_id,
+            sources=sources,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _precheck_source_epoch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        params = dict(request.params)
+        try:
+            params["tenant_id"] = canonical_text(params["tenant_id"], field="tenant_id", maximum_bytes=255)
+            params["machine_id"] = canonical_text(params["machine_id"], field="machine_id", maximum_bytes=255)
+            params["opaque_source_id"] = canonical_text(params["opaque_source_id"], field="opaque_source_id", maximum_bytes=4_096)
+            provider = params["provider"]
+            if not isinstance(provider, str) or _STORAGE_PROVIDER_RE.fullmatch(provider) is None:
+                raise ValueError("provider must be canonical lowercase ASCII")
+            params["session_id"] = _canonical_uuid(params["session_id"], "session_id")
+            params["source_epoch"] = _canonical_uuid(params["source_epoch"], "source_epoch")
+            predecessor = params["predecessor_source_epoch"]
+            params["predecessor_source_epoch"] = (
+                _canonical_uuid(predecessor, "predecessor_source_epoch") if predecessor is not None else None
+            )
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        # Control read lane: a refused envelope must stay cheap even while timeline readers are saturated.
+        result = await self._run_control_read_store(self._store.precheck_source_epoch_admission, **params)
+        if result.get("source_epoch_conflict") is True:
+            return self._error(
+                request,
+                "source_epoch_conflict",
+                "source range overlaps or conflicts with the registered epoch",
+                details=result.get("conflict_details") or {},
+            )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _raw_objects_exist_batch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

@@ -74,6 +74,77 @@ from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id as compute_envelope_id
 
 
+def _new_epoch_admission_conflict(
+    connection,
+    *,
+    tenant_id: str,
+    machine_id: str,
+    provider: str,
+    opaque_source_id: str,
+    predecessor_source_epoch: UUID | None,
+) -> tuple[dict[str, Any] | None, Any]:
+    """Why a not-yet-registered source epoch may not open for this identity, plus its predecessor row.
+
+    Read-only, so the writer's commit and the router's pre-parse check agree on one rule.
+    """
+
+    epoch = LiveSourceEpoch.__table__
+    expected_predecessor = str(predecessor_source_epoch) if predecessor_source_epoch is not None else None
+    predecessor_row = None
+    identity_filters = (
+        epoch.c.tenant_id == tenant_id,
+        epoch.c.machine_id == machine_id,
+        epoch.c.provider == provider,
+        epoch.c.opaque_source_id == opaque_source_id,
+    )
+    open_rows = connection.execute(select(epoch).where(*identity_filters, epoch.c.state == "open")).mappings().all()
+    if predecessor_source_epoch is not None:
+        predecessor_row = connection.execute(select(epoch).where(epoch.c.source_epoch == expected_predecessor)).mappings().first()
+        if predecessor_row is None or any(
+            (
+                predecessor_row["tenant_id"] != tenant_id,
+                predecessor_row["machine_id"] != machine_id,
+                predecessor_row["provider"] != provider,
+                predecessor_row["opaque_source_id"] != opaque_source_id,
+                predecessor_row["state"] != "open",
+            )
+        ):
+            # Name the epoch that IS open. A shipper whose local
+            # registry was lost or salvaged can name a predecessor
+            # the host never saw; without this it can prove only
+            # that its own lineage is wrong, not what to adopt, and
+            # the source stays blocked until a human intervenes.
+            conflict = _source_epoch_conflict(
+                connection,
+                reason="predecessor_not_open_for_this_identity",
+                predecessor_exists=predecessor_row is not None,
+                expected_predecessor=expected_predecessor,
+                predecessor_state=(predecessor_row["state"] if predecessor_row is not None else None),
+                open_source_epochs=[str(row["source_epoch"]) for row in open_rows],
+            )
+            return conflict, predecessor_row
+        if any(row["source_epoch"] != expected_predecessor for row in open_rows):
+            conflict = _source_epoch_conflict(
+                connection,
+                reason="open_epoch_is_not_the_named_predecessor",
+                expected_predecessor=expected_predecessor,
+                open_source_epochs=[str(row["source_epoch"]) for row in open_rows],
+            )
+            return conflict, predecessor_row
+    elif open_rows:
+        # The branch that produced the 2026-08-04 incident: an
+        # initial epoch arrives while this identity already has an
+        # open one. It returned no reason at all, so the shipper
+        # could only report that a later manifest probe 404'd.
+        conflict = _source_epoch_conflict(
+            connection,
+            reason="another_epoch_is_already_open_for_this_source",
+            open_source_epochs=[str(row["source_epoch"]) for row in open_rows],
+        )
+        return conflict, predecessor_row
+    return None, predecessor_row
+
+
 class IngestMixin:
     def open_source_epoch(
         self,
@@ -543,57 +614,17 @@ class IngestMixin:
             epoch_row = connection.execute(select(epoch).where(epoch.c.source_epoch == epoch_key)).mappings().first()
             epoch_is_new = epoch_row is None
             predecessor_row = None
-            identity_filters = (
-                epoch.c.tenant_id == tenant_id,
-                epoch.c.machine_id == machine_id,
-                epoch.c.provider == provider,
-                epoch.c.opaque_source_id == opaque_source_id,
-            )
             if epoch_is_new:
-                open_rows = connection.execute(select(epoch).where(*identity_filters, epoch.c.state == "open")).mappings().all()
-                if predecessor_source_epoch is not None:
-                    predecessor_row = (
-                        connection.execute(select(epoch).where(epoch.c.source_epoch == expected_predecessor)).mappings().first()
-                    )
-                    if predecessor_row is None or any(
-                        (
-                            predecessor_row["tenant_id"] != tenant_id,
-                            predecessor_row["machine_id"] != machine_id,
-                            predecessor_row["provider"] != provider,
-                            predecessor_row["opaque_source_id"] != opaque_source_id,
-                            predecessor_row["state"] != "open",
-                        )
-                    ):
-                        # Name the epoch that IS open. A shipper whose local
-                        # registry was lost or salvaged can name a predecessor
-                        # the host never saw; without this it can prove only
-                        # that its own lineage is wrong, not what to adopt, and
-                        # the source stays blocked until a human intervenes.
-                        return _source_epoch_conflict(
-                            connection,
-                            reason="predecessor_not_open_for_this_identity",
-                            predecessor_exists=predecessor_row is not None,
-                            expected_predecessor=expected_predecessor,
-                            predecessor_state=(predecessor_row["state"] if predecessor_row is not None else None),
-                            open_source_epochs=[str(row["source_epoch"]) for row in open_rows],
-                        )
-                    if any(row["source_epoch"] != expected_predecessor for row in open_rows):
-                        return _source_epoch_conflict(
-                            connection,
-                            reason="open_epoch_is_not_the_named_predecessor",
-                            expected_predecessor=expected_predecessor,
-                            open_source_epochs=[str(row["source_epoch"]) for row in open_rows],
-                        )
-                elif open_rows:
-                    # The branch that produced the 2026-08-04 incident: an
-                    # initial epoch arrives while this identity already has an
-                    # open one. It returned no reason at all, so the shipper
-                    # could only report that a later manifest probe 404'd.
-                    return _source_epoch_conflict(
-                        connection,
-                        reason="another_epoch_is_already_open_for_this_source",
-                        open_source_epochs=[str(row["source_epoch"]) for row in open_rows],
-                    )
+                new_epoch_conflict, predecessor_row = _new_epoch_admission_conflict(
+                    connection,
+                    tenant_id=tenant_id,
+                    machine_id=machine_id,
+                    provider=provider,
+                    opaque_source_id=opaque_source_id,
+                    predecessor_source_epoch=predecessor_source_epoch,
+                )
+                if new_epoch_conflict is not None:
+                    return new_epoch_conflict
                 # Source offsets are coordinates, not byte counts. An initial
                 # storage-v2 epoch may begin at a proven legacy cursor, so its
                 # first durable envelope defines the contiguous base.
@@ -1613,6 +1644,134 @@ class IngestMixin:
                 "found": True,
                 "source_epoch": _source_epoch_dto(epoch_row),
                 "objects": [_raw_object_manifest_dto(row) for row in rows],
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
+    def precheck_source_epoch_admission(
+        self,
+        *,
+        tenant_id: str,
+        machine_id: str,
+        provider: str,
+        opaque_source_id: str,
+        session_id: UUID,
+        source_epoch: UUID,
+        predecessor_source_epoch: UUID | None,
+    ) -> dict[str, Any]:
+        """Read-only: would a new epoch for this source be refused before any bytes are sealed?
+
+        An epoch the catalog already knows is left to the writer, which compares its whole
+        identity. The writer re-checks everything at commit, so this only saves the parse,
+        seal and writer slot of an envelope that cannot be admitted.
+        """
+
+        epoch = LiveSourceEpoch.__table__
+        tombstone = LiveSessionTombstone.__table__
+        with _read_snapshot(self.engine) as connection:
+            if connection.execute(select(tombstone.c.session_id).where(tombstone.c.session_id == str(session_id))).first() is not None:
+                # The writer answers a deleted session with 410 before it looks at epochs.
+                return {"source_epoch_conflict": False}
+            known = connection.execute(select(epoch.c.source_epoch).where(epoch.c.source_epoch == str(source_epoch))).first()
+            if known is not None:
+                return {"source_epoch_conflict": False}
+            conflict, _predecessor = _new_epoch_admission_conflict(
+                connection,
+                tenant_id=tenant_id,
+                machine_id=machine_id,
+                provider=provider,
+                opaque_source_id=opaque_source_id,
+                predecessor_source_epoch=predecessor_source_epoch,
+            )
+            if conflict is None:
+                return {"source_epoch_conflict": False}
+            return {"source_epoch_conflict": True, "conflict_details": conflict["conflict_details"]}
+
+    def read_source_resume(
+        self,
+        *,
+        tenant_id: str,
+        machine_id: str,
+        sources: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        """One read-only snapshot answering, per source, what this machine already has on the host.
+
+        For each (provider, opaque_source_id, range_kind) the open epoch, its
+        accepted_through and the first and last live raw objects with their
+        record-hash digests: enough for a machine with no local shipping state
+        to prove its file prefix matches and continue the epoch instead of
+        re-uploading it. Evidence only; a source with no single open epoch is
+        reported as not found with the reason.
+        """
+
+        epoch = LiveSourceEpoch.__table__
+        raw = LiveRawObject.__table__
+        observed_at = datetime.now(UTC)
+        results: list[dict[str, Any]] = []
+        with _read_snapshot(self.engine) as connection:
+            for source in sources:
+                entry: dict[str, Any] = {
+                    "provider": source["provider"],
+                    "opaque_source_id": source["opaque_source_id"],
+                    "range_kind": source["range_kind"],
+                    "found": False,
+                }
+                open_rows = (
+                    connection.execute(
+                        select(epoch).where(
+                            epoch.c.tenant_id == tenant_id,
+                            epoch.c.machine_id == machine_id,
+                            epoch.c.provider == source["provider"],
+                            epoch.c.opaque_source_id == source["opaque_source_id"],
+                            epoch.c.range_kind == source["range_kind"],
+                            epoch.c.state == "open",
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+                if len(open_rows) != 1:
+                    entry["reason"] = "no_open_epoch" if not open_rows else "ambiguous_open_epochs"
+                    results.append(entry)
+                    continue
+                epoch_row = open_rows[0]
+                live = (raw.c.source_epoch == epoch_row["source_epoch"], raw.c.retired_at.is_(None))
+                first = (
+                    connection.execute(select(raw).where(*live).order_by(raw.c.range_start.asc(), raw.c.range_end.asc()).limit(1))
+                    .mappings()
+                    .first()
+                )
+                last = (
+                    connection.execute(select(raw).where(*live).order_by(raw.c.range_start.desc(), raw.c.range_end.desc()).limit(1))
+                    .mappings()
+                    .first()
+                )
+                if first is None or last is None:
+                    entry["reason"] = "epoch_has_no_objects"
+                    results.append(entry)
+                    continue
+
+                def evidence(row) -> dict[str, Any]:
+                    return {
+                        "range_start": str(int(row["range_start"])),
+                        "range_end": str(int(row["range_end"])),
+                        "record_count": int(row["record_count"]),
+                        "record_hashes_hash": str(row["record_hashes_hash"]),
+                        "envelope_id": str(row["envelope_id"]),
+                    }
+
+                entry.update(
+                    {
+                        "found": True,
+                        "source_epoch": _source_epoch_dto(epoch_row),
+                        "session_id": str(last["session_id"]),
+                        "first_object": evidence(first),
+                        "last_object": evidence(last),
+                    }
+                )
+                results.append(entry)
+            return {
+                "sources": results,
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
             }

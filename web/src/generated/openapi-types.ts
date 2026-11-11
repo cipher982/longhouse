@@ -3239,6 +3239,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/storage/v2/sources/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Storage V2 Source Resume
+         * @description Report, per source, the open epoch and prefix evidence this machine already has on the host.
+         *
+         *     Read-only and scoped to the authenticated machine: a source that is not this
+         *     machine's reads as not found, so nothing about other machines is revealed.
+         */
+        post: operations["storage_v2_source_resume_agents_storage_v2_sources_resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/storage/v2/source-epochs/{source_epoch}/manifest": {
         parameters: {
             query?: never;
@@ -9622,6 +9645,23 @@ export interface components {
             footprint_bytes: number;
             /** Providers */
             providers?: components["schemas"]["ProviderSourceInventory"][];
+        };
+        /** SourceResumeRequest */
+        SourceResumeRequest: {
+            /** Sources */
+            sources: components["schemas"]["SourceResumeSource"][];
+        };
+        /** SourceResumeSource */
+        SourceResumeSource: {
+            /** Provider */
+            provider: string;
+            /** Opaque Source Id */
+            opaque_source_id: string;
+            /**
+             * Range Kind
+             * @enum {string}
+             */
+            range_kind: "byte_offset" | "record_ordinal";
         };
         /**
          * StartupContextItemResponse
@@ -16072,6 +16112,41 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    storage_v2_source_resume_agents_storage_v2_sources_resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceResumeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -1538,6 +1538,130 @@ async def test_storage_v2_rejects_identity_mismatch_before_catalog_work(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_storage_v2_conflicting_new_epoch_is_rejected_before_parse_seal_or_writer(monkeypatch):
+    tempdir = TemporaryDirectory(prefix="lh2-precheck-", dir="/tmp")
+    root = Path(tempdir.name)
+    daemon = CatalogDaemon(database_path=root / "catalog.db", socket_path=root / "catalogd.sock")
+    await daemon.start()
+    catalog = CatalogClient(root / "catalogd.sock")
+    object_root = root / "objects"
+    workers = RawObjectWorkerPool(object_root, live_workers=1, repair_workers=1, queue_multiplier=1)
+    render_workers = _InlineRenderPool(object_root)
+    await workers.start()
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_workers)
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    tenant_id = get_settings().archive_primary_tenant_id
+    first = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=UUID("018f0c3a-7b2d-7f10-8a11-223456789abc"))
+    second = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=UUID("018f0c3a-7b2d-7f10-8a11-523456789abc"))
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            accepted = await client.post("/agents/storage/v2/envelopes", json=first, headers={"X-Longhouse-Storage-Lane": "live"})
+            assert accepted.status_code == 200, accepted.text
+            files_before = sorted(path for path in object_root.rglob("*") if path.is_file())
+            writer_before = daemon._writer_stats.snapshot()["labels"]
+            commits_before = writer_before["commit_raw_object"]["n"]
+            seals: list[object] = []
+            real_seal = workers.seal
+
+            async def counting_seal(*args, **kwargs):
+                seals.append(args)
+                return await real_seal(*args, **kwargs)
+
+            monkeypatch.setattr(workers, "seal", counting_seal)
+
+            rejected = await client.post("/agents/storage/v2/envelopes", json=second, headers={"X-Longhouse-Storage-Lane": "live"})
+
+        assert rejected.status_code == 409, rejected.text
+        detail = rejected.json()["detail"]
+        assert detail["code"] == "source_epoch_conflict"
+        assert detail["details"] == {
+            "reason": "another_epoch_is_already_open_for_this_source",
+            "open_source_epochs": [first["source_epoch"]],
+        }
+        assert seals == []
+        assert sorted(path for path in object_root.rglob("*") if path.is_file()) == files_before
+        writer_after = daemon._writer_stats.snapshot()["labels"]
+        assert writer_after["commit_raw_object"]["n"] == commits_before
+        assert set(writer_after) == set(writer_before)
+    finally:
+        await workers.close()
+        await catalog.close()
+        await daemon.close()
+        tempdir.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_source_resume_reports_the_open_epoch_and_prefix_evidence(monkeypatch):
+    tempdir = TemporaryDirectory(prefix="lh2-resume-", dir="/tmp")
+    root = Path(tempdir.name)
+    daemon = CatalogDaemon(database_path=root / "catalog.db", socket_path=root / "catalogd.sock")
+    await daemon.start()
+    catalog = CatalogClient(root / "catalogd.sock")
+    object_root = root / "objects"
+    workers = RawObjectWorkerPool(object_root, live_workers=1, repair_workers=1, queue_multiplier=1)
+    render_workers = _InlineRenderPool(object_root)
+    await workers.start()
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_workers)
+    machine = {"id": "cinder"}
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id=machine["id"], owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    tenant_id = get_settings().archive_primary_tenant_id
+    payload = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=UUID("018f0c3a-7b2d-7f10-8a11-223456789abc"))
+    asked = {"provider": "codex", "opaque_source_id": "history.jsonl", "range_kind": "byte_offset"}
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            capabilities = (await client.get("/agents/storage/v2/capabilities")).json()
+            assert capabilities["source_resume_path"] == "/api/agents/storage/v2/sources/resume"
+
+            empty = await client.post("/agents/storage/v2/sources/resume", json={"sources": [asked]})
+            assert empty.status_code == 200, empty.text
+            assert empty.json()["sources"] == [{**asked, "found": False, "reason": "no_open_epoch"}]
+
+            accepted = await client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
+            assert accepted.status_code == 200, accepted.text
+
+            found = await client.post(
+                "/agents/storage/v2/sources/resume",
+                json={"sources": [asked, {**asked, "opaque_source_id": "other.jsonl"}]},
+            )
+            assert found.status_code == 200, found.text
+            first, other = found.json()["sources"]
+            assert first["found"] is True
+            assert first["source_epoch"]["source_epoch"] == payload["source_epoch"]
+            assert first["source_epoch"]["accepted_through"] == str(len(b"hello\n"))
+            assert first["source_epoch"]["predecessor_source_epoch"] is None
+            assert first["session_id"] == payload["session_id"]
+            for key in ("first_object", "last_object"):
+                assert (first[key]["range_start"], first[key]["range_end"], first[key]["record_count"]) == ("0", "6", 1)
+            import hashlib
+
+            assert first["last_object"]["record_hashes_hash"] == hashlib.sha256(hashlib.sha256(b"hello\n").digest()).hexdigest()
+            assert other["found"] is False
+
+            # Another machine's token sees nothing of this machine's source.
+            machine["id"] = "laptop"
+            hidden = await client.post("/agents/storage/v2/sources/resume", json={"sources": [asked]})
+            assert hidden.json()["sources"][0]["found"] is False
+
+            bad = await client.post("/agents/storage/v2/sources/resume", json={"sources": []})
+            assert bad.status_code == 422
+    finally:
+        await workers.close()
+        await catalog.close()
+        await daemon.close()
+        tempdir.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_storage_v2_busy_lane_returns_typed_backpressure(monkeypatch):
     monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", _BusyPool)
     monkeypatch.setattr(storage_router, "get_render_object_worker_pool", _AdmissionOnlyPool)
@@ -1567,6 +1691,8 @@ async def test_storage_v2_busy_lane_returns_typed_backpressure(monkeypatch):
 async def test_storage_v2_repair_disk_watermark_returns_typed_backpressure(monkeypatch):
     class Catalog:
         async def call(self, method, _params, **_kwargs):
+            if method == "storage.source_epoch.precheck.v2":
+                return {"source_epoch_conflict": False}
             assert method == "storage.raw_object.exists.batch.v2"
             return {"objects": [{"receipt": None}]}
 

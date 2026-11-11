@@ -124,6 +124,8 @@ SEARCH_CLAIM_WALK_BACKLOG = 2_000
 # activity above the floor, expired leases and retries wait at most this long.
 SEARCH_CLAIM_WALK_RESTART_SECONDS = 30.0
 MACHINE_ENROLLMENT_LIMIT = 1_000
+# Sources one source-resume request may ask about.
+SOURCE_RESUME_MAX_SOURCES = 64
 MACHINE_HEALTH_LIMIT = 100
 # The capability projector consumes only its highest-ranked connection.  The
 # ordering below is deliberately identical to that projector, so returning the
