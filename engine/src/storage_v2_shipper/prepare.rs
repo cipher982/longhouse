@@ -171,7 +171,7 @@ fn prepare_compressed_codex_envelope(
     {
         return pending_to_prepared(pending).map(Some);
     }
-    let cache_dir = crate::compressed_source::cache_dir()?;
+    let cache_dir = compressed_source_cache_dir()?;
     let active = load_active_codex_epoch(conn, &opaque_source_id)?;
     if let Some((_, position, _)) = &active {
         if crate::compressed_source::fully_shipped(path, *position)? {
@@ -193,6 +193,12 @@ fn prepare_compressed_codex_envelope(
         session_id_override,
         maximum_batch_bytes,
     )
+}
+
+/// Where decompressed copies of compressed rollouts are kept while their tail
+/// ships; each is evicted once its source is fully shipped.
+pub(super) fn compressed_source_cache_dir() -> Result<PathBuf> {
+    Ok(crate::config::get_agent_dir()?.join("compressed-source-cache"))
 }
 
 fn load_active_codex_epoch(

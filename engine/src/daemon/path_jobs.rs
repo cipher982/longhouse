@@ -640,6 +640,7 @@ impl DaemonState {
             &mut self.shipping_progress,
             self.offline.is_offline,
             archive_repair_is_paused(config.archive_repair_mode),
+            &mut self.hot_sources,
         )
         .await;
         if !managed_state_changes.is_empty() {

@@ -18,6 +18,7 @@ pub(super) async fn handle_live_transcript_file_events(
     shipping_progress: &mut heartbeat::ShippingProgressObservation,
     offline: bool,
     background_paused: bool,
+    hot_sources: &mut super::hot_sources::HotSources,
 ) -> Vec<PathBuf> {
     // Keep the coalescing wait cancellable by transcript wakes. The wake socket
     // is the managed-session completion lane, so it should not sit behind
@@ -82,6 +83,10 @@ pub(super) async fn handle_live_transcript_file_events(
             continue;
         }
 
+        if crate::qa_fault::watcher_drops_repeat_transcript_event(&session_path) {
+            continue;
+        }
+        hot_sources.note(session_path.clone(), provider, std::time::SystemTime::now());
         let session_event = WatcherEvent {
             path: session_path,
             observed_at_ms: event.observed_at_ms,

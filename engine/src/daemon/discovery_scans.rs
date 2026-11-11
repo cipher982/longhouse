@@ -156,6 +156,10 @@ pub(super) fn start_inventory_task(
     });
 }
 
+/// A reconciliation scan deferred by Live work runs anyway once this many
+/// fallback intervals have passed since the last one started.
+pub(super) const SCAN_OVERDUE_INTERVALS: u32 = 3;
+
 pub(super) fn maybe_start_reconciliation_scan(
     discovery_tasks: &mut JoinSet<DiscoveryTaskResult>,
     providers: &[ProviderConfig],
@@ -164,12 +168,35 @@ pub(super) fn maybe_start_reconciliation_scan(
     archive_repair_mode: ArchiveRepairMode,
     reason: &'static str,
 ) {
+    maybe_start_reconciliation_scan_unless_live(
+        discovery_tasks,
+        providers,
+        scheduler,
+        deferred_retries,
+        archive_repair_mode,
+        reason,
+        false,
+    );
+}
+
+/// Start a reconciliation scan unless one is running or pending, archive
+/// repair is paused, or Live work is pending and the scan is not `overdue`.
+/// Returns whether one started.
+pub(super) fn maybe_start_reconciliation_scan_unless_live(
+    discovery_tasks: &mut JoinSet<DiscoveryTaskResult>,
+    providers: &[ProviderConfig],
+    scheduler: &PathScheduler,
+    deferred_retries: &HashMap<PathBuf, DeferredRetry>,
+    archive_repair_mode: ArchiveRepairMode,
+    reason: &'static str,
+    overdue: bool,
+) -> bool {
     if archive_repair_is_paused(archive_repair_mode) {
         tracing::debug!(
             reason,
             "Skipping reconciliation scan because archive repair is paused"
         );
-        return;
+        return false;
     }
 
     if !discovery_tasks.is_empty() {
@@ -177,7 +204,7 @@ pub(super) fn maybe_start_reconciliation_scan(
             reason,
             "Skipping reconciliation scan because discovery is still running"
         );
-        return;
+        return false;
     }
 
     if scheduler.has_pending_priority(WorkPriority::Scan) {
@@ -185,22 +212,29 @@ pub(super) fn maybe_start_reconciliation_scan(
             reason,
             "Skipping reconciliation scan because one is already pending"
         );
-        return;
+        return false;
     }
 
     let live_retry_pending = deferred_retries
         .values()
         .any(|retry| retry.priority == WorkPriority::Live);
-    if scheduler.has_pending_priority(WorkPriority::Live) || live_retry_pending {
+    if (scheduler.has_pending_priority(WorkPriority::Live) || live_retry_pending) && !overdue {
         tracing::debug!(
             reason,
             "Skipping reconciliation scan while live local work is pending"
         );
-        return;
+        return false;
+    }
+    if overdue && scheduler.has_pending_priority(WorkPriority::Live) {
+        tracing::info!(
+            reason,
+            "Starting an overdue reconciliation scan alongside pending live work"
+        );
     }
 
     tracing::debug!(reason, "Starting reconciliation scan in background");
     start_discovery_task(discovery_tasks, providers, WorkPriority::Scan, reason);
+    true
 }
 
 /// How often the bound working set is reconciled.
@@ -426,6 +460,19 @@ impl DaemonState {
                 let inventory =
                     crate::state::source_inventory::persist_inventory(&self.conn, result.inventory);
                 if result.enqueue_files {
+                    // Seed the re-check with what this scan found recently
+                    // written; the scan already knows each file's mtime, so
+                    // older sources cost nothing here.
+                    let now = std::time::SystemTime::now();
+                    let hot_after_ms =
+                        now_ms().saturating_sub(super::hot_sources::HOT_WINDOW.as_millis() as i64);
+                    for file in result
+                        .files
+                        .iter()
+                        .filter(|file| file.modified_at_ms >= hot_after_ms)
+                    {
+                        self.hot_sources.note(file.path.clone(), file.provider, now);
+                    }
                     let queued = enqueue_discovered_files(
                         &mut self.scheduler,
                         result.files,
@@ -583,13 +630,54 @@ impl DaemonState {
     }
 
     pub(super) fn on_fallback_tick(&mut self, config: &ConnectConfig) {
-        maybe_start_reconciliation_scan(
+        // Live work defers a scan, but never indefinitely: a source whose
+        // event was lost and which is no longer hot is found only by a scan.
+        let fallback_interval = Duration::from_secs(config.fallback_scan_secs.max(10));
+        let overdue = self.last_reconciliation_scan_at.elapsed()
+            >= fallback_interval * SCAN_OVERDUE_INTERVALS;
+        if maybe_start_reconciliation_scan_unless_live(
             &mut self.discovery_tasks,
             &self.providers,
             &self.scheduler,
             &self.deferred_retries,
             config.archive_repair_mode,
             "reconciliation scan",
-        );
+            overdue,
+        ) {
+            self.last_reconciliation_scan_at = Instant::now();
+        }
+    }
+
+    /// Enqueue the hot sources whose stat moved since they were last seen.
+    pub(super) fn on_hot_recheck_tick(&mut self) {
+        if crate::qa_fault::hot_recheck_off() {
+            return;
+        }
+        let moved = self.hot_sources.recheck(std::time::SystemTime::now());
+        if moved.is_empty() {
+            return;
+        }
+        let import_scope = crate::config::import_scope();
+        let now = now_ms();
+        for (path, provider) in moved {
+            if !discovery::source_in_import_scope(&import_scope, provider, &path)
+                || !retry_admission_open(&path, &mut self.deferred_retries)
+            {
+                continue;
+            }
+            tracing::debug!(
+                provider,
+                path = %path.display(),
+                "Hot source moved without a file event reaching it first; scheduling a shipment"
+            );
+            self.scheduler.enqueue_observed_window(
+                path,
+                provider,
+                WorkPriority::Live,
+                "hot_recheck",
+                now,
+                now,
+            );
+        }
     }
 }

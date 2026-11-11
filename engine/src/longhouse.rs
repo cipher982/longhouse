@@ -13,6 +13,11 @@ mod build_identity;
 mod claude_owner_input;
 #[path = "codex_config.rs"]
 mod codex_config;
+// The import scope reads compressed Codex rollouts through it; the rest is
+// the engine's.
+#[allow(dead_code)]
+#[path = "compressed_source.rs"]
+mod compressed_source;
 #[path = "import_scope.rs"]
 mod import_scope;
 #[path = "machine_scope.rs"]

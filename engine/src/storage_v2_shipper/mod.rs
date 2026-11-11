@@ -6145,7 +6145,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        let cache = crate::compressed_source::cache_dir().unwrap();
+        let cache = prepare::compressed_source_cache_dir().unwrap();
         assert_eq!(
             fs::read_dir(&cache)
                 .map(|entries| entries.count())
@@ -6174,7 +6174,7 @@ mod tests {
                 .is_none()
         );
         assert!(
-            !crate::compressed_source::cache_dir().unwrap().exists(),
+            !prepare::compressed_source_cache_dir().unwrap().exists(),
             "an already-shipped rollout is judged from its header, never decompressed"
         );
     }

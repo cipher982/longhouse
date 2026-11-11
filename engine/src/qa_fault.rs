@@ -153,3 +153,45 @@ pub fn record_fired(_fault: CodexFault, _session_id: &str, _detail: serde_json::
 
 #[cfg(not(feature = "qa-fault-injection"))]
 pub fn record_fired_named(_fault: &str, _session_id: &str, _detail: serde_json::Value) {}
+
+/// Whether `name` is one of the comma-separated faults in `LONGHOUSE_QA_FAULT`.
+#[cfg(feature = "qa-fault-injection")]
+fn fault_listed(name: &str) -> bool {
+    std::env::var("LONGHOUSE_QA_FAULT")
+        .ok()
+        .is_some_and(|value| value.split(',').any(|fault| fault.trim() == name))
+}
+
+/// Watcher fault: deliver the first file event for each transcript and drop
+/// every later one, the shape of an overflowing watcher channel or a coalesced
+/// FSEvents stream. Only the hot-source re-check or a reconciliation scan can
+/// then see an append.
+#[cfg(feature = "qa-fault-injection")]
+pub fn watcher_drops_repeat_transcript_event(path: &std::path::Path) -> bool {
+    static SEEN: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
+    > = std::sync::LazyLock::new(Default::default);
+    if !fault_listed("watcher_drop_repeat_events") {
+        return false;
+    }
+    SEEN.lock()
+        .map(|mut seen| !seen.insert(path.to_path_buf()))
+        .unwrap_or(false)
+}
+
+#[cfg(not(feature = "qa-fault-injection"))]
+pub fn watcher_drops_repeat_transcript_event(_path: &std::path::Path) -> bool {
+    false
+}
+
+/// The hot-source re-check does nothing: the behaviour before it existed, as
+/// the negative control for a lost-event latency measurement.
+#[cfg(feature = "qa-fault-injection")]
+pub fn hot_recheck_off() -> bool {
+    fault_listed("hot_recheck_off")
+}
+
+#[cfg(not(feature = "qa-fault-injection"))]
+pub fn hot_recheck_off() -> bool {
+    false
+}

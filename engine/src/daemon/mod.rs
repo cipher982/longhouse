@@ -55,6 +55,7 @@ use crate::watcher::{SessionWatcher, WatcherEvent};
 
 mod archive_repair;
 mod discovery_scans;
+mod hot_sources;
 mod maintenance;
 mod managed_observation;
 mod outbox_lanes;
@@ -832,6 +833,11 @@ struct DaemonState {
     scope_timer: tokio::time::Interval,
     provider_roots_timer: tokio::time::Interval,
     fallback_timer: tokio::time::Interval,
+    /// When a reconciliation scan last started; one is due regardless of Live
+    /// work once it is this overdue (see `on_fallback_tick`).
+    last_reconciliation_scan_at: Instant,
+    hot_sources: hot_sources::HotSources,
+    hot_recheck_timer: tokio::time::Interval,
     managed_full_reconciliation_not_before: Instant,
     shipping_progress: heartbeat::ShippingProgressObservation,
     deferred_retries: HashMap<PathBuf, DeferredRetry>,
@@ -1128,6 +1134,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                  // after startup. Refresh only the small root list, not the whole archive.
     let mut provider_roots_timer = tokio::time::interval(Duration::from_secs(1));
     provider_roots_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut hot_recheck_timer = tokio::time::interval(hot_sources::HOT_RECHECK_INTERVAL);
+    hot_recheck_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     provider_roots_timer.tick().await;
     // `longhouse machine scope` rewrites the scope file while this daemon runs.
     // Widening it must backfill what became eligible now, not at the next
@@ -1403,6 +1411,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         scope_timer,
         provider_roots_timer,
         fallback_timer,
+        last_reconciliation_scan_at: Instant::now(),
+        hot_sources: hot_sources::HotSources::default(),
+        hot_recheck_timer,
         managed_full_reconciliation_not_before,
         shipping_progress,
         deferred_retries,
@@ -1651,6 +1662,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // restarts, sleeps, or dropped OS notifications.
             _ = state.fallback_timer.tick(), if !state.offline.is_offline => {
                 state.on_fallback_tick(&config);
+            }
+
+            // Re-stat recently written sources: repairs a lost file event in
+            // seconds instead of a reconciliation interval.
+            _ = state.hot_recheck_timer.tick(), if !state.hot_sources.is_empty() && !state.offline.is_offline => {
+                state.on_hot_recheck_tick();
             }
 
             // Retry lane: storage-v2 pending envelopes. Never the primary live

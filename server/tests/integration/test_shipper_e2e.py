@@ -914,6 +914,97 @@ def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tm
         shutil.rmtree(longhouse_home, ignore_errors=True)
 
 
+@pytest.mark.parametrize(
+    "hot_recheck",
+    [
+        "on",
+        # The negative control takes about a minute, so it runs only when asked
+        # for by name: PYTEST_ADDOPTS="-k lost_event_control" make test-shipper-e2e
+        pytest.param("off", id="off-lost_event_control"),
+    ],
+)
+def test_lost_file_event_is_repaired_by_the_hot_recheck(server, tmp_path, hot_recheck, request):
+    """An append whose file event is lost still ships in seconds.
+
+    The `watcher_drop_repeat_events` fault delivers each transcript's first event
+    and drops the rest. With the hot re-check off (the engine before it existed)
+    the append waits for a reconciliation scan, so the control appends after the
+    startup scan has run and asserts nothing arrives in 20s.
+    """
+    if hot_recheck == "off" and "lost_event_control" not in (request.config.option.keyword or ""):
+        pytest.skip('negative control; select it with -k lost_event_control')
+    faults = "watcher_drop_repeat_events" + (",hot_recheck_off" if hot_recheck == "off" else "")
+    session_id = str(uuid4())
+    home = tmp_path / "home"
+    claude_root = home / ".claude"
+    projects_dir = claude_root / "projects" / "lost-event-project"
+    projects_dir.mkdir(parents=True)
+    transcript = projects_dir / f"{session_id}.jsonl"
+    longhouse_home = Path("/tmp") / f"lh-e2e-{session_id[:8]}"
+    log_dir = tmp_path / "logs"
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "CLAUDE_CONFIG_DIR": str(claude_root),
+        "LONGHOUSE_HOME": str(longhouse_home),
+        "LONGHOUSE_LOG_DIR": str(log_dir),
+        "LONGHOUSE_QA_FAULT": faults,
+    }
+    proc = _popen_captured(
+        [
+            str(ENGINE_BIN),
+            "connect",
+            "--url",
+            _server_url(server),
+            "--token",
+            _server_token(server),
+            "--db",
+            str(tmp_path / "engine.db"),
+            "--compression",
+            "gzip",
+            "--fallback-scan-secs",
+            "300",
+            "--spool-replay-secs",
+            "300",
+            "--machine-name",
+            "shipper-e2e",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_dir=tmp_path / "process-output",
+        name=f"daemon-lost-event-{hot_recheck}",
+    )
+    try:
+        _wait_for_log_contains(log_dir, "Daemon ready")
+        user_line, reply_line = (FIXTURES_DIR / CLAUDE_FIXTURE).read_text().replace(CLAUDE_SESSION_ID, session_id).splitlines(keepends=True)
+        with transcript.open("a") as f:
+            f.write(user_line)
+        _wait_for_session_events(server, session_id, min_events=1)
+        if hot_recheck == "off":
+            # Let the one-off startup scan (30s after start) pass, so only the
+            # 300s periodic scan could still find the append.
+            time.sleep(35)
+        with transcript.open("a") as f:
+            f.write(reply_line)
+        appended_at = time.monotonic()
+        if hot_recheck == "on":
+            _wait_for_session_events(server, session_id, min_events=2, timeout=10)
+            print(f"lost-event repair latency: {time.monotonic() - appended_at:.2f}s")
+        else:
+            with pytest.raises(AssertionError, match="Timed out"):
+                _wait_for_session_events(server, session_id, min_events=2, timeout=20)
+            print("lost-event control: append not shipped within 20s with the hot re-check off")
+    except Exception:
+        daemon_output = _terminate_process(proc)
+        raise AssertionError(
+            f"lost-event integration failed ({hot_recheck})\n{daemon_output}\n{_read_engine_logs(log_dir)}{_server_output_detail(server)}"
+        ) from None
+    finally:
+        if proc.poll() is None:
+            _terminate_process(proc)
+        shutil.rmtree(longhouse_home, ignore_errors=True)
+
+
 def _stamped_now(text: str) -> str:
     """A fixture transcript as a session that is happening now.
 

@@ -116,11 +116,6 @@ pub fn fully_shipped(path: &Path, position: u64) -> Result<bool> {
     Ok(position >= content_size(path)?)
 }
 
-/// Where decompressed copies are kept while their tail ships.
-pub fn cache_dir() -> Result<PathBuf> {
-    Ok(crate::config::get_agent_dir()?.join("compressed-source-cache"))
-}
-
 fn cache_path_in(dir: &Path, identity_path: &Path) -> PathBuf {
     let digest = <sha2::Sha256 as sha2::Digest>::digest(identity_path.to_string_lossy().as_bytes());
     dir.join(format!("{digest:x}.jsonl"))
