@@ -22,7 +22,7 @@ OUTPUT_PATH = ROOT / "server" / "zerg" / "config" / "managed_provider_contracts.
 # on unrelated edits. (adapter_digest is not stored at all; it is computed from
 # adapter_sources when a proof is produced.)
 ENGINE_OUTPUT_PATH = ROOT / "engine" / "src" / "managed_provider_contracts.generated.json"
-ENGINE_OMITTED_KEYS = frozenset({"oracle_digest"})
+ENGINE_OMITTED_KEYS = frozenset({"oracle_digest", "live_stream_signals"})  # harness-only expectations
 
 sys.path.insert(0, str(ROOT / "server"))
 

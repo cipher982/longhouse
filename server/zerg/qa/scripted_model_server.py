@@ -114,6 +114,83 @@ def reasoning_chunks(pace: Pacing) -> list[tuple[str, float]]:
     return [(f"{REASONING_WORD}{i:03d} ", pace.initial_delay * (i + 1) / (count + 1)) for i in range(count)]
 
 
+def _reasoning_on(pace: Pacing | None) -> bool:
+    return pace is not None and pace.reasoning_tokens > 0
+
+
+def _thinking_requested(payload: dict) -> bool:
+    """Anthropic returns thinking blocks only to a request that enabled thinking; a client that gets one it did not ask for
+    (Claude Code does) retries the request, which streams the reply again."""
+    thinking = payload.get("thinking")
+    return isinstance(thinking, dict) and thinking.get("type") in ("enabled", "adaptive")
+
+
+def _reasoning_text(pace: Pacing) -> str:
+    return "".join(chunk for chunk, _at in reasoning_chunks(pace))
+
+
+def _responses_reasoning_frames(pace: Pacing) -> tuple[list[tuple], dict]:
+    """Responses API: a `reasoning` output item at output_index 0 streamed as summary text deltas."""
+    item_id = f"rs_{uuid4().hex}"
+    done = {"id": item_id, "type": "reasoning", "summary": [{"type": "summary_text", "text": _reasoning_text(pace)}]}
+    ref = {"item_id": item_id, "output_index": 0, "summary_index": 0}
+    frames: list[tuple] = [
+        (
+            "response.output_item.added",
+            {"type": "response.output_item.added", "output_index": 0, "item": {"id": item_id, "type": "reasoning", "summary": []}},
+        ),
+        (
+            "response.reasoning_summary_part.added",
+            {"type": "response.reasoning_summary_part.added", **ref, "part": {"type": "summary_text", "text": ""}},
+        ),
+    ]
+    frames.extend(
+        ("response.reasoning_summary_text.delta", {"type": "response.reasoning_summary_text.delta", **ref, "delta": chunk}, at)
+        for chunk, at in reasoning_chunks(pace)
+    )
+    frames.extend(
+        [
+            (
+                "response.reasoning_summary_text.done",
+                {"type": "response.reasoning_summary_text.done", **ref, "text": _reasoning_text(pace)},
+            ),
+            (
+                "response.reasoning_summary_part.done",
+                {"type": "response.reasoning_summary_part.done", **ref, "part": {"type": "summary_text", "text": _reasoning_text(pace)}},
+            ),
+            ("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": done}),
+        ]
+    )
+    return frames, done
+
+
+def _anthropic_thinking_frames(pace: Pacing) -> list[tuple]:
+    """Anthropic Messages: a `thinking` content block at index 0 before the text block."""
+    frames: list[tuple] = [
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
+        )
+    ]
+    frames.extend(
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": chunk}},
+            at,
+        )
+        for chunk, at in reasoning_chunks(pace)
+    )
+    # A real thinking block ends with its signature; a client that finds none treats the block as malformed and retries.
+    frames.append(
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "longhouse-mock-signature"}},
+        )
+    )
+    frames.append(("content_block_stop", {"type": "content_block_stop", "index": 0}))
+    return frames
+
+
 def paced_text(pace: Pacing) -> str:
     """The generated reply for a pace with `tokens` and no scripted text."""
     if pace.tokens is None:
@@ -869,6 +946,7 @@ class MockHandler(BaseHTTPRequestHandler):
             self._send_model_json(_response_object(response_id, model, text, status="completed"), plan.turn_id)
             return
 
+        ro = 1 if _reasoning_on(pace) else 0
         item_id = f"msg_{uuid4().hex}"
         created = _response_object(response_id, model, text, status="in_progress")
         message = {
@@ -897,7 +975,7 @@ class MockHandler(BaseHTTPRequestHandler):
                 "response.output_item.added",
                 {
                     "type": "response.output_item.added",
-                    "output_index": 0,
+                    "output_index": ro,
                     "item": message,
                 },
             ),
@@ -906,19 +984,23 @@ class MockHandler(BaseHTTPRequestHandler):
                 {
                     "type": "response.content_part.added",
                     "item_id": item_id,
-                    "output_index": 0,
+                    "output_index": ro,
                     "content_index": 0,
                     "part": part,
                 },
             ),
         ]
+        if ro:
+            reasoning_frames, reasoning_item = _responses_reasoning_frames(pace)
+            frames[2:2] = reasoning_frames
+            final_response["output"] = [reasoning_item, final_message]
         frames.extend(
             (
                 "response.output_text.delta",
                 {
                     "type": "response.output_text.delta",
                     "item_id": item_id,
-                    "output_index": 0,
+                    "output_index": ro,
                     "content_index": 0,
                     "delta": chunk,
                 },
@@ -933,7 +1015,7 @@ class MockHandler(BaseHTTPRequestHandler):
                     {
                         "type": "response.output_text.done",
                         "item_id": item_id,
-                        "output_index": 0,
+                        "output_index": ro,
                         "content_index": 0,
                         "text": text,
                     },
@@ -943,7 +1025,7 @@ class MockHandler(BaseHTTPRequestHandler):
                     {
                         "type": "response.content_part.done",
                         "item_id": item_id,
-                        "output_index": 0,
+                        "output_index": ro,
                         "content_index": 0,
                         "part": {
                             "type": "output_text",
@@ -956,7 +1038,7 @@ class MockHandler(BaseHTTPRequestHandler):
                     "response.output_item.done",
                     {
                         "type": "response.output_item.done",
-                        "output_index": 0,
+                        "output_index": ro,
                         "item": final_message,
                     },
                 ),
@@ -995,6 +1077,7 @@ class MockHandler(BaseHTTPRequestHandler):
         if not payload.get("stream", False):
             self._send_model_json(message, plan.turn_id)
             return
+        ti = 1 if _reasoning_on(pace) and _thinking_requested(payload) else 0
         chunks = _text_chunks(text, pace)
         frames: list[tuple] = [
             (
@@ -1013,17 +1096,19 @@ class MockHandler(BaseHTTPRequestHandler):
                 "content_block_start",
                 {
                     "type": "content_block_start",
-                    "index": 0,
+                    "index": ti,
                     "content_block": {"type": "text", "text": ""},
                 },
             ),
         ]
+        if ti:
+            frames[1:1] = _anthropic_thinking_frames(pace)
         frames.extend(
             (
                 "content_block_delta",
                 {
                     "type": "content_block_delta",
-                    "index": 0,
+                    "index": ti,
                     "delta": {"type": "text_delta", "text": chunk},
                 },
                 at,
@@ -1193,7 +1278,8 @@ class MockHandler(BaseHTTPRequestHandler):
             return
 
         created = _response_object(response_id, model, text or "", status="in_progress")
-        call_index = 1 if text is not None else 0
+        ro = 1 if _reasoning_on(pace) and text is not None else 0
+        call_index = (1 if text is not None else 0) + ro
         frames: list[tuple] = [
             ("response.created", {"type": "response.created", "response": created}),
             (
@@ -1201,6 +1287,10 @@ class MockHandler(BaseHTTPRequestHandler):
                 {"type": "response.in_progress", "response": created},
             ),
         ]
+        if ro:
+            reasoning_frames, reasoning_item = _responses_reasoning_frames(pace)
+            frames.extend(reasoning_frames)
+            final["output"] = [reasoning_item, *final["output"]]
         if text is not None:
             item_id = text_item["id"]
             message = {**text_item, "content": [], "status": "in_progress"}
@@ -1212,7 +1302,7 @@ class MockHandler(BaseHTTPRequestHandler):
                         "response.output_item.added",
                         {
                             "type": "response.output_item.added",
-                            "output_index": 0,
+                            "output_index": ro,
                             "item": message,
                         },
                     ),
@@ -1221,7 +1311,7 @@ class MockHandler(BaseHTTPRequestHandler):
                         {
                             "type": "response.content_part.added",
                             "item_id": item_id,
-                            "output_index": 0,
+                            "output_index": ro,
                             "content_index": 0,
                             "part": part,
                         },
@@ -1234,7 +1324,7 @@ class MockHandler(BaseHTTPRequestHandler):
                     {
                         "type": "response.output_text.delta",
                         "item_id": item_id,
-                        "output_index": 0,
+                        "output_index": ro,
                         "content_index": 0,
                         "delta": chunk,
                     },
@@ -1249,7 +1339,7 @@ class MockHandler(BaseHTTPRequestHandler):
                         {
                             "type": "response.output_text.done",
                             "item_id": item_id,
-                            "output_index": 0,
+                            "output_index": ro,
                             "content_index": 0,
                             "text": text,
                         },
@@ -1259,7 +1349,7 @@ class MockHandler(BaseHTTPRequestHandler):
                         {
                             "type": "response.content_part.done",
                             "item_id": item_id,
-                            "output_index": 0,
+                            "output_index": ro,
                             "content_index": 0,
                             "part": {
                                 "type": "output_text",
@@ -1272,7 +1362,7 @@ class MockHandler(BaseHTTPRequestHandler):
                         "response.output_item.done",
                         {
                             "type": "response.output_item.done",
-                            "output_index": 0,
+                            "output_index": ro,
                             "item": text_item,
                         },
                     ),
@@ -1362,6 +1452,10 @@ class MockHandler(BaseHTTPRequestHandler):
         }
         frames: list[tuple] = [("message_start", {"type": "message_start", "message": start})]
         tool_index = 0
+        ti = 1 if _reasoning_on(pace) and text is not None and _thinking_requested(payload) else 0
+        if ti:
+            frames.extend(_anthropic_thinking_frames(pace))
+            tool_index = 1
         if text is not None:
             chunks = _text_chunks(text, pace)
             frames.append(
@@ -1369,7 +1463,7 @@ class MockHandler(BaseHTTPRequestHandler):
                     "content_block_start",
                     {
                         "type": "content_block_start",
-                        "index": 0,
+                        "index": ti,
                         "content_block": {"type": "text", "text": ""},
                     },
                 )
@@ -1379,7 +1473,7 @@ class MockHandler(BaseHTTPRequestHandler):
                     "content_block_delta",
                     {
                         "type": "content_block_delta",
-                        "index": 0,
+                        "index": ti,
                         "delta": {"type": "text_delta", "text": chunk},
                     },
                     at,
@@ -1387,7 +1481,7 @@ class MockHandler(BaseHTTPRequestHandler):
                 for chunk, at in chunks
             )
             frames.append(("content_block_stop", {"type": "content_block_stop", "index": 0}))
-            tool_index = 1
+            tool_index = ti + 1
         frames.extend(
             [
                 (
@@ -1490,6 +1584,15 @@ class MockHandler(BaseHTTPRequestHandler):
                 },
             )
         ]
+        if text is not None and _reasoning_on(pace):
+            frames.extend(
+                (
+                    None,
+                    {**chunk, "choices": [{"index": 0, "delta": {"reasoning_content": piece}, "finish_reason": None}]},
+                    at,
+                )
+                for piece, at in reasoning_chunks(pace)
+            )
         if text is not None:
             chunks = _text_chunks(text, pace)
             frames.extend(
@@ -1572,6 +1675,13 @@ class MockHandler(BaseHTTPRequestHandler):
         if stream and plan.pace is not None and plan.text is not None:
             chunks = _text_chunks(plan.text, plan.pace)
             frames = []
+            if _reasoning_on(plan.pace):
+                for piece, at in reasoning_chunks(plan.pace):
+                    thought = self._gemini_payload(piece, model)
+                    thought["candidates"][0]["content"]["parts"][0]["thought"] = True
+                    del thought["candidates"][0]["finishReason"]
+                    del thought["usageMetadata"]
+                    frames.append((None, thought, at))
             for index, (chunk, at) in enumerate(chunks):
                 last = index == len(chunks) - 1
                 piece = self._gemini_payload(chunk, model, call=plan.tool_call if last else None)

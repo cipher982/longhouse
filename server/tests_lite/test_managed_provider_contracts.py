@@ -1249,3 +1249,30 @@ def test_outstanding_factory_work_names_unprojected_transcript_signals():
             row["provider"] == provider and row["operation"] in {"transcript_signal:turn.duration", "transcript_signal:turn.usage"}
             for row in rows
         ), f"{provider} turn signals are implemented"
+
+
+def test_live_stream_signals_are_declared_and_strictly_validated():
+    from zerg.managed_provider_contract_manifest import _validate_live_stream_signals
+    from zerg.managed_provider_contract_manifest import managed_provider_contract_manifest
+
+    for item in managed_provider_contract_manifest()["providers"]:
+        _validate_live_stream_signals(item)
+    by_provider = {item["provider"]: item["live_stream_signals"] for item in managed_provider_contract_manifest()["providers"]}
+    assert by_provider["claude"]["helm"]["live_reply_text"] == "known_bad"
+    assert by_provider["antigravity"]["helm"]["live_reply_text"] == "known_bad"
+    assert by_provider["cursor"]["console"]["live_reply_text"] == "not_measurable"
+    assert by_provider["codex"]["helm"]["live_reply_text"] == "expected"
+
+    ok = {"live_reply_text": "expected", "source": "x"}
+    _validate_live_stream_signals({"provider": "t", "live_stream_signals": {"console": ok, "helm": ok}})
+    bad = [
+        {},
+        {"console": ok},
+        {"console": ok, "helm": {**ok, "live_reply_text": "maybe"}},
+        {"console": ok, "helm": {**ok, "live_reply_text": "known_bad"}},  # no reason
+        {"console": ok, "helm": {**ok, "source": ""}},
+        {"console": ok, "helm": {**ok, "extra": 1}},
+    ]
+    for signals in bad:
+        with pytest.raises(ValueError):
+            _validate_live_stream_signals({"provider": "t", "live_stream_signals": signals})

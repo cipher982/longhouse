@@ -509,6 +509,13 @@ providers:
   - codex.turn_steer
   - codex.turn_interrupt
   - codex.invocation_close
+  live_stream_signals:
+    console:
+      live_reply_text: expected
+      source: codex_console_live runtime events (app-server agent_message_delta)
+    helm:
+      live_reply_text: expected
+      source: codex_bridge_live runtime events (app-server agent_message_delta)
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented
@@ -1099,6 +1106,14 @@ providers:
   # source, the golden fixture that proves the parser, the live canary that
   # proves the provider still writes it, and the trigger that canary must
   # perform. Signal ids are shared vocabulary across providers.
+  live_stream_signals:
+    console:
+      live_reply_text: expected
+      source: claude_print runtime events (stream-json text deltas)
+    helm:
+      live_reply_text: known_bad
+      source: none
+      reason: "no landed source: the MessageDisplay hook makes Claude's own TUI hold unterminated text, work is on origin/claude-helm-message-display and not landed"
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented
@@ -1513,6 +1528,13 @@ providers:
   - opencode.turn_start
   - opencode.turn_interrupt
   - opencode.turn_steer
+  live_stream_signals:
+    console:
+      live_reply_text: expected
+      source: opencode_run runtime events (opencode_run_stream)
+    helm:
+      live_reply_text: expected
+      source: opencode_server_bridge runtime events (opencode_helm_stream)
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented
@@ -1893,6 +1915,14 @@ providers:
   machine_control_supports: ["antigravity.send", "antigravity.turn_start"]
   # Unsurveyed provider: every signal starts as work, and the census lane is
   # the canary that characterises which lines this provider writes at all.
+  live_stream_signals:
+    console:
+      live_reply_text: expected
+      source: antigravity_print runtime events
+    helm:
+      live_reply_text: known_bad
+      source: none
+      reason: "no structured source: agy acp cannot observe a TUI session (separate agent process, no attach or subscribe)"
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented
@@ -2315,6 +2345,15 @@ providers:
   - cursor.turn_interrupt
   # Unsurveyed provider: every signal starts as work, and the census lane is
   # the canary that characterises which lines this provider writes at all.
+  live_stream_signals:
+    console:
+      live_reply_text: not_measurable
+      source: cursor_print runtime events
+      reason: "not measurable with the scripted fake model: Cursor needs real turns"
+    helm:
+      live_reply_text: not_measurable
+      source: none
+      reason: "not measurable with the scripted fake model: Cursor needs real turns"
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented
@@ -2728,6 +2767,13 @@ providers:
   - pi.turn_interrupt
   # Console steer: Pi Console runs in RPC mode and takes an RPC `steer`.
   - pi.turn_steer
+  live_stream_signals:
+    console:
+      live_reply_text: expected
+      source: pi_print runtime events (pi_print_stream)
+    helm:
+      live_reply_text: expected
+      source: pi_helm_launcher runtime events (pi_print_stream)
   transcript_signals:
     delegation.spawn:
       disposition: upstream_absent
@@ -3144,6 +3190,13 @@ providers:
         minimum_scenario_revision: 2
         acceptable_evidence: [live_token]
         max_age_seconds: 86400
+  live_stream_signals:
+    console:
+      live_reply_text: expected
+      source: omp_print runtime events (omp_print_stream)
+    helm:
+      live_reply_text: expected
+      source: omp_helm_launcher runtime events (omp_print_stream)
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented

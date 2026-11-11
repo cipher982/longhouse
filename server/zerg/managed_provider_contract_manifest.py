@@ -612,6 +612,34 @@ def _validate_transcript_signals(item: dict[str, Any]) -> None:
             raise ValueError(f"{prefix}.first_seen_version must be a non-empty string when present")
 
 
+_LIVE_STREAM_MODES = ("console", "helm")
+_LIVE_STREAM_STATES = frozenset({"expected", "known_bad", "not_measurable"})
+
+
+def _validate_live_stream_signals(item: dict[str, Any]) -> None:
+    """Whether live reply text is expected per mode, its source, and why a cell is known bad or unmeasurable.
+
+    The terminal-truth harness reads its expectations from here.
+    """
+    provider = str(item.get("provider") or "<unknown>")
+    signals = item.get("live_stream_signals")
+    if not isinstance(signals, dict) or set(signals) != set(_LIVE_STREAM_MODES):
+        raise ValueError(f"managed provider contract {provider}: live_stream_signals must have exactly {list(_LIVE_STREAM_MODES)}")
+    for mode, cell in signals.items():
+        prefix = f"managed provider contract {provider}: live_stream_signals.{mode}"
+        if not isinstance(cell, dict):
+            raise ValueError(f"{prefix} must be an object")
+        unknown = set(cell) - {"live_reply_text", "source", "reason"}
+        if unknown:
+            raise ValueError(f"{prefix} has unknown keys {', '.join(sorted(unknown))}")
+        state = cell.get("live_reply_text")
+        if state not in _LIVE_STREAM_STATES:
+            raise ValueError(f"{prefix}.live_reply_text must be one of {sorted(_LIVE_STREAM_STATES)}")
+        _validate_capability_string(prefix, cell, "source")
+        if state != "expected" and not (isinstance(cell.get("reason"), str) and cell["reason"].strip()):
+            raise ValueError(f"{prefix} is {state} but names no reason")
+
+
 def _validate_factory_contract(item: dict[str, Any]) -> None:
     provider = str(item.get("provider") or "<unknown>")
     for field in _FACTORY_STRING_FIELDS:
@@ -810,6 +838,7 @@ def _validated_contract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
         _validate_auth_probe(item)
         _validate_capabilities(item)
         _validate_transcript_signals(item)
+        _validate_live_stream_signals(item)
         _validate_factory_contract(item)
         items.append(deepcopy(item))
     return items

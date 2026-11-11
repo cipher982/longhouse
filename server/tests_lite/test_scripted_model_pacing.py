@@ -46,7 +46,9 @@ def _path(protocol: str, body: dict) -> str:
         body.update(input=[_message(protocol, body.pop("text"))], stream=True)
         return "/v1/responses"
     if protocol == "anthropic":
-        body.update(messages=[_message(protocol, body.pop("text"))], max_tokens=512, stream=True)
+        body.update(
+            messages=[_message(protocol, body.pop("text"))], max_tokens=512, stream=True, thinking={"type": "enabled", "budget_tokens": 256}
+        )
         return "/v1/messages"
     body["contents"] = [_message(protocol, body.pop("text"))]
     return "/v1beta/models/mock-model:streamGenerateContent"
@@ -196,3 +198,95 @@ def test_chat_stream_carries_reasoning_content_before_the_reply(tmp_path: Path) 
         "reasoning" if "reasoning_content" in delta else "content" for delta in deltas if "reasoning_content" in delta or "content" in delta
     ]
     assert kinds == ["reasoning"] * 3 + ["content"] * TOKENS
+
+
+def _reasoning_pieces(protocol: str, events: list[dict]) -> list[str]:
+    if protocol == "chat":
+        return [c["delta"]["reasoning_content"] for e in events for c in e.get("choices", []) if "reasoning_content" in c.get("delta", {})]
+    if protocol == "responses":
+        return [e["delta"] for e in events if e.get("type") == "response.reasoning_summary_text.delta"]
+    if protocol == "anthropic":
+        return [
+            e["delta"]["thinking"] for e in events if e.get("type") == "content_block_delta" and e["delta"].get("type") == "thinking_delta"
+        ]
+    return [
+        part["text"]
+        for e in events
+        for c in e.get("candidates", [])
+        for part in c["content"]["parts"]
+        if part.get("thought") and "text" in part
+    ]
+
+
+def _shape(events: list[dict]) -> list[str]:
+    return [str(e.get("type") or sorted(e)) for e in events]
+
+
+@pytest.mark.parametrize(
+    ("protocol", "tools"),
+    [
+        ("chat", False),
+        ("responses", False),
+        ("anthropic", False),
+        ("gemini", False),
+        ("chat", True),
+        ("responses", True),
+        ("anthropic", True),
+    ],
+)
+def test_reasoning_is_streamed_before_the_reply_on_every_protocol_and_never_in_reply_text(
+    tmp_path: Path, protocol: str, tools: bool
+) -> None:
+    match = "REASON_TOOL" if tools else "REASON_PLAIN"
+    turn = {"id": "r", "match": match, "pace": {**PACE, "reasoning_tokens": 3}}
+    if tools:
+        turn["tool_call"] = {"type": "shell", "name": "shell", "command": "echo hi"}
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps({"turns": [turn]}))
+    with _running_server(tmp_path, script_path=script) as (endpoint, _receipt):
+        events, started = _stream(endpoint, protocol, match, tools=tools)
+    bodies = [event for _, event in events if isinstance(event, dict)]
+    assert _reasoning_pieces(protocol, bodies) == ["THINKING000 ", "THINKING001 ", "THINKING002 "]
+    first_reasoning = next(i for i, (_, e) in enumerate(events) if _reasoning_pieces(protocol, [e]))
+    reply_events = [e for e in bodies if not _reasoning_pieces(protocol, [e])]  # Gemini marks thoughts as parts of the same shape
+    first_text = next(i for i, (_, e) in enumerate(events) if e in reply_events and _text(protocol, [e], streaming=True))
+    assert first_reasoning < first_text
+    # Reasoning is timed inside the initial delay, so it lands in the stream log with a positive time.
+    assert all(0 < arrived - started < INITIAL_DELAY + 0.25 for arrived, e in events if _reasoning_pieces(protocol, [e]))
+    assert _text(protocol, reply_events, streaming=True) == EXPECTED
+    assert "THINKING" not in _text(protocol, reply_events, streaming=True)
+    if protocol == "responses":
+        done = [e["response"]["output"] for e in bodies if e.get("type") == "response.completed"][0]
+        assert [item["type"] for item in done][:2] == ["reasoning", "message"]
+        indexes = {e["item"]["type"]: e["output_index"] for e in bodies if e.get("type") == "response.output_item.done"}
+        assert indexes["reasoning"] == 0 and indexes["message"] == 1
+        if tools:
+            assert indexes["function_call"] == 2
+    if protocol == "anthropic":
+        starts = [(e["index"], e["content_block"]["type"]) for e in bodies if e.get("type") == "content_block_start"]
+        assert starts[:2] == [(0, "thinking"), (1, "text")]
+        if tools:
+            assert starts[2] == (2, "tool_use")
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+def test_zero_reasoning_tokens_leave_every_stream_unchanged(tmp_path: Path, protocol: str) -> None:
+    script = tmp_path / "script.json"
+    script.write_text(
+        json.dumps(
+            {
+                "turns": [
+                    {"id": "a", "match": "ZERO_A", "pace": PACE},
+                    {"id": "b", "match": "ZERO_B", "pace": {**PACE, "reasoning_tokens": 0}},
+                ]
+            }
+        )
+    )
+    with _running_server(tmp_path, script_path=script) as (endpoint, _receipt):
+        plain, _ = _stream(endpoint, protocol, "ZERO_A")
+        zero, _ = _stream(endpoint, protocol, "ZERO_B")
+    assert _shape([e for _, e in plain]) == _shape([e for _, e in zero])
+    assert not _reasoning_pieces(protocol, [e for _, e in zero])
+    assert not any(
+        '"output_index": 1' in json.dumps(e) or '"index": 1' in json.dumps(e) for _, e in zero if protocol in {"responses", "anthropic"}
+    )
