@@ -1,361 +1,133 @@
 ---
 name: zerg-ship
-description: Zerg/Longhouse full ship cycle — test, deploy, QA, verify. Use when pushing changes to production or doing a full dev→deploy iteration.
+description: Land and ship a Longhouse change (the `cowbell` flow) - push an exact SHA, watch canary qualification, read Hosted Live QA, decide whether a CLI release, TestFlight build or local dogfood refresh is also needed. Use when pushing to main, answering "is it deployed", or promoting or releasing by hand.
 ---
 
-# Zerg Ship Cycle
+# Ship a change
 
-The workspace AGENTS.md owns the ring table, the landing flow (worktree,
-`make validate`, the review rule) and the agent-authority table. This skill owns
-the mechanics: which command moves which surface, with which arguments, and how
-to read the result.
+The workspace `AGENTS.md` owns the ring table, the landing flow (worktree,
+`make validate`, `check-push-readiness`) and the agent-authority table. This
+skill owns which command moves which surface and how to read the result.
 
-## Surfaces
+## Which lane a change needs
 
-- **Public demo runtime** — `https://longhouse.ai` — operator-managed Docker Compose app
-- **Control plane** — `https://control.longhouse.ai` — private repo/service; public deploys only health-check it
-- **Hosted tenant runtime** — `https://<subdomain>.longhouse.ai` — reprovisioned runtime container managed by the control plane
+| Change touches | Lane | What moves it |
+|---|---|---|
+| `server/`, `web/`, `engine/`, `config/`, runtime Dockerfile | Hosted runtime | A `main` push builds the image and qualifies the canary. Dogfood and production follow by themselves (Promote Rings). |
+| `longhouse` CLI, hooks, installer, `longhouse machine repair`, engine, Desktop App | CLI/package release | `make release VERSION=vX.Y.Z` ([RELEASE.md](../../../RELEASE.md)). A hosted deploy does not reach users' machines. Say so; do not report "deployed". |
+| `ios/` | TestFlight | `make testflight` (below). Never a hosted deploy. |
+| The separately installed runner | Runner release | `runner-release.yml`; its own path. |
+| Control plane | Not this repo | `~/git/zerg/control-plane`, its README ("Production activation and rollback"). |
 
-`longhouse.ai` is a demo-mode Longhouse runtime, not a static landing page.
+A commit that spans lanes needs each lane run and verified on its own.
 
-## Ship Types
+## Land and watch (`cowbell`)
 
-Do not blur these lanes:
+1. Pick the task SHA: commit uncommitted work now, otherwise the latest commit
+   that represents the task, even if already pushed.
+2. Before pushing: `make affected-check BASE=<base-sha>` shows which CI lanes the
+   diff hits. Run the focused tests for the changed behavior (a CSS change needs a
+   web proof, not engine tests), then `make check-push-readiness`. Once per clone:
+   `make install-precommit-autofix`.
+3. `make ship SHA=<full-sha>` pushes that exact SHA, prints CI queue load and waits
+   on the push-triggered runs (`runtime-image.yml`, `deploy-and-verify.yml`, and
+   others by touched path). Read the start banner to confirm SHA and subject, stay
+   in the foreground, and do not wrap it in a short timeout.
+4. From a topic worktree, rebase onto `origin/main` first and pass
+   `ARGS="--branch main"`; otherwise `ship` pushes the topic branch and nothing
+   deploys. `ARGS=--json` gives one blocking verdict.
+5. Already pushed: `make ship-watch SHA=<full-sha>` (`ARGS="--poll 30"`).
+6. A non-zero exit means ship failed. Explain suspected causes, but do not report
+   it as success.
 
-- **Hosted deploy** — a `main` push touching runtime paths publishes the
-  runtime image and qualifies it on the canary automatically. Dogfood and
-  production are separate rings that move only by command
-  (`control-plane/docs/specs/release-rings.md`):
-  - `make promote-dogfood SHA=<full-sha>`: the SHA is required (the script
-    refuses an empty one) and needs a canary-qualified Deploy and Verify run
-    on it. The instance comes from `SUBDOMAIN` or `LONGHOUSE_DEFAULT_SUBDOMAIN`.
-  - `make promote-production [SHA=<full-sha>] [CHECK=1]`: moves every other
-    hosted tenant, the new-tenant default and the public demo to the exact
-    image dogfood serves. `SHA` is the full 40-character commit and optional
-    (omitted, it means what dogfood serves); `VERSION=` is refused. Five gates
-    must pass: dogfood serves that digest, a passed (never superseded) Hosted
-    Live QA run of main's workflow file on that SHA, the previous-release
-    engine smoke, the control plane's soak (none until the first real tenant
-    exists, then 24 h; an unreadable answer refuses), and the OCI archive.
-    `CHECK=1` prints the receipt and moves nothing. After a halted tenant wave,
-    rerun with `PROMOTION_ATTEMPT=<n+1>`.
-  - Dogfood's fast lane is only for ranges with no match in
-    `scripts/ops/dogfood-sensitive-paths.toml`; sensitive paths, including
-    authentication and migrations, require the canary-qualified path.
-  - No tag or laptop release is involved. The control plane itself is an
-    external private service, not shipped here.
-- **CLI/package release** (`make release VERSION=vX.Y.Z`; see
-  [RELEASE.md](../../../RELEASE.md)) — publishes the native pair (`longhouse`,
-  `longhouse-engine`), `Longhouse.app` and the PyPI wheel. Existing users do not
-  get this from a hosted deploy: they rerun the installer (`scripts/install.sh`)
-  or `uv tool upgrade longhouse` for the Python package. It is independent of
-  production promotion. Start it from any checkout: it holds the `release` ring
-  lock and runs from a disposable checkout of `origin/main` under `/tmp/agents`,
-  removed on exit. Validation (~7 min) holds the heavy-build lock alone;
-  rerunning the same `VERSION` resumes and skips validation for an
-  already-validated candidate (`RELEASE_REVALIDATE=1` forces it).
-- **iOS TestFlight** — `make testflight [SHA=<sha>] [WHATS_NEW="tester note"]`
-  dispatches `ios-testflight.yml` (archive on the wisp runner with the Xcode 27 GM,
-  upload and wait for processing; `DRY_RUN=1` archives and exports only and uploads nothing). By default it submits for Beta
-  App Review when needed and publishes to both the public group and the internal
-  group. Set `INTERNAL_ONLY=1` to skip public-group and Beta App Review setup;
-  the build is made available only through the all-builds internal group. The SHA
-  defaults to `HEAD` and must already be on `origin/main`. `make testflight-status`
-  shows builds, review state and the public link and needs the `ASC_API_*`
-  credentials in the environment. The public link is
-  `https://testflight.apple.com/join/CmEd5kY7`; public publishing fails when the
-  group's link is not the one the landing page advertises
-  (`web/src/features/marketing/landing/links.ts`). Hosted deploys, laptop
-  releases and `make phone-deploy` never ship to TestFlight.
-- **Runner release** — updates the separately installed runner binary/service.
-  This is its own release/update path and is not covered by the normal runtime
-  or control-plane deploy lanes.
+Waiting rules: use a completion event or blocking wait once and move on; no
+`pgrep`/`curl` loops. For a queued GitHub run use
+`gh run watch <id> --interval 60 --compact --exit-status` (the 3 s default hits
+the API rate limit when several watchers run).
 
-If a change touches `longhouse claude`, local hook install, local launcher
-behavior, `longhouse machine repair`, or other code that runs on the user's
-machine, do not say "deployed" as if hosted users now have it. That kind of
-change needs a CLI/package release, and sometimes users must run
-`longhouse machine repair` after upgrading.
+Reading the result:
 
-For launch readiness, use the exact-SHA verifier after the hosted and release
-lanes have both run:
+- `deploy-and-verify.yml` waits for the exact-SHA image, reprovisions the canary
+  and runs a fast smoke. The canary is shared: a run whose canary a newer push
+  replaced ends green as *superseded* ("Stand down, canary superseded"). That is
+  not a verdict on your SHA; check the newest commit's run.
+- Hosted Live QA (`hosted-live-qa.yml`) is dispatched per qualified SHA and runs
+  daily at 10:41 UTC. It deploys the exact commit to its own instance and records
+  a verdict per SHA. "Did QA pass this SHA" is that verdict; a passed,
+  non-superseded verdict gates production. Dispatch command: workspace Rings table.
+- `make qa-live` is not a developer command; it refuses personal and dogfood
+  targets and needs a dedicated QA instance and token.
+- To state what a host runs: `make deploy-status` or
+  `curl -sL https://<host>/api/health` (`build.commit`).
+- To release a held push by `workflow_dispatch`, dispatch `runtime-image.yml` and
+  `deploy-and-verify.yml` at the same exact SHA.
+- Never deploy a hosted tenant by direct SSH or Compose; it bypasses the
+  deployment receipt and target fencing.
 
-```bash
-make launch-readiness SHA="<full-sha>"
-```
+## Promoting by hand
 
-This is stricter than hosted deploy success: it also checks latest release and
-PyPI package build identity so the public installer cannot silently point at old
-code. By default it also requires the public demo to serve that SHA, which only
-happens after `make promote-production`; `ARGS=--skip-demo` skips just that
-check (`release.sh` always passes it).
+Promote Rings does this automatically. By hand only to roll back or unstick a
+ring, and the targets refuse while a Promote Rings run is active.
 
-## Land It
+- `make promote-dogfood SHA=<full-sha> [FAST_LANE=1] [SUBDOMAIN=...]` needs a
+  canary-qualified Deploy and Verify run for the SHA. The fast lane is allowed
+  only when no path between the served SHA and the target matches
+  `scripts/ops/dogfood-sensitive-paths.toml` (auth, migrations and similar).
+- `make promote-production [SHA=<full-sha>] [CHECK=1]` moves production tenants and
+  the new-tenant image to the image dogfood serves (default when `SHA` is omitted).
+  `CHECK=1` prints the gate receipt and moves nothing; `VERSION=` is refused.
+  After a halted tenant wave, rerun with `PROMOTION_ATTEMPT=<n+1>`. The retired
+  demo is skipped unless `DEMO_ENABLED=1` with `DEMO_SSH_HOST` and `DEMO_ENV_PATH`.
+- `make reprovision SUBDOMAIN=<name> IMAGE=ghcr.io/cipher982/longhouse-runtime@sha256:<digest>`
+  submits a durable deployment through the control-plane API. Always pass
+  `SUBDOMAIN` (the fallback is `demo`). Tenant data survives.
+- For tenant logs and state, start with `scripts/ops/hosted-session-debug.sh` and
+  the `zerg-hosted-debug` skill; they are read-only diagnostics.
 
-Before pushing, run `make affected-check BASE=<base-sha>` to see which CI
-filters match the committed and local diff, run focused tests for the changed
-behavior (not `make test-ci` for every edit; a CSS change needs a web proof, not
-backend or engine integration), then `make check-push-readiness` (~1 s). It
-reports stale duplicate commits on `main` (roll forward, never force-push)
-and checks that the verifier/subject import allowlist only shrinks
-(`scripts/ci/verifier_boundary.py`).
+## CLI release and launch readiness
 
-`make ship` and `release.sh` retain their exact-SHA, CI, verifier-boundary and
-release-readiness checks. External model reviews are optional and are not
-prerequisites for landing, release, dogfood or production promotion. Run
-`make install-precommit-autofix` once per clone to install the self-staging
-pre-commit shims.
+`make release VERSION=vX.Y.Z` publishes the native pair (`longhouse`,
+`longhouse-engine`), `Longhouse.app` and the PyPI wheel. Existing users get it by
+rerunning `scripts/install.sh` or `uv tool upgrade longhouse`. It is independent
+of production promotion and runs from any checkout (details in AGENTS.md
+"Shipping").
 
-## Background Wait Rule
+`make launch-readiness SHA=<full-sha>` is the stricter exact-SHA check after the
+hosted and release lanes ran: it also compares the latest release and PyPI build
+identity. It requires the demo to serve the SHA unless `ARGS=--skip-demo`; the
+demo is retired, so pass that flag (`release.sh` always does).
 
-If a tool or workflow already gives you a completion event or a blocking wait primitive, use it once and move on. Do not burn tool calls on `pgrep`, repeated curls, or ad hoc status polling loops while a background task is running.
+## TestFlight
 
-Unchanged wait output is not a model decision seam. If the harness re-enters the
-model whenever a blocking wait yields, do not generate repeated status turns.
-Keep the durable run ID, report the pending operation once, and resume only when
-the wait becomes terminal or new user input requires judgment.
+`make testflight [SHA=<sha on origin/main>] [WHATS_NEW="note"] [INTERNAL_ONLY=1] [DRY_RUN=1]`
+dispatches `ios-testflight.yml` on wisp (archive, upload, wait for processing).
+`INTERNAL_ONLY=1` skips the public group and Beta App Review; `DRY_RUN=1` archives
+and exports only. `make testflight-status` shows builds, review state and the
+public link (needs `ASC_API_*` in the environment). Public publishing fails when
+the group's link differs from the one in
+`web/src/features/marketing/landing/links.ts`. If `ios/` changed: build, look at a
+rendered simulator frame (`zerg-ui`), then `make phone-deploy` as the last step. Do
+not ask David to build in Xcode.
 
-For a queued GitHub run, keep API traffic bounded. `gh run watch` defaults
-to a three-second interval (1,200 reads/hour per watcher); simultaneous
-long-running watches hit GitHub's 403 rate limit. Use:
+## Local dogfood refresh
+
+A hosted ship does not update this Mac. After a successful ship that changed the
+CLI, engine, Desktop App, installer, or hooks:
 
 ```bash
-gh run watch <id> --interval 60 --compact --exit-status
-make ship-watch SHA="<full-sha>" ARGS="--poll 30"
-```
-
-Bad:
-
-```bash
-while pgrep -f playwright; do sleep 5; done
-while true; do curl .../health; sleep 5; done
-```
-
-## Deploy Lanes
-
-### Runtime lane
-
-Changed paths typically include `server/**`, `web/**`, `engine/**`, `config/**`, `docker/runtime.dockerfile`.
-
-What ships:
-- GHCR runtime image tagged with the full source SHA (and `latest` only as a registry convenience)
-- Canary mutations through the durable private deployment API, using the exact
-  immutable digest
-- Canary smoke/functional acceptance. Dogfood and production promotion are
-  separate rings (above) and both name the selected verified release
-
-Primary automation:
-
-```bash
-SHA="$(git rev-parse HEAD)"
-make ship SHA="$SHA"
-```
-
-`make ship` (`scripts/ops/ship.sh`) pushes that exact SHA (after the review and
-verifier-boundary checks), prints how busy CI is, then waits on the push-triggered
-runs for that SHA. GitHub runs at least:
-- `runtime-image.yml`
-- `deploy-and-verify.yml`
-
-Other push workflows may also appear for the same SHA depending on touched paths.
-
-For agent use, always prefer the explicit-SHA forms:
-
-```bash
-make ship SHA="<full-sha>"
-make ship-watch SHA="<full-sha>"
-```
-
-This skill is the single source of truth for the repo's `cowbell` ship flow.
-
-When the maintainer says `cowbell`, the agent owns the whole ship loop:
-
-- resolve the task SHA yourself
-- if the task is still uncommitted work, commit it now
-- otherwise reuse the latest commit that represents the task you just finished, even if it was pushed earlier
-- run `make ship SHA="<task-sha>"`
-- read the start banner and confirm the exact target SHA + commit subject
-- stay in the foreground until `make ship` exits
-- do not wrap `make ship` in a short outer shell timeout; the monitor already has its own timeout
-- cite exact SHAs, immutable image digests, deployment receipt IDs, and workflow run IDs
-
-`deploy-and-verify.yml` waits for exact-SHA image publication, reprovisions
-the hosted canary, and qualifies it with a fast smoke. Its "Deploy public demo
-runtime" job verifies the image and prints promotion instructions; it does
-**not** mutate the demo container. The demo moves on the production ring
-(`make promote-production`, after dogfood serves the SHA), not on every
-push, so `make ship`/`ship-monitor` do not require it to match the pushed
-SHA — a stale demo SHA there is expected, not `live_drift`; it is still
-printed in `make deploy-status`/`ship-watch` output. Hosted Live QA is
-dispatched asynchronously (see Hosted QA) and must be checked before final QA.
-The canary is shared: a run whose canary a newer push replaced mid-run ends
-green as *superseded* (step "Stand down, canary superseded", receipts in its
-summary), which is not a verdict on your SHA. Check the newest commit's run.
-Full CI remains an optional source gate (`DEPLOY_WAIT_FULL_CI=true`).
-
-On `main`, use `make ship SHA=<full-sha> ARGS=--json` for the single blocking
-verdict. From a topic worktree, first rebase onto current `origin/main` and use
-`make ship SHA=<full-sha> ARGS="--branch main --json"`; otherwise `ship`
-pushes the topic branch and does not deploy. `make ship-watch SHA=<full-sha>
-ARGS=--json` observes an already-pushed SHA. Do not babysit branch-latest CI.
-
-If `make ship` returns non-zero for the target SHA, ship failed. You may explain why you think it failed, including suspected pre-existing drift, but do not relabel that outcome as success.
-
-When releasing a held push through `workflow_dispatch`, dispatch
-`runtime-image.yml` and `deploy-and-verify.yml` at the same exact SHA.
-Never use direct SSH/Compose as an alternate hosted-tenant deploy: it bypasses
-the deployment receipt and target fencing. The demo's own Compose stack is
-the exception because it is not a control-plane tenant.
-
-### Public demo promotion
-
-The demo is on the production ring, not the per-push hosted-deploy lane: it
-moves only via `make promote-production` (arguments and gates above), which
-pins the demo's Compose stack to the same qualified digest and verifies it.
-A refusal names every gate that failed. If the tenant wave halts or the demo
-pin fails, the script prints the recovery commands and keeps its receipt under
-`/tmp/agents/promotion-receipts/`. The public demo is an operator-managed
-Compose stack, **not** a control-plane tenant — `promote-production.sh` updates
-its durable image pin over SSH and recreates only the demo service, preserving
-its data. Never register the demo as a hosted tenant or use its Compose
-mechanism to bypass hosted-tenant deployment receipts. Verify the live surface:
-
-```bash
-make deploy-status
-curl -fsS https://longhouse.ai/api/readyz
-```
-
-A successful exact-SHA `make ship-watch` does not imply the demo moved. The demo
-is retired: `make promote-production` skips its pin unless `DEMO_ENABLED=1` with
-an explicit `DEMO_SSH_HOST` and `DEMO_ENV_PATH`, and then reports
-`demo_verified=false`.
-
-### Hosted Control Plane
-
-The hosted control plane is no longer shipped from this public repo. Treat it
-as an external service that runtime deploys depend on through
-`CONTROL_PLANE_URL`.
-
-Runtime deploys may still wait for `https://control.longhouse.ai/health` and
-use the hosted instance helpers to reprovision canary instances. That is a
-service dependency check, not a public control-plane source deploy.
-
-If the control-plane service itself needs changes, switch to the private
-control-plane repo and use its deploy instructions. Do not recreate
-`control-plane/**` or `deploy-control-plane.yml` here.
-
-### Mixed commits
-
-If a commit touches both public runtime code and the external hosted control
-plane, ship and verify each repository independently. Do not assume the public
-runtime workflow deploys the control plane for you.
-
-If a commit also changes local CLI/install behavior, that is a third concern:
-hosted deploys may still be needed, but they do not replace publishing a new
-CLI/package release.
-
-## Hosted QA
-
-Hosted Live QA (`hosted-live-qa.yml`) is the post-deploy verifier. Deploy and
-Verify dispatches it asynchronously for each qualified runtime SHA, and it also
-runs daily. It deploys the exact commit to its own dedicated instance (a push
-never redeploys it), runs `qa-live` (authenticated timeline, owned
-transcript/search, closed-state projection and launch-picker smoke, plus the
-provider-binding audit) through the portable test boundary, and records a verdict
-per SHA. Read that verdict to answer "did QA pass this SHA"; a passed,
-non-superseded verdict is a production-promotion gate. The workspace AGENTS.md
-Rings table has the command to run it for any commit with a published image.
-
-`make qa-live` is not a developer-machine command: the isolation dispatcher
-refuses it without `--live --image ... --credentials`, it needs
-`QA_INSTANCE_SUBDOMAIN` naming a dedicated canary plus `SMOKE_RUNTIME_TOKEN`,
-and `scripts/qa/qa-live.sh` refuses personal, dogfood and demo targets.
-
-Two auth systems:
-- Browser pages: hosted login-token → `longhouse_session` cookie
-- `/api/agents/*`: device token → `X-Agents-Token`
-
-## Reprovision Hosted Tenant
-
-Use the helper only as an API client: it resolves the explicitly selected
-target and submits a durable deployment with the immutable digest. It does not
-SSH to a host, run Compose, or mutate a container directly.
-
-```bash
-make reprovision SUBDOMAIN=other \
-  IMAGE="ghcr.io/cipher982/longhouse-runtime@sha256:<verified-digest>"
-```
-
-Data survives deployment. A hosted tenant keeps its databases under
-`/var/app-data/longhouse/<subdomain>/` on the runtime host (`/data/` in the
-container); access them only for diagnosis, not deployment mutation
-(`zerg-hosted-debug`).
-
-## Logs When Things Break
-
-```bash
-ssh <runtime-host> 'docker logs longhouse-<subdomain> --tail 50'
-```
-
-SSH/container log commands are read-only diagnostics for hosted tenants.
-Canary, cohort, and dogfood mutations use the private deployment API; the
-public demo moves only via `make promote-production`, which pins its own
-Compose stack over SSH rather than a hand-run command.
-
-## Local Dogfood Refresh (MANDATORY for machine-side changes)
-
-**Hosted ship does NOT update the maintainer's laptop.** The `longhouse` CLI,
-`longhouse-engine` daemon, and `Longhouse.app` menu bar are installed into his
-system and only move when rebuilt locally. Automatic hosted promotion of this
-personal dogfood surface is prohibited; any hosted dogfood promotion must name
-the exact selected, canary-verified release.
-
-After a successful `make ship`, run this when the task changes a locally
-installed Longhouse component: CLI/package code, engine, Desktop App,
-installer/onboarding, hooks, or other machine-side behavior.
-
-```bash
-make dogfood-refresh            # installs exactly origin/main (SHA=<rev> for another commit)
+make dogfood-refresh            # installs exactly origin/main (SHA=<rev> for another)
 launchctl kickstart -k gui/$(id -u)/ai.longhouse.app
 ```
 
-Skip this for `web/**`-only, docs-only, test-only, and hosted-runtime-only
-changes; those do not alter the installed CLI, engine, or menu bar. For a
-qualifying change, it rebuilds+reinstalls CLI/engine and restarts the menu bar
-so it picks up the new `engine-status.json`. Afterwards confirm the machine
-still ships (`longhouse-server sessions list --limit 1` shows a fresh last
-activity).
+Then confirm the machine still ships (`longhouse-server sessions list --limit 1`
+shows fresh activity). Skip it for web-only, docs-only, test-only and
+hosted-runtime-only changes. Python-CLI-only edits under `server/zerg/cli/` can use
+`cd server && uv tool install -e .` instead.
 
-**Shortcut:** for Python-CLI-only changes under `server/zerg/cli/`,
-`cd server && uv tool install -e .` is ~5s vs ~60s. This is narrow —
-does not apply to engine, hooks, onboarding, desktop app, or iOS.
+## Report
 
-### iOS
-
-If the change touched `ios/`, the agent builds, verifies a rendered simulator
-frame, then installs the finished build with `make phone-deploy` as the last
-step. Do not claim iOS shipped from a hosted deploy or ask the maintainer to build in Xcode; use the
-`zerg-ui` workflow and report a device-only blocker. Testers get iOS only
-through TestFlight (above).
-
-### End-of-ship prompt
-
-Report the exact task SHA, runtime disposition (`deployed` or
-`no_runtime_change`), the workflow/receipt IDs from the JSON verdict, and
-what local refresh or iOS device installation was required. If there was no
-runtime mutation, do not claim the demo or canary changed.
-
-## Definition of Done
-
-- [ ] Affected-change selection and focused behavioral proof passed before push
-- [ ] `make check-push-readiness` passed (stale-duplicate and verifier-boundary checks)
-- [ ] Runtime/UI launch-surface changes had a matching client/fixture proof
-- [ ] Correct deploy lane(s) used
-- [ ] If local CLI/install behavior changed, a release/upgrade path was handled separately
-- [ ] Hosted canary healthy and serving the exact SHA if the runtime lane changed
-- [ ] Fast deploy smoke passed after hosted runtime changes
-- [ ] Hosted Live QA verdict for the SHA is `passed`, or it is named as pending/failed in the report
-- [ ] Production claimed only after `make promote-production` reported its receipt (the retired demo reports `demo_verified=false`)
-- [ ] Control plane healthy if control-plane lane changed
-- [ ] Local dogfood refreshed only if machine-side behavior changed
-- [ ] iOS device installed only if `ios/` changed
+Give the task SHA, runtime disposition (`deployed` or `no_runtime_change`), the
+workflow run and receipt IDs from the verdict, the Hosted Live QA verdict (or
+"pending"/"failed"), and which local refresh, release or device install was
+needed. Claim production only after `make promote-production` (or Promote Rings)
+reported its receipt. If nothing deployed, do not say the canary changed.

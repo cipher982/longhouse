@@ -1,316 +1,239 @@
 ---
 name: zerg-ui
-description: Longhouse visual QA and autonomous iOS dogfooding. Use for UI changes, simulator recovery, network-loss experiments, and client-render verification without a physical phone. Covers simlab real-pipeline journeys, iOS screenshots/previews, and web fixture captures.
+description: Look at a rendered frame of a Longhouse UI change (web fixture captures, iOS simulator shots, SwiftUI previews) and run simlab, the real-pipeline iOS recovery journeys, without a physical phone. Use for any UI change, simulator or network-loss experiments, transcript jump bugs, and visual regression.
 ---
 
-# Zerg UI: look at it
+# Look at it
 
-A UI change is not done until you have looked at a rendered frame of it.
-Tests prove behavior (an element exists, a label contains a string); they do
-not see "fable 5 1" where "fable 5.1" belongs, a banner with no bottom edge
-over scrolling text, or a preview that rendered blank. Every one of those got
-past a green suite in this repo. You have vision: `Read` a PNG and it is
-shown to you. Use it.
+A UI change is not done until you have looked at a rendered frame. Tests prove an
+element exists, not that "fable 5 1" should read "fable 5.1", that a banner has no
+bottom edge over scrolling text, or that a preview rendered blank. `Read` a PNG and
+you see it. Say what you saw in the handoff, with the artifact path.
 
 ## Pick the render path
 
-| You changed | Render it with | Where it runs | Sees |
-| --- | --- | --- | --- |
-| A SwiftUI view or its states | `make ios-previews` | wisp runner (dispatched), minutes | Every `#Preview` in dark/light and edge states, no server |
-| iOS screen against real data | `make sim-deploy SESSION=<id>` then `make sim-shot LABEL=<name>` | Simulator on the bench: `scripts/ops/bench.sh run ...` (cold build ~70 s, then seconds per shot) | The real pipeline: hosted data, real fonts, real chrome |
-| iOS screen in a deterministic state | `make ios-ui-shot TEST=<Suite>/<test>` | wisp runner (dispatched) | A fixture-driven frame the UI test attaches, exported to PNG |
-| iOS ingest/recovery without a phone | `make simlab-run` | wisp runner (dispatched); `simlab.py up/run` on the bench for iteration | Scratch Runtime Host + Machine Agent + iOS app; client-render convergence and network recovery |
-| iOS chat transcript: does the page jump while content loads, streams or resizes | `make ios-transcript-stability` (`ONLY=a,b`, `FILM=1` for a frame contact sheet, `DARK=1`) | Here, ~30 s, the shipped `transcript.html` in Playwright WebKit at phone size | Anchor-row drift, pinned-bottom gap, and kept UI state per scenario, as numbers with budgets. Spec: `specs/ios-transcript-stability.md`. Add a scenario in `scripts/qa/ios-transcript-stability/scenarios.ts` for every jump you find |
-| iOS chat opening on real data | `scripts/qa/ios_open_film.py --udid <sim> --session <id>` after `sim.sh deploy` | Simulator on the bench (or cinder) | A video of the open, frames, time to first content, time to settle, count of big page jumps, and a contact sheet to `Read` |
-| Web page or row | `make ui-capture PAGE=<page> SCENE=<scene>` | Here, ~7s from cold, nothing needs to be running | Playwright screenshot plus accessibility snapshot |
-| Web composer in every live state | `make ui-capture PAGE=session-detail SCENE=session-tones` | Here, ~7s, one PNG per tone | running, thinking, active, idle, stalled, blocked, closed, unknown side by side |
-| Every web page and state at once | `make ui-gallery` (`ONLY=session` narrows it) | Here, ~3 min for ~105 captures, one Vite, 4 at a time | One `index.html` contact sheet under `/tmp/agents/ui-gallery/<stamp>/`: each fixture scene at 1440x900, 2000x1200 and phone, plus the newest downloaded iOS renders |
-| Every menu opened, at every size | `make ui-sweep` (`ONLY=`, `JOBS=`); CI runs it as "UI popover sweep" | Here, ~5 min | Fails when any menu, popover or dialog lands off-screen, covered or clipped; each frame's `<page>-popovers.json` lists what opened. `ui-capture ... --sweep` (with `SWEEP_SHOTS=1` for a PNG per opened overlay) checks one scene. A new popup or scene needs no new test, but a control that only exists in one session mode needs a fixture scene (as `session-console` does for the model chip) |
+| You changed | Command | Runs | Shows |
+|---|---|---|---|
+| SwiftUI view and its states | `make ios-previews` | wisp (dispatched) | Every `#Preview`, dark and light, no server |
+| iOS screen on real data | `make sim-deploy SESSION=<id>` then `make sim-shot LABEL=<name>` | bench: `scripts/ops/bench.sh run '...'` | Real pipeline, fonts and chrome |
+| iOS screen in a fixed state | `make ios-ui-shot TEST=<Suite>/<test>` | wisp (dispatched) | Frame a UI test attaches, exported to PNG |
+| iOS ingest and recovery | `make simlab-run` | wisp (dispatched); `simlab.py up/run` on the bench to iterate | Scratch host, Machine Agent and app; render convergence, network recovery |
+| iOS transcript jumping while content loads or streams | `make ios-transcript-stability` (`ONLY=a,b`, `FILM=1`, `DARK=1`) | here, shipped `transcript.html` in Playwright WebKit | Anchor drift and pinned-bottom gap as numbers with budgets. Spec: `control-plane/docs/specs/ios-transcript-stability.md`. Add a scenario in `scripts/qa/ios-transcript-stability/scenarios.ts` for each jump found |
+| iOS chat opening on real data | `scripts/qa/ios_open_film.py --udid <sim> --session <id>` after `sim.sh deploy` | bench | Video, time to first content and settle, big-jump count, contact sheet |
+| One web page or scene | `make ui-capture PAGE=<page> SCENE=<scene>` | here, fixture scenes need nothing running | PNG plus accessibility snapshot |
+| Every web page and state | `make ui-gallery` (`ONLY=` narrows) | here | One `index.html` sheet under `/tmp/agents/ui-gallery/<stamp>/` at 1440x900, 2000x1200 and phone |
+| Every menu, popover and dialog | `make ui-sweep` (`ONLY=`, `JOBS=`); CI runs it | here | Fails when an overlay lands off-screen, covered or clipped. `ui-capture ... --sweep` checks one scene (`SWEEP_SHOTS=1` saves a PNG per overlay). A control that exists in only one session mode needs a fixture scene |
+
+Look at more than one when the change spans surfaces: the simulator shot proves
+the data path, the fixture shot proves layout at a known state.
 
 **Dispatched targets** (`ios-previews`, `ios-ui-shot`, `simlab-run`, `test-ios`,
-`menubar-harness`) run on the wisp bench runner and refuse a dirty or
-unpushed worktree: commit and push first, from a host with an authenticated `gh`
-and ssh to wisp (the laptop; not through `bench.sh`, which holds the lock the job waits for). The dispatcher
-prints the run URL and a `source=<sha>` line, and copies the run's `artifacts/`
-tree from wisp to `artifacts/test-isolation/<id>/evidence/<target>/project/` (wisp keeps it
-in /tmp until macOS ages it out). Nothing in this skill's PNG paths below exists locally for a
-dispatched target until that download lands.
-
-Look at more than one when the change spans surfaces. The simulator shot
-proves the data path; the fixture shot proves the layout at a known state.
+`menubar-harness`) run on wisp, refuse a dirty or unpushed worktree, and need the
+laptop's `gh`. Their rules are in `zerg-testing`. The dispatcher prints the run URL
+and `source=<sha>` and downloads the run's `artifacts/` tree to
+`artifacts/test-isolation/<id>/evidence/<target>/project/`. Paths below for those
+targets exist only after that download.
 
 ## Own the QA lifecycle
 
-Before launching, record simulator UDIDs and prior boot/window state, owned
-processes/ports, browser tabs, and scratch roots. Put teardown in `finally` or
-an exit trap, including failure and cancellation. Run it as soon as the visual
-check finishes; a later build, review, or release is not a reason to keep QA open.
+AGENTS.md ("QA ownership and cleanup") and `zerg-testing` ("Proof-run cleanup") set
+the rules. For UI work specifically:
 
-- A simulator created for this check is disposable: `xcrun simctl shutdown
-  <owned-udid>`, then `xcrun simctl delete <owned-udid>`. Verify the UDID is gone
-  and its visible window is closed; device/process state alone is not UI cleanup.
-- Never delete a pre-existing simulator. Restore its original boot state and
-  close only windows/apps you opened. Do not quit Simulator or kill browsers
-  globally when other windows or sessions may belong to another user or agent.
-- Close owned browser tabs and stop owned Runtime Hosts, engines, relays,
-  log followers, and web servers. Do not use `make stop` against a shared stack.
-- Provider verification must use an isolated `HOME`/profile and disposable
-  session directory (or `--no-session`); remove any native session/archive
-  created by the check, not merely the app or simulator.
-- Remove disposable profiles, credentials, caches, and scratch build trees once
-  no longer needed. Keep the selected screenshots and proof receipts, not the
-  environment that produced them.
-
-Before handoff, verify no owned QA window, device, listener, or process remains.
-Retaining a running environment requires an explicit owner request.
-Every command that can outlive the shell is an owned resource. Record its PID/process group and launch command before starting it; run it under a cleanup trap or the repo's process supervisor, never as an untracked background child. This includes `make test-ios`, `xcodebuild`, `simlab`, `sim-deploy`, `sim-shot`, log followers, and local servers.
-
-If a check is interrupted, inspect and clean its exact process group before doing anything else. Do not start a replacement run while an older `xcodebuild` or app is still alive. At the end, check the exact owned process names/PIDs and `xcrun simctl list devices`; a green test is not a clean handoff. Stop the test process, app, and owned simulator/window in the same teardown path. Never leave an iOS verification window open for a later reviewer unless retention was explicitly requested.
+- Before launching, record simulator UDIDs and boot state, owned processes and
+  ports, browser tabs and scratch roots. Put teardown in `finally` or an exit trap
+  and run it as soon as the visual check finishes.
+- A simulator you created: `xcrun simctl shutdown <udid>`, then
+  `xcrun simctl delete <udid>`, and confirm its window closed. Never delete a
+  pre-existing simulator; restore its boot state and close only windows you opened.
+  Do not quit Simulator or kill browsers globally.
+- Every command that can outlive the shell (`make test-ios`, `xcodebuild`, `simlab`,
+  `sim-deploy`, `sim-shot`, log followers, local servers) is an owned resource:
+  record its PID or process group before starting and run it under a trap.
+- After an interruption, clean the exact process group first. Do not start a
+  replacement while an older `xcodebuild` or app is alive.
+- Provider verification uses an isolated `HOME` and `--no-session` or a disposable
+  session directory, and you remove any native session it created.
+- Keep the screenshots and receipts, not the environment. Before handoff, check
+  process names and PIDs and `xcrun simctl list devices`.
 
 ## iOS
 
 ### Autonomous recovery dogfood (simlab)
 
-Use this before asking a user to reproduce transcript-delivery or reconnect
-problems on a phone. The gate form is the dispatched wisp job; iterate on
-the bench:
+Use this before asking anyone to reproduce transcript-delivery or reconnect
+problems on a phone.
 
 ```bash
 make simlab-run                                    # dispatched, clean pushed revision
 make simlab-run SCENARIOS="interrupted-client-recovery client-network-recovery"
-make test-ios-helper
+make test-ios-helper                               # harness verdict, cleanup and TCP relay
 scripts/ops/bench.sh run 'python3 scripts/qa/simlab.py up --build && python3 scripts/qa/simlab.py run --deploy interrupted-client-recovery; python3 scripts/qa/simlab.py down'
 ```
 
-`scripts/qa/simlab.py` owns the experiment: isolated provider HOME, scratch
-SQLite Runtime Host, real Machine Agent, synthetic Claude transcripts, and
-the actual simulator app. `simlab_proxy.py` places a loopback TCP relay only
-in the client path; the engine keeps shipping while the client is offline.
-Do not run concurrent simlab jobs against its shared `current` state/simulator.
+`scripts/qa/simlab.py` builds an isolated provider `HOME`, a scratch SQLite
+Runtime Host, a real Machine Agent, synthetic Claude transcripts and the real
+simulator app. `simlab_proxy.py` puts a loopback TCP relay in the client path only,
+so the engine keeps shipping while the client is offline. Scenarios are hidden
+**Shadow** imports, not Console launches; do not use the Console session-creation
+API to register them. Do not run two simlab jobs at once (shared `current` state
+and simulator).
 
-`simlab up` runs the newest binary it finds across the `release` and `ci`
-cargo profiles, and neither is guaranteed to match `HEAD`: a stale engine
-silently drops newer behavior and the silence reads as product behavior.
-Compare `longhouse-engine --version` with the commit under test, or run
-`simlab.py up --build`, before believing a negative result.
-
-Six scenarios: open imported history; live appended turns; abandon/resend;
-malformed/split/delayed transcript input; terminate/reopen after new output;
-network loss and reconnect without relaunch. They are hidden **Shadow**
-imports via the existing provider-evidence namespace, not Console launches.
-Do not use the Console-only session-creation API to register a Shadow proof.
-
-**A pass is stronger than server progress:** the exact final assistant reply
-written to the source must reach the server projection, then the newest
-session-open's successful WebKit render must carry its `prose:<event.id>`.
-Duplicate early renders or a partial head containing all user prompts cannot
-pass. Network recovery additionally requires an observed disconnect, a fresh
-stream connection after the offline boundary, and no new session-open.
-`source_revision` is optional benchmark attribution (normally `-1` here), not
-a production freshness requirement.
-
-Read `artifacts/simlab/current/summary.json` (on the bench, under its collected
-`/tmp/agents/bench/<job>/`; for a dispatched run, in the downloaded evidence tree)
-for links to each unique scratch
-run's screenshots, app/server/engine/relay logs, source transcript, projection,
-recovery checkpoints, timings, and verdict. Inspect the PNGs: a rendered
-callback alone does not prove a usable layout. `current` is overwritten by the
-next run; scratch evidence lives under `/tmp/longhouse-simlab/<stamp>/artifacts`
-and is temporary, not a durable archive. Persist conclusions/review IDs in
-session notes rather than committing raw logs or screenshots.
-
-Failures must retain verdicts and available evidence. Do not replace a failed
-log follower with a sliding OSLog window: recovery boundaries depend on one
-stable capture. Teardown checks process birth identity and group ownership;
-never signal a PID merely because an old state file names it.
-
-**Limits:** termination is not iOS background suspension; TCP loss is not a
-cellular-radio simulation; synthetic Shadow history does not qualify real
-provider execution, Helm/Console steering, APNs, or Live Activities. No physical
-phone or provider credentials are required. Contributor-facing instructions
-also live in the root `CONTRIBUTING.md` Tests section.
+- `simlab up` runs the newest binary across the `release` and `ci` cargo profiles,
+  which may not match `HEAD`. A stale engine drops newer behavior silently.
+  Compare `longhouse-engine --version` with the commit under test, or use
+  `up --build`, before believing a negative result.
+- A pass needs more than server progress: the exact final assistant reply must
+  reach the server projection, then the newest session-open's WebKit render must
+  carry its `prose:<event.id>`. Network recovery also needs an observed
+  disconnect, a fresh stream connection after the offline boundary, and no new
+  session-open.
+- Read `artifacts/simlab/current/summary.json` (on the bench, under
+  `/tmp/agents/bench/<job>/`; for a dispatched run, in the downloaded evidence) for
+  screenshots, logs, source transcript, projection, timings and verdict. Open the
+  PNGs; a render callback alone does not prove a usable layout. `current` is
+  overwritten by the next run and scratch evidence under
+  `/tmp/longhouse-simlab/<stamp>/artifacts` is temporary: record conclusions in
+  session notes, not raw logs.
+- Keep one stable log capture; do not replace a failed follower with a sliding
+  OSLog window. Teardown checks process birth identity and group ownership; never
+  signal a PID only because an old state file names it.
+- Limits: termination is not iOS background suspension, TCP loss is not a
+  cellular radio, and synthetic Shadow history does not qualify real provider
+  execution, Helm or Console steering, APNs or Live Activities. No phone or
+  provider credentials are needed.
 
 ### Simulator on real data
-```bash
-make sim-deploy SESSION=<longhouse-session-id>   # Debug build, install, sign in headlessly, open the session
-make sim-shot LABEL=turn-footer                   # artifacts/sim/<timestamp>-turn-footer.png
-```
-Run these on the bench (`scripts/ops/bench.sh run 'make sim-deploy SESSION=<id> && make sim-shot LABEL=<name>'`);
-the laptop only when the bench is unreachable, and say so. On the bench the shot
-lands in the job's collected output, `/tmp/agents/bench/<stamp>/`, not `artifacts/sim/`.
-Signs in with this machine's device token against its linked Runtime Host
-(`SIM_SERVER_URL` / `SIM_AUTH_TOKEN` override). The session id is the
-Longhouse id (`GET /api/agents/sessions/<id>` returns it next to the
-provider's own id). The app opens at the tail: a live session shows the turn
-in progress there, so a footer or banner that belongs to an earlier reply is
-above the fold. Deep links open a session, not an event, and nothing scrolls
-the simulator from the shell; use a fixture shot for a frame you control.
 
-### Fixture-driven frame with a screenshot
+```bash
+scripts/ops/bench.sh run 'make sim-deploy SESSION=<id> && make sim-shot LABEL=<name>'
+```
+
+Use the bench; the laptop only when the bench is unreachable, and say so. The shot
+lands in `/tmp/agents/bench/<stamp>/` (on the laptop, `artifacts/sim/`). It signs
+in with this machine's device token against its linked Runtime Host
+(`SIM_SERVER_URL` and `SIM_AUTH_TOKEN` override). `SESSION` is the Longhouse id
+(`GET /api/agents/sessions/<id>` returns it next to the provider's id). The app
+opens at the tail, so a footer from an earlier reply is above the fold, and nothing
+scrolls the simulator from the shell; use a fixture shot for a frame you control.
+
+### Fixture frame with a screenshot
+
 ```bash
 make ios-ui-shot TEST=SessionChatUITests/testTurnFooterRendersUnderTheProviderReply
-# in the downloaded evidence: .../project/ios-ui-shot/<timestamp>/turn-footer_0_<uuid>.png
 ```
-Write the test like the ones in `ios/Tests/LonghouseIOSUITests/SessionChatUITests.swift`:
-launch a chat fixture (`launchChatFixture(eventCount:)` or a named fixture from
-`ios/Sources/LonghouseApp/Fixtures/ChatUITestWorkspaceClient.swift`), wait for the element, then
-`add(XCTAttachment(screenshot: app.screenshot()))` with `lifetime = .keepAlways`.
-WebKit exposes transcript text as `staticTexts`, so a DOM footer is
-queryable with `staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Worked for"))`.
-The fixture stamps every assistant reply with a turn end and every send with
-a Longhouse origin; put new served fields into the fixture too, so the frame
-the test sees is the frame the app will show. XCTest's own failure
-screenshots are exported as well, so a failing run still leaves a frame.
 
-Only the `LonghouseSmoke` scheme carries the UI test target; the `Longhouse`
-scheme refuses `-only-testing:LonghouseIOSUITests/...`. The target handles that.
+Write the test like those in `ios/Tests/LonghouseIOSUITests/SessionChatUITests.swift`:
+launch a chat fixture (`launchChatFixture(eventCount:)` or a named fixture in
+`ios/Sources/LonghouseApp/Fixtures/ChatUITestWorkspaceClient.swift`), wait for the
+element, then `add(XCTAttachment(screenshot: app.screenshot()))` with
+`lifetime = .keepAlways`. Transcript text is exposed as `staticTexts` (query with
+`NSPredicate(format: "label CONTAINS %@", ...)`). Add any new served field to the
+fixture too. XCTest failure screenshots are exported as well. Only the
+`LonghouseSmoke` scheme carries the UI test target; the target handles that.
 
 ### SwiftUI previews
-```bash
-make ios-previews        # in the downloaded evidence: .../project/ios-previews/<timestamp>/<File>_0_<Preview name>.png
-```
-Add a `#Preview` in `*Previews.swift` for every new view, in dark and light
-when it uses materials or secondary text. Put the view in the shell it
-really lives in (a `NavigationStack` with a scrolling body, the way
-`SessionScreenPreview` and `ProviderChromePreview` in
-`Previews/SessionViewPreviews.swift` do): a bare view over the harness's transparent
-canvas renders bar materials and secondary text as nothing, and you get a
-blank PNG with one divider on it.
+
+`make ios-previews` renders every `#Preview`. Add one in `*Previews.swift` for each
+new view, in dark and light when it uses materials or secondary text. Put the view
+in the shell it lives in (a `NavigationStack` with a scrolling body, as
+`SessionScreenPreview` and `ProviderChromePreview` do in
+`Previews/SessionViewPreviews.swift`); a bare view over the transparent harness
+canvas renders as a blank PNG with one divider.
 
 ### Transcript rows are HTML
-The phone transcript is a `WKWebView` document whose TypeScript and CSS live
-in `web/src/embeds/ios-transcript/` (Vitest covers it: `make test-frontend`).
-`make generate-ios-transcript` builds it into the checked-in
-`ios/Resources/Transcript/transcript.html`, and `make validate` fails when that
-file is stale, so rebuild and commit both together. Each item renders as one root element and the
-retained-node reconciler keys on `JSON.stringify(item)`, so a footer or badge
-belongs inside the item's root, and any new field on `WebTranscriptPayloadItem`
-re-renders the row when it arrives. The view model's diagnostics line
-(`transcript-benchmark-status`) reports `renders=`, `rows=`, and `latest=`;
-`renders=1 rows=1` after a send means the DOM never re-rendered, which is
-where to look before blaming a style.
 
-### Phone
-Real performance and device-only behavior (APNS, Live Activity, cellular).
-Testers get builds from TestFlight (`make testflight`, the `zerg-ship` skill).
-`make phone-deploy` builds and installs over the Wi-Fi tunnel; a locked phone
-takes the install and refuses the launch (`phone.sh` says so). Unlocked:
-`phone.sh console [--seconds N]` relaunches and streams the app's stdout and
-OSLog as Xcode's console would; `phone.sh profile` records Instruments.
+The phone transcript is a `WKWebView` document. Its TypeScript and CSS live in
+`web/src/embeds/ios-transcript/` (tested by `make test-frontend`).
+`make generate-ios-transcript` builds the checked-in
+`ios/Resources/Transcript/transcript.html`; `make validate` fails when it is stale,
+so rebuild and commit both together. Each item is one root element and the
+reconciler keys on `JSON.stringify(item)`: put a footer or badge inside the item's
+root, and a new `WebTranscriptPayloadItem` field re-renders the row. The
+diagnostics line `transcript-benchmark-status` reports `renders=`, `rows=` and
+`latest=`; `renders=1 rows=1` after a send means the DOM never re-rendered, so look
+there before blaming a style.
 
-### The bench (wisp) and the performance tour
-- `scripts/ops/bench.sh run <cmd>` runs any of this on `wisp`, the MacBook
-  Neo test bench, not the laptop: mirror, lock, run, copy `$BENCH_OUT` back
-  to `/tmp/agents/bench/<stamp>/`. Cold sim build ~70 s; `simlab.py up
-  --build` ~220 s cold.
-- Realistic data: `~/bench/corpus/home` on wisp holds 100 of
-  David's recent Claude transcripts. `simlab.py up --build --seed-corpus
-  ~/bench/corpus/home` ships them through a real Machine Agent
-  into the scratch Runtime Host, never his instance. Refresh the corpus by
-  rsyncing newer `~/.claude/projects` files there.
-- `scripts/ops/ios_tour.sh` (simulator by default, `TOUR_TARGET=device` for a
-  test phone) runs the read-only `testLiveDogfoodTour` (cold launch,
-  timeline scroll, open and scroll three sessions, background/resume) under
-  Instruments and prints the timings plus `trace_summary.py`. One line:
-  `bench.sh run 'python3 scripts/qa/simlab.py up --build --seed-corpus
-  ~/bench/corpus/home && scripts/ops/ios_tour.sh; python3
+### Phone, bench and profiling
+
+- A real phone is for timing and device-only behavior (APNs, Live Activity,
+  cellular). `make phone-deploy` installs over the Wi-Fi tunnel; a locked phone
+  takes the install and refuses the launch. Unlocked: `phone.sh console
+  [--seconds N]` streams stdout and OSLog, `phone.sh profile` records Instruments.
+  Testers use TestFlight (`zerg-ship`). Never tour David's own phone.
+- `scripts/ops/bench.sh run <cmd>` runs on wisp (mirror, lock, run, copy
+  `$BENCH_OUT` to `/tmp/agents/bench/<stamp>/`).
+- `~/bench/corpus/home` on wisp holds 100 recent Claude transcripts; `simlab.py up
+  --build --seed-corpus ~/bench/corpus/home` ships them through a real Machine
+  Agent into the scratch host, never David's instance. Refresh by rsyncing newer
+  `~/.claude/projects` files there.
+- `scripts/ops/ios_tour.sh` (`TOUR_TARGET=device` for a test phone) runs the
+  read-only `testLiveDogfoodTour` under Instruments and prints timings plus
+  `trace_summary.py` output. Example: `bench.sh run 'python3 scripts/qa/simlab.py
+  up --build --seed-corpus ~/bench/corpus/home && scripts/ops/ios_tour.sh; python3
   scripts/qa/simlab.py down'`.
-- Never tour David's own phone; it is not a test device.
-
-### Warnings, console noise, profiling
-- Every `sim.sh`/`phone.sh` build prints its compiler warnings to stderr. Keep
-  it at zero: Xcode's GUI only shows warnings for recompiled files, and a
-  "nearly matches optional requirement" warning meant WebKit silently never
-  called a delegate method. Check a suspect `@objc` witness with
-  `otool -oV <app>/Longhouse.debug.dylib | grep <selector>`.
-- Console yellow is os_log Error, red is Fault. On a normal simlab run ~47 of
-  48 are Apple frameworks (cfprefsd, CoreAnimation "dropping" handlers,
-  nw_connection on unconnected sockets, UIKit dictation asserts, "Could not
-  resolve UID for user mobile"). Filter to `subsystem == "ai.longhouse.ios"`
-  (`sim.sh logs`) and read only ours.
-- `sim.sh profile|phone.sh profile [--template "Animation Hitches"] [--seconds 20]`
-  attaches Instruments to the running app and prints CPU by thread, top
-  symbols, the app frames they came through, hangs and hitches
-  (`scripts/ops/trace_summary.py`). Simulator Debug numbers find hotspots;
-  judge speed on the phone.
+- `sim.sh profile` or `phone.sh profile [--template "Animation Hitches"]
+  [--seconds 20]` prints CPU by thread, top symbols, hangs and hitches. Simulator
+  Debug numbers find hotspots; judge speed on the phone.
+- Keep `sim.sh` and `phone.sh` builds at zero compiler warnings (a "nearly matches
+  optional requirement" warning once meant WebKit never called a delegate method;
+  check with `otool -oV <app>/Longhouse.debug.dylib | grep <selector>`). For
+  console noise, filter to `subsystem == "ai.longhouse.ios"` (`sim.sh logs`); most
+  yellow and red lines are Apple frameworks.
 
 ## Web
 
-Look first, then talk. For any styling, layout, or "make it look better"
-request, render the page before reasoning from CSS or a pasted screenshot:
+Render before reasoning from CSS or a pasted screenshot:
 
 ```bash
-make ui-capture PAGE=session-detail SCENE=session-detail-stress   # the session chat, ~7s from cold
-make ui-capture PAGE=session-detail SCENE=session-tones            # composer in all seven live states
+make ui-capture PAGE=session-detail SCENE=session-detail-stress
+make ui-capture PAGE=session-detail SCENE=session-tones      # composer in every live state
 make ui-capture PAGE=timeline SCENE=timeline-card-stress VIEWPORT=mobile
-make ui-capture PAGE=session-detail SCENE=session-prose-idle VIEWPORT=2000x1200 CSS_VARIANT=terminal   # a layout experiment from scripts/ui/css-variants/
-make qa-ui-workbench                                  # timeline + session fixtures, desktop and mobile, one index.html (a qa-* goal: runs in the disposable container, output returns under artifacts/test-isolation/<run-id>/files/)
-make ui-capture                                       # demo data; needs the demo backend on :47300 (`make dev-demo`)
-make ui-capture ALL=1
+make ui-capture PAGE=session-detail SCENE=session-prose-idle VIEWPORT=2000x1200 CSS_VARIANT=terminal   # variants in scripts/ui/css-variants/
+make qa-ui-workbench          # timeline and session fixtures, desktop and mobile; qa-* goal, output under artifacts/test-isolation/<run-id>/files/
+make ui-capture ALL=1         # demo data; needs `make dev-demo` (backend on :47300)
 ```
-Then `Read` the PNG. To measure instead of eyeball, add
-`PROBE='.selector-a,.selector-b'`: the capture also writes `<page>-probe.json`
-with each selector's bounding box and key computed styles (flex, width,
-margins), which is how to tell a rule is being overridden rather than
-guessing from a screenshot. Nothing needs to be running for a fixture scene: the
-capture starts Vite on :47200 when nothing is listening and stops it when
-done (it leaves a Vite that was already there alone). Output:
-`artifacts/ui-capture/<timestamp>/<page>.png`, `<page>-a11y.json|yml`,
-`console.log`, `manifest.json`, and `trace.zip` unless `NO_TRACE=1`.
 
-For "what captures the scroll wheel here?" add `WHEEL_MAP=1` (and
-`VIEWPORT=1700x900` for the three-column session layout): it sends a real wheel
-event at every 40px cell and writes `<page>-wheelmap.txt|json` — a letter per
-cell naming the scroll container that moved, `.` where nothing scrolled.
-Dead cells beside a scroller (gutters, rails) are the bug; dead cells over a
-fixed header or composer are intended. A scroller narrower than its pane (a
-centered `max-width` column with `overflow: auto`) always leaves dead gutters:
-make the scroller span the pane and center the column with padding.
-
-Fixture scenes answer every API call from Playwright routes; add new served
-fields to `scripts/ui-fixtures/*.ts` so the capture exercises them. The
-session context pane is a drawer and is closed in captures; the timeline
-pane is what you see. Only demo-data scenes need the backend.
-
-Scenes: `session-detail-stress`, `session-tones`, `session-resume`,
-`session-stale-observation`, `timeline-card-stress` (fixture, nothing
-running); `demo` (seeded sessions, default), `empty`, `onboarding-modal`,
-`missing-api-key` (need `make dev-demo`).
+- Output: `artifacts/ui-capture/<timestamp>/` with `<page>.png`, `<page>-a11y.json|yml`,
+  `console.log`, `manifest.json`, and `trace.zip` unless `NO_TRACE=1`. A fixture
+  scene starts Vite on :47200 if nothing listens and stops it afterwards (an
+  existing Vite is left alone).
+- To measure instead of eyeball, add `PROBE='.a,.b'`: `<page>-probe.json` gives each
+  selector's bounding box and key computed styles, which shows an overridden rule.
+- `WHEEL_MAP=1` (with `VIEWPORT=1700x900` for the three-column session layout)
+  sends a wheel event at every 40px cell and writes `<page>-wheelmap.txt|json`, a
+  letter per cell naming the scroller that moved, `.` where nothing did. Dead cells
+  beside a scroller (gutters, rails) are the bug; over a fixed header or composer
+  they are intended. A scroller narrower than its pane leaves dead gutters: make it
+  span the pane and center the column with padding.
+- Fixture scenes answer API calls from Playwright routes. Add new served fields to
+  `scripts/ui-fixtures/*.ts`. The session context drawer is closed in captures.
+- Fixture scenes (nothing running): `session-detail-stress`, `session-tones`,
+  `session-resume`, `session-stale-observation`, `session-prose-idle`,
+  `session-console`, `timeline-card-stress`. Demo-backend scenes: `demo`, `empty`,
+  `onboarding-modal`, `missing-api-key`.
+- Visual regression (CI): `make qa-ui-baseline`, `make qa-ui-baseline-mobile`,
+  `make qa-ui-baseline-update` to accept, `SKIP_LLM=1 make qa-visual-compare`.
+- Public pages need no identity: use a disposable headless browser (`browser`
+  skill; `make hero-frames` and `e2e/scripts/qa-landing-live-demo.mjs` do).
+  `make qa-remote-scene` writes a frame bundle for a separate vision agent to
+  describe.
 
 ## How to look
-- Open the PNG with `Read`. Compare it with the reference you are matching
-  (the provider terminal, a design note, the web version of the same row).
-- Check the words: truncation, number formatting, dates on the wrong day,
-  "done" with no time.
-- Check the edges: anything that sits over scrolling content needs its own
-  bottom edge; anything right-aligned needs the same inset as its neighbors.
-- Check both themes for anything using materials or secondary text.
-- A blank or near-empty PNG is a harness problem, not a pass. Fix the
-  preview shell or the fixture until the frame shows the thing.
-- Say what you saw in the handoff, with the artifact path. "Tests pass" is
-  not a description of a screen.
 
-## Visual regression (CI)
-```bash
-make qa-ui-baseline           # desktop visual baselines
-make qa-ui-baseline-update    # accept new baselines
-make qa-ui-baseline-mobile
-SKIP_LLM=1 make qa-visual-compare
-```
-
-## Public pages
-Public pages need no identity: drive a disposable headless browser (the
-`browser` skill; `make hero-frames` and `e2e/scripts/qa-landing-live-demo.mjs`
-already do) and `Read` the screenshot.
-For the landing-page ASCII scene, `make qa-remote-scene` writes a review
-bundle (frames, contact sheets, `review-prompt.md`); hand only the bundle to
-a separate vision-capable agent and let it describe what the frames show.
+- `Read` the PNG and compare with the reference (provider terminal, design note,
+  web version of the row).
+- Check the words: truncation, number formatting, dates on the wrong day, "done"
+  with no time.
+- Check edges: anything over scrolling content needs its own bottom edge;
+  right-aligned items need the same inset as neighbors.
+- Check both themes for anything with materials or secondary text.
+- A blank or near-empty PNG is a harness problem, not a pass; fix the preview
+  shell or fixture until the frame shows the thing.
 
 ## Gotchas
-- The shell guard blocks `rm -rf` and `>` into repo paths from agents: write
-  outputs under `artifacts/` or `mktemp -d`, and use the Write tool for files.
-- `xcresulttool export attachments` names files by uuid; `ios-ui-shot`
-  renames them to the attachment name.
-- `make dev` does not start a local API; `:47300` is `make dev-demo`.
-- Output directories are gitignored; quote the path in your handoff, don't
-  commit the PNGs.
+
+- The shell guard blocks `rm -rf` and `>` into repo paths: write outputs under
+  `artifacts/` or `mktemp -d`, and use the Write tool for files.
+- `xcresulttool export attachments` names files by uuid; `ios-ui-shot` renames them
+  to the attachment name.
+- Output directories are gitignored; quote the path, do not commit PNGs.

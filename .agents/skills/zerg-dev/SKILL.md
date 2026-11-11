@@ -1,33 +1,23 @@
 ---
 name: zerg-dev
-description: Zerg local dev workflow (make dev, logs, debug, stop). Use when running or troubleshooting this repo.
+description: Run the Longhouse web UI locally (`make dev`, `make dev-demo`, `make stop`) and troubleshoot it. Use when starting the local frontend or choosing between real-account and demo data.
 ---
 
-# Zerg Dev Workflow
+# Local dev
 
-## Quick Start
 ```bash
-make dev
-```
-This serves the local frontend at `http://localhost:47200` and proxies its API
-requests to the Runtime Host already recorded in
-`~/.longhouse/machine/target-url`, authenticated with the existing device token.
-It should show the same account and sessions as the hosted UI. Ctrl+C stops it.
-
-Use `make dev-demo` only when an isolated seeded local runtime is intentional.
-
-## Common Commands
-```bash
-make stop      # stop local development processes
-make dev-demo  # isolated local backend + seeded demo UI
+make dev        # frontend at http://localhost:47200, proxied to your linked Runtime Host
+make dev-demo   # isolated local backend with seeded demo data
+make stop
 ```
 
-## URL
-- http://localhost:47200/timeline
-
-## Gotchas
-- Don’t assume `make dev` is already running.
-- `make dev` requires an existing `longhouse auth` machine link.
-- The normal local UI must never silently fall back to an empty local database.
-- Use `make dev-demo` for disposable local data and `make dev` for real account data.
-- `make stop` runs `pkill -f` on every `uvicorn zerg.main:app` and `vite` on the machine, not just yours; do not use it when another session's dev stack may be running.
+- `make dev` proxies API calls to the Runtime Host in `~/.longhouse/machine/target-url`
+  using the existing device token, so it shows the real account. It needs a prior
+  `longhouse auth --url <runtime>` link and never falls back to an empty local
+  database. Ctrl+C stops it. It starts no local API; the demo backend on `:47300`
+  is `make dev-demo`.
+- Do not assume a dev stack is already running.
+- `make stop` runs `pkill -f` on every `uvicorn zerg.main:app` and `vite` on the
+  machine, not only yours. Do not use it while another session's stack may be up;
+  stop your own PIDs.
+- For rendering a page to a PNG without a running stack, use `zerg-ui`.
