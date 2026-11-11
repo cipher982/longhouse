@@ -1444,11 +1444,21 @@ class StorageMixin:
                     table.c.git_branch,
                     table.c.provider,
                     table.c.title_last_error,
+                    table.c.anchor_title_source,
+                    _title_anchor_replaceable_clause(table).label("anchor_replaceable"),
                 ).where(table.c.session_id == session_key)
             ).first()
             existing_error = str(row.title_last_error or "").lower() if row is not None else ""
             existing_retryable = existing_error in RETRYABLE_TITLE_ROW_ERRORS
-            if row is None or row.anchor_title or (int(row.title_attempt_count or 0) >= MAX_TITLE_ATTEMPTS and not existing_retryable):
+            # Failure must refuse exactly the anchors selection refuses. It used
+            # to refuse any anchor, so a row with a provider-native title stayed
+            # a candidate while each failure went unrecorded; on david010 one
+            # such row was retried twice a second.
+            if (
+                row is None
+                or not row.anchor_replaceable
+                or (int(row.title_attempt_count or 0) >= MAX_TITLE_ATTEMPTS and not existing_retryable)
+            ):
                 return {"changed": False, "commit_seq": str(_current_commit_seq(connection))}
             attempts = min(int(row.title_attempt_count or 0) + 1, MAX_TITLE_ATTEMPTS)
             retryable = reason.lower() in RETRYABLE_TITLE_ROW_ERRORS
@@ -1457,13 +1467,16 @@ class StorageMixin:
                 # deterministic prompt/project fallback as an AI anchor. The
                 # timeline can still render a clearly degraded fallback while
                 # a later explicit repair is free to install a real title.
+                # A provider-native name is the fallback the timeline should
+                # keep showing; only an empty or leaked anchor is cleared.
+                keep_provider_anchor = bool(row.anchor_title) and row.anchor_title_source == "provider"
+                cleared = {} if keep_provider_anchor else {"anchor_title": None, "summary_title": None}
                 commit_seq = _advance_commit_seq(connection, failed_at)
                 connection.execute(
                     update(table)
                     .where(table.c.session_id == session_key)
                     .values(
-                        anchor_title=None,
-                        summary_title=None,
+                        **cleared,
                         title_attempt_count=attempts,
                         title_last_attempt_at=failed_at,
                         title_retry_at=failed_at,
@@ -1476,18 +1489,18 @@ class StorageMixin:
                     update(LiveSessionCatalog.__table__)
                     .where(LiveSessionCatalog.__table__.c.session_id == session_key)
                     .values(
-                        anchor_title=None,
-                        summary_title=None,
+                        **cleared,
                         title_retry_at=failed_at,
                         title_last_error=reason[:128],
                         updated_at=failed_at,
                     )
                 )
-                connection.execute(
-                    update(LiveTimelineCard.__table__)
-                    .where(LiveTimelineCard.__table__.c.session_id == session_key)
-                    .values(summary_title=None)
-                )
+                if not keep_provider_anchor:
+                    connection.execute(
+                        update(LiveTimelineCard.__table__)
+                        .where(LiveTimelineCard.__table__.c.session_id == session_key)
+                        .values(summary_title=None)
+                    )
                 return {
                     "changed": True,
                     "terminal": True,

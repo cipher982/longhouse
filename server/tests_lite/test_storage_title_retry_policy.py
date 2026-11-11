@@ -1110,3 +1110,31 @@ def test_title_health_degrades_for_aged_backlog_and_terminal_row_debt(tmp_path):
     assert health["oldest_overdue_age_seconds"] >= 9 * 60
     assert health["terminal_sessions"] == 1
     assert health["terminal_shared_failure_sessions"] == 0
+
+
+def test_title_failure_on_provider_anchored_row_is_recorded_and_keeps_the_provider_name(tmp_path):
+    """Selection treats a provider-named row as a candidate, so failure must charge it.
+
+    It used to return unchanged for any anchor, leaving the row selected while
+    each failure went unrecorded; on david010 one row retried twice a second.
+    """
+
+    engine = _build_engine(tmp_path)
+    session_id = uuid4()
+    _insert_session(engine, session_id=session_id, first_message="fix the refresh token bug")
+    store = CatalogStore(engine)
+    now = datetime.now(UTC)
+    store.complete_storage_title(session_id=session_id, title="Claude's own name", completed_at=now, source="provider")
+    assert str(session_id) in _candidate_ids(engine)
+
+    result = store.fail_storage_title(session_id=session_id, reason="no_meaningful_user_text", failed_at=now)
+
+    assert result["changed"] is True
+    assert str(session_id) not in _candidate_ids(engine)
+    row = _read_session(engine, session_id)
+    assert (row["anchor_title"], row["anchor_title_source"]) == ("Claude's own name", "provider")
+
+    for _ in range(MAX_TITLE_ATTEMPTS):
+        store.fail_storage_title(session_id=session_id, reason="invalid_title_payload", failed_at=now)
+    row = _read_session(engine, session_id)
+    assert (row["anchor_title"], row["anchor_title_source"]) == ("Claude's own name", "provider")
