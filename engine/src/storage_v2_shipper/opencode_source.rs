@@ -36,6 +36,69 @@ pub(super) fn opencode_rest_key(conn: &Connection, db_path: &Path) -> Result<Opt
     )))
 }
 
+/// Sessions a walk found with nothing left to ship, by database and OpenCode
+/// session id: the session's `version` (its newest `time_updated`) and durable
+/// lane then, and when. While both are unchanged a later walk skips rebuilding
+/// that session's record stream, so one busy session no longer costs a read of
+/// every session in the database. The whole map is dropped when anything else
+/// the walk depends on changes (`SessionRests::context`), and an entry is
+/// trusted for [`OPENCODE_SESSION_REST_TTL`] so an edit that moves no timestamp
+/// is still found. Taken from Atuin Threads (spec: session-capture-hardening.md,
+/// task 4).
+static OPENCODE_SESSION_RESTS: std::sync::LazyLock<std::sync::Mutex<SessionRests>> =
+    std::sync::LazyLock::new(Default::default);
+
+pub(super) const OPENCODE_SESSION_REST_TTL: Duration = Duration::from_secs(600);
+
+#[derive(Default)]
+struct SessionRests {
+    context: String,
+    sessions: HashMap<(PathBuf, String), SessionRest>,
+}
+
+struct SessionRest {
+    version: u64,
+    lane: Option<(Uuid, u64)>,
+    at: std::time::Instant,
+}
+
+/// What every session's rest depends on beyond its own rows and lane: the
+/// managed-state files that bind sessions, the build, and the import scope.
+fn session_rest_context(import_scope: &crate::import_scope::ImportScope) -> Option<String> {
+    Some(format!(
+        "{}|{}|{}",
+        opencode_db::managed_state_signature()?,
+        crate::build_identity::COMMIT,
+        import_scope.signature()
+    ))
+}
+
+/// The durable lane of a session's active epoch, if it has one.
+fn opencode_session_lane(conn: &Connection, opaque_source_id: &str) -> Result<Option<(Uuid, u64)>> {
+    let Some(epoch) = source_epoch::active_source_epoch(conn, "opencode", opaque_source_id)? else {
+        return Ok(None);
+    };
+    Ok(Some((
+        epoch,
+        source_epoch::lane_position(conn, epoch, SourceLane::Durable)?,
+    )))
+}
+
+#[cfg(test)]
+pub(super) static OPENCODE_STREAMS_BUILT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+pub(super) static OPENCODE_SESSION_RESTS_DISABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn session_rests_enabled() -> bool {
+    #[cfg(test)]
+    if OPENCODE_SESSION_RESTS_DISABLED.load(std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    true
+}
+
 /// Whether the walk that last found nothing left to ship saw this same database
 /// and binding evidence, and nothing has been queued since, blocked or not.
 pub(super) fn opencode_database_is_settled(
@@ -101,16 +164,17 @@ pub(super) fn walk_opencode_database(
     // discovery. A session outside it is skipped before any of its records are
     // read or its source epoch opened.
     let import_scope = crate::config::import_scope();
-    let mut page_offset = 0usize;
-    loop {
-        let candidates = opencode_db::list_opencode_sessions_page(
-            db_path,
-            OPENCODE_SESSION_PAGE_SIZE,
-            page_offset,
-        )?;
-        if candidates.is_empty() {
-            return Ok(None);
+    let rest_context = session_rests_enabled()
+        .then(|| session_rest_context(&import_scope))
+        .flatten();
+    if let (Some(context), Ok(mut rests)) = (&rest_context, OPENCODE_SESSION_RESTS.lock()) {
+        if &rests.context != context {
+            rests.context = context.clone();
+            rests.sessions.clear();
         }
+    }
+    {
+        let candidates = opencode_db::list_all_opencode_sessions(db_path)?;
         for (candidate_index, candidate) in candidates.iter().enumerate() {
             if !candidate.in_import_scope(&import_scope) {
                 continue;
@@ -125,6 +189,25 @@ pub(super) fn walk_opencode_database(
             if let Some(pending) = load_pending_for_source(conn, "opencode", &opaque_source_id)? {
                 return Ok(Some(pending));
             }
+            let rest_key = (db_path.to_path_buf(), candidate.provider_session_id.clone());
+            let lane_before = if rest_context.is_some() {
+                let lane = opencode_session_lane(conn, &opaque_source_id)?;
+                let at_rest = OPENCODE_SESSION_RESTS.lock().is_ok_and(|rests| {
+                    rests.sessions.get(&rest_key).is_some_and(|rest| {
+                        rest.version == candidate.version
+                            && rest.lane == lane
+                            && rest.at.elapsed() < OPENCODE_SESSION_REST_TTL
+                    })
+                });
+                if at_rest {
+                    continue;
+                }
+                Some(lane)
+            } else {
+                None
+            };
+            #[cfg(test)]
+            OPENCODE_STREAMS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let stream = opencode_db::opencode_session_stream(
                 db_path,
                 &candidate.provider_session_id,
@@ -176,6 +259,20 @@ pub(super) fn walk_opencode_database(
             let range_start =
                 source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
             if range_start >= logical_len {
+                // Nothing to ship and nothing in flight: remember the rows and
+                // lane this was decided on.
+                if lane_before.is_some() && stream.next_wake_ms().is_none() {
+                    if let Ok(mut rests) = OPENCODE_SESSION_RESTS.lock() {
+                        rests.sessions.insert(
+                            rest_key,
+                            SessionRest {
+                                version: candidate.version,
+                                lane: Some((resolution.source_epoch, range_start)),
+                                at: std::time::Instant::now(),
+                            },
+                        );
+                    }
+                }
                 continue;
             }
             let (range_end, raw_bytes) = bounded_record_ordinal_end(
@@ -360,15 +457,13 @@ pub(super) fn walk_opencode_database(
                     .iter()
                     .any(|event| matches!(event.role, Role::Assistant | Role::Tool)),
                 raw_bytes,
-                has_more: range_end < logical_len
-                    || candidate_index + 1 < candidates.len()
-                    || candidates.len() == OPENCODE_SESSION_PAGE_SIZE,
+                has_more: range_end < logical_len || candidate_index + 1 < candidates.len(),
                 media_objects,
             };
             return persist_prepared(conn, &path_text, prepared).map(Some);
         }
-        page_offset = page_offset.saturating_add(candidates.len());
     }
+    Ok(None)
 }
 
 /// `source_ordinals` pairs each part's source offset with the ordinal of its

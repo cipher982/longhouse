@@ -266,6 +266,14 @@ pub fn list_opencode_session_watermarks(db_path: &Path) -> Result<Vec<OpenCodeSe
     list_opencode_sessions_inner(db_path, None, false)
 }
 
+/// Every session, newest first. One query: ordering by the newest write has to
+/// compute it for every session whatever the page size, so a paged walk paid
+/// for the whole sort once per page (about 32 ms a page on cinder's 1,837
+/// sessions, 2026-11-11).
+pub fn list_all_opencode_sessions(db_path: &Path) -> Result<Vec<OpenCodeSessionCandidate>> {
+    list_opencode_sessions_inner(db_path, None, false)
+}
+
 pub fn list_opencode_sessions_page(
     db_path: &Path,
     limit: usize,

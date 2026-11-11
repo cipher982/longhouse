@@ -65,7 +65,6 @@ pub(crate) use self::ship::*;
 
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
-const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
 // v7: failed/aborted managed prose remains inspectable as abandoned output,
 // without authorizing it as a committed head reply. Replay historical sources.
 const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v8-turn-outcome";
@@ -6618,6 +6617,175 @@ mod tests {
             "#,
         )
         .unwrap();
+    }
+
+    fn add_opencode_session(db_path: &Path, session: &str, updated_ms: i64) {
+        let conn = Connection::open(db_path).unwrap();
+        conn.execute(
+            "INSERT INTO session VALUES (?1, 'project-1', NULL, '/tmp/longhouse', '/tmp/longhouse', ?1, '1', 1779000000000, ?2)",
+            rusqlite::params![session, updated_ms],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message VALUES (?1, ?2, 1779000000010, ?3, '{\"role\":\"user\"}')",
+            rusqlite::params![format!("{session}-message"), session, updated_ms],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part VALUES (?1, ?2, ?3, 1779000000011, ?4, '{\"type\":\"text\",\"text\":\"hello\"}')",
+            rusqlite::params![
+                format!("{session}-part"),
+                format!("{session}-message"),
+                session,
+                updated_ms
+            ],
+        )
+        .unwrap();
+    }
+
+    fn ship_every_opencode_session(conn: &mut Connection, db_path: &Path) -> usize {
+        let mut shipped = 0;
+        while let Some(prepared) =
+            prepare_next_opencode_envelope(conn, &capabilities(), db_path).unwrap()
+        {
+            acknowledge_prepared(conn, &prepared);
+            shipped += 1;
+            assert!(shipped < 1_000_000, "the walk never settled");
+        }
+        shipped
+    }
+
+    fn opencode_streams_built() -> usize {
+        opencode_source::OPENCODE_STREAMS_BUILT.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Ship three sessions, then give session-1 (the oldest) a new part dated
+    /// between the others, so the walk meets unchanged session-3 before it.
+    /// Returns how many record streams the next walk built.
+    fn streams_built_after_an_older_session_changes(rests_disabled: bool) -> usize {
+        opencode_source::OPENCODE_SESSION_RESTS_DISABLED
+            .store(rests_disabled, std::sync::atomic::Ordering::Relaxed);
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        create_opencode_db(&db_path);
+        add_opencode_session(&db_path, "session-2", 1779000000200);
+        add_opencode_session(&db_path, "session-3", 1779000000300);
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        assert_eq!(ship_every_opencode_session(&mut conn, &db_path), 3);
+
+        let opencode = Connection::open(&db_path).unwrap();
+        opencode
+            .execute(
+                "INSERT INTO part VALUES ('part-2', 'message-1', 'session-1', 1779000000250, 1779000000250, '{\"type\":\"text\",\"text\":\"late\"}')",
+                [],
+            )
+            .unwrap();
+        drop(opencode);
+        let before = opencode_streams_built();
+        let prepared = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+            .unwrap()
+            .expect("session-1's new part must ship");
+        let built = opencode_streams_built() - before;
+        acknowledge_prepared(&mut conn, &prepared);
+        assert_eq!(ship_every_opencode_session(&mut conn, &db_path), 0);
+        opencode_source::OPENCODE_SESSION_RESTS_DISABLED
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        built
+    }
+
+    #[test]
+    fn opencode_walk_skips_unchanged_sessions_ahead_of_the_changed_one() {
+        assert_eq!(streams_built_after_an_older_session_changes(false), 1);
+    }
+
+    #[test]
+    fn opencode_walk_without_session_rests_rebuilds_the_unchanged_ones_too() {
+        // The control: session-3 is rebuilt before session-1 is reached.
+        assert_eq!(streams_built_after_an_older_session_changes(true), 2);
+    }
+
+    /// Before/after on a real database: `LONGHOUSE_OPENCODE_BENCH_DB` names a
+    /// copy (it is written to). Ships every session into a scratch shipper
+    /// database, appends one part to the newest session, and times the next walk
+    /// with and without the per-session rest.
+    #[test]
+    #[ignore = "benchmark; needs LONGHOUSE_OPENCODE_BENCH_DB"]
+    fn opencode_walk_bench_on_a_real_database() {
+        let Some(source) = std::env::var_os("LONGHOUSE_OPENCODE_BENCH_DB") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let _home = ScratchLonghouseHome::set(&dir.path().join("lh"));
+        crate::import_scope::ImportScope::all("bench")
+            .save(&crate::config::get_machine_dir().unwrap())
+            .unwrap();
+        let db_path = dir.path().join("opencode.db");
+        fs::copy(&source, &db_path).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let started = std::time::Instant::now();
+        let shipped = ship_every_opencode_session(&mut conn, &db_path);
+        eprintln!(
+            "setup: shipped {shipped} envelopes in {:?}",
+            started.elapsed()
+        );
+
+        let mut bump = 0;
+        let mut walk = |rests_disabled: bool| {
+            opencode_source::OPENCODE_SESSION_RESTS_DISABLED
+                .store(rests_disabled, std::sync::atomic::Ordering::Relaxed);
+            // Change the oldest-ranked session so the walk has to pass all others.
+            let oldest = crate::opencode_db::list_all_opencode_sessions(&db_path)
+                .unwrap()
+                .last()
+                .unwrap()
+                .provider_session_id
+                .clone();
+            bump += 1;
+            let opencode = Connection::open(&db_path).unwrap();
+            let message: String = opencode
+                .query_row(
+                    "SELECT id FROM message WHERE session_id = ?1 LIMIT 1",
+                    [&oldest],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            // One millisecond past its own newest write: a real change that
+            // keeps it at (or next to) the end of the walk order.
+            let newest_write: i64 = opencode
+                .query_row(
+                    "SELECT MAX(time_updated) FROM part WHERE session_id = ?1",
+                    [&oldest],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .unwrap()
+                .unwrap_or(0);
+            opencode
+                .execute(
+                    "INSERT INTO part VALUES (?1, ?2, ?3, ?4, ?4, '{\"type\":\"text\",\"text\":\"bench\"}')",
+                    rusqlite::params![format!("bench-part-{bump}"), message, oldest, newest_write + 1],
+                )
+                .unwrap();
+            drop(opencode);
+            let before = opencode_streams_built();
+            let started = std::time::Instant::now();
+            let prepared = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                .unwrap()
+                .expect("the bumped session must ship");
+            let elapsed = started.elapsed();
+            let built = opencode_streams_built() - before;
+            acknowledge_prepared(&mut conn, &prepared);
+            (elapsed, built)
+        };
+        // Prime the rests with one settled walk.
+        let _ = walk(false);
+        let (before_elapsed, before_built) = walk(true);
+        let _ = walk(false);
+        let (after_elapsed, after_built) = walk(false);
+        eprintln!(
+            "before: {before_elapsed:?} ({before_built} streams); after: {after_elapsed:?} ({after_built} streams)"
+        );
+        opencode_source::OPENCODE_SESSION_RESTS_DISABLED
+            .store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[test]
