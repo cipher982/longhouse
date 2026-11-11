@@ -1,0 +1,339 @@
+# ROLE: measurement of live reply text, terminal to client, for the stock provider CLIs in Console
+# and Helm against the fake model on the Linux pool. Credential-free; manual dispatch only for now.
+name: Terminal Truth
+
+# How long after a provider paints (Helm) or the fake model writes (Console) a piece of reply
+# text does that text reach a Longhouse client? server/zerg/qa/terminal_truth.py measures it; this
+# workflow runs that harness on the same runner pool as console-served-state.yml. Plan:
+# control-plane/docs/specs/terminal-truth-ci-gate.md (step 1: prove the harness runs on Linux and
+# say where the time goes). It has no push trigger and no schedule until that proof is recorded.
+#
+# Mock mode only. No provider secret is passed to this job; every provider talks to the loopback
+# scripted model, and a cell fails closed if that model served no request. The only secrets in the
+# environment are the CI receipt store's, used after the run to keep the results.
+#
+# Provider versions are NOT pinned here, same as console-served-state.yml: npm installs the
+# latest @openai/codex, @anthropic-ai/claude-code, opencode-ai and
+# @earendil-works/pi-coding-agent, and the vendors' own installers fetch the latest omp and
+# agy. The versions the job got are printed in the "Record provider versions" step and are in
+# every result row (`provider_version`).
+#
+# Evidence: results JSON, per-cell logs with a time stamp on each line, per-step timings and the
+# provider PTY recordings (terminal.raw and terminal.timing per cell) are kept as a CI receipt of
+# kind `terminal-truth` (scripts/ops/ci_receipts.py), not GitHub artifact storage, which
+# scripts/ci/check-actions-storage.py forbids. The same results are printed in the job log.
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Provider (codex, claude, opencode, pi, omp, antigravity), a comma list, or 'all'"
+        required: false
+        default: "all"
+        type: string
+      mode:
+        description: "Cells to run"
+        required: false
+        default: "both"
+        type: choice
+        options:
+          - both
+          - console
+          - helm
+      tokens:
+        description: "Tokens in the scripted reply"
+        required: false
+        default: "100"
+        type: string
+      rate:
+        description: "Tokens per second"
+        required: false
+        default: "20"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terminal-truth-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  terminal-truth:
+    name: "terminal-truth"
+    runs-on: grind-browser
+    if: github.repository == 'cipher982/longhouse'
+    timeout-minutes: 90
+    env:
+      TT_PROVIDER: ${{ inputs.provider || 'all' }}
+      TT_MODE: ${{ inputs.mode || 'both' }}
+      TT_TOKENS: ${{ inputs.tokens || '100' }}
+      TT_RATE: ${{ inputs.rate || '20' }}
+      CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
+      CI_RECEIPTS_S3_BUCKET: ${{ secrets.CI_RECEIPTS_S3_BUCKET }}
+      CI_RECEIPTS_S3_PREFIX: ${{ secrets.CI_RECEIPTS_S3_PREFIX }}
+      CI_RECEIPTS_S3_ACCESS_KEY_ID: ${{ secrets.CI_RECEIPTS_S3_ACCESS_KEY_ID }}
+      CI_RECEIPTS_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_RECEIPTS_S3_SECRET_ACCESS_KEY }}
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          known=",codex,claude,opencode,pi,omp,antigravity,"
+          providers="$TT_PROVIDER"
+          if [[ "$providers" == all ]]; then
+            providers="codex,claude,opencode,pi,omp,antigravity"
+          fi
+          if [[ ! "$providers" =~ ^[a-z,]+$ ]]; then
+            echo "::error::Provider input contains unsafe characters." >&2
+            exit 1
+          fi
+          IFS=',' read -r -a requested <<< "$providers"
+          for provider in "${requested[@]}"; do
+            if [[ -z "$provider" || "$known" != *",$provider,"* ]]; then
+              echo "::error::Unsupported provider '$provider'; mock mode supports codex, claude, opencode, pi, omp, antigravity (cursor has no custom model endpoint)." >&2
+              exit 1
+            fi
+          done
+          case "$TT_MODE" in
+            both) modes="console helm" ;;
+            console|helm) modes="$TT_MODE" ;;
+            *) echo "::error::Unsupported mode: $TT_MODE" >&2; exit 1 ;;
+          esac
+          [[ "$TT_TOKENS" =~ ^[0-9]+$ ]] || { echo "::error::tokens must be an integer" >&2; exit 1; }
+          [[ "$TT_RATE" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "::error::rate must be a number" >&2; exit 1; }
+          echo "TT_PROVIDERS=${providers}" >> "$GITHUB_ENV"
+          echo "TT_MODES=${modes}" >> "$GITHUB_ENV"
+          mkdir -p artifacts/terminal-truth
+          echo "TT_OUT=$GITHUB_WORKSPACE/artifacts/terminal-truth" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch head 2026-08-05
+
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
+
+      - name: Sync server environment
+        run: uv sync --project server
+
+      # The runner's own control: a fake TUI with a known schedule must be recovered by the
+      # screen reader, a prompt stub lane must read as prompt and a late stub lane as late.
+      - name: Harness self-check
+        run: |
+          set -euo pipefail
+          make terminal-truth-selfcheck ARGS="--out $TT_OUT/selfcheck.json"
+
+      - name: Build engine and native longhouse CLI
+        run: |
+          set -euo pipefail
+          # engine/build.rs requires the checkout-scoped identity before any cargo invocation.
+          python3 scripts/build/generate_build_identity.py --output "$GITHUB_WORKSPACE/.build/build-identity.json"
+          test -s "$GITHUB_WORKSPACE/.build/build-identity.json"
+          python3 scripts/build/cargo.py exec -- \
+            build --manifest-path "$GITHUB_WORKSPACE/engine/Cargo.toml" --profile ci --bin longhouse-engine --bin longhouse
+          engine="$(python3 scripts/build/cargo.py artifact --profile ci --bin longhouse-engine)"
+          cli="$(python3 scripts/build/cargo.py artifact --profile ci --bin longhouse)"
+          test -x "$engine"
+          test -x "$cli"
+          echo "TT_ENGINE=$engine" >> "$GITHUB_ENV"
+          echo "TT_CLI=$cli" >> "$GITHUB_ENV"
+
+      - name: Stage stock providers in job-owned paths
+        run: |
+          set -euo pipefail
+          fixture_root="$(mktemp -d "$RUNNER_TEMP/terminal-truth-fixture.XXXXXX")"
+          chmod 700 "$fixture_root"
+          echo "TT_FIXTURE_ROOT=$fixture_root" >> "$GITHUB_ENV"
+          provider_root="$fixture_root/providers"
+          home="$fixture_root/home"
+          mkdir -p "$provider_root" "$home/.local/bin"
+          # Installers are untrusted network inputs and run with an empty credential
+          # environment and a disposable HOME; nothing is written to the runner profile.
+          export HOME="$home"
+          export XDG_CONFIG_HOME="$home/.config"
+          export XDG_DATA_HOME="$home/.local/share"
+          wanted=",$TT_PROVIDERS,"
+          npm_packages=()
+          [[ "$wanted" == *,codex,* ]] && npm_packages+=(@openai/codex)
+          [[ "$wanted" == *,claude,* ]] && npm_packages+=(@anthropic-ai/claude-code)
+          [[ "$wanted" == *,opencode,* ]] && npm_packages+=(opencode-ai)
+          [[ "$wanted" == *,pi,* ]] && npm_packages+=(@earendil-works/pi-coding-agent)
+          if (( ${#npm_packages[@]} )); then
+            npm install --prefix "$provider_root" --no-save "${npm_packages[@]}"
+          fi
+          if [[ "$wanted" == *,omp,* ]]; then
+            curl -fsSL https://omp.sh/install | sh -s -- --binary
+          fi
+          if [[ "$wanted" == *,antigravity,* ]]; then
+            curl -fsSL https://antigravity.google/cli/install.sh -o "$fixture_root/antigravity-install.sh"
+            bash "$fixture_root/antigravity-install.sh" --dir "$home/.local/bin"
+          fi
+          mkdir -p "$fixture_root/bin"
+          install -m 755 "$TT_CLI" "$fixture_root/bin/longhouse"
+          {
+            echo "$fixture_root/bin"
+            echo "$provider_root/node_modules/.bin"
+            echo "$home/.local/bin"
+          } >> "$GITHUB_PATH"
+
+      - name: Record provider versions
+        run: |
+          set -uo pipefail
+          out="$TT_OUT/versions.txt"
+          {
+            echo "uname: $(uname -srm)"
+            echo "python: $(python3 --version 2>&1)"
+            echo "node: $(node --version 2>&1)"
+            echo "engine: $("$TT_ENGINE" --version 2>&1 | head -1)"
+            echo "longhouse: $(longhouse --version 2>&1 | head -1)"
+            for binary in codex claude opencode pi omp agy; do
+              if path="$(command -v "$binary" 2>/dev/null)"; then
+                echo "$binary: $(timeout 20 "$binary" --version 2>&1 | head -1)  ($path)"
+              else
+                echo "$binary: not installed"
+              fi
+            done
+            if [[ -f "$TT_FIXTURE_ROOT/providers/package-lock.json" ]]; then
+              python3 - "$TT_FIXTURE_ROOT/providers/node_modules" <<'PY'
+          import json, sys
+          from pathlib import Path
+          for pkg in ("@openai/codex", "@anthropic-ai/claude-code", "opencode-ai", "@earendil-works/pi-coding-agent"):
+              manifest = Path(sys.argv[1]) / pkg / "package.json"
+              if manifest.is_file():
+                  print(f"npm {pkg}: {json.loads(manifest.read_text())['version']}")
+          PY
+            fi
+          } | tee "$out"
+          { echo "## Provider versions (not pinned: latest at job time)"; echo '```'; cat "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      # One harness invocation per cell: wall time per cell, a stable exit status per cell, and
+      # a failed cell does not hide the cells after it. The harness is run through make as a
+      # person would; its own scratch directories are kept (--keep) for the recordings.
+      - name: Run terminal-truth cells
+        run: |
+          set +e
+          scratch=/tmp/agents/tt
+          mkdir -p "$scratch"
+          find "$scratch" -mindepth 1 -maxdepth 1 -printf '%f\n' > "$TT_OUT/scratch-before.txt"
+          timings="$TT_OUT/cell-timings.tsv"
+          printf 'cell\tstart_epoch\tend_epoch\texit\n' > "$timings"
+          # Prefix every output line with the epoch time it arrived, for the per-step breakdown.
+          cat > "$RUNNER_TEMP/tt-stamp.py" <<'PY'
+          import sys, time
+          for line in sys.stdin:
+              sys.stdout.write("%.3f %s" % (time.time(), line))
+              sys.stdout.flush()
+          PY
+          stamp() { python3 -u "$RUNNER_TEMP/tt-stamp.py"; }
+          failed=0
+          IFS=',' read -r -a providers <<< "$TT_PROVIDERS"
+          for mode in $TT_MODES; do
+            for provider in "${providers[@]}"; do
+              cell="$provider-$mode"
+              echo "::group::cell $cell"
+              start="$(date +%s.%N)"
+              make terminal-truth ARGS="run --provider $provider --mode $mode --tokens $TT_TOKENS --rate $TT_RATE --engine $TT_ENGINE --longhouse-cli $TT_CLI --keep --out $TT_OUT/$cell.json" 2>&1 | stamp | tee "$TT_OUT/$cell.log"
+              rc="${PIPESTATUS[0]}"
+              end="$(date +%s.%N)"
+              echo "::endgroup::"
+              printf '%s\t%s\t%s\t%s\n' "$cell" "$start" "$end" "$rc" >> "$timings"
+              if [[ "$rc" != 0 ]]; then
+                echo "::error::cell $cell exited $rc"
+                failed=1
+              fi
+            done
+          done
+          echo "TT_FAILED=$failed" >> "$GITHUB_ENV"
+
+      # Fail closed: exit status alone is not trusted. Every selected cell must have a result
+      # row that was measured and whose scripted model served at least one request.
+      - name: Check every cell ran against the fake model
+        run: |
+          set -uo pipefail
+          python3 - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+
+          out = Path(os.environ["TT_OUT"])
+          bad = []
+          print(f"{'cell':<22}{'status':<14}{'requests':>9}  {'first':>7}{'median':>8}{'worst':>7}  live markers")
+          for provider in os.environ["TT_PROVIDERS"].split(","):
+              for mode in os.environ["TT_MODES"].split():
+                  path = out / f"{provider}-{mode}.json"
+                  if not path.is_file():
+                      bad.append(f"{provider}-{mode}: no result file")
+                      continue
+                  for row in json.loads(path.read_text()):
+                      requests = (row.get("diagnostics") or {}).get("model_served_requests", 0)
+                      live = next((l for l in row.get("lanes", []) if "SSE" in l.get("lane", "")), {}) or {}
+                      fmt = lambda v: "-" if v is None else f"{v:.2f}"
+                      print(
+                          f"{provider + '-' + mode:<22}{row['status']:<14}{requests:>9}  "
+                          f"{fmt(live.get('first_marker_delay_s')):>7}{fmt(live.get('median_delay_s')):>8}{fmt(live.get('worst_delay_s')):>7}  "
+                          f"{len(row.get('markers', [])) - len(live.get('never_served', []))}/{len(row.get('markers', []))}"
+                      )
+                      if row["status"] != "measured" or requests < 1:
+                          bad.append(f"{provider}-{mode}: {row['status']}: {(row.get('reason') or '')[:300]}")
+          if bad:
+              print("\n".join(f"::error::{line}" for line in bad))
+              sys.exit(1)
+          PY
+          rc=$?
+          if [[ "$rc" != 0 || "${TT_FAILED:-0}" != 0 ]]; then
+            exit 1
+          fi
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "## Terminal truth cells"
+            echo '```'
+            cat "$TT_OUT/cell-timings.tsv" 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect recordings and keep the results
+        if: always()
+        run: |
+          set -uo pipefail
+          scratch=/tmp/agents/tt
+          if [[ -f "$TT_OUT/scratch-before.txt" && -d "$scratch" ]]; then
+            find "$scratch" -mindepth 1 -maxdepth 1 -printf '%f\n' | grep -vxFf "$TT_OUT/scratch-before.txt" > "$TT_OUT/scratch-new.txt" || true
+            # PTY recordings and host/model/engine logs per cell; never the provider home
+            # (h/) or the SQLite database.
+            if [[ -s "$TT_OUT/scratch-new.txt" ]]; then
+              (cd "$scratch" && xargs -a "$TT_OUT/scratch-new.txt" tar --exclude='*/h' --exclude='*.db' --exclude='*.db-*' -czf "$TT_OUT/scratch-recordings.tgz")
+              (cd "$scratch" && xargs -a "$TT_OUT/scratch-new.txt" -I{} sh -c 'echo "== {}"; find {} -maxdepth 2 -not -path "{}/h/*" -printf "%p %s %TT+ %Cs\n" | sort')  > "$TT_OUT/scratch-listing.txt" || true
+            fi
+          fi
+          ls -la "$TT_OUT"
+          python3 scripts/ops/ci_receipts.py put terminal-truth "$GITHUB_SHA" "$TT_OUT"/* || echo "::warning::receipt not stored"
+
+      - name: Remove owned state
+        if: always()
+        run: |
+          set -uo pipefail
+          if [[ -s "${TT_OUT:-/nonexistent}/scratch-new.txt" ]]; then
+            while IFS= read -r name; do
+              [[ "$name" =~ ^[0-9a-f]{4}$ ]] && rm -rf -- "/tmp/agents/tt/$name"
+            done < "$TT_OUT/scratch-new.txt"
+          fi
+          if [[ -n "${TT_FIXTURE_ROOT:-}" && "$TT_FIXTURE_ROOT" == "$RUNNER_TEMP"/* ]]; then
+            rm -rf -- "$TT_FIXTURE_ROOT"
+          fi
