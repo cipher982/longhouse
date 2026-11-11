@@ -1149,3 +1149,112 @@ def test_an_event_the_reducer_ignores_is_not_a_write_to_the_runtime_row(tmp_path
         # the pending UPDATE and hide it.
         assert result.ignored == 1
         assert not db.is_modified(state)
+
+
+def _antigravity_event(*, session_id, now: datetime, seq: int, item_id: str, payload: dict) -> RuntimeEventIngest:
+    return RuntimeEventIngest(
+        runtime_key=f"antigravity:{session_id}",
+        session_id=session_id,
+        thread_id=None,
+        run_id=None,
+        provider="antigravity",
+        device_id="cinder",
+        source="antigravity_print",
+        kind="progress_signal",
+        occurred_at=now,
+        dedupe_key=f"antigravity-print:{session_id}:run-1:live:{seq}",
+        payload={"turn_id": "turn-1", "item_id": item_id, "seq": seq, **payload},
+    )
+
+
+def test_antigravity_print_step_text_materializes_and_replaces_with_the_longer_text(tmp_path):
+    from zerg.routers.runtime import _is_bridge_live_transcript_event
+    from zerg.routers.runtime import _live_transcript_preview_payload
+
+    SessionLocal = _make_sessionmaker(tmp_path, "antigravity_print_text.db")
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="antigravity")
+        events = [
+            _antigravity_event(
+                session_id=session.id,
+                now=now + timedelta(seconds=seq),
+                seq=seq,
+                item_id="run-1:step:1",
+                payload={"progress_kind": "bridge_live_transcript_delta", "live_text": text, "delta": text[-1:]},
+            )
+            for seq, text in ((1, "LHPACE0000"), (2, "LHPACE0000 birch"), (3, "LHPACE0000 birch cedar\n"))
+        ]
+        assert all(_is_bridge_live_transcript_event(event) for event in events)
+        published = _live_transcript_preview_payload(events[-1], now=now)
+        result = ingest_runtime_events(db, events)
+        db.commit()
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert result.accepted == 3
+    assert published is not None and published["text"] == "LHPACE0000 birch cedar"
+    assert preview.text == "LHPACE0000 birch cedar"
+    assert preview.tool_name is None
+
+
+def test_antigravity_print_tool_step_materializes_command_then_output(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "antigravity_print_tool.db")
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="antigravity")
+        running = _antigravity_event(
+            session_id=session.id,
+            now=now,
+            seq=1,
+            item_id="run-1:step:2",
+            payload={
+                "progress_kind": "console_live_tool_item",
+                "command": "sleep 1; echo hi",
+                "output": "",
+                "status": "running",
+                "completed": False,
+            },
+        )
+        done = _antigravity_event(
+            session_id=session.id,
+            now=now + timedelta(seconds=1),
+            seq=2,
+            item_id="run-1:step:2",
+            payload={
+                "progress_kind": "console_live_tool_item",
+                "command": "sleep 1; echo hi",
+                "output": "hi\r\n",
+                "status": "completed",
+                "completed": True,
+            },
+        )
+        ingest_runtime_events(db, [running])
+        db.commit()
+        first = load_session_live_preview_map(db, [session.id])[str(session.id)]
+        ingest_runtime_events(db, [done])
+        db.commit()
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert first.tool_call_state == "running"
+    assert first.text == "sleep 1; echo hi"
+    assert preview.tool_name == "exec"
+    assert preview.tool_input_json == {"command": "sleep 1; echo hi"}
+    assert preview.tool_output_text == "hi\r\n"
+    assert preview.tool_call_state == "completed"
+
+
+def test_antigravity_events_from_another_source_are_not_live_previews(tmp_path):
+    from zerg.routers.runtime import _is_bridge_live_transcript_event
+
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+    event = _antigravity_event(
+        session_id=uuid4(),
+        now=now,
+        seq=1,
+        item_id="run-1:step:1",
+        payload={"progress_kind": "bridge_live_transcript_delta", "live_text": "x"},
+    )
+    assert _is_bridge_live_transcript_event(event)
+    assert not _is_bridge_live_transcript_event(event.model_copy(update={"source": "antigravity_hook"}))

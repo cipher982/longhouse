@@ -7775,9 +7775,10 @@ mod tests {
 
     #[test]
     fn a_quiet_hook_grants_nothing_even_though_the_session_is_owned() {
-        // The GEMINI_API_KEY case: hooks load and never fire, so the session is
-        // healthy and uncontrollable. Granting send here is the failure the
-        // whole readiness notion exists to prevent.
+        // Hooks load but none has fired (unregistered, or the session has not
+        // reached its first invocation), so the session is healthy and
+        // uncontrollable. Granting send here is the failure the whole
+        // readiness notion exists to prevent.
         let control = antigravity_control(&[antigravity_observation(None, true)]);
         assert_eq!(control.len(), 1);
         assert_eq!(control[0].state, "detached");

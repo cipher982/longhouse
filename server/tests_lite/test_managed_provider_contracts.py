@@ -505,7 +505,8 @@ def test_antigravity_contract_serves_hook_send_and_print_console_turns():
     always failed. The fix then was to stop advertising it. The fix now is that
     it is genuinely routed: the hook-inbox injection is proven live, and what
     keeps the advertisement honest is a per-session gate on observed hook
-    readiness, because hooks do not fire under GEMINI_API_KEY auth.
+    readiness: a session whose hook is unregistered or has not fired is not
+    controllable.
     """
 
     provider = "antigravity"

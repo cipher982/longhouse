@@ -346,8 +346,7 @@ mod tests {
     /// PreInvocation hook would, and confirm it claims and injects a message
     /// this module actually wrote via `enqueue`. This is the exact contract
     /// boundary this fix depends on -- it does not exercise a live `agy`
-    /// turn (hooks don't fire under `GEMINI_API_KEY` auth, and a signed-in
-    /// profile plus a Helm launch is a separate, heavier proof).
+    /// turn (a live Helm launch is a separate, heavier proof).
     ///
     /// Run with: cargo test --bin longhouse-engine \
     ///   antigravity_channel_control::tests::live_proof_real_hook_script_claims_engine_written_message \

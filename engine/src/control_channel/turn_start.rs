@@ -567,10 +567,9 @@ pub(super) async fn execute_turn_start(
             })
         })
     } else if provider == "antigravity" {
-        // The Console path does not go through hooks, which is the point: agy
-        // loads its hooks and never fires them under GEMINI_API_KEY auth, so a
-        // hook-delivered turn is not universally available and a one-shot
-        // print turn is.
+        // The Console path does not go through hooks: a one-shot print turn
+        // needs no hook inbox and no readiness proof, so it works whether or
+        // not the hook is registered on this machine.
         start_antigravity_print_turn(AntigravityPrintRunConfig {
             session_id: session_id.to_string(),
             thread_id: thread_id.clone(),

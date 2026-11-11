@@ -2847,7 +2847,7 @@
           "level": "live_token",
           "source": "real agy --print PreInvocation hook-inbox injection changed the model-visible turn",
           "disposition": "implemented",
-          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send: a queued message is claimed at PreInvocation, the inbox drains, and the injected text replaces the model-visible turn. Availability follows the hook rather than the release, because hooks do not fire under GEMINI_API_KEY auth -- the control fact's granted_operations is empty whenever the hook has not been seen recently, so a healthy but uncontrollable session offers nothing.",
+          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send: a queued message is claimed at PreInvocation, the inbox drains, and the injected text replaces the model-visible turn. Availability follows the hook rather than the release: the control fact's granted_operations is empty whenever the hook has not been seen recently, so a healthy but uncontrollable session offers nothing. Hooks fire under GEMINI_API_KEY auth (observed on agy 1.5.6 through Longhouse's own hook install).",
           "observed_provider_version": "1.1.17"
         },
         "interrupt": {

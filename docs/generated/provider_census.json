@@ -1931,6 +1931,7 @@
     {
       "path": "server/tests_lite/test_session_live_previews.py",
       "providers": [
+        "antigravity",
         "codex",
         "cursor",
         "omp",
@@ -2667,6 +2668,7 @@
     {
       "path": "server/zerg/services/session_live_previews.py",
       "providers": [
+        "antigravity",
         "codex",
         "cursor",
         "omp",
@@ -2696,6 +2698,7 @@
     {
       "path": "server/zerg/services/session_runtime.py",
       "providers": [
+        "antigravity",
         "codex",
         "cursor",
         "omp",

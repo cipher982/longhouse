@@ -67,9 +67,10 @@ def managed_provider_requires_readiness_proof(provider: str | None) -> bool:
     """Whether launch alone is insufficient to grant the send capability.
 
     True only for Antigravity, and not because its release is unproven: its
-    control is hook-delivered and hooks do not fire under GEMINI_API_KEY auth,
-    so a launched, healthy session may still be uncontrollable. Observation is
-    the only thing that can tell those apart.
+    control is hook-delivered, and a launched, healthy session whose hook is
+    unregistered or has not fired yet is uncontrollable. Hooks do fire under
+    GEMINI_API_KEY auth (observed on agy 1.5.6 with Longhouse's own install), so
+    the gate is observation of the first hook, not the auth method.
     """
 
     return str(provider or "").strip().lower() == "antigravity"

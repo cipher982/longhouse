@@ -1,16 +1,18 @@
 //! Antigravity Console turns through stock `agy --print`.
 //!
 //! Turn-scoped one-shot adapter: one bounded `agy --print <prompt>` invocation
-//! per Console turn. Unlike the Helm path, this does not depend on hooks --
-//! which matters, because agy loads its hooks and never fires them when the
-//! user authenticated with `GEMINI_API_KEY`, so hook-delivered control is not
-//! universally available. A one-shot print turn is.
+//! per Console turn. Unlike the Helm path, this does not depend on hooks: a
+//! one-shot print turn needs no hook inbox and no proof that a hook has fired.
+//! (Hooks do fire under `GEMINI_API_KEY` auth; observed on agy 1.5.5 and 1.5.6,
+//! including the plugin Longhouse installs. Helm control still waits for the
+//! first observed hook, because only observation shows that one is registered.)
 //!
 //! Stock `--output-format stream-json` reports native identity in its `init`
 //! event, before the terminal `result`. Discovery reads that same durable stdout
 //! independently of the monitor and holds unowned sources while a Console
 //! launch is still waiting for identity, rather than guessing from a workspace.
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -643,7 +645,9 @@ async fn monitor_antigravity_print(
 ) {
     sink.post_phase("thinking", None).await;
     let mut source_bound = false;
+    let mut stream = PrintStream::new(&sink.run_id);
     let status = loop {
+        sink.publish_stream_growth(&mut stream).await;
         if !source_bound {
             source_bound = sink.read_and_bind_transcript(false).await
                 .map(|output| output.conversation_id.is_some())
@@ -666,6 +670,7 @@ async fn monitor_antigravity_print(
     // agy flushes its result object and the conversation transcript as it
     // exits; give the filesystem a beat before reading either.
     tokio::time::sleep(Duration::from_millis(150)).await;
+    sink.publish_stream_growth(&mut stream).await;
     // An interrupted turn exits like any other, so the claim -- not the exit
     // code -- is what distinguishes cancellation from completion.
     let cancel_requested = crate::turn_claims::default_registry()
@@ -839,6 +844,177 @@ struct PrintRecord {
 struct PrintResult {
     conversation_id: String,
     status: Option<String>,
+}
+
+/// One live signal projected from a stock `step_update` record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LiveSignal {
+    /// Reply text of one model step, accumulated so far (the stream carries
+    /// fragments, not cumulative text).
+    Text {
+        item_id: String,
+        seq: u64,
+        delta: String,
+        text: String,
+        completed: bool,
+    },
+    /// A tool step: `ACTIVE` carries the call, `DONE` adds the output.
+    Tool {
+        item_id: String,
+        seq: u64,
+        command: String,
+        output: String,
+        completed: bool,
+    },
+}
+
+/// The live half of `--output-format stream-json`.
+///
+/// `read_print_output` reads identity and the terminal result from the whole
+/// file and ignores `step_update`; this follows the file's growth and turns
+/// `step_update` records into live signals: `agent_response` `text_delta`
+/// fragments accumulate per `step_index` (the `DONE` record carries only the
+/// last fragment), and `tool` steps become a command and its output.
+/// Transcript rows still arrive at step end and replace these previews.
+#[derive(Debug, Default)]
+struct PrintStreamProjection {
+    run_id: String,
+    texts: HashMap<i64, String>,
+    seq: u64,
+}
+
+impl PrintStreamProjection {
+    fn new(run_id: &str) -> Self {
+        Self {
+            run_id: run_id.to_string(),
+            ..Self::default()
+        }
+    }
+
+    fn apply(&mut self, record: &Value) -> Option<LiveSignal> {
+        if record.get("event").and_then(Value::as_str) != Some("step_update") {
+            return None;
+        }
+        let update = record.get("step_update")?;
+        let step = update.get("step_index").and_then(Value::as_i64)?;
+        let completed = update.get("state").and_then(Value::as_str) == Some("DONE");
+        match update.get("step_type").and_then(Value::as_str)? {
+            "agent_response" => {
+                let delta = update
+                    .get("text_delta")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if delta.is_empty() {
+                    return None;
+                }
+                let text = self.texts.entry(step).or_default();
+                text.push_str(delta);
+                let text = text.clone();
+                self.seq += 1;
+                Some(LiveSignal::Text {
+                    item_id: format!("{}:step:{step}", self.run_id),
+                    seq: self.seq,
+                    delta: delta.to_string(),
+                    text,
+                    completed,
+                })
+            }
+            "tool" => {
+                let info = update.get("tool_info");
+                let name = update
+                    .get("tool_name")
+                    .or_else(|| info.and_then(|info| info.get("name")))
+                    .and_then(Value::as_str)
+                    .unwrap_or("tool");
+                let params = info.and_then(|info| info.get("parameters"));
+                let command = params
+                    .and_then(|params| params.get("CommandLine"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| match params {
+                        Some(params) if !params.is_null() => format!("{name} {params}"),
+                        _ => name.to_string(),
+                    });
+                let output = info
+                    .and_then(|info| info.get("output"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                self.seq += 1;
+                Some(LiveSignal::Tool {
+                    item_id: format!("{}:step:{step}", self.run_id),
+                    seq: self.seq,
+                    command,
+                    output,
+                    completed,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Apply complete stdout lines. Of consecutive text signals for one step
+    /// only the newest is kept: each already carries the whole step text, so
+    /// the older ones add nothing a client could show.
+    fn apply_lines(&mut self, lines: &[Vec<u8>]) -> Vec<LiveSignal> {
+        let mut signals: Vec<LiveSignal> = Vec::new();
+        for line in lines {
+            let Ok(record) = serde_json::from_slice::<Value>(line) else {
+                continue;
+            };
+            let Some(signal) = self.apply(&record) else {
+                continue;
+            };
+            if let (
+                Some(LiveSignal::Text { item_id: last, .. }),
+                LiveSignal::Text { item_id, .. },
+            ) = (signals.last(), &signal)
+            {
+                if last == item_id {
+                    signals.pop();
+                }
+            }
+            signals.push(signal);
+        }
+        signals
+    }
+}
+
+/// A growth reader over the stdout file plus what it has projected so far.
+#[derive(Debug)]
+struct PrintStream {
+    offset: u64,
+    pending: Vec<u8>,
+    projection: PrintStreamProjection,
+}
+
+impl PrintStream {
+    fn new(run_id: &str) -> Self {
+        Self {
+            offset: 0,
+            pending: Vec::new(),
+            projection: PrintStreamProjection::new(run_id),
+        }
+    }
+
+    fn poll(&mut self, stdout_path: &Path) -> Result<Vec<LiveSignal>> {
+        let lines = match crate::console_adapter::read_growth(
+            stdout_path,
+            &mut self.offset,
+            &mut self.pending,
+        ) {
+            Ok(lines) => lines,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                return Ok(Vec::new())
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(self.projection.apply_lines(&lines))
+    }
 }
 
 /// Read only complete JSON values. A partially appended event is pending, not a
@@ -1145,6 +1321,71 @@ impl AntigravityPrintSink {
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
         self.publish_phase(phase, tool_name.as_deref(), None);
+    }
+
+    /// Publish what the stdout stream has added since the last call on the
+    /// live-text path Codex uses: `bridge_live_transcript_delta` carries the
+    /// step's reply text so far, `console_live_tool_item` a tool command and
+    /// its output.
+    async fn publish_stream_growth(&self, stream: &mut PrintStream) {
+        let signals = match stream.poll(&self.stdout_path) {
+            Ok(signals) => signals,
+            Err(error) => {
+                tracing::warn!(run_id = %self.run_id, %error, "Antigravity live stream read failed");
+                return;
+            }
+        };
+        for signal in signals {
+            self.post_event(&self.live_event(&signal));
+        }
+    }
+
+    fn live_event(&self, signal: &LiveSignal) -> Value {
+        let payload = match signal {
+            LiveSignal::Text {
+                item_id,
+                seq,
+                delta,
+                text,
+                completed,
+            } => json!({
+                "progress_kind": "bridge_live_transcript_delta",
+                "turn_id": self.turn_id,
+                "client_request_id": self.client_request_id,
+                "item_id": item_id,
+                "seq": seq,
+                "item_seq": seq,
+                "delta": delta,
+                "live_text": text,
+                "item_completed": completed,
+                "turn_completed": false,
+            }),
+            LiveSignal::Tool {
+                item_id,
+                seq,
+                command,
+                output,
+                completed,
+            } => json!({
+                "progress_kind": "console_live_tool_item",
+                "turn_id": self.turn_id,
+                "client_request_id": self.client_request_id,
+                "item_id": item_id,
+                "command": command,
+                "output": output,
+                "status": if *completed { "completed" } else { "running" },
+                "seq": seq,
+                "completed": completed,
+            }),
+        };
+        let seq = match signal {
+            LiveSignal::Text { seq, .. } | LiveSignal::Tool { seq, .. } => *seq,
+        };
+        self.run_event(
+            "progress_signal",
+            &format!("live:{seq}"),
+            self.with_transport(payload),
+        )
     }
 
     async fn post_terminal(
@@ -2310,6 +2551,243 @@ elif prompt in ("restart-stop", "restart-mismatch"):
         )).unwrap();
         assert!(read_print_output(&path, false).is_err());
     }
+    fn step_update(step: i64, state: &str, step_type: &str, extra: Value) -> Value {
+        let mut update = json!({
+            "conversation_id": "5f62a636-1412-4afe-9cfd-a5079e0a0366",
+            "step_index": step,
+            "state": state,
+            "step_type": step_type,
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            update[key] = value.clone();
+        }
+        json!({"event": "step_update", "step_update": update})
+    }
+
+    #[test]
+    fn text_deltas_accumulate_per_step_and_the_done_record_adds_only_its_tail() {
+        let mut stream = PrintStreamProjection::new("run");
+        let mut last = None;
+        for (state, delta) in [("ACTIVE", "ONE"), ("ACTIVE", " two"), ("DONE", " three\n")] {
+            last = stream.apply(&step_update(
+                1,
+                state,
+                "agent_response",
+                json!({"text_delta": delta}),
+            ));
+        }
+        assert_eq!(
+            last,
+            Some(LiveSignal::Text {
+                item_id: "run:step:1".to_string(),
+                seq: 3,
+                delta: " three\n".to_string(),
+                text: "ONE two three\n".to_string(),
+                completed: true,
+            })
+        );
+        // A later step starts from nothing instead of inheriting the first.
+        let next = stream
+            .apply(&step_update(
+                3,
+                "ACTIVE",
+                "agent_response",
+                json!({"text_delta": "next"}),
+            ))
+            .unwrap();
+        assert!(matches!(
+            next,
+            LiveSignal::Text { ref text, completed: false, .. } if text == "next"
+        ));
+    }
+
+    #[test]
+    fn steps_without_text_and_other_events_project_nothing() {
+        let mut stream = PrintStreamProjection::new("run");
+        assert_eq!(
+            stream.apply(&step_update(0, "DONE", "user_input", json!({}))),
+            None
+        );
+        assert_eq!(
+            stream.apply(&step_update(
+                2,
+                "DONE",
+                "agent_response",
+                json!({"usage": {"input_tokens": 32}})
+            )),
+            None
+        );
+        assert_eq!(
+            stream.apply(&json!({"event": "init", "conversation_id": "x"})),
+            None
+        );
+        assert_eq!(
+            stream.apply(&json!({"event": "result", "result": {"response": "text"}})),
+            None
+        );
+        assert_eq!(stream.seq, 0);
+    }
+
+    #[test]
+    fn tool_steps_carry_the_command_then_its_output() {
+        let mut stream = PrintStreamProjection::new("run");
+        let parameters = json!({"CommandLine": "echo hello-tool-out"});
+        let start = stream
+            .apply(&step_update(
+                108,
+                "ACTIVE",
+                "tool",
+                json!({"tool_name": "run_command", "tool_info": {"name": "run_command", "parameters": parameters}}),
+            ))
+            .unwrap();
+        assert_eq!(
+            start,
+            LiveSignal::Tool {
+                item_id: "run:step:108".to_string(),
+                seq: 1,
+                command: "echo hello-tool-out".to_string(),
+                output: String::new(),
+                completed: false,
+            }
+        );
+        let done = stream
+            .apply(&step_update(
+                108,
+                "DONE",
+                "tool",
+                json!({"tool_name": "run_command", "duration_seconds": 1.0, "tool_info": {"name": "run_command", "parameters": parameters, "output": "hello-tool-out\r\n"}}),
+            ))
+            .unwrap();
+        assert_eq!(
+            done,
+            LiveSignal::Tool {
+                item_id: "run:step:108".to_string(),
+                seq: 2,
+                command: "echo hello-tool-out".to_string(),
+                output: "hello-tool-out\r\n".to_string(),
+                completed: true,
+            }
+        );
+        // A tool without a command line is labelled by name and parameters.
+        let other = stream
+            .apply(&step_update(
+                110,
+                "ACTIVE",
+                "tool",
+                json!({"tool_name": "view_file", "tool_info": {"parameters": {"AbsolutePath": "/x"}}}),
+            ))
+            .unwrap();
+        assert!(matches!(
+            other,
+            LiveSignal::Tool { ref command, .. } if command == "view_file {\"AbsolutePath\":\"/x\"}"
+        ));
+    }
+
+    #[test]
+    fn one_read_publishes_only_the_newest_text_of_a_step_but_every_tool_event() {
+        let mut stream = PrintStreamProjection::new("run");
+        let lines = [
+            step_update(1, "ACTIVE", "agent_response", json!({"text_delta": "a"})),
+            step_update(1, "ACTIVE", "agent_response", json!({"text_delta": "b"})),
+            step_update(2, "ACTIVE", "tool", json!({"tool_name": "run_command", "tool_info": {"parameters": {"CommandLine": "ls"}}})),
+            step_update(2, "DONE", "tool", json!({"tool_name": "run_command", "tool_info": {"parameters": {"CommandLine": "ls"}, "output": "x"}})),
+            step_update(3, "ACTIVE", "agent_response", json!({"text_delta": "c"})),
+        ]
+        .iter()
+        .map(|record| serde_json::to_vec(record).unwrap())
+        .chain([b"not json".to_vec()])
+        .collect::<Vec<_>>();
+        let signals = stream.apply_lines(&lines);
+        assert_eq!(signals.len(), 4);
+        assert!(matches!(&signals[0], LiveSignal::Text { text, seq: 2, .. } if text == "ab"));
+        assert!(matches!(
+            &signals[1],
+            LiveSignal::Tool {
+                completed: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &signals[2],
+            LiveSignal::Tool {
+                completed: true,
+                ..
+            }
+        ));
+        assert!(matches!(&signals[3], LiveSignal::Text { text, .. } if text == "c"));
+    }
+
+    #[test]
+    fn the_growth_reader_waits_for_a_whole_line_and_tolerates_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stdout.log");
+        let mut stream = PrintStream::new("run");
+        assert!(stream.poll(&path).unwrap().is_empty());
+        let line = serde_json::to_string(&step_update(
+            1,
+            "ACTIVE",
+            "agent_response",
+            json!({"text_delta": "hello"}),
+        ))
+        .unwrap();
+        let (head, tail) = line.split_at(20);
+        std::fs::write(&path, head).unwrap();
+        assert!(stream.poll(&path).unwrap().is_empty());
+        std::fs::write(&path, format!("{head}{tail}\n")).unwrap();
+        let signals = stream.poll(&path).unwrap();
+        assert!(matches!(&signals[..], [LiveSignal::Text { text, .. }] if text == "hello"));
+        assert!(stream.poll(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn live_events_use_the_codex_live_text_envelope_under_the_antigravity_source() {
+        let sink = AntigravityPrintSink {
+            run: ConsoleRun {
+                provider: &ANTIGRAVITY_CONSOLE,
+                session_id: Uuid::new_v4().to_string(),
+                thread_id: Uuid::new_v4().to_string(),
+                turn_id: Some("turn-1".to_string()),
+                run_id: "run".to_string(),
+                client_request_id: Some("req-1".to_string()),
+                launch_id: Uuid::new_v4().to_string(),
+                process_group_id: None,
+                machine_name: "test".to_string(),
+                local_db_path: None,
+                runtime_events_outbox_dir: PathBuf::from("/nonexistent"),
+            },
+            stdout_path: PathBuf::from("/nonexistent"),
+        };
+        let text = sink.live_event(&LiveSignal::Text {
+            item_id: "run:step:1".to_string(),
+            seq: 7,
+            delta: "b".to_string(),
+            text: "ab".to_string(),
+            completed: false,
+        });
+        assert_eq!(text["provider"], "antigravity");
+        assert_eq!(text["source"], ANTIGRAVITY_PRINT_ADAPTER);
+        assert_eq!(text["kind"], "progress_signal");
+        assert!(text["dedupe_key"].as_str().unwrap().ends_with(":live:7"));
+        assert_eq!(
+            text["payload"]["progress_kind"],
+            "bridge_live_transcript_delta"
+        );
+        assert_eq!(text["payload"]["live_text"], "ab");
+        assert_eq!(text["payload"]["item_id"], "run:step:1");
+        assert_eq!(text["payload"]["turn_id"], "turn-1");
+        assert_eq!(text["payload"]["seq"], 7);
+        let tool = sink.live_event(&LiveSignal::Tool {
+            item_id: "run:step:2".to_string(),
+            seq: 8,
+            command: "ls".to_string(),
+            output: "out".to_string(),
+            completed: true,
+        });
+        assert_eq!(tool["payload"]["progress_kind"], "console_live_tool_item");
+        assert_eq!(tool["payload"]["status"], "completed");
+        assert_eq!(tool["payload"]["output"], "out");
+    }
+
     #[test]
     fn failed_terminal_handoff_keeps_status_until_durable() {
         let _home_guard = crate::console_adapter::longhouse_home_test_guard();

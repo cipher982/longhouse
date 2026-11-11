@@ -573,6 +573,12 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
         and event.kind == "progress_signal"
         and payload.get("progress_kind") in {"bridge_live_transcript_delta", "console_live_tool_item"}
     )
+    antigravity_live = (
+        (event.provider or "").strip().lower() == "antigravity"
+        and (event.source or "").strip().lower() == "antigravity_print"
+        and event.kind == "progress_signal"
+        and payload.get("progress_kind") in {"bridge_live_transcript_delta", "console_live_tool_item"}
+    )
     cursor_live = (
         (event.provider or "").strip().lower() == "cursor"
         and (event.source or "").strip().lower() == "cursor_print"
@@ -587,6 +593,7 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
     )
     return (
         codex_live
+        or antigravity_live
         or cursor_live
         or opencode_live
         or _is_pi_print_stream_event(event)
