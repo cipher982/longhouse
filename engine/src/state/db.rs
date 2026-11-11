@@ -604,7 +604,17 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
          ON pending_source_envelope(wake_at, source_epoch);
 
          CREATE INDEX IF NOT EXISTS idx_pending_source_supersession_epoch
-         ON pending_source_envelope_supersession(source_epoch, created_at);",
+         ON pending_source_envelope_supersession(source_epoch, created_at);
+
+         -- The Cursor drain asks, per drained hash, whether any epoch still holds
+         -- live bytes for it. The primary key leads with source_epoch, so without
+         -- this index every probe scanned the whole table. On cinder
+         -- (2026-11-11: 850k rows, 128MB) one probe took ~40ms, a 128-record
+         -- batch ~16s of a full core inside an IMMEDIATE transaction, every 30s.
+         -- Partial on live rows only: ~70k entries, ~5MB, built in <0.1s.
+         CREATE INDEX IF NOT EXISTS idx_cursor_store_raw_record_live_hash
+         ON cursor_store_raw_record(record_hash)
+         WHERE record_bytes_len > 0;",
     )?;
 
     tracing::debug!("Opened shipper DB: {}", path.display());

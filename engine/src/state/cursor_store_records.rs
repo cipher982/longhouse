@@ -415,10 +415,7 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
         let root = records_root(&cleanup)?;
         for hash in drained_hashes {
             let live: bool = cleanup.query_row(
-                "SELECT EXISTS(
-                     SELECT 1 FROM cursor_store_raw_record
-                     WHERE record_hash = ?1 AND record_bytes_len > 0
-                 )",
+                LIVE_RECORD_HASH_EXISTS_SQL,
                 [&hash],
                 |row| row.get(0),
             )?;
@@ -433,6 +430,14 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
     }
     Ok(drained_records)
 }
+
+/// Whether any epoch still holds live bytes for a content hash. Runs once per
+/// drained hash while the drain holds the writer, so it must stay an index
+/// probe (`idx_cursor_store_raw_record_live_hash`), never a table scan.
+const LIVE_RECORD_HASH_EXISTS_SQL: &str = "SELECT EXISTS(
+     SELECT 1 FROM cursor_store_raw_record
+     WHERE record_hash = ?1 AND record_bytes_len > 0
+ )";
 
 #[derive(Debug)]
 struct CursorDrainCandidate {
@@ -821,6 +826,30 @@ mod tests {
             params![epoch.to_string(), Utc::now().to_rfc3339()],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn drain_live_hash_probe_is_an_index_search_not_a_table_scan() {
+        // The drain runs this once per drained hash while holding the writer.
+        // As a scan it cost ~16s of a core per 30s batch on a 850k-row table.
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(temp.path())).unwrap();
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {LIVE_RECORD_HASH_EXISTS_SQL}"))
+            .unwrap()
+            .query_map(["hash"], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|step| step
+                .contains("USING INDEX idx_cursor_store_raw_record_live_hash (record_hash=?)")),
+            "live-hash probe must search the partial index, got {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|step| step.starts_with("SCAN cursor_store_raw_record")),
+            "live-hash probe must not scan the table, got {plan:?}"
+        );
     }
 
     #[test]
