@@ -33,10 +33,101 @@ SCRIPTED_INPUT_MARKER = re.compile(r"\b(?:LONGHOUSE_PI_PROBE_[a-f0-9]{32}|(?:OMP
 
 
 @dataclass(frozen=True)
+class Pacing:
+    """Stream a reply one token per delta at `rate` tokens/second after `initial_delay` seconds.
+
+    `tokens` with no scripted reply generates filler words, with a unique marker word
+    at token 0 and every `marker_every` tokens after it, so a reader can time the stream.
+    """
+
+    rate: float
+    initial_delay: float = 0.0
+    tokens: int | None = None
+    marker_every: int = 20
+    marker_prefix: str = "LHPACE"
+
+
+@dataclass(frozen=True)
 class GenerationPlan:
     text: str | None
     tool_call: tuple[str, dict] | None
     turn_id: str | None = None
+    pace: Pacing | None = None
+
+
+_FILLER_WORDS = ("amber", "birch", "cedar", "dune", "ember", "fjord", "grove", "heath", "inlet", "juniper")
+_TOKEN_SPLIT = re.compile(r"\s*\S+|\s+$")
+
+
+def parse_pacing(value: object, *, where: str = "pace") -> Pacing:
+    if not isinstance(value, dict):
+        raise ValueError(f"{where} must be an object")
+    unknown = set(value) - {"rate", "initial_delay", "tokens", "marker_every", "marker_prefix"}
+    if unknown:
+        raise ValueError(f"{where} has unknown keys: {sorted(unknown)}")
+
+    def number(key: str, default: float | None) -> float | None:
+        raw = value.get(key, default)
+        if raw is None:
+            return None
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw < 0:
+            raise ValueError(f"{where}.{key} must be a non-negative number")
+        return float(raw)
+
+    rate = number("rate", None)
+    if not rate:
+        raise ValueError(f"{where}.rate must be a positive number")
+    tokens = number("tokens", None)
+    marker_every = number("marker_every", 20)
+    prefix = value.get("marker_prefix", "LHPACE")
+    if not isinstance(prefix, str) or not re.fullmatch(r"[A-Za-z0-9]+", prefix):
+        raise ValueError(f"{where}.marker_prefix must be alphanumeric")
+    if tokens is not None and tokens < 1:
+        raise ValueError(f"{where}.tokens must be at least 1")
+    if not marker_every or marker_every < 1:
+        raise ValueError(f"{where}.marker_every must be at least 1")
+    return Pacing(
+        rate=rate,
+        initial_delay=number("initial_delay", 0.0) or 0.0,
+        tokens=int(tokens) if tokens is not None else None,
+        marker_every=int(marker_every),
+        marker_prefix=prefix,
+    )
+
+
+def pace_marker(pace: Pacing, index: int) -> str:
+    return f"{pace.marker_prefix}{index:04d}"
+
+
+def paced_text(pace: Pacing) -> str:
+    """The generated reply for a pace with `tokens` and no scripted text."""
+    if pace.tokens is None:
+        raise ValueError("pace.tokens is required when the turn has no reply text")
+    words = [pace_marker(pace, i) if i % pace.marker_every == 0 else _FILLER_WORDS[i % len(_FILLER_WORDS)] for i in range(pace.tokens)]
+    return " ".join(words)
+
+
+def pace_schedule(pace: Pacing, text: str) -> list[tuple[int, str, float]]:
+    """(token index, marker word, seconds after the stream opens) for every marker token."""
+    out = []
+    for index, token in enumerate(_TOKEN_SPLIT.findall(text)):
+        word = token.strip()
+        if word.startswith(pace.marker_prefix) and word == pace_marker(pace, index):
+            out.append((index, word, pace.initial_delay + index / pace.rate))
+    return out
+
+
+def _text_chunks(text: str, pace: Pacing | None = None) -> list[tuple[str, float]]:
+    """Split a reply into (delta, seconds after the stream opens) pairs.
+
+    Unpaced: the historic two halves, both sent at once. Paced: one token per delta.
+    """
+    if pace is None:
+        cut = max(1, len(text) // 2)
+        halves = [text[:cut], text[cut:]] if text[cut:] else [text]
+        return [(half, 0.0) for half in halves]
+    tokens = _TOKEN_SPLIT.findall(text) or [text]
+    return [(token, pace.initial_delay + index / pace.rate) for index, token in enumerate(tokens)]
 
 
 def load_script(path: Path) -> tuple[list[dict], str]:
@@ -86,7 +177,12 @@ def load_script(path: Path) -> tuple[list[dict], str]:
                 raise ValueError(f"turn {turn_id!r} history group is not present")
             if isinstance(group, str) and group not in pattern.groupindex:
                 raise ValueError(f"turn {turn_id!r} history group is not present")
-        if reply is None and tool_call is None and history is None:
+        pace = turn.get("pace")
+        if pace is not None:
+            parsed = parse_pacing(pace, where=f"turn {turn_id!r} pace")
+            if reply is None and parsed.tokens is None and history is None:
+                raise ValueError(f"turn {turn_id!r} pace needs tokens or a reply")
+        if reply is None and tool_call is None and history is None and pace is None:
             raise ValueError(f"turn {turn_id!r} must contain a reply or tool_call")
     return turns, hashlib.sha256(raw).hexdigest()
 
@@ -452,7 +548,10 @@ def _scripted_plan(payload: dict, turns: list[dict]) -> GenerationPlan | None:
             reply = reply.replace("{{input_marker}}", marker)
         tool_spec = turn.get("tool_call")
         tool_call = _scripted_tool_call(payload, tool_spec) if tool_spec is not None else None
-        return GenerationPlan(reply, tool_call, turn["id"])
+        pace = parse_pacing(turn["pace"]) if turn.get("pace") is not None else None
+        if pace is not None and reply is None:
+            reply = paced_text(pace)
+        return GenerationPlan(reply, tool_call, turn["id"], pace)
     return None
 
 
@@ -564,7 +663,7 @@ class MockHandler(BaseHTTPRequestHandler):
 
     def _send_sse(
         self,
-        frames: list[tuple[str | None, dict | str]],
+        frames: list[tuple],
         *,
         model_request_id: int | None = None,
     ) -> None:
@@ -576,7 +675,13 @@ class MockHandler(BaseHTTPRequestHandler):
             self.end_headers()
             if model_request_id is not None and not frames:
                 self.server.mark_model_request_served(model_request_id)
-            for index, (event, data) in enumerate(frames):
+            started = time.monotonic()
+            for index, frame in enumerate(frames):
+                event, data = frame[0], frame[1]
+                at = frame[2] if len(frame) > 2 else 0.0
+                wait = started + at - time.monotonic()
+                if wait > 0:
+                    time.sleep(wait)
                 if model_request_id is not None and index == len(frames) - 1:
                     self.server.mark_model_request_served(model_request_id)
                 if event:
@@ -598,7 +703,7 @@ class MockHandler(BaseHTTPRequestHandler):
         request_id = self.server.begin_model_request(turn_id)
         self._send_json(200, payload, model_request_id=request_id)
 
-    def _send_model_sse(self, frames: list[tuple[str | None, dict | str]], turn_id: str | None) -> None:
+    def _send_model_sse(self, frames: list[tuple], turn_id: str | None) -> None:
         request_id = self.server.begin_model_request(turn_id)
         self._send_sse(frames, model_request_id=request_id)
 
@@ -729,9 +834,10 @@ class MockHandler(BaseHTTPRequestHandler):
             flush=True,
         )
         if plan.tool_call:
-            self._responses_tool(payload, *plan.tool_call, text=plan.text, turn_id=plan.turn_id)
+            self._responses_tool(payload, *plan.tool_call, text=plan.text, turn_id=plan.turn_id, pace=plan.pace)
             return
         text = plan.text or ""
+        pace = plan.pace
         model = str(payload.get("model") or "mock-model")
         response_id = f"resp_{uuid4().hex}"
         if not payload.get("stream", True):
@@ -755,9 +861,8 @@ class MockHandler(BaseHTTPRequestHandler):
         }
         final_response = _response_object(response_id, model, text, status="completed")
         final_response["output"] = [final_message]
-        cut = max(1, len(text) // 2)
-        chunks = [text[:cut], text[cut:]] if text[cut:] else [text]
-        frames: list[tuple[str | None, dict | str]] = [
+        chunks = _text_chunks(text, pace)
+        frames: list[tuple] = [
             ("response.created", {"type": "response.created", "response": created}),
             (
                 "response.in_progress",
@@ -792,8 +897,9 @@ class MockHandler(BaseHTTPRequestHandler):
                     "content_index": 0,
                     "delta": chunk,
                 },
+                at,
             )
-            for chunk in chunks
+            for chunk, at in chunks
         )
         frames.extend(
             [
@@ -845,9 +951,10 @@ class MockHandler(BaseHTTPRequestHandler):
             flush=True,
         )
         if plan.tool_call:
-            self._anthropic_tool(payload, *plan.tool_call, text=plan.text, turn_id=plan.turn_id)
+            self._anthropic_tool(payload, *plan.tool_call, text=plan.text, turn_id=plan.turn_id, pace=plan.pace)
             return
         text = plan.text or ""
+        pace = plan.pace
         model = str(payload.get("model") or "mock-model")
         message_id = f"msg_{uuid4().hex}"
         message = {
@@ -863,9 +970,8 @@ class MockHandler(BaseHTTPRequestHandler):
         if not payload.get("stream", False):
             self._send_model_json(message, plan.turn_id)
             return
-        cut = max(1, len(text) // 2)
-        chunks = [text[:cut], text[cut:]] if text[cut:] else [text]
-        frames: list[tuple[str | None, dict | str]] = [
+        chunks = _text_chunks(text, pace)
+        frames: list[tuple] = [
             (
                 "message_start",
                 {
@@ -895,8 +1001,9 @@ class MockHandler(BaseHTTPRequestHandler):
                     "index": 0,
                     "delta": {"type": "text_delta", "text": chunk},
                 },
+                at,
             )
-            for chunk in chunks
+            for chunk, at in chunks
         )
         frames.extend(
             [
@@ -922,9 +1029,10 @@ class MockHandler(BaseHTTPRequestHandler):
             flush=True,
         )
         if plan.tool_call:
-            self._chat_tool(payload, *plan.tool_call, text=plan.text, turn_id=plan.turn_id)
+            self._chat_tool(payload, *plan.tool_call, text=plan.text, turn_id=plan.turn_id, pace=plan.pace)
             return
         text = plan.text or ""
+        pace = plan.pace
         model = str(payload.get("model") or "mock-model")
         completion_id = f"chatcmpl_{uuid4().hex}"
         created = int(time.time())
@@ -947,9 +1055,8 @@ class MockHandler(BaseHTTPRequestHandler):
                 plan.turn_id,
             )
             return
-        cut = max(1, len(text) // 2)
-        chunks = [text[:cut], text[cut:]] if text[cut:] else [text]
-        frames: list[tuple[str | None, dict | str]] = [
+        chunks = _text_chunks(text, pace)
+        frames: list[tuple] = [
             (
                 None,
                 {
@@ -977,8 +1084,9 @@ class MockHandler(BaseHTTPRequestHandler):
                     "model": model,
                     "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
                 },
+                at,
             )
-            for chunk in chunks
+            for chunk, at in chunks
         )
         frames.extend(
             [
@@ -1016,6 +1124,7 @@ class MockHandler(BaseHTTPRequestHandler):
         *,
         text: str | None = None,
         turn_id: str | None = None,
+        pace: Pacing | None = None,
     ) -> None:
         model = str(payload.get("model") or "mock-model")
         response_id = f"resp_{uuid4().hex}"
@@ -1045,7 +1154,7 @@ class MockHandler(BaseHTTPRequestHandler):
 
         created = _response_object(response_id, model, text or "", status="in_progress")
         call_index = 1 if text is not None else 0
-        frames: list[tuple[str | None, dict | str]] = [
+        frames: list[tuple] = [
             ("response.created", {"type": "response.created", "response": created}),
             (
                 "response.in_progress",
@@ -1056,8 +1165,7 @@ class MockHandler(BaseHTTPRequestHandler):
             item_id = text_item["id"]
             message = {**text_item, "content": [], "status": "in_progress"}
             part = {"type": "output_text", "text": "", "annotations": []}
-            cut = max(1, len(text) // 2)
-            chunks = [text[:cut], text[cut:]] if text[cut:] else [text]
+            chunks = _text_chunks(text, pace)
             frames.extend(
                 [
                     (
@@ -1090,8 +1198,9 @@ class MockHandler(BaseHTTPRequestHandler):
                         "content_index": 0,
                         "delta": chunk,
                     },
+                    at,
                 )
-                for chunk in chunks
+                for chunk, at in chunks
             )
             frames.extend(
                 [
@@ -1180,6 +1289,7 @@ class MockHandler(BaseHTTPRequestHandler):
         *,
         text: str | None = None,
         turn_id: str | None = None,
+        pace: Pacing | None = None,
     ) -> None:
         model = str(payload.get("model") or "mock-model")
         block = {
@@ -1210,11 +1320,10 @@ class MockHandler(BaseHTTPRequestHandler):
             "stop_reason": None,
             "usage": {"input_tokens": INPUT_TOKENS, "output_tokens": 0},
         }
-        frames: list[tuple[str | None, dict | str]] = [("message_start", {"type": "message_start", "message": start})]
+        frames: list[tuple] = [("message_start", {"type": "message_start", "message": start})]
         tool_index = 0
         if text is not None:
-            cut = max(1, len(text) // 2)
-            chunks = [text[:cut], text[cut:]] if text[cut:] else [text]
+            chunks = _text_chunks(text, pace)
             frames.append(
                 (
                     "content_block_start",
@@ -1233,8 +1342,9 @@ class MockHandler(BaseHTTPRequestHandler):
                         "index": 0,
                         "delta": {"type": "text_delta", "text": chunk},
                     },
+                    at,
                 )
-                for chunk in chunks
+                for chunk, at in chunks
             )
             frames.append(("content_block_stop", {"type": "content_block_stop", "index": 0}))
             tool_index = 1
@@ -1284,6 +1394,7 @@ class MockHandler(BaseHTTPRequestHandler):
         *,
         text: str | None = None,
         turn_id: str | None = None,
+        pace: Pacing | None = None,
     ) -> None:
         model = str(payload.get("model") or "mock-model")
         completion_id = f"chatcmpl_{uuid4().hex}"
@@ -1324,7 +1435,7 @@ class MockHandler(BaseHTTPRequestHandler):
             "created": created,
             "model": model,
         }
-        frames: list[tuple[str | None, dict | str]] = [
+        frames: list[tuple] = [
             (
                 None,
                 {
@@ -1340,8 +1451,7 @@ class MockHandler(BaseHTTPRequestHandler):
             )
         ]
         if text is not None:
-            cut = max(1, len(text) // 2)
-            chunks = [text[:cut], text[cut:]] if text[cut:] else [text]
+            chunks = _text_chunks(text, pace)
             frames.extend(
                 (
                     None,
@@ -1355,8 +1465,9 @@ class MockHandler(BaseHTTPRequestHandler):
                             }
                         ],
                     },
+                    at,
                 )
-                for content in chunks
+                for content, at in chunks
             )
         frames.extend(
             [
@@ -1418,7 +1529,18 @@ class MockHandler(BaseHTTPRequestHandler):
         if plan.tool_call and plan.turn_id is None and _has_user_prompt(payload):
             _issue(_reply_text(payload), f"gemini:{plan.tool_call[0]}:{uuid4().hex}")
         result = self._gemini_payload(plan.text, model, call=plan.tool_call)
-        if stream:
+        if stream and plan.pace is not None and plan.text is not None:
+            chunks = _text_chunks(plan.text, plan.pace)
+            frames = []
+            for index, (chunk, at) in enumerate(chunks):
+                last = index == len(chunks) - 1
+                piece = self._gemini_payload(chunk, model, call=plan.tool_call if last else None)
+                if not last:
+                    del piece["candidates"][0]["finishReason"]
+                    del piece["usageMetadata"]
+                frames.append((None, piece, at))
+            self._send_model_sse(frames, plan.turn_id)
+        elif stream:
             self._send_model_sse([(None, result)], plan.turn_id)
         else:
             self._send_model_json(result, plan.turn_id)
