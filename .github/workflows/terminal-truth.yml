@@ -231,10 +231,7 @@ jobs:
         if: env.TT_PUBLISH == '1'
         run: |
           set -euo pipefail
-          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-            -f state=pending -f context=longhouse/terminal-truth \
-            -f description="terminal truth running" \
-            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          python3 scripts/ci/terminal_truth_status.py pending "terminal truth running"
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -431,10 +428,7 @@ jobs:
           if [[ -f "$TT_OUT/gate.json" ]]; then
             description="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["description"][:140])' "$TT_OUT/gate.json")"
           fi
-          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-            -f state="$state" -f context=longhouse/terminal-truth \
-            -f description="$description" \
-            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          python3 scripts/ci/terminal_truth_status.py "$state" "$description"
 
       - name: Remove owned state
         if: always()

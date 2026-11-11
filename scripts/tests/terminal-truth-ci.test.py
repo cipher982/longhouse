@@ -75,7 +75,8 @@ class WorkflowTests(unittest.TestCase):
 
     def test_the_workflow_publishes_one_stable_status_and_uses_no_secret_but_the_receipt_store(self):
         text = WORKFLOW.read_text()
-        self.assertEqual(len(re.findall(r"context=longhouse/terminal-truth", text)), 2)  # pending, result
+        self.assertEqual(len(re.findall(r"terminal_truth_status\.py", text)), 2)  # pending, result
+        self.assertNotIn("gh api", text)  # the Linux runner has no gh
         secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", text))
         self.assertTrue(all(name.startswith("CI_RECEIPTS_S3_") for name in secrets), secrets)
         self.assertNotIn("upload-artifact", text)
@@ -86,6 +87,20 @@ class WorkflowTests(unittest.TestCase):
         for cell, value in data["budget_s"].items():
             self.assertIn(cell.split("/")[0], PROVIDERS)
             self.assertGreater(value, 0)
+
+
+class StatusTests(unittest.TestCase):
+    def test_the_payload_has_the_one_context_the_promotion_requirement_reads(self):
+        sys.path.insert(0, str(ROOT / "scripts" / "ci"))
+        import terminal_truth_status as status
+
+        env = {"GITHUB_REPOSITORY": "o/r", "GITHUB_RUN_ID": "7", "GITHUB_SERVER_URL": "https://github.com"}
+        body = status.payload("success", "x" * 300, env)
+        self.assertEqual(body["context"], "longhouse/terminal-truth")
+        self.assertEqual(body["target_url"], "https://github.com/o/r/actions/runs/7")
+        self.assertEqual(len(body["description"]), 140)
+        with self.assertRaises(SystemExit):
+            status.payload("cancelled", "x", env)
 
 
 class SummaryTests(unittest.TestCase):
