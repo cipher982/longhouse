@@ -3209,6 +3209,8 @@ async def test_source_epoch_precheck_is_read_only_and_matches_the_writer_rule(da
     try:
         assert (await precheck(open_epoch))["source_epoch_conflict"] is False  # nothing open yet
         await client.call("storage.source_epoch.open.v2", _epoch_params(epoch=open_epoch, opened_at=now))
+        # Startup repair writes on its own schedule; let it finish so only this test's calls are counted.
+        await daemon._projector_repair_task
         writer_before = daemon._writer_stats.snapshot()["labels"]
 
         with pytest.raises(CatalogRemoteError) as initial:
