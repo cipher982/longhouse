@@ -333,7 +333,6 @@ impl BackgroundSnapshotCoalescer {
 }
 
 const MAX_PENDING_COMMANDS: usize = 64;
-const MAX_LIVE_TEXT_BYTES: usize = 16 * 1024;
 /// Spacing between late native-identity reconciliation attempts.
 ///
 /// A binding that fails leaves no committed identity, and nothing re-binds it
@@ -1614,12 +1613,7 @@ impl OmpHelmServer {
     }
 
     fn append_live_text(target: &mut String, delta: &str) {
-        for character in delta.chars() {
-            if target.len() + character.len_utf8() > MAX_LIVE_TEXT_BYTES {
-                break;
-            }
-            target.push(character);
-        }
+        crate::status_slot::append_live_text(target, delta);
     }
 
     fn record_activity(&self, kind: &str, frame: &Value) {

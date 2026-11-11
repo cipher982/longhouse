@@ -50,6 +50,20 @@ pub struct StatusPreview {
     pub provider_session_id: Option<String>,
 }
 
+/// Cap on the cumulative reply text a Helm launcher carries in a preview.
+pub const MAX_LIVE_TEXT_BYTES: usize = 16 * 1024;
+
+/// Append `delta` to a cumulative live preview, stopping at the byte cap on a
+/// character boundary. Shared by the OMP and Pi Helm launchers.
+pub fn append_live_text(target: &mut String, delta: &str) {
+    for character in delta.chars() {
+        if target.len() + character.len_utf8() > MAX_LIVE_TEXT_BYTES {
+            break;
+        }
+        target.push(character);
+    }
+}
+
 /// Everything the Machine Agent needs to state a session's current status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusSlot {

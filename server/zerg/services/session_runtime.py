@@ -592,6 +592,7 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
         or _is_pi_print_stream_event(event)
         or _is_omp_print_stream_event(event)
         or _is_omp_helm_stream_event(event)
+        or _is_pi_helm_stream_event(event)
     )
 
 
@@ -622,6 +623,16 @@ def _is_omp_helm_stream_event(event: RuntimeEventIngest) -> bool:
         and (event.source or "").strip().lower() == "omp_helm_channel"
         and event.kind == "progress_signal"
         and payload.get("progress_kind") == "omp_helm_stream"
+    )
+
+
+def _is_pi_helm_stream_event(event: RuntimeEventIngest) -> bool:
+    payload = event.payload or {}
+    return (
+        (event.provider or "").strip().lower() == "pi"
+        and (event.source or "").strip().lower() == "pi_helm_channel"
+        and event.kind == "progress_signal"
+        and payload.get("progress_kind") == "pi_helm_stream"
     )
 
 

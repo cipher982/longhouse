@@ -95,6 +95,64 @@ struct SharedChannelState {
     extension_sender: Option<mpsc::Sender<Value>>,
     extension_connection_id: Option<String>,
     pending: HashMap<String, mpsc::Sender<Value>>,
+    live: PiLiveText,
+}
+
+/// Cumulative reply text of the assistant message being streamed, and the
+/// counters that give each preview a unique (turn, message, seq) identity.
+#[derive(Debug, Clone, Default)]
+struct PiLiveText {
+    text: String,
+    seq: u64,
+    turn_seq: u64,
+    message_seq: u64,
+}
+
+impl PiLiveText {
+    /// An idle-to-active transition opens a new turn.
+    fn start_turn(&mut self) {
+        self.turn_seq = self.turn_seq.saturating_add(1);
+        self.message_seq = 0;
+        self.text.clear();
+        self.seq = 0;
+    }
+
+    /// An assistant message begins; its text starts empty.
+    fn start_message(&mut self) {
+        self.message_seq = self.message_seq.saturating_add(1);
+        self.text.clear();
+        self.seq = 0;
+    }
+
+    fn append(&mut self, delta: &str) {
+        crate::status_slot::append_live_text(&mut self.text, delta);
+        self.seq = self.seq.saturating_add(1);
+    }
+
+    /// Bump the sequence for the closing publish so its dedupe key is new.
+    /// Returns false when there is nothing to close.
+    fn complete(&mut self) -> bool {
+        if self.text.is_empty() {
+            return false;
+        }
+        self.seq = self.seq.saturating_add(1);
+        true
+    }
+
+    fn turn_id(&self, run_id: &str) -> String {
+        format!("{run_id}:{}:{}", self.turn_seq, self.message_seq)
+    }
+}
+
+/// The reply text of a forwarded `message_update` frame, if it carries any.
+fn pi_live_text_delta(frame: &Value) -> Option<&str> {
+    if frame.get("message_event_type").and_then(Value::as_str) != Some("text_delta") {
+        return None;
+    }
+    frame
+        .get("delta")
+        .and_then(Value::as_str)
+        .filter(|delta| !delta.is_empty())
 }
 
 #[derive(Clone)]
@@ -131,6 +189,7 @@ impl PiHelmServer {
                 extension_sender: None,
                 extension_connection_id: None,
                 pending: HashMap::new(),
+                live: PiLiveText::default(),
             })),
             socket_path,
             state_path,
@@ -506,10 +565,16 @@ impl PiHelmServer {
                     guard.state.phase = phase.to_string();
                     guard.state.tool_name = tool_name.clone();
                     guard.state.updated_at = Utc::now().to_rfc3339();
+                    if became_active {
+                        guard.live.start_turn();
+                    }
                     (became_active, became_idle, became_authority)
                 };
                 let _ = self.persist_state();
                 self.publish_phase(phase, tool_name);
+                if became_idle {
+                    self.publish_live_text(true);
+                }
                 let state = self.current_state();
                 if became_active {
                     crate::warp_cli_agent::emit_tty_event(
@@ -539,9 +604,57 @@ impl PiHelmServer {
                     );
                 }
             }
+            "message_start" => {
+                self.shared
+                    .lock()
+                    .expect("Pi Helm state mutex poisoned")
+                    .live
+                    .start_message();
+            }
+            "message_update" => {
+                if let Some(delta) = pi_live_text_delta(&frame) {
+                    self.shared
+                        .lock()
+                        .expect("Pi Helm state mutex poisoned")
+                        .live
+                        .append(delta);
+                    self.publish_live_text(false);
+                }
+            }
             "session_shutdown" => self.disconnect_extension(connection_id),
             _ => {}
         }
+    }
+
+    /// Publish the cumulative reply text as a status preview. The slot keeps
+    /// only the newest value, so a burst of deltas costs one post.
+    fn publish_live_text(&self, turn_completed: bool) {
+        let (state, preview) = {
+            let mut guard = self.shared.lock().expect("Pi Helm state mutex poisoned");
+            if turn_completed && !guard.live.complete() {
+                return;
+            }
+            let preview = crate::status_slot::StatusPreview {
+                turn_id: guard.live.turn_id(&guard.state.run_id),
+                seq: guard.live.seq,
+                live_text: guard.live.text.clone(),
+                turn_completed,
+                progress_kind: "pi_helm_stream".into(),
+                provider_session_id: (!guard.state.provider_session_id.is_empty())
+                    .then(|| guard.state.provider_session_id.clone()),
+            };
+            (guard.state.clone(), preview)
+        };
+        self.status.publish(
+            crate::status_slot::StatusUpdate::phase(
+                &state.session_id,
+                &state.run_id,
+                &Utc::now().to_rfc3339(),
+                &state.phase,
+            )
+            .with_tool(state.tool_name.as_deref())
+            .with_preview(Some(preview)),
+        );
     }
 
     fn handle_remote_command(&self, frame: Value) -> Value {
@@ -1522,7 +1635,57 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{provisional_run_id, resume_run_id};
+    use super::{pi_live_text_delta, provisional_run_id, resume_run_id, PiLiveText};
+    use serde_json::json;
+
+    #[test]
+    fn live_text_accumulates_and_identifies_each_message() {
+        let mut live = PiLiveText::default();
+        live.start_turn();
+        live.start_message();
+        live.append("Hel");
+        live.append("lo");
+        assert_eq!(live.text, "Hello");
+        assert_eq!(live.seq, 2);
+        assert_eq!(live.turn_id("run"), "run:1:1");
+        // Closing publishes the same text under a new sequence.
+        assert!(live.complete());
+        assert_eq!(live.text, "Hello");
+        assert_eq!(live.seq, 3);
+        // A second assistant message starts empty under a new id.
+        live.start_message();
+        assert_eq!(live.text, "");
+        assert_eq!(live.turn_id("run"), "run:1:2");
+        assert!(!live.complete(), "nothing to close for an empty message");
+        // A new turn resets everything.
+        live.append("x");
+        live.start_turn();
+        assert_eq!(live.text, "");
+        assert_eq!(live.turn_id("run"), "run:2:0");
+    }
+
+    #[test]
+    fn live_text_is_capped_at_the_shared_limit() {
+        let mut live = PiLiveText::default();
+        let chunk = "é".repeat(1000);
+        for _ in 0..20 {
+            live.append(&chunk);
+        }
+        assert!(live.text.len() <= crate::status_slot::MAX_LIVE_TEXT_BYTES);
+        assert!(live.text.len() >= crate::status_slot::MAX_LIVE_TEXT_BYTES - 1);
+    }
+
+    #[test]
+    fn only_text_deltas_become_reply_text() {
+        let text = json!({"kind": "message_update", "message_event_type": "text_delta", "delta": "hi"});
+        let thinking = json!({"kind": "message_update", "message_event_type": "thinking_delta", "delta": "hmm"});
+        let empty = json!({"kind": "message_update", "message_event_type": "text_delta", "delta": ""});
+        let tool = json!({"kind": "message_update", "message_event_type": "toolcall_delta", "delta": "{"});
+        assert_eq!(pi_live_text_delta(&text), Some("hi"));
+        assert_eq!(pi_live_text_delta(&thinking), None);
+        assert_eq!(pi_live_text_delta(&empty), None);
+        assert_eq!(pi_live_text_delta(&tool), None);
+    }
 
     #[test]
     fn provisional_run_matches_runtime_host_identity() {

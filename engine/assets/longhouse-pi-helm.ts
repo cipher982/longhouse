@@ -867,6 +867,7 @@ const authToken = process.env.LONGHOUSE_PI_HELM_CHANNEL_TOKEN;
 const launchSessionId = process.env.LONGHOUSE_MANAGED_SESSION_ID;
 const initialPrompt = process.env.LONGHOUSE_PI_HELM_INITIAL_PROMPT;
 const MAX_FRAME_BYTES = 512 * 1024;
+const MAX_LIVE_TEXT_DELTA_LENGTH = 4096;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const MAX_DEFERRED_COMMANDS = 32;
 
@@ -1180,7 +1181,25 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_execution_start", async (event, ctx) => emitActivity("running", event.toolName, ctx));
   pi.on("tool_execution_update", async (event, ctx) => emitActivity("running", event.toolName, ctx));
   pi.on("tool_execution_end", async (_event, ctx) => emitActivity("running", undefined, ctx));
-  pi.on("message_update", async (_event, ctx) => emitActivity("thinking", undefined, ctx));
+  pi.on("message_start", async (event, ctx) => {
+    if (isChildSession(ctx) || (event as any)?.message?.role !== "assistant") return;
+    write(sessionFrame({ kind: "message_start" }, ctx));
+  });
+  pi.on("message_update", async (event, ctx) => {
+    emitActivity("thinking", undefined, ctx);
+    if (isChildSession(ctx)) return;
+    const update = (event as any)?.assistantMessageEvent;
+    // Reply text only. thinking_delta and tool-call deltas share this event
+    // and must never be forwarded as reply text.
+    if (update?.type === "text_delta" && typeof update.delta === "string" && update.delta) {
+      write(
+        sessionFrame(
+          { kind: "message_update", message_event_type: "text_delta", delta: update.delta.slice(0, MAX_LIVE_TEXT_DELTA_LENGTH) },
+          ctx,
+        ),
+      );
+    }
+  });
   pi.on("ui_prompt_start", async (_event, ctx) => emitActivity("authority", undefined, ctx));
   pi.on("ui_prompt_end", async (_event, ctx) => emitActivity(ctx.isIdle() ? "idle" : "running", undefined, ctx));
   // agent_end may precede retries, compaction or queued follow-ups.
