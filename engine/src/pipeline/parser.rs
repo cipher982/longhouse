@@ -373,8 +373,19 @@ struct CodexPayload {
     cli_version: Option<String>,
     /// function_call: tool name
     name: Option<String>,
-    /// function_call: JSON-encoded arguments
-    arguments: Option<String>,
+    /// function_call: JSON-encoded arguments (a string); tool_search_call: an
+    /// object. A string-only field made every tool_search_call line fail to
+    /// parse.
+    /// Raw, not an untagged enum: serde cannot buffer a `RawValue` inside one.
+    arguments: Option<Box<RawValue>>,
+    /// web_search_call: provider-reported status. Kept raw, like `action` and
+    /// `tools`: other payload types may carry same-named fields of another
+    /// shape, and a typed field that fails to match drops the whole line.
+    status: Option<Box<RawValue>>,
+    /// web_search_call: what was searched (`{type, query, queries}`).
+    action: Option<Box<RawValue>>,
+    /// tool_search_output: the tools the search returned.
+    tools: Option<Box<RawValue>>,
     /// custom_tool_call: arbitrary JSON input (often a plain command string).
     input: Option<Box<RawValue>>,
     /// function_call / function_call_output: call correlation ID
@@ -392,6 +403,22 @@ struct CodexPayload {
 /// content items. Image content (`image_url`) is intentionally ignored here --
 /// inline image bytes are captured by source-line media redaction, not by this
 /// struct, so we never pull megabyte base64 into the parse DOM.
+/// Codex tool arguments as a JSON object: function_call sends them as a
+/// JSON-encoded string, tool_search_call as the object itself. Anything that is
+/// not an object is not shown as input.
+fn codex_arguments_object(raw: &RawValue) -> Option<Box<RawValue>> {
+    let text = raw.get().trim();
+    if text.starts_with('{') {
+        return RawValue::from_string(text.to_string()).ok();
+    }
+    let decoded: String = serde_json::from_str(text).ok()?;
+    let decoded = decoded.trim();
+    decoded
+        .starts_with('{')
+        .then(|| RawValue::from_string(decoded.to_string()).ok())
+        .flatten()
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum CodexFunctionOutput {
@@ -5601,14 +5628,10 @@ fn extract_codex_events(
                     .as_ref()
                     .and_then(|input| RawValue::from_string(input.get().to_string()).ok())
             } else {
-                payload.arguments.as_ref().and_then(|args| {
-                    let trimmed = args.trim();
-                    if trimmed.starts_with('{') {
-                        RawValue::from_string(trimmed.to_string()).ok()
-                    } else {
-                        None
-                    }
-                })
+                payload
+                    .arguments
+                    .as_deref()
+                    .and_then(codex_arguments_object)
             };
 
             events.push(ParsedEvent {
@@ -5698,6 +5721,101 @@ fn extract_codex_events(
                 } else {
                     "codex_function_call_output".to_string()
                 },
+                raw_line: Some(raw_line.to_string()),
+            });
+        }
+        "web_search_call" | "tool_search_call" => {
+            // Provider-run searches. Neither is a function_call, so they fell
+            // into the unknown arm and the timeline never showed them. Each
+            // becomes a tool call; a web search has no output record, so its
+            // completion is the result.
+            pending.suppress_next_turn_aborted_marker = false;
+            let is_web = payload.r#type.as_deref() == Some("web_search_call");
+            let call_id = payload
+                .call_id
+                .as_deref()
+                .or(payload.id.as_deref())
+                .unwrap_or("");
+            let uuid_suffix = if call_id.is_empty() { "0" } else { call_id };
+            let tool_input = if is_web {
+                payload.action.clone()
+            } else {
+                payload
+                    .arguments
+                    .as_deref()
+                    .and_then(codex_arguments_object)
+            };
+            let tool_call_id = (!call_id.is_empty()).then(|| call_id.to_string());
+            events.push(ParsedEvent {
+                uuid: format!("{}-tool-{}", msg_uuid, uuid_suffix),
+                parent_uuid: None,
+                session_id: session_id.to_string(),
+                timestamp,
+                role: Role::Assistant,
+                content_text: None,
+                tool_name: Some(if is_web { "web_search" } else { "tool_search" }.to_string()),
+                tool_input_json: tool_input,
+                tool_output_text: None,
+                tool_call_id: tool_call_id.clone(),
+                source_offset: line_offset,
+                raw_type: format!("codex_{}", payload.r#type.as_deref().unwrap_or_default()),
+                raw_line: Some(raw_line.to_string()),
+            });
+            if is_web {
+                events.push(ParsedEvent {
+                    uuid: format!("{}-result-{}", msg_uuid, uuid_suffix),
+                    parent_uuid: None,
+                    session_id: session_id.to_string(),
+                    timestamp,
+                    role: Role::Tool,
+                    content_text: None,
+                    tool_name: None,
+                    tool_input_json: None,
+                    tool_output_text: Some(format!(
+                        "[web search {}]",
+                        payload
+                            .status
+                            .as_ref()
+                            .and_then(|raw| serde_json::from_str::<String>(raw.get()).ok())
+                            .unwrap_or_else(|| "completed".to_string())
+                    )),
+                    tool_call_id,
+                    source_offset: line_offset,
+                    raw_type: "codex_web_search_result".to_string(),
+                    raw_line: Some(raw_line.to_string()),
+                });
+            }
+        }
+        "tool_search_output" => {
+            pending.suppress_next_turn_aborted_marker = false;
+            let call_id = payload.call_id.as_deref().unwrap_or("");
+            let uuid_suffix = if call_id.is_empty() { "0" } else { call_id };
+            let tools: Vec<Value> = payload
+                .tools
+                .as_ref()
+                .and_then(|raw| serde_json::from_str(raw.get()).ok())
+                .unwrap_or_default();
+            let names: Vec<&str> = tools
+                .iter()
+                .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+                .collect();
+            events.push(ParsedEvent {
+                uuid: format!("{}-result-{}", msg_uuid, uuid_suffix),
+                parent_uuid: None,
+                session_id: session_id.to_string(),
+                timestamp,
+                role: Role::Tool,
+                content_text: None,
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: Some(if names.is_empty() {
+                    "[no tools found]".to_string()
+                } else {
+                    format!("Found: {}", names.join(", "))
+                }),
+                tool_call_id: (!call_id.is_empty()).then(|| call_id.to_string()),
+                source_offset: line_offset,
+                raw_type: "codex_tool_search_output".to_string(),
                 raw_line: Some(raw_line.to_string()),
             });
         }

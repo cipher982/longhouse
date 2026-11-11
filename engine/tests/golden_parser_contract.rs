@@ -249,6 +249,15 @@ fn golden_codex_basic() {
 }
 
 #[test]
+fn golden_codex_search_tools() {
+    let base = fixtures_dir().join("golden").join("codex");
+    run_golden_test(
+        &base.join("search_tools.jsonl"),
+        &base.join("search_tools.expected.json"),
+    );
+}
+
+#[test]
 fn golden_codex_turn_interrupted() {
     let base = fixtures_dir().join("golden").join("codex");
     run_golden_test(

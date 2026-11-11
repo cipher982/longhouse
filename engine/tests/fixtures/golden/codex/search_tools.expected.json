@@ -1,0 +1,51 @@
+{
+  "event_count": 6,
+  "events": [
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "codex_user",
+      "content_text": "How do Metal texture coordinates work?"
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "codex_web_search_call",
+      "tool_name": "web_search",
+      "tool_input_json": {
+        "queries": [
+          "metal normalized texture coordinates",
+          "metal fragment position viewport"
+        ],
+        "query": "metal normalized texture coordinates",
+        "type": "search"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "tool",
+      "raw_type": "codex_web_search_result"
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "codex_tool_search_call",
+      "tool_name": "tool_search",
+      "tool_input_json": {
+        "limit": 10,
+        "query": "hatch review"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "tool",
+      "raw_type": "codex_tool_search_output"
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "codex_assistant",
+      "content_text": "They run from 0 to 1 across the texture."
+    }
+  ]
+}
