@@ -55,6 +55,7 @@ class ProviderPtySession:
         rows: int = 40,
         columns: int = 132,
         thread_name: str = "provider-qualification-terminal-drain",
+        timing_path: Path | None = None,
     ) -> ProviderPtySession:
         terminal_path.parent.mkdir(parents=True, exist_ok=True)
         master_fd, slave_fd = pty.openpty()
@@ -88,7 +89,7 @@ class ProviderPtySession:
         master_lock = threading.Lock()
         master_ref = [master_fd]
         try:
-            reader = OwnedPtyReader.start(master_fd, terminal_path, mode="ab", thread_name=thread_name)
+            reader = OwnedPtyReader.start(master_fd, terminal_path, mode="ab", thread_name=thread_name, timing_path=timing_path)
         except BaseException:
             stop_reader.set()
             try:
