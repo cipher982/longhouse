@@ -462,9 +462,21 @@ pub fn file_first_record_at(path: &Path) -> Option<DateTime<Utc>> {
 
 fn peek_head(path: &Path) -> HeadFacts {
     let mut head = Vec::with_capacity(CWD_PEEK_BYTES);
-    let read = std::fs::File::open(path)
-        .ok()
-        .and_then(|file| file.take(CWD_PEEK_BYTES as u64).read_to_end(&mut head).ok());
+    // A compressed Codex rollout's first records are inside the zstd stream.
+    let read = if crate::compressed_source::is_compressed_transcript(path) {
+        crate::compressed_source::open_decompressed(path)
+            .ok()
+            .and_then(|stream| {
+                stream
+                    .take(CWD_PEEK_BYTES as u64)
+                    .read_to_end(&mut head)
+                    .ok()
+            })
+    } else {
+        std::fs::File::open(path)
+            .ok()
+            .and_then(|file| file.take(CWD_PEEK_BYTES as u64).read_to_end(&mut head).ok())
+    };
     if read.is_none() {
         return HeadFacts::default();
     }

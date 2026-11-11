@@ -443,7 +443,10 @@ pub fn content_anchor(conn: &Connection, source_epoch: Uuid) -> Result<Option<Co
 /// Whether the source still holds the anchored bytes just before
 /// `anchor.position`. A source too short to hold them does not; the caller's
 /// truncation check normally sees that first.
-pub fn content_anchor_holds(source: &mut impl std::io::Read, anchor: &ContentAnchor) -> Result<bool> {
+pub fn content_anchor_holds(
+    source: &mut impl std::io::Read,
+    anchor: &ContentAnchor,
+) -> Result<bool> {
     let tail_len = usize::try_from(anchor.tail_len).context("anchor length exceeds usize")?;
     if tail_len > CONTENT_ANCHOR_BYTES || anchor.tail_len > anchor.position {
         bail!("content anchor is malformed");

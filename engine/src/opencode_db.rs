@@ -109,11 +109,49 @@ struct OpenCodeTaskChildEvidence {
     metadata: Value,
 }
 
+/// OpenCode's data folder: `$XDG_DATA_HOME/opencode`, else
+/// `~/.local/share/opencode`.
+pub fn opencode_data_dir(home: &Path) -> std::path::PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".local").join("share"))
+        .join("opencode")
+}
+
+/// `OPENCODE_DB`, which points OpenCode at another database: absolute, or
+/// relative to the data folder.
+pub fn opencode_db_override(home: &Path) -> Option<std::path::PathBuf> {
+    let value = std::env::var_os("OPENCODE_DB").filter(|value| !value.is_empty())?;
+    let path = std::path::PathBuf::from(value);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        opencode_data_dir(home).join(path)
+    })
+}
+
+/// Whether a file name is one of OpenCode's databases: `opencode.db`, or a
+/// release channel's `opencode-<channel>.db`.
+fn is_opencode_database_name(name: &str) -> bool {
+    name == "opencode.db"
+        || name
+            .strip_prefix("opencode-")
+            .and_then(|rest| rest.strip_suffix(".db"))
+            .is_some_and(|channel| !channel.is_empty())
+}
+
 pub fn is_opencode_database_path(path: &Path) -> bool {
-    path.file_name()
+    if path
+        .file_name()
         .and_then(|value| value.to_str())
-        .map(|value| value == "opencode.db")
-        .unwrap_or(false)
+        .is_some_and(is_opencode_database_name)
+    {
+        return true;
+    }
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    home.and_then(|home| opencode_db_override(&home))
+        .is_some_and(|database| database == path)
 }
 
 pub fn opencode_source_key(db_path: &Path, provider_session_id: &str) -> String {

@@ -6058,6 +6058,178 @@ mod tests {
         assert_eq!(prepared.range_start, 0);
     }
 
+    const CODEX_META: &[u8] = b"{\"type\":\"session_meta\",\"timestamp\":\"2026-10-07T00:20:11Z\",\"payload\":{\"id\":\"01a11497-2113-71e2-ad48-fd5cabab09a6\",\"cwd\":\"/tmp/test\",\"cli_version\":\"0.150.0\"}}\n";
+    const CODEX_USER: &[u8] = b"{\"type\":\"response_item\",\"timestamp\":\"2026-10-07T00:20:12Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"compress me\"}]}}\n";
+    const CODEX_REPLY: &[u8] = b"{\"type\":\"response_item\",\"timestamp\":\"2026-10-07T00:20:13Z\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}}\n";
+
+    /// A scratch `LONGHOUSE_HOME` for a test (the compressed-source cache lives
+    /// under it), restored on drop. Engine tests run one per process or one
+    /// thread at a time, so the environment is not shared mid-test.
+    struct ScratchLonghouseHome(Option<std::ffi::OsString>);
+    impl ScratchLonghouseHome {
+        fn set(path: &Path) -> Self {
+            let previous = std::env::var_os("LONGHOUSE_HOME");
+            unsafe { std::env::set_var("LONGHOUSE_HOME", path) };
+            Self(previous)
+        }
+    }
+    impl Drop for ScratchLonghouseHome {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },
+                None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+            }
+        }
+    }
+
+    fn compress_in_place(plain: &Path) -> PathBuf {
+        let bytes = fs::read(plain).unwrap();
+        let compressed = plain.with_file_name(format!(
+            "{}.zst",
+            plain.file_name().unwrap().to_string_lossy()
+        ));
+        fs::write(
+            &compressed,
+            zstd::stream::encode_all(bytes.as_slice(), 3).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(plain).unwrap();
+        compressed
+    }
+
+    fn codex_rollout_path(dir: &tempfile::TempDir) -> PathBuf {
+        let day = dir
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("10")
+            .join("07");
+        fs::create_dir_all(&day).unwrap();
+        day.join("rollout-2026-10-07T00-20-11-01a11497-2113-71e2-ad48-fd5cabab09a6.jsonl")
+    }
+
+    #[test]
+    fn compressed_codex_rollout_never_shipped_backfills_under_the_plain_source_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let _home = ScratchLonghouseHome::set(&dir.path().join("lh"));
+        let plain = codex_rollout_path(&dir);
+        fs::write(&plain, [CODEX_META, CODEX_USER, CODEX_REPLY].concat()).unwrap();
+        let compressed = compress_in_place(&plain);
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let prepared =
+            prepare_next_envelope(&mut conn, &capabilities(), &compressed, "codex", None)
+                .unwrap()
+                .expect("an unshipped compressed rollout must ship");
+        assert_eq!(prepared.range_start, 0);
+        assert_eq!(
+            prepared.range_end,
+            (CODEX_META.len() + CODEX_USER.len() + CODEX_REPLY.len()) as u64
+        );
+        assert_eq!(
+            prepared.envelope.opaque_source_id,
+            opaque_source_id(&stable_source_path(&plain).to_string_lossy()),
+            "the compressed file is the same source as the plain one"
+        );
+        let decoded: Vec<u8> = prepared
+            .envelope
+            .records
+            .iter()
+            .flat_map(|record| BASE64_STANDARD.decode(&record.data_b64).unwrap())
+            .collect();
+        assert_eq!(decoded, [CODEX_META, CODEX_USER, CODEX_REPLY].concat());
+        acknowledge_prepared(&mut conn, &prepared);
+
+        assert!(
+            prepare_next_envelope(&mut conn, &capabilities(), &compressed, "codex", None)
+                .unwrap()
+                .is_none()
+        );
+        let cache = crate::compressed_source::cache_dir().unwrap();
+        assert_eq!(
+            fs::read_dir(&cache)
+                .map(|entries| entries.count())
+                .unwrap_or(0),
+            0,
+            "the decompressed copy is evicted once the source is fully shipped"
+        );
+    }
+
+    #[test]
+    fn rollout_shipped_plain_then_compressed_ships_nothing_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let _home = ScratchLonghouseHome::set(&dir.path().join("lh"));
+        let plain = codex_rollout_path(&dir);
+        fs::write(&plain, [CODEX_META, CODEX_USER, CODEX_REPLY].concat()).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &plain, "codex", None)
+            .unwrap()
+            .unwrap();
+        acknowledge_prepared(&mut conn, &prepared);
+        let compressed = compress_in_place(&plain);
+
+        assert!(
+            prepare_next_envelope(&mut conn, &capabilities(), &compressed, "codex", None)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !crate::compressed_source::cache_dir().unwrap().exists(),
+            "an already-shipped rollout is judged from its header, never decompressed"
+        );
+    }
+
+    #[test]
+    fn rollout_compressed_before_its_tail_shipped_continues_the_same_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let _home = ScratchLonghouseHome::set(&dir.path().join("lh"));
+        let plain = codex_rollout_path(&dir);
+        fs::write(&plain, [CODEX_META, CODEX_USER].concat()).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let first = prepare_next_envelope(&mut conn, &capabilities(), &plain, "codex", None)
+            .unwrap()
+            .unwrap();
+        acknowledge_prepared(&mut conn, &first);
+        // The reply lands, and Codex compresses before the engine reads it.
+        let mut file = fs::OpenOptions::new().append(true).open(&plain).unwrap();
+        file.write_all(CODEX_REPLY).unwrap();
+        drop(file);
+        let compressed = compress_in_place(&plain);
+
+        let tail = prepare_next_envelope(&mut conn, &capabilities(), &compressed, "codex", None)
+            .unwrap()
+            .expect("the unshipped reply must ship");
+        assert_eq!(tail.source_epoch, first.source_epoch);
+        assert_eq!(tail.range_start, first.range_end);
+        assert_eq!(
+            tail.range_end,
+            (CODEX_META.len() + CODEX_USER.len() + CODEX_REPLY.len()) as u64
+        );
+    }
+
+    #[test]
+    fn plain_rollout_still_present_owns_the_source_over_its_compressed_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let _home = ScratchLonghouseHome::set(&dir.path().join("lh"));
+        let plain = codex_rollout_path(&dir);
+        fs::write(&plain, [CODEX_META, CODEX_USER].concat()).unwrap();
+        let compressed = plain.with_file_name(format!(
+            "{}.zst",
+            plain.file_name().unwrap().to_string_lossy()
+        ));
+        fs::write(
+            &compressed,
+            zstd::stream::encode_all([CODEX_META, CODEX_USER].concat().as_slice(), 3).unwrap(),
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        assert!(
+            prepare_next_envelope(&mut conn, &capabilities(), &compressed, "codex", None)
+                .unwrap()
+                .is_none()
+        );
+    }
+
     #[test]
     fn batch_tail_spans_records_and_caps_at_anchor_size() {
         let big = vec![b'a'; source_epoch::CONTENT_ANCHOR_BYTES - 10];

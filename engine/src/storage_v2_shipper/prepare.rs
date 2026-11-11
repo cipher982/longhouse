@@ -66,7 +66,161 @@ pub(super) fn prepare_next_envelope_with_limit(
     session_id_override: Option<&str>,
     maximum_batch_bytes: usize,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
-    let canonical_path = stable_source_path(path);
+    if provider.eq_ignore_ascii_case("codex")
+        && crate::compressed_source::is_compressed_transcript(path)
+    {
+        return prepare_compressed_codex_envelope(
+            conn,
+            capabilities,
+            path,
+            session_id_override,
+            maximum_batch_bytes,
+        );
+    }
+    prepare_file_envelope(
+        conn,
+        capabilities,
+        &FileSourceView::plain(path),
+        provider,
+        session_id_override,
+        maximum_batch_bytes,
+    )
+}
+
+/// Where a file source's bytes are read from, and which source they are. They
+/// differ only for a compressed Codex rollout, whose bytes come from a
+/// decompressed copy while its identity stays the plain rollout it replaced.
+pub(super) struct FileSourceView<'a> {
+    read_path: &'a Path,
+    identity_path: &'a Path,
+    /// The incarnation to record instead of the read file's own: a fresh
+    /// decompressed copy has a new inode but continues the same source.
+    incarnation: Option<String>,
+}
+
+impl<'a> FileSourceView<'a> {
+    pub(super) fn plain(path: &'a Path) -> Self {
+        Self {
+            read_path: path,
+            identity_path: path,
+            incarnation: None,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn observe_view(
+    conn: &mut Connection,
+    provider: &str,
+    opaque_source_id: &str,
+    view: &FileSourceView<'_>,
+    position: u64,
+    source_revision: Option<&str>,
+    bound_session_id: Option<&str>,
+    change_hint: SourceChangeHint,
+) -> Result<source_epoch::SourceEpochResolution> {
+    match view.incarnation.as_deref() {
+        None => source_epoch::observe_file(
+            conn,
+            provider,
+            opaque_source_id,
+            view.read_path,
+            SourceLane::Durable,
+            position,
+            source_revision,
+            bound_session_id,
+            change_hint,
+        ),
+        Some(incarnation) => source_epoch::observe_source(
+            conn,
+            provider,
+            opaque_source_id,
+            incarnation,
+            std::fs::metadata(view.read_path)?.len(),
+            SourceLane::Durable,
+            position,
+            source_revision,
+            bound_session_id,
+            change_hint,
+        ),
+    }
+}
+
+/// A Codex rollout Codex compressed in place. Already shipped (the usual case:
+/// live capture reads the plain file before Codex compresses it) is decided
+/// from the zstd header without decompressing; otherwise the rollout is
+/// decompressed into a cache and its unshipped bytes go out under the plain
+/// path's source id, continuing that source's epoch. Task 1's content anchor
+/// still guards the join.
+fn prepare_compressed_codex_envelope(
+    conn: &mut Connection,
+    capabilities: &StorageV2Capabilities,
+    path: &Path,
+    session_id_override: Option<&str>,
+    maximum_batch_bytes: usize,
+) -> Result<Option<PreparedStorageV2Envelope>> {
+    let identity_path = crate::compressed_source::uncompressed_path(path);
+    if identity_path.exists() {
+        // Mid-compression both exist; the plain file is the source until it goes.
+        return Ok(None);
+    }
+    let canonical_identity = stable_source_path(&identity_path);
+    let opaque_source_id = opaque_source_id(&canonical_identity.to_string_lossy());
+    if let Some(pending) =
+        pending_source_envelope::load_for_source(conn, "codex", &opaque_source_id)?
+    {
+        return pending_to_prepared(pending).map(Some);
+    }
+    let cache_dir = crate::compressed_source::cache_dir()?;
+    let active = load_active_codex_epoch(conn, &opaque_source_id)?;
+    if let Some((_, position, _)) = &active {
+        if crate::compressed_source::fully_shipped(path, *position)? {
+            crate::compressed_source::evict(&canonical_identity, &cache_dir);
+            return Ok(None);
+        }
+    }
+    let copy = crate::compressed_source::materialize(path, &canonical_identity, &cache_dir)?;
+    let view = FileSourceView {
+        read_path: &copy,
+        identity_path: &identity_path,
+        incarnation: active.map(|(_, _, incarnation)| incarnation),
+    };
+    prepare_file_envelope(
+        conn,
+        capabilities,
+        &view,
+        "codex",
+        session_id_override,
+        maximum_batch_bytes,
+    )
+}
+
+fn load_active_codex_epoch(
+    conn: &Connection,
+    opaque_source_id: &str,
+) -> Result<Option<(Uuid, u64, String)>> {
+    let Some(epoch) = source_epoch::active_source_epoch(conn, "codex", opaque_source_id)? else {
+        return Ok(None);
+    };
+    let Some(incarnation) =
+        source_epoch::active_source_incarnation(conn, "codex", opaque_source_id)?
+    else {
+        return Ok(None);
+    };
+    let position = source_epoch::lane_position(conn, epoch, SourceLane::Durable)?;
+    Ok(Some((epoch, position, incarnation)))
+}
+
+fn prepare_file_envelope(
+    conn: &mut Connection,
+    capabilities: &StorageV2Capabilities,
+    view: &FileSourceView<'_>,
+    provider: &str,
+    session_id_override: Option<&str>,
+    maximum_batch_bytes: usize,
+) -> Result<Option<PreparedStorageV2Envelope>> {
+    let path = view.read_path;
+    let canonical_path = stable_source_path(view.identity_path);
     let path_text = canonical_path.to_string_lossy();
     let opaque_source_id = opaque_source_id(&path_text);
     let mut durable_session_id = session_id_override.map(str::to_string);
@@ -295,12 +449,11 @@ pub(super) fn prepare_next_envelope_with_limit(
         } else {
             None
         };
-    let resolution = source_epoch::observe_file(
+    let resolution = observe_view(
         conn,
         provider,
         &opaque_source_id,
-        path,
-        SourceLane::Durable,
+        view,
         legacy_offset,
         source_revision.as_deref(),
         session_id_override,
@@ -335,21 +488,20 @@ pub(super) fn prepare_next_envelope_with_limit(
             position,
             "Source was rewritten under its cursor; shipping it again under a new epoch"
         );
-        source_epoch::observe_file(
+        observe_view(
             conn,
             provider,
             &opaque_source_id,
-            path,
-            SourceLane::Durable,
+            view,
             0,
             source_revision.as_deref(),
             session_id_override,
             SourceChangeHint::Rewrite,
         )?;
-        return prepare_next_envelope_with_limit(
+        return prepare_file_envelope(
             conn,
             capabilities,
-            path,
+            view,
             provider,
             session_id_override,
             maximum_batch_bytes,
@@ -590,10 +742,10 @@ pub(super) fn prepare_next_envelope_with_limit(
             raw_batch.range_end,
         )?;
         if raw_batch.range_end < source_len {
-            return prepare_next_envelope_with_limit(
+            return prepare_file_envelope(
                 conn,
                 capabilities,
-                path,
+                view,
                 provider,
                 session_id_override,
                 maximum_batch_bytes,

@@ -24,6 +24,7 @@ mod codex_source;
 mod codex_teardown;
 mod codex_ws_relay;
 mod commands;
+mod compressed_source;
 mod config;
 mod console_adapter;
 mod console_lifecycle;

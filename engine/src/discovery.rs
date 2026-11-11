@@ -44,6 +44,15 @@ pub fn configured_provider_roots() -> Vec<ProviderConfig> {
         .unwrap_or_else(|| home.join(".config"));
 
     let mut providers = provider_candidates(&home, &claude_root, &xdg_config_root);
+    // Provider homes that move with the environment. Applied here so
+    // `provider_candidates` stays a pure function of its arguments.
+    for provider in &mut providers {
+        match provider.name {
+            "codex" => provider.root = codex_home(&home).join("sessions"),
+            "opencode" => provider.root = crate::opencode_db::opencode_data_dir(&home),
+            _ => {}
+        }
+    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     if let Ok(pi_roots) = crate::pi_session::configured_native_session_roots(&cwd) {
         for root in pi_roots {
@@ -71,7 +80,30 @@ pub fn configured_provider_roots() -> Vec<ProviderConfig> {
             });
         }
     }
+    if let Some(parent) = crate::opencode_db::opencode_db_override(&home)
+        .as_deref()
+        .and_then(Path::parent)
+    {
+        if !providers
+            .iter()
+            .any(|provider| provider.name == "opencode" && provider.root == parent)
+        {
+            providers.push(ProviderConfig {
+                name: "opencode",
+                root: parent.to_path_buf(),
+                extension: "db",
+            });
+        }
+    }
     providers
+}
+
+/// Codex's home: `$CODEX_HOME`, else `~/.codex`.
+fn codex_home(home: &Path) -> PathBuf {
+    std::env::var_os("CODEX_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"))
 }
 
 fn existing_provider_roots(candidates: Vec<ProviderConfig>) -> Vec<ProviderConfig> {
@@ -509,8 +541,9 @@ fn source_wal_bytes(provider: &ProviderConfig, path: &Path) -> (u64, u64) {
     }
     if !matches!(
         path.file_name().and_then(|value| value.to_str()),
-        Some("opencode.db") | Some("store.db")
-    ) {
+        Some("store.db")
+    ) && !(provider.name == "opencode" && crate::opencode_db::is_opencode_database_path(path))
+    {
         return (0, 0);
     }
     let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
@@ -771,17 +804,25 @@ fn cursor_database_path_for_event(path: &Path) -> Option<PathBuf> {
 }
 
 fn opencode_database_path_for_event(path: &Path) -> Option<PathBuf> {
-    match path.file_name().and_then(|name| name.to_str()) {
-        Some("opencode.db") => Some(path.to_path_buf()),
-        Some("opencode.db-wal") => Some(path.with_file_name("opencode.db")),
-        Some("opencode.db-shm") => None,
-        _ => None,
+    let name = path.file_name().and_then(|name| name.to_str())?;
+    // Our own reads touch `-shm`; see `cursor_database_path_for_event`.
+    if name.ends_with(".db-shm") {
+        return None;
     }
+    let database = match name.strip_suffix("-wal") {
+        Some(database) => path.with_file_name(database),
+        None => path.to_path_buf(),
+    };
+    crate::opencode_db::is_opencode_database_path(&database).then_some(database)
 }
 
 fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
     if provider.name == "opencode" {
-        return path.file_name().and_then(|name| name.to_str()) == Some("opencode.db");
+        return crate::opencode_db::is_opencode_database_path(path);
+    }
+    if provider.name == "codex" && crate::compressed_source::is_compressed_transcript(path) {
+        // Codex compresses older rollouts in place (`rollout-*.jsonl.zst`).
+        return true;
     }
     if provider.name == "cursor" {
         if path.file_name().and_then(|name| name.to_str()) == Some("store.db") {
@@ -1742,6 +1783,60 @@ mod tests {
             Some((db.clone(), "opencode"))
         );
         assert_eq!(session_path_for_watcher_event(&shm, &providers), None);
+    }
+
+    #[test]
+    fn opencode_channel_databases_are_sources_and_their_wal_maps_back() {
+        let home = PathBuf::from("/tmp/home");
+        let claude_root = PathBuf::from("/tmp/custom-claude");
+        let providers = provider_candidates(&home, &claude_root, &home.join(".config"));
+        let root = home.join(".local").join("share").join("opencode");
+        let beta = root.join("opencode-beta.db");
+
+        assert_eq!(provider_for_path(&beta, &providers), Some("opencode"));
+        assert_eq!(
+            session_path_for_watcher_event(&root.join("opencode-beta.db-wal"), &providers),
+            Some((beta.clone(), "opencode"))
+        );
+        assert_eq!(
+            session_path_for_watcher_event(&root.join("opencode-beta.db-shm"), &providers),
+            None
+        );
+        assert_eq!(
+            provider_for_path(&root.join("opencode-.db"), &providers),
+            None
+        );
+        assert_eq!(provider_for_path(&root.join("other.db"), &providers), None);
+    }
+
+    #[test]
+    fn compressed_codex_rollouts_are_discovered() {
+        let home = tempfile::tempdir().unwrap();
+        let day = home
+            .path()
+            .join(".codex")
+            .join("sessions")
+            .join("2026")
+            .join("10")
+            .join("07");
+        fs::create_dir_all(&day).unwrap();
+        let compressed = day.join("rollout-2026-10-07T00-20-11-abc.jsonl.zst");
+        fs::write(&compressed, b"not empty").unwrap();
+        fs::write(day.join("notes.zst"), b"not a rollout").unwrap();
+        let providers = existing_provider_roots(provider_candidates(
+            home.path(),
+            &home.path().join(".claude"),
+            &home.path().join(".config"),
+        ));
+
+        let found: Vec<PathBuf> =
+            discover_files_in_scope(&providers, &crate::import_scope::ImportScope::all("test"))
+                .files
+                .into_iter()
+                .filter(|file| file.provider == "codex")
+                .map(|file| file.path)
+                .collect();
+        assert_eq!(found, vec![compressed.canonicalize().unwrap()]);
     }
 
     #[test]

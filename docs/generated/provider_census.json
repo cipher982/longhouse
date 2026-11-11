@@ -475,6 +475,7 @@
       "providers": [
         "antigravity",
         "claude",
+        "codex",
         "cursor",
         "omp",
         "pi"
