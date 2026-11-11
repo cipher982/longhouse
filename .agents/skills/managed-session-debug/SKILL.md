@@ -25,8 +25,7 @@ For "is the transcript shipping live?", read `~/.longhouse/agent/engine-status.j
 commits, activity receipts and the served payload, then names the slow hop. Run it
 on the machine that owns the session (the first two sections are local); the rest
 comes from the Runtime Host over ssh (`--ssh`, default `zerg`). It is read-only and
-needs only the device token at `~/.longhouse/machine/device-token`. The tenant for
-David's sessions is `david010`, the hosted helper's default.
+needs only the device token at `~/.longhouse/machine/device-token`. Pass the tenant with `--subdomain`.
 
 ## Reading the result
 

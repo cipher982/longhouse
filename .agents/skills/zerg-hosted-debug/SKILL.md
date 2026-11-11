@@ -1,6 +1,6 @@
 ---
 name: zerg-hosted-debug
-description: Debug a live hosted Longhouse tenant (david010 or another hosted Runtime Host): a session's served state, hosted 502s, slow startup, large tenant SQLite or WAL, disk pressure, tenant container health, hosted auth, or control-plane-managed tenants. Not for local `make dev` (use zerg-dev).
+description: Debug a live hosted Longhouse tenant (a hosted Runtime Host): a session's served state, hosted 502s, slow startup, large tenant SQLite or WAL, disk pressure, tenant container health, hosted auth, or control-plane-managed tenants. Not for local `make dev` (use zerg-dev).
 ---
 
 # Zerg Hosted Debug
@@ -11,19 +11,14 @@ shortcut unless David approves the loss.
 
 ## Where things run
 
-| What | Where |
-|---|---|
-| Tenant Runtime Hosts (`longhouse-<tenant>` containers) | cube. `ssh zerg` is cube (port 2222) |
-| Tenant data | cube `/var/app-data/longhouse/<tenant>`, mounted at `/data` in the container |
-| Production control plane (`control.longhouse.ai`) | clifford, `/home/drose/manual-apps/longhouse-control-plane` |
-| Host agent (owns Docker and tenant files for shard `zerg`; the control plane drives cube through it) | cube, `/home/drose/manual-apps/longhouse-host-agent` |
-| Ingress for tenants | `zerg-caddy` on cube |
-
-Clifford holds no tenant data, and the Hetzner host (hel1) is cancelled. Design and
-cutover record: `control-plane/docs/specs/host-agent-split.md` and
-`hosted-runtime-on-cube.md`. Canary and QA tenants (`release-canary-a`,
-`hosted-qa-a`) also run on cube. Cube's `/tmp` is a small RAM disk, so keep scratch
-elsewhere (`file-placement`). `rg` is not on cube; use `grep` in remote commands.
+The workspace `AGENTS.md` (private) names the hosts, ssh aliases and compose
+directories. In this skill `<runtime-host>` is the ssh alias of the host that runs
+tenant containers (`longhouse-<tenant>`, data under
+`/var/app-data/longhouse/<tenant>`, mounted at `/data`). The control plane runs on a
+separate host and drives tenant containers through that host's host agent.
+Canary and QA tenants (`release-canary-a`, `hosted-qa-a`) run on the same host. Its
+`/tmp` is a small RAM disk, so keep scratch elsewhere, and `rg` is not installed;
+use `grep` in remote commands.
 
 Tenant files in `/data`: `longhouse-live.db` (the live catalog, the authoritative
 served-state store and by far the largest file), `longhouse.db` (archive database,
@@ -34,9 +29,9 @@ served-state store and by far the largest file), `longhouse.db` (archive databas
 ## Start here
 
 ```bash
-bash scripts/ops/hosted-session-debug.sh --subdomain david010 --session <id> --limit 20
-bash scripts/ops/hosted-session-debug.sh --subdomain david010 --session <id> --logs   # add tenant log tail
-bash scripts/ops/hosted-session-debug.sh --subdomain david010 --session <id> --json
+bash scripts/ops/hosted-session-debug.sh --subdomain <tenant> --session <id> --limit 20
+bash scripts/ops/hosted-session-debug.sh --subdomain <tenant> --session <id> --logs   # add tenant log tail
+bash scripts/ops/hosted-session-debug.sh --subdomain <tenant> --session <id> --json
 ```
 
 It resolves the tenant through the control plane, opens `longhouse-live.db`
@@ -45,8 +40,8 @@ read-only over ssh, summarizes the session's `live_sessions`, `live_runtime_stat
 (a database without live tables falls back to the legacy tables), and summarizes
 WriteSerializer pressure and request counts from tenant logs. It needs
 `CONTROL_PLANE_ADMIN_TOKEN` or `ADMIN_TOKEN` (Infisical, workspace `AGENTS.md`) and
-ssh to alias `zerg` (override `HOSTED_SESSION_DEBUG_SSH_TARGET`). Its default
-subdomain is `david010`. Prefer it over
+ssh to the runtime host (`HOSTED_SESSION_DEBUG_SSH_TARGET`). Pass `--subdomain`
+or set `LONGHOUSE_DEFAULT_SUBDOMAIN`. Prefer it over
 hand-written `ssh` plus guessed DB paths. Auth helpers are in
 `scripts/lib/hosted-instance.sh`.
 
@@ -64,9 +59,9 @@ never "latest".
 ```bash
 curl -fsS https://<tenant>.longhouse.ai/api/readyz
 curl -fsS https://<tenant>.longhouse.ai/api/health          # build.commit
-ssh zerg "docker ps -a --filter name=longhouse-<tenant>"
-ssh zerg "df -h /var/app-data && ls -lh /var/app-data/longhouse/<tenant>/*.db*"
-ssh zerg "docker logs --tail 300 longhouse-<tenant> 2>&1 | grep -E 'Startup step|Database initialization step|Application startup|readyz|ERROR'"
+ssh <runtime-host> "docker ps -a --filter name=longhouse-<tenant>"
+ssh <runtime-host> "df -h /var/app-data && ls -lh /var/app-data/longhouse/<tenant>/*.db*"
+ssh <runtime-host> "docker logs --tail 300 longhouse-<tenant> 2>&1 | grep -E 'Startup step|Database initialization step|Application startup|readyz|ERROR'"
 ```
 
 Startup logs carry `Startup step complete: initialize_database elapsed_ms=...` and
@@ -82,8 +77,8 @@ Run inside the container, or, when it cannot stay up, in a throwaway container w
 the data mounted (use the incident's runtime image SHA where possible):
 
 ```bash
-ssh zerg "docker exec longhouse-<tenant> longhouse-server db doctor --json"
-ssh zerg "docker run --rm -v /var/app-data/longhouse/<tenant>:/data \
+ssh <runtime-host> "docker exec longhouse-<tenant> longhouse-server db doctor --json"
+ssh <runtime-host> "docker run --rm -v /var/app-data/longhouse/<tenant>:/data \
   -e DATABASE_URL=sqlite:////data/longhouse.db <image> longhouse-server db doctor --json"
 ```
 
@@ -123,5 +118,5 @@ process health (the API must stop returning `branch_projection_pending`).
   and rollback path.
 - No broad startup backfills. Startup may create tables, add columns, create indexes
   and verify FTS.
-- Change nothing on cube from a diagnosis session beyond the commands above; deploys
+- Change nothing on the runtime host from a diagnosis session beyond the commands above; deploys
   and promotions go through Promote Rings (workspace `AGENTS.md`).
