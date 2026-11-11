@@ -59,7 +59,8 @@ class PromoteProductionTests(unittest.TestCase):
             with w.Wire(world, root) as wire:
                 result = subprocess.run(
                     ["bash", str(ops / "promote-production.sh"), *args],
-                    env={**wire.env(), "LONGHOUSE_RING_LOCK_DIR": str(locks), **(env or {})},
+                    env={**wire.env(), "DEMO_ENABLED": "1", "DEMO_SSH_HOST": "demo-host",
+                         "DEMO_ENV_PATH": "/srv/longhouse-demo/.env", "LONGHOUSE_RING_LOCK_DIR": str(locks), **(env or {})},
                     text=True,
                     capture_output=True,
                     timeout=60,
@@ -134,6 +135,22 @@ class PromoteProductionTests(unittest.TestCase):
         self.assertTrue(receipt["promotion"]["demo_verified"])
         self.assertEqual(saved, [receipt])
         self.assertIn("demo_verified=true", result.stderr)
+
+    def test_the_demo_pin_is_off_by_default_and_touches_no_host(self) -> None:
+        result, promotions, ssh_calls, saved = self.run_promotion(
+            w.green_world(), w.SHA, env={"DEMO_ENABLED": "0", "DEMO_SSH_HOST": "", "DEMO_ENV_PATH": ""})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(promotions), 1)
+        self.assertEqual(ssh_calls, [], "the retired demo host was touched")
+        self.assertFalse(saved[0]["promotion"]["demo_verified"])
+        self.assertIn("Public demo pin skipped", result.stderr)
+
+    def test_an_enabled_demo_pin_needs_an_explicit_host(self) -> None:
+        result, _p, ssh_calls, _saved = self.run_promotion(
+            w.green_world(), w.SHA, env={"DEMO_SSH_HOST": "", "DEMO_ENV_PATH": ""})
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(ssh_calls, [])
+        self.assertIn("requires DEMO_SSH_HOST", result.stderr)
 
     def test_no_tag_and_no_github_release_is_needed(self) -> None:
         # The gh stub aborts on anything but `run list` and `api`; a `release view` or

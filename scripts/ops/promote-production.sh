@@ -31,13 +31,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REPO="${GITHUB_REPOSITORY:-cipher982/longhouse}"
 PUBLISH_WORKFLOW="Publish Runtime Image"
 DOGFOOD_SUBDOMAIN="${SUBDOMAIN:-${LONGHOUSE_DEFAULT_SUBDOMAIN:-david010}}"
-DEMO_SSH_HOST="${DEMO_SSH_HOST:-zerg}"
-DEMO_ENV_PATH="${DEMO_ENV_PATH:-/home/zerg/manual-apps/longhouse-demo/.env}"
+# The public demo is retired (standoff). Pinning it is opt-in: DEMO_ENABLED=1 plus
+# an explicit DEMO_SSH_HOST and DEMO_ENV_PATH; there is no default host.
+DEMO_ENABLED="${DEMO_ENABLED:-0}"
+DEMO_SSH_HOST="${DEMO_SSH_HOST:-}"
+DEMO_ENV_PATH="${DEMO_ENV_PATH:-}"
 DEMO_COMPOSE_SERVICE="${DEMO_COMPOSE_SERVICE:-longhouse-demo}"
 DEMO_HEALTH_URL="${DEMO_HEALTH_URL:-https://longhouse.ai/api/health}"
 DEMO_VERIFY_TIMEOUT="${DEMO_VERIFY_TIMEOUT:-300}"
 DEMO_POLL_SECONDS="${DEMO_POLL_SECONDS:-5}"
 ATTEMPT="${PROMOTION_ATTEMPT:-1}"
+if [[ "$DEMO_ENABLED" == 1 && ( -z "$DEMO_SSH_HOST" || -z "$DEMO_ENV_PATH" ) ]]; then
+  echo "DEMO_ENABLED=1 requires DEMO_SSH_HOST and DEMO_ENV_PATH." >&2; exit 2
+fi
 RECEIPT_DIR="${PROMOTION_RECEIPT_DIR:-/tmp/agents/promotion-receipts}"
 
 CHECK_ONLY=0
@@ -211,51 +217,57 @@ The rerun replays the finished deployment (same key) and repins the demo idempot
 plane answers 409 because the tenant set changed meanwhile, rerun with PROMOTION_ATTEMPT=$((ATTEMPT + 1)).
 EOF
 }
-echo "Pinning public demo ($DEMO_SSH_HOST:$DEMO_ENV_PATH) to $PROD_IMAGE..." >&2
-demo_dir="$(dirname "$DEMO_ENV_PATH")"
-if ! ssh "$DEMO_SSH_HOST" "set -euo pipefail
-if grep -q '^LONGHOUSE_DEMO_IMAGE=' '$DEMO_ENV_PATH' 2>/dev/null; then
-  sed -i \"s|^LONGHOUSE_DEMO_IMAGE=.*|LONGHOUSE_DEMO_IMAGE=$PROD_IMAGE|\" '$DEMO_ENV_PATH'
-else
-  printf 'LONGHOUSE_DEMO_IMAGE=%s\n' '$PROD_IMAGE' >> '$DEMO_ENV_PATH'
-fi
-cd '$demo_dir'
-docker compose up -d --force-recreate '$DEMO_COMPOSE_SERVICE'"; then
-  echo "Could not pin the public demo over ssh." >&2
-  demo_recovery
-  save_stopped_receipt demo-not-pinned
-  exit 1
-fi
-
-echo "Verifying public demo reports $SHA..." >&2
-deadline=$(( $(date +%s) + DEMO_VERIFY_TIMEOUT ))
-demo_commit=""
-# Poll at least once: the deadline has whole-second resolution, so a short
-# timeout started late in a second used to expire before the first look.
-first_poll=1
-while [[ "$first_poll" == 1 || "$(date +%s)" -lt "$deadline" ]]; do
-  first_poll=0
-  demo_body="$(curl -sfL --max-time 10 "$DEMO_HEALTH_URL" 2>/dev/null || echo '{}')"
-  demo_commit="$(jq -r '.build.commit // empty' <<<"$demo_body" 2>/dev/null || true)"
-  if [[ "$demo_commit" == "$SHA" ]]; then
-    break
+if [[ "$DEMO_ENABLED" == 1 ]]; then
+  echo "Pinning public demo ($DEMO_SSH_HOST:$DEMO_ENV_PATH) to $PROD_IMAGE..." >&2
+  demo_dir="$(dirname "$DEMO_ENV_PATH")"
+  if ! ssh "$DEMO_SSH_HOST" "set -euo pipefail
+  if grep -q '^LONGHOUSE_DEMO_IMAGE=' '$DEMO_ENV_PATH' 2>/dev/null; then
+    sed -i \"s|^LONGHOUSE_DEMO_IMAGE=.*|LONGHOUSE_DEMO_IMAGE=$PROD_IMAGE|\" '$DEMO_ENV_PATH'
+  else
+    printf 'LONGHOUSE_DEMO_IMAGE=%s\n' '$PROD_IMAGE' >> '$DEMO_ENV_PATH'
   fi
-  sleep "$DEMO_POLL_SECONDS"
-done
-if [[ "$demo_commit" != "$SHA" ]]; then
-  echo "Timed out waiting for public demo to report commit $SHA (last seen: ${demo_commit:-<unreachable>})." >&2
-  demo_recovery
-  save_stopped_receipt demo-not-verified
-  exit 1
+  cd '$demo_dir'
+  docker compose up -d --force-recreate '$DEMO_COMPOSE_SERVICE'"; then
+    echo "Could not pin the public demo over ssh." >&2
+    demo_recovery
+    save_stopped_receipt demo-not-pinned
+    exit 1
+  fi
+
+  echo "Verifying public demo reports $SHA..." >&2
+  deadline=$(( $(date +%s) + DEMO_VERIFY_TIMEOUT ))
+  demo_commit=""
+  # Poll at least once: the deadline has whole-second resolution, so a short
+  # timeout started late in a second used to expire before the first look.
+  first_poll=1
+  while [[ "$first_poll" == 1 || "$(date +%s)" -lt "$deadline" ]]; do
+    first_poll=0
+    demo_body="$(curl -sfL --max-time 10 "$DEMO_HEALTH_URL" 2>/dev/null || echo '{}')"
+    demo_commit="$(jq -r '.build.commit // empty' <<<"$demo_body" 2>/dev/null || true)"
+    if [[ "$demo_commit" == "$SHA" ]]; then
+      break
+    fi
+    sleep "$DEMO_POLL_SECONDS"
+  done
+  if [[ "$demo_commit" != "$SHA" ]]; then
+    echo "Timed out waiting for public demo to report commit $SHA (last seen: ${demo_commit:-<unreachable>})." >&2
+    demo_recovery
+    save_stopped_receipt demo-not-verified
+    exit 1
+  fi
+  DEMO_VERIFIED=true
+else
+  echo "Public demo pin skipped (DEMO_ENABLED is not 1; the demo is retired)." >&2
+  DEMO_VERIFIED=false
 fi
 
 # --- The receipt of what was checked and what moved.
 final="$(jq \
-  --arg deployment "$DEPLOYMENT_ID" --arg key "$LH_DEPLOYMENT_IDEMPOTENCY_KEY" --arg demo_host "$DEMO_SSH_HOST" \
+  --arg deployment "$DEPLOYMENT_ID" --arg key "$LH_DEPLOYMENT_IDEMPOTENCY_KEY" --arg demo_host "${DEMO_SSH_HOST:-}" --argjson demo_verified "$DEMO_VERIFIED" \
   --arg attempt "$ATTEMPT" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson targets "$TARGET_COUNT" \
   '. + {promotion: {deployment_id: $deployment, idempotency_key: $key, attempt: ($attempt | tonumber), targets: $targets,
-        demo_host: $demo_host, demo_verified: true, promoted_at: $at}}' "$receipt")"
+        demo_host: $demo_host, demo_verified: $demo_verified, promoted_at: $at}}' "$receipt")"
 printf '%s\n' "$final" >"$receipt"
 save_receipt
-echo "Promoted production: sha=$SHA digest=$PROD_IMAGE targets=$TARGET_COUNT demo_verified=true" >&2
+echo "Promoted production: sha=$SHA digest=$PROD_IMAGE targets=$TARGET_COUNT demo_verified=$DEMO_VERIFIED" >&2
 printf '%s\n' "$final"

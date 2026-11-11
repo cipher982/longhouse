@@ -225,9 +225,10 @@ make deploy-status
 curl -fsS https://longhouse.ai/api/readyz
 ```
 
-A successful exact-SHA `make ship-watch` does not imply the demo moved; it is
-only deployed once `make promote-production` reports `demo_verified=true` for
-that SHA.
+A successful exact-SHA `make ship-watch` does not imply the demo moved. The demo
+is retired: `make promote-production` skips its pin unless `DEMO_ENABLED=1` with
+an explicit `DEMO_SSH_HOST` and `DEMO_ENV_PATH`, and then reports
+`demo_verified=false`.
 
 ### Hosted Control Plane
 
@@ -354,7 +355,7 @@ runtime mutation, do not claim the demo or canary changed.
 - [ ] Hosted canary healthy and serving the exact SHA if the runtime lane changed
 - [ ] Fast deploy smoke passed after hosted runtime changes
 - [ ] Hosted Live QA verdict for the SHA is `passed`, or it is named as pending/failed in the report
-- [ ] Demo and production claimed only after `make promote-production` reported `demo_verified=true`
+- [ ] Production claimed only after `make promote-production` reported its receipt (the retired demo reports `demo_verified=false`)
 - [ ] Control plane healthy if control-plane lane changed
 - [ ] Local dogfood refreshed only if machine-side behavior changed
 - [ ] iOS device installed only if `ios/` changed

@@ -149,6 +149,5 @@ jobs:
           CI_RECEIPTS_S3_ACCESS_KEY_ID: ${{ secrets.CI_RECEIPTS_S3_ACCESS_KEY_ID }}
           CI_RECEIPTS_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_RECEIPTS_S3_SECRET_ACCESS_KEY }}
           SUBDOMAIN: ${{ vars.LONGHOUSE_DEFAULT_SUBDOMAIN }}
-          DEMO_SSH_HOST: deploy-host
           PROMOTER_TRIGGER: ${{ github.event_name }}${{ (github.event.workflow_run.name || needs.wake.outputs.woken_by) && format(':{0}', github.event.workflow_run.name || needs.wake.outputs.woken_by) || '' }}
         run: python3 scripts/ops/ring_promoter.py --json "$RUNNER_TEMP/ring-decision.json"
