@@ -414,11 +414,8 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
         let cleanup = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
         let root = records_root(&cleanup)?;
         for hash in drained_hashes {
-            let live: bool = cleanup.query_row(
-                LIVE_RECORD_HASH_EXISTS_SQL,
-                [&hash],
-                |row| row.get(0),
-            )?;
+            let live: bool =
+                cleanup.query_row(LIVE_RECORD_HASH_EXISTS_SQL, [&hash], |row| row.get(0))?;
             if !live {
                 crate::state::payload_store::remove(
                     &root,
@@ -847,7 +844,9 @@ mod tests {
             "live-hash probe must search the partial index, got {plan:?}"
         );
         assert!(
-            !plan.iter().any(|step| step.starts_with("SCAN cursor_store_raw_record")),
+            !plan
+                .iter()
+                .any(|step| step.starts_with("SCAN cursor_store_raw_record")),
             "live-hash probe must not scan the table, got {plan:?}"
         );
     }
