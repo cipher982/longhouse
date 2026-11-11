@@ -4184,6 +4184,27 @@ def _normalized_parent_source_id(source_path: str) -> str | None:
     return identities[-1] if identities else None
 
 
+# Heartbeats and appends resolve a session from its raw source identity several
+# times per write. The raw side leads, pinned to the index that matches what the
+# caller knows (machine, provider, source id); sessions are then checked by
+# primary key. Letting the planner choose walked every session of the provider.
+_SESSIONS_BY_SOURCE_ID = text(
+    """
+    SELECT DISTINCT r.session_id
+    FROM raw_objects AS r INDEXED BY ix_raw_objects_machine_source
+    CROSS JOIN sessions AS s ON s.session_id = r.session_id
+    WHERE r.machine_id = :machine_id
+      AND r.provider = :provider
+      AND r.opaque_source_id = :opaque_source_id
+      AND s.owner_id = :owner_id
+      AND s.machine_id = :machine_id
+      AND s.provider = :provider
+      AND s.raw_state != 'retired'
+      AND s.render_state != 'retired'
+    """
+)
+
+
 def _resolve_session_id_by_source_id(
     connection,
     *,
@@ -4196,19 +4217,14 @@ def _resolve_session_id_by_source_id(
 
     if owner_id is None or not opaque_source_id:
         return None
-    raw_table = LiveRawObject.__table__
-    storage_table = StorageSession.__table__
     rows = connection.execute(
-        select(raw_table.c.session_id)
-        .select_from(raw_table.join(storage_table, storage_table.c.session_id == raw_table.c.session_id))
-        .where(raw_table.c.provider == provider)
-        .where(raw_table.c.opaque_source_id == opaque_source_id)
-        .where(storage_table.c.owner_id == str(owner_id))
-        .where(storage_table.c.machine_id == machine_id)
-        .where(storage_table.c.provider == provider)
-        .where(storage_table.c.raw_state != "retired")
-        .where(storage_table.c.render_state != "retired")
-        .distinct()
+        _SESSIONS_BY_SOURCE_ID,
+        {
+            "provider": provider,
+            "opaque_source_id": opaque_source_id,
+            "owner_id": str(owner_id),
+            "machine_id": machine_id,
+        },
     ).all()
     return str(rows[0][0]) if len(rows) == 1 else None
 

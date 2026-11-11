@@ -333,6 +333,12 @@ class RawObject(CatalogBase):
             unique=True,
         ),
         Index("ix_raw_objects_source_identity", "tenant_id", "machine_id", "provider", "opaque_source_id"),
+        # Session resolution by source identity knows machine, provider and source
+        # id but not tenant, so it cannot use the index above. Without this the
+        # planner walked every session of the provider (142 ms per call on
+        # david010 with 23k claude sessions, a quarter of all writer time);
+        # with it the read is under 1 ms. session_id makes it covering.
+        Index("ix_raw_objects_machine_source", "machine_id", "provider", "opaque_source_id", "session_id"),
         Index(
             "ix_raw_objects_session_source_order",
             "session_id",

@@ -157,6 +157,7 @@ def test_hot_path_reads_are_pinned_to_their_indexes(tmp_path):
         (store._ORPHANS_BY_PARENT_SOURCE, {"parent_source_id": "s"}, "ix_sessions_subagent_parent_source_id"),
         (store._ORPHANS_BY_PARENT_NATIVE_ID, {"alias_values": ["p"]}, "ix_sessions_subagent_parent_provider_session_id"),
         (store._NEWEST_SCOPED_SPAWN_FACTS, {"session_id": "x", "limit": 256}, "ix_session_provider_facts_kind_at"),
+        (store._SESSIONS_BY_SOURCE_ID, {"opaque_source_id": "path-sha256:x"}, "ix_raw_objects_machine_source"),
     )
     scope = {"provider": "claude", "owner_id": "1", "machine_id": "cinder", "session_key": "x"}
     from sqlalchemy import bindparam
