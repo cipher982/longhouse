@@ -48,7 +48,9 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRATCH_PARENT = Path("/tmp/agents/w1-bench")
+# Override on hosts whose /tmp is small (cube: a 2 GB RAM disk); --seed-data is
+# reflinked only when the scratch is on the same filesystem as the seed.
+SCRATCH_PARENT = Path(os.environ.get("LONGHOUSE_BENCH_SCRATCH", "/tmp/agents/w1-bench"))
 RESULTS_PARENT = Path("/tmp/agents/w1-bench-results")
 TOXIPROXY_IMAGE = "ghcr.io/shopify/toxiproxy:2.12.0"
 DEVICE_ID = "8e447278-31b2-42e2-9518-3713dc9ef6cc"
@@ -98,6 +100,35 @@ def http(method: str, url: str, payload: dict[str, Any] | None = None, *, bearer
     except (OSError, http_client.HTTPException) as exc:
         # Connection refused/reset while a container starts is "not ready", not a crash.
         return 0, {"transport_error": f"{type(exc).__name__}: {exc}"}, {}
+
+
+_WRITER_HELD = re.compile(r"catalogd writer held for (\d+)ms by (\w+)")
+_WRITER_STATS = re.compile(r"catalogd writer depth=\d+ peak=(\d+) rejected=(\d+) expired=(\d+) .*exec_p99=(\d+)ms queue_wait_p99=(\d+)ms")
+
+
+def catalog_writer_summary(container: str) -> dict[str, Any]:
+    """The Runtime Host's own catalogd writer log lines, summarized.
+
+    Slow holds are logged above CATALOGD_WRITER_SLOW_MS (250 ms by default), so
+    `slow_holds` counts and sums only those; the periodic stats line carries the
+    rolling p99s and the rejected/expired totals.
+    """
+
+    logs = subprocess.run(["docker", "logs", container], capture_output=True, text=True, check=False)
+    text = logs.stdout + logs.stderr
+    holds: dict[str, list[int]] = {}
+    for match in _WRITER_HELD.finditer(text):
+        holds.setdefault(match.group(2), []).append(int(match.group(1)))
+    stats = _WRITER_STATS.findall(text)
+    last = stats[-1] if stats else None
+    return {
+        "slow_holds": {label: {"count": len(values), "total_ms": sum(values), "max_ms": max(values)}
+                       for label, values in sorted(holds.items(), key=lambda item: -sum(item[1]))},
+        "queue_full_responses": text.count("catalog writer queue is full"),
+        "peak_depth_max": max((int(row[0]) for row in stats), default=None),
+        "last": None if last is None else {"rejected": int(last[1]), "expired": int(last[2]),
+                                           "exec_p99_ms": int(last[3]), "queue_wait_p99_ms": int(last[4])},
+    }
 
 
 def wait_for_health(base_url: str) -> None:
@@ -224,6 +255,21 @@ def all_readable(base_url: str, token: str, session_ids: set[str]) -> bool:
         ):
             return False
     return True
+
+
+def corpus_import_progress(status_path: Path) -> tuple[int, int] | None:
+    """(acknowledged source bytes, fully acknowledged source count) from the engine.
+
+    The live-probe transcript is one more tracked source that keeps growing, so
+    the corpus is complete when the complete-source count reaches the corpus
+    file count; acknowledged bytes give the throughput curve.
+    """
+    try:
+        progress = json.loads(status_path.read_text())["history_import"]["progress"]
+        complete = sum(int(p.get("complete_source_count", 0)) for p in progress["providers"])
+        return int(progress["acknowledged_source_bytes"]), complete
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
 
 
 def visible_sessions(base_url: str, token: str, status_counts: dict[int, int]) -> dict[str, str]:
@@ -369,6 +415,13 @@ def main() -> int:
     parser.add_argument("--corpus-bytes", type=int, default=1_500_000_000)
     parser.add_argument("--timeout-secs", type=int, default=3_600)
     parser.add_argument("--keep-logs", action="store_true", help="copy the engine logs to /tmp/agents/w1-bench-results")
+    parser.add_argument("--seed-data", type=Path,
+                        help="tenant data directory to start the local Runtime Host from (copied with a reflink when the "
+                             "filesystem supports it, so a production-sized catalog costs no time); without it the host starts empty")
+    parser.add_argument("--memory", default="4g", help="local Runtime Host memory limit (docker --memory)")
+    parser.add_argument("--cpus", default=None, help="local Runtime Host CPU limit (docker --cpus); default unlimited")
+    parser.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
+                        help="extra Runtime Host environment, repeatable (e.g. LONGHOUSE_STORAGE_RAW_LIVE_WORKERS=8)")
     parser.add_argument("--engine-bin", type=Path, help="Machine Agent binary to run, e.g. the installed release; default builds from source")
     args = parser.parse_args()
 
@@ -378,6 +431,13 @@ def main() -> int:
         raise SystemExit("--image is required without --remote-url")
     if args.remote_url and args.shaped:
         raise SystemExit("--shaped cannot be used with --remote-url")
+    if args.seed_data and args.remote_url:
+        raise SystemExit("--seed-data applies only to a local Runtime Host")
+    if args.seed_data and not args.seed_data.is_dir():
+        raise SystemExit(f"seed data is not a directory: {args.seed_data}")
+    for item in args.env:
+        if "=" not in item:
+            raise SystemExit(f"--env expects KEY=VALUE, got {item!r}")
     if not args.corpus_root.is_dir():
         raise SystemExit(f"corpus root is not a directory: {args.corpus_root}")
     if not args.remote_url and shutil.which("docker") is None:
@@ -393,7 +453,8 @@ def main() -> int:
     started = time.monotonic()
     result: dict[str, Any] = {"schema": "longhouse.import_bench.v1", "name": args.name, "image": args.image,
                               "image_commit": args.image_commit, "remote_url": args.remote_url,
-                              "shaped": args.shaped, "status": "fail"}
+                              "shaped": args.shaped, "seed_data": str(args.seed_data) if args.seed_data else None,
+                              "memory": args.memory, "cpus": args.cpus, "env": sorted(args.env), "status": "fail"}
     try:
         home = scratch / "home"
         corpus = newest_corpus(args.corpus_root, home, args.corpus_bytes)
@@ -410,7 +471,18 @@ def main() -> int:
             host_port, proxy_port, admin_port = port(), port(), port()
             password = secrets.token_urlsafe(24)
             docker("network", "create", network)
-            docker("run", "-d", "--name", runtime, "--network", network, "--memory", "4g", "-p", f"127.0.0.1:{host_port}:8000",
+            run_extra: list[str] = []
+            if args.seed_data:
+                data_dir = scratch / "data"
+                seed_started = time.monotonic()
+                command("cp", "-a", "--reflink=auto", str(args.seed_data), str(data_dir))
+                result["seed_copy_s"] = round(time.monotonic() - seed_started, 3)
+                run_extra += ["-v", f"{data_dir}:/data"]
+            if args.cpus:
+                run_extra += ["--cpus", str(args.cpus)]
+            for item in args.env:
+                run_extra += ["-e", item]
+            docker("run", "-d", "--name", runtime, "--network", network, "--memory", args.memory, *run_extra, "-p", f"127.0.0.1:{host_port}:8000",
                    "-e", "AUTH_DISABLED=0", "-e", "SINGLE_TENANT=1", "-e", f"LONGHOUSE_PASSWORD={password}",
                    "-e", "JWT_SECRET=import-bench-jwt-secret", "-e", f"FERNET_SECRET={base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()}",
                    "-e", "INTERNAL_API_SECRET=import-bench-internal-secret", "-e", "LLM_DISABLED=1",
@@ -477,9 +549,28 @@ def main() -> int:
         first, recent, complete = None, None, None
         counts = {429: 0, 503: 0}
         deadline = import_started + args.timeout_secs
+        # A seeded catalog already holds tens of thousands of sessions, so paging
+        # the archive manifest every second is itself load, and corpus ids may
+        # already exist there under another machine. Seeded runs instead time the
+        # engine's own acknowledged corpus bytes (the live-probe file excluded).
+        status_path = home / ".longhouse" / "agent" / "engine-status.json"
+        ack_samples: list[tuple[float, int]] = []
         while time.monotonic() < deadline:
             if engine.poll() is not None:
                 raise RuntimeError(f"Machine Agent exited early ({engine.returncode})")
+            if args.seed_data:
+                elapsed = round(time.monotonic() - import_started, 3)
+                progress = corpus_import_progress(status_path)
+                acked, done = progress if progress else (None, 0)
+                if acked is not None and (not ack_samples or acked != ack_samples[-1][1]):
+                    ack_samples.append((elapsed, acked))
+                if first is None and acked:
+                    first = elapsed
+                if done >= corpus["file_count"]:
+                    complete = elapsed
+                    break
+                time.sleep(1)
+                continue
             visible = visible_sessions(base_url, token, counts)
             elapsed = round(time.monotonic() - import_started, 3)
             if first is None and any(provider_id in visible for provider_id in all_ids):
@@ -501,11 +592,17 @@ def main() -> int:
             result["engine_bytes_out"] = sent
             if complete:
                 result["engine_wire_mbit_s"] = round(sent * 8 / complete / 1e6, 2)
+        if ack_samples:
+            # Ten evenly spaced points are enough to see a stall or a slope change.
+            step = max(1, len(ack_samples) // 10)
+            result["ack_progress"] = [list(sample) for sample in ack_samples[::step]] + [list(ack_samples[-1])]
+            result["ack_mbyte_s"] = round(ack_samples[-1][1] / max(ack_samples[-1][0], 0.001) / 1e6, 2)
         result.update({"status": "ok" if complete is not None else "timeout", "wire_bytes_client_to_server": interface_rx_bytes(runtime) - wire_start if wire_start is not None else None,
                        "wire_bytes_note": "remote Runtime Host cannot expose a client wire counter; engine logs and local health retained" if args.remote_url else None,
                        "time_to_first_timeline_s": first, "time_to_recent_readable_s": recent, "time_to_fully_imported_s": complete,
                        "http_status_counts": {str(key): value for key, value in counts.items()}, "engine_backlog": engine_backlog(engine_db),
                         "server_rss_bytes": container_rss_bytes(runtime) if not args.remote_url else None,
+                       "catalog_writer": catalog_writer_summary(runtime) if not args.remote_url else None,
                        "elapsed_s": round(time.monotonic() - started, 3), "import_elapsed_s": round(time.monotonic() - import_started, 3)})
     except Exception as exc:
         result.update({"error": f"{type(exc).__name__}: {exc}", "elapsed_s": round(time.monotonic() - started, 3)})
