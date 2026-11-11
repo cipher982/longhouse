@@ -48,3 +48,25 @@ def test_render_table_has_a_could_not_run_row() -> None:
     assert "could not run" in table and "not installed" in table
     header, rule, line = table.splitlines()
     assert header.count("|") == rule.count("|") == line.count("|")
+
+
+def test_file_watcher_dates_a_provider_write_and_ship_lag_is_lane_minus_write(tmp_path) -> None:
+    import threading
+    import time
+
+    stop = threading.Event()
+    watcher = tt.FileWatcher(tmp_path, ["WROTE0001"], stop, interval=0.02)
+    (tmp_path / ".longhouse").mkdir()
+    (tmp_path / ".longhouse" / "state").write_text("WROTE0001 in machine agent state is not a provider write")
+    watcher.scan_once()
+    watcher.start()
+    time.sleep(0.2)
+    wrote_at = time.monotonic()
+    (tmp_path / "session.jsonl").write_text('{"text":"WROTE0001"}')
+    time.sleep(0.3)
+    stop.set()
+    watcher.join(timeout=2)
+    assert watcher.first_path == {"WROTE0001": "session.jsonl"}
+    assert 0 <= watcher.first_seen["WROTE0001"] - wrote_at < 0.1
+    stats = tt.lane_stats("x", {"WROTE0001": 1.0}, {"WROTE0001": 5.0}, 0.1, ["WROTE0001"], {"WROTE0001": 4.0})
+    assert stats.delays == {"WROTE0001": 4.0} and stats.ship_lag == {"WROTE0001": 1.0}

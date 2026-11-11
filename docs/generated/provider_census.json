@@ -2432,8 +2432,10 @@
     {
       "path": "server/zerg/qa/terminal_truth.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
+        "omp",
         "opencode",
         "pi"
       ]

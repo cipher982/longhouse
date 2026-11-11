@@ -33,6 +33,8 @@ import contextlib
 import http.client
 import json
 import os
+import queue
+import re
 import secrets
 import shutil
 import signal
@@ -89,6 +91,10 @@ class LaneStats:
     median: float | None = None
     worst: float | None = None
     never_served: list[str] = field(default_factory=list)
+    ship_lag: dict[str, float | None] = field(default_factory=dict)  # marker -> lane time - provider file write time
+    ship_first: float | None = None
+    ship_median: float | None = None
+    ship_worst: float | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -100,11 +106,20 @@ class LaneStats:
             "worst_delay_s": self.worst,
             "never_served": self.never_served,
             "delays_s": self.delays,
+            "ship_lag_s": self.ship_lag,
+            "ship_lag_first_s": self.ship_first,
+            "ship_lag_median_s": self.ship_median,
+            "ship_lag_worst_s": self.ship_worst,
         }
 
 
 def lane_stats(
-    lane: str, terminal: dict[str, float | None], served: dict[str, float], resolution_s: float | None, order: Sequence[str]
+    lane: str,
+    terminal: dict[str, float | None],
+    served: dict[str, float],
+    resolution_s: float | None,
+    order: Sequence[str],
+    file_written: dict[str, float] | None = None,
 ) -> LaneStats:
     """Delay per marker that reached the terminal. Markers absent from the terminal are not scored."""
 
@@ -115,7 +130,16 @@ def lane_stats(
             continue
         delays[marker] = served[marker] - seen if marker in served else None
     numbers = [d for d in delays.values() if d is not None]
+    ship: dict[str, float | None] = {}
+    for marker in delays:
+        if file_written is not None and marker in file_written:
+            ship[marker] = served[marker] - file_written[marker] if marker in served else None
+    ship_numbers = [d for d in ship.values() if d is not None]
     return LaneStats(
+        ship_lag=ship,
+        ship_first=ship.get(order[0]) if order else None,
+        ship_median=statistics.median(ship_numbers) if ship_numbers else None,
+        ship_worst=max(ship_numbers) if ship_numbers else None,
         lane=lane,
         resolution_s=resolution_s,
         delays=delays,
@@ -158,7 +182,7 @@ class LaneWatcher(threading.Thread):
         self.first_seen: dict[str, float] = {}
         self.response_times: list[float] = []
         self.errors: list[str] = []
-        self._stop = stop
+        self._stop_event = stop
 
     @property
     def resolution_s(self) -> float | None:
@@ -167,7 +191,7 @@ class LaneWatcher(threading.Thread):
 
     def run(self) -> None:
         pending = set(self.markers)
-        while pending and not self._stop.is_set():
+        while pending and not self._stop_event.is_set():
             try:
                 text = self.lane.read()
             except Exception as exc:  # noqa: BLE001 - a lane failure is data, not a crash
@@ -182,7 +206,70 @@ class LaneWatcher(threading.Thread):
                     self.first_seen[marker] = now
                     pending.discard(marker)
             if pending:
-                self._stop.wait(self.lane.interval)
+                self._stop_event.wait(self.lane.interval)
+
+
+class FileWatcher(threading.Thread):
+    """When a marker first appears in a file under the provider's HOME (its transcript, session file or store).
+
+    Walks the tree every ``interval`` seconds, reads files whose size or mtime changed, and searches them for the markers.
+    Resolution is the worst gap between completed scans (reported). The Machine Agent's own state (``.longhouse``) is
+    excluded: this watches what the provider wrote, not what Longhouse did with it.
+    """
+
+    SKIP_DIRS = {".longhouse", "node_modules", ".git", "bin"}
+
+    def __init__(
+        self, root: Path, markers: Sequence[str], stop: threading.Event, interval: float = 0.03, only_under: Sequence[str] = ()
+    ) -> None:
+        super().__init__(daemon=True, name="provider-files")
+        self.root = root
+        self.only_under = tuple(only_under)  # when set, only files below these HOME-relative prefixes count
+        self.markers = list(markers)
+        self.first_seen: dict[str, float] = {}
+        self.first_path: dict[str, str] = {}
+        self.scan_times: list[float] = []
+        self.interval = interval
+        self._stop_event = stop
+        self._stat: dict[str, tuple[int, int]] = {}
+
+    @property
+    def resolution_s(self) -> float | None:
+        gaps = [b - a for a, b in zip(self.scan_times, self.scan_times[1:], strict=False)]
+        return max(gaps) if gaps else None
+
+    def scan_once(self) -> None:
+        pending = [m for m in self.markers if m not in self.first_seen]
+        for directory, names, files in os.walk(self.root):
+            names[:] = [n for n in names if n not in self.SKIP_DIRS]
+            for name in files:
+                path = os.path.join(directory, name)
+                if self.only_under and not os.path.relpath(path, self.root).startswith(self.only_under):
+                    continue
+                try:
+                    info = os.stat(path)
+                except OSError:
+                    continue
+                key = (info.st_mtime_ns, info.st_size)
+                if self._stat.get(path) == key or info.st_size > 64 * 1024 * 1024 or not pending:
+                    self._stat[path] = key
+                    continue
+                self._stat[path] = key
+                try:
+                    data = Path(path).read_bytes()
+                except OSError:
+                    continue
+                now = time.monotonic()
+                for marker in [m for m in pending if m.encode() in data]:
+                    self.first_seen[marker] = now
+                    self.first_path[marker] = os.path.relpath(path, self.root)
+                pending = [m for m in pending if m not in self.first_seen]
+
+    def run(self) -> None:
+        while not self._stop_event.is_set():
+            self.scan_once()
+            self.scan_times.append(time.monotonic())
+            self._stop_event.wait(self.interval)
 
 
 class StreamWatcher(threading.Thread):
@@ -199,7 +286,7 @@ class StreamWatcher(threading.Thread):
         self.response_times: list[float] = []
         self.event_counts: dict[str, int] = {}
         self.sample: list[str] = []  # the first stream lines, to see what the lane carries when no marker arrives
-        self._stop = stop
+        self._stop_event = stop
 
     def run(self) -> None:
         pending = set(self.markers)
@@ -215,10 +302,10 @@ class StreamWatcher(threading.Thread):
                 for marker in [m for m in pending if m in line]:
                     self.first_seen[marker] = now
                     pending.discard(marker)
-                if not pending or self._stop.is_set():
+                if not pending or self._stop_event.is_set():
                     return
         except Exception as exc:  # noqa: BLE001
-            if not self._stop.is_set():
+            if not self._stop_event.is_set():
                 self.errors.append(f"{type(exc).__name__}: {exc}")
 
 
@@ -234,7 +321,7 @@ class RuntimeApi:
         parsed = urlsplit(api_url)
         self.host, self.port = parsed.hostname or "127.0.0.1", parsed.port or 80
         self.token = token
-        self.session_id: str | None = None
+        self.pinned_sessions: list[str] = []
 
     def _headers(self, browser: bool) -> dict[str, str]:
         headers = {"Accept": "application/json", "User-Agent": "longhouse-terminal-truth/1"}
@@ -250,24 +337,42 @@ class RuntimeApi:
         finally:
             connection.close()
 
-    def find_session(self) -> str | None:
-        if self.session_id is None:
-            status, body = self.get("/api/agents/sessions?limit=5")
-            if status == 200:
-                sessions = json.loads(body).get("sessions") or []
-                if sessions:
-                    self.session_id = str(sessions[0]["id"])
-        return self.session_id
+    def post_raw(self, path: str, payload: dict[str, Any]) -> tuple[int, str]:
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=30)
+        try:
+            headers = {**self._headers(False), "Content-Type": "application/json"}
+            connection.request("POST", path, json.dumps(payload), headers)
+            response = connection.getresponse()
+            return response.status, response.read().decode("utf-8", errors="replace")
+        finally:
+            connection.close()
+
+    def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        status, body = self.post_raw(path, payload)
+        if status >= 300:
+            raise RuntimeError(f"POST {path}: HTTP {status} {body[:300]}")
+        return json.loads(body)
+
+    def session_ids(self) -> list[str]:
+        """Every session the host has. A Helm launch creates a managed session beside the file-discovered one, and only
+        one of them carries the live text, so a lane reads all of them."""
+
+        status, body = self.get("/api/agents/sessions?limit=20")
+        listed = [str(item["id"]) for item in json.loads(body).get("sessions") or []] if status == 200 else []
+        return listed + [s for s in self.pinned_sessions if s not in listed]
 
     def _lane(self, name: str, path: str, *, browser: bool, interval: float) -> Lane:
         def read() -> str | None:
-            session = self.find_session()
-            if session is None:
+            sessions = self.session_ids()
+            if not sessions:
                 return None
-            status, body = self.get(path.format(id=session), browser=browser)
-            if status != 200:
-                raise RuntimeError(f"{name}: HTTP {status} {body[:200]}")
-            return body
+            bodies = []
+            for session in sessions:
+                status, body = self.get(path.format(id=session), browser=browser)
+                if status != 200:
+                    raise RuntimeError(f"{name}: HTTP {status} {body[:200]}")
+                bodies.append(body)
+            return "\n".join(bodies)
 
         return Lane(name, read, interval)
 
@@ -277,14 +382,8 @@ class RuntimeApi:
             self._lane("workspace (served to web)", "/api/timeline/sessions/{id}/workspace", browser=True, interval=0.1),
         ]
 
-    def stream_lines(self, stop: threading.Event) -> Iterator[str]:
-        """The workspace SSE (what the web client subscribes to), once the session exists."""
-
+    def _stream_one(self, session: str, out: queue.Queue[str], stop: threading.Event) -> None:
         while not stop.is_set():
-            session = self.find_session()
-            if session is None:
-                stop.wait(0.05)
-                continue
             connection = http.client.HTTPConnection(self.host, self.port, timeout=30)
             try:
                 headers = self._headers(True)
@@ -292,15 +391,36 @@ class RuntimeApi:
                 connection.request("GET", f"/api/timeline/sessions/{session}/workspace/stream", headers=headers)
                 response = connection.getresponse()
                 if response.status != 200:
-                    raise RuntimeError(f"workspace stream HTTP {response.status}")
+                    out.put(f"harness: workspace stream HTTP {response.status} for {session}\n")
+                    return
                 while not stop.is_set():
                     raw = response.readline()
                     if not raw:
                         break
-                    yield raw.decode("utf-8", errors="replace")
+                    out.put(raw.decode("utf-8", errors="replace"))
+            except OSError:
+                pass
             finally:
                 connection.close()
             stop.wait(0.2)
+
+    def stream_lines(self, stop: threading.Event) -> Iterator[str]:
+        """The workspace SSE (what the web client subscribes to) of every session, as lines, as each session appears."""
+
+        out: queue.Queue[str] = queue.Queue()
+        started: set[str] = set()
+        last_scan = 0.0
+        while not stop.is_set():
+            if time.monotonic() - last_scan > 0.1:
+                last_scan = time.monotonic()
+                for session in self.session_ids():
+                    if session not in started:
+                        started.add(session)
+                        threading.Thread(target=self._stream_one, args=(session, out, stop), daemon=True).start()
+            try:
+                yield out.get(timeout=0.05)
+            except queue.Empty:
+                continue
 
 
 def _free_port() -> int:
@@ -375,7 +495,7 @@ def _stop_group(process: subprocess.Popen[Any] | None) -> None:
 class ScriptedModel:
     """The scripted model server as a child process serving one paced turn."""
 
-    def __init__(self, root: Path, pace: Pacing, match: str) -> None:
+    def __init__(self, root: Path, pace: Pacing, match: str, match_scope: str = "latest") -> None:
         self.root = root
         self.script = root / "scripted-model.json"
         self.script.write_text(
@@ -385,6 +505,7 @@ class ScriptedModel:
                         {
                             "id": "paced",
                             "match": match,
+                            "match_scope": match_scope,
                             "pace": {
                                 "tokens": pace.tokens,
                                 "rate": pace.rate,
@@ -414,6 +535,8 @@ class ScriptedModel:
                 str(self.script),
                 "--receipt-file",
                 str(self.root / "model-receipt.json"),
+                "--stream-log",
+                str(self.root / "model-stream.jsonl"),
             ],
             cwd=SERVER_ROOT,
             env=environment,
@@ -431,10 +554,31 @@ class ScriptedModel:
     def stop(self) -> None:
         _stop_group(self.process)
 
+    def sent_times(self, markers: Sequence[str]) -> dict[str, float | None]:
+        """When the model server wrote the first frame carrying each marker to the provider (monotonic)."""
+
+        seen: dict[str, float | None] = dict.fromkeys(markers)
+        log = self.root / "model-stream.jsonl"
+        if log.exists():
+            for line in log.read_text().splitlines():
+                row = json.loads(line)
+                for marker in markers:
+                    if seen[marker] is None and marker in row["frame"]:
+                        seen[marker] = row["t"]
+        return seen
+
+    def served_requests(self) -> int:
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            return int(json.loads((self.root / "model-receipt.json").read_text())["scripted_model"]["served_requests"])
+        return 0
+
 
 # --------------------------------------------------------------------------------------
 # Providers: how each CLI is launched in a test-owned PTY
 # --------------------------------------------------------------------------------------
+
+
+_DUMMY_KEY = "longhouse-mock-key"
 
 
 @dataclass(frozen=True)
@@ -443,10 +587,17 @@ class ProviderDriver:
     binary: str
     ready_text: str  # on screen when the TUI accepts a prompt
     argv: Callable[[Path, Path], list[str]]  # (binary, workspace) -> argv
+    answers: tuple[tuple[str, bytes], ...] = ()  # (screen text, keys): startup prompts the harness answers once
 
 
 PROVIDERS: dict[str, ProviderDriver] = {
-    "claude": ProviderDriver("claude", "claude", 'Try "', lambda b, w: [str(b)]),
+    "claude": ProviderDriver(
+        "claude",
+        "claude",
+        'Try "',
+        lambda b, w: [str(b)],
+        answers=(("I am using this for local development", b"\r"),),  # Helm's development-channel warning
+    ),
     "codex": ProviderDriver(
         "codex",
         "codex",
@@ -456,11 +607,62 @@ PROVIDERS: dict[str, ProviderDriver] = {
     "opencode": ProviderDriver(
         "opencode",
         "opencode",
-        "Ask anything",
+        "ctrl+p commands",
         lambda b, w: [str(b), "--model", "longhouse-mock/mock-model", str(w), "--pure"],
     ),
-    "pi": ProviderDriver("pi", "pi", "mock-model", lambda b, w: [str(b), "--provider", "longhouse-mock", "--model", "mock-model"]),
+    "pi": ProviderDriver("pi", "pi", "", lambda b, w: [str(b), "--provider", "longhouse-mock", "--model", "mock-model"]),
+    "omp": ProviderDriver("omp", "omp", "", lambda b, w: [str(b), "--model", "longhouse-mock/mock-model"]),
+    "antigravity": ProviderDriver(
+        "antigravity", "agy", "Gemini API key", lambda b, w: [str(b)], answers=(("Yes, I trust this folder", b"\r"),)
+    ),
 }
+
+
+def provider_environment(provider: str, endpoint: str, script: Path, home: Path) -> dict[str, str]:
+    """A credential-free environment for ``provider`` whose only reachable model is the scripted endpoint at ``endpoint``."""
+
+    profiles = scripted_model_profiles
+    saved = {k: os.environ.get(k) for k in (profiles.SCRIPTED_MODEL_BASE_URL_ENV, profiles.SCRIPTED_MODEL_SCRIPT_ENV)}
+    os.environ[profiles.SCRIPTED_MODEL_BASE_URL_ENV] = endpoint
+    os.environ[profiles.SCRIPTED_MODEL_SCRIPT_ENV] = str(script)
+    try:
+        if provider in profiles.SCRIPTED_MODEL_API_KEY_BY_PROVIDER:
+            environment = profiles.scripted_model_environment(provider)
+        else:
+            environment = profiles.credential_free_environment(reject_ambient_credentials=False)
+            environment[profiles.SCRIPTED_MODEL_BASE_URL_ENV] = endpoint
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    for name in [
+        n
+        for n in environment
+        if n.startswith(("CLAUDECODE", "CLAUDE_CODE", "CODEX_", "OMP_")) and n not in {"CODEX_API_KEY", "CODEX_MODEL"}
+    ]:
+        environment.pop(name)
+    if provider == "omp":
+        environment["OMP_SKIP_SETUP"] = "1"  # a fresh HOME otherwise shows a setup wizard that swallows input
+    if provider == "antigravity":
+        environment.update(HOME=str(home), GEMINI_API_KEY=_DUMMY_KEY, GOOGLE_GEMINI_BASE_URL=endpoint)
+        cli = home / ".gemini" / "antigravity-cli"
+        (cli / "cache").mkdir(parents=True, exist_ok=True)
+        (cli / "cache" / "onboarding.json").write_text(
+            json.dumps({"consumerOnboardingComplete": True, "enterpriseOnboardingComplete": False, "onboardingComplete": True})
+        )
+        (cli / "settings.json").write_text(json.dumps({"modelProvider": "gemini", "colorScheme": "dark"}))
+    else:
+        profiles.configure_scripted_model_profile(provider, home, environment)
+    if provider == "opencode":
+        # Fail closed: only the scripted provider is enabled, so no built-in provider (OpenRouter and the like) can be chosen.
+        config = home / ".config" / "opencode" / "opencode.json"
+        value = json.loads(config.read_text())
+        value["enabled_providers"] = [profiles.SCRIPTED_MODEL_PROVIDER]
+        value["model"] = f"{profiles.SCRIPTED_MODEL_PROVIDER}/{profiles.SCRIPTED_MODEL_NAME}"
+        config.write_text(json.dumps(value, indent=2))
+    return environment
 
 
 def screen_text(chunks: Iterable[TimedChunk]) -> str:
@@ -481,7 +683,14 @@ class RunResult:
     pace: dict[str, Any] | None = None
     stream_seconds: float | None = None
     markers: list[str] = field(default_factory=list)
-    terminal_first_seen_s: dict[str, float | None] = field(default_factory=dict)  # relative to prompt submit
+    baseline: str | None = None
+    terminal_first_seen_s: dict[str, float | None] = field(default_factory=dict)  # baseline first-seen, relative to prompt submit
+    model_sent_s: dict[str, float | None] = field(default_factory=dict)  # when the model server wrote each marker, relative to submit
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+    file_first_seen_s: dict[str, float | None] = field(default_factory=dict)  # provider wrote the marker to a file, relative to submit
+    file_paths: list[str] = field(default_factory=list)
+    file_scan_gap_s: float | None = None
+    split: dict[str, Any] = field(default_factory=dict)
     pacing_error_s: float | None = None  # median |terminal spacing - scheduled spacing|
     lanes: list[LaneStats] = field(default_factory=list)
     lane_errors: dict[str, list[str]] = field(default_factory=dict)
@@ -503,11 +712,28 @@ def _version(binary: str) -> str | None:
     return out.splitlines()[0] if out else None
 
 
-def _wait_ready(session: ProviderPtySession, recording: Path, timing: Path, text: str, timeout: float) -> None:
+def _wait_ready(
+    session: ProviderPtySession, recording: Path, timing: Path, text: str, timeout: float, answers: Sequence[tuple[str, bytes]] = ()
+) -> None:
+    answered: set[str] = set()
     deadline = time.monotonic() + timeout
+    last_size, still_since = -1, time.monotonic()
     while time.monotonic() < deadline:
         if not session.alive():
-            raise RuntimeError(f"provider exited before it was ready ({session.process.returncode})")
+            raise RuntimeError(f"provider exited before it was ready ({session.process.returncode})\nlast output:\n{_tail_text(recording)}")
+        for needle, keys in answers:
+            with contextlib.suppress(OSError, ValueError, json.JSONDecodeError):
+                if needle not in answered and needle in screen_text(load_timed_chunks(recording, timing)):
+                    answered.add(needle)
+                    session.write(keys)
+        if not text:  # no known ready string: the TUI has drawn something and then gone quiet
+            size = recording.stat().st_size if recording.exists() else 0
+            if size != last_size:
+                last_size, still_since = size, time.monotonic()
+            elif size > 400 and time.monotonic() - still_since > 4:
+                return
+            time.sleep(0.5)
+            continue
         with contextlib.suppress(OSError, ValueError, json.JSONDecodeError):
             if text in screen_text(load_timed_chunks(recording, timing)):
                 time.sleep(1.5)  # let the TUI finish its first paint
@@ -519,24 +745,61 @@ def _wait_ready(session: ProviderPtySession, recording: Path, timing: Path, text
     raise RuntimeError(f"provider TUI never showed {text!r}; last screen:\n{last[-1200:]}")
 
 
-def run_shadow(
+def _tail_text(path: Path, limit: int = 1500) -> str:
+    with contextlib.suppress(OSError):
+        raw = path.read_bytes().decode("utf-8", errors="replace")
+        return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07", "", raw)[-limit:]
+    return ""
+
+
+def _collect_diagnostics(root: Path, model: ScriptedModel) -> dict[str, Any]:
+    """Where live text could have stopped: model frames, engine log, Runtime Host log."""
+
+    diag: dict[str, Any] = {"model_served_requests": model.served_requests()}
+    host_log = root / "runtime-host.log"
+    if host_log.exists():
+        lines = host_log.read_text(errors="replace").splitlines()
+        live = [line for line in lines if "live_transcript" in line]
+        diag["host_log_live_transcript_lines"] = len(live)
+        diag["host_log_live_transcript_sample"] = [x[:260] for x in live[:2] + live[-2:]]
+        diag["host_log_runtime_events_posts"] = sum("/api/agents/runtime/events" in line for line in lines)
+    engine_logs = sorted((root / "evidence").rglob("*.log")) if (root / "evidence").exists() else []
+    engine_lines: list[str] = []
+    for path in engine_logs:
+        engine_lines += path.read_text(errors="replace").splitlines()
+    keywords = re.compile(r"live_text|live preview|live_preview|runtime/events|runtime event|bridge.*delta|agent_message_delta", re.I)
+    hits = [line for line in engine_lines if keywords.search(line)]
+    diag["engine_log_lines"] = len(engine_lines)
+    diag["engine_log_live_hits"] = len(hits)
+    diag["engine_log_live_sample"] = [x[:260] for x in hits[:2] + hits[-2:]]
+    return diag
+
+
+def run_cell(
     provider: str,
     *,
     pace: Pacing,
     engine: Path,
+    longhouse_cli: Path | None = None,
     keep: bool = False,
     grace_s: float = 90.0,
     mode: str = "shadow",
 ) -> RunResult:
-    """Provider in a test-owned PTY (what a person sees); the Machine Agent ships its files, as for any Shadow session."""
+    """One provider/mode cell.
+
+    shadow: the provider command alone in a test-owned PTY; the Machine Agent ships its files, as for any Shadow session.
+    helm: ``longhouse <provider>`` in that PTY (what a person types for a managed session).
+    console: no PTY; a headless turn dispatched through the Runtime Host API. The reference clock is then the scripted
+    model server's own send time for each frame, not a terminal.
+    """
 
     from zerg.qa import live_session_toolkit as toolkit
 
     driver = PROVIDERS[provider]
     binary_path = shutil.which(driver.binary)
     result = RunResult(provider=provider, mode=mode, status="could_not_run")
-    longhouse_cli = shutil.which("longhouse")
-    if mode == "helm" and longhouse_cli is None:
+    cli = longhouse_cli or (Path(shutil.which("longhouse")) if shutil.which("longhouse") else None)
+    if mode == "helm" and cli is None:
         result.reason = "the native longhouse CLI is not installed on this machine"
         return result
     if binary_path is None:
@@ -547,37 +810,18 @@ def run_shadow(
     root = _new_scratch()
     result.scratch = str(root)
     host = ScratchRuntimeHost(root)
-    model = ScriptedModel(root, pace, "TTRUTH")
+    model = ScriptedModel(root, pace, "TTRUTH", "any_user" if provider == "antigravity" else "latest")
     shipper = None
     session: ProviderPtySession | None = None
     stop = threading.Event()
+    recording, timing = root / "terminal.raw", root / "terminal.timing"
     try:
         model.start()
-        saved = {
-            k: os.environ.get(k)
-            for k in (scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV, scripted_model_profiles.SCRIPTED_MODEL_SCRIPT_ENV)
-        }
-        os.environ[scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV] = model.endpoint
-        os.environ[scripted_model_profiles.SCRIPTED_MODEL_SCRIPT_ENV] = str(model.script)
-        try:
-            environment = scripted_model_profiles.scripted_model_environment(provider)
-        finally:
-            for key, value in saved.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
-        for name in [
-            n
-            for n in environment
-            if n.startswith(("CLAUDECODE", "CLAUDE_CODE", "CODEX_", "OMP_")) and n not in {"CODEX_API_KEY", "CODEX_MODEL"}
-        ]:
-            environment.pop(name)
         home = root / "h"
         home.mkdir()
         workspace = root / "w"
         workspace.mkdir()
-        scripted_model_profiles.configure_scripted_model_profile(provider, home, environment)
+        environment = provider_environment(provider, model.endpoint, model.script, home)
         if provider == "codex":
             from zerg.qa.codex_auth import login_with_api_key
 
@@ -587,70 +831,115 @@ def run_shadow(
             toolkit.prepare_claude_profile(
                 binary=Path(binary_path), home=home, workspace=workspace, environment=environment, recording=root / "claude-onboarding.raw"
             )
+            # Pre-answer the Bypass Permissions acceptance screen that the Helm launcher's flags trigger.
+            settings = Path(environment["CLAUDE_CONFIG_DIR"]) / "settings.json"
+            current = json.loads(settings.read_text()) if settings.exists() else {}
+            current["skipDangerousModePermissionPrompt"] = True
+            settings.write_text(json.dumps(current))
+            # The engine advertises claude.turn_start (Console) only once the lifecycle hook is in settings.json; Helm
+            # installs it at launch, Console does not, so install it the way `longhouse claude configure` does.
+            subprocess.run(
+                [str(cli), "claude", "configure", "--claude-dir", environment["CLAUDE_CONFIG_DIR"]],
+                env=environment,
+                check=True,
+                capture_output=True,
+                timeout=60,
+            )
+        if provider == "pi":
+            # Console launches `pi` with no --model, so Pi's own default (an OpenRouter model) would be tried; pin the fake.
+            agent_dir = home / ".pi" / "agent"
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            (agent_dir / "settings.json").write_text(json.dumps({"defaultProvider": "longhouse-mock", "defaultModel": "mock-model"}))
+        if provider == "omp" and mode == "console":
+            # Without this the engine expects OMP's sessions under ~/.local/share/omp, while OMP 18.18.9 in a fresh HOME
+            # writes ~/.omp/agent/sessions, and the turn fails with "reserving the reported OMP native source".
+            environment["LONGHOUSE_OMP_SESSION_DIR"] = str(home / ".omp" / "agent" / "sessions")
         host.start()
         args = argparse.Namespace(api_url=host.url, agents_token=host.token, engine=engine, repo_root=REPO_ROOT)
         shipper = toolkit.start_transcript_shipper(provider, args, home=home, environment=environment, evidence_root=root / "evidence")
-        recording, timing = root / "terminal.raw", root / "terminal.timing"
-        session = ProviderPtySession.start(
-            argv=(
-                driver.argv(Path(binary_path), workspace)
-                if mode == "shadow"
-                else [
-                    str(longhouse_cli),
-                    provider,
-                    "--cwd",
-                    str(workspace),
-                    "--url",
-                    host.url,
-                    "--token",
-                    host.token,
-                    f"--{provider}-bin",
-                    binary_path,
-                ]
-            ),
-            cwd=workspace,
-            env=environment,
-            terminal_path=recording,
-            timing_path=timing,
-            rows=ROWS,
-            columns=COLUMNS,
-        )
-        _wait_ready(session, recording, timing, driver.ready_text, 120)
+        api = RuntimeApi(host.url, host.token)
+
+        if mode != "console":
+            helm_argv = [
+                str(cli),
+                provider,
+                "--cwd",
+                str(workspace),
+                "--url",
+                host.url,
+                *(["--token", host.token] if provider != "pi" else []),  # `longhouse pi` takes no --token (clap exit 2)
+                f"--{provider}-bin",
+                binary_path,
+            ]
+            if provider == "opencode":
+                helm_argv += ["--model", "longhouse-mock/mock-model"]
+            if provider == "pi":
+                helm_argv += ["--provider", "longhouse-mock", "--model", "mock-model"]
+            session = ProviderPtySession.start(
+                argv=driver.argv(Path(binary_path), workspace) if mode == "shadow" else helm_argv,
+                cwd=workspace,
+                env=environment,
+                terminal_path=recording,
+                timing_path=timing,
+                rows=ROWS,
+                columns=COLUMNS,
+            )
+            _wait_ready(session, recording, timing, driver.ready_text, 120, driver.answers)
 
         text = paced_text(pace)
         schedule = pace_schedule(pace, text)
         markers = [word for _, word, _ in schedule]
-        api = RuntimeApi(host.url, host.token)
         watchers: list[LaneWatcher | StreamWatcher] = [LaneWatcher(lane, markers, stop) for lane in api.poll_lanes()]
         watchers.append(StreamWatcher("workspace stream (SSE)", lambda: api.stream_lines(stop), markers, stop))
+        if mode == "console":
+            created = _create_console_session(api, provider, shipper.machine_name, workspace)
+            console_session = str(created["session_id"])
+            api.pinned_sessions = [console_session]  # the list endpoint may not show a headless session
+        # Codex also writes streamed text to debug SQLite logs; only its rollout file is the transcript.
+        files = FileWatcher(home, markers, stop, only_under=(".codex/sessions",) if provider == "codex" else ())
+        files.scan_once()  # baseline of what already exists, so only writes after the prompt count
         for watcher in watchers:
             watcher.start()
+        files.start()
         submitted = time.monotonic()
-        session.submit_line(PROMPT)
+        if mode == "console":
+            api.post(
+                f"/api/agents/sessions/{console_session}/turns", {"message": PROMPT, "client_request_id": f"tt-{secrets.token_hex(4)}"}
+            )
+        else:
+            assert session is not None
+            session.submit_line(PROMPT)
         stream_seconds = pace.initial_delay + (len(text.split()) - 1) / pace.rate
         deadline = submitted + stream_seconds + grace_s + 30
-        terminal: dict[str, float | None] = {}
+        reference: dict[str, float | None] = {}
         polled_done_at: float | None = None
+
+        def reference_times() -> dict[str, float | None]:
+            if mode == "console":
+                return model.sent_times(markers)
+            return terminal_first_seen(load_timed_chunks(recording, timing), markers)
+
         while time.monotonic() < deadline:
-            terminal = terminal_first_seen(load_timed_chunks(recording, timing), markers)
-            on_screen = [m for m in markers if terminal.get(m) is not None]
-            all_on_screen = len(on_screen) == len(markers)
+            reference = reference_times()
+            seen_ref = [m for m in markers if reference.get(m) is not None]
+            all_seen = len(seen_ref) == len(markers)
             polled = [w for w in watchers if isinstance(w, LaneWatcher)]
-            if all_on_screen and polled_done_at is None and all(m in w.first_seen for w in polled for m in on_screen):
+            if all_seen and polled_done_at is None and all(m in w.first_seen for w in polled for m in seen_ref):
                 polled_done_at = time.monotonic()
-            # Stop once the polled lanes have everything and the stream has had a few seconds more, or after the grace.
             if polled_done_at is not None and time.monotonic() > polled_done_at + 8:
                 break
-            if all_on_screen and time.monotonic() > max(terminal[m] for m in markers) + grace_s:  # type: ignore[type-var]
+            if all_seen and time.monotonic() > max(reference[m] for m in markers) + grace_s:  # type: ignore[type-var]
                 break
-            if not session.alive():
+            if session is not None and not session.alive():
                 break
             time.sleep(1.0)
         stop.set()
         for watcher in watchers:
             watcher.join(timeout=5)
-        terminal = terminal_first_seen(load_timed_chunks(recording, timing), markers)
+        files.join(timeout=5)
+        reference = reference_times()
         result.status = "measured"
+        result.baseline = "model stream (frame written to the provider)" if mode == "console" else "terminal screen (pyte)"
         result.pace = {
             "tokens": pace.tokens,
             "rate_per_s": pace.rate,
@@ -659,25 +948,44 @@ def run_shadow(
         }
         result.stream_seconds = stream_seconds
         result.markers = markers
-        result.terminal_first_seen_s = {m: (t - submitted if t is not None else None) for m, t in terminal.items()}
-        result.pacing_error_s = pacing_error(schedule, terminal)
+        result.terminal_first_seen_s = {m: (t - submitted if t is not None else None) for m, t in reference.items()}
+        result.pacing_error_s = pacing_error(schedule, reference)
+        if mode != "console":
+            result.model_sent_s = {m: (t - submitted if t is not None else None) for m, t in model.sent_times(markers).items()}
         for watcher in watchers:
-            stats = lane_stats(watcher.lane.name, terminal, watcher.first_seen, watcher.resolution_s, markers)
+            stats = lane_stats(watcher.lane.name, reference, watcher.first_seen, watcher.resolution_s, markers, files.first_seen)
             stats.observations = len(watcher.response_times)
             result.lanes.append(stats)
             if watcher.errors:
                 result.lane_errors[watcher.lane.name] = watcher.errors
             if isinstance(watcher, StreamWatcher):
                 result.stream_sample = [f"events: {watcher.event_counts}", *watcher.sample]
-        if not any(t is not None for t in terminal.values()):
+        result.file_first_seen_s = {m: (files.first_seen[m] - submitted if m in files.first_seen else None) for m in markers}
+        result.file_paths = sorted(set(files.first_path.values()))
+        result.file_scan_gap_s = files.resolution_s
+        result.diagnostics = _collect_diagnostics(root, model)
+        last = markers[-1]
+        if reference.get(last) is not None:
+            first_ref = next(reference[m] for m in markers if reference.get(m) is not None)
+            result.split = {
+                "stream_s": reference[last] - first_ref,
+                "last_paint_s_after_submit": reference[last] - submitted,
+                "provider_write_lag_after_last_paint_s": (files.first_seen[last] - reference[last]) if last in files.first_seen else None,
+            }
+        if result.diagnostics["model_served_requests"] < 1 or not any(t is not None for t in reference.values()):
+            # Fail closed: a marker can only come from the scripted model, so no marker means the provider did not use it.
             result.status = "could_not_run"
-            result.reason = (
-                "no marker ever reached the terminal screen; last screen:\n" + screen_text(load_timed_chunks(recording, timing))[-1500:]
+            result.reason = "the provider never reached the scripted model (no marker, no served request)" + (
+                "; last screen:\n" + screen_text(load_timed_chunks(recording, timing))[-1500:]
+                if mode != "console" and recording.exists()
+                else ""
             )
         return result
     except Exception as exc:  # noqa: BLE001 - becomes a "could not run" row with the cause
         result.status = "could_not_run"
         result.reason = f"{type(exc).__name__}: {exc}"
+        if recording.exists() and "last screen" not in result.reason:
+            result.reason += "\nlast output:\n" + _tail_text(recording)
         return result
     finally:
         stop.set()
@@ -691,6 +999,25 @@ def run_shadow(
         if not keep:
             shutil.rmtree(root, ignore_errors=True)
             result.scratch = None
+
+
+def _create_console_session(api: RuntimeApi, provider: str, device_id: str, cwd: Path) -> dict[str, Any]:
+    payload = {
+        "provider": provider,
+        "device_id": device_id,
+        "cwd": str(cwd),
+        "project": "terminal-truth",
+        "display_name": "terminal-truth",
+        "launch_surface": "test",
+    }
+    deadline = time.monotonic() + 90
+    while True:
+        status, body = api.post_raw("/api/agents/sessions", payload)
+        if status < 300:
+            return json.loads(body)
+        if status != 409 or "adapter_unavailable" not in body or time.monotonic() > deadline:
+            raise RuntimeError(f"Console session create failed: HTTP {status} {body[:300]}")
+        time.sleep(0.5)
 
 
 def pacing_error(schedule: Sequence[tuple[int, str, float]], terminal: dict[str, float | None]) -> float | None:
@@ -944,6 +1271,27 @@ def render_table(results: Sequence[RunResult]) -> str:
     return "\n".join(lines)
 
 
+def render_split(results: Sequence[RunResult]) -> str:
+    """Where each durable delay comes from: provider write lag after the last paint, then Longhouse's ship lag."""
+
+    lines = [
+        "| provider | mode | stream (first to last marker) | provider wrote last marker, after its last paint | lane | Longhouse ship lag first / median / worst (lane minus provider write) | file watch gap |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for result in results:
+        if result.status != "measured" or not result.split:
+            continue
+        gap = f"{result.file_scan_gap_s * 1000:.0f} ms" if result.file_scan_gap_s is not None else "-"
+        for lane in result.lanes:
+            if "SSE" in lane.lane:
+                continue
+            lines.append(
+                f"| {result.provider} | {result.mode} | {_fmt(result.split['stream_s'])} | {_fmt(result.split['provider_write_lag_after_last_paint_s'])} | "
+                f"{lane.lane} | {_fmt(lane.ship_first)} / {_fmt(lane.ship_median)} / {_fmt(lane.ship_worst)} | {gap} |"
+            )
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -954,7 +1302,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--marker-every", type=int, default=20)
     run.add_argument("--initial-delay", type=float, default=1.0)
     run.add_argument("--engine", type=Path, default=Path(os.environ.get("LONGHOUSE_ENGINE_BIN") or shutil.which("longhouse-engine") or ""))
-    run.add_argument("--mode", action="append", choices=["shadow", "helm"], help="repeatable; default shadow")
+    run.add_argument("--mode", action="append", choices=["shadow", "helm", "console"], help="repeatable; default shadow")
+    run.add_argument("--longhouse-cli", type=Path, default=None, help="native longhouse CLI for helm mode (default: PATH)")
     run.add_argument("--keep", action="store_true")
     run.add_argument("--out", type=Path, help="write the JSON results here")
     check = sub.add_parser("selfcheck", help="fake TUI + stub lanes; exits non-zero if the harness cannot recover its own schedule")
@@ -988,11 +1337,13 @@ def main(argv: list[str] | None = None) -> int:
     if not args.engine.is_file():
         parser.error("no longhouse-engine binary: pass --engine")
     results = [
-        run_shadow(provider, pace=pace, engine=args.engine, keep=args.keep, mode=mode)
+        run_cell(provider, pace=pace, engine=args.engine, longhouse_cli=args.longhouse_cli, keep=args.keep, mode=mode)
         for mode in (args.mode or ["shadow"])
         for provider in (args.provider or sorted(PROVIDERS))
     ]
     print(render_table(results))
+    print()
+    print(render_split(results))
     if args.out:
         args.out.write_text(json.dumps([r.to_json() for r in results], indent=2) + "\n")
     return 0

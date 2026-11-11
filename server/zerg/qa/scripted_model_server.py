@@ -103,7 +103,11 @@ def paced_text(pace: Pacing) -> str:
     """The generated reply for a pace with `tokens` and no scripted text."""
     if pace.tokens is None:
         raise ValueError("pace.tokens is required when the turn has no reply text")
-    words = [pace_marker(pace, i) if i % pace.marker_every == 0 else _FILLER_WORDS[i % len(_FILLER_WORDS)] for i in range(pace.tokens)]
+    # A marker at token 0, every `marker_every` after it, and on the last token (so the end of the stream is timeable too).
+    words = [
+        pace_marker(pace, i) if i % pace.marker_every == 0 or i == pace.tokens - 1 else _FILLER_WORDS[i % len(_FILLER_WORDS)]
+        for i in range(pace.tokens)
+    ]
     return " ".join(words)
 
 
@@ -533,8 +537,12 @@ def _history_value(payload: dict, spec: dict) -> str:
 
 def _scripted_plan(payload: dict, turns: list[dict]) -> GenerationPlan | None:
     latest = _latest_input_text(payload)
+    any_user = "\n".join(_user_text(payload))
     for turn in turns:
-        if turn["match"] not in latest:
+        # "any_user" matches the marker anywhere in the user messages, for a provider whose last user message is
+        # context it appended after the person's prompt (Antigravity).
+        haystack = any_user if turn.get("match_scope") == "any_user" else latest
+        if turn["match"] not in haystack:
             continue
         reply = turn.get("reply")
         history = turn.get("reply_from_history")
@@ -689,6 +697,8 @@ class MockHandler(BaseHTTPRequestHandler):
                 encoded = data if isinstance(data, str) else json.dumps(data, separators=(",", ":"))
                 self.wfile.write(f"data: {encoded}\n\n".encode("utf-8"))
                 self.wfile.flush()
+                if at > 0:
+                    self.server.log_paced_frame(time.monotonic(), encoded)
         except (BrokenPipeError, ConnectionResetError):
             if model_request_id is not None:
                 self.server.mark_model_request_failed(model_request_id)
@@ -1559,8 +1569,11 @@ class ThreadedServer(ThreadingHTTPServer):
         script_turns: list[dict] | None = None,
         script_sha256: str | None = None,
         receipt_file: Path | None = None,
+        stream_log: Path | None = None,
     ):
         super().__init__(server_address, request_handler_class, bind_and_activate)
+        self.stream_log = stream_log
+        self._stream_log_lock = threading.Lock()
         self.script_turns = script_turns or []
         self.script_sha256 = script_sha256
         self.receipt_file = receipt_file
@@ -1582,6 +1595,13 @@ class ThreadedServer(ThreadingHTTPServer):
     def receipt(self) -> dict:
         with self._receipt_lock:
             return self._receipt_locked()
+
+    def log_paced_frame(self, sent_at: float, encoded: str) -> None:
+        """Append (time.monotonic() after the write, frame) for each paced frame, so a reader can time the model side."""
+        if self.stream_log is None:
+            return
+        with self._stream_log_lock, self.stream_log.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"t": sent_at, "frame": encoded}, separators=(",", ":")) + "\n")
 
     def begin_model_request(self, turn_id: str | None) -> int:
         with self._receipt_lock:
@@ -1634,6 +1654,12 @@ def main() -> int:
         default=os.environ.get("LONGHOUSE_SCRIPTED_MODEL_RECEIPT") or None,
         help="write the current run receipt to this file",
     )
+    parser.add_argument(
+        "--stream-log",
+        type=Path,
+        default=os.environ.get("LONGHOUSE_SCRIPTED_MODEL_STREAM_LOG") or None,
+        help="append one JSON line (monotonic send time, frame) per paced frame written",
+    )
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")
@@ -1652,6 +1678,7 @@ def main() -> int:
         script_turns=script_turns,
         script_sha256=script_sha256,
         receipt_file=args.receipt_file,
+        stream_log=args.stream_log,
     )
     if args.port_file:
         # Atomic: a reader polling for the file must never see it empty.

@@ -153,8 +153,9 @@ def test_pace_schedule_names_each_marker_and_its_due_time() -> None:
         (5, "PACEUNIT0005"),
         (10, "PACEUNIT0010"),
         (15, "PACEUNIT0015"),
+        (19, "PACEUNIT0019"),
     ]
-    assert [due for *_, due in schedule] == pytest.approx([0.3, 0.425, 0.55, 0.675])
+    assert [due for *_, due in schedule] == pytest.approx([0.3, 0.425, 0.55, 0.675, 0.775])
 
 
 @pytest.mark.parametrize(
