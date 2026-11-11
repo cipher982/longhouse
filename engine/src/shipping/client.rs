@@ -40,7 +40,7 @@ pub(crate) const STARTUP_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(5);
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
 use crate::shipping::storage_v2::{
     MachineIdentityMismatch, StorageV2BodyEncoding, StorageV2Capabilities, StorageV2Envelope,
-    StorageV2Receipt, StorageV2SourceManifest,
+    StorageV2Receipt, StorageV2ResumeQuery, StorageV2SourceManifest, StorageV2SourceResume,
 };
 use crate::shipping::storage_v2::{
     STORAGE_V2_CAPABILITIES_PATH, STORAGE_V2_LANE_HEADER, STORAGE_V2_SOURCE_EPOCHS_PATH,
@@ -1102,6 +1102,42 @@ impl ShipperClient {
             .json::<StorageV2SourceManifest>()
             .await
             .context("storage-v2 manifest response is invalid JSON")
+    }
+
+    /// Ask the host what it already holds for these sources (one read-only call).
+    pub async fn storage_v2_source_resume(
+        &self,
+        resume_path: &str,
+        sources: &[StorageV2ResumeQuery],
+        request_timeout: Option<Duration>,
+    ) -> Result<StorageV2SourceResume> {
+        let url = self.ingest_url.replace("/api/agents/ingest", resume_path);
+        let mut request = self
+            .client
+            .post(&url)
+            .json(&serde_json::json!({ "sources": sources }));
+        if let Some(request_timeout) = request_timeout {
+            request = request.timeout(request_timeout);
+        }
+        let response = request
+            .send()
+            .await
+            .context("storage-v2 source resume request failed")?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            if let Some(backpressure) =
+                parse_storage_v2_backpressure(status.as_u16(), &headers, &body, "repair")
+            {
+                return Err(backpressure.into());
+            }
+            anyhow::bail!("storage-v2 source resume returned {status}: {body}");
+        }
+        response
+            .json::<StorageV2SourceResume>()
+            .await
+            .context("storage-v2 source resume response is invalid JSON")
     }
 
     /// Get the ingest URL (for logging).

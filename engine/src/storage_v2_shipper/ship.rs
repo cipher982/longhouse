@@ -12,6 +12,10 @@ pub(crate) async fn ship_next_envelope(
     lane: &str,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
+    // A source this machine never shipped may already be on the host (reinstall,
+    // migration, wiped state): continue its epoch instead of replaying the file.
+    adopt_host_epoch_if_unshipped(conn, client, capabilities, path, provider, request_timeout)
+        .await?;
     let maximum_batch_bytes = if lane == "live" {
         live_catch_up_batch_bytes(live_lag_bytes(conn, provider, path))
     } else {

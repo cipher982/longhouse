@@ -29,7 +29,9 @@ use crate::shipping::storage_v2::{
     StorageV2BodyEncoding, StorageV2Capabilities, StorageV2Envelope, StorageV2MediaRef,
     StorageV2ProviderFact, StorageV2Record, StorageV2SourceManifest,
 };
-use crate::shipping::storage_v2::{StorageV2Render, StorageV2RenderRecord, StorageV2SessionFacts};
+use crate::shipping::storage_v2::{
+    StorageV2Render, StorageV2RenderRecord, StorageV2ResumeQuery, StorageV2SessionFacts,
+};
 use crate::state::cursor_store_records;
 use crate::state::cursor_store_root;
 use crate::state::file_identity::{
@@ -48,6 +50,7 @@ mod pending;
 mod prepare;
 mod reconcile;
 mod render;
+mod resume;
 mod ship;
 
 pub(crate) use self::cursor_acp_source::*;
@@ -57,6 +60,7 @@ pub(crate) use self::pending::*;
 pub(crate) use self::prepare::*;
 use self::reconcile::*;
 use self::render::*;
+use self::resume::*;
 pub(crate) use self::ship::*;
 
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
@@ -678,6 +682,7 @@ mod tests {
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: "X-Longhouse-Storage-Lane".to_string(),
             envelope_content_encodings: Vec::new(),
+            source_resume_path: None,
         }
     }
 

@@ -511,6 +511,7 @@ mod tests {
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: STORAGE_V2_LANE_HEADER.to_string(),
             envelope_content_encodings: vec![],
+            source_resume_path: None,
         }
     }
 

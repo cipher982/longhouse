@@ -29,6 +29,11 @@ pub struct StorageV2Capabilities {
     /// hosts, which accept identity only.
     #[serde(default)]
     pub envelope_content_encodings: Vec<String>,
+    /// Where a machine with no local shipping state asks what the host already
+    /// holds for its sources. Absent on hosts without the endpoint, which keep
+    /// today's behavior: a fresh epoch from position zero.
+    #[serde(default)]
+    pub source_resume_path: Option<String>,
 }
 
 impl StorageV2Capabilities {
@@ -263,6 +268,50 @@ pub struct StorageV2Receipt {
     pub missing_media_hashes: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct StorageV2ResumeQuery {
+    pub provider: String,
+    pub opaque_source_id: String,
+    pub range_kind: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct StorageV2SourceResume {
+    pub v: u8,
+    pub sources: Vec<StorageV2ResumeEntry>,
+    pub commit_seq: String,
+    pub observed_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct StorageV2ResumeEntry {
+    pub provider: String,
+    pub opaque_source_id: String,
+    pub range_kind: String,
+    pub found: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub source_epoch: Option<StorageV2SourceEpoch>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub first_object: Option<StorageV2ResumeObject>,
+    #[serde(default)]
+    pub last_object: Option<StorageV2ResumeObject>,
+}
+
+/// Evidence for one live raw object of the host's open epoch: its byte range and
+/// the digest of its record hashes, which a machine recomputes from its own file.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct StorageV2ResumeObject {
+    pub range_start: String,
+    pub range_end: String,
+    pub record_count: u64,
+    pub record_hashes_hash: String,
+    pub envelope_id: String,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct StorageV2SourceManifest {
     pub v: u8,
@@ -450,6 +499,7 @@ mod tests {
 
         let current_host = StorageV2Capabilities {
             envelope_content_encodings: vec!["zstd".to_string(), "identity".to_string()],
+            source_resume_path: None,
             ..older_host
         };
         assert_eq!(
@@ -502,6 +552,7 @@ mod tests {
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: STORAGE_V2_LANE_HEADER.to_string(),
             envelope_content_encodings: Vec::new(),
+            source_resume_path: None,
         }
     }
 
@@ -580,6 +631,7 @@ mod tests {
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: STORAGE_V2_LANE_HEADER.to_string(),
             envelope_content_encodings: Vec::new(),
+            source_resume_path: None,
         };
         valid.validate("cinder").unwrap();
         let mut drift = valid;

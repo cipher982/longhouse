@@ -1526,6 +1526,7 @@ mod tests {
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: "X-Longhouse-Storage-Lane".to_string(),
             envelope_content_encodings: Vec::new(),
+            source_resume_path: None,
         };
         let state_path = dir.path().join("engine/state.sqlite");
         let (first_body, first_prepared) = {

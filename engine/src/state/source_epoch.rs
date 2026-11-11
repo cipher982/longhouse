@@ -307,6 +307,69 @@ pub fn observe_source(
     Ok(resolved)
 }
 
+/// Continue an epoch the Runtime Host already holds, on a machine with no local
+/// shipping state for the source.
+///
+/// The epoch keeps the host's id, its opening time and the host-bound session,
+/// and its durable lane starts at the host's `accepted_through`, so the next
+/// envelope is exactly the next contiguous range of the same epoch. Only an
+/// initial epoch (no predecessor) can be adopted: a replacement's predecessor
+/// has no local registry row to prove its lineage from.
+///
+/// Returns false, changing nothing, when the source already has an active epoch.
+pub fn adopt_host_epoch(
+    conn: &mut Connection,
+    provider: &str,
+    opaque_source_id: &str,
+    path: &Path,
+    source_epoch: Uuid,
+    opened_at: &str,
+    bound_session_id: Option<&str>,
+    accepted_through: u64,
+) -> Result<bool> {
+    let metadata = path
+        .metadata()
+        .with_context(|| format!("reading source metadata: {}", path.display()))?;
+    let incarnation = identity_from_metadata(&metadata).ok_or_else(|| {
+        anyhow::anyhow!("source file has no stable incarnation: {}", path.display())
+    })?;
+    if accepted_through > metadata.len() {
+        bail!(
+            "host accepted_through {accepted_through} exceeds source length {}",
+            metadata.len()
+        );
+    }
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if load_active_epoch(&tx, provider, opaque_source_id)?.is_some() {
+        return Ok(false);
+    }
+    insert_epoch(
+        &tx,
+        source_epoch,
+        provider,
+        opaque_source_id,
+        &incarnation,
+        None,
+        EpochStartReason::Initial,
+        i64::try_from(metadata.len()).context("source length exceeds SQLite INTEGER")?,
+        None,
+        bound_session_id,
+        opened_at,
+    )?;
+    tx.execute(
+        "INSERT INTO source_epoch_lane_state (source_epoch, lane, last_position, updated_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![
+            source_epoch.to_string(),
+            SourceLane::Durable.as_str(),
+            i64::try_from(accepted_through).context("host position exceeds SQLite INTEGER")?,
+            Utc::now().to_rfc3339()
+        ],
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
 pub fn lane_position(conn: &Connection, source_epoch: Uuid, lane: SourceLane) -> Result<u64> {
     load_lane_position(conn, source_epoch, lane)?
         .ok_or_else(|| anyhow::anyhow!("source epoch lane is not registered"))
