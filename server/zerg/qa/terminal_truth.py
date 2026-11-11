@@ -586,9 +586,6 @@ class ScriptedModel:
 # --------------------------------------------------------------------------------------
 
 
-_DUMMY_KEY = "longhouse-mock-key"
-
-
 @dataclass(frozen=True)
 class ProviderDriver:
     provider: str
@@ -653,16 +650,8 @@ def provider_environment(provider: str, endpoint: str, script: Path, home: Path)
         environment.pop(name)
     if provider == "omp":
         environment["OMP_SKIP_SETUP"] = "1"  # a fresh HOME otherwise shows a setup wizard that swallows input
-    if provider == "antigravity":
-        environment.update(HOME=str(home), GEMINI_API_KEY=_DUMMY_KEY, GOOGLE_GEMINI_BASE_URL=endpoint)
-        cli = home / ".gemini" / "antigravity-cli"
-        (cli / "cache").mkdir(parents=True, exist_ok=True)
-        (cli / "cache" / "onboarding.json").write_text(
-            json.dumps({"consumerOnboardingComplete": True, "enterpriseOnboardingComplete": False, "onboardingComplete": True})
-        )
-        (cli / "settings.json").write_text(json.dumps({"modelProvider": "gemini", "colorScheme": "dark"}))
-    else:
-        profiles.configure_scripted_model_profile(provider, home, environment)
+    environment[profiles.SCRIPTED_MODEL_BASE_URL_ENV] = endpoint
+    profiles.configure_scripted_model_profile(provider, home, environment)
     if provider == "opencode":
         # Fail closed: only the scripted provider is enabled, so no built-in provider (OpenRouter and the like) can be chosen.
         config = home / ".config" / "opencode" / "opencode.json"
@@ -831,6 +820,9 @@ def run_cell(
         workspace = root / "w"
         workspace.mkdir()
         environment = provider_environment(provider, model.endpoint, model.script, home)
+        if provider == "antigravity":
+            # An absolute path: an ambient wrapper that resolves "$HOME/.local/bin/agy" finds nothing under this HOME.
+            environment["LONGHOUSE_ANTIGRAVITY_BIN"] = binary_path
         if provider == "codex":
             from zerg.qa.codex_auth import login_with_api_key
 
@@ -854,6 +846,8 @@ def run_cell(
                 capture_output=True,
                 timeout=60,
             )
+        if provider == "antigravity" and mode == "helm":
+            _install_antigravity_hook(binary_path, home, environment)
         if provider == "pi":
             # Console launches `pi` with no --model, so Pi's own default (an OpenRouter model) would be tried; pin the fake.
             agent_dir = home / ".pi" / "agent"
@@ -1011,6 +1005,31 @@ def run_cell(
         if not keep:
             shutil.rmtree(root, ignore_errors=True)
             result.scratch = None
+
+
+def _install_antigravity_hook(binary: str, home: Path, environment: dict[str, str]) -> None:
+    """Put the Longhouse hook that `longhouse antigravity` insists on into the isolated ``home`` only.
+
+    The product's only installer, ``longhouse-server onboard``, installs the machine service as well and there is no
+    hook-only command, so this calls the function that installer uses (``install_hooks`` -> ``_ensure_antigravity_runtime_plugin``)
+    under the isolated HOME. It writes ``$HOME/.longhouse/managed-local/antigravity/plugins/longhouse-runtime``,
+    ``$HOME/.gemini/config/hooks.json`` and runs ``agy plugin install`` against that HOME; nothing outside it.
+    """
+
+    if Path(environment["HOME"]).resolve() != home.resolve():
+        raise RuntimeError("refusing to install the Antigravity hook outside the isolated HOME")
+    code = f"from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin as e; print(e(antigravity_bin={binary!r}))"
+    subprocess.run(
+        [sys.executable, "-I", "-c", code],
+        env={**environment, "PYTHONPATH": str(SERVER_ROOT), "LONGHOUSE_HOME": str(home / ".longhouse")},
+        cwd=SERVER_ROOT,
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+    script = home / ".longhouse" / "managed-local" / "antigravity" / "plugins" / "longhouse-runtime" / "longhouse-antigravity-hook.sh"
+    if not script.is_file():
+        raise RuntimeError(f"Antigravity hook was not installed at {script}")
 
 
 def _create_console_session(api: RuntimeApi, provider: str, device_id: str, cwd: Path) -> dict[str, Any]:

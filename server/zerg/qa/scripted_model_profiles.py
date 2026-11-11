@@ -327,8 +327,53 @@ def configure_scripted_model_profile(
             encoding="utf-8",
         )
         models.chmod(0o600)
+    elif provider == "antigravity":
+        _configure_antigravity_profile(profile_root, endpoint, environment)
     else:
         raise ValueError(f"scripted_model profiles are unsupported for {provider!r}")
+
+
+# Names that would point agy (or a Longhouse hook it fires) at a real surface from an ambient shell. The wrapper
+# agy-dangerously-skip-permissions resolves "$HOME/.local/bin/agy", which does not exist under an isolated HOME.
+_ANTIGRAVITY_AMBIENT_ENV_NAMES = (
+    "LONGHOUSE_ANTIGRAVITY_BIN",
+    "LONGHOUSE_HOOK_TOKEN",
+    "LONGHOUSE_HOOK_URL",
+    "LONGHOUSE_OWNER_INPUT_ENGINE",
+    "LONGHOUSE_RUN_ID",
+    "GOOGLE_API_KEY",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "AGY_LLM_GATEWAY_URL",
+)
+# A discard-port proxy: every non-loopback HTTPS request agy makes (telemetry, update check, a stray Google endpoint)
+# is refused locally, so a run cannot reach Google even if agy ignores the endpoint override.
+_DEAD_HTTPS_PROXY = "http://127.0.0.1:9"
+
+
+def _configure_antigravity_profile(profile_root: Path, endpoint: str, environment: MutableMapping[str, str]) -> None:
+    """agy against the scripted Gemini endpoint: no login, no real model, no route to a Google host."""
+
+    parsed = urlsplit(endpoint)
+    try:
+        loopback = ipaddress.ip_address(parsed.hostname or "").is_loopback
+    except ValueError:
+        loopback = False
+    if parsed.scheme != "http" or not loopback:
+        raise RuntimeError("antigravity scripted profile requires a loopback HTTP endpoint")
+    for name in list(environment):
+        if name in _ANTIGRAVITY_AMBIENT_ENV_NAMES or name.startswith(("LONGHOUSE_MANAGED_", "LONGHOUSE_CHANNEL_", "LONGHOUSE_PROVIDER_")):
+            environment.pop(name)
+    environment["HOME"] = str(profile_root)
+    environment["GEMINI_API_KEY"] = _SCRIPTED_MODEL_DUMMY_KEY
+    environment["GOOGLE_GEMINI_BASE_URL"] = endpoint
+    environment["HTTPS_PROXY"] = environment["https_proxy"] = _DEAD_HTTPS_PROXY
+    environment["NO_PROXY"] = environment["no_proxy"] = "127.0.0.1,localhost"
+    cli = profile_root / ".gemini" / "antigravity-cli"
+    (cli / "cache").mkdir(mode=0o700, parents=True, exist_ok=True)
+    (cli / "cache" / "onboarding.json").write_text(
+        json.dumps({"consumerOnboardingComplete": True, "enterpriseOnboardingComplete": False, "onboardingComplete": True})
+    )
+    (cli / "settings.json").write_text(json.dumps({"modelProvider": "gemini", "colorScheme": "dark"}))
 
 
 def scripted_model_receipt_snapshot(

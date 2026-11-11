@@ -28,20 +28,32 @@ class TimedChunk:
 
 
 def load_timed_chunks(recording_path: Path, timing_path: Path) -> list[TimedChunk]:
-    """Re-join a recording with its timing sidecar (one JSON line per chunk after a header)."""
+    """Re-join a recording with its timing sidecar (one JSON line per chunk after a header).
 
+    The reader appends a chunk to the recording and then its line to the sidecar, so a reader that loads the
+    sidecar first never sees an entry whose bytes are not yet in the recording. Loading the recording first
+    raced a live PTY: a chunk written between the two reads made the sidecar "run past" the recording.
+    """
+
+    sidecar = timing_path.read_text(encoding="utf-8").split("\n")
     raw = recording_path.read_bytes()
     chunks: list[TimedChunk] = []
-    with timing_path.open("r", encoding="utf-8") as lines:
-        header = json.loads(lines.readline())
-        if header.get("clock") != "monotonic":
-            raise ValueError(f"unknown PTY timing clock in {timing_path}")
-        for line in lines:
+    header = json.loads(sidecar[0])
+    if header.get("clock") != "monotonic":
+        raise ValueError(f"unknown PTY timing clock in {timing_path}")
+    for index, line in enumerate(sidecar[1:], start=1):
+        if not line:
+            continue
+        try:
             entry = json.loads(line)
-            start, size = int(entry["o"]), int(entry["n"])
-            if start + size > len(raw):
-                raise ValueError(f"PTY timing sidecar runs past the recording at offset {start}")
-            chunks.append(TimedChunk(float(entry["t"]), start, raw[start : start + size]))
+        except ValueError:
+            if index == len(sidecar) - 1:  # a line still being written
+                break
+            raise
+        start, size = int(entry["o"]), int(entry["n"])
+        if start + size > len(raw):
+            raise ValueError(f"PTY timing sidecar runs past the recording at offset {start}")
+        chunks.append(TimedChunk(float(entry["t"]), start, raw[start : start + size]))
     return chunks
 
 
