@@ -508,6 +508,7 @@ async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence
         "status": "applied",
         "changed_heads": 1,
         "duplicates": 0,
+        "coalesced_renewals": 0,
         "stale": 0,
         "conflicts": 0,
         "identity_binding": {"bound": 0, "matched": 0, "unbound": 0, "mismatched": 0},

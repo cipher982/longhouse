@@ -51,6 +51,7 @@ from zerg.catalogd.fact_reducer import MAX_VALUE_JSON_BYTES
 from zerg.catalogd.fact_reducer import ReducerFact
 from zerg.catalogd.fact_reducer import _advance_commit_seq
 from zerg.catalogd.fact_reducer import _current_commit_seq
+from zerg.catalogd.fact_reducer import coalesce_renewals
 from zerg.catalogd.fact_reducer import read_registry_lifecycle_heads
 from zerg.catalogd.fact_reducer import reduce_fact_batch_setwise
 from zerg.catalogd.fact_reducer import reducer_facts_from_machine_evidence
@@ -5153,9 +5154,11 @@ def _apply_shadow_reducer(
             if evidence_status != "ready":
                 return {"status": evidence_status}
             timer.mark("extract_facts")
+            reducer_facts, coalesced = coalesce_renewals(connection, facts)
+            timer.mark("coalesce_renewals")
             reduced = reduce_fact_batch_setwise(
                 connection,
-                facts,
+                reducer_facts,
                 received_at=received_at,
                 commit_seq_override=commit_seq,
             )
@@ -5172,6 +5175,7 @@ def _apply_shadow_reducer(
                 "status": "applied",
                 "changed_heads": reduced.changed_heads,
                 "duplicates": reduced.duplicates,
+                "coalesced_renewals": coalesced,
                 "stale": reduced.stale,
                 "conflicts": reduced.conflicts,
                 "identity_binding": identity_binding,

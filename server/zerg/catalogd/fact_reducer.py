@@ -771,6 +771,81 @@ __all__ = [
 ]
 
 
+# Families whose facts are standing statements the machine re-observes on a
+# timer rather than events. Only the observation time and validity move between
+# re-observations, and readers treat the head as present until it ages out.
+RENEWAL_FAMILIES = frozenset({"continuation"})
+_RENEWAL_TIME_KEYS = ("observed_at", "valid_until")
+
+
+def _without_renewal_times(value: dict[str, Any]) -> dict[str, Any]:
+    return {key: item for key, item in value.items() if key not in _RENEWAL_TIME_KEYS}
+
+
+def coalesce_renewals(connection: Connection, facts: list[ReducerFact]) -> tuple[list[ReducerFact], int]:
+    """Drop re-observations that only move a still-fresh head's timestamps.
+
+    The engine re-sends every retained launch contract about once a minute
+    with a new ``observed_at`` and a ``valid_until`` 20 minutes out. Each one
+    hashed differently, so on david010 the reducer rewrote ~1,000 continuation
+    heads and receipts a minute (17 writes/s) to say nothing new, and those
+    facts filled the 256-fact window of nearly every heartbeat.
+
+    A renewal is written once the head has used half of the incoming fact's
+    validity window, so the head is refreshed well before it expires and never
+    reads older than that half-window (10 minutes for contracts, against the
+    12-hour retention readers apply). Any change in content is written at once.
+    """
+
+    renewals = [
+        fact
+        for fact in facts
+        if fact.family in RENEWAL_FAMILIES
+        and fact.source_seq is None
+        and fact.observed_at is not None
+        and fact.valid_until is not None
+        and fact.valid_until > fact.observed_at
+    ]
+    if not renewals:
+        return facts, 0
+    heads = FactHead.__table__
+    scope = _candidate_scope(sorted({_candidate_key(fact) for fact in renewals}), name="renewal_scope")
+    current: dict[tuple[str, str, str, str], tuple[datetime | None, str]] = {}
+    for row in connection.execute(
+        select(
+            heads.c.family,
+            heads.c.subject_key,
+            heads.c.source,
+            heads.c.source_epoch,
+            heads.c.ordering_mode,
+            heads.c.observed_at,
+            heads.c.value_json,
+        ).select_from(heads.join(scope, _candidate_scope_join(heads, scope)))
+    ):
+        if row[4] == "observed_at":
+            current[(row[0], row[1], row[2], row[3])] = (_sqlite_datetime(row[5]), row[6])
+
+    dropped: set[int] = set()
+    for fact in renewals:
+        head = current.get(_candidate_key(fact))
+        if head is None or head[0] is None:
+            continue
+        head_observed, head_value_json = head
+        assert fact.observed_at is not None and fact.valid_until is not None
+        half_window = (fact.valid_until - fact.observed_at) / 2
+        if not (head_observed <= fact.observed_at < head_observed + half_window):
+            continue
+        try:
+            head_value = json.loads(head_value_json)
+        except ValueError:
+            continue
+        if isinstance(head_value, dict) and _without_renewal_times(head_value) == _without_renewal_times(fact.value):
+            dropped.add(id(fact))
+    if not dropped:
+        return facts, 0
+    return [fact for fact in facts if id(fact) not in dropped], len(dropped)
+
+
 def reduce_fact_batch_setwise(
     connection: Connection,
     facts: list[ReducerFact],

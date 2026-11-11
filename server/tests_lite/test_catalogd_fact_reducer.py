@@ -376,3 +376,74 @@ def test_hash_mismatch_is_rejected_before_any_write(tmp_path):
     bad = replace(bad, evidence_hash="0" * 64)
     with engine.begin() as connection, pytest.raises(ValueError, match="canonical value"):
         reduce_fact_batch(connection, [bad], received_at=NOW)
+
+
+def _contract(*, observed_at: datetime, cwd: str = "/repo") -> ReducerFact:
+    value = {
+        "authority_class": "retained_launch_contract",
+        "contract_state": "valid",
+        "cwd": cwd,
+        "observed_at": observed_at.isoformat(),
+        "provider": "claude",
+        "provider_session_id": "provider-1",
+        "session_id": "session-1",
+        "source": "managed_resume_contract_scan",
+        "valid_until": (observed_at + timedelta(minutes=20)).isoformat(),
+    }
+    evidence_hash = canonical_evidence_hash(value)
+    return ReducerFact(
+        family="continuation",
+        subject_key="resume:session-1",
+        source="managed_resume_contract_scan",
+        source_epoch="contract-v1",
+        source_seq=None,
+        dedupe_key=hashlib.sha256(evidence_hash.encode()).hexdigest(),
+        evidence_hash=evidence_hash,
+        value=value,
+        observed_at=observed_at,
+        session_id="session-1",
+        valid_until=observed_at + timedelta(minutes=20),
+    )
+
+
+def _reduce_with_coalescing(engine, facts, *, received_at):
+    with engine.begin() as connection:
+        kept, coalesced = fact_reducer.coalesce_renewals(connection, facts)
+        result = fact_reducer.reduce_fact_batch_setwise(connection, kept, received_at=received_at)
+        _seq, head = read_fact_heads(connection, family="continuation", subject_key="resume:session-1")
+    return coalesced, result.changed_heads, head
+
+
+def test_contract_renewal_rewrites_head_only_after_half_its_validity(tmp_path):
+    engine = _engine(tmp_path)
+
+    original = _contract(observed_at=NOW)
+    assert _reduce_with_coalescing(engine, [original], received_at=NOW)[:2] == (0, 1)
+
+    # A minute later nothing but the timestamps moved: no head, no receipt.
+    coalesced, changed, [head] = _reduce_with_coalescing(engine, [_contract(observed_at=NOW + timedelta(minutes=1))], received_at=NOW)
+    assert (coalesced, changed) == (1, 0)
+    assert head["evidence_hash"] == original.evidence_hash
+
+    # Content changes are written at once, however fresh the head.
+    moved = _contract(observed_at=NOW + timedelta(minutes=2), cwd="/elsewhere")
+    assert _reduce_with_coalescing(engine, [moved], received_at=NOW)[:2] == (0, 1)
+
+    # Half of the 20-minute window after the head, the renewal is written, so
+    # the head is renewed long before its own valid_until lapses.
+    later = _contract(observed_at=NOW + timedelta(minutes=12), cwd="/elsewhere")
+    assert _reduce_with_coalescing(engine, [later], received_at=NOW)[:2] == (0, 1)
+
+    with engine.connect() as connection:
+        receipts = connection.execute(select(func.count()).select_from(FactReceipt.__table__)).scalar_one()
+    assert receipts == 3
+
+
+def test_renewal_coalescing_leaves_other_families_to_the_reducer(tmp_path):
+    engine = _engine(tmp_path)
+    first = _fact(source_seq=None, observed_at=NOW)
+    with engine.begin() as connection:
+        fact_reducer.reduce_fact_batch_setwise(connection, [first], received_at=NOW)
+        renewed = _fact(source_seq=None, observed_at=NOW + timedelta(seconds=10))
+        kept, coalesced = fact_reducer.coalesce_renewals(connection, [renewed])
+    assert (kept, coalesced) == ([renewed], 0)
