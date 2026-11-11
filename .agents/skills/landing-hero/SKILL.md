@@ -160,7 +160,6 @@ Hand-drawn terminal beats ("doesn't look like the real CLIs"), an mp4 hero
 (compression blur), procedural later loops (a synthetic terminal with no
 splash, composer or status line read as fake), `@remotion/player` in a fixed
 16:9 frame (on a 390px phone the stage scales to about 20% and the terminals
-become decoration), and AI-image device compositions (a harness for that is in
-`workshop/`). The handoff phone is a drawn replica of the iOS app and the
+become decoration), and AI-image device compositions. The handoff phone is a drawn replica of the iOS app and the
 send-to-react link is composited. The known upgrade is one continuous capture
 through real Longhouse: launch, remote send, PTY reaction, timeline entry.
