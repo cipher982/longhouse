@@ -1677,10 +1677,13 @@ mod tests {
 
     #[test]
     fn only_text_deltas_become_reply_text() {
-        let text = json!({"kind": "message_update", "message_event_type": "text_delta", "delta": "hi"});
+        let text =
+            json!({"kind": "message_update", "message_event_type": "text_delta", "delta": "hi"});
         let thinking = json!({"kind": "message_update", "message_event_type": "thinking_delta", "delta": "hmm"});
-        let empty = json!({"kind": "message_update", "message_event_type": "text_delta", "delta": ""});
-        let tool = json!({"kind": "message_update", "message_event_type": "toolcall_delta", "delta": "{"});
+        let empty =
+            json!({"kind": "message_update", "message_event_type": "text_delta", "delta": ""});
+        let tool =
+            json!({"kind": "message_update", "message_event_type": "toolcall_delta", "delta": "{"});
         assert_eq!(pi_live_text_delta(&text), Some("hi"));
         assert_eq!(pi_live_text_delta(&thinking), None);
         assert_eq!(pi_live_text_delta(&empty), None);

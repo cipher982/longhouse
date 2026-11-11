@@ -24,9 +24,11 @@ EXPECTED_COPY = {
     # table generated from schemas/managed_providers.yml, which cannot drift
     # from the contract the way a sentence can. Only the FORBIDDEN_COPY guard
     # below still applies to it.
-    ".agents/skills/managed-provider-cli/SKILL.md": [
-        "OpenCode server-bridge send, interrupt, and terminate are first-class Helm",
-    ],
+    # .agents/skills/managed-provider-cli/SKILL.md carried the OpenCode Helm
+    # sentence until a1c5f4310 ("slim and verify provider and hosted-debug
+    # skills", 2026-11-11) cut the skill to routing and pointers on purpose. The
+    # skill sends agents to schemas/managed_providers.yml for capabilities, so
+    # nothing here may require the sentence back.
     "config/session-propagation-sla.toml": [
         "Terminal-originated OpenCode Helm send/interrupt/terminate exists",
         "Managed OpenCode Helm send/interrupt is a product contract",
