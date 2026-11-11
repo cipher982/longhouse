@@ -34,6 +34,10 @@ class PromotionAuthorizationTests(unittest.TestCase):
         served: str = "d" * 40,
         sensitive_rc: int = 0,
         ancestor: bool = True,
+        live_preview: str = "",
+        statuses: list | None = None,
+        status_unreadable: bool = False,
+        health_unreadable: bool = False,
     ):
         s3 = fake_s3.FakeS3()
         s3.__enter__()
@@ -124,11 +128,26 @@ elif name == 'gh':
         attempt = 1 if publish else int(os.environ['FIXTURE_FINAL_ATTEMPT'])
         print(json.dumps({'headSha':sha,'attempt':attempt,'number':10,'status':'completed',
                          'conclusion':'success','workflowName':'Publish Runtime Image' if publish else 'Deploy and Verify'}))
+    elif args[:1] == ['api']:
+        with open(root/'status_lookups', 'a') as log:
+            log.write(args[1] + '\n')
+        if os.environ['FIXTURE_STATUS_UNREADABLE'] == '1':
+            sys.exit(1)
+        print(json.dumps({'statuses': json.loads(os.environ['FIXTURE_STATUSES'])}))
     else:
         raise AssertionError(args)
 elif name == 'curl' and args[-1].endswith('/api/health'):
+    if os.environ['FIXTURE_HEALTH_UNREADABLE'] == '1':
+        sys.exit(22)
     print(json.dumps({'build': {'commit': os.environ['FIXTURE_SERVED']}}))
 elif name == 'python3':
+    if args and args[0].endswith('dogfood_sensitive_paths.py') and 'live-preview' in args:
+        with open(root/'live_preview_calls', 'a') as log:
+            log.write(f"{args[args.index('--base') + 1]} {args[args.index('--head') + 1]}\n")
+        if os.environ['FIXTURE_LIVE_PREVIEW'] == 'undecidable':
+            sys.exit(2)
+        print(os.environ['FIXTURE_LIVE_PREVIEW'] if os.environ['FIXTURE_LIVE_PREVIEW'] else '', end='')
+        sys.exit(0)
     if args and args[0].endswith('dogfood_sensitive_paths.py'):
         with open(root/'sensitive_calls', 'a') as log:
             log.write(f"{args[args.index('--base') + 1]} {args[args.index('--head') + 1]}\n")
@@ -157,6 +176,10 @@ else:
                 "FIXTURE_SERVED": served,
                 "FIXTURE_SENSITIVE": str(sensitive_rc),
                 "FIXTURE_ANCESTOR": "1" if ancestor else "0",
+                "FIXTURE_LIVE_PREVIEW": live_preview,
+                "FIXTURE_STATUSES": json.dumps(statuses if statuses is not None else []),
+                "FIXTURE_STATUS_UNREADABLE": "1" if status_unreadable else "0",
+                "FIXTURE_HEALTH_UNREADABLE": "1" if health_unreadable else "0",
                 **s3.env(),
             }
             result = subprocess.run(
@@ -176,6 +199,8 @@ else:
             sensitive_calls = root / "sensitive_calls"
             self.sensitive_calls = sensitive_calls.read_text().splitlines() if sensitive_calls.exists() else []
             self.publish_lookups = (root / "publish_lookups").exists()
+            self.live_preview_calls = (root / "live_preview_calls").read_text().splitlines() if (root / "live_preview_calls").exists() else []
+            self.status_lookups = (root / "status_lookups").read_text().splitlines() if (root / "status_lookups").exists() else []
             self.locks_left = sorted(p.name for p in locks.glob("*.json")) if locks.exists() else []
             events = locks / "events.jsonl"
             self.lock_events = [json.loads(line)["event"] for line in events.read_text().splitlines()] if events.exists() else []
@@ -285,6 +310,79 @@ else:
         result, promotions = self.run_promotion(fast_lane=True, receipt_sha="c" * 40)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(promotions, [])
+
+    # --- the terminal-truth requirement: a live-preview change needs its passing commit status ---
+
+    LP = "f1" * 20  # the newest commit in the range that touches a live-preview path
+    PASSED = {"context": "longhouse/terminal-truth", "state": "success", "creator": {"login": "github-actions[bot]"},
+              "target_url": "https://github.com/cipher982/longhouse/actions/runs/1"}
+
+    def status(self, **over):
+        return {**self.PASSED, **over}
+
+    def test_a_live_preview_change_with_a_passing_status_promotes(self):
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[self.PASSED])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(promotions, [f"ghcr.io/cipher982/longhouse-runtime@{DIGEST}"])
+        self.assertEqual(self.live_preview_calls, [f"{'d' * 40} {SHA}"])
+        self.assertEqual(self.status_lookups, [f"repos/cipher982/longhouse/commits/{self.LP}/status?per_page=100"])
+        self.assertIn("passed", result.stdout)
+
+    def test_a_live_preview_change_with_no_status_waits_and_promotes_nothing(self):
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[])
+        self.assertEqual((result.returncode, promotions), (4, []))
+        self.assertIn("has no terminal-truth status yet", result.stderr)
+        self.assertEqual(self.read_receipts, [])  # refused before any canary receipt was read
+        self.assertEqual(self.locks_left, [])
+
+    def test_another_context_does_not_count_as_the_terminal_truth_status(self):
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[self.status(context="longhouse/dogfood")])
+        self.assertEqual((result.returncode, promotions), (4, []))
+
+    def test_a_pending_status_waits(self):
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[self.status(state="pending")])
+        self.assertEqual((result.returncode, promotions), (4, []))
+        self.assertIn("still pending", result.stderr)
+
+    def test_a_failed_status_refuses(self):
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[self.status(state="failure")])
+        self.assertEqual((result.returncode, promotions), (5, []))
+        self.assertIn("is failure", result.stderr)
+
+    def test_an_errored_status_refuses(self):
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[self.status(state="error")])
+        self.assertEqual((result.returncode, promotions), (5, []))
+
+    def test_a_passing_status_not_posted_by_github_actions_refuses(self):
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[self.status(creator={"login": "someone"})])
+        self.assertEqual((result.returncode, promotions), (5, []))
+        self.assertIn("not GitHub Actions", result.stderr)
+
+    def test_an_unreadable_status_waits(self):
+        result, promotions = self.run_promotion(live_preview=self.LP, status_unreadable=True)
+        self.assertEqual((result.returncode, promotions), (4, []))
+
+    def test_a_range_without_live_preview_paths_needs_no_status_and_makes_no_lookup(self):
+        result, promotions = self.run_promotion(live_preview="")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(promotions), 1)
+        self.assertEqual(self.status_lookups, [])
+        self.assertIn("no terminal-truth status needed", result.stdout)
+
+    def test_when_the_classifier_cannot_decide_nothing_is_promoted(self):
+        result, promotions = self.run_promotion(live_preview="undecidable")
+        self.assertEqual((result.returncode, promotions), (1, []))
+
+    def test_by_hand_with_dogfood_unreadable_the_check_is_skipped_loudly(self):
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[], health_unreadable=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(promotions), 1)
+        self.assertIn("terminal-truth status was NOT checked", result.stderr)
+
+    def test_the_fast_lane_never_asks_for_a_status_because_live_preview_ranges_are_sensitive(self):
+        result, promotions = self.run_promotion(fast_lane=True, sensitive_rc=1, live_preview=self.LP, statuses=[])
+        self.assertEqual((result.returncode, promotions), (3, []))
+        self.assertEqual(self.status_lookups, [])
 
 
 if __name__ == "__main__":

@@ -82,6 +82,22 @@ class PromoterTests(unittest.TestCase):
         d = promoter.decide_dogfood(C, dry_run=False)
         self.assertEqual((d["action"], d["lane"]), ("promoted", "canary-qualified"))
 
+    def test_a_live_preview_change_without_a_terminal_truth_status_waits_for_it(self):
+        self.world.answers["scripts/ops/promote-dogfood.sh --fast-lane"] = (3, "", "touches sensitive paths")
+        self.world.answers["scripts/ops/promote-dogfood.sh"] = (4, "", "has no terminal-truth status yet")
+        d = promoter.decide_dogfood(C, dry_run=False)
+        self.assertEqual((d["action"], d["lane"], d["waiting_on"]), ("waiting", "canary-qualified", ["terminal-truth"]))
+        self.assertEqual(promoter.describe(d), "waiting (canary-qualified) on terminal-truth")
+        self.assertEqual(promoter.STATE[d["action"]], "pending")
+
+    def test_a_failed_terminal_truth_status_is_a_refusal_that_is_not_a_failed_promotion(self):
+        self.world.answers["scripts/ops/promote-dogfood.sh --fast-lane"] = (3, "", "touches sensitive paths")
+        self.world.answers["scripts/ops/promote-dogfood.sh"] = (5, "", "the terminal-truth status on aaaa is failure")
+        d = promoter.decide_dogfood(C, dry_run=False)
+        self.assertEqual((d["action"], d["lane"]), ("refused", "canary-qualified"))
+        self.assertIn("is failure", d["reason"])
+        self.assertEqual(promoter.STATE[d["action"]], "failure")
+
     def test_a_fast_lane_deploy_that_fails_is_a_failure_not_a_wait(self):
         self.world.answers["scripts/ops/promote-dogfood.sh --fast-lane"] = (1, "", "deployment failed")
         self.assertEqual(promoter.decide_dogfood(C, dry_run=False)["action"], "failed")

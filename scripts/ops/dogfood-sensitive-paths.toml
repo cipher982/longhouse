@@ -106,3 +106,56 @@ paths = [
   "server/zerg/routers/agents_machine_presence.py",
   "server/zerg/routers/permission_gate.py",
 ]
+
+# Live-preview paths: a commit that touches one of these must carry a passing `longhouse/terminal-truth`
+# commit status before dogfood promotion (scripts/ops/promote-dogfood.sh, both lanes). They are also
+# sensitive: the classifier treats them like `paths` above, so such a range never takes the fast lane.
+# THIS LIST IS A COPY of `on.push.paths` in .github/workflows/terminal-truth.yml, which is the one
+# original; scripts/tests/dogfood-sensitive-paths.test.py fails when the two differ.
+live_preview_paths = [
+  # --- engine: provider adapters and launchers, the runtime-event path (outbox, lanes, status slots)
+  "engine/src/*_print.rs",
+  "engine/src/*_helm_launcher.rs",
+  "engine/src/*_bridge.rs",
+  "engine/src/codex_exec.rs",
+  "engine/src/codex_ws_relay.rs",
+  "engine/src/opencode_run.rs",
+  "engine/src/console_sink.rs",
+  "engine/src/console_rpc.rs",
+  "engine/src/status_slot.rs",
+  "engine/src/outbox.rs",
+  "engine/src/daemon/status_slots.rs",
+  "engine/src/daemon/outbox_lanes.rs",
+  "engine/src/daemon/managed_observation.rs",
+  # --- provider extensions and hooks
+  "engine/assets/longhouse-pi-helm.ts",
+  "engine/assets/longhouse-omp-helm.ts",
+  "engine/assets/claude-mod/**",
+  "server/zerg/services/antigravity_hook_inbox.py",
+  # --- host: runtime ingest, live preview and stream
+  "server/zerg/routers/runtime.py",
+  "server/zerg/routers/timeline.py",
+  "server/zerg/services/session_live_previews.py",
+  "server/zerg/services/session_runtime.py",
+  "server/zerg/services/session_runtime_display.py",
+  "server/zerg/services/session_pubsub.py",
+  "server/zerg/services/session_workspace_revision.py",
+  "server/zerg/services/timeline_session_stream.py",
+  # --- clients that render the live preview
+  "web/src/features/session/useSessionWorkspace.ts",
+  "web/src/features/session/sessionActivityFeed.ts",
+  "web/src/features/session/TimelinePane.tsx",
+  "web/src/features/session/SessionRuntimeStrip.tsx",
+  "ios/Sources/Shared/Streams/SessionWorkspaceStream.swift",
+  "ios/Sources/LonghouseApp/Session/Runtime/ActivityPulseStore.swift",
+  # --- the harness, the scripted model, the ledger it reads, the pinned versions, the budget and this lane
+  "server/zerg/qa/terminal_truth*.py",
+  "server/zerg/qa/terminal_screen.py",
+  "server/zerg/qa/scripted_model_*.py",
+  "server/zerg/qa/pty_*.py",
+  "schemas/managed_providers.yml",
+  "schemas/terminal-truth-budget.json",
+  "scripts/ci/terminal-truth-*",
+  "scripts/ci/terminal_truth_*.py",
+  ".github/workflows/terminal-truth.yml",
+]

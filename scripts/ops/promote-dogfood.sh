@@ -73,6 +73,53 @@ lh_ring_lock_keepalive 60 1200
 HEALTH_URL="https://${SUBDOMAIN}.longhouse.ai/api/health"
 receipt_path="$(mktemp)"
 
+# A commit that touches a live-preview path (dogfood-sensitive-paths.toml, live_preview_paths) must carry a
+# passing `longhouse/terminal-truth` commit status, posted by the Terminal Truth workflow run on that exact
+# commit (.github/workflows/terminal-truth.yml). The commit is the newest one in served..SHA that touches such
+# a path: its run tested the tree holding every earlier live-preview change in the range. No such commit, no
+# requirement. Exit 4: the status is missing or still pending (the promoter waits). Exit 5: it failed, errored
+# or was not posted by GitHub Actions (the promoter records a refusal).
+require_terminal_truth() {
+  local base="$1" commit status_json row state creator url
+  commit="$(python3 "$ROOT/scripts/ops/dogfood_sensitive_paths.py" --repo "$ROOT" live-preview --base "$base" --head "$SHA")" || {
+    echo "Refusing $SHA: could not decide whether ${base:0:12}..${SHA:0:12} touches live-preview paths (above)." >&2
+    exit 1
+  }
+  if [[ -z "$commit" ]]; then
+    echo "terminal-truth: ${base:0:12}..${SHA:0:12} touches no live-preview path; no terminal-truth status needed."
+    return 0
+  fi
+  status_json="$(gh api "repos/$REPO/commits/$commit/status?per_page=100" 2>/dev/null)" || {
+    echo "Refusing $SHA: could not read the commit statuses of ${commit:0:12} (the terminal-truth status is required)." >&2
+    exit 4
+  }
+  row="$(jq -c '[.statuses[] | select(.context == "longhouse/terminal-truth")] | first // empty' <<<"$status_json")"
+  if [[ -z "$row" ]]; then
+    echo "Refusing $SHA: ${commit:0:12} touches live-preview paths and has no terminal-truth status yet (its Terminal Truth run has not reported; dispatch it on main with publish_status if it was superseded)." >&2
+    exit 4
+  fi
+  state="$(jq -r '.state' <<<"$row")"
+  creator="$(jq -r '.creator.login // ""' <<<"$row")"
+  url="$(jq -r '.target_url // ""' <<<"$row")"
+  case "$state" in
+    success)
+      if [[ "$creator" != "github-actions[bot]" ]]; then
+        echo "Refusing $SHA: the terminal-truth status on ${commit:0:12} was posted by '$creator', not GitHub Actions." >&2
+        exit 5
+      fi
+      echo "terminal-truth: ${commit:0:12} passed ($url)"
+      ;;
+    pending)
+      echo "Refusing $SHA: the terminal-truth status on ${commit:0:12} is still pending ($url)." >&2
+      exit 4
+      ;;
+    *)
+      echo "Refusing $SHA: the terminal-truth status on ${commit:0:12} is $state ($url): live text regressed on a live-preview change." >&2
+      exit 5
+      ;;
+  esac
+}
+
 # CI receipts live in the artifact object store (scripts/ops/ci_receipts.py), configured by the
 # CI_RECEIPTS_S3_* environment values; secret loading stays external.
 ci_receipt() { python3 "$ROOT/scripts/ops/ci_receipts.py" "$@"; }
@@ -104,6 +151,8 @@ if [[ "$FAST_LANE" == "1" ]]; then
     exit 1
   fi
 
+  require_terminal_truth "$served"
+
   publish_json="$(gh run list --repo "$REPO" --workflow "$PUBLISH_WORKFLOW" --commit "$SHA" --status success --limit 20 --json headSha,databaseId,attempt,event)"
   publish_pick="$(jq -c --arg sha "$SHA" \
     '[.[] | select(.headSha == $sha and (.event == "push" or .event == "workflow_dispatch"))] | sort_by(.databaseId) | last // empty' \
@@ -126,6 +175,17 @@ if [[ "$FAST_LANE" == "1" ]]; then
   )"
   qualification_note="published by $PUBLISH_WORKFLOW run $publish_run_id; no sensitive-path change since ${served}"
 else
+  # The canary-qualified lane: the range base is what dogfood serves. By hand with dogfood unreadable (a repair
+  # promotion) there is no base to classify against; say so and go on rather than block the repair.
+  served="$(curl -sfL --max-time 15 "$HEALTH_URL" | jq -r '.build.commit // empty' 2>/dev/null || true)"
+  if [[ "$served" =~ ^[0-9a-f]{40}$ ]]; then
+    git -C "$ROOT" cat-file -e "${served}^{commit}" 2>/dev/null || git -C "$ROOT" fetch --quiet origin >/dev/null 2>&1 || true
+  fi
+  if [[ "$served" =~ ^[0-9a-f]{40}$ ]] && git -C "$ROOT" cat-file -e "${served}^{commit}" 2>/dev/null; then
+    require_terminal_truth "$served"
+  else
+    echo "terminal-truth: cannot read what $SUBDOMAIN serves from $HEALTH_URL; the terminal-truth status was NOT checked." >&2
+  fi
   deploy_json="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --commit "$SHA" --status success --limit 20 --json headSha,databaseId,workflowName,event)"
   deploy_run_ids="$(jq -r --arg sha "$SHA" \
     '.[] | select(.headSha == $sha and (.event == "push" or .event == "workflow_dispatch")) | .databaseId' \
