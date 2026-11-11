@@ -53,7 +53,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-opencode-console-steer-live-canary
 .PHONY: test-antigravity-conversation-reset test-claude-conversation-reset test-codex-conversation-reset test-cursor-conversation-reset test-opencode-conversation-reset
 .PHONY: provider-fidelity-coverage test-provider-fidelity-coverage fidelity-coverage-gate
-.PHONY: validate-dogfood-runtime validate-actions-storage validate-terminal-truth-citest-storage-v2-b2 test-shipper-synthetic-live-bench
+.PHONY: validate-dogfood-runtime validate-actions-storage validate-terminal-truth-ci test-storage-v2-b2 test-shipper-synthetic-live-bench
 .PHONY: phone-shot phone-deploy phone-logs sim-deploy sim-shot sim-logs simlab-run ios-ui-shot ios-previews
 .PHONY: validate-playwright-install
 .PHONY: validate-deploy-window-probe
