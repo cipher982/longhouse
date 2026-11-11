@@ -25,6 +25,7 @@ LIVE_PREVIEW_SOURCES = {
     "antigravity_print",
     "cursor_print",
     "opencode_run",
+    "opencode_server_bridge",
     "pi_print",
     "omp_print",
     "omp_helm_channel",
@@ -127,6 +128,8 @@ def live_preview_candidate_from_runtime_event(
         return _pi_print_preview_candidate(event, payload, observation_id=observation_id)
     if provider == "omp" and source.lower() == "omp_print" and progress_kind == "omp_print_stream":
         return _omp_print_preview_candidate(event, payload, observation_id=observation_id)
+    if provider == "opencode" and source.lower() == "opencode_server_bridge" and progress_kind == "opencode_helm_stream":
+        return _opencode_helm_preview_candidate(event, payload, observation_id=observation_id)
     if provider == "omp" and source.lower() == "omp_helm_channel" and progress_kind == "omp_helm_stream":
         return _omp_helm_preview_candidate(event, payload, observation_id=observation_id)
     if provider == "pi" and source.lower() == "pi_helm_channel" and progress_kind == "pi_helm_stream":
@@ -211,6 +214,46 @@ def _omp_helm_preview_candidate(
         provisional_complete=bool(payload.get("turn_completed") or payload.get("completed")),
         preview_observed_at=observed_at,
         source=source,
+        last_observation_id=observation_id,
+    )
+
+
+def _opencode_helm_preview_candidate(
+    event: Any,
+    payload: dict[str, Any],
+    *,
+    observation_id: str,
+) -> LivePreviewCandidate | None:
+    """Reply text the Helm bridge read from OpenCode's event stream.
+
+    ``live_text`` is the cumulative text of one assistant message and ``turn_id``
+    is that message's id, so a later message in a tool loop never overwrites an
+    earlier one's preview.
+    """
+    if event.session_id is None:
+        return None
+    text = str(payload.get("live_text") or "").strip()
+    if not text:
+        return None
+    thread_id = _optional_str(payload.get("thread_id") or event.thread_id)
+    turn_key = build_provisional_key(
+        source="opencode_server_bridge",
+        session_id=event.session_id,
+        thread_id=thread_id,
+        turn_id=_optional_str(payload.get("turn_id") or payload.get("run_id")),
+    )
+    observed_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    seq = _coerce_seq(payload.get("seq"))
+    return LivePreviewCandidate(
+        session_id=event.session_id,
+        thread_id=thread_id,
+        turn_key=turn_key,
+        seq=seq,
+        preview_text=text,
+        provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
+        provisional_complete=bool(payload.get("turn_completed")),
+        preview_observed_at=observed_at,
+        source="opencode_server_bridge",
         last_observation_id=observation_id,
     )
 

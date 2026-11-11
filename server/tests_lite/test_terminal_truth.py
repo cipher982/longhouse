@@ -91,3 +91,18 @@ def test_stream_watcher_keeps_the_last_preview_per_session_after_the_last_marker
     watcher.run()
     assert watcher.first_seen.keys() == {"beta"}
     assert watcher.final_preview == {"s1": "alpha beta gamma", "s2": "other"}
+
+
+def test_live_preview_check_accepts_a_cumulative_stream_and_flags_every_failure() -> None:
+    from zerg.qa.terminal_truth import check_live_previews
+
+    reply = "alpha beta gamma delta"
+    good = check_live_previews({"s": ["alpha", "alpha", "alpha beta gamma", reply]}, reply, "THINKING")
+    assert good["each_continues_the_last"] and good["final_equals_reply"] and not good["reasoning_leaked"]
+    # A repeated or reordered chunk breaks the chain; a short ending is not the whole reply.
+    assert check_live_previews({"s": ["alpha beta", "alpha beta alpha beta"]}, reply, "THINKING")["each_continues_the_last"]
+    reordered = check_live_previews({"s": ["alpha beta", "beta alpha"]}, reply, "THINKING")
+    assert not reordered["each_continues_the_last"] and reordered["first_break_at_preview"] == 1
+    assert not check_live_previews({"s": ["alpha"]}, reply, "THINKING")["final_equals_reply"]
+    assert check_live_previews({"s": ["THINKING000 alpha"]}, reply, "THINKING")["reasoning_leaked"]
+    assert check_live_previews({}, reply, "THINKING") == {"previews": 0}

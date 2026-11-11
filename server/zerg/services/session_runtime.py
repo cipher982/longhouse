@@ -587,9 +587,11 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
     )
     opencode_live = (
         (event.provider or "").strip().lower() == "opencode"
-        and (event.source or "").strip().lower() == "opencode_run"
         and event.kind == "progress_signal"
-        and payload.get("progress_kind") == "opencode_run_stream"
+        and (
+            ((event.source or "").strip().lower() == "opencode_run" and payload.get("progress_kind") == "opencode_run_stream")
+            or ((event.source or "").strip().lower() == "opencode_server_bridge" and payload.get("progress_kind") == "opencode_helm_stream")
+        )
     )
     return (
         codex_live

@@ -2500,6 +2500,7 @@
       "path": "server/zerg/routers/runtime.py",
       "providers": [
         "omp",
+        "opencode",
         "pi"
       ]
     },

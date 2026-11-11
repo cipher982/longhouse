@@ -174,3 +174,25 @@ def test_pace_without_tokens_or_reply_is_rejected(tmp_path: Path) -> None:
     script.write_text(json.dumps({"turns": [{"id": "x", "match": "x", "pace": {"rate": 5}}]}))
     with pytest.raises(ValueError):
         server.load_script(script)
+
+
+def test_reasoning_tokens_are_streamed_as_reasoning_content_before_the_reply() -> None:
+    pace = server.parse_pacing({"rate": 40, "tokens": 4, "initial_delay": 0.4, "reasoning_tokens": 3})
+    chunks = server.reasoning_chunks(pace)
+    assert [text for text, _ in chunks] == ["THINKING000 ", "THINKING001 ", "THINKING002 "]
+    assert all(0 < at < pace.initial_delay for _, at in chunks)
+    assert server.parse_pacing({"rate": 40, "tokens": 4}).reasoning_tokens == 0
+    with pytest.raises(ValueError):
+        server.reasoning_chunks(server.parse_pacing({"rate": 40, "tokens": 4, "reasoning_tokens": 2}))
+
+
+def test_chat_stream_carries_reasoning_content_before_the_reply(tmp_path: Path) -> None:
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps({"turns": [{"id": "r", "match": "WITH_REASONING", "pace": {**PACE, "reasoning_tokens": 3}}]}))
+    with _running_server(tmp_path, script_path=script) as (endpoint, _receipt):
+        events, _started = _stream(endpoint, "chat", "WITH_REASONING")
+    deltas = [event["choices"][0]["delta"] for _, event in events if isinstance(event, dict) and event.get("choices")]
+    kinds = [
+        "reasoning" if "reasoning_content" in delta else "content" for delta in deltas if "reasoning_content" in delta or "content" in delta
+    ]
+    assert kinds == ["reasoning"] * 3 + ["content"] * TOKENS

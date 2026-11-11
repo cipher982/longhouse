@@ -4,6 +4,7 @@
 //! private state. Runtime plugins and answerable permission pauses stay out of
 //! this first native slice until their reply path is native too.
 
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -535,6 +536,7 @@ async fn monitor_opencode_events_once(
         tracing::warn!(error = %error, "OpenCode status snapshot was not published");
     }
     let mut pending = String::new();
+    let mut live_text = LiveTextTracker::default();
     while !*stop.borrow() {
         let chunk = tokio::select! {
             chunk = response.chunk() => chunk?,
@@ -579,6 +581,13 @@ async fn monitor_opencode_events_once(
                         crate::managed_phase_contract::PHASE_IDLE,
                     ) {
                         tracing::warn!(error = %error, "OpenCode initial idle signal was not enqueued");
+                    }
+                }
+                if let Some(preview) = live_text.observe(&event, std::time::Instant::now()) {
+                    if let Err(error) =
+                        publish_live_text(state_path, longhouse_session_id, &preview)
+                    {
+                        tracing::warn!(error = %error, "OpenCode live text was not published");
                     }
                 }
                 if let Some((provider_session_id, phase)) = status_phase(&event) {
@@ -765,6 +774,159 @@ fn publish_phase_signal(
                 phase,
             )
             .with_payload(json!({"provider_session_id": provider_session_id})),
+        );
+    Ok(())
+}
+
+/// Reply text of one assistant message, as read from the event stream.
+#[derive(Debug, PartialEq)]
+struct LivePreview {
+    provider_session_id: String,
+    message_id: String,
+    seq: u64,
+    /// Everything the message has said so far.
+    text: String,
+}
+
+/// How often the newest text of one part is restated.
+const LIVE_TEXT_EVERY: Duration = Duration::from_millis(200);
+
+/// Accumulates `message.part.delta` text from `/global/event` into the cumulative
+/// reply text of each message.
+///
+/// A delta names only its part, and a reasoning part's deltas are `field: "text"`
+/// too, so text is shown only for a part `message.part.updated` has declared to
+/// be `text`. A delta that arrives first is kept until then.
+#[derive(Default)]
+struct LiveTextTracker {
+    part_types: HashMap<String, String>,
+    text: HashMap<String, String>,
+    last_emit: HashMap<String, std::time::Instant>,
+    seq: u64,
+}
+
+impl LiveTextTracker {
+    fn observe(&mut self, event: &Value, now: std::time::Instant) -> Option<LivePreview> {
+        let payload = event.get("payload")?;
+        let properties = payload.get("properties")?;
+        match payload.get("type").and_then(Value::as_str)? {
+            "message.part.updated" => {
+                let part = properties.get("part")?;
+                let part_id = part.get("id").and_then(Value::as_str)?;
+                let kind = part.get("type").and_then(Value::as_str)?;
+                self.part_types
+                    .insert(part_id.to_string(), kind.to_string());
+                if kind != "text" {
+                    return None;
+                }
+                // The authoritative snapshot replaces what the deltas built. Only
+                // a part that has had deltas is an assistant's streamed text; a
+                // user's text part arrives as an update alone.
+                let text = part.get("text").and_then(Value::as_str)?;
+                let known = self.text.contains_key(part_id);
+                if !known || text.is_empty() {
+                    return None;
+                }
+                self.text.insert(part_id.to_string(), text.to_string());
+                self.preview(
+                    part_id,
+                    part.get("messageID")?.as_str()?,
+                    part.get("sessionID")?.as_str()?,
+                    now,
+                    true,
+                )
+            }
+            "message.part.delta" => {
+                if properties.get("field").and_then(Value::as_str) != Some("text") {
+                    return None;
+                }
+                let part_id = properties.get("partID").and_then(Value::as_str)?;
+                let delta = properties.get("delta").and_then(Value::as_str)?;
+                let message_id = properties.get("messageID").and_then(Value::as_str)?;
+                let session_id = properties.get("sessionID").and_then(Value::as_str)?;
+                match self.part_types.get(part_id).map(String::as_str) {
+                    Some("text") | None => {}
+                    Some(_) => return None,
+                }
+                self.text
+                    .entry(part_id.to_string())
+                    .or_default()
+                    .push_str(delta);
+                if self.part_types.get(part_id).map(String::as_str) != Some("text") {
+                    return None;
+                }
+                self.preview(part_id, message_id, session_id, now, false)
+            }
+            _ => None,
+        }
+    }
+
+    fn preview(
+        &mut self,
+        part_id: &str,
+        message_id: &str,
+        session_id: &str,
+        now: std::time::Instant,
+        force: bool,
+    ) -> Option<LivePreview> {
+        let due = self
+            .last_emit
+            .get(part_id)
+            .is_none_or(|last| now.duration_since(*last) >= LIVE_TEXT_EVERY);
+        if !due && !force {
+            return None;
+        }
+        self.last_emit.insert(part_id.to_string(), now);
+        self.seq += 1;
+        Some(LivePreview {
+            provider_session_id: session_id.to_string(),
+            message_id: message_id.to_string(),
+            seq: self.seq,
+            text: self.text.get(part_id)?.clone(),
+        })
+    }
+}
+
+/// State the live reply text in the session's status slot: the newest text is
+/// the whole statement, so a burst of deltas costs one slot write.
+fn publish_live_text(
+    state_path: &Path,
+    longhouse_session_id: &str,
+    preview: &LivePreview,
+) -> Result<()> {
+    let state: Value = serde_json::from_slice(&fs::read(state_path)?)?;
+    // A subagent's session has its own id; only the bound session's text is
+    // this session's reply.
+    if state.get("provider_session_id").and_then(Value::as_str)
+        != Some(preview.provider_session_id.as_str())
+    {
+        return Ok(());
+    }
+    let Some(run_id) = state
+        .get("run_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(());
+    };
+    let occurred_at = chrono::Utc::now();
+    crate::status_slot::publisher_for("opencode", OPENCODE_BRIDGE_TRANSPORT, longhouse_session_id)
+        .publish(
+            crate::status_slot::StatusUpdate::phase(
+                longhouse_session_id,
+                run_id,
+                &occurred_at.to_rfc3339(),
+                crate::managed_phase_contract::PHASE_RUNNING,
+            )
+            .with_payload(json!({"provider_session_id": preview.provider_session_id}))
+            .with_preview(Some(crate::status_slot::StatusPreview {
+                turn_id: preview.message_id.clone(),
+                seq: preview.seq,
+                live_text: preview.text.clone(),
+                turn_completed: false,
+                progress_kind: "opencode_helm_stream".into(),
+                provider_session_id: Some(preview.provider_session_id.clone()),
+            })),
         );
     Ok(())
 }
@@ -1191,6 +1353,87 @@ fn pid_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn global(kind: &str, properties: Value) -> Value {
+        json!({"directory": "/work", "payload": {"type": kind, "properties": properties}})
+    }
+
+    fn part_updated(part_id: &str, kind: &str, text: &str) -> Value {
+        global(
+            "message.part.updated",
+            json!({"sessionID": "ses_1", "part": {"id": part_id, "messageID": "msg_a",
+                   "sessionID": "ses_1", "type": kind, "text": text}}),
+        )
+    }
+
+    fn delta(part_id: &str, text: &str) -> Value {
+        global(
+            "message.part.delta",
+            json!({"sessionID": "ses_1", "messageID": "msg_a", "partID": part_id,
+                   "field": "text", "delta": text}),
+        )
+    }
+
+    #[test]
+    fn live_text_accumulates_in_order_and_reasoning_is_never_reply_text() {
+        let mut tracker = LiveTextTracker::default();
+        let t0 = std::time::Instant::now();
+        assert!(tracker
+            .observe(&part_updated("prt_r", "reasoning", ""), t0)
+            .is_none());
+        assert!(tracker
+            .observe(&part_updated("prt_t", "text", ""), t0)
+            .is_none());
+        // Reasoning deltas are field "text" too and produce nothing.
+        assert!(tracker
+            .observe(&delta("prt_r", "thinking hard"), t0)
+            .is_none());
+        let first = tracker
+            .observe(&delta("prt_t", "Hel"), t0)
+            .expect("first delta");
+        assert_eq!(first.text, "Hel");
+        assert_eq!(first.message_id, "msg_a");
+        // Inside the interval nothing is restated, and nothing is lost.
+        assert!(tracker.observe(&delta("prt_t", "lo "), t0).is_none());
+        assert!(tracker
+            .observe(&delta("prt_r", "more thinking"), t0)
+            .is_none());
+        let later = tracker
+            .observe(&delta("prt_t", "world"), t0 + LIVE_TEXT_EVERY)
+            .expect("due");
+        assert_eq!(later.text, "Hello world");
+        assert!(later.seq > first.seq);
+        // The final snapshot is restated at once and equals the message.
+        let end = tracker
+            .observe(
+                &part_updated("prt_t", "text", "Hello world"),
+                t0 + LIVE_TEXT_EVERY,
+            )
+            .expect("final");
+        assert_eq!(end.text, "Hello world");
+    }
+
+    #[test]
+    fn a_delta_ahead_of_its_part_is_kept_until_the_part_is_text() {
+        let mut tracker = LiveTextTracker::default();
+        let t0 = std::time::Instant::now();
+        assert!(tracker.observe(&delta("prt_t", "Hi "), t0).is_none());
+        assert!(tracker
+            .observe(&part_updated("prt_t", "text", ""), t0)
+            .is_none());
+        let next = tracker
+            .observe(&delta("prt_t", "there"), t0)
+            .expect("text part");
+        assert_eq!(next.text, "Hi there");
+        // A part later declared reasoning stays silent.
+        assert!(tracker.observe(&delta("prt_x", "secret"), t0).is_none());
+        assert!(tracker
+            .observe(&part_updated("prt_x", "reasoning", ""), t0)
+            .is_none());
+        assert!(tracker
+            .observe(&delta("prt_x", "more"), t0 + LIVE_TEXT_EVERY)
+            .is_none());
+    }
 
     #[cfg(unix)]
     #[test]

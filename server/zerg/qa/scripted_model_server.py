@@ -45,6 +45,9 @@ class Pacing:
     tokens: int | None = None
     marker_every: int = 20
     marker_prefix: str = "LHPACE"
+    # Reasoning words streamed as `reasoning_content` (chat completions only)
+    # inside the initial delay, before the reply starts.
+    reasoning_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -62,7 +65,7 @@ _TOKEN_SPLIT = re.compile(r"\s*\S+|\s+$")
 def parse_pacing(value: object, *, where: str = "pace") -> Pacing:
     if not isinstance(value, dict):
         raise ValueError(f"{where} must be an object")
-    unknown = set(value) - {"rate", "initial_delay", "tokens", "marker_every", "marker_prefix"}
+    unknown = set(value) - {"rate", "initial_delay", "tokens", "marker_every", "marker_prefix", "reasoning_tokens"}
     if unknown:
         raise ValueError(f"{where} has unknown keys: {sorted(unknown)}")
 
@@ -92,11 +95,23 @@ def parse_pacing(value: object, *, where: str = "pace") -> Pacing:
         tokens=int(tokens) if tokens is not None else None,
         marker_every=int(marker_every),
         marker_prefix=prefix,
+        reasoning_tokens=int(number("reasoning_tokens", 0) or 0),
     )
 
 
 def pace_marker(pace: Pacing, index: int) -> str:
     return f"{pace.marker_prefix}{index:04d}"
+
+
+REASONING_WORD = "THINKING"
+
+
+def reasoning_chunks(pace: Pacing) -> list[tuple[str, float]]:
+    """Reasoning deltas, spread over the initial delay so they end before the reply begins."""
+    if pace.reasoning_tokens and pace.initial_delay <= 0:
+        raise ValueError("pace.reasoning_tokens needs a positive initial_delay")
+    count = pace.reasoning_tokens
+    return [(f"{REASONING_WORD}{i:03d} ", pace.initial_delay * (i + 1) / (count + 1)) for i in range(count)]
 
 
 def paced_text(pace: Pacing) -> str:
@@ -1084,6 +1099,21 @@ class MockHandler(BaseHTTPRequestHandler):
                 },
             )
         ]
+        if pace is not None:
+            frames.extend(
+                (
+                    None,
+                    {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [{"index": 0, "delta": {"reasoning_content": chunk}, "finish_reason": None}],
+                    },
+                    at,
+                )
+                for chunk, at in reasoning_chunks(pace)
+            )
         frames.extend(
             (
                 None,

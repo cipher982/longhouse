@@ -1258,3 +1258,73 @@ def test_antigravity_events_from_another_source_are_not_live_previews(tmp_path):
     )
     assert _is_bridge_live_transcript_event(event)
     assert not _is_bridge_live_transcript_event(event.model_copy(update={"source": "antigravity_hook"}))
+
+
+def _opencode_event(source: str, payload: dict, *, seq: int = 1) -> RuntimeEventIngest:
+    session_id = uuid4()
+    return RuntimeEventIngest(
+        runtime_key=f"opencode:{session_id}",
+        session_id=session_id,
+        thread_id=uuid4(),
+        run_id=uuid4(),
+        provider="opencode",
+        device_id="cinder",
+        source=source,
+        kind="progress_signal",
+        occurred_at=datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc),
+        dedupe_key=f"opencode:{seq}",
+        payload=payload,
+    )
+
+
+def test_opencode_console_text_is_published_live_and_other_parts_are_not():
+    """The host's immediate publish builds the preview from the engine's nested `event`.
+
+    It used to read only `live_text` for every provider but Pi and OMP, so 249
+    posted OpenCode Console events produced no published preview at all.
+    """
+    from zerg.routers.runtime import _is_bridge_live_transcript_event
+    from zerg.routers.runtime import _live_transcript_preview_payload
+
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+
+    def stream(part: dict) -> RuntimeEventIngest:
+        return _opencode_event(
+            "opencode_run",
+            {"progress_kind": "opencode_run_stream", "turn_id": "turn-1", "seq": 3, "event": {"type": "text", "part": part}},
+        )
+
+    text = stream({"type": "text", "text": "reply so far"})
+    assert _is_bridge_live_transcript_event(text)
+    preview = _live_transcript_preview_payload(text, now=now)
+    assert preview is not None
+    assert preview["text"] == "reply so far"
+    assert preview["event_origin"] == "live_provisional"
+    assert preview["tool_name"] is None
+    # Reasoning is never reply text.
+    assert _live_transcript_preview_payload(stream({"type": "reasoning", "text": "thinking"}), now=now) is None
+
+
+def test_opencode_helm_stream_is_published_live_per_message():
+    from zerg.routers.runtime import _is_bridge_live_transcript_event
+    from zerg.routers.runtime import _live_transcript_preview_payload
+
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+
+    def helm(message_id: str, seq: int, text: str) -> RuntimeEventIngest:
+        return _opencode_event(
+            "opencode_server_bridge",
+            {"progress_kind": "opencode_helm_stream", "turn_id": message_id, "seq": seq, "live_text": text, "turn_completed": False},
+            seq=seq,
+        )
+
+    first = helm("msg_a", 4, "Hello wor")
+    assert _is_bridge_live_transcript_event(first)
+    preview = _live_transcript_preview_payload(first, now=now)
+    assert preview is not None and preview["text"] == "Hello wor"
+    later = _live_transcript_preview_payload(helm("msg_a", 9, "Hello world"), now=now)
+    assert later is not None and later["text"] == "Hello world"
+    # A second message of the turn has its own cursor, so it does not overwrite the first.
+    other = _live_transcript_preview_payload(helm("msg_b", 10, "Next"), now=now)
+    assert other is not None and other["content_cursor"] != later["content_cursor"]
+    assert _live_transcript_preview_payload(helm("msg_a", 11, "  "), now=now) is None

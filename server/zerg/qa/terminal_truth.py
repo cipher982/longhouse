@@ -61,6 +61,7 @@ from zerg.qa import scripted_model_profiles
 from zerg.qa.pty_reader import TimedChunk
 from zerg.qa.pty_reader import load_timed_chunks
 from zerg.qa.pty_session import ProviderPtySession
+from zerg.qa.scripted_model_server import REASONING_WORD
 from zerg.qa.scripted_model_server import Pacing
 from zerg.qa.scripted_model_server import pace_schedule
 from zerg.qa.scripted_model_server import paced_text
@@ -288,7 +289,17 @@ class StreamWatcher(threading.Thread):
         self.event_counts: dict[str, int] = {}
         self.sample: list[str] = []  # the first stream lines, to see what the lane carries when no marker arrives
         self.final_preview: dict[str, str] = {}  # session id -> the last transcript_preview text seen on the stream
+        self.previews: dict[str, list[str]] = {}  # session id -> each `transcript_preview` text, in arrival order
         self._stop_event = stop
+
+    def _record_preview(self, data: str) -> None:
+        try:
+            frame = json.loads(data)
+        except ValueError:
+            return
+        preview = frame.get("transcript_preview")
+        if isinstance(preview, dict) and not preview.get("tool_name") and isinstance(preview.get("text"), str):
+            self.previews.setdefault(str(frame.get("session_id")), []).append(preview["text"])
 
     def run(self) -> None:
         pending = set(self.markers)
@@ -301,6 +312,8 @@ class StreamWatcher(threading.Thread):
                     self.event_counts[text[6:].strip()] = self.event_counts.get(text[6:].strip(), 0) + 1
                 elif text.startswith("data:") and "workspace_changed" not in text and '"session_id"' in text and len(self.sample) < 12:
                     self.sample.append(text[:400])
+                if text.startswith("data:") and '"transcript_preview": {' in text:
+                    self._record_preview(text[5:])
                 for marker in [m for m in pending if m in line]:
                     self.first_seen[marker] = now
                     pending.discard(marker)
@@ -521,6 +534,7 @@ class ScriptedModel:
                                 "initial_delay": pace.initial_delay,
                                 "marker_every": pace.marker_every,
                                 "marker_prefix": pace.marker_prefix,
+                                "reasoning_tokens": pace.reasoning_tokens,
                             },
                         }
                     ]
@@ -694,6 +708,7 @@ class RunResult:
     lane_errors: dict[str, list[str]] = field(default_factory=dict)
     stream_sample: list[str] = field(default_factory=list)
     final_preview: dict[str, Any] = field(default_factory=dict)  # last live preview per session vs the scripted reply
+    live_preview_check: dict[str, Any] = field(default_factory=dict)
     scratch: str | None = None
 
     def to_json(self) -> dict[str, Any]:
@@ -967,6 +982,7 @@ def run_cell(
                         for sid, value in watcher.final_preview.items()
                     },
                 }
+                result.live_preview_check = check_live_previews(watcher.previews, text, REASONING_WORD)
         result.file_first_seen_s = {m: (files.first_seen[m] - submitted if m in files.first_seen else None) for m in markers}
         result.file_paths = sorted(set(files.first_path.values()))
         result.file_scan_gap_s = files.resolution_s
@@ -1295,6 +1311,28 @@ def _fmt(value: float | None) -> str:
     return "-" if value is None else f"{value:.2f}s"
 
 
+def check_live_previews(previews: dict[str, list[str]], expected: str, reasoning_word: str) -> dict[str, Any]:
+    """What the live lane showed as reply text, against the reply the model sent.
+
+    Judged on the session with the most previews. Each preview must continue the one before it (cumulative text:
+    nothing repeated, reordered or replaced), the last must be the whole reply, and no reasoning word may appear.
+    """
+    if not previews:
+        return {"previews": 0}
+    session, texts = max(previews.items(), key=lambda item: len(item[1]))
+    broken = next((i for i in range(1, len(texts)) if not texts[i].startswith(texts[i - 1])), None)
+    return {
+        "session": session,
+        "previews": len(texts),
+        "each_continues_the_last": broken is None,
+        "first_break_at_preview": broken,
+        "final_equals_reply": texts[-1] == expected.strip(),
+        "final_length": len(texts[-1]),
+        "expected_length": len(expected.strip()),
+        "reasoning_leaked": any(reasoning_word in text for text in texts),
+    }
+
+
 def render_table(results: Sequence[RunResult]) -> str:
     lines = [
         "| provider | mode | lane | observations | resolution | first marker | median | worst | on screen, never served |",
@@ -1366,6 +1404,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--rate", type=float, default=5.0)
     run.add_argument("--marker-every", type=int, default=20)
     run.add_argument("--initial-delay", type=float, default=1.0)
+    run.add_argument(
+        "--reasoning-tokens", type=int, default=0, help="stream this many reasoning words before the reply (chat completions providers)"
+    )
     run.add_argument("--engine", type=Path, default=Path(os.environ.get("LONGHOUSE_ENGINE_BIN") or shutil.which("longhouse-engine") or ""))
     run.add_argument("--mode", action="append", choices=["shadow", "helm", "console"], help="repeatable; default shadow")
     run.add_argument("--longhouse-cli", type=Path, default=None, help="native longhouse CLI for helm mode (default: PATH)")
@@ -1397,6 +1438,7 @@ def main(argv: list[str] | None = None) -> int:
             "marker_every": args.marker_every,
             "initial_delay": args.initial_delay,
             "marker_prefix": f"TT{os.getpid() % 10000:04d}",
+            "reasoning_tokens": args.reasoning_tokens,
         }
     )
     if not args.engine.is_file():
@@ -1411,6 +1453,9 @@ def main(argv: list[str] | None = None) -> int:
     print(render_split(results))
     print()
     print(render_final_preview(results))
+    for result in results:
+        if result.live_preview_check:
+            print(f"live preview check {result.provider} {result.mode}: {json.dumps(result.live_preview_check)}")
     if args.out:
         args.out.write_text(json.dumps([r.to_json() for r in results], indent=2) + "\n")
     return 0

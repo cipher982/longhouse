@@ -284,7 +284,15 @@ def configure_scripted_model_profile(
                         "npm": "@ai-sdk/openai-compatible",
                         "name": "Longhouse mock",
                         "options": {"baseURL": openai_base_url, "apiKey": _SCRIPTED_MODEL_DUMMY_KEY},
-                        "models": {SCRIPTED_MODEL_NAME: {"name": "Longhouse mock"}},
+                        "models": {
+                            SCRIPTED_MODEL_NAME: {
+                                "name": "Longhouse mock",
+                                # Without these OpenCode drops `reasoning_content`, so a scripted
+                                # reasoning stream would never become a reasoning part.
+                                "reasoning": True,
+                                "interleaved": {"field": "reasoning_content"},
+                            }
+                        },
                     }
                 },
             },

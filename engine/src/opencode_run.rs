@@ -413,6 +413,10 @@ struct Projector {
     emitted: HashSet<(String, String)>,
     text: HashMap<String, String>,
     last_text_emit: HashMap<String, Instant>,
+    /// part id -> part type, from `message.part.updated`. A delta carries only
+    /// the part id, and a reasoning part's deltas are `field: "text"` too, so
+    /// this is the only way to tell reply text from reasoning.
+    part_types: HashMap<String, String>,
 }
 
 impl Projector {
@@ -423,6 +427,7 @@ impl Projector {
             emitted: HashSet::new(),
             text: HashMap::new(),
             last_text_emit: HashMap::new(),
+            part_types: HashMap::new(),
         }
     }
 
@@ -525,6 +530,10 @@ impl Projector {
                     return Vec::new();
                 }
                 let part_id = part.get("id").and_then(Value::as_str).unwrap_or_default();
+                if let Some(kind) = part.get("type").and_then(Value::as_str) {
+                    self.part_types
+                        .insert(part_id.to_string(), kind.to_string());
+                }
                 match part.get("type").and_then(Value::as_str) {
                     Some("step-start") if self.mark_delivered(part_id, "step_start") => {
                         vec![Self::stream_event("step_start", part)]
@@ -533,7 +542,13 @@ impl Projector {
                         vec![Self::stream_event("step_finish", part)]
                     }
                     Some("text") => {
-                        if let Some(text) = part.get("text").and_then(Value::as_str) {
+                        // The snapshot is authoritative, except an empty one: a
+                        // part is announced with no text, possibly after deltas.
+                        if let Some(text) = part
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .filter(|text| !text.is_empty())
+                        {
                             self.text.insert(part_id.to_string(), text.to_string());
                         }
                         let finished = part
@@ -574,8 +589,20 @@ impl Projector {
                 ) else {
                     return Vec::new();
                 };
+                // Only a part known to be reply text is previewed as reply text.
+                // Reasoning and any other part type never is. A delta that
+                // outruns its `message.part.updated` is kept and shown once the
+                // part is known to be text.
+                let known_text = match self.part_types.get(part_id).map(String::as_str) {
+                    Some("text") => true,
+                    Some(_) => return Vec::new(),
+                    None => false,
+                };
                 let text = self.text.entry(part_id.to_string()).or_default();
                 text.push_str(delta);
+                if !known_text {
+                    return Vec::new();
+                }
                 let due = self
                     .last_text_emit
                     .get(part_id)
@@ -3086,6 +3113,14 @@ mod tests {
                        "field": "text", "delta": text}),
             )
         };
+        projector.interpret(
+            &frame(
+                "message.part.updated",
+                json!({"part": {"id": "prt_1", "messageID": "msg_a", "sessionID": "ses_1",
+                                "type": "text", "text": ""}}),
+            ),
+            start,
+        );
         let first = projector.interpret(&delta("Hel"), start);
         assert_eq!(first.len(), 1);
         // Within the interval nothing is re-emitted, but nothing is lost.
@@ -3095,6 +3130,47 @@ mod tests {
             panic!("a due preview is emitted");
         };
         assert_eq!(event["part"]["text"], "Hello!");
+    }
+
+    #[test]
+    fn reasoning_deltas_are_never_previewed_as_reply_text() {
+        let mut projector = Projector::new("ses_1");
+        let start = Instant::now();
+        let part = |id: &str, kind: &str| {
+            frame(
+                "message.part.updated",
+                json!({"part": {"id": id, "messageID": "msg_a", "sessionID": "ses_1",
+                                "type": kind, "text": ""}}),
+            )
+        };
+        let delta = |id: &str, text: &str| {
+            frame(
+                "message.part.delta",
+                json!({"sessionID": "ses_1", "messageID": "msg_a", "partID": id,
+                       "field": "text", "delta": text}),
+            )
+        };
+        projector.interpret(&part("prt_r", "reasoning"), start);
+        projector.interpret(&part("prt_t", "text"), start);
+        assert!(projector
+            .interpret(&delta("prt_r", "pondering"), start)
+            .is_empty());
+        let reply = projector.interpret(&delta("prt_t", "Answer"), start);
+        let Some(Action::Stream(event)) = reply.first() else {
+            panic!("reply text is previewed");
+        };
+        assert_eq!(event["part"]["id"], "prt_t");
+        assert_eq!(event["part"]["text"], "Answer");
+        // A delta ahead of its part is held, then shown once the part is text.
+        assert!(projector
+            .interpret(&delta("prt_n", "early "), start)
+            .is_empty());
+        projector.interpret(&part("prt_n", "text"), start);
+        let held = projector.interpret(&delta("prt_n", "late"), start);
+        let Some(Action::Stream(event)) = held.first() else {
+            panic!("held text is previewed");
+        };
+        assert_eq!(event["part"]["text"], "early late");
     }
 
     #[test]

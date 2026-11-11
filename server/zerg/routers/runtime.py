@@ -461,9 +461,10 @@ def _publish_live_transcript_previews(events, *, now: datetime) -> None:
 
 def _live_transcript_preview_payload(event, *, now: datetime) -> dict | None:
     if (
-        (event.provider or "").strip().lower() in {"pi", "omp"}
-        and (event.source or "").strip().lower() in {"pi_print", "omp_print"}
-        and (event.payload or {}).get("progress_kind") in {"pi_print_stream", "omp_print_stream"}
+        (event.provider or "").strip().lower() in {"pi", "omp", "opencode"}
+        and (event.source or "").strip().lower() in {"pi_print", "omp_print", "opencode_run", "opencode_server_bridge"}
+        and (event.payload or {}).get("progress_kind")
+        in {"pi_print_stream", "omp_print_stream", "opencode_run_stream", "opencode_helm_stream"}
     ):
         return preview_payload_from_runtime_event(
             event,
