@@ -242,6 +242,16 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
         );
 
+        -- The bytes just before the end of the last prepared range, as a hash,
+        -- so a source rewritten in place under the cursor is noticed
+        -- (source_epoch::content_anchor_holds). Losing a row only skips one check.
+        CREATE TABLE IF NOT EXISTS source_epoch_content_anchor (
+            source_epoch TEXT PRIMARY KEY,
+            position INTEGER NOT NULL,
+            tail_len INTEGER NOT NULL,
+            tail_sha256 TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS pending_source_envelope (
             source_epoch TEXT PRIMARY KEY,
             source_path TEXT NOT NULL,

@@ -5962,6 +5962,127 @@ mod tests {
         assert_eq!(prepared.range_start, 0);
     }
 
+    const ANCHOR_FIRST: &[u8] = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+    const ANCHOR_SAME_LENGTH: &[u8] = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"jello\"}}\n";
+    const ANCHOR_LONGER: &[u8] = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello, migrated\"}}\n";
+    const ANCHOR_SECOND: &[u8] = b"{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":\"2026-07-12T12:01:00Z\",\"message\":{\"content\":\"world\"}}\n";
+
+    /// Ship `ANCHOR_FIRST` through a fully acknowledged envelope and return the
+    /// connection, the source path and the epoch it shipped under.
+    fn shipped_anchor_source(dir: &tempfile::TempDir) -> (Connection, PathBuf, Uuid) {
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        fs::write(&path, ANCHOR_FIRST).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (prepared.range_start, prepared.range_end),
+            (0, ANCHOR_FIRST.len() as u64)
+        );
+        acknowledge_prepared(&mut conn, &prepared);
+        let epoch = prepared.source_epoch;
+        (conn, path, epoch)
+    }
+
+    #[test]
+    fn same_length_rewrite_under_cursor_reships_from_start_under_new_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut conn, path, first_epoch) = shipped_anchor_source(&dir);
+        // Same inode, same length, different bytes: identity and length both
+        // pass, and before the anchor nothing noticed.
+        fs::write(&path, ANCHOR_SAME_LENGTH).unwrap();
+
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .expect("a same-length rewrite must ship again");
+        assert_eq!(prepared.range_start, 0);
+        assert_eq!(prepared.range_end, ANCHOR_SAME_LENGTH.len() as u64);
+        assert_ne!(prepared.source_epoch, first_epoch);
+    }
+
+    #[test]
+    fn longer_rewrite_under_cursor_reships_from_start_under_new_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut conn, path, first_epoch) = shipped_anchor_source(&dir);
+        fs::write(&path, [ANCHOR_LONGER, ANCHOR_SECOND].concat()).unwrap();
+
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.range_start, 0);
+        assert_ne!(prepared.source_epoch, first_epoch);
+    }
+
+    #[test]
+    fn identical_rewrite_and_append_keep_the_epoch_and_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut conn, path, first_epoch) = shipped_anchor_source(&dir);
+        // Rewriting the same bytes (a provider that saves the whole file) is
+        // not a change; only the appended record ships.
+        fs::write(&path, [ANCHOR_FIRST, ANCHOR_SECOND].concat()).unwrap();
+
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.source_epoch, first_epoch);
+        assert_eq!(prepared.range_start, ANCHOR_FIRST.len() as u64);
+        acknowledge_prepared(&mut conn, &prepared);
+
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(ANCHOR_FIRST).unwrap();
+        drop(file);
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.source_epoch, first_epoch);
+        assert_eq!(
+            prepared.range_start,
+            (ANCHOR_FIRST.len() + ANCHOR_SECOND.len()) as u64
+        );
+    }
+
+    #[test]
+    fn rewrite_with_no_new_bytes_is_still_noticed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut conn, path, first_epoch) = shipped_anchor_source(&dir);
+        fs::write(&path, ANCHOR_SAME_LENGTH).unwrap();
+        // The cursor already sits at the end of the file; without the check
+        // before the "nothing new" exit this rewrite would wait for an append.
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert_ne!(prepared.source_epoch, first_epoch);
+        assert_eq!(prepared.range_start, 0);
+    }
+
+    #[test]
+    fn batch_tail_spans_records_and_caps_at_anchor_size() {
+        let big = vec![b'a'; source_epoch::CONTENT_ANCHOR_BYTES - 10];
+        let batch = RawRecordBatch {
+            range_start: 0,
+            range_end: (big.len() + 20) as u64,
+            records: vec![
+                crate::raw_records::RawRecord {
+                    range_start: 0,
+                    range_end: big.len() as u64,
+                    bytes: big.clone(),
+                },
+                crate::raw_records::RawRecord {
+                    range_start: big.len() as u64,
+                    range_end: (big.len() + 20) as u64,
+                    bytes: vec![b'b'; 20],
+                },
+            ],
+        };
+        let tail = prepare::batch_tail(&batch);
+        assert_eq!(tail.len(), source_epoch::CONTENT_ANCHOR_BYTES);
+        assert!(tail.ends_with(&[b'b'; 20]));
+        assert_eq!(tail[0], b'a');
+    }
+
     /// Run `run` and return the warnings it logged on this thread.
     fn warnings_during<T>(run: impl FnOnce() -> T) -> (T, Vec<String>) {
         #[derive(Clone, Default)]

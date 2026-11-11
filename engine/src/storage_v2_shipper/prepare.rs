@@ -307,16 +307,6 @@ pub(super) fn prepare_next_envelope_with_limit(
         SourceChangeHint::None,
     )?;
     let position = source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
-    let source_len = std::fs::metadata(path)?.len();
-    if position >= source_len {
-        return Ok(None);
-    }
-    // The raw batch and the parsed events are separate reads of a file the
-    // provider may rewrite between them, which would publish raw bytes from one
-    // version with rendered events from another. Stamp the source here and
-    // re-check it after the parse; a change means this batch describes no single
-    // version, so decline it and let the next tick read a consistent one.
-    let source_stamp_before = source_stamp(path)?;
     let framing = if provider.eq_ignore_ascii_case("antigravity")
         && path
             .extension()
@@ -327,6 +317,54 @@ pub(super) fn prepare_next_envelope_with_limit(
     } else {
         RawSourceFraming::LfDelimited
     };
+    // Identity and length catch a replaced or shortened file. A file rewritten
+    // in place to the same or a greater length passes both, and the cursor
+    // would go on reading new bytes as if they followed the old ones. The
+    // anchor recorded when the range ending here was prepared says what the
+    // bytes before the cursor were; if they changed, ship the source again
+    // from the start under a new epoch. Checked before the "nothing new" exit
+    // so a same-length rewrite is seen without waiting for an append.
+    if framing == RawSourceFraming::LfDelimited
+        && position > 0
+        && rewritten_under_cursor(conn, path, resolution.source_epoch, position)?
+    {
+        tracing::warn!(
+            path = %path.display(),
+            provider,
+            source_epoch = %resolution.source_epoch,
+            position,
+            "Source was rewritten under its cursor; shipping it again under a new epoch"
+        );
+        source_epoch::observe_file(
+            conn,
+            provider,
+            &opaque_source_id,
+            path,
+            SourceLane::Durable,
+            0,
+            source_revision.as_deref(),
+            session_id_override,
+            SourceChangeHint::Rewrite,
+        )?;
+        return prepare_next_envelope_with_limit(
+            conn,
+            capabilities,
+            path,
+            provider,
+            session_id_override,
+            maximum_batch_bytes,
+        );
+    }
+    let source_len = std::fs::metadata(path)?.len();
+    if position >= source_len {
+        return Ok(None);
+    }
+    // The raw batch and the parsed events are separate reads of a file the
+    // provider may rewrite between them, which would publish raw bytes from one
+    // version with rendered events from another. Stamp the source here and
+    // re-check it after the parse; a change means this batch describes no single
+    // version, so decline it and let the next tick read a consistent one.
+    let source_stamp_before = source_stamp(path)?;
     let maximum_record_bytes = usize::try_from(capabilities.max_raw_record_bytes)
         .context("storage-v2 raw record limit exceeds usize")?;
     let Some(mut raw_batch) = read_next_raw_batch_with_limits(
@@ -382,6 +420,18 @@ pub(super) fn prepare_next_envelope_with_limit(
             "Source changed between the raw read and the parse; declining this batch"
         );
         return Ok(None);
+    }
+    if framing == RawSourceFraming::LfDelimited {
+        // Anchor the end of this range from the bytes being shipped, not a later
+        // read of the file: a rewrite before the receipt lands must still be
+        // seen as one. The anchor is consulted only once the lane reaches
+        // exactly this position, so a batch that is declined or replaced leaves
+        // nothing wrong behind.
+        source_epoch::record_content_anchor(
+            conn,
+            resolution.source_epoch,
+            &source_epoch::ContentAnchor::new(raw_batch.range_end, &batch_tail(&raw_batch)),
+        )?;
     }
     let session_id = resolve_session_id(
         provider,
@@ -826,4 +876,43 @@ pub(crate) fn durable_lane_age_seconds(
     let parsed = chrono::DateTime::parse_from_rfc3339(&updated_at).ok()?;
     let age = chrono::Utc::now().signed_duration_since(parsed.with_timezone(&chrono::Utc));
     Some(age.num_seconds().max(0))
+}
+
+/// Whether the bytes before `position` differ from the ones anchored when the
+/// range ending there was prepared. No anchor at exactly this position (a
+/// source shipped before anchors existed, or a lane moved by a host resync)
+/// means there is nothing to compare, not a rewrite.
+pub(super) fn rewritten_under_cursor(
+    conn: &Connection,
+    path: &Path,
+    source_epoch: Uuid,
+    position: u64,
+) -> Result<bool> {
+    let Some(anchor) = source_epoch::content_anchor(conn, source_epoch)? else {
+        return Ok(false);
+    };
+    if anchor.position != position {
+        return Ok(false);
+    }
+    if std::fs::metadata(path)?.len() < position {
+        // A shorter file is a truncation, which the epoch registry already ends.
+        return Ok(false);
+    }
+    Ok(!source_epoch::file_content_anchor_holds(path, &anchor)?)
+}
+
+/// The last bytes of a contiguous raw batch, up to the anchor size, taken
+/// across record boundaries.
+pub(super) fn batch_tail(batch: &RawRecordBatch) -> Vec<u8> {
+    let mut wanted = source_epoch::CONTENT_ANCHOR_BYTES;
+    let mut pieces = Vec::new();
+    for record in batch.records.iter().rev() {
+        if wanted == 0 {
+            break;
+        }
+        let take = record.bytes.len().min(wanted);
+        pieces.push(&record.bytes[record.bytes.len() - take..]);
+        wanted -= take;
+    }
+    pieces.into_iter().rev().flatten().copied().collect()
 }

@@ -370,6 +370,111 @@ pub fn adopt_host_epoch(
     Ok(true)
 }
 
+/// How many bytes before a prepared range's end are kept as its content anchor.
+pub const CONTENT_ANCHOR_BYTES: usize = 4096;
+
+/// A hash of the bytes that ended a prepared range, so the next read from that
+/// position can prove the file still holds them. Identity and length catch a
+/// replaced or shortened file; only content catches one rewritten in place to
+/// the same or a greater length.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentAnchor {
+    pub position: u64,
+    pub tail_len: u64,
+    pub tail_sha256: String,
+}
+
+impl ContentAnchor {
+    /// The anchor for a range ending at `position` whose last bytes are
+    /// `tail`; at most [`CONTENT_ANCHOR_BYTES`] of them are kept.
+    pub fn new(position: u64, tail: &[u8]) -> Self {
+        let tail = &tail[tail.len().saturating_sub(CONTENT_ANCHOR_BYTES)..];
+        Self {
+            position,
+            tail_len: tail.len() as u64,
+            tail_sha256: sha256_hex(tail),
+        }
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes))
+}
+
+pub fn record_content_anchor(
+    conn: &Connection,
+    source_epoch: Uuid,
+    anchor: &ContentAnchor,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO source_epoch_content_anchor (source_epoch, position, tail_len, tail_sha256)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(source_epoch) DO UPDATE SET
+             position = excluded.position,
+             tail_len = excluded.tail_len,
+             tail_sha256 = excluded.tail_sha256",
+        params![
+            source_epoch.to_string(),
+            i64::try_from(anchor.position).context("anchor position exceeds SQLite INTEGER")?,
+            i64::try_from(anchor.tail_len).context("anchor length exceeds SQLite INTEGER")?,
+            anchor.tail_sha256,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn content_anchor(conn: &Connection, source_epoch: Uuid) -> Result<Option<ContentAnchor>> {
+    conn.query_row(
+        "SELECT position, tail_len, tail_sha256 FROM source_epoch_content_anchor
+         WHERE source_epoch = ?1",
+        [source_epoch.to_string()],
+        |row| {
+            Ok(ContentAnchor {
+                position: row.get::<_, i64>(0)?.max(0) as u64,
+                tail_len: row.get::<_, i64>(1)?.max(0) as u64,
+                tail_sha256: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+/// Whether the source still holds the anchored bytes just before
+/// `anchor.position`. A source too short to hold them does not; the caller's
+/// truncation check normally sees that first.
+pub fn content_anchor_holds(source: &mut impl std::io::Read, anchor: &ContentAnchor) -> Result<bool> {
+    let tail_len = usize::try_from(anchor.tail_len).context("anchor length exceeds usize")?;
+    if tail_len > CONTENT_ANCHOR_BYTES || anchor.tail_len > anchor.position {
+        bail!("content anchor is malformed");
+    }
+    let mut skip = std::io::Read::take(&mut *source, anchor.position - anchor.tail_len);
+    std::io::copy(&mut skip, &mut std::io::sink())?;
+    let mut tail = vec![0u8; tail_len];
+    let mut read = 0;
+    while read < tail_len {
+        match source.read(&mut tail[read..])? {
+            0 => return Ok(false),
+            n => read += n,
+        }
+    }
+    Ok(sha256_hex(&tail) == anchor.tail_sha256)
+}
+
+/// [`content_anchor_holds`] for a plain file, reading only the anchored bytes.
+pub fn file_content_anchor_holds(path: &Path, anchor: &ContentAnchor) -> Result<bool> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("opening source for its content anchor: {}", path.display()))?;
+    let start = anchor.position.saturating_sub(anchor.tail_len);
+    file.seek(SeekFrom::Start(start))?;
+    let shifted = ContentAnchor {
+        position: anchor.tail_len,
+        ..anchor.clone()
+    };
+    content_anchor_holds(&mut file, &shifted)
+}
+
 pub fn lane_position(conn: &Connection, source_epoch: Uuid, lane: SourceLane) -> Result<u64> {
     load_lane_position(conn, source_epoch, lane)?
         .ok_or_else(|| anyhow::anyhow!("source epoch lane is not registered"))
