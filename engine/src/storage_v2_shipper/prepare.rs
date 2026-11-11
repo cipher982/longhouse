@@ -66,16 +66,29 @@ pub(super) fn prepare_next_envelope_with_limit(
     session_id_override: Option<&str>,
     maximum_batch_bytes: usize,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
-    if provider.eq_ignore_ascii_case("codex")
-        && crate::compressed_source::is_compressed_transcript(path)
-    {
-        return prepare_compressed_codex_envelope(
-            conn,
-            capabilities,
-            path,
-            session_id_override,
-            maximum_batch_bytes,
-        );
+    if provider.eq_ignore_ascii_case("codex") {
+        if crate::compressed_source::is_compressed_transcript(path) {
+            return prepare_compressed_codex_envelope(
+                conn,
+                capabilities,
+                path,
+                session_id_override,
+                maximum_batch_bytes,
+            );
+        }
+        // Codex compresses a rollout by writing `<path>.zst` and then removing
+        // the plain file. The `.zst` event came while the plain file still owned
+        // the source, so the removal is the moment its tail becomes readable.
+        let compressed = compressed_sibling(path);
+        if !path.exists() && compressed.exists() {
+            return prepare_compressed_codex_envelope(
+                conn,
+                capabilities,
+                &compressed,
+                session_id_override,
+                maximum_batch_bytes,
+            );
+        }
     }
     prepare_file_envelope(
         conn,
@@ -193,6 +206,12 @@ fn prepare_compressed_codex_envelope(
         session_id_override,
         maximum_batch_bytes,
     )
+}
+
+fn compressed_sibling(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".zst");
+    PathBuf::from(name)
 }
 
 /// Where decompressed copies of compressed rollouts are kept while their tail

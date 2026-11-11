@@ -21,23 +21,63 @@ pub(super) const HOT_WINDOW: Duration = Duration::from_secs(15 * 60);
 const HOT_SOURCES_MAX: usize = 2048;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Stat {
+struct FileStat {
     len: u64,
     modified: SystemTime,
     inode: u64,
 }
 
-fn stat(path: &Path) -> Option<Stat> {
+fn file_stat(path: &Path) -> Option<FileStat> {
     let metadata = std::fs::metadata(path).ok()?;
     #[cfg(unix)]
     let inode = std::os::unix::fs::MetadataExt::ino(&metadata);
     #[cfg(not(unix))]
     let inode = 0;
-    Some(Stat {
+    Some(FileStat {
         len: metadata.len(),
         modified: metadata.modified().ok()?,
         inode,
     })
+}
+
+/// A source's stat. An OpenCode database also carries its `-wal` file: SQLite
+/// appends there and leaves the main file untouched until a checkpoint, so a
+/// write whose event was lost shows only in the WAL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stat {
+    file: FileStat,
+    wal: Option<FileStat>,
+}
+
+impl Stat {
+    fn modified(&self) -> SystemTime {
+        self.wal.map_or(self.file.modified, |wal| {
+            wal.modified.max(self.file.modified)
+        })
+    }
+}
+
+fn stat(path: &Path, provider: &str) -> Option<Stat> {
+    let file = file_stat(path)?;
+    let wal = (provider == "opencode")
+        .then(|| {
+            let mut wal = path.as_os_str().to_os_string();
+            wal.push("-wal");
+            file_stat(Path::new(&wal))
+        })
+        .flatten();
+    Some(Stat { file, wal })
+}
+
+/// A Codex rollout Codex compressed: `<path>.zst` once the plain file is gone.
+fn compressed_successor(path: &Path, provider: &str) -> Option<PathBuf> {
+    if provider != "codex" || crate::compressed_source::is_compressed_transcript(path) {
+        return None;
+    }
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".zst");
+    let compressed = PathBuf::from(name);
+    compressed.exists().then_some(compressed)
 }
 
 struct HotSource {
@@ -64,11 +104,12 @@ impl HotSources {
     /// now: the job that was enqueued reads at least this much, so only a
     /// change after this moment is news to the re-check.
     pub(super) fn note(&mut self, path: PathBuf, provider: &'static str, now: SystemTime) {
-        let Some(stat) = stat(&path) else {
+        let Some(stat) = stat(&path, provider) else {
             self.entries.remove(&path);
             return;
         };
-        if !is_hot(stat.modified, now) {
+        if !is_hot(stat.modified(), now) {
+            self.entries.remove(&path);
             return;
         }
         self.entries.insert(path, HotSource { provider, stat });
@@ -76,18 +117,23 @@ impl HotSources {
     }
 
     /// Re-state every hot source. Returns those that moved since they were
-    /// last seen, and forgets those gone or quiet for the hot window.
+    /// last seen, and forgets those gone or quiet for the hot window. A Codex
+    /// rollout that is gone because Codex compressed it is reported once as
+    /// its `.zst`, so a tail the plain file never shipped is read from there.
     pub(super) fn recheck(&mut self, now: SystemTime) -> Vec<(PathBuf, &'static str)> {
         let mut moved = Vec::new();
         self.entries.retain(|path, source| {
-            let Some(current) = stat(path) else {
+            let Some(current) = stat(path, source.provider) else {
+                if let Some(compressed) = compressed_successor(path, source.provider) {
+                    moved.push((compressed, source.provider));
+                }
                 return false;
             };
             if current != source.stat {
                 source.stat = current;
                 moved.push((path.clone(), source.provider));
             }
-            is_hot(current.modified, now)
+            is_hot(current.modified(), now)
         });
         moved
     }
@@ -101,7 +147,8 @@ impl HotSources {
             .iter()
             .map(|(path, source)| {
                 (
-                    now.duration_since(source.stat.modified).unwrap_or_default(),
+                    now.duration_since(source.stat.modified())
+                        .unwrap_or_default(),
                     path.clone(),
                 )
             })
@@ -177,6 +224,53 @@ mod tests {
         assert!(hot
             .recheck(now + HOT_WINDOW + Duration::from_secs(5))
             .is_empty());
+        assert!(hot.is_empty());
+    }
+
+    #[test]
+    fn an_opencode_wal_only_write_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let wal = dir.path().join("opencode.db-wal");
+        std::fs::write(&db, b"db").unwrap();
+        std::fs::write(&wal, b"w1").unwrap();
+        let mut hot = HotSources::default();
+        hot.note(db.clone(), "opencode", SystemTime::now());
+        let mut file = std::fs::OpenOptions::new().append(true).open(&wal).unwrap();
+        file.write_all(b"w2").unwrap();
+        drop(file);
+        assert_eq!(hot.recheck(SystemTime::now()), vec![(db, "opencode")]);
+    }
+
+    #[test]
+    fn a_compressed_codex_rollout_is_reported_when_its_plain_file_goes() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("rollout-x.jsonl");
+        let deleted = dir.path().join("rollout-y.jsonl");
+        std::fs::write(&plain, b"x\n").unwrap();
+        std::fs::write(&deleted, b"x\n").unwrap();
+        let mut hot = HotSources::default();
+        hot.note(plain.clone(), "codex", SystemTime::now());
+        hot.note(deleted.clone(), "codex", SystemTime::now());
+        std::fs::write(dir.path().join("rollout-x.jsonl.zst"), b"z").unwrap();
+        std::fs::remove_file(&plain).unwrap();
+        std::fs::remove_file(&deleted).unwrap();
+        assert_eq!(
+            hot.recheck(SystemTime::now()),
+            vec![(dir.path().join("rollout-x.jsonl.zst"), "codex")]
+        );
+        assert!(hot.is_empty());
+    }
+
+    #[test]
+    fn noting_a_source_gone_cold_forgets_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        std::fs::write(&path, b"x\n").unwrap();
+        let mut hot = HotSources::default();
+        hot.note(path.clone(), "claude", SystemTime::now());
+        assert_eq!(hot.len(), 1);
+        hot.note(path, "claude", SystemTime::now() + HOT_WINDOW * 2);
         assert!(hot.is_empty());
     }
 

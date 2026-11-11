@@ -6207,6 +6207,37 @@ mod tests {
     }
 
     #[test]
+    fn removal_of_the_plain_rollout_ships_its_tail_from_the_compressed_copy() {
+        // The .zst event arrived while the plain file still existed (and was
+        // declined); the job for the removed plain path is what reads the tail.
+        let dir = tempfile::tempdir().unwrap();
+        let _home = ScratchLonghouseHome::set(&dir.path().join("lh"));
+        let plain = codex_rollout_path(&dir);
+        fs::write(&plain, [CODEX_META, CODEX_USER].concat()).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let first = prepare_next_envelope(&mut conn, &capabilities(), &plain, "codex", None)
+            .unwrap()
+            .unwrap();
+        acknowledge_prepared(&mut conn, &first);
+        let mut file = fs::OpenOptions::new().append(true).open(&plain).unwrap();
+        file.write_all(CODEX_REPLY).unwrap();
+        drop(file);
+        compress_in_place(&plain);
+
+        let tail = prepare_next_envelope(&mut conn, &capabilities(), &plain, "codex", None)
+            .unwrap()
+            .expect("the job for the removed plain path ships the tail");
+        assert_eq!(tail.source_epoch, first.source_epoch);
+        assert_eq!(tail.range_start, first.range_end);
+        acknowledge_prepared(&mut conn, &tail);
+        assert!(
+            prepare_next_envelope(&mut conn, &capabilities(), &plain, "codex", None)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn plain_rollout_still_present_owns_the_source_over_its_compressed_copy() {
         let dir = tempfile::tempdir().unwrap();
         let _home = ScratchLonghouseHome::set(&dir.path().join("lh"));

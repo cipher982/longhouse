@@ -98,6 +98,18 @@ pub fn configured_provider_roots() -> Vec<ProviderConfig> {
     providers
 }
 
+/// How deep discovery looks under a provider root. OpenCode's databases sit at
+/// the top of their data directory, and `OPENCODE_DB` can name a file in any
+/// directory, so its root is read one level deep (and watched without
+/// recursion) instead of walking whatever that directory holds.
+pub fn provider_root_depth(provider: &str) -> usize {
+    if provider == "opencode" {
+        1
+    } else {
+        DISCOVERY_MAX_DEPTH
+    }
+}
+
 /// Codex's home: `$CODEX_HOME`, else `~/.codex`.
 fn codex_home(home: &Path) -> PathBuf {
     std::env::var_os("CODEX_HOME")
@@ -274,7 +286,7 @@ pub fn discover_files_in_scope(
         // discovery from wandering into unrelated or pathological directory trees.
         for entry in WalkDir::new(&provider.root)
             .follow_links(false)
-            .max_depth(DISCOVERY_MAX_DEPTH)
+            .max_depth(provider_root_depth(provider.name))
             .into_iter()
         {
             let entry = match entry {
@@ -1807,6 +1819,26 @@ mod tests {
             None
         );
         assert_eq!(provider_for_path(&root.join("other.db"), &providers), None);
+    }
+
+    #[test]
+    fn an_opencode_root_is_read_one_level_deep() {
+        // OPENCODE_DB=/data/opencode.db makes /data the root; a scan must not
+        // walk the rest of /data.
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("opencode.db"), b"db").unwrap();
+        let nested = root.path().join("projects").join("x");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("opencode.db"), b"db").unwrap();
+        let providers = vec![ProviderConfig {
+            name: "opencode",
+            root: root.path().canonicalize().unwrap(),
+            extension: "db",
+        }];
+        let scan =
+            discover_files_in_scope(&providers, &crate::import_scope::ImportScope::all("cli"));
+        let found: Vec<_> = scan.files.iter().map(|file| file.path.clone()).collect();
+        assert_eq!(found, vec![providers[0].root.join("opencode.db")]);
     }
 
     #[test]

@@ -134,7 +134,7 @@ impl SessionWatcher {
         // Watch all provider root directories recursively
         for provider in providers {
             if provider.root.exists() {
-                watcher.watch(&provider.root, RecursiveMode::Recursive)?;
+                watcher.watch(&provider.root, root_watch_mode(provider.name))?;
                 tracing::info!(
                     "Watching {} for {} sessions",
                     provider.root.display(),
@@ -179,7 +179,10 @@ impl SessionWatcher {
                 candidates.swap_remove(index);
                 continue;
             }
-            match self._watcher.watch(&root, RecursiveMode::Recursive) {
+            match self
+                ._watcher
+                .watch(&root, root_watch_mode(candidates[index].name))
+            {
                 Ok(()) => {
                     let mut provider = candidates.swap_remove(index);
                     provider.root = root;
@@ -228,9 +231,21 @@ impl SessionWatcher {
 }
 
 fn provider_owns_root(providers: &[ProviderConfig], path: &Path) -> bool {
-    providers
-        .iter()
-        .any(|provider| path.starts_with(&provider.root))
+    // A root watched without recursion does not see inside a state directory.
+    providers.iter().any(|provider| {
+        path.starts_with(&provider.root)
+            && root_watch_mode(provider.name) == RecursiveMode::Recursive
+    })
+}
+
+/// A provider root whose sources sit directly in it is watched without recursion
+/// (`discovery::provider_root_depth`).
+fn root_watch_mode(provider: &str) -> RecursiveMode {
+    if crate::discovery::provider_root_depth(provider) <= 1 {
+        RecursiveMode::NonRecursive
+    } else {
+        RecursiveMode::Recursive
+    }
 }
 
 fn coalesced_batch_to_events(batch: HashMap<PathBuf, (i64, i64)>) -> Vec<WatcherEvent> {

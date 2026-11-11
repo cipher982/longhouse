@@ -460,6 +460,9 @@ impl DaemonState {
                 let inventory =
                     crate::state::source_inventory::persist_inventory(&self.conn, result.inventory);
                 if result.enqueue_files {
+                    // Any scan that enqueues what it found resets the overdue
+                    // clock, whichever caller started it.
+                    self.last_reconciliation_scan_at = Instant::now();
                     // Seed the re-check with what this scan found recently
                     // written; the scan already knows each file's mtime, so
                     // older sources cost nothing here.
@@ -660,7 +663,19 @@ impl DaemonState {
         let import_scope = crate::config::import_scope();
         let now = now_ms();
         for (path, provider) in moved {
+            // Same admission as a file event: a managed wake that owns this
+            // turn keeps its deferral, and a deferred retry keeps its slot.
+            let as_event = WatcherEvent {
+                path: path.clone(),
+                observed_at_ms: now,
+                latest_observed_at_ms: now,
+            };
             if !discovery::source_in_import_scope(&import_scope, provider, &path)
+                || should_defer_fsevent_for_managed_wake(
+                    &self.latest_transcript_wake_observed,
+                    &as_event,
+                    provider,
+                )
                 || !retry_admission_open(&path, &mut self.deferred_retries)
             {
                 continue;

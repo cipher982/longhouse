@@ -172,7 +172,8 @@
       "path": "engine/src/daemon/hot_sources.rs",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "opencode"
       ]
     },
     {

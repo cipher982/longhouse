@@ -399,10 +399,6 @@ struct CodexPayload {
     output: Option<CodexFunctionOutput>,
 }
 
-/// Codex `function_call_output.output`: either opaque result text or an array of
-/// content items. Image content (`image_url`) is intentionally ignored here --
-/// inline image bytes are captured by source-line media redaction, not by this
-/// struct, so we never pull megabyte base64 into the parse DOM.
 /// Codex tool arguments as a JSON object: function_call sends them as a
 /// JSON-encoded string, tool_search_call as the object itself. Anything that is
 /// not an object is not shown as input.
@@ -419,6 +415,10 @@ fn codex_arguments_object(raw: &RawValue) -> Option<Box<RawValue>> {
         .flatten()
 }
 
+/// Codex `function_call_output.output`: either opaque result text or an array of
+/// content items. Image content (`image_url`) is intentionally ignored here --
+/// inline image bytes are captured by source-line media redaction, not by this
+/// struct, so we never pull megabyte base64 into the parse DOM.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum CodexFunctionOutput {
