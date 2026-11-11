@@ -761,8 +761,8 @@ def test_heartbeat_endpoint_appends_history_rows(live_catalog, live_catalog_clie
     assert [stamp["spool_pending"] for stamp in _stamps(DEVICE_ID)] == [0, 1]
 
 
-def test_heartbeat_prunes_old_rows(live_catalog, live_catalog_client):
-    """Stamps older than the retention window go away on the next heartbeat."""
+def test_heartbeat_leaves_retention_to_catalogd_maintenance(live_catalog, live_catalog_client):
+    """Stamps past retention are pruned by catalogd maintenance (prune_heartbeat_stamps), not by a heartbeat."""
 
     _seed_stamp(
         live_catalog,
@@ -786,7 +786,7 @@ def test_heartbeat_prunes_old_rows(live_catalog, live_catalog_client):
     )
     assert response.status_code == 204, response.text
 
-    assert [stamp["version"] for stamp in _stamps(DEVICE_ID)] == ["0.5.0"]
+    assert sorted(stamp["version"] for stamp in _stamps(DEVICE_ID)) == ["0.4.0", "0.5.0"]
 
 
 def test_heartbeat_endpoint_persists_transport_summary_fields(live_catalog, live_catalog_client):
