@@ -197,6 +197,8 @@ jobs:
           out="$TT_OUT/versions.txt"
           {
             echo "uname: $(uname -srm)"
+            echo "cpus: $(nproc)  load: $(cut -d' ' -f1-3 /proc/loadavg)"
+            echo "memory: $(free -m | awk '/^Mem:/ {print $2 " MB total, " $7 " MB available"}')"
             echo "python: $(python3 --version 2>&1)"
             echo "node: $(node --version 2>&1)"
             echo "engine: $("$TT_ENGINE" --version 2>&1 | head -1)"
@@ -240,6 +242,10 @@ jobs:
               sys.stdout.flush()
           PY
           stamp() { python3 -u "$RUNNER_TEMP/tt-stamp.py"; }
+          # CPU, run queue and memory once a second while the cells run, to say whether the
+          # runner is the limit.
+          vmstat -t 1 > "$TT_OUT/vmstat.log" 2>&1 &
+          sampler=$!
           failed=0
           IFS=',' read -r -a providers <<< "$TT_PROVIDERS"
           for mode in $TT_MODES; do
@@ -258,6 +264,7 @@ jobs:
               fi
             done
           done
+          kill "$sampler" 2>/dev/null
           echo "TT_FAILED=$failed" >> "$GITHUB_ENV"
 
       # Fail closed: exit status alone is not trusted. Every selected cell must have a result
@@ -319,7 +326,7 @@ jobs:
             # (h/) or the SQLite database.
             if [[ -s "$TT_OUT/scratch-new.txt" ]]; then
               (cd "$scratch" && xargs -a "$TT_OUT/scratch-new.txt" tar --exclude='*/h' --exclude='*.db' --exclude='*.db-*' -czf "$TT_OUT/scratch-recordings.tgz")
-              (cd "$scratch" && xargs -a "$TT_OUT/scratch-new.txt" -I{} sh -c 'echo "== {}"; find {} -maxdepth 2 -not -path "{}/h/*" -printf "%p %s %TT+ %Cs\n" | sort')  > "$TT_OUT/scratch-listing.txt" || true
+              (cd "$scratch" && xargs -a "$TT_OUT/scratch-new.txt" -I{} sh -c 'echo "== {}"; find {} -maxdepth 2 -not -path "{}/h/*" -printf "%p %s birth=%B@ mtime=%T@\n" | sort')  > "$TT_OUT/scratch-listing.txt" || true
             fi
           fi
           ls -la "$TT_OUT"
