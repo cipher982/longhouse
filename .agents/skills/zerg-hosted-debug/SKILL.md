@@ -46,7 +46,7 @@ read-only over ssh, summarizes the session's `live_sessions`, `live_runtime_stat
 WriteSerializer pressure and request counts from tenant logs. It needs
 `CONTROL_PLANE_ADMIN_TOKEN` or `ADMIN_TOKEN` (Infisical, workspace `AGENTS.md`) and
 ssh to alias `zerg` (override `HOSTED_SESSION_DEBUG_SSH_TARGET`). Its default
-subdomain is `demo`, which is retired, so always pass `--subdomain`. Prefer it over
+subdomain is `david010`. Prefer it over
 hand-written `ssh` plus guessed DB paths. Auth helpers are in
 `scripts/lib/hosted-instance.sh`.
 

@@ -13,7 +13,7 @@ fi
 # shellcheck disable=SC1090
 . "$HOSTED_INSTANCE_HELPER"
 
-INSTANCE_SUBDOMAIN="${LONGHOUSE_DEFAULT_SUBDOMAIN:-demo}"
+INSTANCE_SUBDOMAIN="${LONGHOUSE_DEFAULT_SUBDOMAIN:-david010}"
 SESSION_ID=""
 LIMIT=20
 LOGS_SINCE="30m"
@@ -36,7 +36,7 @@ Requirements:
   - SSH access to host alias "zerg" (override with HOSTED_SESSION_DEBUG_SSH_TARGET)
 
 Options:
-  --subdomain <name>   Hosted instance subdomain (default: $LONGHOUSE_DEFAULT_SUBDOMAIN or demo)
+  --subdomain <name>   Hosted instance subdomain (default: $LONGHOUSE_DEFAULT_SUBDOMAIN or david010)
   --session <id>       Session ID to inspect (required)
   --limit <n>          Max recent rows to show per section (default: 20)
   --logs               Include session-specific tenant logs
@@ -86,7 +86,7 @@ while (($# > 0)); do
       exit 1
       ;;
     *)
-      if [[ "$INSTANCE_SUBDOMAIN" != "${LONGHOUSE_DEFAULT_SUBDOMAIN:-demo}" ]]; then
+      if [[ "$INSTANCE_SUBDOMAIN" != "${LONGHOUSE_DEFAULT_SUBDOMAIN:-david010}" ]]; then
         echo "Unexpected extra argument: $1" >&2
         usage >&2
         exit 1
