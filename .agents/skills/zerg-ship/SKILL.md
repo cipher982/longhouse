@@ -50,7 +50,9 @@ Reading the result:
 - `deploy-and-verify.yml` waits for the exact-SHA image, reprovisions the canary
   and runs a fast smoke. The canary is shared: a run whose canary a newer push
   replaced ends green as *superseded* ("Stand down, canary superseded"). That is
-  not a verdict on your SHA; check the newest commit's run.
+  not a verdict on your SHA; check the newest commit's run. A newer head that
+  publishes no runtime image (a CI or docs push) does not supersede: the deploy
+  waits on that head's CI, which contains your SHA, and deploys your image.
 - Hosted Live QA (`hosted-live-qa.yml`) is dispatched per qualified SHA and runs
   daily at 10:41 UTC. It deploys the exact commit to its own instance and records
   a verdict per SHA. "Did QA pass this SHA" is that verdict; a passed,

@@ -225,7 +225,10 @@ jobs:
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
           head_branch: ${{ steps.meta.outputs.head_branch }}
-          superseded_branch: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          # A manual dispatch from main (releasing a held push) follows main's
+          # newer head the same way a push does.
+          superseded_branch: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref_name == 'main' && 'main' || '' }}
+          covering_workflow: runtime-image.yml
           # The action's 20m default is shorter than a queued run: on 2026-09-18
           # `Core E2E tests` took 15m of runtime but only started ~20m after the
           # push, so the gate expired first and reported a timeout against a job
@@ -250,7 +253,10 @@ jobs:
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
           head_branch: ${{ steps.meta.outputs.head_branch }}
-          superseded_branch: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          # A manual dispatch from main (releasing a held push) follows main's
+          # newer head the same way a push does.
+          superseded_branch: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref_name == 'main' && 'main' || '' }}
+          covering_workflow: runtime-image.yml
           github_token: ${{ github.token }}
           event: ""
           required_jobs: Changed paths,Fixture image,Backend tests,Engine tests,Core E2E tests,CLI wheel packaging,Provider contract tests

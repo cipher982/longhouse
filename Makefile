@@ -859,6 +859,7 @@ validate-affected-check: ## @internal Affected-path glob and dirty-tree contract
 
 validate-ship-monitor: ## @internal Ship monitor regression tests
 	@python3 scripts/tests/ship-monitor.test.py
+	@bun scripts/tests/wait-for-ci.test.mjs
 
 validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 	@bash scripts/tests/dogfood-runtime.test.sh
