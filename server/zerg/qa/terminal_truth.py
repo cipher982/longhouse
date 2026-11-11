@@ -36,6 +36,7 @@ import os
 import queue
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -847,7 +848,7 @@ def run_cell(
                 timeout=60,
             )
         if provider == "antigravity" and mode == "helm":
-            _install_antigravity_hook(binary_path, home, environment)
+            _install_antigravity_hook(home, environment)
         if provider == "pi":
             # Console launches `pi` with no --model, so Pi's own default (an OpenRouter model) would be tried; pin the fake.
             agent_dir = home / ".pi" / "agent"
@@ -1007,29 +1008,43 @@ def run_cell(
             result.scratch = None
 
 
-def _install_antigravity_hook(binary: str, home: Path, environment: dict[str, str]) -> None:
-    """Put the Longhouse hook that `longhouse antigravity` insists on into the isolated ``home`` only.
+def _install_antigravity_hook(home: Path, environment: dict[str, str]) -> None:
+    """Put the Longhouse hook where `longhouse antigravity` insists on finding it, inside the isolated ``home`` only.
 
-    The product's only installer, ``longhouse-server onboard``, installs the machine service as well and there is no
-    hook-only command, so this calls the function that installer uses (``install_hooks`` -> ``_ensure_antigravity_runtime_plugin``)
-    under the isolated HOME. It writes ``$HOME/.longhouse/managed-local/antigravity/plugins/longhouse-runtime``,
-    ``$HOME/.gemini/config/hooks.json`` and runs ``agy plugin install`` against that HOME; nothing outside it.
+    Product finding: no command installs the Antigravity hook without also installing the machine service
+    (`longhouse-server onboard` and `longhouse machine repair` both do), and the verifier may not import the
+    subject's installer. So the harness writes the same files the installer writes: the shipped hook script (its
+    source text is read from the subject's file, not imported, and fails loudly if it moves) and a global
+    ``hooks.json`` entry, both under ``home``. The real script matters: on Stop it wakes the transcript shipper, which
+    a no-op stub does not, and that changes the measured ship lag by seconds.
     """
+
+    import ast
+
+    from zerg.qa.provider_live_canary import _antigravity_hook_config
 
     if Path(environment["HOME"]).resolve() != home.resolve():
         raise RuntimeError("refusing to install the Antigravity hook outside the isolated HOME")
-    code = f"from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin as e; print(e(antigravity_bin={binary!r}))"
-    subprocess.run(
-        [sys.executable, "-I", "-c", code],
-        env={**environment, "PYTHONPATH": str(SERVER_ROOT), "LONGHOUSE_HOME": str(home / ".longhouse")},
-        cwd=SERVER_ROOT,
-        check=True,
-        capture_output=True,
-        timeout=60,
+    source = (SERVER_ROOT / "zerg" / "services" / "antigravity_hook_inbox.py").read_text()
+    template = next(
+        (
+            ast.literal_eval(node.value)
+            for node in ast.parse(source).body
+            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "_ANTIGRAVITY_HOOK_SCRIPT" for t in node.targets)
+        ),
+        None,
     )
-    script = home / ".longhouse" / "managed-local" / "antigravity" / "plugins" / "longhouse-runtime" / "longhouse-antigravity-hook.sh"
-    if not script.is_file():
-        raise RuntimeError(f"Antigravity hook was not installed at {script}")
+    if not isinstance(template, str) or "__LONGHOUSE_HOME__" not in template:
+        raise RuntimeError("the Antigravity hook script template moved; update _install_antigravity_hook")
+    plugin = home / ".longhouse" / "managed-local" / "antigravity" / "plugins" / "longhouse-runtime"
+    plugin.mkdir(parents=True)
+    script = plugin / "longhouse-antigravity-hook.sh"
+    script.write_text(template.replace("__LONGHOUSE_HOME__", shlex.quote(str(home / ".longhouse"))))
+    script.chmod(0o755)
+    (plugin / "plugin.json").write_text(json.dumps({"name": "longhouse-runtime"}) + "\n")
+    hooks = home / ".gemini" / "config" / "hooks.json"
+    hooks.parent.mkdir(parents=True, exist_ok=True)
+    hooks.write_text(json.dumps({"longhouse-runtime": _antigravity_hook_config(script)}, indent=2) + "\n")
 
 
 def _create_console_session(api: RuntimeApi, provider: str, device_id: str, cwd: Path) -> dict[str, Any]:

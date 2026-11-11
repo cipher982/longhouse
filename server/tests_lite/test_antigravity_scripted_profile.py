@@ -105,3 +105,21 @@ def test_timing_sidecar_with_a_line_still_being_written_loads_the_complete_chunk
     timing.write_text('{"clock":"monotonic","start_offset":0}\n{"t":1.0,"o":0,"n":50}\n')
     with pytest.raises(ValueError, match="runs past the recording"):
         load_timed_chunks(recording, timing)
+
+
+def test_helm_hook_is_the_shipped_script_written_into_the_isolated_home_only(tmp_path: Path) -> None:
+    from zerg.qa.terminal_truth import _install_antigravity_hook
+
+    home = tmp_path / "h"
+    home.mkdir()
+    _install_antigravity_hook(home, {"HOME": str(home)})
+    script = home / ".longhouse/managed-local/antigravity/plugins/longhouse-runtime/longhouse-antigravity-hook.sh"
+    text = script.read_text()
+    assert "__LONGHOUSE_HOME__" not in text and str(home / ".longhouse") in text
+    assert "wake" in text  # the shipped script wakes the transcript shipper on Stop; a stub would not
+    assert script.stat().st_mode & 0o111
+    hooks = json.loads((home / ".gemini/config/hooks.json").read_text())
+    assert set(hooks["longhouse-runtime"]) >= {"PreInvocation", "PostInvocation", "Stop"}
+    assert str(script).replace("'", "") in json.dumps(hooks)
+    with pytest.raises(RuntimeError, match="isolated HOME"):
+        _install_antigravity_hook(tmp_path / "other", {"HOME": str(home)})
