@@ -70,3 +70,24 @@ def test_file_watcher_dates_a_provider_write_and_ship_lag_is_lane_minus_write(tm
     assert 0 <= watcher.first_seen["WROTE0001"] - wrote_at < 0.1
     stats = tt.lane_stats("x", {"WROTE0001": 1.0}, {"WROTE0001": 5.0}, 0.1, ["WROTE0001"], {"WROTE0001": 4.0})
     assert stats.delays == {"WROTE0001": 4.0} and stats.ship_lag == {"WROTE0001": 1.0}
+
+
+def test_stream_watcher_keeps_the_last_preview_per_session_after_the_last_marker() -> None:
+    import json
+    import threading
+
+    def frame(session: str, text: str) -> str:
+        return "data: " + json.dumps({"session_id": session, "change_kind": "runtime", "transcript_preview": {"text": text}})
+
+    lines = [
+        frame("s1", "alpha"),
+        frame("s1", "alpha beta"),  # carries the last marker
+        "data: " + json.dumps({"session_id": "s1", "transcript_preview": None}),
+        frame("s1", "alpha beta gamma"),  # arrives after every marker was seen
+        frame("s2", "other"),
+    ]
+    stop = threading.Event()
+    watcher = tt.StreamWatcher("s", lambda: iter(lines), ["beta"], stop)
+    watcher.run()
+    assert watcher.first_seen.keys() == {"beta"}
+    assert watcher.final_preview == {"s1": "alpha beta gamma", "s2": "other"}

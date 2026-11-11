@@ -286,6 +286,7 @@ class StreamWatcher(threading.Thread):
         self.response_times: list[float] = []
         self.event_counts: dict[str, int] = {}
         self.sample: list[str] = []  # the first stream lines, to see what the lane carries when no marker arrives
+        self.final_preview: dict[str, str] = {}  # session id -> the last transcript_preview text seen on the stream
         self._stop_event = stop
 
     def run(self) -> None:
@@ -302,7 +303,14 @@ class StreamWatcher(threading.Thread):
                 for marker in [m for m in pending if m in line]:
                     self.first_seen[marker] = now
                     pending.discard(marker)
-                if not pending or self._stop_event.is_set():
+                if text.startswith("data:") and '"transcript_preview": {' in text:
+                    with contextlib.suppress(ValueError):
+                        frame = json.loads(text[5:])
+                        preview = frame.get("transcript_preview")
+                        if isinstance(preview, dict) and isinstance(preview.get("text"), str):
+                            self.final_preview[str(frame.get("session_id"))] = preview["text"]
+                # Keep reading after the last marker: the final preview is the reply as the web client ends up showing it.
+                if self._stop_event.is_set():
                     return
         except Exception as exc:  # noqa: BLE001
             if not self._stop_event.is_set():
@@ -695,6 +703,7 @@ class RunResult:
     lanes: list[LaneStats] = field(default_factory=list)
     lane_errors: dict[str, list[str]] = field(default_factory=dict)
     stream_sample: list[str] = field(default_factory=list)
+    final_preview: dict[str, Any] = field(default_factory=dict)  # last live preview per session vs the scripted reply
     scratch: str | None = None
 
     def to_json(self) -> dict[str, Any]:
@@ -850,10 +859,6 @@ def run_cell(
             agent_dir = home / ".pi" / "agent"
             agent_dir.mkdir(parents=True, exist_ok=True)
             (agent_dir / "settings.json").write_text(json.dumps({"defaultProvider": "longhouse-mock", "defaultModel": "mock-model"}))
-        if provider == "omp" and mode == "console":
-            # Without this the engine expects OMP's sessions under ~/.local/share/omp, while OMP 18.18.9 in a fresh HOME
-            # writes ~/.omp/agent/sessions, and the turn fails with "reserving the reported OMP native source".
-            environment["LONGHOUSE_OMP_SESSION_DIR"] = str(home / ".omp" / "agent" / "sessions")
         host.start()
         args = argparse.Namespace(api_url=host.url, agents_token=host.token, engine=engine, repo_root=REPO_ROOT)
         shipper = toolkit.start_transcript_shipper(provider, args, home=home, environment=environment, evidence_root=root / "evidence")
@@ -960,6 +965,13 @@ def run_cell(
                 result.lane_errors[watcher.lane.name] = watcher.errors
             if isinstance(watcher, StreamWatcher):
                 result.stream_sample = [f"events: {watcher.event_counts}", *watcher.sample]
+                result.final_preview = {
+                    "expected_len": len(text),
+                    "sessions": {
+                        sid: {"len": len(value), "equals_final_message": value.strip() == text.strip()}
+                        for sid, value in watcher.final_preview.items()
+                    },
+                }
         result.file_first_seen_s = {m: (files.first_seen[m] - submitted if m in files.first_seen else None) for m in markers}
         result.file_paths = sorted(set(files.first_path.values()))
         result.file_scan_gap_s = files.resolution_s
@@ -1271,6 +1283,25 @@ def render_table(results: Sequence[RunResult]) -> str:
     return "\n".join(lines)
 
 
+def render_final_preview(results: Sequence[RunResult]) -> str:
+    """Whether the last live preview a web client received equals the scripted final message, per session."""
+
+    lines = ["| provider | mode | final live preview equals the final message |", "|---|---|---|"]
+    for result in results:
+        if result.status != "measured":
+            continue
+        sessions = (result.final_preview or {}).get("sessions") or {}
+        if not sessions:
+            lines.append(f"| {result.provider} | {result.mode} | no live preview received |")
+            continue
+        parts = [
+            f"{sid[:8]}: {'equal' if info['equals_final_message'] else 'DIFFERENT'} ({info['len']} of {result.final_preview['expected_len']} chars)"
+            for sid, info in sessions.items()
+        ]
+        lines.append(f"| {result.provider} | {result.mode} | {'; '.join(parts)} |")
+    return "\n".join(lines)
+
+
 def render_split(results: Sequence[RunResult]) -> str:
     """Where each durable delay comes from: provider write lag after the last paint, then Longhouse's ship lag."""
 
@@ -1344,6 +1375,8 @@ def main(argv: list[str] | None = None) -> int:
     print(render_table(results))
     print()
     print(render_split(results))
+    print()
+    print(render_final_preview(results))
     if args.out:
         args.out.write_text(json.dumps([r.to_json() for r in results], indent=2) + "\n")
     return 0

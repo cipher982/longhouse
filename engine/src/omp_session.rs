@@ -210,20 +210,24 @@ pub fn session_dir_for_launch(cwd: &Path, profile: Option<&str>) -> Result<PathB
         return Ok(candidate);
     }
 
-    let xdg_data_home = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|value| !value.as_os_str().is_empty())
-        .unwrap_or_else(|| home_dir().join(".local").join("share"));
-    let upstream_root = xdg_data_home.join(OMP_DATA_DIR_NAME);
-    let candidate = match profile.as_deref().and_then(safe_profile_name) {
-        Some(profile) => upstream_root
-            .join("profiles")
-            .join(profile)
-            .join(OMP_SESSION_DIR_NAME),
-        None => upstream_root.join(OMP_SESSION_DIR_NAME),
-    };
-    if upstream_root.is_dir() {
-        return Ok(candidate);
+    // OMP reads XDG_DATA_HOME itself and uses `$XDG_DATA_HOME/omp` only when the
+    // variable is set and that directory exists (packages/utils/src/dirs.ts in
+    // oh-my-pi). It never falls back to `~/.local/share`, so neither may this:
+    // a `~/.local/share/omp` that something else created would otherwise name a
+    // root OMP does not write to, and the launch would wait for a transcript
+    // that never appears there.
+    if let Some(xdg_data_home) = nonempty_env_path("XDG_DATA_HOME") {
+        let upstream_root = xdg_data_home.join(OMP_DATA_DIR_NAME);
+        let candidate = match profile.as_deref().and_then(safe_profile_name) {
+            Some(profile) => upstream_root
+                .join("profiles")
+                .join(profile)
+                .join(OMP_SESSION_DIR_NAME),
+            None => upstream_root.join(OMP_SESSION_DIR_NAME),
+        };
+        if upstream_root.is_dir() {
+            return Ok(candidate);
+        }
     }
 
     let config_root = launch_config_root(cwd);
@@ -1677,6 +1681,29 @@ mod tests {
             },
         );
         assert_eq!(xdg, xdg_data.join("omp/sessions"));
+    }
+
+    #[test]
+    fn omp_fresh_launch_ignores_a_default_xdg_directory_omp_would_not_use() {
+        // Mutates process-global environment: hold the shared agent-state lock.
+        let _guard = crate::console_adapter::agent_state_guard();
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home.path().join("workspace");
+        fs::create_dir_all(&cwd).unwrap();
+        // Something other than OMP (a provisioning script, another tool) made it.
+        fs::create_dir_all(home.path().join(".local/share/omp/sessions")).unwrap();
+        let selected = temp_env::with_vars(
+            [
+                ("HOME", Some(home.path().to_str().unwrap())),
+                ("XDG_DATA_HOME", None),
+                (OMP_CONFIG_DIR_ENV, None),
+                (OMP_DATA_DIR_ENV, None),
+                (OMP_PROFILE_ENV, None),
+                (OMP_SESSION_DIR_ENV, None),
+            ],
+            || session_dir_for_launch(&cwd, None).unwrap(),
+        );
+        assert_eq!(selected, home.path().join(".omp/agent/sessions"));
     }
 
     #[test]
