@@ -48,6 +48,9 @@ class Pacing:
     # Reasoning words streamed as `reasoning_content` (chat completions only)
     # inside the initial delay, before the reply starts.
     reasoning_tokens: int = 0
+    # Reasoning word prefix. Empty keeps the historic `THINKING000` words; set, the words are `<prefix>0000`, `<prefix>0001`...
+    # so a harness can time each reasoning chunk by a word unique to its cell.
+    reasoning_prefix: str = ""
 
 
 @dataclass(frozen=True)
@@ -65,7 +68,7 @@ _TOKEN_SPLIT = re.compile(r"\s*\S+|\s+$")
 def parse_pacing(value: object, *, where: str = "pace") -> Pacing:
     if not isinstance(value, dict):
         raise ValueError(f"{where} must be an object")
-    unknown = set(value) - {"rate", "initial_delay", "tokens", "marker_every", "marker_prefix", "reasoning_tokens"}
+    unknown = set(value) - {"rate", "initial_delay", "tokens", "marker_every", "marker_prefix", "reasoning_tokens", "reasoning_prefix"}
     if unknown:
         raise ValueError(f"{where} has unknown keys: {sorted(unknown)}")
 
@@ -89,6 +92,9 @@ def parse_pacing(value: object, *, where: str = "pace") -> Pacing:
         raise ValueError(f"{where}.tokens must be at least 1")
     if not marker_every or marker_every < 1:
         raise ValueError(f"{where}.marker_every must be at least 1")
+    reasoning_prefix = value.get("reasoning_prefix", "")
+    if not isinstance(reasoning_prefix, str) or (reasoning_prefix and not re.fullmatch(r"[A-Za-z0-9]+", reasoning_prefix)):
+        raise ValueError(f"{where}.reasoning_prefix must be alphanumeric")
     return Pacing(
         rate=rate,
         initial_delay=number("initial_delay", 0.0) or 0.0,
@@ -96,6 +102,7 @@ def parse_pacing(value: object, *, where: str = "pace") -> Pacing:
         marker_every=int(marker_every),
         marker_prefix=prefix,
         reasoning_tokens=int(number("reasoning_tokens", 0) or 0),
+        reasoning_prefix=reasoning_prefix,
     )
 
 
@@ -111,7 +118,8 @@ def reasoning_chunks(pace: Pacing) -> list[tuple[str, float]]:
     if pace.reasoning_tokens and pace.initial_delay <= 0:
         raise ValueError("pace.reasoning_tokens needs a positive initial_delay")
     count = pace.reasoning_tokens
-    return [(f"{REASONING_WORD}{i:03d} ", pace.initial_delay * (i + 1) / (count + 1)) for i in range(count)]
+    word = (lambda i: f"{pace.reasoning_prefix}{i:04d}") if pace.reasoning_prefix else (lambda i: f"{REASONING_WORD}{i:03d}")
+    return [(f"{word(i)} ", pace.initial_delay * (i + 1) / (count + 1)) for i in range(count)]
 
 
 def _reasoning_on(pace: Pacing | None) -> bool:
@@ -352,6 +360,33 @@ def _latest_input_text(value: object) -> str:
     return ""
 
 
+def _all_input_text(value: object) -> str:
+    """Every user, tool and function message's text in the request (not only the latest): for a provider that appends its own
+    context after a tool result, so the result is neither the latest message nor in a ``user``-role message."""
+
+    found: list[str] = []
+
+    def visit(item: object) -> None:
+        if isinstance(item, dict):
+            if item.get("role") in ("user", "tool", "function"):
+                found.append("\n".join(_string_leaves(item.get("content", item.get("parts", item.get("output"))))))
+                return
+            if isinstance(item.get("type"), str) and item["type"] in TOOL_RESULT_TYPES:
+                found.append("\n".join(_string_leaves(item)))
+                return
+            if "functionResponse" in item:  # Gemini: Antigravity sends the result in a `model`-role content
+                found.append("\n".join(_string_leaves(item["functionResponse"])))
+                return
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return "\n".join(found)
+
+
 def _assistant_history_text(value: object) -> list[str]:
     found: list[str] = []
 
@@ -537,7 +572,20 @@ def _declared_tools(payload: dict) -> list[tuple[str, dict]]:
                 found.append((str(decl.get("name", "")), schema))
         elif tool.get("type") == "function":  # Responses
             found.append((str(tool.get("name", "")), tool.get("parameters") or {}))
+        elif tool.get("type") == "namespace":  # Responses: a group of functions the model calls as `namespace` + `name`
+            for inner in tool.get("tools") or []:
+                if isinstance(inner, dict) and inner.get("type") == "function":
+                    found.append((str(inner.get("name", "")), inner.get("parameters") or {}))
     return found
+
+
+def _tool_namespace(payload: dict, name: str) -> str | None:
+    """The namespace a Responses function tool lives in, if it is offered inside one."""
+    for tool in payload.get("tools") or []:
+        if isinstance(tool, dict) and tool.get("type") == "namespace":
+            if any(isinstance(inner, dict) and inner.get("name") == name for inner in tool.get("tools") or []):
+                return str(tool.get("name"))
+    return None
 
 
 def _shell_call(
@@ -606,8 +654,11 @@ def _scripted_tool_call(payload: dict, spec: dict) -> tuple[str, dict]:
             overrides=overrides,
         )
     offered = {tool_name for tool_name, _schema in _declared_tools(payload)}
+    if isinstance(name, str) and name in offered:
+        schema = next(schema for tool_name, schema in _declared_tools(payload) if tool_name == name)
+        print(f"scripted tool {name}: {json.dumps(schema, sort_keys=True)[:2000]}", flush=True)
     if not isinstance(name, str) or name not in offered:
-        raise ValueError(f"scripted tool {name!r} is not among offered tools")
+        raise ValueError(f"scripted tool {name!r} is not among offered tools: {sorted(offered)}")
     return name, arguments
 
 
@@ -633,7 +684,8 @@ def _scripted_plan(payload: dict, turns: list[dict]) -> GenerationPlan | None:
     for turn in turns:
         # "any_user" matches the marker anywhere in the user messages, for a provider whose last user message is
         # context it appended after the person's prompt (Antigravity).
-        haystack = any_user if turn.get("match_scope") == "any_user" else latest
+        scope = turn.get("match_scope")
+        haystack = any_user if scope == "any_user" else _all_input_text(payload) if scope == "any_input" else latest
         if turn["match"] not in haystack:
             continue
         reply = turn.get("reply")
@@ -789,7 +841,7 @@ class MockHandler(BaseHTTPRequestHandler):
                 encoded = data if isinstance(data, str) else json.dumps(data, separators=(",", ":"))
                 self.wfile.write(f"data: {encoded}\n\n".encode("utf-8"))
                 self.wfile.flush()
-                if at > 0:
+                if at > 0 or getattr(self.server, "log_all_frames", False):
                     self.server.log_paced_frame(time.monotonic(), encoded)
         except (BrokenPipeError, ConnectionResetError):
             if model_request_id is not None:
@@ -860,6 +912,9 @@ class MockHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         try:
             payload = self._read_json()
+            dump_dir = getattr(self.server, "dump_dir", None)
+            if dump_dir is not None:  # opt-in debugging: every request body, one file each, in arrival order
+                (dump_dir / f"{int(time.time() * 1000)}-{uuid4().hex[:6]}.json").write_text(json.dumps({"path": path, "payload": payload}))
             if path.endswith("/messages/count_tokens"):
                 self._send_json(200, {"input_tokens": INPUT_TOKENS})
                 return
@@ -1117,7 +1172,7 @@ class MockHandler(BaseHTTPRequestHandler):
         )
         frames.extend(
             [
-                ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                ("content_block_stop", {"type": "content_block_stop", "index": ti}),
                 (
                     "message_delta",
                     {
@@ -1262,6 +1317,9 @@ class MockHandler(BaseHTTPRequestHandler):
             "arguments": arguments,
             "status": "completed",
         }
+        namespace = _tool_namespace(payload, name)
+        if namespace:
+            call["namespace"] = namespace
         if turn_id is None and _has_user_prompt(payload):
             _issue(_reply_text(payload), f"id:{call['call_id']}")
         text_item = {
@@ -1480,7 +1538,7 @@ class MockHandler(BaseHTTPRequestHandler):
                 )
                 for chunk, at in chunks
             )
-            frames.append(("content_block_stop", {"type": "content_block_stop", "index": 0}))
+            frames.append(("content_block_stop", {"type": "content_block_stop", "index": ti}))
             tool_index = ti + 1
         frames.extend(
             [
@@ -1710,9 +1768,13 @@ class ThreadedServer(ThreadingHTTPServer):
         script_sha256: str | None = None,
         receipt_file: Path | None = None,
         stream_log: Path | None = None,
+        log_all_frames: bool = False,
+        dump_dir: Path | None = None,
     ):
         super().__init__(server_address, request_handler_class, bind_and_activate)
         self.stream_log = stream_log
+        self.dump_dir = dump_dir
+        self.log_all_frames = log_all_frames  # also log unpaced frames (a tool call's arguments), for harnesses that time them
         self._stream_log_lock = threading.Lock()
         self.script_turns = script_turns or []
         self.script_sha256 = script_sha256
@@ -1800,6 +1862,12 @@ def main() -> int:
         default=os.environ.get("LONGHOUSE_SCRIPTED_MODEL_STREAM_LOG") or None,
         help="append one JSON line (monotonic send time, frame) per paced frame written",
     )
+    parser.add_argument(
+        "--stream-log-all",
+        action="store_true",
+        help="with --stream-log, also log frames that are not paced (tool calls)",
+    )
+    parser.add_argument("--dump-requests", type=Path, help="debugging: write every request body into this directory")
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")
@@ -1819,7 +1887,11 @@ def main() -> int:
         script_sha256=script_sha256,
         receipt_file=args.receipt_file,
         stream_log=args.stream_log,
+        log_all_frames=args.stream_log_all,
+        dump_dir=args.dump_requests,
     )
+    if args.dump_requests:
+        args.dump_requests.mkdir(parents=True, exist_ok=True)
     if args.port_file:
         # Atomic: a reader polling for the file must never see it empty.
         partial = args.port_file.with_name(args.port_file.name + ".partial")

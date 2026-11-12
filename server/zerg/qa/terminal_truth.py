@@ -29,6 +29,9 @@ import sys
 from pathlib import Path
 
 from zerg.qa.scripted_model_server import parse_pacing
+from zerg.qa.terminal_truth_kinds import SCENARIOS
+from zerg.qa.terminal_truth_kinds import render_kinds
+from zerg.qa.terminal_truth_kinds import run_kinds_suite
 from zerg.qa.terminal_truth_lanes import _PUBLISH_LINE  # noqa: F401 - re-exported: this module is the entry point and the public surface
 from zerg.qa.terminal_truth_lanes import FileWatcher  # noqa: F401 - re-exported: this module is the entry point and the public surface
 from zerg.qa.terminal_truth_lanes import Lane  # noqa: F401 - re-exported: this module is the entry point and the public surface
@@ -181,7 +184,12 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument(
         "--reasoning-tokens", type=int, default=5, help="reasoning words streamed before the reply, on every protocol (0 turns it off)"
     )
-    run.add_argument("--scenario", choices=["long_reply", "two_message"], default="long_reply")
+    run.add_argument("--scenario", choices=["long_reply", "two_message", "thinking", "tool", "subagent"], default="long_reply")
+    run.add_argument(
+        "--kinds-mutation",
+        choices=["no_thinking", "no_tool", "no_subagent"],
+        help="negative control for the thinking, tool and subagent scenarios: the scripted model skips the thing; every cell must then fail",
+    )
     run.add_argument("--engine", type=Path, default=Path(os.environ.get("LONGHOUSE_ENGINE_BIN") or shutil.which("longhouse-engine") or ""))
     run.add_argument("--mode", action="append", choices=["shadow", "helm", "console"], help="repeatable; default console and helm")
     run.add_argument("--longhouse-cli", type=Path, default=None, help="native longhouse CLI for helm mode (default: PATH)")
@@ -232,6 +240,22 @@ def main(argv: list[str] | None = None) -> int:
         for provider in providers
         if mode == "shadow" or (provider, mode) in expectations
     ]
+    if args.scenario in SCENARIOS:  # the live-kinds scenarios: measurements with preflight checks, no budgets yet
+        kind_results = run_kinds_suite(
+            declared,
+            engine=args.engine,
+            longhouse_cli=args.longhouse_cli,
+            keep=args.keep,
+            ready_timeout=args.ready_timeout,
+            mutation=args.kinds_mutation,
+            log=lambda message: print(message, file=sys.stderr, flush=True),
+        )
+        print(render_kinds(kind_results))
+        if args.out:
+            args.out.write_text(json.dumps(kind_results, indent=2) + "\n")
+        code = 1 if any(r["outcome"] == "fail" for r in kind_results) else 0
+        print(f"\nterminal truth {args.scenario}: {'PASS' if code == 0 else 'FAIL'} (exit {code})")
+        return code
     results = run_suite(
         declared,
         pace=pace,

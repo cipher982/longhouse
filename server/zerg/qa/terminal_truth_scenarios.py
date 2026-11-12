@@ -159,6 +159,7 @@ def build_pass(
     cli: Path | None,
     host_environment: dict[str, str] | None = None,
     log: Callable[[str], None] = lambda _m: None,
+    log_all_frames: bool = False,
 ) -> Pass:
     from zerg.qa import live_session_toolkit as toolkit
 
@@ -169,7 +170,7 @@ def build_pass(
     turns: list[dict[str, Any]] = []
     for spec in specs:
         turns += plans[spec.key].turns
-    model = ScriptedModel(root, turns)
+    model = ScriptedModel(root, turns, log_all_frames=log_all_frames)
     host = ScratchRuntimeHost(root, host_environment)
     proxy: TeeProxy | None = None
     shipper = None

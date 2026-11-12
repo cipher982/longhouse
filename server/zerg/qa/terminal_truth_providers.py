@@ -114,12 +114,14 @@ def pace_json(pace: Pacing) -> dict[str, Any]:
 class ScriptedModel:
     """The scripted model server as a child process, holding every turn of a pass (one per cell, matched by its nonce)."""
 
-    def __init__(self, root: Path, turns: Sequence[dict[str, Any]]) -> None:
+    def __init__(self, root: Path, turns: Sequence[dict[str, Any]], *, log_all_frames: bool = False) -> None:
         self.root = root
+        self.log_all_frames = log_all_frames
         self.script = root / "scripted-model.json"
         self.script.write_text(json.dumps({"turns": list(turns)}))
         self.process: subprocess.Popen[bytes] | None = None
         self.endpoint = ""
+        self._log = open(root / "model.log", "wb")  # noqa: SIM115 - held for the child's life, closed in stop()
 
     def start(self) -> None:
         port_file = self.root / "model.port"
@@ -137,11 +139,13 @@ class ScriptedModel:
                 str(self.root / "model-receipt.json"),
                 "--stream-log",
                 str(self.root / "model-stream.jsonl"),
+                *(["--stream-log-all"] if self.log_all_frames else []),
+                *(["--dump-requests", os.environ["TT_DUMP_REQUESTS_DIR"]] if os.environ.get("TT_DUMP_REQUESTS_DIR") else []),
             ],
             cwd=SERVER_ROOT,
             env=environment,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=self._log,
+            stderr=subprocess.STDOUT,
             start_new_session=True,
         )
         deadline = time.monotonic() + 15
@@ -153,6 +157,7 @@ class ScriptedModel:
 
     def stop(self) -> None:
         _stop_group(self.process)
+        self._log.close()
 
     def sent_times(self, markers: Sequence[str]) -> dict[str, float | None]:
         """When the model server wrote the first frame carrying each marker to the provider (monotonic)."""
