@@ -22,7 +22,7 @@ Object.assign(process.env, {
   LONGHOUSE_MANAGED_SESSION_ID: "pi-helm-test-session",
 });
 // Dynamic import is intentional: the extension validates launch-scoped identity at module load.
-const { default: registerExtension } = await import("./longhouse-pi-helm");
+const { default: registerExtension, toolArgumentsOf, toolOutputTextOf } = await import("./longhouse-pi-helm");
 
 const register = () => {
   const tools = new Map<string, RegisteredTool>();
@@ -108,5 +108,24 @@ describe("Pi coordination child-session fence", () => {
       .execute("s", { session_id: "x", text: "hi", client_request_id: "1" }, new AbortController().signal, undefined, ctxFor(join(channelDir, "sessions", "main", "child.jsonl")));
     expect(child.isError).toBe(true);
     expect(child.content[0].text).toContain("Native subagents");
+  });
+});
+
+describe("tool frames for the live preview", () => {
+  it("keeps small object arguments and drops large or non-object ones", () => {
+    expect(toolArgumentsOf({ args: { command: "ls" } })).toEqual({ command: "ls" });
+    expect(toolArgumentsOf({ args: "ls" })).toBeUndefined();
+    expect(toolArgumentsOf({ args: { blob: "x".repeat(5000) } })).toBeUndefined();
+  });
+
+  it("reads the text of a partial or final result and bounds it to its tail", () => {
+    expect(
+      toolOutputTextOf({ partialResult: { content: [{ type: "text", text: "one\n" }, { type: "image" }, { type: "text", text: "two" }] } }),
+    ).toBe("one\ntwo");
+    expect(toolOutputTextOf({ result: { content: [{ type: "text", text: "done" }] } })).toBe("done");
+    expect(toolOutputTextOf({ partialResult: { details: {} } })).toBeUndefined();
+    const bounded = toolOutputTextOf({ partialResult: { content: [{ type: "text", text: "a".repeat(5000) + "END" }] } });
+    expect(bounded?.length).toBe(4096);
+    expect(bounded?.endsWith("END")).toBe(true);
   });
 });

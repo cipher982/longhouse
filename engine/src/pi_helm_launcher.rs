@@ -145,6 +145,16 @@ impl PiLiveText {
 }
 
 /// The reply text of a forwarded `message_update` frame, if it carries any.
+fn pi_thinking_delta(frame: &Value) -> Option<&str> {
+    if frame.get("message_event_type").and_then(Value::as_str) != Some("thinking_delta") {
+        return None;
+    }
+    frame
+        .get("delta")
+        .and_then(Value::as_str)
+        .filter(|delta| !delta.is_empty())
+}
+
 fn pi_live_text_delta(frame: &Value) -> Option<&str> {
     if frame.get("message_event_type").and_then(Value::as_str) != Some("text_delta") {
         return None;
@@ -165,6 +175,8 @@ struct PiHelmServer {
     stop: Arc<AtomicBool>,
     terminate_requested: Arc<AtomicBool>,
     status: Arc<crate::status_slot::StatusPublisher>,
+    /// The thinking text and tool-call order the extension's frames add up to.
+    discrete: Arc<Mutex<crate::status_slot::DiscreteLive>>,
     /// Session-scoped coordination authority, handed to the extension on
     /// connect and again whenever a degraded launch's registration recovers.
     coordination_token: Arc<Mutex<Option<String>>>,
@@ -202,6 +214,7 @@ impl PiHelmServer {
                 "pi",
                 PI_HELM_TRANSPORT,
             )),
+            discrete: Arc::new(Mutex::new(crate::status_slot::DiscreteLive::default())),
         };
         server.persist_state()?;
         let acceptor = server.clone();
@@ -610,9 +623,13 @@ impl PiHelmServer {
                     .expect("Pi Helm state mutex poisoned")
                     .live
                     .start_message();
+                self.discrete.lock().expect("Pi Helm discrete mutex poisoned").reset_thinking();
             }
+            "tool_call" => self.publish_tool_call(&frame),
             "message_update" => {
-                if let Some(delta) = pi_live_text_delta(&frame) {
+                if let Some(delta) = pi_thinking_delta(&frame) {
+                    self.publish_thinking(delta);
+                } else if let Some(delta) = pi_live_text_delta(&frame) {
                     self.shared
                         .lock()
                         .expect("Pi Helm state mutex poisoned")
@@ -623,6 +640,121 @@ impl PiHelmServer {
             }
             "session_shutdown" => self.disconnect_extension(connection_id),
             _ => {}
+        }
+    }
+
+    /// Thinking text rides the status slot as cumulative text per message, so
+    /// a burst of deltas costs one post, as reply text does.
+    fn publish_thinking(&self, delta: &str) {
+        let (state, turn_id, provider_session_id) = {
+            let guard = self.shared.lock().expect("Pi Helm state mutex poisoned");
+            (
+                guard.state.clone(),
+                guard.live.turn_id(&guard.state.run_id),
+                (!guard.state.provider_session_id.is_empty())
+                    .then(|| guard.state.provider_session_id.clone()),
+            )
+        };
+        let (text, seq) = {
+            let mut discrete = self.discrete.lock().expect("Pi Helm discrete mutex poisoned");
+            crate::status_slot::append_live_text(&mut discrete.thinking, delta);
+            discrete.thinking_seq = discrete.thinking_seq.saturating_add(1);
+            (discrete.thinking.clone(), discrete.thinking_seq)
+        };
+        let preview = crate::status_slot::StatusPreview {
+            turn_id: format!("{turn_id}:thinking"),
+            seq,
+            live_text: text,
+            progress_kind: "pi_helm_stream".into(),
+            provider_session_id,
+            kind: Some("thinking".into()),
+            ..Default::default()
+        };
+        self.status.publish(
+            crate::status_slot::StatusUpdate::phase(
+                &state.session_id,
+                &state.run_id,
+                &Utc::now().to_rfc3339(),
+                &state.phase,
+            )
+            .with_tool(state.tool_name.as_deref())
+            .with_preview(Some(preview)),
+        );
+    }
+
+    /// One tool call frame (start, update or end) as its own durable event: the
+    /// status slot keeps only the newest preview, so a call that moved on within
+    /// one beat was never posted.
+    fn publish_tool_call(&self, frame: &Value) {
+        let (Some(name), Some(call_id), Some(phase)) = (
+            frame.get("tool_name").and_then(Value::as_str),
+            frame.get("tool_call_id").and_then(Value::as_str),
+            frame.get("phase").and_then(Value::as_str),
+        ) else {
+            return;
+        };
+        let (state, turn_id) = {
+            let guard = self.shared.lock().expect("Pi Helm state mutex poisoned");
+            (guard.state.clone(), guard.live.turn_id(&guard.state.run_id))
+        };
+        let Some(seq) = self
+            .discrete
+            .lock()
+            .expect("Pi Helm discrete mutex poisoned")
+            .next_tool_seq(phase == "update")
+        else {
+            return;
+        };
+        let input = frame.get("args").filter(|args| args.is_object()).cloned();
+        let output = frame
+            .get("tool_output")
+            .and_then(Value::as_str)
+            .and_then(crate::status_slot::bounded_tool_tail);
+        let summary = input
+            .as_ref()
+            .map(|args| crate::status_slot::tool_arguments_summary(name, args))
+            .unwrap_or_default();
+        let text = output
+            .clone()
+            .filter(|text| !text.trim().is_empty())
+            .or_else(|| (!summary.is_empty()).then_some(summary))
+            .unwrap_or_else(|| name.to_string());
+        let tool_state = match (phase, frame.get("is_error").and_then(Value::as_bool)) {
+            ("end", Some(true)) => "failed",
+            ("end", _) => "completed",
+            _ => "running",
+        };
+        let preview = crate::status_slot::StatusPreview {
+            turn_id,
+            seq,
+            live_text: text,
+            turn_completed: tool_state != "running",
+            progress_kind: "pi_helm_stream".into(),
+            provider_session_id: (!state.provider_session_id.is_empty())
+                .then(|| state.provider_session_id.clone()),
+            kind: Some(crate::status_slot::tool_preview_kind(name).into()),
+            tool_name: Some(name.to_string()),
+            tool_call_id: Some(call_id.to_string()),
+            tool_input: input,
+            tool_output: output,
+            tool_state: Some(tool_state.into()),
+        };
+        let outbox = match crate::config::get_agent_runtime_events_outbox_dir() {
+            Ok(outbox) => outbox,
+            Err(error) => {
+                tracing::warn!("Pi Helm tool preview has no outbox: {error}");
+                return;
+            }
+        };
+        if let Err(error) = crate::status_slot::enqueue_preview_event(
+            &outbox,
+            "pi",
+            &state.session_id,
+            &state.run_id,
+            PI_HELM_TRANSPORT,
+            preview,
+        ) {
+            tracing::warn!("Pi Helm tool preview not queued: {error}");
         }
     }
 
@@ -1636,7 +1768,9 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{pi_live_text_delta, provisional_run_id, resume_run_id, PiLiveText};
+    use super::{
+        pi_live_text_delta, pi_thinking_delta, provisional_run_id, resume_run_id, PiLiveText,
+    };
     use serde_json::json;
 
     #[test]
@@ -1689,6 +1823,9 @@ mod tests {
         assert_eq!(pi_live_text_delta(&thinking), None);
         assert_eq!(pi_live_text_delta(&empty), None);
         assert_eq!(pi_live_text_delta(&tool), None);
+        // The same frame is read as thinking, and only as thinking.
+        assert_eq!(pi_thinking_delta(&thinking), Some("hmm"));
+        assert_eq!(pi_thinking_delta(&text), None);
     }
 
     #[test]

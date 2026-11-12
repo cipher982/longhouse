@@ -114,6 +114,45 @@ pub fn tool_arguments_summary(name: &str, input: &Value) -> String {
         .unwrap_or_else(|| input.to_string())
 }
 
+/// What a Helm launcher's thinking deltas and tool frames add up to: the
+/// current message's cumulative thinking text, and the counter that orders
+/// tool previews.
+#[derive(Default)]
+pub struct DiscreteLive {
+    pub thinking: String,
+    pub thinking_seq: u64,
+    tool_seq: u64,
+    last_tool_update: Option<std::time::Instant>,
+}
+
+/// A tool's running output is posted at most this often, the status slot's own
+/// coalescing interval, so tool output never posts faster than reply text.
+const TOOL_UPDATE_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+impl DiscreteLive {
+    pub fn reset_thinking(&mut self) {
+        self.thinking.clear();
+        self.thinking_seq = 0;
+    }
+
+    /// The order number for the next tool preview, or None for an update that
+    /// follows the last one too closely. Starts and ends are never skipped.
+    pub fn next_tool_seq(&mut self, is_update: bool) -> Option<u64> {
+        if is_update {
+            let now = std::time::Instant::now();
+            if self
+                .last_tool_update
+                .is_some_and(|last| now.duration_since(last) < TOOL_UPDATE_MIN_INTERVAL)
+            {
+                return None;
+            }
+            self.last_tool_update = Some(now);
+        }
+        self.tool_seq = self.tool_seq.saturating_add(1);
+        Some(self.tool_seq)
+    }
+}
+
 /// Post one preview as its own durable event, in order, instead of through the
 /// single-valued status slot. A tool call is a discrete event: the slot keeps
 /// only the newest preview and coalesces updates, so a call that began and

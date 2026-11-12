@@ -868,6 +868,35 @@ const launchSessionId = process.env.LONGHOUSE_MANAGED_SESSION_ID;
 const initialPrompt = process.env.LONGHOUSE_PI_HELM_INITIAL_PROMPT;
 const MAX_FRAME_BYTES = 512 * 1024;
 const MAX_LIVE_TEXT_DELTA_LENGTH = 4096;
+const MAX_TOOL_ARGS_LENGTH = 2048;
+const MAX_TOOL_OUTPUT_LENGTH = 4096;
+
+/// A tool call's arguments when they are a small object, else nothing: the
+/// preview only needs enough to say what the call is.
+export const toolArgumentsOf = (event: Record<string, unknown>): Record<string, unknown> | undefined => {
+  const args = event.args;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
+  try {
+    return JSON.stringify(args).length <= MAX_TOOL_ARGS_LENGTH ? (args as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/// The text a running tool has produced so far (`partialResult`, cumulative) or
+/// finished with (`result`): the last MAX_TOOL_OUTPUT_LENGTH characters.
+export const toolOutputTextOf = (event: Record<string, unknown>): string | undefined => {
+  const result = event.partialResult ?? event.result;
+  if (!result || typeof result !== "object") return undefined;
+  const content = (result as Record<string, unknown>).content;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .map((block: Record<string, unknown>) =>
+      block && block.type === "text" && typeof block.text === "string" ? block.text : "",
+    )
+    .join("");
+  return text ? text.slice(-MAX_TOOL_OUTPUT_LENGTH) : undefined;
+};
 const MAX_RECONNECT_ATTEMPTS = 5;
 const MAX_DEFERRED_COMMANDS = 32;
 
@@ -1178,9 +1207,40 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", async (_event, ctx) => emitActivity("running", undefined, ctx));
-  pi.on("tool_execution_start", async (event, ctx) => emitActivity("running", event.toolName, ctx));
-  pi.on("tool_execution_update", async (event, ctx) => emitActivity("running", event.toolName, ctx));
-  pi.on("tool_execution_end", async (_event, ctx) => emitActivity("running", undefined, ctx));
+  // The tool call itself, for the live preview: its name, id, arguments and output so far.
+  const emitToolCall = (phase: string, event: unknown, ctx: ExtensionContext) => {
+    if (isChildSession(ctx)) return;
+    const frame = (event ?? {}) as Record<string, unknown>;
+    if (typeof frame.toolName !== "string" || typeof frame.toolCallId !== "string") return;
+    const args = toolArgumentsOf(frame);
+    const output = toolOutputTextOf(frame);
+    write(
+      sessionFrame(
+        {
+          kind: "tool_call",
+          phase,
+          tool_name: frame.toolName.slice(0, 256),
+          tool_call_id: frame.toolCallId.slice(0, 256),
+          ...(args ? { args } : {}),
+          ...(output ? { tool_output: output } : {}),
+          ...(frame.isError === true ? { is_error: true } : {}),
+        },
+        ctx,
+      ),
+    );
+  };
+  pi.on("tool_execution_start", async (event, ctx) => {
+    emitToolCall("start", event, ctx);
+    emitActivity("running", event.toolName, ctx);
+  });
+  pi.on("tool_execution_update", async (event, ctx) => {
+    emitToolCall("update", event, ctx);
+    emitActivity("running", event.toolName, ctx);
+  });
+  pi.on("tool_execution_end", async (event, ctx) => {
+    emitToolCall("end", event, ctx);
+    emitActivity("running", undefined, ctx);
+  });
   pi.on("message_start", async (event, ctx) => {
     if (isChildSession(ctx) || (event as any)?.message?.role !== "assistant") return;
     write(sessionFrame({ kind: "message_start" }, ctx));
@@ -1189,8 +1249,16 @@ export default function (pi: ExtensionAPI) {
     emitActivity("thinking", undefined, ctx);
     if (isChildSession(ctx)) return;
     const update = (event as any)?.assistantMessageEvent;
-    // Reply text only. thinking_delta and tool-call deltas share this event
-    // and must never be forwarded as reply text.
+    // A thinking_delta is forwarded as its own message_event_type, never as
+    // reply text.
+    if (update?.type === "thinking_delta" && typeof update.delta === "string" && update.delta) {
+      write(
+        sessionFrame(
+          { kind: "message_update", message_event_type: "thinking_delta", delta: update.delta.slice(0, MAX_LIVE_TEXT_DELTA_LENGTH) },
+          ctx,
+        ),
+      );
+    }
     if (update?.type === "text_delta" && typeof update.delta === "string" && update.delta) {
       write(
         sessionFrame(

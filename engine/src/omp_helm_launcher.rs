@@ -498,22 +498,9 @@ struct OmpHelmServer {
     status: Arc<crate::status_slot::StatusPublisher>,
     background_snapshot_coalescer: Arc<Mutex<BackgroundSnapshotCoalescer>>,
     coordination_token: Arc<Mutex<Option<String>>>,
-    discrete: Arc<Mutex<DiscreteLive>>,
+    discrete: Arc<Mutex<crate::status_slot::DiscreteLive>>,
 }
 
-/// What the extension's thinking deltas and tool frames add up to: the current
-/// message's cumulative thinking text, and one counter that orders tool previews.
-#[derive(Default)]
-struct DiscreteLive {
-    thinking: String,
-    thinking_seq: u64,
-    tool_seq: u64,
-    last_tool_update: Option<std::time::Instant>,
-}
-
-/// A tool's running output is posted at most this often, the status slot's own
-/// coalescing interval, so tool output never posts faster than reply text.
-const TOOL_UPDATE_MIN_INTERVAL: Duration = Duration::from_millis(100);
 impl OmpHelmServer {
     fn start(
         state: OmpHelmStateFile,
@@ -556,7 +543,7 @@ impl OmpHelmServer {
                 OMP_HELM_TRANSPORT,
             )),
             coordination_token: Arc::new(Mutex::new(None)),
-            discrete: Arc::new(Mutex::new(DiscreteLive::default())),
+            discrete: Arc::new(Mutex::new(crate::status_slot::DiscreteLive::default())),
             background_snapshot_coalescer: Arc::new(Mutex::new(
                 BackgroundSnapshotCoalescer::default(),
             )),
@@ -2175,18 +2162,10 @@ impl OmpHelmServer {
         };
         let seq = {
             let mut discrete = self.discrete.lock();
-            if kind == "tool_execution_update" {
-                let now = std::time::Instant::now();
-                if discrete
-                    .last_tool_update
-                    .is_some_and(|last| now.duration_since(last) < TOOL_UPDATE_MIN_INTERVAL)
-                {
-                    return;
-                }
-                discrete.last_tool_update = Some(now);
+            match discrete.next_tool_seq(kind == "tool_execution_update") {
+                Some(seq) => seq,
+                None => return,
             }
-            discrete.tool_seq = discrete.tool_seq.saturating_add(1);
-            discrete.tool_seq
         };
         let preview = crate::status_slot::StatusPreview {
             turn_id: turn_id.to_string(),
