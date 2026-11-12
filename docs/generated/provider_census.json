@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 345,
+  "file_count": 347,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -854,6 +854,24 @@
         "cursor",
         "omp",
         "opencode",
+        "pi"
+      ]
+    },
+    {
+      "path": "scripts/qa/web-paint-e2e.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "omp"
+      ]
+    },
+    {
+      "path": "scripts/qa/web_paint_sampler.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "omp",
         "pi"
       ]
     },
