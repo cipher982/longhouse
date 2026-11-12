@@ -16,6 +16,8 @@ from collections.abc import Mapping
 from collections.abc import MutableMapping
 from typing import Any
 
+from zerg.utils import fast_json
+
 INTERACTION_DURABLE_USER_MESSAGE = "durable_user_message"
 INTERACTION_LOCAL_CONTROL = "local_control"
 INTERACTION_LOCAL_CONTROL_OUTPUT = "local_control_output"
@@ -88,7 +90,7 @@ def _raw_mapping(raw_json: Any) -> Mapping[str, Any] | None:
     if not isinstance(raw_json, str) or not raw_json.strip():
         return None
     try:
-        value = json.loads(raw_json)
+        value = fast_json.loads(raw_json)
     except (TypeError, json.JSONDecodeError):
         return None
     return value if isinstance(value, Mapping) else None
@@ -626,6 +628,13 @@ def claude_sequence_dependent_control_candidate(
     sequence is available; without the caveat it remains an ordinary prompt.
     """
 
+    content_candidate = claude_sequence_dependent_control_content_candidate(content_text)
+    if not content_candidate and isinstance(raw_json, str) and "command-" not in raw_json and "\\u" not in raw_json:
+        # Both markup patterns below contain "command-"; skip parsing the
+        # full record JSON (every Claude row on the ingest event loop) when
+        # neither the rendered text nor the raw text can match. A \u escape
+        # could spell "command-" without the literal, so it still parses.
+        return False
     raw = _raw_mapping(raw_json)
     if raw is None or _claude_native_meta_record(raw):
         return False
@@ -638,7 +647,7 @@ def claude_sequence_dependent_control_candidate(
     if prompt_id is None and _raw_identifier(raw, "uuid") is None and _raw_identifier(raw, "parentUuid") is None:
         return False
     raw_text = _raw_content(raw)
-    return claude_sequence_dependent_control_content_candidate(content_text) or (
+    return content_candidate or (
         bool(raw_text) and bool(_CLAUDE_COMMAND_RECORD_RE.fullmatch(raw_text) or _CLAUDE_COMMAND_OUTPUT_RE.fullmatch(raw_text))
     )
 

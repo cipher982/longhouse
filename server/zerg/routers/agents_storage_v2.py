@@ -96,6 +96,7 @@ from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectValidationError
 from zerg.storage_v2.render_objects import RenderRecord
 from zerg.storage_v2.render_objects import validate_render_object_spec
+from zerg.utils import fast_json
 from zerg.utils.server_timing import ServerTimingRecorder
 
 _SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS = 4.25
@@ -320,7 +321,7 @@ async def _read_bounded_json(request: Request) -> dict[str, Any]:
                 "Storage-v2 body is not valid zstd.",
             ) from exc
     try:
-        decoded = await asyncio.to_thread(json.loads, body)
+        decoded = await asyncio.to_thread(fast_json.loads, body)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise _http_error(status.HTTP_400_BAD_REQUEST, "invalid_json", "Storage-v2 body is not valid JSON.") from exc
     if not isinstance(decoded, dict):
@@ -428,7 +429,7 @@ def _parse_render_spec(
     raw_values: list[object] = []
     for raw_record in raw_spec.records:
         try:
-            raw_value = json.loads(raw_record.data.decode("utf-8"))
+            raw_value = fast_json.loads(raw_record.data.decode("utf-8"))
             raw_values.append(raw_value if isinstance(raw_value, dict) else None)
         except (UnicodeDecodeError, json.JSONDecodeError):
             raw_values.append(None)

@@ -27,6 +27,7 @@ from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import aggregate_render_object
+from zerg.utils import fast_json
 
 
 class StorageV2SemanticRecoveryError(RuntimeError):
@@ -346,7 +347,7 @@ def _classify_render_records_in_raw_order(
     for raw_record in raw_records:
         raw_text = raw_record.data.decode("utf-8", errors="replace")
         try:
-            raw_values.append(json.loads(raw_text))
+            raw_values.append(fast_json.loads(raw_text))
         except (TypeError, json.JSONDecodeError):
             raw_values.append(raw_text)
 
@@ -424,7 +425,7 @@ async def _seed_sequence_context_from_prior_raw(
         for raw_record in decoded.spec.records:
             raw_text = raw_record.data.decode("utf-8", errors="replace")
             try:
-                raw_value: Any = json.loads(raw_text)
+                raw_value: Any = fast_json.loads(raw_text)
             except (TypeError, json.JSONDecodeError):
                 raw_value = None
             role = _raw_role(raw_value)
@@ -531,7 +532,7 @@ async def _seed_sequence_context_from_adjacent_raw(
         for raw_record in decoded.spec.records:
             raw_text = raw_record.data.decode("utf-8", errors="replace")
             try:
-                raw_value: Any = json.loads(raw_text)
+                raw_value: Any = fast_json.loads(raw_text)
             except (TypeError, json.JSONDecodeError):
                 continue
             if not isinstance(raw_value, Mapping):

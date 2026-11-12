@@ -36,6 +36,7 @@ dependencies = [
     "psutil>=5.9.0",
     "onnxruntime>=1.28.0",
     "tokenizers>=0.23.1",
+    "msgspec>=0.22.0",
 ]
 
 [project.optional-dependencies]
