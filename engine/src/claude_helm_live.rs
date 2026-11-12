@@ -85,30 +85,6 @@ struct ToolCall {
     seq: u64,
 }
 
-/// What a tool call's arguments say in one line, for the preview text: the
-/// command, a subagent's description, a path, pattern or query, else the JSON.
-fn arguments_summary(name: &str, input: &serde_json::Value) -> String {
-    let keys: &[&str] = if crate::status_slot::tool_preview_kind(name) == "subagent" {
-        &["description", "prompt", "subagent_type"]
-    } else {
-        &[
-            "command",
-            "description",
-            "file_path",
-            "path",
-            "pattern",
-            "url",
-            "query",
-            "prompt",
-        ]
-    };
-    keys.iter()
-        .find_map(|key| input.get(*key).and_then(|value| value.as_str()))
-        .filter(|text| !text.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| input.to_string())
-}
-
 /// The live content of the message Claude is writing: reply text and thinking,
 /// each cumulative, reset when a new step (a new assistant message) or a new
 /// turn begins.
@@ -188,7 +164,7 @@ impl LiveText {
                     return None;
                 }
                 call.seq = call.seq.saturating_add(1);
-                let text = arguments_summary(&call.name, &input);
+                let text = crate::status_slot::tool_arguments_summary(&call.name, &input);
                 Some(self.tool_preview(run_id, position, text, Some(input)))
             }
             Some(_) => None,

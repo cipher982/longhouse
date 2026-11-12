@@ -17,8 +17,11 @@
 //! - `step_payload` is protobuf without a published schema. Field 1 repeats
 //!   `step_type`; field 20 is the model response. Inside it, field 1 is the
 //!   reply text so far (plain UTF-8, cumulative, not a delta) and field 3 is
-//!   the model's thinking so far. Thinking is never read here: the preview
-//!   cannot label what kind of text it carries yet, so only the reply goes out.
+//!   the model's thinking so far. Thinking goes out as its own preview,
+//!   labelled `thinking`, never as the reply.
+//! - `step_type` 132 is a tool call. Its payload's field 5 holds, in field 4,
+//!   the call id (1), the tool name (2) and the arguments as JSON text (3);
+//!   field 4 of the payload is the step's status, 3 once the call is done.
 //!
 //! This is a private, undocumented surface, so the reader trusts none of it
 //! until it checks it, and stands down for the rest of the session on any
@@ -58,6 +61,8 @@ const SUPPORTED_USER_VERSION: i64 = 1;
 const STEP_TYPE_MODEL_RESPONSE: u64 = 15;
 /// `steps.status` while a model step is streaming, and once it is done.
 const STATUS_STREAMING: i64 = 8;
+/// `steps.step_type` of a tool call.
+const STEP_TYPE_TOOL: i64 = 132;
 const STATUS_DONE: i64 = 3;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -212,9 +217,9 @@ fn fields(bytes: &[u8]) -> Result<Vec<(u64, Wire<'_>)>, Surprise> {
     Ok(out)
 }
 
-/// The reply text of a model-response step payload. `Ok(None)` while the
-/// response has produced no reply text yet (thinking only).
-pub fn reply_text(payload: &[u8]) -> Result<Option<String>, Surprise> {
+/// The reply text and the thinking of a model-response step payload, each
+/// `None` while it has produced none (thinking only, or no response yet).
+fn response_texts(payload: &[u8]) -> Result<(Option<String>, Option<String>), Surprise> {
     let mut step_type = None;
     let mut response: Option<&[u8]> = None;
     for (number, value) in fields(payload)? {
@@ -230,29 +235,99 @@ pub fn reply_text(payload: &[u8]) -> Result<Option<String>, Surprise> {
         ));
     }
     let Some(response) = response else {
-        return Ok(None);
+        return Ok((None, None));
     };
-    let mut reply = None;
+    let (mut reply, mut thinking) = (None, None);
     for (number, value) in fields(response)? {
-        // Field 3 is thinking and is deliberately never read.
-        if let (1, Wire::Bytes(bytes)) = (number, value) {
+        if let (1 | 3, Wire::Bytes(bytes)) = (number, value) {
             let text = std::str::from_utf8(bytes)
-                .map_err(|_| Surprise("reply text is not UTF-8".into()))?;
-            reply = Some(text.to_string());
+                .map_err(|_| Surprise("response text is not UTF-8".into()))?
+                .to_string();
+            if number == 1 {
+                reply = Some(text);
+            } else {
+                thinking = Some(text);
+            }
         }
     }
-    Ok(reply.filter(|text| !text.is_empty()))
+    Ok((
+        reply.filter(|text| !text.is_empty()),
+        thinking.filter(|text| !text.is_empty()),
+    ))
+}
+
+/// The reply text of a model-response step payload. `Ok(None)` while the
+/// response has produced no reply text yet (thinking only).
+pub fn reply_text(payload: &[u8]) -> Result<Option<String>, Surprise> {
+    response_texts(payload).map(|(reply, _)| reply)
+}
+
+/// The thinking so far of a model-response step payload.
+pub fn thinking_text(payload: &[u8]) -> Result<Option<String>, Surprise> {
+    response_texts(payload).map(|(_, thinking)| thinking)
+}
+
+/// A tool call as a tool step records it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub input: Option<Value>,
+}
+
+/// The call a tool step's payload names, or `None` when it names none. Never a
+/// surprise: a tool step that does not read is simply not announced.
+pub fn tool_call(payload: &[u8]) -> Option<ToolCall> {
+    let top = fields(payload).ok()?;
+    let info = top
+        .iter()
+        .find_map(|(number, value)| match (number, value) {
+            (5, Wire::Bytes(bytes)) => Some(*bytes),
+            _ => None,
+        })?;
+    let call =
+        fields(info)
+            .ok()?
+            .into_iter()
+            .find_map(|(number, value)| match (number, value) {
+                (4, Wire::Bytes(bytes)) => Some(bytes),
+                _ => None,
+            })?;
+    let (mut id, mut name, mut arguments) = (None, None, None);
+    for (number, value) in fields(call).ok()? {
+        if let Wire::Bytes(bytes) = value {
+            let text = std::str::from_utf8(bytes).ok()?.to_string();
+            match number {
+                1 => id = Some(text),
+                2 => name = Some(text),
+                3 => arguments = Some(text),
+                _ => {}
+            }
+        }
+    }
+    let name = name.filter(|name| !name.is_empty())?;
+    Some(ToolCall {
+        id: id.unwrap_or_default(),
+        name,
+        input: arguments
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .filter(Value::is_object),
+    })
 }
 
 // --- what to say, given what the database shows ---------------------------
 
 /// One statement of a step's reply text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Preview {
     pub idx: i64,
     pub seq: u64,
     pub text: String,
     pub completed: bool,
+    /// `thinking`, `tool` or `subagent`; `None` is reply text.
+    pub kind: Option<&'static str>,
+    pub tool: Option<ToolCall>,
+    pub tool_state: Option<&'static str>,
 }
 
 /// Follows the newest model step and decides when it has something to say.
@@ -325,6 +400,9 @@ impl StepWatch {
                 seq: current.seq,
                 text: current.text.clone(),
                 completed: false,
+                kind: None,
+                tool: None,
+                tool_state: None,
             });
         }
         if status == STATUS_DONE && !current.completed {
@@ -342,9 +420,74 @@ impl StepWatch {
                 seq: current.seq,
                 text: current.text.clone(),
                 completed: true,
+                kind: None,
+                tool: None,
+                tool_state: None,
             });
         }
         None
+    }
+}
+
+/// Follows the newest tool call. Like `StepWatch`, it says nothing about a call
+/// already in the database when the reader arrived.
+pub struct ToolWatch {
+    first_poll: bool,
+    current: Option<(i64, bool, u64)>,
+}
+
+impl ToolWatch {
+    pub fn new() -> Self {
+        Self {
+            first_poll: true,
+            current: None,
+        }
+    }
+
+    /// A poll that found no tool step: whatever appears next is news.
+    pub fn nothing_yet(&mut self) {
+        self.first_poll = false;
+    }
+
+    /// Feed the newest tool step: its index, status and the call it names.
+    pub fn observe(&mut self, idx: i64, status: i64, call: Option<ToolCall>) -> Option<Preview> {
+        let first = std::mem::replace(&mut self.first_poll, false);
+        let done = status == STATUS_DONE;
+        match self.current {
+            Some((current, _, _)) if idx < current => return None,
+            Some((current, was_done, seq)) if current == idx => {
+                if !done || was_done {
+                    return None;
+                }
+                self.current = Some((idx, true, seq + 1));
+                return Self::preview(idx, seq + 1, call?, "completed");
+            }
+            _ => {}
+        }
+        // A new call. One already finished or already there when the reader
+        // arrived is history, not news.
+        self.current = Some((idx, done, 1));
+        if first {
+            return None;
+        }
+        let state = if done { "completed" } else { "running" };
+        Self::preview(idx, 1, call?, state)
+    }
+
+    fn preview(idx: i64, seq: u64, call: ToolCall, state: &'static str) -> Option<Preview> {
+        let text = match call.input.as_ref() {
+            Some(input) => crate::status_slot::tool_arguments_summary(&call.name, input),
+            None => call.name.clone(),
+        };
+        Some(Preview {
+            idx,
+            seq,
+            text,
+            completed: false,
+            kind: Some(crate::status_slot::tool_preview_kind(&call.name)),
+            tool: Some(call),
+            tool_state: Some(state),
+        })
     }
 }
 
@@ -420,6 +563,22 @@ fn newest_model_step(conn: &Connection) -> rusqlite::Result<Option<(i64, i64, Ve
     }
 }
 
+/// The newest tool step: (idx, status, payload).
+fn newest_tool_step(conn: &Connection) -> rusqlite::Result<Option<(i64, i64, Vec<u8>)>> {
+    let mut statement = conn.prepare(
+        "SELECT idx, status, step_payload FROM steps WHERE step_type = ?1 ORDER BY idx DESC LIMIT 1",
+    )?;
+    let mut rows = statement.query([STEP_TYPE_TOOL])?;
+    match rows.next()? {
+        Some(row) => Ok(Some((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Option<Vec<u8>>>(2)?.unwrap_or_default(),
+        ))),
+        None => Ok(None),
+    }
+}
+
 // --- the loop -------------------------------------------------------------
 
 /// How often the hook state directory is rescanned for sessions.
@@ -435,6 +594,8 @@ const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 struct Following {
     conn: Connection,
     watch: StepWatch,
+    thinking: StepWatch,
+    tools: ToolWatch,
 }
 
 /// One Helm session being followed.
@@ -531,16 +692,34 @@ impl Session {
             self.following = Some(Following {
                 conn,
                 watch: StepWatch::new(),
+                thinking: StepWatch::new(),
+                tools: ToolWatch::new(),
             });
         }
         let current = self.following.as_mut().expect("opened above");
         let row = newest_model_step(&current.conn)
             .map_err(|error| Tick::Retry(format!("read: {error}")))?;
-        let Some((idx, status, payload)) = row else {
-            return Ok(());
-        };
-        let text = reply_text(&payload).map_err(|Surprise(message)| Tick::StandDown(message))?;
-        if let Some(preview) = current.watch.observe(idx, status, text) {
+        let tool_row = newest_tool_step(&current.conn)
+            .map_err(|error| Tick::Retry(format!("read: {error}")))?;
+        let mut previews = Vec::new();
+        if let Some((idx, status, payload)) = row {
+            let (reply, thinking) =
+                response_texts(&payload).map_err(|Surprise(message)| Tick::StandDown(message))?;
+            // Thinking first: within a step it comes before the reply.
+            if let Some(mut preview) = current.thinking.observe(idx, status, thinking) {
+                preview.kind = Some("thinking");
+                preview.completed = false;
+                previews.push(preview);
+            }
+            previews.extend(current.watch.observe(idx, status, reply));
+        }
+        match tool_row {
+            Some((idx, status, payload)) => {
+                previews.extend(current.tools.observe(idx, status, tool_call(&payload)));
+            }
+            None => current.tools.nothing_yet(),
+        }
+        for preview in previews {
             publish(config, self, &preview)
                 .map_err(|error| Tick::Retry(format!("enqueue: {error}")))?;
         }
@@ -628,10 +807,14 @@ fn run(config: HelmLiveConfig, stop: Arc<AtomicBool>) {
 /// providers' previews; the Runtime Host allowlists the source.
 fn preview_event(session: &Session, preview: &Preview, occurred_at: &str) -> Value {
     let conversation = session.conversation.as_str();
-    let turn_id = format!("{conversation}:{}", preview.idx);
+    let turn_id = match (preview.kind, preview.tool.as_ref()) {
+        (Some("thinking"), _) => format!("{conversation}:{}:thinking", preview.idx),
+        (Some(_), Some(call)) => format!("{conversation}:{}:tool:{}", preview.idx, call.id),
+        _ => format!("{conversation}:{}", preview.idx),
+    };
     let mut text = String::new();
     crate::status_slot::append_live_text(&mut text, &preview.text);
-    json!({
+    let mut event = json!({
         "runtime_key": format!("antigravity:{}", session.session_id),
         "session_id": session.session_id,
         "provider": "antigravity",
@@ -651,7 +834,24 @@ fn preview_event(session: &Session, preview: &Preview, occurred_at: &str) -> Val
             "execution_lifetime": "interactive",
             "provider_session_id": conversation,
         },
-    })
+    });
+    // Reply text carries none of these, so its payload is what it was.
+    if let Some(payload) = event["payload"].as_object_mut() {
+        if let Some(kind) = preview.kind {
+            payload.insert("preview_kind".into(), json!(kind));
+        }
+        if let Some(call) = preview.tool.as_ref() {
+            payload.insert("tool_name".into(), json!(call.name));
+            payload.insert("tool_call_id".into(), json!(call.id));
+            if let Some(input) = call.input.as_ref() {
+                payload.insert("tool_input".into(), input.clone());
+            }
+        }
+        if let Some(state) = preview.tool_state {
+            payload.insert("tool_state".into(), json!(state));
+        }
+    }
+    event
 }
 
 fn publish(config: &HelmLiveConfig, session: &Session, preview: &Preview) -> anyhow::Result<()> {
@@ -952,7 +1152,7 @@ mod tests {
     }
 
     #[test]
-    fn a_known_schema_streams_reply_text_to_the_outbox_and_never_thinking() {
+    fn a_known_schema_streams_reply_text_and_labelled_thinking_to_the_outbox() {
         let dir = tempfile::tempdir().unwrap();
         let config = config(dir.path());
         write_state(&config, "conv-1", "thinking");
@@ -991,14 +1191,30 @@ mod tests {
         }
         assert!(!session.stood_down);
         let events = outbox_events(&config);
+        let is_thinking = |event: &&Value| event["payload"]["preview_kind"] == "thinking";
+        let thinking: Vec<_> = events.iter().filter(is_thinking).cloned().collect();
+        let events: Vec<_> = events.iter().filter(|e| !is_thinking(e)).cloned().collect();
         let texts: Vec<_> = events
             .iter()
             .map(|event| event["payload"]["live_text"].as_str().unwrap().to_string())
             .collect();
         assert_eq!(texts, ["EXPM0000", "EXPM0000 birch", "EXPM0000 birch"]);
+        // Reply events never carry thinking text or a kind label.
         assert!(events
             .iter()
-            .all(|event| !event.to_string().contains("THINKING")));
+            .all(|event| !event.to_string().contains("THINKING")
+                && event["payload"].get("preview_kind").is_none()));
+        // Thinking is its own labelled item, never completed, never reply text.
+        assert!(!thinking.is_empty());
+        for event in &thinking {
+            assert_eq!(event["payload"]["turn_id"], "conv-1:1:thinking");
+            assert_eq!(event["payload"]["turn_completed"], false);
+            assert!(!event.to_string().contains("EXPM"));
+        }
+        assert_eq!(
+            thinking[0]["payload"]["live_text"],
+            "THINKING000 THINKING001"
+        );
         assert_eq!(events[2]["payload"]["turn_completed"], true);
         assert_eq!(events[0]["source"], SOURCE);
         assert_eq!(events[0]["session_id"], "sess");
@@ -1006,6 +1222,95 @@ mod tests {
         assert_eq!(events[0]["payload"]["progress_kind"], PROGRESS_KIND);
         assert_eq!(events[0]["payload"]["turn_id"], "conv-1:1");
         assert_eq!(events[0]["payload"]["provider_session_id"], "conv-1");
+    }
+
+    /// A tool step, as agy writes it: field 5 holds, in field 4, the call id, the
+    /// tool name and the arguments as JSON text.
+    fn tool_payload(id: &str, name: &str, arguments: &str) -> Vec<u8> {
+        let mut call = field_bytes(1, id.as_bytes());
+        call.extend(field_bytes(2, name.as_bytes()));
+        call.extend(field_bytes(3, arguments.as_bytes()));
+        let mut info = field_bytes(4, &call);
+        info.extend(field_varint(3, 2));
+        let mut out = field_varint(1, STEP_TYPE_TOOL as u64);
+        out.extend(field_bytes(5, &info));
+        out
+    }
+
+    #[test]
+    fn a_tool_step_names_its_call_and_a_bad_one_names_nothing() {
+        let call = tool_call(&tool_payload(
+            "call_1",
+            "run_command",
+            r#"{"CommandLine":"ls"}"#,
+        ))
+        .expect("a call");
+        assert_eq!(
+            (call.id.as_str(), call.name.as_str()),
+            ("call_1", "run_command")
+        );
+        assert_eq!(call.input.unwrap()["CommandLine"], "ls");
+        assert_eq!(tool_call(&field_varint(1, 132)), None);
+        assert_eq!(tool_call(&[0xff, 0xff]), None);
+    }
+
+    #[test]
+    fn a_tool_call_is_announced_running_then_completed_and_history_is_not() {
+        let call = |name: &str| tool_call(&tool_payload("c", name, r#"{"CommandLine":"ls -la"}"#));
+        let mut watch = ToolWatch::new();
+        // Already there when the reader arrived: silent.
+        assert_eq!(watch.observe(4, 3, call("run_command")), None);
+        let started = watch.observe(6, 2, call("run_command")).expect("running");
+        assert_eq!(started.kind, Some("tool"));
+        assert_eq!(started.tool_state, Some("running"));
+        assert_eq!(started.text, "ls -la");
+        assert_eq!(watch.observe(6, 2, call("run_command")), None, "unchanged");
+        let done = watch.observe(6, 3, call("run_command")).expect("completed");
+        assert_eq!(done.tool_state, Some("completed"));
+        assert!(done.seq > started.seq);
+        assert_eq!(watch.observe(6, 3, call("run_command")), None, "once");
+        let agent = watch
+            .observe(8, 2, call("invoke_subagent"))
+            .expect("running");
+        assert_eq!(agent.kind, Some("subagent"));
+    }
+
+    #[test]
+    fn a_tool_step_in_the_database_reaches_the_outbox_labelled_with_its_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path());
+        write_state(&config, "conv-1", "running");
+        let writer = make_db(&db_path(&config, "conv-1"), 1, GOOD_COLUMNS);
+        writer
+            .execute(
+                "INSERT INTO steps VALUES (0, 14, 3, ?1)",
+                [field_varint(1, 14)],
+            )
+            .unwrap();
+        let mut sessions = HashMap::new();
+        rescan(&config, &mut sessions);
+        let session = sessions.get_mut("sess").unwrap();
+        session.poll(&config);
+        writer
+            .execute(
+                "INSERT INTO steps VALUES (1, 132, 2, ?1)",
+                [tool_payload(
+                    "call_9",
+                    "run_command",
+                    r#"{"CommandLine":": TTMARK0000"}"#,
+                )],
+            )
+            .unwrap();
+        session.poll(&config);
+        let events = outbox_events(&config);
+        assert_eq!(events.len(), 1);
+        let payload = &events[0]["payload"];
+        assert_eq!(payload["preview_kind"], "tool");
+        assert_eq!(payload["tool_name"], "run_command");
+        assert_eq!(payload["tool_call_id"], "call_9");
+        assert_eq!(payload["tool_state"], "running");
+        assert_eq!(payload["live_text"], ": TTMARK0000");
+        assert_eq!(payload["tool_input"]["CommandLine"], ": TTMARK0000");
     }
 
     #[test]

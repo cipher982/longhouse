@@ -1152,8 +1152,16 @@ LIVE_SOURCE: dict[tuple[str, str, str], tuple[bool, str, str]] = {
     ("antigravity", "console", "thinking"): (False, "agy -p stdout has no thought field; agy acp has agent_thought_chunk (not used)", ""),
     ("antigravity", "console", "tool_started"): (True, "stdout step_update tool ACTIVE", "engine: read_print_output drops step_update"),
     ("antigravity", "console", "tool_output"): (False, "a foreground command's output exists only at completion", ""),
-    ("antigravity", "helm", "thinking"): (False, "TUI paint only; transcript has it at step end", ""),
-    ("antigravity", "helm", "tool_started"): (True, "PreToolUse hook", "engine: hook sets presence state only"),
+    ("antigravity", "helm", "thinking"): (
+        True,
+        "conversation db: the streaming model step's thought field",
+        "engine: antigravity_helm_live thinking",
+    ),
+    ("antigravity", "helm", "tool_started"): (
+        True,
+        "PreToolUse hook; conversation db tool-call step",
+        "engine: antigravity_helm_live tool",
+    ),
     ("antigravity", "helm", "tool_output"): (False, "a foreground command's output exists only at completion", ""),
 }
 
@@ -1269,6 +1277,8 @@ KIND_EXPECTATIONS: dict[tuple[str, str], tuple[str, str]] = {
     ("claude/helm", "thinking"): ("thinking", "thinking"),
     ("claude/helm", "tool"): ("tool_started", "tool"),
     ("claude/helm", "subagent"): ("subagent_started", "subagent"),
+    ("antigravity/helm", "thinking"): ("thinking", "thinking"),
+    ("antigravity/helm", "tool"): ("tool_started", "tool"),
 }
 
 

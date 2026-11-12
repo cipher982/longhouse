@@ -85,6 +85,35 @@ pub fn tool_preview_kind(tool_name: &str) -> &'static str {
     }
 }
 
+/// What a tool call's arguments say in one line, for a preview's text: the
+/// command, a subagent's description, a path, pattern or query, else the JSON.
+pub fn tool_arguments_summary(name: &str, input: &Value) -> String {
+    let keys: &[&str] = if tool_preview_kind(name) == "subagent" {
+        &["description", "prompt", "subagent_type"]
+    } else {
+        &[
+            "command",
+            "CommandLine",
+            "description",
+            "file_path",
+            "path",
+            "AbsolutePath",
+            "TargetFile",
+            "pattern",
+            "url",
+            "Url",
+            "query",
+            "Query",
+            "prompt",
+        ]
+    };
+    keys.iter()
+        .find_map(|key| input.get(*key).and_then(Value::as_str))
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| input.to_string())
+}
+
 /// The bound on a running tool's output tail, the same as the Runtime Host's.
 pub const MAX_TOOL_TAIL_LINES: usize = 40;
 pub const MAX_TOOL_TAIL_BYTES: usize = 4 * 1024;
