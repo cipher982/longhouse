@@ -412,7 +412,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "engine",
         "engine/src/opencode_run.rs",
         "crate::status_slot::append_live_text(text, delta);",
-        "let _ = (text, delta);",
+        "let _ = delta;",
         "opencode/console",
         ("engine_posted",),
         scenario="thinking",
