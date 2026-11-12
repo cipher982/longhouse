@@ -37,6 +37,15 @@
 //! `-wal` and `-shm` files are not both already there (opening a WAL database
 //! read-only without them would create them), and retries only on a backoff
 //! that grows to two seconds, never in a tight loop.
+//!
+//! When it reads. Every write agy makes lands in the `-wal` file, so between
+//! polls the reader only stats that file (size and modification time) and
+//! reads the database when it changed, at most once per `POLL_INTERVAL`. The
+//! hook state file says whether a turn is in progress, but the reader learns
+//! that a second late (`SCAN_EVERY`), and until 2026-11-12 an idle session was
+//! read once a second whatever agy wrote: the first text or tool call of each
+//! turn in an open session reached Longhouse up to a second after the terminal
+//! showed it (1.0 s measured for a turn that opens with a tool call).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -521,6 +530,17 @@ fn sidecar(db: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Size and modification time of a `-wal` file; `None` while it does not exist.
+type WalMark = (u64, std::time::SystemTime);
+
+/// One `stat`, no read: SQLite appends every committed change to the WAL (or
+/// rewrites it from the start after a checkpoint), so either the size or the
+/// modification time differs after any write. A reader never changes it.
+fn wal_mark(wal: &Path) -> Option<WalMark> {
+    let meta = std::fs::metadata(wal).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
 /// Fail unless the database is the schema this reader was written against.
 pub fn check_schema(conn: &Connection) -> Result<(), Surprise> {
     let version: i64 = conn
@@ -608,6 +628,12 @@ struct Session {
     errors: u32,
     backoff: Duration,
     next_poll: Instant,
+    /// A write to the database may bring the next poll forward to here, never
+    /// earlier: the floor that keeps a busy stream at one read per
+    /// `POLL_INTERVAL` and an error backoff a backoff.
+    earliest_poll: Instant,
+    /// The `-wal` file as it was just before the last poll read the database.
+    wal_seen: Option<WalMark>,
     /// Set once the conversation's database proved unreadable or unknown. The
     /// reader never touches that conversation again.
     stood_down: bool,
@@ -634,8 +660,27 @@ impl Session {
             errors: 0,
             backoff: POLL_INTERVAL,
             next_poll: Instant::now(),
+            earliest_poll: Instant::now(),
+            wal_seen: None,
             stood_down: false,
         }
+    }
+
+    fn wal_path(&self, config: &HelmLiveConfig) -> PathBuf {
+        sidecar(
+            &config
+                .store_root
+                .join("conversations")
+                .join(format!("{}.db", self.conversation)),
+            "-wal",
+        )
+    }
+
+    /// Whether to read the database at `now`: the cadence says so, or agy has
+    /// written to it since the last read and the floor has passed.
+    fn due(&self, config: &HelmLiveConfig, now: Instant) -> bool {
+        now >= self.next_poll
+            || (now >= self.earliest_poll && wal_mark(&self.wal_path(config)) != self.wal_seen)
     }
 
     fn poll(&mut self, config: &HelmLiveConfig) {
@@ -645,6 +690,10 @@ impl Session {
         } else {
             IDLE_POLL_INTERVAL
         };
+        // Taken before the read: a write that lands during it leaves the file
+        // different from this mark, so the next slice reads again.
+        self.wal_seen = wal_mark(&self.wal_path(config));
+        self.earliest_poll = now + POLL_INTERVAL;
         match self.tick(config) {
             Ok(()) => {
                 self.errors = 0;
@@ -666,6 +715,7 @@ impl Session {
                 }
                 self.backoff = (self.backoff * 2).min(MAX_BACKOFF);
                 self.next_poll = now + self.backoff;
+                self.earliest_poll = self.next_poll;
             }
             Err(Tick::StandDown(message)) => {
                 tracing::warn!(
@@ -795,7 +845,7 @@ fn run(config: HelmLiveConfig, stop: Arc<AtomicBool>) {
             next_scan = now + SCAN_EVERY;
         }
         for session in sessions.values_mut() {
-            if !session.stood_down && now >= session.next_poll {
+            if !session.stood_down && session.due(&config, now) {
                 session.poll(&config);
             }
         }
@@ -1345,6 +1395,80 @@ mod tests {
             outbox_events(&config)[0]["payload"]["live_text"],
             "EXPM0000"
         );
+    }
+
+    #[test]
+    fn an_idle_session_is_read_when_agy_writes_not_a_second_later() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path());
+        write_state(&config, "conv-1", "idle");
+        let writer = make_db(&db_path(&config, "conv-1"), 1, GOOD_COLUMNS);
+        writer
+            .execute(
+                "INSERT INTO steps VALUES (1, 15, 3, ?1)",
+                [payload(Some("the previous turn"), None)],
+            )
+            .unwrap();
+        let mut session = Session::new("sess".into(), "run".into(), "conv-1".into());
+        session.poll(&config);
+        assert!(session.following.is_some());
+        assert_eq!(
+            session.next_poll - session.earliest_poll,
+            IDLE_POLL_INTERVAL - POLL_INTERVAL,
+            "an idle session is on the slow cadence"
+        );
+        let just_before_the_slow_poll = session.next_poll - Duration::from_millis(1);
+        assert!(
+            !session.due(&config, just_before_the_slow_poll),
+            "nothing was written, so nothing is read before the slow poll"
+        );
+
+        // The next turn opens with a tool call. The hook state still says idle.
+        writer
+            .execute(
+                "INSERT INTO steps VALUES (2, 132, 8, ?1)",
+                [tool_payload(
+                    "call_1",
+                    "run_command",
+                    r#"{"CommandLine":"ls"}"#,
+                )],
+            )
+            .unwrap();
+        assert!(
+            !session.due(&config, session.earliest_poll - Duration::from_millis(1)),
+            "a write never brings a read closer than one poll interval"
+        );
+        assert!(
+            session.due(&config, session.earliest_poll),
+            "the write is read at the floor, not at the slow poll"
+        );
+        session.poll(&config);
+        let events = outbox_events(&config);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["payload"]["tool_name"], "run_command");
+        assert!(
+            !session.due(&config, session.next_poll - Duration::from_millis(1)),
+            "the reader's own read does not look like a write"
+        );
+    }
+
+    #[test]
+    fn a_read_error_backoff_is_not_shortened_by_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path());
+        let writer = make_db(&db_path(&config, "conv-1"), 1, GOOD_COLUMNS);
+        let mut session = Session::new("sess".into(), "run".into(), "conv-1".into());
+        session.poll(&config);
+        assert!(session.following.is_some());
+        // The table goes away under the reader: every read now fails.
+        writer.execute_batch("DROP TABLE steps;").unwrap();
+        session.poll(&config);
+        assert_eq!(session.errors, 1);
+        writer
+            .execute_batch("CREATE TABLE other (x integer);")
+            .unwrap();
+        assert!(!session.due(&config, session.next_poll - Duration::from_millis(1)));
+        assert!(session.due(&config, session.next_poll));
     }
 
     #[test]
