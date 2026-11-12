@@ -10,11 +10,11 @@ from uuid import UUID
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.routers.agents_storage_v2 import _parse_envelope
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import encode_envelope_preimage
 from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
+from zerg.storage_v2.envelope_wire import parse_envelope as _parse_envelope
 
 
 def _load_wire():

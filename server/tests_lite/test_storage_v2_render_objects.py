@@ -17,7 +17,6 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from tests_lite._process_helpers import child_is_gone
-from zerg.routers.agents_storage_v2 import _parse_render_spec
 from zerg.services.render_object_workers import RenderObjectWorkerError
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.storage_v2_semantics import SemanticRecoveryStats
@@ -27,6 +26,7 @@ from zerg.services.storage_v2_semantics import _semantic_repair_replay_set
 from zerg.services.storage_v2_semantics import enrich_render_interaction_kinds
 from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
 from zerg.services.storage_v2_semantics import repair_storage_session_semantic_projection
+from zerg.storage_v2.envelope_wire import parse_render_spec as _parse_render_spec
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawRecord
 from zerg.storage_v2.raw_objects import read_raw_object

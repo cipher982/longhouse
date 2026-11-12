@@ -48,6 +48,7 @@ from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.services.raw_object_workers import RawObjectWorkerPool
+from zerg.storage_v2 import envelope_wire
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
@@ -430,7 +431,7 @@ def test_router_extracts_rotation_ids_from_reset_records():
         previous_native_id="native-old",
         new_native_id="native-new",
     )
-    _spec, parsed = storage_router._parse_envelope(payload, tenant_id=tenant, machine_id="cinder", lane="live")
+    _spec, parsed = envelope_wire.parse_envelope(payload, tenant_id=tenant, machine_id="cinder", lane="live")
     assert storage_router._conversation_resets(parsed["render_spec"]) == [
         {"previous_provider_session_id": "native-old", "provider_session_id": "native-new"}
     ]
@@ -443,6 +444,6 @@ def test_router_extracts_rotation_ids_from_reset_records():
         new_native_id="native-new",
         reset_payload={"provider_session_id": "  "},
     )
-    _spec, parsed = storage_router._parse_envelope(degraded, tenant_id=tenant, machine_id="cinder", lane="live")
+    _spec, parsed = envelope_wire.parse_envelope(degraded, tenant_id=tenant, machine_id="cinder", lane="live")
     assert storage_router._conversation_resets(parsed["render_spec"]) == []
     assert storage_router._conversation_resets(None) == []

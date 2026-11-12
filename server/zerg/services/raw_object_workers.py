@@ -78,6 +78,12 @@ def _seal_in_worker(root: str, spec: RawObjectSpec) -> SealedRawObject:
     return seal_raw_object(Path(root), spec)
 
 
+def _parse_envelope_in_worker(payload: dict[str, Any], tenant_id: str, machine_id: str, lane: str) -> tuple[RawObjectSpec, dict[str, Any]]:
+    from zerg.storage_v2.envelope_wire import parse_envelope
+
+    return parse_envelope(payload, tenant_id=tenant_id, machine_id=machine_id, lane=lane)
+
+
 def _read_in_worker(root: str, object_path: str, expected_object_hash: str, tenant_id: str) -> DecodedRawObject:
     return read_raw_object_from_store(
         FilesystemImmutableObjectStore(Path(root), tenant_id=tenant_id),
@@ -393,8 +399,53 @@ class RawObjectWorkerPool:
                 await slots.acquire()
         except TimeoutError as exc:
             raise RawObjectWorkerBusy(f"raw {lane} worker queue is full") from exc
-        return await self._seal_once_with_recovery(
-            spec,
+        return await self._run_once_with_recovery(
+            _seal_in_worker,
+            (str(self.root), spec),
+            what="object seal",
+            lane=lane,
+            queue_timeout_seconds=queue_timeout_seconds,
+            timeout_seconds=operation_timeout_seconds,
+            slots=slots,
+        )
+
+    async def parse_envelope(
+        self,
+        payload: dict[str, Any],
+        *,
+        tenant_id: str,
+        machine_id: str,
+        lane: str,
+        queue_timeout_seconds: float | None = None,
+        operation_timeout_seconds: float = 10.0,
+    ) -> tuple[RawObjectSpec, dict[str, Any]]:
+        """Parse and verify an envelope in this lane's worker process.
+
+        Parsing is about 14 ms of interpreter time per 1.7 MB envelope; on
+        serve's event loop it competed with every request for one GIL. The
+        result travels back pickled (about 1 ms). Contract errors raised by
+        the parser (``ValueError``, ``PermissionError``) reach the caller
+        unchanged.
+        """
+
+        if self._closed:
+            raise RawObjectWorkerError("raw worker pool is closed")
+        if lane not in {"live", "repair"}:
+            raise ValueError("raw worker lane must be live or repair")
+        queue_timeout_seconds = write_queue_deadline(lane, queue_timeout_seconds)
+        owner = self._pool_for_lane(lane)
+        if not await owner.recover():
+            raise RawObjectWorkerBusy(f"raw {lane} workers are unavailable while child cleanup is pending")
+        slots = self._live_slots if lane == "live" else self._repair_slots
+        try:
+            async with asyncio.timeout(queue_timeout_seconds):
+                await slots.acquire()
+        except TimeoutError as exc:
+            raise RawObjectWorkerBusy(f"raw {lane} worker queue is full") from exc
+        return await self._run_once_with_recovery(
+            _parse_envelope_in_worker,
+            (payload, tenant_id, machine_id, lane),
+            what="envelope parse",
             lane=lane,
             queue_timeout_seconds=queue_timeout_seconds,
             timeout_seconds=operation_timeout_seconds,
@@ -496,30 +547,27 @@ class RawObjectWorkerPool:
         finally:
             slots.release()
 
-    async def _seal_once_with_recovery(
+    async def _run_once_with_recovery(
         self,
-        spec: RawObjectSpec,
+        fn: Callable[..., Any],
+        args: tuple[Any, ...],
         *,
+        what: str,
         lane: str,
         queue_timeout_seconds: float,
         timeout_seconds: float,
         slots: asyncio.Semaphore,
-    ) -> SealedRawObject:
+    ) -> Any:
         release_slot = True
         try:
             for attempt in range(2):
                 owner = self._pool_for_lane(lane)
                 executor = owner.executor
                 try:
-                    future = owner.submit(
-                        executor,
-                        _seal_in_worker,
-                        str(self.root),
-                        spec,
-                    )
+                    future = owner.submit(executor, fn, *args)
                     async with asyncio.timeout(timeout_seconds):
                         # A timeout or caller cancellation must not free queue
-                        # capacity while the process is still sealing the file.
+                        # capacity while the process is still working.
                         return await asyncio.shield(future)
                 except BrokenProcessPool:
                     release_slot = False
@@ -536,7 +584,7 @@ class RawObjectWorkerPool:
                 except TimeoutError as exc:
                     release_slot = False
                     self._schedule_abandoned(future, owner, executor, slots)
-                    raise RawObjectWorkerError(f"raw {lane} object seal exceeded its deadline") from exc
+                    raise RawObjectWorkerError(f"raw {lane} {what} exceeded its deadline") from exc
                 except asyncio.CancelledError:
                     release_slot = False
                     self._schedule_abandoned(future, owner, executor, slots)

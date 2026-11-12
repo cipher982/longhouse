@@ -5,7 +5,6 @@ import base64
 import hashlib
 import json
 import os
-import threading
 from contextlib import asynccontextmanager
 from datetime import UTC
 from datetime import datetime
@@ -37,6 +36,7 @@ from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
 from zerg.services.session_pubsub import reset_pubsub_for_test
 from zerg.services.session_pubsub import topic_session
+from zerg.storage_v2 import envelope_wire
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import RenderDetailCursor
 from zerg.storage_v2.contracts import envelope_id
@@ -54,6 +54,9 @@ class _AdmissionOnlyPool:
     @asynccontextmanager
     async def admission(self, _lane):
         yield
+
+    async def parse_envelope(self, payload, **kwargs):
+        return envelope_wire.parse_envelope(payload, **kwargs)
 
     async def seal(self, *_args, **_kwargs):
         raise AssertionError("rejected request reached storage worker")
@@ -421,7 +424,7 @@ def test_storage_v2_session_facts_accept_provider_conversation_identity():
     payload = _payload(tenant_id="tenant", machine_id="machine", epoch=uuid4())
     payload["session"]["provider_session_id"] = "provider-thread-new"
 
-    _spec, parsed = storage_router._parse_envelope(
+    _spec, parsed = envelope_wire.parse_envelope(
         payload,
         tenant_id="tenant",
         machine_id="machine",
@@ -1771,6 +1774,9 @@ async def test_storage_v2_releases_live_admission_before_catalog_wait(monkeypatc
                 async with permit:
                     yield
 
+            async def parse_envelope(self, payload, **kwargs):
+                return envelope_wire.parse_envelope(payload, **kwargs)
+
             async def seal(self, *_args, **_kwargs):
                 raise AssertionError("durable replay attempted to reseal source bytes")
 
@@ -1800,25 +1806,38 @@ async def test_storage_v2_releases_live_admission_before_catalog_wait(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_storage_v2_parses_envelopes_off_the_event_loop(monkeypatch):
-    parse_thread_ids = []
-    parse = storage_router._parse_envelope
+async def test_storage_v2_parses_envelopes_in_a_worker_process(monkeypatch):
+    parsed_in: list[int] = []
+    pool_parse = RawObjectWorkerPool.parse_envelope
 
-    def recording_parse(*args, **kwargs):
-        parse_thread_ids.append(threading.get_ident())
-        return parse(*args, **kwargs)
+    async def recording_parse(self, payload, **kwargs):
+        spec, parsed = await pool_parse(self, payload, **kwargs)
+        parsed_in.extend(self._pool_for_lane(kwargs["lane"]).executor._processes)
+        return spec, parsed
 
-    monkeypatch.setattr(storage_router, "_parse_envelope", recording_parse)
-    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-parse-thread-") as stack:
+    monkeypatch.setattr(RawObjectWorkerPool, "parse_envelope", recording_parse)
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-parse-worker-") as stack:
         payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())
         response = await stack.client.post(
             "/agents/storage/v2/envelopes",
             json=payload,
             headers={"X-Longhouse-Storage-Lane": "live"},
         )
+        assert response.status_code == 200, response.text
+        assert response.json()["envelope_id"] == payload["expected_envelope_id"]
 
-    assert response.status_code == 200, response.text
-    assert parse_thread_ids[0] != threading.get_ident()
+        # Same source and epoch, so the precheck admits it and parsing must refuse it.
+        broken = json.loads(json.dumps(payload))
+        broken["records"] = [{"source_position": 0, "data": "\ud800"}]
+        rejected = await stack.client.post(
+            "/agents/storage/v2/envelopes",
+            content=json.dumps(broken).encode(),
+            headers={"Content-Type": "application/json", "X-Longhouse-Storage-Lane": "live"},
+        )
+        assert rejected.status_code == 422, rejected.text
+        assert rejected.json()["detail"]["code"] == "invalid_envelope"
+
+    assert parsed_in and os.getpid() not in parsed_in
 
 
 @pytest.mark.asyncio
@@ -2296,8 +2315,8 @@ def test_text_records_parse_to_the_same_bytes_and_envelope_as_base64(data):
     # The engine serializes the string; the host sees whatever JSON escaping it chose.
     text_payload = json.loads(json.dumps(text_payload, ensure_ascii=False))
 
-    base_spec, base_meta = storage_router._parse_envelope(payload, tenant_id="tenant", machine_id="machine", lane="repair")
-    text_spec, text_meta = storage_router._parse_envelope(text_payload, tenant_id="tenant", machine_id="machine", lane="repair")
+    base_spec, base_meta = envelope_wire.parse_envelope(payload, tenant_id="tenant", machine_id="machine", lane="repair")
+    text_spec, text_meta = envelope_wire.parse_envelope(text_payload, tenant_id="tenant", machine_id="machine", lane="repair")
 
     assert text_spec.records == base_spec.records
     assert text_spec.records[0].data == data
@@ -2318,7 +2337,7 @@ def test_text_records_refuse_what_cannot_be_source_bytes(record, message):
     payload["records"] = [record]
 
     with pytest.raises(ValueError, match=message):
-        storage_router._parse_envelope(payload, tenant_id="tenant", machine_id="machine", lane="repair")
+        envelope_wire.parse_envelope(payload, tenant_id="tenant", machine_id="machine", lane="repair")
 
 
 def test_json_string_raw_record_cannot_acquire_native_provider_authority():
@@ -2331,7 +2350,7 @@ def test_json_string_raw_record_cannot_acquire_native_provider_authority():
     }
     data = json.dumps(json.dumps(native)).encode()
     payload = _payload(tenant_id="tenant", machine_id="machine", epoch=UUID(int=1), data=data)
-    raw_spec, metadata = storage_router._parse_envelope(payload, tenant_id="tenant", machine_id="machine", lane="repair")
+    raw_spec, metadata = envelope_wire.parse_envelope(payload, tenant_id="tenant", machine_id="machine", lane="repair")
 
     assert raw_spec.records[0].data == data
     assert metadata["render_spec"].records[0].interaction_kind == "durable_user_message"
