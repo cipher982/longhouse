@@ -1568,6 +1568,7 @@ async def _live_catalog_workspace_stream(
     stream_epoch: str | None = None,
     include_canary_markers: bool = False,
     heartbeat_interval_seconds: float | None = None,
+    accepted_preview_kinds: frozenset[str] = frozenset(),
 ):
     """Live-only invalidation stream; archive detail is fetched via a child.
 
@@ -1660,6 +1661,11 @@ async def _live_catalog_workspace_stream(
                     last_heartbeat = monotonic()
                 continue
             preview = _workspace_transcript_preview_from_payload(message.payload)
+            if isinstance(preview, dict) and preview.get("kind") not in (None, "reply", "tool", "subagent"):
+                if preview.get("kind") not in accepted_preview_kinds:
+                    # A client that did not ask for this kind (thinking) cannot tell it from the reply, so it gets no frame at all,
+                    # not even a wake: the web tabs and the iOS build that predate kinds see exactly what they saw before.
+                    continue
             preview_event_id = _workspace_preview_event_id(preview)
             latest_event_id = -abs(preview_event_id) if preview_event_id is not None else 0
             catalog_commit_seq = _workspace_catalog_commit_seq(message.payload)
@@ -1723,6 +1729,14 @@ async def stream_session_workspace(
         max_length=128,
         description="Process epoch paired with Last-Event-ID; mismatches force durable snapshot reconciliation.",
     ),
+    preview_kinds: str | None = Query(
+        None,
+        max_length=64,
+        description=(
+            "Comma-separated preview kinds the client can render beyond reply, tool and subagent. `thinking` sends reasoning text on "
+            "transcript_preview frames; without it a thinking preview is never sent to this connection."
+        ),
+    ),
     caller: Caller = Depends(get_current_browser_caller_short_lived),
 ) -> EventSourceResponse:
     """SSE stream that emits workspace_changed when the session's data mutates.
@@ -1764,5 +1778,6 @@ async def stream_session_workspace(
             known_workspace_fingerprint=known_workspace_fingerprint,
             owner_id=caller.owner_id,
             stream_epoch=stream_epoch,
+            accepted_preview_kinds=frozenset(k.strip() for k in (preview_kinds or "").split(",") if k.strip()),
         )
     )

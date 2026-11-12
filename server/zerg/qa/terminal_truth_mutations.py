@@ -28,6 +28,8 @@ from typing import Any
 
 from zerg.qa import terminal_truth as tt
 from zerg.qa.scripted_model_server import parse_pacing
+from zerg.qa.terminal_truth_kinds import kinds_expectation
+from zerg.qa.terminal_truth_kinds import run_kinds_suite
 
 REPO_ROOT = tt.REPO_ROOT
 SCRATCH = tt.SCRATCH_ROOT.parent / "tt-mut"
@@ -43,6 +45,9 @@ class Mutation:
     new: str
     cell: str  # provider/mode the defect breaks
     stages: tuple[str, ...]  # the verdict must name one of these as the first failed stage
+    scenario: str = (
+        ""  # thinking | tool | subagent: judge the cell with the live-kinds scenario and its published-kind check, not reply text
+    )
 
 
 MUTATIONS: tuple[Mutation, ...] = (
@@ -115,6 +120,28 @@ MUTATIONS: tuple[Mutation, ...] = (
         "const READER_ENABLED: bool = false;",
         "antigravity/helm",
         ("engine_posted",),
+    ),
+    Mutation(
+        "host-live-item-drop",
+        "the host stops publishing Claude Console's tool and subagent items (it allowlisted a few progress kinds and drew no other live item)",
+        "server",
+        "server/zerg/services/session_live_previews.py",
+        'if provider == "claude" and source.lower() == "claude_print" and progress_kind == "claude_print_stream":\n        return _claude_print_item_candidate(',
+        "if False:\n        return _claude_print_item_candidate(",
+        "claude/console",
+        ("host_published",),
+        scenario="tool",
+    ),
+    Mutation(
+        "host-thinking-drop",
+        "the host stops publishing Codex Console reasoning (no candidate for the app-server's item/reasoning deltas)",
+        "server",
+        "server/zerg/services/session_live_previews.py",
+        'if provider == "codex" and source.lower() == "codex_app_server" and progress_kind == "codex_app_server_jsonrpc":\n        return _codex_reasoning_candidate(',
+        "if False:\n        return _codex_reasoning_candidate(",
+        "codex/console",
+        ("host_published",),
+        scenario="thinking",
     ),
 )
 
@@ -198,6 +225,21 @@ def run_mutations(args: argparse.Namespace) -> int:
     worktree = SCRATCH / "worktree"
     engine_built: dict[str, tuple[Path, Path]] = {}
 
+    def kinds_cell(spec: tt.CellSpec, engine: Path, cli: Path, **extra: Any) -> tuple[str, str | None, str]:
+        """(outcome, first failed stage, reason) of one live-kinds cell judged by its published-kind check."""
+
+        result = run_kinds_suite([spec], engine=engine, longhouse_cli=cli, **extra)[0]
+        if result["outcome"] != "measured":
+            return "fail", "preflight", str(result.get("reason", ""))[:200]
+        check = kinds_expectation(result)
+        if check is None:
+            return "fail", "preflight", "the cell has no published-kind expectation"
+        return (
+            ("pass" if check["ok"] else "fail"),
+            (None if check["ok"] else check["stage"]),
+            json.dumps({k: check[k] for k in ("engine_posted", "stream")}),
+        )
+
     def cell(spec: tt.CellSpec, engine: Path, cli: Path, **extra: Any) -> tt.CellResult:
         return tt.run_suite([spec], pace=extra.pop("pace", pace), engine=engine, longhouse_cli=cli, expectations=expectations, **extra)[0]
 
@@ -207,14 +249,14 @@ def run_mutations(args: argparse.Namespace) -> int:
                 _run(["git", "worktree", "add", "--detach", str(worktree), "HEAD"], cwd=REPO_ROOT)
             _clone_dir(Path(args.cargo_target).resolve(), SCRATCH / "target")
         for m in selected:
-            spec = tt.CellSpec(*m.cell.split("/"))
-            baseline = cell(spec, base_engine, base_cli)
+            spec = tt.CellSpec(*m.cell.split("/"), m.scenario) if m.scenario else tt.CellSpec(*m.cell.split("/"))
+            baseline_outcome = kinds_cell(spec, base_engine, base_cli)[0] if m.scenario else cell(spec, base_engine, base_cli).outcome
             row: dict[str, Any] = {
                 "check": f"mutation {m.name}",
                 "defect": m.defect,
-                "cell": m.cell,
+                "cell": m.cell if not m.scenario else f"{m.cell} ({m.scenario})",
                 "expected_stage": "/".join(m.stages),
-                "baseline": baseline.outcome,
+                "baseline": baseline_outcome,
             }
             started = time.monotonic()
             if m.side == "server":
@@ -225,7 +267,10 @@ def run_mutations(args: argparse.Namespace) -> int:
                 shutil.copytree(REPO_ROOT / "config", copy / "config")
                 target_file = copy / "server" / "zerg" / Path(m.file).relative_to("server/zerg")
                 target_file.write_text(mutated_text(m, target_file.read_text()))
-                mutated = cell(spec, base_engine, base_cli, host_environment={"PYTHONPATH": str(copy / "server")})
+                if m.scenario:
+                    mutated_kinds = kinds_cell(spec, base_engine, base_cli, host_environment={"PYTHONPATH": str(copy / "server")})
+                else:
+                    mutated = cell(spec, base_engine, base_cli, host_environment={"PYTHONPATH": str(copy / "server")})
             elif args.skip_engine:
                 row.update(observed="skipped", ok=False, note="--skip-engine")
                 rows.append(row)
@@ -238,9 +283,9 @@ def run_mutations(args: argparse.Namespace) -> int:
                 finally:
                     _run(["git", "checkout", "--", "."], cwd=worktree)
                 mutated = cell(spec, *engine_built[m.name])
-            outcome, stage, reason = _verdict([mutated])
+            outcome, stage, reason = mutated_kinds if m.scenario else _verdict([mutated])
             row.update(observed_outcome=outcome, observed_stage=stage, reason=reason, seconds=round(time.monotonic() - started))
-            row["ok"] = baseline.outcome == "pass" and outcome == "fail" and stage in m.stages
+            row["ok"] = baseline_outcome == "pass" and outcome == "fail" and stage in m.stages
             rows.append(row)
 
         if not args.only or "reworded-ready-string" in args.only:

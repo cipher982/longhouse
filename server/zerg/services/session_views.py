@@ -661,6 +661,13 @@ class SessionTranscriptPreviewResponse(UTCBaseModel):
     tool_output_text: Optional[str] = None
     tool_call_id: Optional[str] = None
     tool_call_state: Optional[Literal["running", "completed", "dropped"]] = None
+    kind: Optional[Literal["reply", "thinking", "tool", "subagent"]] = Field(
+        None,
+        description=(
+            "What the preview is. Absent: a reply when there is no tool_name, else a tool. thinking is sent only on the live stream, "
+            "to a connection that asked for it with preview_kinds=thinking."
+        ),
+    )
     event_origin: str = Field(..., description="Event origin: durable|live_provisional")
     timestamp: Optional[datetime] = Field(None, description="Event timestamp used for transcript ordering")
     is_provisional: bool = Field(..., description="True when the preview is from an active provisional event")
@@ -2065,6 +2072,7 @@ def build_session_transcript_preview_response(
         tool_output_text=preview.tool_output_text,
         tool_call_id=preview.tool_call_id,
         tool_call_state=preview.tool_call_state,
+        kind=preview.kind,
         event_origin=preview.event_origin,
         timestamp=preview.timestamp,
         is_provisional=preview.event_origin == "live_provisional",

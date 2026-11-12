@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 343,
+  "file_count": 344,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1420,6 +1420,14 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_live_preview_kinds.py",
+      "providers": [
+        "claude",
+        "codex",
+        "omp"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_live_preview_replay.py",
       "providers": [
         "codex",
@@ -2506,6 +2514,7 @@
     {
       "path": "server/zerg/qa/terminal_truth_mutations.py",
       "providers": [
+        "claude",
         "codex",
         "omp",
         "opencode",

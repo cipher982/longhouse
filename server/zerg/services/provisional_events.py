@@ -33,6 +33,8 @@ class TranscriptPreview:
     tool_output_text: str | None = None
     tool_call_id: str | None = None
     tool_call_state: str | None = None
+    # reply | tool | subagent for a stored head, derived from what it carries; None for a durable preview and for rows older than kinds.
+    kind: str | None = None
 
 
 def visible_transcript_event_predicate():

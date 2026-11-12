@@ -33,7 +33,42 @@ LIVE_PREVIEW_SOURCES = {
     "pi_helm_channel",
     "antigravity_helm_db",
     "claude_helm_channel",
+    "codex_app_server",
 }
+
+# What a preview is, for a client that renders by kind. A preview with no kind is a reply (no tool name) or a tool (a tool name);
+# ``subagent`` is a tool whose name is one of the provider subagent-spawning tools. ``thinking`` is never stored: it exists only on the
+# live stream, and only for a connection that asked for it (``preview_kinds=thinking``), so a client that predates kinds cannot show
+# reasoning text as the reply.
+PREVIEW_KIND_REPLY = "reply"
+PREVIEW_KIND_THINKING = "thinking"
+PREVIEW_KIND_TOOL = "tool"
+PREVIEW_KIND_SUBAGENT = "subagent"
+PREVIEW_KINDS = (PREVIEW_KIND_REPLY, PREVIEW_KIND_THINKING, PREVIEW_KIND_TOOL, PREVIEW_KIND_SUBAGENT)
+SUBAGENT_TOOL_NAMES = frozenset({"agent", "task", "spawn_agent", "invoke_subagent"})
+THINKING_MAX_CHARS = 8000  # the tail of the reasoning so far
+TOOL_TAIL_MAX_LINES = 40  # a running tool's output is shown as its tail, never in full
+TOOL_TAIL_MAX_CHARS = 4096
+
+
+def preview_kind(tool_name: str | None) -> str:
+    """The kind of a stored preview, from what it carries: no tool is a reply, a spawning tool is a subagent, any other tool is a tool."""
+
+    name = (tool_name or "").strip()
+    if not name:
+        return PREVIEW_KIND_REPLY
+    return PREVIEW_KIND_SUBAGENT if name.lower() in SUBAGENT_TOOL_NAMES else PREVIEW_KIND_TOOL
+
+
+def bounded_tail(text: str | None) -> str | None:
+    """The last lines of a running tool's output, at most 40 lines and 4 KiB."""
+
+    if not text:
+        return None
+    if len(text) <= TOOL_TAIL_MAX_CHARS and text.count("\n") < TOOL_TAIL_MAX_LINES:
+        return text  # within bounds: exactly as the provider wrote it
+    tail = "\n".join(text.splitlines()[-TOOL_TAIL_MAX_LINES:])
+    return tail[-TOOL_TAIL_MAX_CHARS:] or None
 
 
 @dataclass(frozen=True)
@@ -54,6 +89,13 @@ class LivePreviewCandidate:
     tool_output_text: str | None = None
     tool_call_id: str | None = None
     tool_call_state: str | None = None
+    kind: str = PREVIEW_KIND_REPLY
+    # A thinking candidate carries one delta; the live stream accumulates it (LIVE_ITEM_MEMORY) and never stores it.
+    text_is_delta: bool = False
+
+    @property
+    def effective_kind(self) -> str:
+        return self.kind if self.kind != PREVIEW_KIND_REPLY else preview_kind(self.tool_name)
 
 
 @dataclass(frozen=True)
@@ -131,6 +173,8 @@ def live_preview_candidate_from_runtime_event(
         return _pi_print_preview_candidate(event, payload, observation_id=observation_id)
     if is_claude_print_live_text_event(event):
         return _claude_print_preview_candidate(event, payload, observation_id=observation_id)
+    if provider == "claude" and source.lower() == "claude_print" and progress_kind == "claude_print_stream":
+        return _claude_print_item_candidate(event, payload, observation_id=observation_id)
     if provider == "omp" and source.lower() == "omp_print" and progress_kind == "omp_print_stream":
         return _omp_print_preview_candidate(event, payload, observation_id=observation_id)
     if provider == "opencode" and source.lower() == "opencode_server_bridge" and progress_kind == "opencode_helm_stream":
@@ -143,6 +187,8 @@ def live_preview_candidate_from_runtime_event(
         return _omp_helm_preview_candidate(event, payload, observation_id=observation_id, source="pi_helm_channel")
     if provider == "antigravity" and source.lower() == "antigravity_helm_db" and progress_kind == "antigravity_helm_stream":
         return _omp_helm_preview_candidate(event, payload, observation_id=observation_id, source="antigravity_helm_db")
+    if provider == "codex" and source.lower() == "codex_app_server" and progress_kind == "codex_app_server_jsonrpc":
+        return _codex_reasoning_candidate(event, payload, observation_id=observation_id)
     if progress_kind not in {"bridge_live_transcript_delta", "console_live_tool_item"}:
         return None
 
@@ -176,9 +222,9 @@ def live_preview_candidate_from_runtime_event(
         source=source,
         last_observation_id=observation_id,
         preview_role="assistant",
-        tool_name="exec" if is_tool else None,
+        tool_name=(_optional_str(payload.get("tool_name")) or "exec") if is_tool else None,
         tool_input_json={"command": command} if is_tool else None,
-        tool_output_text=output if is_tool and output else None,
+        tool_output_text=bounded_tail(output) if is_tool and output else None,
         tool_call_id=item_id if is_tool else None,
         tool_call_state=(
             _tool_call_state(
@@ -242,6 +288,226 @@ def _claude_print_preview_candidate(event: Any, payload: dict[str, Any], *, obse
     )
 
 
+class LiveItemMemory:
+    """What the host remembers between runtime events so a live item can be drawn from one event.
+
+    Two things arrive in pieces: reasoning (deltas, accumulated here and only here) and a Claude tool (its name and arguments come on one
+    event, its output on a later one). Memory is per process and bounded; losing it costs a partial reasoning text or a tool called "tool",
+    never a wrong item. Every operation is idempotent in the event's sequence number, because the same event is read by the live stream, the
+    catalog and a resent batch.
+    """
+
+    MAX_SESSIONS = 256
+    MAX_TOOLS = 512
+
+    def __init__(self) -> None:
+        self._thinking: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._tools: OrderedDict[tuple[str, str], tuple[str, dict[str, Any] | None]] = OrderedDict()
+
+    def clear(self) -> None:
+        self._thinking.clear()
+        self._tools.clear()
+
+    def remember_tool(self, session_id: Any, tool_id: str, name: str, args: dict[str, Any] | None) -> None:
+        key = (str(session_id), tool_id)
+        self._tools[key] = (name, args)
+        self._tools.move_to_end(key)
+        while len(self._tools) > self.MAX_TOOLS:
+            self._tools.popitem(last=False)
+
+    def tool(self, session_id: Any, tool_id: str) -> tuple[str, dict[str, Any] | None] | None:
+        return self._tools.get((str(session_id), tool_id))
+
+    def thinking_text(self, event: Any) -> str | None:
+        """The reasoning so far, after applying this event once; ``None`` when the event carries none. Call exactly once per event, in order."""
+
+        step = reasoning_step(event)
+        if step is None:
+            return None
+        delta, item, reset, seq = step
+        sid = str(event.session_id)
+        state = self._thinking.get(sid)
+        if state is None:
+            state = {"text": "", "item": None, "seq": -1}
+            self._thinking[sid] = state
+        self._thinking.move_to_end(sid)
+        while len(self._thinking) > self.MAX_SESSIONS:
+            self._thinking.popitem(last=False)
+        if seq is not None and seq <= state["seq"]:
+            return state["text"] or None  # a replay of an event already applied
+        if seq is not None:
+            state["seq"] = seq
+        if reset or (item is not None and item != state["item"]):
+            state["text"] = ""
+        if item is not None:
+            state["item"] = item
+        if delta:
+            state["text"] = (state["text"] + delta)[-THINKING_MAX_CHARS:]
+        return state["text"] or None
+
+
+LIVE_ITEM_MEMORY = LiveItemMemory()
+
+
+def reasoning_step(event: Any) -> tuple[str, str | None, bool, int | None] | None:
+    """(delta, item id, starts a new block, sequence) for an event that carries reasoning text or opens a reasoning block, else ``None``."""
+
+    payload = event.payload or {}
+    raw = payload.get("event")
+    if not isinstance(raw, dict) or event.kind != "progress_signal":
+        return None
+    provider, source, progress_kind = (
+        (event.provider or "").strip().lower(),
+        (event.source or "").strip().lower(),
+        payload.get("progress_kind"),
+    )
+    seq = _coerce_seq(payload.get("seq"))
+    if provider == "claude" and source == "claude_print" and progress_kind == "claude_print_stream" and raw.get("type") == "stream_event":
+        inner = raw.get("event")
+        if not isinstance(inner, dict):
+            return None
+        kind = inner.get("type")
+        if kind == "message_start":
+            return "", None, True, seq
+        block = inner.get("content_block")
+        if kind == "content_block_start" and isinstance(block, dict) and block.get("type") in {"thinking", "redacted_thinking"}:
+            return "", None, True, seq
+        delta = inner.get("delta")
+        if kind == "content_block_delta" and isinstance(delta, dict) and delta.get("type") == "thinking_delta":
+            return str(delta.get("thinking") or ""), None, False, seq
+        return None
+    if provider == "codex" and source == "codex_app_server" and progress_kind == "codex_app_server_jsonrpc":
+        method = str(raw.get("method") or "")
+        params = raw.get("params") if isinstance(raw.get("params"), dict) else {}
+        item = _optional_str(params.get("itemId"))
+        if method in {"item/reasoning/summaryTextDelta", "item/reasoning/textDelta"}:
+            return str(params.get("delta") or ""), item, False, seq
+        if method == "item/reasoning/summaryPartAdded":
+            return "\n\n", item, False, seq
+    return None
+
+
+def _claude_print_item_candidate(event: Any, payload: dict[str, Any], *, observation_id: str) -> LivePreviewCandidate | None:
+    """Claude Console stream-json lines that are not reply text: reasoning deltas, a tool or subagent call starting, its result."""
+
+    raw = payload.get("event")
+    if not isinstance(raw, dict) or event.session_id is None:
+        return None
+    raw_type = raw.get("type")
+    seq = _coerce_seq(payload.get("seq"))
+    thread_id = _optional_str(payload.get("thread_id") or event.thread_id)
+    turn_id = _optional_str(payload.get("turn_id"))
+    observed_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    source = "claude_print"
+
+    def candidate(item: str, text: str, **extra: Any) -> LivePreviewCandidate:
+        turn_key = build_provisional_key(
+            source=source, session_id=event.session_id, thread_id=thread_id, turn_id=_item_scoped_turn_id(turn_id, item)
+        )
+        return LivePreviewCandidate(
+            session_id=event.session_id,
+            thread_id=thread_id,
+            turn_key=turn_key,
+            seq=seq,
+            preview_text=text,
+            provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
+            preview_observed_at=observed_at,
+            source=source,
+            last_observation_id=observation_id,
+            **{"provisional_complete": False, **extra},
+        )
+
+    step = reasoning_step(event)
+    if step is not None:
+        delta = step[0]
+        return candidate("thinking", delta, kind=PREVIEW_KIND_THINKING, text_is_delta=True) if delta else None
+    message = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+    content = message.get("content")
+    if not isinstance(content, list):
+        return None
+    if raw_type == "assistant":
+        calls = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use" and _optional_str(b.get("id"))]
+        if not calls:
+            return None
+        call = calls[-1]
+        tool_id, name = str(call["id"]), _optional_str(call.get("name")) or "tool"
+        args = call.get("input") if isinstance(call.get("input"), dict) else None
+        LIVE_ITEM_MEMORY.remember_tool(event.session_id, tool_id, name, args)
+        kind = preview_kind(name)
+        text = (_subagent_label(args) if kind == PREVIEW_KIND_SUBAGENT else None) or _tool_call_text(args) or name
+        return candidate(tool_id, text, kind=kind, tool_name=name, tool_input_json=args, tool_call_id=tool_id, tool_call_state="running")
+    if raw_type == "user":
+        results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result" and _optional_str(b.get("tool_use_id"))]
+        if not results:
+            return None
+        result = results[-1]
+        tool_id = str(result["tool_use_id"])
+        remembered = LIVE_ITEM_MEMORY.tool(event.session_id, tool_id)
+        name = remembered[0] if remembered else "tool"
+        args = remembered[1] if remembered else None
+        output = (
+            _native_tool_text(result.get("content"))
+            if not isinstance(result.get("content"), list)
+            else "".join(str(part.get("text") or "") for part in result["content"] if isinstance(part, dict))
+        )
+        kind = preview_kind(name)
+        text = (_subagent_label(args) if kind == PREVIEW_KIND_SUBAGENT else None) or output.strip() or name
+        return candidate(
+            tool_id,
+            text,
+            kind=kind,
+            tool_name=name,
+            tool_input_json=args,
+            tool_output_text=bounded_tail(output),
+            tool_call_id=tool_id,
+            tool_call_state="failed" if result.get("is_error") else "completed",
+            provisional_complete=True,
+        )
+    return None
+
+
+def _tool_call_text(args: dict[str, Any] | None) -> str | None:
+    """The line a client shows for a call that has no output yet: the command, the path, or the arguments."""
+
+    if not args:
+        return None
+    for key in ("command", "cmd", "file_path", "path", "pattern", "url", "query"):
+        value = _optional_str(args.get(key))
+        if value:
+            return value[:400]
+    return json.dumps(args, ensure_ascii=False, sort_keys=True)[:400]
+
+
+def _codex_reasoning_candidate(event: Any, payload: dict[str, Any], *, observation_id: str) -> LivePreviewCandidate | None:
+    """Codex Console reasoning: the app-server's ``item/reasoning/*Delta`` notifications, which the engine posts raw."""
+
+    step = reasoning_step(event)
+    if step is None or not step[0].strip() or event.session_id is None:
+        return None
+    seq = _coerce_seq(payload.get("seq"))
+    thread_id = _optional_str(payload.get("thread_id") or event.thread_id)
+    turn_key = build_provisional_key(
+        source="codex_app_server",
+        session_id=event.session_id,
+        thread_id=thread_id,
+        turn_id=_item_scoped_turn_id(_optional_str(payload.get("turn_id")), "thinking"),
+    )
+    return LivePreviewCandidate(
+        session_id=event.session_id,
+        thread_id=thread_id,
+        turn_key=turn_key,
+        seq=seq,
+        preview_text=step[0],
+        provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
+        provisional_complete=False,
+        preview_observed_at=normalize_utc(event.occurred_at) or datetime.now(timezone.utc),
+        source="codex_app_server",
+        last_observation_id=observation_id,
+        kind=PREVIEW_KIND_THINKING,
+        text_is_delta=True,
+    )
+
+
 def _omp_helm_preview_candidate(
     event: Any,
     payload: dict[str, Any],
@@ -264,6 +530,20 @@ def _omp_helm_preview_candidate(
     )
     observed_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
     seq = _coerce_seq(payload.get("seq"))
+    # A Helm launcher that labels what its cumulative text is says so with `preview_kind` (thinking, tool, subagent) and, for a tool, the
+    # `tool_name`, `tool_call_id`, `tool_input` and `tool_output` tail. A launcher that does not (every one today) sends reply text.
+    labelled = _optional_str(payload.get("preview_kind"))
+    kind = labelled if labelled in {PREVIEW_KIND_THINKING, PREVIEW_KIND_TOOL, PREVIEW_KIND_SUBAGENT} else PREVIEW_KIND_REPLY
+    tool_name = _optional_str(payload.get("tool_name")) if kind in {PREVIEW_KIND_TOOL, PREVIEW_KIND_SUBAGENT} else None
+    if kind != PREVIEW_KIND_REPLY:
+        turn_key = build_provisional_key(
+            source=source,
+            session_id=event.session_id,
+            thread_id=thread_id,
+            turn_id=_item_scoped_turn_id(turn_id, _optional_str(payload.get("tool_call_id")) or kind),
+        )
+    tool_input = payload.get("tool_input")
+    state = _optional_str(payload.get("tool_state"))
     return LivePreviewCandidate(
         session_id=event.session_id,
         thread_id=thread_id,
@@ -275,6 +555,12 @@ def _omp_helm_preview_candidate(
         preview_observed_at=observed_at,
         source=source,
         last_observation_id=observation_id,
+        kind=kind,
+        tool_name=tool_name,
+        tool_input_json=tool_input if isinstance(tool_input, dict) and tool_name else None,
+        tool_output_text=bounded_tail(_optional_str(payload.get("tool_output"))) if tool_name else None,
+        tool_call_id=_optional_str(payload.get("tool_call_id")) if tool_name else None,
+        tool_call_state=(state if state in {"running", "completed", "failed"} else "running") if tool_name else None,
     )
 
 
@@ -339,8 +625,21 @@ def _omp_print_preview_candidate(
             text = "".join(
                 str(block.get("text") or "") for block in content if isinstance(block, dict) and block.get("type") == "text"
             ).strip()
-    if not text:
-        return None
+    if not text or _pi_tool_phase(raw_type) is not None:
+        # A tool the provider is running (OMP print mode speaks the same tool_execution_* events as Pi). The engine
+        # may stamp the turn's live text on these events too, so the event type decides, not an empty text.
+        return _native_tool_candidate(
+            event,
+            payload,
+            raw,
+            raw_type=raw_type,
+            source="omp_print",
+            observation_id=observation_id,
+            thread_id=_optional_str(payload.get("thread_id") or event.thread_id),
+            turn_id=_optional_str(payload.get("turn_id")),
+            seq=_coerce_seq(payload.get("seq")),
+            observed_at=normalize_utc(event.occurred_at) or datetime.now(timezone.utc),
+        )
     thread_id = _optional_str(payload.get("thread_id") or event.thread_id)
     turn_id = _optional_str(payload.get("turn_id"))
     message_index = _optional_str(payload.get("assistant_message_index"))
@@ -568,6 +867,35 @@ def _pi_print_preview_candidate(event: Any, payload: dict[str, Any], *, observat
             last_observation_id=observation_id,
         )
 
+    return _native_tool_candidate(
+        event,
+        payload,
+        raw,
+        raw_type=raw_type,
+        source="pi_print",
+        observation_id=observation_id,
+        thread_id=thread_id,
+        turn_id=turn_id,
+        seq=seq,
+        observed_at=observed_at,
+    )
+
+
+def _native_tool_candidate(
+    event: Any,
+    payload: dict[str, Any],
+    raw: dict[str, Any],
+    *,
+    raw_type: str,
+    source: str,
+    observation_id: str,
+    thread_id: str | None,
+    turn_id: str | None,
+    seq: int | None,
+    observed_at: datetime,
+) -> LivePreviewCandidate | None:
+    """A tool the provider (Pi or OMP print mode) is running: its real name, arguments, and the output so far."""
+
     tool_phase = _pi_tool_phase(raw_type)
     if tool_phase is None:
         return None
@@ -583,9 +911,11 @@ def _pi_print_preview_candidate(event: Any, payload: dict[str, Any], *, observat
     if not output and is_error:
         output = "Tool failed"
     args_text = json.dumps(args, ensure_ascii=False, sort_keys=True) if args else ""
-    preview_text = output.strip() or args_text or tool_name or "Tool"
+    kind = preview_kind(tool_name)
+    label = _subagent_label(args) if kind == PREVIEW_KIND_SUBAGENT else None
+    preview_text = label or output.strip() or args_text or tool_name or "Tool"
     turn_key = build_provisional_key(
-        source="pi_print",
+        source=source,
         session_id=event.session_id,
         thread_id=thread_id,
         turn_id=_item_scoped_turn_id(turn_id, tool_call_id),
@@ -599,15 +929,39 @@ def _pi_print_preview_candidate(event: Any, payload: dict[str, Any], *, observat
         provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
         provisional_complete=tool_phase == "completed",
         preview_observed_at=observed_at,
-        source="pi_print",
+        source=source,
         last_observation_id=observation_id,
         preview_role="assistant",
         tool_name=tool_name,
         tool_input_json=dict(args) if isinstance(args, dict) else None,
-        tool_output_text=output or None,
+        tool_output_text=bounded_tail(output),
         tool_call_id=tool_call_id,
         tool_call_state="failed" if is_error else tool_phase,
+        kind=kind,
     )
+
+
+def _subagent_label(args: Any) -> str | None:
+    """What the user calls a spawned subagent: its description, its name, or the start of its task."""
+
+    if not isinstance(args, dict):
+        return None
+    for key in ("description", "name"):
+        value = _optional_str(args.get(key))
+        if value:
+            return value[:120]
+    tasks = args.get("tasks")
+    if isinstance(tasks, list) and tasks and isinstance(tasks[0], dict):
+        first = tasks[0]
+        for key in ("name", "description", "task"):
+            value = _optional_str(first.get(key))
+            if value:
+                return value[:120]
+    for key in ("prompt", "message", "task"):
+        value = _optional_str(args.get(key))
+        if value:
+            return value[:120]
+    return None
 
 
 def preview_payload_from_runtime_event(event: Any, *, observation_id: str) -> dict[str, Any] | None:
@@ -625,6 +979,7 @@ def preview_payload_from_runtime_event(event: Any, *, observation_id: str) -> di
         "tool_output_text": candidate.tool_output_text,
         "tool_call_id": candidate.tool_call_id,
         "tool_call_state": candidate.tool_call_state,
+        "kind": candidate.effective_kind,
         "event_origin": EVENT_ORIGIN_LIVE_PROVISIONAL,
         "timestamp": candidate.preview_observed_at.isoformat().replace("+00:00", "Z"),
         "is_provisional": True,
@@ -708,11 +1063,15 @@ def _pi_tool_phase(raw_type: str) -> str | None:
 
 
 def upsert_session_live_preview(db: Session, candidate: LivePreviewCandidate) -> bool:
+    if candidate.kind == PREVIEW_KIND_THINKING:
+        return False
     existing = db.get(SessionLivePreview, candidate.session_id)
     return _upsert_live_preview_row(db, candidate, existing, SessionLivePreview, session_id=candidate.session_id)
 
 
 def upsert_live_session_live_preview(db: Session, candidate: LivePreviewCandidate) -> bool:
+    if candidate.kind == PREVIEW_KIND_THINKING:
+        return False  # reasoning exists only on the live stream, for a connection that asked for it
     existing = db.get(LiveSessionLivePreview, str(candidate.session_id))
     return _upsert_live_preview_row(db, candidate, existing, LiveSessionLivePreview, session_id=str(candidate.session_id))
 
@@ -852,6 +1211,7 @@ def preview_map_from_rows(rows) -> dict[str, TranscriptPreview]:
             tool_output_text=row.tool_output_text,
             tool_call_id=row.tool_call_id,
             tool_call_state=row.tool_call_state,
+            kind=preview_kind(row.tool_name),
         )
     return previews
 

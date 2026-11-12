@@ -33,10 +33,15 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.request_db import no_request_db
 from zerg.metrics import event_age_at_ingest_seconds
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.session_live_previews import LIVE_ITEM_MEMORY
+from zerg.services.session_live_previews import PREVIEW_KIND_REPLY
+from zerg.services.session_live_previews import PREVIEW_KIND_THINKING
 from zerg.services.session_live_previews import admit_preview_publication
+from zerg.services.session_live_previews import bounded_tail
 from zerg.services.session_live_previews import is_claude_print_live_text_event
 from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
 from zerg.services.session_live_previews import preview_payload_from_runtime_event
+from zerg.services.session_live_previews import reasoning_step
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import _is_bridge_transcript_event
@@ -214,7 +219,7 @@ async def apply_runtime_observation_batch(
                 managed="true",
             ).observe(age_s)
 
-        live_transcript_events = [event for event in events if _is_bridge_live_transcript_event(event)]
+        live_transcript_events = [event for event in events if _is_bridge_live_transcript_event(event) or _is_live_item_event(event)]
         if live_transcript_events:
             _publish_live_transcript_previews(live_transcript_events, now=now_utc)
 
@@ -404,13 +409,29 @@ def _is_bridge_live_transcript_event(event) -> bool:
     return _is_bridge_transcript_event(event)
 
 
+def _is_live_item_event(event) -> bool:
+    """A runtime event that is a live thinking, tool or subagent item (or a reasoning block boundary), beyond the reply-text sources.
+
+    Boundaries are included so the reasoning memory sees every event of a session in order, which is what lets it start a new block.
+    """
+
+    if event.kind != "progress_signal" or event.session_id is None:
+        return False
+    if reasoning_step(event) is not None:
+        return True
+    candidate = live_preview_candidate_from_runtime_event(event, observation_id=f"live:{event.source}:{event.dedupe_key}")
+    return candidate is not None and candidate.kind != PREVIEW_KIND_REPLY
+
+
 def _publish_live_transcript_previews(events, *, now: datetime) -> None:
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import publish_session_transcript_preview_update
 
     latest_by_session: dict[str, tuple[object, dict]] = {}
     for event in events:
-        preview = _live_transcript_preview_payload(event, now=now)
+        # Once per event, in order: reasoning arrives as deltas and the memory accumulates them (a replay is ignored by sequence).
+        thinking_text = LIVE_ITEM_MEMORY.thinking_text(event) if event.session_id is not None else None
+        preview = _live_transcript_preview_payload(event, now=now, thinking_text=thinking_text)
         if preview is None or event.session_id is None:
             continue
         sid = str(event.session_id)
@@ -466,7 +487,26 @@ def _publish_live_transcript_previews(events, *, now: datetime) -> None:
         )
 
 
-def _live_transcript_preview_payload(event, *, now: datetime) -> dict | None:
+def _live_item_preview_payload(event, *, thinking_text: str | None) -> dict | None:
+    """The preview of a thinking, tool or subagent item, or ``None`` when the event is not one."""
+
+    candidate = live_preview_candidate_from_runtime_event(event, observation_id=f"runtime:{event.source}:{event.dedupe_key}")
+    if candidate is None or candidate.kind == PREVIEW_KIND_REPLY:
+        return None
+    payload = preview_payload_from_runtime_event(event, observation_id=f"runtime:{event.source}:{event.dedupe_key}")
+    if payload is None:
+        return None
+    if candidate.text_is_delta:
+        if candidate.kind != PREVIEW_KIND_THINKING or not thinking_text:
+            return None
+        payload["text"] = thinking_text
+    return payload
+
+
+def _live_transcript_preview_payload(event, *, now: datetime, thinking_text: str | None = None) -> dict | None:
+    item = _live_item_preview_payload(event, thinking_text=thinking_text)
+    if item is not None:
+        return item
     if is_claude_print_live_text_event(event):
         return preview_payload_from_runtime_event(
             event,
@@ -504,9 +544,10 @@ def _live_transcript_preview_payload(event, *, now: datetime) -> dict | None:
         "event_id": seq or 0,
         "text": text,
         "role": "assistant",
-        "tool_name": "exec" if is_tool else None,
+        "tool_name": (str(payload.get("tool_name") or "").strip() or "exec") if is_tool else None,
+        "kind": "tool" if is_tool else "reply",
         "tool_input_json": {"command": command} if is_tool else None,
-        "tool_output_text": output if is_tool and output else None,
+        "tool_output_text": bounded_tail(output) if is_tool and output else None,
         "tool_call_id": str(payload.get("item_id") or "") or None,
         "tool_call_state": (
             "completed"

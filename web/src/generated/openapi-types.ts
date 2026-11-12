@@ -9362,6 +9362,11 @@ export interface components {
             /** Tool Call State */
             tool_call_state?: ("running" | "completed" | "dropped") | null;
             /**
+             * Kind
+             * @description What the preview is. Absent: a reply when there is no tool_name, else a tool. thinking is sent only on the live stream, to a connection that asked for it with preview_kinds=thinking.
+             */
+            kind?: ("reply" | "thinking" | "tool" | "subagent") | null;
+            /**
              * Event Origin
              * @description Event origin: durable|live_provisional
              */
@@ -13251,6 +13256,8 @@ export interface operations {
                 known_workspace_fingerprint?: string | null;
                 /** @description Process epoch paired with Last-Event-ID; mismatches force durable snapshot reconciliation. */
                 stream_epoch?: string | null;
+                /** @description Comma-separated preview kinds the client can render beyond reply, tool and subagent. `thinking` sends reasoning text on transcript_preview frames; without it a thinking preview is never sent to this connection. */
+                preview_kinds?: string | null;
             };
             header?: never;
             path: {

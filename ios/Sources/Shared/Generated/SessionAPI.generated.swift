@@ -444,6 +444,7 @@ struct APISessionTranscriptPreviewResponse: Codable, Hashable, Sendable {
     let toolOutputText: String?
     let toolCallId: String?
     let toolCallState: String?
+    let kind: String?
     let eventOrigin: String
     let timestamp: String?
     let isProvisional: Bool
