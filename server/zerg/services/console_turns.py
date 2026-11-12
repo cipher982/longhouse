@@ -524,6 +524,18 @@ async def enqueue_catalog_console_turn(
         from zerg.services.session_pubsub import publish_session_input_queued
 
         publish_session_input_queued(session_id=str(session_id), source="console_turn_queued")
+    if result.get("created") is True and state == SESSION_TURN_STATE_STARTING:
+        # A turn that starts at once is served as "Starting" from this commit,
+        # and nothing else is published until the provider's first event: about
+        # 1 s for OMP (measured 2026-11-12), longer on a cold start. The sender
+        # refetches on its own; every other viewer kept the previous state.
+        from zerg.services.session_pubsub import publish_session_runtime_update
+
+        publish_session_runtime_update(
+            session_id=str(session_id),
+            provider=str(turn.get("provider") or "") or None,
+            source="console_turn_starting",
+        )
     if state == SESSION_TURN_STATE_QUEUED:
         # A follow-up is the first reliable opportunity to recover a current
         # starting turn while the Machine Agent remains connected. Rebuild the

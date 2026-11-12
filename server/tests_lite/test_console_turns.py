@@ -412,6 +412,52 @@ async def test_queued_console_turn_wakes_session_viewers_once(monkeypatch, creat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("created", [True, False])
+async def test_console_turn_that_starts_at_once_wakes_session_viewers_once(monkeypatch, created):
+    """The session is served as "Starting" from the enqueue commit and the provider's first event can be a second or
+    more away; without a wake every viewer but the sender keeps the previous state. An idempotent replay is no change."""
+    session_id = uuid4()
+
+    class Catalog:
+        async def call(self, method, params, **_kwargs):
+            if method == "session.console.turn.enqueue.v2":
+                return {
+                    "found": True,
+                    "created": created,
+                    "turn": {
+                        "turn_id": str(uuid4()),
+                        "session_id": str(session_id),
+                        "run_id": str(uuid4()),
+                        "thread_id": str(uuid4()),
+                        "state": "starting",
+                        "provider": "omp",
+                        "device_id": "cinder",
+                        "cwd": "/tmp",
+                    },
+                }
+            return {"found": True, "turn": None}
+
+    wakes = []
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: Catalog())
+    monkeypatch.setattr(
+        "zerg.services.session_pubsub.publish_session_runtime_update",
+        lambda **kwargs: wakes.append(kwargs),
+    )
+
+    await enqueue_catalog_console_turn(
+        owner_id=1,
+        session_id=session_id,
+        message="start now",
+        client_request_id="sender",
+        # No adapter: the turn fails to launch after the wake, which is not what this test is about.
+        registry=SimpleNamespace(supports=lambda **_kwargs: False),
+    )
+
+    starting = [wake for wake in wakes if wake.get("source") == "console_turn_starting"]
+    assert starting == ([{"session_id": str(session_id), "provider": "omp", "source": "console_turn_starting"}] if created else [])
+
+
+@pytest.mark.asyncio
 async def test_control_reconnect_replays_live_catalog_turn_with_same_run_id(monkeypatch):
     session_id = uuid4()
     thread_id = uuid4()
