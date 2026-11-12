@@ -6,8 +6,9 @@ of the defects the harness found, a cell that the defect breaks, and the stage w
 thinking preview, that write replaced the mislabelled one in the status slot before it was posted, so the edit no longer
 broke anything; ``opencode-helm-thinking-as-reply`` reintroduces the same defect, reasoning shown as the reply, and fails.) The command runs the unmutated cell first (it must pass), then the
 mutated one (it must fail at the named stage), and exits non-zero on any mismatch. When the unmutated cell fails, the row
-is a miss already, so its mutation is not built or run. Every row that is not ok is printed again under the table with
-the harness's reason, and ``--out`` holds the rows as JSON, rewritten after each one.
+is a miss already, so its mutation is not built or run; one that never reached the prompt is run once more first. Every
+row that is not ok is printed again under the table with the harness's reason, and ``--out`` holds the rows as JSON,
+rewritten after each one, with what the failing live-kinds cell saw (checks, states served and shown) under ``evidence``.
 
     make terminal-truth-mutations ARGS="--engine <engine> --longhouse-cli <longhouse>"
 
@@ -37,6 +38,8 @@ from zerg.qa.terminal_truth_kinds import kinds_expectation
 from zerg.qa.terminal_truth_kinds import run_kinds_suite
 
 REPO_ROOT = tt.REPO_ROOT
+# What a live-kinds cell's result says about a failure: the checks, the states served and shown, and how the run ended.
+EVIDENCE_KEYS = ("checks", "state_lane", "stream_open_before_prompt", "lane_errors", "sse_event_counts", "last_output", "wall_s")
 SCRATCH = tt.SCRATCH_ROOT.parent / "tt-mut"
 
 
@@ -633,10 +636,13 @@ def run_mutations(args: argparse.Namespace) -> int:
     expectations = tt.load_expectations()
     base_engine, base_cli = args.engine.resolve(), args.longhouse_cli.resolve()
     rows: list[dict[str, Any]] = []
+    last_kinds: dict[str, Any] = {}  # what the most recent live-kinds cell saw, kept on a row that is not ok
 
     def record(row: dict[str, Any]) -> None:
         """Keep the row, and the file up to date: a run that hits its time limit still leaves every row it finished."""
 
+        if not row["ok"] and "(" in row["cell"] and last_kinds:
+            row["evidence"] = dict(last_kinds)
         rows.append(row)
         if args.out:
             args.out.write_text(json.dumps(rows, indent=2) + "\n")
@@ -650,11 +656,21 @@ def run_mutations(args: argparse.Namespace) -> int:
         """(outcome, first failed stage, reason) of one live-kinds cell judged by its published-kind check."""
 
         result = run_kinds_suite([spec], engine=engine, longhouse_cli=cli, **extra)[0]
+        last_kinds.clear()
+        last_kinds.update({k: result[k] for k in EVIDENCE_KEYS if k in result})
         if result["outcome"] != "measured":
             failed = [check["name"] for check in result.get("checks", []) if not check["ok"]]
-            # The one failure that is about the product rather than the run: the host served a state and woke nobody.
-            stage = "state_shown" if failed == [WOKEN_STATE_CHECK] else "preflight"
-            return "fail", stage, str(result.get("reason", ""))
+            reason = str(result.get("reason", ""))
+            if failed != [WOKEN_STATE_CHECK]:
+                return "fail", "preflight", reason
+            # The one failure that is about the product rather than the run: the host served a state and woke nobody. It is
+            # the last stage down the path. A live item that was lost or mislabelled upstream wakes nobody either, so when
+            # the published-kind check also fails, that stage is the first failure and the unshown state its consequence
+            # (codex-helm-thinking-as-reply on the runner, 2026-11-12: reasoning sent as the reply, "Thinking" never shown).
+            upstream = kinds_expectation({**result, "outcome": "measured"})
+            if upstream is not None and not upstream["ok"]:
+                return "fail", upstream["stage"], f"{json.dumps({k: upstream[k] for k in ('engine_posted', 'stream')})}; then {reason}"
+            return "fail", "state_shown", reason
         check = kinds_expectation(result)
         if check is None:
             return "fail", "preflight", "the cell has no published-kind expectation"
@@ -674,9 +690,24 @@ def run_mutations(args: argparse.Namespace) -> int:
             _clone_dir(Path(args.cargo_target).resolve(), SCRATCH / "target")
         for m in selected:
             spec = tt.CellSpec(*m.cell.split("/"), m.scenario) if m.scenario else tt.CellSpec(*m.cell.split("/"))
-            baseline_outcome, baseline_stage, baseline_reason = (
-                kinds_cell(spec, base_engine, base_cli, **m.run_options) if m.scenario else _verdict([cell(spec, base_engine, base_cli)])
-            )
+
+            def unmutated() -> tuple[str, str | None, str]:
+                return (
+                    kinds_cell(spec, base_engine, base_cli, **m.run_options)
+                    if m.scenario
+                    else _verdict([cell(spec, base_engine, base_cli)])
+                )
+
+            baseline_outcome, baseline_stage, baseline_reason = unmutated()
+            retried = baseline_outcome != "pass" and baseline_stage == "preflight"
+            if retried:
+                # The provider never got as far as the prompt (on the runner, 2026-11-12: Codex's app-server announced no
+                # URL), which says nothing about the gate. One more try; the mutated cell gets none.
+                print(
+                    f"{m.name}: the unmutated cell failed before the prompt ({baseline_reason[:300]}); running it once more",
+                    file=sys.stderr,
+                )
+                baseline_outcome, baseline_stage, baseline_reason = unmutated()
             row: dict[str, Any] = {
                 "check": f"mutation {m.name}",
                 "defect": m.defect,
@@ -684,6 +715,8 @@ def run_mutations(args: argparse.Namespace) -> int:
                 "expected_stage": "/".join(m.stages),
                 "baseline": baseline_outcome,
             }
+            if retried:
+                row["baseline_retried"] = True
             if baseline_outcome != "pass":
                 # The row is a miss whatever the mutated cell does, and an engine mutation costs a rebuild: keep the reason, skip it.
                 row.update(baseline_stage=baseline_stage, baseline_reason=baseline_reason, observed="not run", ok=False)
