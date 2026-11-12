@@ -78,6 +78,11 @@ class ReducerResult:
     duplicates: int
     stale: int
     conflicts: int
+    #: Sessions one of whose heads this batch replaced. Whoever applied the
+    #: batch wakes those sessions' viewers: a served state label is computed
+    #: from the heads, so a head that changes without a wake leaves every open
+    #: page on the previous label until something unrelated refreshes it.
+    changed_session_ids: frozenset[str] = frozenset()
 
 
 def reducer_facts_from_machine_evidence(evidence: object) -> list[ReducerFact]:
@@ -129,6 +134,7 @@ def reduce_fact_batch(
         raise ValueError("reducer commit_seq_override must equal the current catalog commit")
     allocated_commit: int | None = None
     changed_heads = stale = conflicts = 0
+    changed_session_ids: set[str] = set()
     duplicates = batch_duplicates
     touched_candidates: dict[tuple[str, str, str, str], ReducerFact] = {}
 
@@ -284,6 +290,8 @@ def reduce_fact_batch(
         )
         touched_candidates[_candidate_key(fact)] = fact
         changed_heads += 1
+        if fact.session_id:
+            changed_session_ids.add(str(fact.session_id))
 
     for winner, incoming in batch_conflicts:
         conflicts += _record_conflict(
@@ -319,6 +327,7 @@ def reduce_fact_batch(
         duplicates=duplicates,
         stale=stale,
         conflicts=conflicts,
+        changed_session_ids=frozenset(changed_session_ids),
     )
 
 
@@ -885,6 +894,7 @@ def reduce_fact_batch_setwise(
 
     allocated_commit: int | None = None
     changed_heads = stale = conflicts = 0
+    changed_session_ids: set[str] = set()
     duplicates = batch_duplicates
     touched_candidates: dict[tuple[str, str, str, str], ReducerFact] = {}
 
@@ -1104,6 +1114,8 @@ def reduce_fact_batch_setwise(
         }
         touched_candidates[candidate] = fact
         changed_heads += 1
+        if fact.session_id:
+            changed_session_ids.add(str(fact.session_id))
 
     for winner, incoming in batch_conflicts:
         conflicts += note_conflict(
@@ -1218,4 +1230,5 @@ def reduce_fact_batch_setwise(
         duplicates=duplicates,
         stale=stale,
         conflicts=conflicts,
+        changed_session_ids=frozenset(changed_session_ids),
     )

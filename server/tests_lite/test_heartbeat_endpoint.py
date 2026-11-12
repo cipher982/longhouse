@@ -609,6 +609,87 @@ def test_heartbeat_aged_request_does_not_dispatch_catalog_write(live_catalog):
     assert _stamps(device_id) == []
 
 
+class _ReducerResultClient:
+    """The real catalog client, with the reducer outcome a heartbeat's evidence would have had."""
+
+    def __init__(self, real, *, changed_session_ids: list[str], exact_replay: bool = False) -> None:
+        self._real = real
+        self._changed = changed_session_ids
+        self._exact_replay = exact_replay
+        self.commit_seq: str | None = None
+
+    async def call(self, method: str, params: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        result = await self._real.call(method, params, **kwargs)
+        if method == "machine.heartbeat.apply.v2":
+            self.commit_seq = result["commit_seq"]
+            result = {
+                **result,
+                "exact_replay": self._exact_replay,
+                "shadow_reducer": {"status": "applied", "changed_heads": len(self._changed), "changed_session_ids": self._changed},
+            }
+        return result
+
+
+def _session_wakes(sub) -> list[dict[str, Any]]:
+    return [message.payload for message in sub.drain_nowait_messages()]
+
+
+def test_heartbeat_that_changes_a_sessions_state_wakes_its_viewers(live_catalog, live_catalog_client, monkeypatch):
+    """The state label is computed from heads only a heartbeat writes; a page that is not woken keeps the old label."""
+    from zerg.routers import heartbeat as heartbeat_router
+    from zerg.services.session_pubsub import TOPIC_TIMELINE
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
+
+    reset_pubsub_for_test()
+    changed, untouched = str(uuid4()), str(uuid4())
+    real = heartbeat_router.get_catalogd_client()
+    client = _ReducerResultClient(real, changed_session_ids=[changed])
+    monkeypatch.setattr(heartbeat_router, "get_catalogd_client", lambda: client)
+    bus = get_pubsub()
+    with (
+        bus.subscribe(topic_session(changed)) as viewer,
+        bus.subscribe(topic_session(untouched)) as other,
+        bus.subscribe(TOPIC_TIMELINE) as timeline,
+    ):
+        response = live_catalog_client.post("/agents/heartbeat", headers=_headers(live_catalog), json={"version": "wake"})
+        assert response.status_code == 204, response.text
+        wakes = _session_wakes(viewer)
+        timeline_wakes = _session_wakes(timeline)
+        assert _session_wakes(other) == []
+    reset_pubsub_for_test()
+
+    assert [(wake["kind"], wake["session_id"], wake["source"]) for wake in wakes] == [("runtime", changed, "machine_evidence")]
+    # The commit the heads changed at, so a client can tell this wake's read from an older one.
+    assert wakes[0]["catalog_commit_seq"] == int(client.commit_seq)
+    assert [wake["session_id"] for wake in timeline_wakes] == [changed]
+
+
+def test_heartbeat_that_changes_no_state_wakes_nobody(live_catalog, live_catalog_client, monkeypatch):
+    from zerg.routers import heartbeat as heartbeat_router
+    from zerg.services.session_pubsub import TOPIC_TIMELINE
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+
+    reset_pubsub_for_test()
+    real = heartbeat_router.get_catalogd_client()
+    bus = get_pubsub()
+    with bus.subscribe(TOPIC_TIMELINE) as timeline:
+        # An ordinary heartbeat: the reducer replaced no head.
+        response = live_catalog_client.post("/agents/heartbeat", headers=_headers(live_catalog), json={"version": "quiet"})
+        assert response.status_code == 204, response.text
+        # A resent heartbeat answered from its stored result woke its viewers the first time.
+        replayed = _ReducerResultClient(real, changed_session_ids=[str(uuid4())], exact_replay=True)
+        monkeypatch.setattr(heartbeat_router, "get_catalogd_client", lambda: replayed)
+        response = live_catalog_client.post("/agents/heartbeat", headers=_headers(live_catalog), json={"version": "replayed"})
+        assert response.status_code == 204, response.text
+        wakes = _session_wakes(timeline)
+    reset_pubsub_for_test()
+
+    assert wakes == []
+
+
 def test_heartbeat_shipping_progress_reaches_machine_health_route(live_catalog, live_catalog_client):
     device_id = "shipping-progress-machine"
     owner_id = live_catalog.create_user("owner@heartbeat-shipping.test")

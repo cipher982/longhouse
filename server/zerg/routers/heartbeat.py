@@ -1074,6 +1074,35 @@ def _runtime_events_for_missing_unbound_unmanaged_sessions(
     return events
 
 
+def _publish_state_changes(result: dict, *, commit_seq: str, exact_replay: bool) -> None:
+    """Wake the viewers of every session whose served state this heartbeat changed.
+
+    A session's state label is computed from its fact heads, and for a hook
+    provider (a phase event that names no run) those heads arrive only here, in
+    the machine evidence. The runtime event that preceded them already woke the
+    page, which refetched and read the old head; without a wake at this commit
+    it kept that label until something unrelated refreshed it. Measured
+    2026-11-12 on Antigravity Helm: "Thinking" through a whole tool run in 7 of
+    13 browser runs, and after the turn had ended.
+    """
+    if exact_replay:
+        return
+    reducer = result.get("shadow_reducer")
+    session_ids = reducer.get("changed_session_ids") if isinstance(reducer, dict) else None
+    if not isinstance(session_ids, list) or not session_ids:
+        return
+    from zerg.services.session_pubsub import publish_session_runtime_update
+
+    for session_id in session_ids:
+        if isinstance(session_id, str) and session_id:
+            publish_session_runtime_update(
+                session_id=session_id,
+                provider=None,
+                source="machine_evidence",
+                catalog_commit_seq=commit_seq,
+            )
+
+
 @router.post(
     "/heartbeat",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -1383,6 +1412,7 @@ async def ingest_heartbeat(
                     "message": ("Catalog mutation is temporarily unavailable." if exc.retryable else "Catalog heartbeat mutation failed."),
                 },
             ) from exc
+        _publish_state_changes(result, commit_seq=commit_seq, exact_replay=exact_replay)
         write_ms = round((time.monotonic() - write_started) * 1000, 1)
         agents_heartbeat_write_seconds.observe(write_ms / 1000.0)
 

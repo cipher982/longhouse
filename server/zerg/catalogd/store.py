@@ -5253,6 +5253,7 @@ def _apply_shadow_reducer(
             return {
                 "status": "applied",
                 "changed_heads": reduced.changed_heads,
+                "changed_session_ids": sorted(reduced.changed_session_ids),
                 "duplicates": reduced.duplicates,
                 "coalesced_renewals": coalesced,
                 "stale": reduced.stale,

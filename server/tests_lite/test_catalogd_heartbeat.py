@@ -507,6 +507,9 @@ async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence
     assert first["shadow_reducer"] == {
         "status": "applied",
         "changed_heads": 1,
+        # The route wakes these sessions' viewers: the state label is computed
+        # from the head this heartbeat just replaced.
+        "changed_session_ids": [session_id],
         "duplicates": 0,
         "coalesced_renewals": 0,
         "stale": 0,
@@ -517,6 +520,7 @@ async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence
     assert replay == {**first, "exact_replay": True}
     assert duplicate["commit_seq"] == "2"
     assert duplicate["shadow_reducer"]["changed_heads"] == 0
+    assert duplicate["shadow_reducer"]["changed_session_ids"] == []
     assert duplicate["shadow_reducer"]["duplicates"] == 1
 
     engine = create_catalog_engine(database_path)
