@@ -14,8 +14,13 @@
 //! ends it by closing its standard input. Without the relay the mod forwards
 //! nothing and Helm behaves as it did.
 //!
-//! Only reply text arrives. The mod drops `thinking`, `tool` and `input` chunks,
-//! because the preview has one cumulative text and no field to label a kind.
+//! The mod forwards reply text, `thinking` text and the start of each `tool`
+//! call (its name and id; a `tool` chunk is the model beginning the call, so it
+//! is "tool started", not a measure of when the tool runs). Each is published as
+//! a preview that says what it is (`StatusPreview::kind`). Claude has no stream
+//! of a running tool's output and none of a subagent's text, so none is posted.
+//! Its argument JSON (`input` chunks) is shown once it parses. The mod drops
+//! `stop` chunks.
 
 use serde::Deserialize;
 
@@ -26,9 +31,10 @@ pub const PROGRESS_KIND: &str = "claude_helm_stream";
 /// The mod reads the relay's socket path from this variable.
 pub const SOCKET_ENV: &str = "LONGHOUSE_CLAUDE_LIVE_SOCKET";
 
-/// One forwarded entry: reply text of step `step` of turn `turn`, or `done`
-/// when the turn ended.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+/// One forwarded entry: reply text, thinking, or the start of a tool call, of
+/// step `step` of turn `turn`, or `done` when the turn ended. An entry with no
+/// `kind` is reply text, which is all an older mod sends.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct Entry {
     pub turn: String,
     #[serde(default)]
@@ -37,6 +43,21 @@ pub struct Entry {
     pub text: Option<String>,
     #[serde(default)]
     pub done: bool,
+    /// `thinking` or `tool`; absent for reply text.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// The tool call's `tool_use_id` (kind `tool`).
+    #[serde(default)]
+    pub id: Option<String>,
+    /// The tool's name (kind `tool`).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The content block a `tool` or `input` entry belongs to.
+    #[serde(default)]
+    pub index: Option<u64>,
+    /// The next piece of a tool call's argument JSON (kind `input`).
+    #[serde(default)]
+    pub json: Option<String>,
 }
 
 /// What to publish after applying an entry.
@@ -46,14 +67,58 @@ pub struct Preview {
     pub seq: u64,
     pub text: String,
     pub completed: bool,
+    /// `thinking`, `tool` or `subagent`; `None` is reply text.
+    pub kind: Option<&'static str>,
+    pub tool_name: Option<String>,
+    pub tool_call_id: Option<String>,
+    pub tool_input: Option<serde_json::Value>,
 }
 
-/// The reply text of the message Claude is writing: cumulative, and reset when
-/// a new step (a new assistant message) or a new turn begins.
+/// One tool call of the current step: its block, id, name and the argument JSON
+/// received so far.
+#[derive(Debug)]
+struct ToolCall {
+    index: Option<u64>,
+    id: String,
+    name: String,
+    json: String,
+    seq: u64,
+}
+
+/// What a tool call's arguments say in one line, for the preview text: the
+/// command, a subagent's description, a path, pattern or query, else the JSON.
+fn arguments_summary(name: &str, input: &serde_json::Value) -> String {
+    let keys: &[&str] = if crate::status_slot::tool_preview_kind(name) == "subagent" {
+        &["description", "prompt", "subagent_type"]
+    } else {
+        &[
+            "command",
+            "description",
+            "file_path",
+            "path",
+            "pattern",
+            "url",
+            "query",
+            "prompt",
+        ]
+    };
+    keys.iter()
+        .find_map(|key| input.get(*key).and_then(|value| value.as_str()))
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| input.to_string())
+}
+
+/// The live content of the message Claude is writing: reply text and thinking,
+/// each cumulative, reset when a new step (a new assistant message) or a new
+/// turn begins.
 #[derive(Debug, Default)]
 pub struct LiveText {
     text: String,
+    thinking: String,
     seq: u64,
+    thinking_seq: u64,
+    tools: Vec<ToolCall>,
     turn_seq: u64,
     message_seq: u64,
     turn: Option<String>,
@@ -70,7 +135,68 @@ impl LiveText {
             self.seq = self.seq.saturating_add(1);
             return Some(self.preview(run_id, true));
         }
-        let delta = entry.text.as_deref().filter(|text| !text.is_empty())?;
+        match entry.kind.as_deref() {
+            None | Some("text") => {
+                let delta = entry.text.as_deref().filter(|text| !text.is_empty())?;
+                self.enter(entry)?;
+                crate::status_slot::append_live_text(&mut self.text, delta);
+                self.seq = self.seq.saturating_add(1);
+                Some(self.preview(run_id, false))
+            }
+            Some("thinking") => {
+                let delta = entry.text.as_deref().filter(|text| !text.is_empty())?;
+                self.enter(entry)?;
+                crate::status_slot::append_live_text(&mut self.thinking, delta);
+                self.thinking_seq = self.thinking_seq.saturating_add(1);
+                Some(Preview {
+                    turn_id: format!("{}:thinking", self.message_id(run_id)),
+                    seq: self.thinking_seq,
+                    text: self.thinking.clone(),
+                    completed: false,
+                    kind: Some("thinking"),
+                    tool_name: None,
+                    tool_call_id: None,
+                    tool_input: None,
+                })
+            }
+            Some("tool") => {
+                let name = entry.name.as_deref().filter(|name| !name.is_empty())?;
+                let id = entry.id.as_deref().filter(|id| !id.is_empty())?;
+                self.enter(entry)?;
+                self.tools.push(ToolCall {
+                    index: entry.index,
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    json: String::new(),
+                    seq: 1,
+                });
+                Some(self.tool_preview(run_id, self.tools.len() - 1, name.to_string(), None))
+            }
+            Some("input") => {
+                let piece = entry.json.as_deref().filter(|json| !json.is_empty())?;
+                self.enter(entry)?;
+                let position = self
+                    .tools
+                    .iter()
+                    .rposition(|call| entry.index.is_some() && call.index == entry.index)?;
+                let call = &mut self.tools[position];
+                crate::status_slot::append_live_text(&mut call.json, piece);
+                // Show the arguments once they parse; a partial object says
+                // nothing a reader can use.
+                let input: serde_json::Value = serde_json::from_str(&call.json).ok()?;
+                if !input.is_object() {
+                    return None;
+                }
+                call.seq = call.seq.saturating_add(1);
+                let text = arguments_summary(&call.name, &input);
+                Some(self.tool_preview(run_id, position, text, Some(input)))
+            }
+            Some(_) => None,
+        }
+    }
+
+    /// Move to the entry's turn and step, starting fresh content for a new one.
+    fn enter(&mut self, entry: &Entry) -> Option<()> {
         let step = entry.step?;
         if self.turn.as_deref() != Some(entry.turn.as_str()) {
             self.turn = Some(entry.turn.clone());
@@ -78,32 +204,64 @@ impl LiveText {
             self.message_seq = 0;
             self.step = None;
             self.text.clear();
+            self.thinking.clear();
+            self.tools.clear();
             self.seq = 0;
+            self.thinking_seq = 0;
         }
         if self.step != Some(step) {
             self.step = Some(step);
             self.message_seq = self.message_seq.saturating_add(1);
             self.text.clear();
+            self.thinking.clear();
+            self.tools.clear();
             self.seq = 0;
+            self.thinking_seq = 0;
         }
-        crate::status_slot::append_live_text(&mut self.text, delta);
-        self.seq = self.seq.saturating_add(1);
-        Some(self.preview(run_id, false))
+        Some(())
+    }
+
+    fn tool_preview(
+        &self,
+        run_id: &str,
+        position: usize,
+        text: String,
+        input: Option<serde_json::Value>,
+    ) -> Preview {
+        let call = &self.tools[position];
+        Preview {
+            turn_id: format!("{}:tool:{}", self.message_id(run_id), call.id),
+            seq: call.seq,
+            text,
+            completed: false,
+            kind: Some(crate::status_slot::tool_preview_kind(&call.name)),
+            tool_name: Some(call.name.clone()),
+            tool_call_id: Some(call.id.clone()),
+            tool_input: input,
+        }
+    }
+
+    fn message_id(&self, run_id: &str) -> String {
+        format!("{run_id}:{}:{}", self.turn_seq, self.message_seq)
     }
 
     fn preview(&self, run_id: &str, completed: bool) -> Preview {
         Preview {
-            turn_id: format!("{run_id}:{}:{}", self.turn_seq, self.message_seq),
+            turn_id: self.message_id(run_id),
             seq: self.seq,
             text: self.text.clone(),
             completed,
+            kind: None,
+            tool_name: None,
+            tool_call_id: None,
+            tool_input: None,
         }
     }
 }
 
 /// The preview as a status slot states it. The slot carries no phase (the empty
 /// phase is not a wire phase and is not recorded locally): Claude's own hooks
-/// own the session's phase, and this only adds text.
+/// own the session's phase, and this only adds content.
 pub fn status_preview(
     preview: &Preview,
     provider_session_id: &str,
@@ -116,6 +274,11 @@ pub fn status_preview(
         progress_kind: PROGRESS_KIND.into(),
         provider_session_id: (!provider_session_id.is_empty())
             .then(|| provider_session_id.to_string()),
+        kind: preview.kind.map(str::to_string),
+        tool_name: preview.tool_name.clone(),
+        tool_call_id: preview.tool_call_id.clone(),
+        tool_input: preview.tool_input.clone(),
+        tool_state: preview.tool_name.as_ref().map(|_| "running".to_string()),
         ..Default::default()
     }
 }
@@ -143,8 +306,16 @@ mod relay {
         run_id: String,
         provider_session_id: String,
         live: Mutex<LiveText>,
+        /// The tool or subagent preview last published, and when.
+        discrete: Mutex<Option<(String, std::time::Instant)>>,
         status: crate::status_slot::StatusPublisher,
     }
+
+    /// The slot holds one preview and the daemon reads it on its own beat, so a
+    /// tool call that the next step's text replaces within milliseconds (an
+    /// async subagent returns at once) would never be seen. A different item
+    /// waits until the call's preview has stood this long.
+    const DISCRETE_HOLD: Duration = Duration::from_millis(250);
 
     impl Relay {
         fn apply(&self, entries: &[Entry]) {
@@ -161,6 +332,20 @@ mod relay {
         }
 
         fn publish(&self, preview: &Preview) {
+            {
+                let mut last = self
+                    .discrete
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some((turn_id, at)) = last.as_ref() {
+                    if *turn_id != preview.turn_id {
+                        std::thread::sleep(DISCRETE_HOLD.saturating_sub(at.elapsed()));
+                    }
+                }
+                if preview.tool_name.is_some() {
+                    *last = Some((preview.turn_id.clone(), std::time::Instant::now()));
+                }
+            }
             self.status.publish(
                 crate::status_slot::StatusUpdate::phase(
                     &self.session_id,
@@ -192,6 +377,7 @@ mod relay {
             run_id: run_id.to_string(),
             provider_session_id: provider_session_id.to_string(),
             live: Mutex::new(LiveText::default()),
+            discrete: Mutex::new(None),
             status: crate::status_slot::StatusPublisher::for_provider("claude", TRANSPORT),
         });
         {
@@ -289,6 +475,7 @@ mod relay {
                 run_id: "run-1".into(),
                 provider_session_id: "native-1".into(),
                 live: Mutex::new(LiveText::default()),
+                discrete: Mutex::new(None),
                 status: crate::status_slot::StatusPublisher::new(
                     dir.to_path_buf(),
                     "claude",
@@ -351,6 +538,81 @@ mod relay {
         }
 
         #[test]
+        fn thinking_and_tool_posts_reach_the_slot_labelled_and_never_as_the_reply() {
+            let temp = tempfile::tempdir().unwrap();
+            let relay = Arc::new(relay_in(temp.path()));
+            let mut client = serving(&relay);
+
+            post(
+                &mut client,
+                r#"[{"turn":"t1","step":0,"kind":"thinking","text":"pondering"}]"#,
+            );
+            let slot = crate::status_slot::read_all(temp.path()).pop().unwrap();
+            let preview = slot.preview.clone().expect("preview");
+            assert_eq!(preview.kind.as_deref(), Some("thinking"));
+            assert_eq!(preview.live_text, "pondering");
+            let events = crate::status_slot::runtime_events(&slot);
+            let payload = &events.last().unwrap()["payload"];
+            assert_eq!(payload["preview_kind"], "thinking");
+
+            std::thread::sleep(Duration::from_millis(120));
+            post(
+                &mut client,
+                r#"[{"turn":"t1","step":0,"kind":"tool","id":"toolu_1","name":"Bash"}]"#,
+            );
+            let slot = crate::status_slot::read_all(temp.path()).pop().unwrap();
+            let preview = slot.preview.expect("preview");
+            assert_eq!(preview.kind.as_deref(), Some("tool"));
+            assert_eq!(preview.tool_name.as_deref(), Some("Bash"));
+            assert_eq!(preview.tool_state.as_deref(), Some("running"));
+        }
+
+        /// The tool's name and its arguments arrive within milliseconds of each
+        /// other. The arguments are the newer preview and the slot must end up
+        /// holding them once the coalescing window has passed.
+        #[test]
+        fn a_tool_start_and_its_arguments_in_one_batch_end_as_the_arguments() {
+            let temp = tempfile::tempdir().unwrap();
+            let relay = Arc::new(relay_in(temp.path()));
+            let mut client = serving(&relay);
+            post(
+                &mut client,
+                r#"[{"turn":"t1","step":0,"kind":"tool","index":1,"id":"toolu_1","name":"Agent"},{"turn":"t1","step":0,"kind":"input","index":1,"json":"{\"description\":\"survey the repo\"}"}]"#,
+            );
+            std::thread::sleep(Duration::from_millis(400));
+            let slot = crate::status_slot::read_all(temp.path()).pop().unwrap();
+            let preview = slot.preview.expect("preview");
+            assert_eq!(preview.live_text, "survey the repo");
+            assert_eq!(preview.kind.as_deref(), Some("subagent"));
+        }
+
+        /// An async subagent returns at once, so the next step's text follows its
+        /// arguments within milliseconds. The call's preview stands for the hold
+        /// before that text replaces it.
+        #[test]
+        fn a_tool_call_stands_before_the_next_steps_text_replaces_it() {
+            let temp = tempfile::tempdir().unwrap();
+            let relay = Arc::new(relay_in(temp.path()));
+            let started = std::time::Instant::now();
+            relay.apply(
+                &serde_json::from_str::<Vec<Entry>>(
+                    r#"[{"turn":"t1","step":0,"kind":"tool","index":1,"id":"toolu_1","name":"Agent"},{"turn":"t1","step":0,"kind":"input","index":1,"json":"{\"description\":\"survey\"}"},{"turn":"t1","step":1,"text":"next step"}]"#,
+                )
+                .unwrap(),
+            );
+            assert!(
+                started.elapsed() >= DISCRETE_HOLD,
+                "the next step waited for the call's preview to stand"
+            );
+            let preview = crate::status_slot::read_all(temp.path())
+                .pop()
+                .unwrap()
+                .preview
+                .unwrap();
+            assert_eq!(preview.live_text, "next step");
+        }
+
+        #[test]
         fn a_malformed_body_is_answered_and_changes_nothing() {
             let temp = tempfile::tempdir().unwrap();
             let relay = Arc::new(relay_in(temp.path()));
@@ -371,16 +633,15 @@ mod tests {
             turn: turn.into(),
             step: Some(step),
             text: Some(text.into()),
-            done: false,
+            ..Default::default()
         }
     }
 
     fn done(turn: &str) -> Entry {
         Entry {
             turn: turn.into(),
-            step: None,
-            text: None,
             done: true,
+            ..Default::default()
         }
     }
 
@@ -441,9 +702,8 @@ mod tests {
         assert_eq!(live.apply("run", &text("t1", 0, "")), None);
         let stepless = Entry {
             turn: "t1".into(),
-            step: None,
             text: Some("x".into()),
-            done: false,
+            ..Default::default()
         };
         assert_eq!(live.apply("run", &stepless), None);
     }
@@ -463,5 +723,189 @@ mod tests {
                 .unwrap();
         assert_eq!(parsed[0], text("t", 2, "hi"));
         assert_eq!(parsed[1], done("t"));
+    }
+
+    fn thinking(turn: &str, step: u64, text: &str) -> Entry {
+        Entry {
+            kind: Some("thinking".into()),
+            ..text_entry(turn, step, text)
+        }
+    }
+
+    fn text_entry(turn: &str, step: u64, text: &str) -> Entry {
+        self::text(turn, step, text)
+    }
+
+    fn tool(turn: &str, step: u64, id: &str, name: &str) -> Entry {
+        Entry {
+            turn: turn.into(),
+            step: Some(step),
+            kind: Some("tool".into()),
+            id: Some(id.into()),
+            name: Some(name.into()),
+            index: Some(2),
+            ..Default::default()
+        }
+    }
+
+    fn input(turn: &str, step: u64, json: &str) -> Entry {
+        Entry {
+            turn: turn.into(),
+            step: Some(step),
+            kind: Some("input".into()),
+            index: Some(2),
+            json: Some(json.into()),
+            ..Default::default()
+        }
+    }
+
+    /// A tool's arguments arrive as partial JSON. Nothing is posted until they
+    /// parse, then the preview text is the command and the object is the input.
+    #[test]
+    fn tool_arguments_show_once_they_parse() {
+        let mut live = LiveText::default();
+        let started = live
+            .apply("run", &tool("t1", 0, "toolu_1", "Bash"))
+            .unwrap();
+        assert_eq!(started.text, "Bash");
+        assert_eq!(
+            live.apply("run", &input("t1", 0, r#"{"command":"ls "#)),
+            None
+        );
+        let full = live
+            .apply("run", &input("t1", 0, r#"-la","description":"d"}"#))
+            .unwrap();
+        assert_eq!(full.text, "ls -la");
+        assert_eq!(full.tool_input.as_ref().unwrap()["description"], "d");
+        assert_eq!(full.turn_id, started.turn_id);
+        assert!(full.seq > started.seq);
+        assert_eq!(full.kind, Some("tool"));
+    }
+
+    #[test]
+    fn a_subagent_call_shows_its_description() {
+        let mut live = LiveText::default();
+        live.apply("run", &tool("t1", 0, "toolu_1", "Agent"));
+        let full = live
+            .apply(
+                "run",
+                &input(
+                    "t1",
+                    0,
+                    r#"{"description":"survey the repo","prompt":"long prompt"}"#,
+                ),
+            )
+            .unwrap();
+        assert_eq!(full.kind, Some("subagent"));
+        assert_eq!(full.text, "survey the repo");
+    }
+
+    #[test]
+    fn arguments_for_an_unknown_block_or_that_are_not_an_object_are_ignored() {
+        let mut live = LiveText::default();
+        live.apply("run", &tool("t1", 0, "toolu_1", "Bash"));
+        let mut elsewhere = input("t1", 0, r#"{"command":"x"}"#);
+        elsewhere.index = Some(9);
+        assert_eq!(live.apply("run", &elsewhere), None);
+        assert_eq!(live.apply("run", &input("t1", 0, "[1]")), None);
+    }
+
+    /// Thinking is its own cumulative text with its own identity. It never
+    /// shares the reply's turn id or text, and it is labelled on the wire.
+    #[test]
+    fn thinking_is_labelled_and_never_becomes_the_reply() {
+        let mut live = LiveText::default();
+        let first = live.apply("run", &thinking("t1", 0, "hmm ")).unwrap();
+        let second = live.apply("run", &thinking("t1", 0, "ok")).unwrap();
+        assert_eq!(second.text, "hmm ok");
+        assert_eq!(
+            (first.kind, second.kind),
+            (Some("thinking"), Some("thinking"))
+        );
+        assert_eq!((first.seq, second.seq), (1, 2));
+        let reply = live.apply("run", &text("t1", 0, "answer")).unwrap();
+        assert_eq!(reply.kind, None);
+        assert_eq!(reply.text, "answer", "the reply holds no thinking text");
+        assert_ne!(reply.turn_id, second.turn_id);
+        let wire = status_preview(&second, "native");
+        assert_eq!(wire.kind.as_deref(), Some("thinking"));
+        assert_eq!(wire.tool_name, None);
+        assert_eq!(status_preview(&reply, "native").kind, None);
+        // The turn's close restates the reply, not the thinking.
+        let closing = live.apply("run", &done("t1")).unwrap();
+        assert_eq!((closing.kind, closing.text.as_str()), (None, "answer"));
+    }
+
+    #[test]
+    fn thinking_stops_at_the_shared_cap() {
+        let mut live = LiveText::default();
+        let big = "x".repeat(crate::status_slot::MAX_LIVE_TEXT_BYTES + 100);
+        let preview = live.apply("run", &thinking("t1", 0, &big)).unwrap();
+        assert_eq!(preview.text.len(), crate::status_slot::MAX_LIVE_TEXT_BYTES);
+    }
+
+    #[test]
+    fn a_tool_call_is_a_running_tool_preview_with_its_real_name_and_id() {
+        let mut live = LiveText::default();
+        let started = live
+            .apply("run", &tool("t1", 0, "toolu_1", "Bash"))
+            .unwrap();
+        assert_eq!(started.kind, Some("tool"));
+        assert_eq!(started.tool_name.as_deref(), Some("Bash"));
+        assert_eq!(started.tool_call_id.as_deref(), Some("toolu_1"));
+        let wire = status_preview(&started, "native");
+        assert_eq!(wire.tool_state.as_deref(), Some("running"));
+        assert!(!wire.turn_completed);
+        let other = live
+            .apply("run", &tool("t1", 0, "toolu_2", "Read"))
+            .unwrap();
+        assert_ne!(started.turn_id, other.turn_id);
+    }
+
+    #[test]
+    fn a_spawning_tool_is_a_subagent_preview() {
+        let mut live = LiveText::default();
+        let started = live
+            .apply("run", &tool("t1", 0, "toolu_1", "Agent"))
+            .unwrap();
+        assert_eq!(started.kind, Some("subagent"));
+        assert_eq!(started.tool_name.as_deref(), Some("Agent"));
+    }
+
+    #[test]
+    fn a_tool_entry_without_a_name_or_id_or_an_unknown_kind_is_ignored() {
+        let mut live = LiveText::default();
+        let mut nameless = tool("t1", 0, "toolu_1", "Bash");
+        nameless.name = None;
+        assert_eq!(live.apply("run", &nameless), None);
+        let mut idless = tool("t1", 0, "toolu_1", "Bash");
+        idless.id = None;
+        assert_eq!(live.apply("run", &idless), None);
+        let mut other = text("t1", 0, "x");
+        other.kind = Some("input".into());
+        assert_eq!(live.apply("run", &other), None);
+    }
+
+    #[test]
+    fn a_tool_only_turn_does_not_close_a_reply_it_never_had() {
+        let mut live = LiveText::default();
+        live.apply("run", &tool("t1", 0, "toolu_1", "Bash"));
+        assert_eq!(live.apply("run", &done("t1")), None);
+    }
+
+    #[test]
+    fn kinds_parse_from_the_mods_json() {
+        let parsed: Vec<Entry> = serde_json::from_str(
+            r#"[{"turn":"t","step":0,"kind":"thinking","text":"x"},{"turn":"t","step":0,"kind":"tool","id":"i","name":"Bash"}]"#,
+        )
+        .unwrap();
+        assert_eq!(parsed[0], thinking("t", 0, "x"));
+        assert_eq!(
+            parsed[1],
+            Entry {
+                index: None,
+                ..tool("t", 0, "i", "Bash")
+            }
+        );
     }
 }

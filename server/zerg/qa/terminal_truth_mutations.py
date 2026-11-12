@@ -48,6 +48,7 @@ class Mutation:
     scenario: str = (
         ""  # thinking | tool | subagent: judge the cell with the live-kinds scenario and its published-kind check, not reply text
     )
+    warm: bool = False  # live-kinds scenarios on a Helm cell: open the session and its stream before the scenario prompt (--warm-session)
 
 
 MUTATIONS: tuple[Mutation, ...] = (
@@ -70,6 +71,54 @@ MUTATIONS: tuple[Mutation, ...] = (
         "if (false) {",
         "claude/helm",
         ("engine_posted",),
+    ),
+    Mutation(
+        "claude-helm-thinking-forward",
+        "drop the Claude Helm mod's forwarding of thinking chunks from the turn.step stream",
+        "engine",
+        "engine/assets/claude-mod/hooks/register.js",
+        "} else if (chunk.kind === 'thinking' && typeof chunk.text === 'string' && chunk.text !== '') {",
+        "} else if (false) {",
+        "claude/helm",
+        ("engine_posted",),
+        scenario="thinking",
+        warm=True,
+    ),
+    Mutation(
+        "claude-helm-thinking-as-reply",
+        "the Claude Helm relay posts thinking text without saying it is thinking (the host would show it as the reply)",
+        "engine",
+        "engine/src/claude_helm_live.rs",
+        '                    kind: Some("thinking"),\n                    tool_name: None,',
+        "                    kind: None,\n                    tool_name: None,",
+        "claude/helm",
+        ("kind", "stream_delivered", "host_published"),
+        scenario="thinking",
+        warm=True,
+    ),
+    Mutation(
+        "claude-helm-tool-forward",
+        "drop the Claude Helm mod's forwarding of tool-call starts and arguments from the turn.step stream",
+        "engine",
+        "engine/assets/claude-mod/hooks/register.js",
+        "chunk.kind === 'tool' &&\n        typeof chunk.id === 'string' &&",
+        "false &&\n        typeof chunk.id === 'string' &&",
+        "claude/helm",
+        ("engine_posted",),
+        scenario="tool",
+        warm=True,
+    ),
+    Mutation(
+        "claude-helm-subagent-forward",
+        "drop the Claude Helm mod's forwarding of subagent (Agent tool) starts from the turn.step stream",
+        "engine",
+        "engine/assets/claude-mod/hooks/register.js",
+        "chunk.kind === 'tool' &&\n        typeof chunk.id === 'string' &&",
+        "false &&\n        typeof chunk.id === 'string' &&",
+        "claude/helm",
+        ("engine_posted",),
+        scenario="subagent",
+        warm=True,
     ),
     Mutation(
         "opencode-host-publish",
@@ -250,7 +299,9 @@ def run_mutations(args: argparse.Namespace) -> int:
             _clone_dir(Path(args.cargo_target).resolve(), SCRATCH / "target")
         for m in selected:
             spec = tt.CellSpec(*m.cell.split("/"), m.scenario) if m.scenario else tt.CellSpec(*m.cell.split("/"))
-            baseline_outcome = kinds_cell(spec, base_engine, base_cli)[0] if m.scenario else cell(spec, base_engine, base_cli).outcome
+            baseline_outcome = (
+                kinds_cell(spec, base_engine, base_cli, warm_session=m.warm)[0] if m.scenario else cell(spec, base_engine, base_cli).outcome
+            )
             row: dict[str, Any] = {
                 "check": f"mutation {m.name}",
                 "defect": m.defect,
@@ -268,7 +319,9 @@ def run_mutations(args: argparse.Namespace) -> int:
                 target_file = copy / "server" / "zerg" / Path(m.file).relative_to("server/zerg")
                 target_file.write_text(mutated_text(m, target_file.read_text()))
                 if m.scenario:
-                    mutated_kinds = kinds_cell(spec, base_engine, base_cli, host_environment={"PYTHONPATH": str(copy / "server")})
+                    mutated_kinds = kinds_cell(
+                        spec, base_engine, base_cli, host_environment={"PYTHONPATH": str(copy / "server")}, warm_session=m.warm
+                    )
                 else:
                     mutated = cell(spec, base_engine, base_cli, host_environment={"PYTHONPATH": str(copy / "server")})
             elif args.skip_engine:
@@ -282,7 +335,10 @@ def run_mutations(args: argparse.Namespace) -> int:
                     engine_built[m.name] = _build_engine(worktree, SCRATCH / "target", SCRATCH / f"bin-{m.name}")
                 finally:
                     _run(["git", "checkout", "--", "."], cwd=worktree)
-                mutated = cell(spec, *engine_built[m.name])
+                if m.scenario:
+                    mutated_kinds = kinds_cell(spec, *engine_built[m.name], warm_session=m.warm)
+                else:
+                    mutated = cell(spec, *engine_built[m.name])
             outcome, stage, reason = mutated_kinds if m.scenario else _verdict([mutated])
             row.update(observed_outcome=outcome, observed_stage=stage, reason=reason, seconds=round(time.monotonic() - started))
             row["ok"] = baseline_outcome == "pass" and outcome == "fail" and stage in m.stages

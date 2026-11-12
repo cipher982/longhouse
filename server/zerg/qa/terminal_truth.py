@@ -202,6 +202,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="connect the stream as a client that predates preview kinds (no preview_kinds parameter); thinking must then never arrive",
     )
+    run.add_argument(
+        "--warm-session",
+        action="store_true",
+        help="live-kinds scenarios, Helm cells: send one unmarked warm-up turn first, so the session is listed and the stream is open when the scenario "
+        "prompt goes (a frame posted in the first half second of a session's first prompt cannot otherwise be seen)",
+    )
     run.add_argument("--engine", type=Path, default=Path(os.environ.get("LONGHOUSE_ENGINE_BIN") or shutil.which("longhouse-engine") or ""))
     run.add_argument("--mode", action="append", choices=["shadow", "helm", "console"], help="repeatable; default console and helm")
     run.add_argument("--longhouse-cli", type=Path, default=None, help="native longhouse CLI for helm mode (default: PATH)")
@@ -268,6 +274,7 @@ def main(argv: list[str] | None = None) -> int:
             ready_timeout=args.ready_timeout,
             mutation=args.kinds_mutation,
             old_client=args.old_client,
+            warm_session=args.warm_session,
             log=lambda message: print(message, file=sys.stderr, flush=True),
         )
         print(render_kinds(kind_results))

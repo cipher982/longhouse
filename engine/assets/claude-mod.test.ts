@@ -292,14 +292,16 @@ describe("Longhouse Claude mod: live reply text", () => {
     return mod;
   }
 
-  it("forwards reply text only, and hands every chunk on unchanged", async () => {
+  it("forwards reply text, thinking, tool starts and tool arguments, labelled, and hands every chunk on unchanged", async () => {
     const mod = await started();
     const chunks = [
-      { kind: "thinking", index: 0, text: "secret reasoning" },
+      { kind: "thinking", index: 0, text: "secret " },
+      { kind: "thinking", index: 0, text: "reasoning" },
       text(1, "Hel"),
       text(1, "lo"),
       { kind: "tool", index: 2, id: "toolu_1", name: "Bash" },
-      { kind: "input", index: 2, json: '{"command":"cat /etc/secret"}' },
+      { kind: "input", index: 2, json: '{"command":"ca' },
+      { kind: "input", index: 2, json: 't /etc/hosts"}' },
       { kind: "stop", stopReason: "end_turn", usage: null },
     ];
     const yielded = await mod.step({ turnId: "t1", index: 0, model: "m", messageCount: 1 }, chunks);
@@ -308,12 +310,33 @@ describe("Longhouse Claude mod: live reply text", () => {
     yielded.forEach((chunk, i) => expect(chunk).toBe(chunks[i]));
     expect(mod.fetches.every((call) => call.socketPath === SOCKET && call.method === "POST")).toBe(true);
     const sent = mod.sent();
-    expect(sent.map((entry) => entry.text).join("")).toBe("Hello");
+    // Reply text carries no kind, so an older engine reads it as it always did.
+    expect(sent.filter((entry) => entry.kind === undefined).map((entry) => entry.text).join("")).toBe("Hello");
+    expect(sent.filter((entry) => entry.kind === "thinking").map((entry) => entry.text).join("")).toBe(
+      "secret reasoning",
+    );
+    expect(sent.filter((entry) => entry.kind === "tool")).toEqual([
+      { turn: "t1", step: 0, kind: "tool", index: 2, id: "toolu_1", name: "Bash" },
+    ]);
+    // The argument JSON pieces are joined in order, under their block.
+    expect(sent.filter((entry) => entry.kind === "input")).toEqual([
+      { turn: "t1", step: 0, kind: "input", index: 2, json: '{"command":"cat /etc/hosts"}' },
+    ]);
     expect(sent.every((entry) => entry.turn === "t1" && entry.step === 0)).toBe(true);
+    // Thinking text never rides in an entry without its kind.
+    expect(sent.some((entry) => entry.kind === undefined && String(entry.text).includes("secret"))).toBe(false);
     const wire = mod.fetches.map((call) => call.body).join("");
-    for (const dropped of ["secret reasoning", "toolu_1", "Bash", "cat /etc/secret", "end_turn"]) {
+    for (const dropped of ["end_turn"]) {
       expect(wire).not.toContain(dropped);
     }
+  });
+
+  it("forwards no thinking or tool start for a subagent's steps", async () => {
+    const mod = await started();
+    const chunks = [{ kind: "thinking", index: 0, text: "child thought" }, { kind: "tool", index: 1, id: "c1", name: "Read" }];
+    await mod.step({ turnId: "t9", index: 0, model: "m", messageCount: 1, agentId: "sub-1" }, chunks);
+    await settle();
+    expect(mod.fetches).toEqual([]);
   });
 
   it("coalesces a fast stream: the first piece goes at once, the rest wait for the spacing", async () => {

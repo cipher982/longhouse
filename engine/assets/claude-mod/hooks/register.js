@@ -223,16 +223,18 @@ const liveQueue = []
 
 function liveEnqueue($, entry) {
   if (liveSocket === undefined) return
-  if (entry.text !== undefined) liveSeen = true
+  if (!entry.done) liveSeen = true
   const last = liveQueue[liveQueue.length - 1]
-  if (
-    entry.text !== undefined &&
+  const same =
     last !== undefined &&
-    last.text !== undefined &&
     last.turn === entry.turn &&
-    last.step === entry.step
-  ) {
+    last.step === entry.step &&
+    last.kind === entry.kind &&
+    last.index === entry.index
+  if (same && entry.text !== undefined && last.text !== undefined) {
     last.text += entry.text
+  } else if (same && entry.json !== undefined && last.json !== undefined) {
+    last.json += entry.json
   } else {
     liveQueue.push(entry)
   }
@@ -275,14 +277,27 @@ async function liveSend($) {
   }
 }
 
-// Passes every chunk on as it came. Only the main loop's reply text is
-// forwarded; `thinking`, `tool`, `input` and `stop` chunks are not.
+// Passes every chunk on as it came. The main loop's reply text, thinking text
+// the start of each tool call (its id and name) and the call's argument JSON are
+// forwarded, each saying what it is; `stop` chunks are not. Chunks are only read: the
+// terminal paints exactly what it painted before.
 async function* liveTurnStep($, e, next) {
   if (liveSocket === undefined || e.agentId !== undefined) return yield* next(e)
   for await (const chunk of next(e)) {
     try {
       if (chunk.kind === 'text' && typeof chunk.text === 'string' && chunk.text !== '') {
         liveEnqueue($, { turn: e.turnId, step: e.index, text: chunk.text })
+      } else if (chunk.kind === 'thinking' && typeof chunk.text === 'string' && chunk.text !== '') {
+        liveEnqueue($, { turn: e.turnId, step: e.index, kind: 'thinking', text: chunk.text })
+      } else if (
+        chunk.kind === 'tool' &&
+        typeof chunk.id === 'string' &&
+        typeof chunk.name === 'string' &&
+        chunk.name !== ''
+      ) {
+        liveEnqueue($, { turn: e.turnId, step: e.index, kind: 'tool', index: chunk.index, id: chunk.id, name: chunk.name })
+      } else if (chunk.kind === 'input' && typeof chunk.json === 'string' && chunk.json !== '') {
+        liveEnqueue($, { turn: e.turnId, step: e.index, kind: 'input', index: chunk.index, json: chunk.json })
       }
     } catch (ignored) {}
     yield chunk

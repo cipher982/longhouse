@@ -606,6 +606,21 @@ def _helm_argv(cli: Path, provider: str, workspace: Path, binary: str, url: str,
     return argv
 
 
+def _warm_helm_session(session: ProviderPtySession, api: RuntimeApi, nonce: str) -> None:
+    """Send one throwaway turn so the Helm session exists on the host, with its stream open, before the scenario prompt.
+
+    A Helm session is unknown to the host until its first event, and a stream client can only connect to a session it can list, so a
+    frame posted in the first half second of the first prompt (a tool or subagent start) is posted before any client could be
+    listening. A real client has the session open long before a later prompt. The warm-up text carries no marker, so no lane counts it.
+    """
+
+    session.submit_line(f"TTWARM{nonce} reply with the word ok")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline and not api.session_ids():
+        time.sleep(0.2)
+    time.sleep(6)  # the warm-up reply finishes and the provider is idle again
+
+
 def _rel(value: float | None, base: float) -> float | None:
     return None if value is None else round(value - base, 3)
 
@@ -665,6 +680,7 @@ def run_kind_cell_in(
     drivers: dict[str, ProviderDriver],
     expand_key: bool = True,
     old_client: bool = False,
+    warm_session: bool = False,
 ) -> dict[str, Any]:
     spec = plan.spec
     provider, mode = spec.provider, spec.mode
@@ -714,6 +730,8 @@ def run_kind_cell_in(
                 columns=COLUMNS,
             )
             obs.ready_evidence = _wait_ready(session, recording, timing_file, driver.ready_text, ready_timeout, driver.answers)
+        if warm_session and session is not None:
+            _warm_helm_session(session, api, plan.nonce)
         watchers = [LaneWatcher(lane, markers, stop) for lane in api.poll_lanes()]
         stream = FramingStreamWatcher("workspace stream (SSE)", lambda: api.stream_lines(stop), markers, stop)
         stream.prompt = plan.prompt
@@ -957,6 +975,7 @@ def run_kinds_suite(
     mutation: str | None = None,
     host_environment: dict[str, str] | None = None,
     old_client: bool = False,
+    warm_session: bool = False,
     log: Callable[[str], None] = lambda _m: None,
 ) -> list[dict[str, Any]]:
     """Run each scenario cell. OMP gets a pass of its own (it shares a config layout with Pi); the rest share one pass."""
@@ -1012,7 +1031,13 @@ def run_kinds_suite(
                     log(f"running {s.key} {scenario}")
                     results.append(
                         run_kind_cell_in(
-                            pas, keyed[s.key], ready_timeout=ready_timeout, drivers=drivers, expand_key=expand_key, old_client=old_client
+                            pas,
+                            keyed[s.key],
+                            ready_timeout=ready_timeout,
+                            drivers=drivers,
+                            expand_key=expand_key,
+                            old_client=old_client,
+                            warm_session=warm_session,
                         )
                     )
             finally:
@@ -1037,17 +1062,17 @@ LIVE_SOURCE: dict[tuple[str, str, str], tuple[bool, str, str]] = {
     ("claude", "console", "tool_output"): (False, "no stream carries a running tool's stdout (audit claude.md)", ""),
     ("claude", "console", "subagent_started"): (True, "stream-json tool_use Agent and system task_started", "host"),
     ("claude", "console", "subagent_text"): (True, "--forward-subagent-text (whole child messages)", "engine: the flag is not passed"),
-    ("claude", "helm", "thinking"): (True, "mod turn.step thinking chunk", "mod: register.js liveTurnStep forwards text chunks only"),
+    ("claude", "helm", "thinking"): (True, "mod turn.step thinking chunk", "mod: register.js liveTurnStep"),
     ("claude", "helm", "tool_started"): (
         True,
         "PreToolUse hook; mod turn.step tool chunk",
-        "mod: tool chunks not forwarded (state is on the facts lane)",
+        "mod: register.js liveTurnStep",
     ),
     ("claude", "helm", "tool_output"): (False, "no hook or mod event carries a running tool's stdout", ""),
     ("claude", "helm", "subagent_started"): (
         True,
         "PreToolUse/SubagentStart hooks",
-        "preview: none posted (state is on the facts lane since d0b54a8b9)",
+        "mod: register.js liveTurnStep",
     ),
     ("claude", "helm", "subagent_text"): (False, "no hook or TUI event carries child text", ""),
     ("codex", "console", "thinking"): (True, "app-server item/reasoning/*Delta", "host"),
@@ -1240,6 +1265,10 @@ KIND_EXPECTATIONS: dict[tuple[str, str], tuple[str, str]] = {
     ("omp/console", "tool"): ("tool_output", "tool"),
     ("claude/console", "subagent"): ("subagent_started", "subagent"),
     ("omp/console", "subagent"): ("subagent_started", "subagent"),
+    # Engine-side forwards (2026-11-12): the Claude mod's turn.step chunks. Run with --warm-session.
+    ("claude/helm", "thinking"): ("thinking", "thinking"),
+    ("claude/helm", "tool"): ("tool_started", "tool"),
+    ("claude/helm", "subagent"): ("subagent_started", "subagent"),
 }
 
 

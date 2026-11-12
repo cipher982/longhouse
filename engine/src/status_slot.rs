@@ -75,6 +75,16 @@ pub struct StatusPreview {
     pub tool_state: Option<String>,
 }
 
+/// The kind a tool's name gives its preview: the provider's subagent-spawning
+/// tools are `subagent`, every other tool is `tool`. The Runtime Host derives it
+/// from the same names (`SUBAGENT_TOOL_NAMES`).
+pub fn tool_preview_kind(tool_name: &str) -> &'static str {
+    match tool_name.trim().to_ascii_lowercase().as_str() {
+        "agent" | "task" | "spawn_agent" | "invoke_subagent" => "subagent",
+        _ => "tool",
+    }
+}
+
 /// The bound on a running tool's output tail, the same as the Runtime Host's.
 pub const MAX_TOOL_TAIL_LINES: usize = 40;
 pub const MAX_TOOL_TAIL_BYTES: usize = 4 * 1024;
@@ -680,9 +690,12 @@ impl StatusPublisher {
         if guard.retired {
             return;
         }
-        let completes_turn = preview
-            .as_ref()
-            .is_some_and(|preview| preview.turn_completed);
+        // A turn's end and a tool or subagent call are single events, not a
+        // token stream: the next update may be seconds away, so the newest one
+        // is never held back for the coalescing window.
+        let completes_turn = preview.as_ref().is_some_and(|preview| {
+            preview.turn_completed || matches!(preview.kind.as_deref(), Some("tool" | "subagent"))
+        });
         if let Some(preview) = preview {
             guard.preview = Some(preview);
         }
@@ -1322,6 +1335,46 @@ mod tests {
         assert!(
             resolved.seq > pending.seq,
             "the change was published, not coalesced"
+        );
+    }
+
+    /// A tool or subagent call is one event, not a token stream: the update that
+    /// follows a call's start (its arguments) is written at once, while a reply
+    /// preview inside the window is still held back for the newest one.
+    #[test]
+    fn a_tool_preview_is_not_coalesced_but_reply_text_still_is() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = status_slot_dir(tmp.path());
+        let publisher = StatusPublisher::new(dir.clone(), "claude", "claude_helm_channel");
+        let preview = |seq: u64, kind: Option<&str>, text: &str| StatusPreview {
+            turn_id: format!("turn-{}", kind.unwrap_or("reply")),
+            seq,
+            live_text: text.into(),
+            progress_kind: "claude_helm_stream".into(),
+            kind: kind.map(str::to_string),
+            tool_name: kind.map(|_| "Bash".to_string()),
+            ..Default::default()
+        };
+        let say = |preview: StatusPreview| {
+            publisher.publish(
+                StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:01Z", "")
+                    .with_preview(Some(preview)),
+            );
+            read_all(&dir)
+                .pop()
+                .expect("slot")
+                .preview
+                .expect("preview")
+        };
+
+        say(preview(1, Some("tool"), "Bash"));
+        let with_arguments = say(preview(2, Some("tool"), "ls -la"));
+        assert_eq!(with_arguments.live_text, "ls -la", "not held back");
+
+        let held = say(preview(1, None, "Hel"));
+        assert_eq!(
+            held.live_text, "ls -la",
+            "reply text inside the window waits for the next write"
         );
     }
 
