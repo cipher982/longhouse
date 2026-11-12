@@ -67,7 +67,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: validate-native-device-entrypoints
 .PHONY: validate-host-link-contract
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
-.PHONY: validate-format validate-legacy-nouns
+.PHONY: validate-format validate-legacy-nouns validate-engine-format validate-session-mode-definitions
 .PHONY: validate-dogfood-sensitive-paths validate-precommit-autofix
 .PHONY: validate-verifier-boundary
 .PHONY: provider-release-proof-universal-live-smoke provider-capability-coordination-proof
@@ -788,6 +788,8 @@ VALIDATE_MEMBERS := \
 	validate-playwright-install \
 	validate-public-surface \
 	validate-format \
+	validate-engine-format \
+	validate-session-mode-definitions \
 	validate-provider-brands \
 	validate-tool-tiers \
 	validate-managed-session-contract \
@@ -844,6 +846,16 @@ validate-format: ## @internal Backend formatting is uniform tree-wide
 	@# so anything nobody happens to touch drifts forever -- which is how 154
 	@# files ended up unformatted. Fix drift with: cd server && uv run --extra dev ruff format zerg tests_lite
 	@cd server && uv run --extra dev ruff format --check zerg tests_lite
+
+validate-engine-format: ## @internal Engine Rust formatting, when a rustfmt is installed
+	@# The same command as CI's "Engine rustfmt gate" step, run here so a
+	@# formatting miss fails before a push instead of after a CI round trip.
+	@# The test image carries rustfmt, so this runs wherever `make validate`
+	@# does; on a machine with no rustfmt it says so and passes.
+	@python3 scripts/ci/check-engine-format.py
+
+validate-session-mode-definitions: ## @internal Session modes are defined once, in ARCHITECTURE.md
+	@python3 scripts/ci/check-session-mode-definitions.py
 
 validate-legacy-nouns: ## @internal Guard against pre-pivot product nouns
 	@python3 scripts/qa/legacy-nouns-check
