@@ -48,19 +48,34 @@ from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 
 
 class ProjectorsMixin:
-    def refresh_projector_statistics(self) -> dict[str, int]:
-        """Give the planner projector_state's real shape once per catalogd start.
+    def refresh_planner_statistics(self) -> dict[str, int]:
+        """Give the planner the catalog's real shape once per catalogd start.
 
-        Nothing else analyzes the catalog, and the production statistics were
-        taken at 196 rows: claim lookups scanned the projector (28 ms on the
-        frozen owner catalog, 0.14 ms after this). A full ANALYZE, because a
-        sampled one misjudges the mostly-NULL claim_token index the same way.
+        Nothing refreshed sqlite_stat1, so david010's statistics described a
+        catalog of a few hundred rows: raw_objects at 242 rows (964k real),
+        sessions at 196 (43k), media_objects and session_media_refs at 6 (31k
+        and 92k). With ten media hashes against six expected rows SQLite chose
+        a full scan of media_objects over its primary key, 8.7 ms against
+        0.05 ms on every committed envelope, and earlier fixes pinned single
+        queries to their indexes one at a time instead.
+
+        A sampled ANALYZE of the whole catalog takes 0.27 s on that 5.4 GB
+        snapshot (a full one 3.7 s) and lands within 10% of the real counts.
+        projector_state then gets a full ANALYZE, because a sample misjudges
+        its mostly-NULL claim_token index (claim lookups scanned the projector,
+        28 ms against 0.14 ms).
         """
 
         with _write_transaction(self.engine) as connection:
+            connection.exec_driver_sql("PRAGMA analysis_limit=1000")
+            try:
+                connection.exec_driver_sql("ANALYZE")
+            finally:
+                connection.exec_driver_sql("PRAGMA analysis_limit=0")
             connection.exec_driver_sql("ANALYZE projector_state")
+            tables = connection.exec_driver_sql("SELECT count(DISTINCT tbl) FROM sqlite_stat1").scalar_one()
             rows = connection.execute(select(func.count()).select_from(ProjectorState.__table__)).scalar_one()
-        return {"rows": int(rows)}
+        return {"tables": int(tables), "projector_rows": int(rows)}
 
     def scan_projector_repairs(self) -> ProjectorRepairPlan:
         """Find the sessions ``ensure_known_projector_states`` must repair.

@@ -4393,8 +4393,8 @@ class CatalogDaemon:
                 **ensured,
             )
             stage_started = time.perf_counter()
-            analyzed = await self._run_startup_write(self._store.refresh_projector_statistics)
-            _log_startup_stage("refresh_projector_statistics", stage_started, **analyzed)
+            analyzed = await self._run_startup_write(self._store.refresh_planner_statistics)
+            _log_startup_stage("refresh_planner_statistics", stage_started, **analyzed)
             _log_startup_stage("deferred_projector_repair", repair_started)
         except asyncio.CancelledError:
             raise
