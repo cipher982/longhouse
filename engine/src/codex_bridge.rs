@@ -89,8 +89,6 @@ const PAUSE_KIND_PLAN_APPROVAL: &str = "plan_approval";
 const REPLY_TRANSPORT_MANAGED_PUSH: &str = "managed_push";
 const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
     "item/plan/delta",
-    "item/reasoning/summaryTextDelta",
-    "item/reasoning/summaryPartAdded",
     "item/reasoning/textDelta",
     "turn/plan/updated",
     "turn/diff/updated",
@@ -467,6 +465,8 @@ struct BridgeContext {
     live_transcript_item_id: Option<String>,
     live_transcript_item_hint: Option<String>,
     live_transcript_text: String,
+    /// What the live lane carries besides reply text: reasoning, tools and subagents.
+    live_kinds: LiveKindsState,
     runtime_tracker: CodexRuntimeTracker,
     subscribed_thread_id: Option<String>,
     /// The stock TUI is performing the first resume so it can hydrate visible
@@ -1991,6 +1991,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         live_transcript_item_id: None,
         live_transcript_item_hint: None,
         live_transcript_text: String::new(),
+        live_kinds: LiveKindsState::default(),
         runtime_tracker: CodexRuntimeTracker::default(),
         subscribed_thread_id: startup_subscribed_thread_id,
         tui_owned_resume_pending: tui_owns_startup_resume(
@@ -4741,6 +4742,9 @@ async fn process_notification(
                     }
                 }
             }
+            if matches!(method, "item/started" | "item/completed") {
+                post_live_tool_item(context, method, &params);
+            }
             let updates = context.runtime_tracker.handle_notification(method, &params);
             emit_runtime_updates(config, context, updates).await;
             if followup.is_none() {
@@ -4753,6 +4757,12 @@ async fn process_notification(
                     pending_thread_subscription(context)?
                 };
             }
+        }
+        method if crate::codex_live_kinds::is_reasoning_method(method) => {
+            if different_notification_thread_id(&params, context).is_some() {
+                return Ok(None);
+            }
+            post_live_thinking(context, method, &params);
         }
         "item/agentMessage/delta"
         | "item/commandExecution/outputDelta"
@@ -4770,6 +4780,9 @@ async fn process_notification(
                     )?;
                 }
                 return Ok(None);
+            }
+            if method == "item/commandExecution/outputDelta" {
+                post_live_tool_output(context, &params);
             }
             if let Some(delta) = extract_live_transcript_delta(method, &params) {
                 let item_id = resolve_live_transcript_item_id(context, &params);
@@ -5672,7 +5685,7 @@ impl CodexRuntimeTracker {
         };
 
         // Rollout growth is real provider progress even when the bridge saw no
-        // events, because the bridge opts out of token-usage and reasoning deltas.
+        // events, because the bridge opts out of token-usage and raw reasoning deltas.
         if let Some(len) = rollout_len {
             let grew = self.last_rollout_len.is_some_and(|prev| len > prev);
             self.last_rollout_len = Some(len);
@@ -5747,6 +5760,134 @@ fn reset_live_transcript_turn(context: &mut BridgeContext) {
     context.live_transcript_item_id = None;
     context.live_transcript_item_hint = None;
     context.live_transcript_text.clear();
+    context.live_kinds.reset_turn();
+}
+
+/// The reasoning, tool and subagent state of the live lane for the current turn.
+#[derive(Debug, Default)]
+struct LiveKindsState {
+    /// Orders reasoning deltas for the host, which drops one it has already applied. It lives as long as the
+    /// bridge (reasoning is never stored, so a large starting value costs nothing) and starts at the clock so a
+    /// restarted bridge never counts below what the host last saw.
+    thinking_seq: u64,
+    tool_seq: u64,
+    last_tool_update: Option<Instant>,
+    tools: BTreeMap<String, crate::codex_live_kinds::LiveToolItem>,
+    tool_output: BTreeMap<String, String>,
+}
+
+/// A tool's running output is posted at most this often, the rate reply text is posted at.
+const LIVE_TOOL_UPDATE_MIN_INTERVAL: Duration = Duration::from_millis(100);
+
+impl LiveKindsState {
+    fn reset_turn(&mut self) {
+        self.tools.clear();
+        self.tool_output.clear();
+    }
+
+    fn next_thinking_seq(&mut self) -> u64 {
+        if self.thinking_seq == 0 {
+            self.thinking_seq = Utc::now().timestamp_millis().max(1) as u64;
+        }
+        self.thinking_seq += 1;
+        self.thinking_seq
+    }
+
+    /// The order number for the next tool post. A running-output update that follows the last one too closely gets
+    /// none; a start or an end always does.
+    fn next_tool_seq(&mut self, is_update: bool) -> Option<u64> {
+        if is_update {
+            let now = Instant::now();
+            if self
+                .last_tool_update
+                .is_some_and(|last| now.duration_since(last) < LIVE_TOOL_UPDATE_MIN_INTERVAL)
+            {
+                return None;
+            }
+            self.last_tool_update = Some(now);
+        }
+        self.tool_seq += 1;
+        Some(self.tool_seq)
+    }
+}
+
+/// Post a reasoning summary delta as the raw app-server notification, which the host turns into a `thinking` preview.
+fn post_live_thinking(context: &mut BridgeContext, method: &str, params: &Value) {
+    let seq = context.live_kinds.next_thinking_seq();
+    context.runtime.post_live_thinking(
+        method,
+        params,
+        context.state.active_turn_id.as_deref(),
+        seq,
+    );
+}
+
+fn post_live_tool_item(context: &mut BridgeContext, method: &str, params: &Value) {
+    let Some(item) = params.get("item") else {
+        return;
+    };
+    let Some(tool) = crate::codex_live_kinds::live_tool_item(item) else {
+        return;
+    };
+    let completed = method == "item/completed";
+    let Some(seq) = context.live_kinds.next_tool_seq(false) else {
+        return;
+    };
+    let status = extract_string(item, &["status"])
+        .unwrap_or_else(|| if completed { "completed" } else { "inProgress" }.to_string());
+    let output = if completed {
+        let output = crate::codex_live_kinds::item_output(item)
+            .or_else(|| context.live_kinds.tool_output.remove(&tool.item_id));
+        context.live_kinds.tools.remove(&tool.item_id);
+        output.unwrap_or_default()
+    } else {
+        context
+            .live_kinds
+            .tools
+            .insert(tool.item_id.clone(), tool.clone());
+        String::new()
+    };
+    context.runtime.post_live_tool(
+        &tool,
+        &output,
+        &status,
+        context.state.active_turn_id.as_deref(),
+        seq,
+        completed,
+    );
+}
+
+fn post_live_tool_output(context: &mut BridgeContext, params: &Value) {
+    let Some(item_id) = extract_string(params, &["itemId"]) else {
+        return;
+    };
+    let Some(delta) = params.get("delta").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(tool) = context.live_kinds.tools.get(&item_id).cloned() else {
+        return;
+    };
+    let output = context
+        .live_kinds
+        .tool_output
+        .entry(item_id.clone())
+        .or_default();
+    output.push_str(delta);
+    if output.len() > 2 * crate::status_slot::MAX_TOOL_TAIL_BYTES {
+        *output = crate::status_slot::bounded_tool_tail(output).unwrap_or_default();
+    }
+    let output = output.clone();
+    let Some(seq) = context.live_kinds.next_tool_seq(true) else {
+        return;
+    };
+    context.runtime.post_live_tool(
+        &tool,
+        &output,
+        "inProgress",
+        context.state.active_turn_id.as_deref(),
+        seq,
+        false,
+    );
 }
 
 fn extract_live_transcript_delta<'a>(method: &str, params: &'a Value) -> Option<&'a str> {
@@ -6490,6 +6631,74 @@ impl BridgeRuntimeSink {
                 "turn_completed": turn_completed,
             }
         })
+    }
+
+    /// A reasoning summary delta, posted as the raw notification (the shape Console posts).
+    fn post_live_thinking(&self, method: &str, params: &Value, turn_id: Option<&str>, seq: u64) {
+        let thread_id = self.thread_id.as_deref().unwrap_or("unknown-thread");
+        let turn_id = turn_id.unwrap_or("unknown-turn");
+        self.post_live_runtime_events_background(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": "codex_app_server",
+            "kind": "progress_signal",
+            "phase": Value::Null,
+            "tool_name": Value::Null,
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("bridge:thinking:{}:{}:{}:{}", self.session_id, thread_id, turn_id, seq),
+            "payload": {
+                "progress_kind": "codex_app_server_jsonrpc",
+                "managed_transport": "codex_app_server",
+                "thread_id": self.thread_id,
+                "turn_id": turn_id,
+                "seq": seq,
+                "event": {"method": method, "params": params},
+            }
+        })]);
+    }
+
+    /// A tool or subagent call, posted as its own event (never merged with another) so a call that starts and ends
+    /// within one beat is still seen.
+    fn post_live_tool(
+        &self,
+        tool: &crate::codex_live_kinds::LiveToolItem,
+        output: &str,
+        status: &str,
+        turn_id: Option<&str>,
+        seq: u64,
+        completed: bool,
+    ) {
+        let thread_id = self.thread_id.as_deref().unwrap_or("unknown-thread");
+        let turn_id = turn_id.unwrap_or("unknown-turn");
+        self.post_live_runtime_events_background(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": "codex_bridge_live",
+            "kind": "progress_signal",
+            "phase": Value::Null,
+            "tool_name": Value::Null,
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("bridge:tool:{}:{}:{}:{}:{}", self.session_id, thread_id, turn_id, tool.item_id, seq),
+            "payload": {
+                "progress_kind": "console_live_tool_item",
+                "managed_transport": "codex_app_server",
+                "thread_id": self.thread_id,
+                "turn_id": turn_id,
+                "item_id": tool.item_id,
+                "tool_name": tool.name,
+                "command": tool.summary,
+                "output": crate::status_slot::bounded_tool_tail(output).unwrap_or_default(),
+                "status": status,
+                "seq": seq,
+                "completed": completed,
+            }
+        })]);
     }
 
     fn post_live_runtime_events_background(&self, events: Vec<Value>) {
@@ -7263,6 +7472,7 @@ mod tests {
             live_transcript_item_id: None,
             live_transcript_item_hint: None,
             live_transcript_text: String::new(),
+            live_kinds: LiveKindsState::default(),
             runtime_tracker: CodexRuntimeTracker::default(),
             subscribed_thread_id: None,
             tui_owned_resume_pending: false,
@@ -8830,6 +9040,52 @@ mod tests {
             .unwrap();
     }
     #[tokio::test]
+    async fn process_notification_posts_thinking_tools_and_subagents_as_labelled_live_events() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<Value>>();
+        context.runtime.live_runtime_tx = Some(tx);
+
+        for notification in [
+            json!({"method": "turn/started", "params": {"turn": {"id": "turn-1", "status": "inProgress"}}}),
+            json!({"method": "item/reasoning/summaryTextDelta", "params": {"itemId": "r1", "delta": "weigh options"}}),
+            json!({"method": "item/started", "params": {"item": {"id": "c1", "type": "commandExecution", "command": "ls", "status": "inProgress"}}}),
+            json!({"method": "item/commandExecution/outputDelta", "params": {"itemId": "c1", "delta": "a\n"}}),
+            json!({"method": "item/completed", "params": {"item": {"id": "c1", "type": "commandExecution", "command": "ls", "aggregatedOutput": "a\nb\n", "status": "completed"}}}),
+            json!({"method": "item/started", "params": {"item": {"id": "s1", "type": "collabAgentToolCall", "tool": "spawnAgent", "prompt": "count files", "status": "inProgress"}}}),
+            json!({"method": "item/agentMessage/delta", "params": {"itemId": "m1", "delta": "done"}}),
+        ] {
+            process_notification(&notification, &config, &mut context)
+                .await
+                .unwrap();
+        }
+        let mut events = Vec::new();
+        while let Ok(batch) = rx.try_recv() {
+            events.extend(batch);
+        }
+        let payload = |index: usize| events[index]["payload"].clone();
+
+        // reasoning goes out as the raw notification, never as the reply's progress kind
+        assert_eq!(events[0]["source"], "codex_app_server");
+        assert_eq!(payload(0)["progress_kind"], "codex_app_server_jsonrpc");
+        assert_eq!(payload(0)["event"]["params"]["delta"], "weigh options");
+        // the shell call starts, streams one output update and ends with the full output
+        assert_eq!(payload(1)["tool_name"], "shell");
+        assert_eq!(payload(1)["status"], "inProgress");
+        assert_eq!(payload(2)["output"], "a\n");
+        assert_eq!(payload(3)["output"], "a\nb");
+        assert_eq!(payload(3)["completed"], true);
+        // a subagent call is named for the host's subagent kind
+        assert_eq!(payload(4)["tool_name"], "spawn_agent");
+        assert_eq!(payload(4)["command"], "count files");
+        // reply text is still the only thing posted as transcript text
+        assert_eq!(payload(5)["progress_kind"], "bridge_live_transcript_delta");
+        assert_eq!(events.len(), 6);
+        assert!(!BRIDGE_OPT_OUT_NOTIFICATION_METHODS.contains(&"item/reasoning/summaryTextDelta"));
+    }
+
+    #[tokio::test]
     async fn process_notification_resets_live_buffer_for_new_assistant_item() {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
@@ -9914,7 +10170,7 @@ mod tests {
 
     #[test]
     fn rollout_growth_counts_as_progress_and_clears_a_stall() {
-        // The bridge opts out of token-usage and reasoning deltas, so rollout
+        // The bridge opts out of token-usage and raw reasoning deltas, so rollout
         // growth is the only visible evidence of model-only work.
         let mut tracker = CodexRuntimeTracker::default();
         start_turn_with_command(&mut tracker);

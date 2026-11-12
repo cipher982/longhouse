@@ -20,6 +20,7 @@ mod codex_bridge;
 mod codex_bridge_ownership;
 mod codex_config;
 mod codex_exec;
+mod codex_live_kinds;
 #[cfg(test)]
 mod codex_rpc_golden;
 mod codex_source;

@@ -1298,6 +1298,9 @@ KIND_EXPECTATIONS: dict[tuple[str, str], tuple[str, str]] = {
     # Console thinking (2026-11-12): the engine posts it through the status slot beside the stripped stream event.
     ("omp/console", "thinking"): ("thinking", "thinking"),
     ("pi/console", "thinking"): ("thinking", "thinking"),
+    # Codex (2026-11-12): the bridge forwards reasoning, tool and subagent items; Console names its tools. Run Helm with --warm-session.
+    ("codex/helm", "thinking"): ("thinking", "thinking"),
+    ("codex/helm", "tool"): ("tool_started", "tool"),
 }
 
 

@@ -45,6 +45,9 @@ def test_every_defect_of_2026_11_11_has_a_mutation_and_a_named_stage() -> None:
         "omp-console-thinking-as-reply",
         "pi-console-thinking-forward",
         "pi-console-thinking-as-reply",
+        "codex-helm-thinking-forward",
+        "codex-helm-thinking-as-reply",
+        "codex-helm-tool-forward",
     }
     assert all(m.stages and m.cell.count("/") == 1 for m in MUTATIONS)
 

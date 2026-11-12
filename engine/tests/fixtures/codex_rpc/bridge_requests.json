@@ -5,7 +5,7 @@
     },
     "step": "initialize",
     "wire": [
-      "{\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"experimentalApi\":true,\"optOutNotificationMethods\":[\"item/plan/delta\",\"item/reasoning/summaryTextDelta\",\"item/reasoning/summaryPartAdded\",\"item/reasoning/textDelta\",\"turn/plan/updated\",\"turn/diff/updated\",\"thread/tokenUsage/updated\",\"rawResponseItem/completed\"]},\"clientInfo\":{\"name\":\"longhouse_codex_bridge\",\"title\":\"Longhouse Codex Bridge\",\"version\":\"<version>\"}}}",
+      "{\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"experimentalApi\":true,\"optOutNotificationMethods\":[\"item/plan/delta\",\"item/reasoning/textDelta\",\"turn/plan/updated\",\"turn/diff/updated\",\"thread/tokenUsage/updated\",\"rawResponseItem/completed\"]},\"clientInfo\":{\"name\":\"longhouse_codex_bridge\",\"title\":\"Longhouse Codex Bridge\",\"version\":\"<version>\"}}}",
       "{\"method\":\"initialized\",\"params\":{}}"
     ]
   },
