@@ -721,5 +721,9 @@ describe("SessionRuntimeStrip background registry", () => {
     expect(state.tone).toBe("working");
     expect(state.detailKind).toBe("delegated");
     expect(state.detail).toBe("Rebasing worktree and rerunning make validate · Using Bash (+1 more)");
+
+    current.session_state.delegation.count = 4;
+    const capped = buildSessionLedgerState(current, interaction, start + 10_000, true);
+    expect(capped.detail).toBe("Rebasing worktree and rerunning make validate · Using Bash (+3 more)");
   });
 });

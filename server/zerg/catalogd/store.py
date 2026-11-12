@@ -4920,16 +4920,18 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
             ):
                 continue
             agent_id = raw_item["id"]
-            clean_item: dict[str, Any] = {
-                "id": agent_id,
-                "kind": "subagent",
-                "status": raw_item["status"],
-            }
+            clean_item: dict[str, Any] = dict(raw_item)
+            clean_item["id"] = agent_id
+            clean_item["kind"] = "subagent"
+            clean_item["status"] = raw_item["status"]
             if isinstance(raw_item.get("description"), str):
                 clean_item["description"] = raw_item["description"][:512]
             tool_call_id = raw_item.get("parent_tool_call_id")
-            if isinstance(tool_call_id, str) and 0 < len(tool_call_id) <= 256:
-                clean_item["parent_tool_call_id"] = tool_call_id
+            if tool_call_id is not None:
+                if isinstance(tool_call_id, str) and 0 < len(tool_call_id) <= 256:
+                    clean_item["parent_tool_call_id"] = tool_call_id
+                else:
+                    clean_item.pop("parent_tool_call_id", None)
             progress = raw_item.get("native_progress")
             if progress is not None:
                 if not isinstance(progress, Mapping):

@@ -73,7 +73,8 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
         None
     };
     let lifecycle_update = lifecycle_update_for_event(&event, input, &occurred_at);
-    if observation.status.is_none()
+    if event != "SessionEnd"
+        && observation.status.is_none()
         && observation.edge.is_none()
         && registry.is_none()
         && lifecycle_update.is_none()
@@ -204,18 +205,29 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     // time but remain separate fact families downstream. Keep both fields on
     // the producer payload: the daemon preserves the complete snapshot while
     // reducing the exact child edge independently.
+    let home = longhouse_home()?;
     if (!child_origin && observation.status.is_some())
         || payload.get("delegation").is_some()
         || payload.get("delegation_update").is_some()
     {
-        crate::hook_outbox::enqueue_presence(&longhouse_home()?, &payload)?;
+        crate::hook_outbox::enqueue_presence(&home, &payload)?;
     }
     if !child_origin {
         if let Some(edge) = observation.edge.as_ref() {
             enqueue_interaction_edge(&session_id, edge)?;
         }
     }
-    if let Some(marker_event) = warp_marker_for_event(&event, child_origin, payload.get("delegation")) {
+    let stopping_agent_id = (event == "SubagentStop")
+        .then(|| string(input, "agent_id"))
+        .flatten();
+    if let Some(marker_event) = warp_marker_for_event(
+        &home,
+        &session_id,
+        &event,
+        child_origin,
+        stopping_agent_id.as_deref(),
+        payload.get("delegation"),
+    ) {
         crate::warp_cli_agent::emit_tty_event(
             "claude",
             marker_event,
@@ -419,24 +431,84 @@ fn parent_tool_call_id(input: &Value, task_id: &str) -> Option<String> {
 const DELEGATION_UPDATE_PATH_MAX_CHARS: usize = 1024;
 const DELEGATION_PROGRESS_TOOL_MAX_CHARS: usize = 128;
 
+fn warp_deferred_stop_path(home: &Path, session_id: &str) -> PathBuf {
+    let digest = Sha256::digest(session_id.as_bytes());
+    home.join("agent")
+        .join("turn-claims")
+        .join(format!("warp-deferred-stop-{digest:x}"))
+}
+
+fn remaining_active_subagents(
+    delegation: Option<&Value>,
+    stopping_agent_id: Option<&str>,
+) -> u64 {
+    let Some(snapshot) = delegation else {
+        return 0;
+    };
+    if let Some(items) = snapshot.get("items").and_then(Value::as_array) {
+        return items
+            .iter()
+            .filter(|item| item.get("kind").and_then(Value::as_str) == Some("subagent"))
+            .filter(|item| {
+                stopping_agent_id
+                    .map_or(true, |stop_id| item.get("id").and_then(Value::as_str) != Some(stop_id))
+            })
+            .count() as u64;
+    }
+    let count = snapshot
+        .get("kinds")
+        .and_then(|kinds| kinds.get("subagent"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if stopping_agent_id.is_some() {
+        count.saturating_sub(1)
+    } else {
+        count
+    }
+}
+
 fn warp_marker_for_event(
+    home: &Path,
+    session_id: &str,
     event: &str,
     child_origin: bool,
+    stopping_agent_id: Option<&str>,
     delegation: Option<&Value>,
 ) -> Option<&'static str> {
+    let deferred_path = warp_deferred_stop_path(home, session_id);
+    if event == "SubagentStop" {
+        if deferred_path.exists()
+            && remaining_active_subagents(delegation, stopping_agent_id) == 0
+        {
+            let _ = std::fs::remove_file(&deferred_path);
+            return Some("stop");
+        }
+        return None;
+    }
     if child_origin {
         return None;
     }
     match event {
-        "UserPromptSubmit" => Some("prompt_submit"),
+        "UserPromptSubmit" => {
+            let _ = std::fs::remove_file(&deferred_path);
+            Some("prompt_submit")
+        }
         "PermissionRequest" => Some("permission_request"),
+        "SessionEnd" => {
+            let _ = std::fs::remove_file(&deferred_path);
+            Some("stop")
+        }
         "Stop" => {
-            let active_subagents = delegation
-                .and_then(|snapshot| snapshot.get("kinds"))
-                .and_then(|kinds| kinds.get("subagent"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            (active_subagents == 0).then_some("stop")
+            if remaining_active_subagents(delegation, None) == 0 {
+                let _ = std::fs::remove_file(&deferred_path);
+                Some("stop")
+            } else {
+                if let Some(parent) = deferred_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&deferred_path, b"1");
+                None
+            }
         }
         _ => None,
     }
@@ -2019,38 +2091,126 @@ mod tests {
     }
 
     #[test]
-    fn warp_stop_marker_is_suppressed_only_while_background_subagents_are_active() {
-        assert_eq!(warp_marker_for_event("Stop", false, None), Some("stop"));
+    fn warp_stop_marker_is_suppressed_while_subagents_run_and_released_on_final_stop_or_exit() {
+        let home = tempfile::tempdir().unwrap();
+        let sid = "sess-warp-1";
+        assert_eq!(
+            warp_marker_for_event(home.path(), sid, "Stop", false, None, None),
+            Some("stop")
+        );
         assert_eq!(
             warp_marker_for_event(
+                home.path(),
+                sid,
                 "Stop",
                 false,
-                Some(&json!({"count": 0, "kinds": {}}))
+                None,
+                Some(&json!({"count": 0, "kinds": {}, "items": []}))
             ),
             Some("stop")
         );
         assert_eq!(
             warp_marker_for_event(
+                home.path(),
+                sid,
                 "Stop",
                 false,
-                Some(&json!({"count": 2, "kinds": {"shell": 2}}))
+                None,
+                Some(&json!({
+                    "count": 2,
+                    "kinds": {"shell": 2},
+                    "items": [
+                        {"id": "sh-1", "kind": "shell", "status": "running"},
+                        {"id": "sh-2", "kind": "shell", "status": "running"}
+                    ]
+                }))
             ),
             Some("stop"),
             "background shells like dev servers must not keep Warp spinning"
         );
+        // Foreground SubagentStop when parent never suppressed Stop emits nothing.
         assert_eq!(
             warp_marker_for_event(
+                home.path(),
+                sid,
+                "SubagentStop",
+                true,
+                Some("fg-1"),
+                Some(&json!({"count": 0, "kinds": {}, "items": []}))
+            ),
+            None
+        );
+        // Parent Stop with 2 running background subagents defers Warp stop.
+        assert_eq!(
+            warp_marker_for_event(
+                home.path(),
+                sid,
                 "Stop",
                 false,
-                Some(&json!({"count": 2, "kinds": {"subagent": 1, "shell": 1}}))
+                None,
+                Some(&json!({
+                    "count": 2,
+                    "kinds": {"subagent": 2},
+                    "items": [
+                        {"id": "bg-1", "kind": "subagent", "status": "running"},
+                        {"id": "bg-2", "kind": "subagent", "status": "running"}
+                    ]
+                }))
             ),
-            None,
-            "active background subagents keep Warp active until the post-notification Stop"
+            None
+        );
+        // First SubagentStop still has bg-2 running, so Warp stays active.
+        assert_eq!(
+            warp_marker_for_event(
+                home.path(),
+                sid,
+                "SubagentStop",
+                true,
+                Some("bg-1"),
+                Some(&json!({
+                    "count": 2,
+                    "kinds": {"subagent": 2},
+                    "items": [
+                        {"id": "bg-1", "kind": "subagent", "status": "running"},
+                        {"id": "bg-2", "kind": "subagent", "status": "running"}
+                    ]
+                }))
+            ),
+            None
+        );
+        // Final SubagentStop clears the deferred Warp stop even if no later parent Stop fires.
+        assert_eq!(
+            warp_marker_for_event(
+                home.path(),
+                sid,
+                "SubagentStop",
+                true,
+                Some("bg-2"),
+                Some(&json!({
+                    "count": 1,
+                    "kinds": {"subagent": 1},
+                    "items": [
+                        {"id": "bg-2", "kind": "subagent", "status": "running"}
+                    ]
+                }))
+            ),
+            Some("stop")
+        );
+        // SessionEnd also clears any deferred stop unconditionally.
+        assert_eq!(
+            warp_marker_for_event(
+                home.path(),
+                sid,
+                "Stop",
+                false,
+                None,
+                Some(&json!({"count": 1, "kinds": {"subagent": 1}}))
+            ),
+            None
         );
         assert_eq!(
-            warp_marker_for_event("Stop", true, None),
-            None,
-            "child-origin hooks never emit parent Warp markers"
+            warp_marker_for_event(home.path(), sid, "SessionEnd", false, None, None),
+            Some("stop")
         );
     }
 

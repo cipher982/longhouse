@@ -586,7 +586,13 @@ fn collect_outbox_impl(
                     .payload
                     .delegation_update
                     .as_ref()
-                    .filter(|u| u.get("operation").and_then(Value::as_str) == Some("observe"))
+                    .filter(|u| {
+                        u.get("operation").and_then(Value::as_str) == Some("observe")
+                            && matches!(
+                                u.get("source_event").and_then(Value::as_str),
+                                Some("PreToolUse" | "PostToolUse" | "PostToolUseFailure")
+                            )
+                    })
                     .and_then(|u| u.get("source_agent_id").and_then(Value::as_str))
                     .map(str::trim)
                     .filter(|id| !id.is_empty())
@@ -2390,8 +2396,26 @@ mod tests {
     }
 
     #[test]
-    fn child_tool_observe_updates_coalesce_per_agent_without_dropping_completion_edges() {
+    fn child_tool_observe_updates_coalesce_per_agent_without_dropping_start_or_completion_edges() {
         let dir = make_outbox();
+        let start_a = write_presence_payload(
+            dir.path(),
+            "prs.child-start-a.json",
+            json!({
+                "session_id": "parent", "provider": "claude", "run_id": "run",
+                "occurred_at": "2026-09-30T15:00:00Z",
+                "delegation_update": {
+                    "operation": "observe", "membership": "existing_exact_link_only",
+                    "source_event": "SubagentStart", "source_agent_id": "agent-a",
+                    "observed_at": "2026-09-30T15:00:00Z",
+                    "item": {
+                        "id": "agent-a", "kind": "subagent", "status": "running",
+                        "agent_type": "general-purpose",
+                        "parent_tool_call_id": "toolu_parent_a"
+                    }
+                }
+            }),
+        );
         let older_pre = write_presence_payload(
             dir.path(),
             "prs.child-pre-1.json",
@@ -2443,10 +2467,10 @@ mod tests {
 
         let drained = collect_outbox_impl(dir.path(), None, false);
         let paths: Vec<_> = drained.posts.iter().map(|post| post.path.clone()).collect();
-        assert_eq!(paths, vec![stop_b, newest_pre]);
+        assert_eq!(paths, vec![start_a, stop_b, newest_pre]);
         assert!(
             !older_pre.exists(),
-            "superseded child observe outbox file should be removed during coalescing"
+            "superseded child tool observe outbox file should be removed during coalescing"
         );
     }
 

@@ -112,7 +112,11 @@ function delegatedWorkDetail(inspector: SessionBackgroundInspector | null): stri
   const step = tool ? `Using ${tool}` : progressStatus === "thinking" ? "Thinking" : null;
   const leadSummary = [lead.name, step].filter(Boolean).join(" · ");
   if (!leadSummary) return null;
-  const extra = activeTasks.length - 1;
+  const totalActive = Math.max(
+    inspector.count ?? activeTasks.length,
+    activeTasks.length,
+  );
+  const extra = totalActive - 1;
   return extra > 0 ? `${leadSummary} (+${extra} more)` : leadSummary;
 }
 
