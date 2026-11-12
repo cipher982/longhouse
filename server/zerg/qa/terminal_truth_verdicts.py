@@ -37,9 +37,21 @@ def median_budget_s(provider: str, mode: str) -> float:
 EARLY_FRACTION_MIN = 0.5  # blocking: this share of the markers must reach the client before the provider's last token
 
 
-PAINT_LAG_BUDGET_S = (
-    4.0  # Helm: median model-write to terminal-paint time; Claude Code measured 1.03 s (it paints about once a second), so 4x
-)
+# Helm: the median model-write to terminal-paint time. Claude Code paints a line of the reply when the line is complete, so a
+# marker (the first word of its line) is painted when the next marker is written: 1.03 s behind at 1.0 s between markers and
+# 4.11 s behind at 4.0 s (the nightly's 5 tokens a second, 2026-11-12). The budget is therefore the larger of 4 s and two
+# marker spacings; a fixed 4 s failed every slow run of a terminal that was behaving as it always does.
+PAINT_LAG_BUDGET_S = 4.0
+PAINT_LAG_BUDGET_MARKER_SPACINGS = 2.0
+
+
+def paint_lag_budget_s(model_sent: Sequence[float]) -> float:
+    """The paint-lag budget for a reply whose markers the model wrote at these times."""
+
+    times = sorted(model_sent)
+    gaps = [later - earlier for earlier, later in zip(times, times[1:], strict=False)]
+    spacing = statistics.median(gaps) if gaps else 0.0
+    return max(PAINT_LAG_BUDGET_S, PAINT_LAG_BUDGET_MARKER_SPACINGS * spacing)
 
 
 LEDGER_PATH = SERVER_ROOT / "zerg" / "config" / "managed_provider_contracts.json"
@@ -224,8 +236,15 @@ def judge(obs: Observation) -> dict[str, StageResult]:
         emitted_problem = "zero markers observed"
     elif len(seen) < len(obs.markers):
         emitted_problem = f"{len(seen)} of {len(obs.markers)} markers observed"
-    elif obs.mode == "helm" and lags and statistics.median(lags) > PAINT_LAG_BUDGET_S:
-        emitted_problem = f"terminal painted markers {statistics.median(lags):.2f} s after the model wrote them"
+    elif (
+        obs.mode == "helm"
+        and lags
+        and statistics.median(lags)
+        > (paint_budget := paint_lag_budget_s([s for m in obs.markers if (s := obs.model_sent.get(m)) is not None]))
+    ):
+        emitted_problem = (
+            f"terminal painted markers {statistics.median(lags):.2f} s after the model wrote them (budget {paint_budget:.1f} s)"
+        )
     stages["provider_emitted"] = StageResult(
         not emitted_problem,
         emitted_problem,

@@ -568,3 +568,34 @@ def test_a_cells_median_budget_comes_from_the_budget_file_and_falls_back_to_the_
         obs = _good_observation(provider=provider, stream_first_seen=slow)
         medians = [c for c in verdicts.stream_checks(obs) if c[0] == "median_delay_within_budget"]
         assert medians[0][1] is expected, (provider, medians)
+
+
+def test_a_terminal_that_paints_each_line_when_it_is_complete_passes_at_any_stream_rate() -> None:
+    """Claude Code paints a marker when the next one is written: 1.03 s behind at 20 tokens a second, 4.11 s at 5 (the nightly)."""
+
+    def paint(spacing: float, lag: float) -> tt.StageResult:
+        markers = _good_observation().markers
+        sent = {m: 10.0 + i * spacing for i, m in enumerate(markers)}
+        painted = {m: t + lag for m, t in sent.items()}
+        return tt.judge(_good_observation(model_sent=sent, reference=painted, engine_posted=painted, stream_first_seen=painted))[
+            "provider_emitted"
+        ]
+
+    assert paint(1.0, 1.03).ok
+    assert paint(4.0, 4.11).ok
+    # Two spacings behind is not a terminal painting line by line, at either rate.
+    assert not paint(4.0, 8.5).ok and "budget 8.0 s" in paint(4.0, 8.5).reason
+    assert not paint(1.0, 4.5).ok and "budget 4.0 s" in paint(1.0, 4.5).reason
+
+
+def test_the_second_message_is_matched_wherever_the_provider_puts_the_tool_result() -> None:
+    """Antigravity and Codex Helm append their own context after a tool result once the first message has streamed for long
+    enough (40 s in the nightly), so the result is not the latest message; matched on the latest only, the fake served the
+    first message again, five times, and the second never streamed."""
+    from zerg.qa.scripted_model_server import parse_pacing
+
+    pace = parse_pacing({"rate": 5, "tokens": 400, "marker_every": 20, "initial_delay": 1.0, "marker_prefix": "TT", "reasoning_tokens": 0})
+    for provider in ("antigravity", "codex", "claude"):
+        plan = tt.plan_cell(tt.CellSpec(provider, "helm", "two_message"), pace)
+        second = plan.turns[0]
+        assert second["match"] == plan.tool_token and second["match_scope"] == "any_input"

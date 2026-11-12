@@ -105,7 +105,7 @@ def plan_cell(spec: CellSpec, base: Pacing) -> CellPlan:
             {  # second request: the provider sends the tool result, whose output carries the tool token
                 "id": f"{spec.key}:b",
                 "match": tool_token,
-                "match_scope": "latest",
+                "match_scope": "any_input",
                 "reply": text_b,
                 "pace": pace_json(pace_b),
             },
