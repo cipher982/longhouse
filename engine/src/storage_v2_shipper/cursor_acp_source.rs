@@ -110,10 +110,7 @@ pub(crate) fn prepare_next_cursor_acp_envelope(
             records: batch
                 .records
                 .into_iter()
-                .map(|record| StorageV2Record {
-                    source_position: record.range_start,
-                    data_b64: BASE64_STANDARD.encode(record.bytes),
-                })
+                .map(|record| StorageV2Record::from_bytes(record.range_start, record.bytes))
                 .collect(),
             facts: Vec::new(),
             expected_envelope_id: hex_hash(storage_v2_contract::envelope_id(&identity)?),

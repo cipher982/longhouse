@@ -141,7 +141,13 @@ _EXPECTED_ENVELOPE_FIELDS = {
 # shipping; when present it is validated as strictly as the rest.
 _OPTIONAL_ENVELOPE_FIELDS = {"facts"}
 _EXPECTED_PROVIDER_FACT_FIELDS = {"kind", "at", "source_position", "payload"}
-_EXPECTED_RECORD_FIELDS = {"source_position", "data_b64"}
+# A record carries its exact source bytes either as a UTF-8 string (`data`)
+# or, for bytes that are not valid UTF-8, as base64 (`data_b64`). Transcripts
+# are JSON lines, so nearly every record is text; base64 inside the zstd
+# envelope halved its compression (5.2x to 2.6x on captured engine envelopes).
+_RECORD_FIELDS_BASE64 = frozenset({"source_position", "data_b64"})
+_RECORD_FIELDS_TEXT = frozenset({"source_position", "data"})
+ENVELOPE_RECORD_ENCODINGS = ("utf8", "base64")
 _EXPECTED_MEDIA_REF_FIELDS = {"sha256", "source_position", "ref_key", "availability"}
 _EXPECTED_RENDER_FIELDS = {"generation_id", "parser_revision", "ordering_revision", "records"}
 _LEGACY_RENDER_RECORD_FIELDS = {
@@ -572,18 +578,30 @@ def _parse_envelope(
     records: list[RawRecord] = []
     raw_bytes = 0
     for item in wire_records:
-        if not isinstance(item, dict) or set(item) != _EXPECTED_RECORD_FIELDS:
-            raise ValueError("each record must contain source_position and data_b64")
+        fields = set(item) if isinstance(item, dict) else None
+        if fields != _RECORD_FIELDS_TEXT and fields != _RECORD_FIELDS_BASE64:
+            raise ValueError("each record must contain source_position and one of data or data_b64")
         position = item["source_position"]
         if type(position) is not int or not 0 <= position < 1 << 64:
             raise ValueError("record source_position must be an unsigned 64-bit integer")
-        encoded = item["data_b64"]
-        if not isinstance(encoded, str):
-            raise ValueError("record data_b64 must be a string")
-        try:
-            data = base64.b64decode(encoded, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError("record data_b64 is invalid base64") from exc
+        if fields == _RECORD_FIELDS_TEXT:
+            text = item["data"]
+            if not isinstance(text, str):
+                raise ValueError("record data must be a string")
+            try:
+                # A JSON string can spell a lone surrogate, which no UTF-8 byte
+                # sequence encodes; such a record could not be the source bytes.
+                data = text.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise ValueError("record data is not valid UTF-8 text") from exc
+        else:
+            encoded = item["data_b64"]
+            if not isinstance(encoded, str):
+                raise ValueError("record data_b64 must be a string")
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError("record data_b64 is invalid base64") from exc
         raw_bytes += len(data)
         if raw_bytes > MAX_RECORD_BYTES:
             raise ValueError(f"raw record bytes exceed {MAX_RECORD_BYTES}")
@@ -1219,6 +1237,7 @@ async def storage_v2_capabilities(
         "ingest_path": "/api/agents/storage/v2/envelopes",
         "max_wire_body_bytes": MAX_WIRE_BODY_BYTES,
         "envelope_content_encodings": list(ENVELOPE_CONTENT_ENCODINGS),
+        "envelope_record_encodings": list(ENVELOPE_RECORD_ENCODINGS),
         "max_raw_record_bytes": MAX_RECORD_BYTES,
         "max_records": MAX_RECORDS,
         "media_claim_path": "/api/agents/storage/v2/media/claims",

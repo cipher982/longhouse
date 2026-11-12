@@ -1,6 +1,7 @@
 //! Typed Machine Agent wire contracts for storage-v2 negotiation and receipts.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use base64::prelude::{Engine as _, BASE64_STANDARD};
 use serde::{Deserialize, Serialize};
 
 pub const STORAGE_V2_CAPABILITIES_PATH: &str = "/api/agents/storage/v2/capabilities";
@@ -29,6 +30,10 @@ pub struct StorageV2Capabilities {
     /// hosts, which accept identity only.
     #[serde(default)]
     pub envelope_content_encodings: Vec<String>,
+    /// Raw record encodings the Runtime Host accepts. Absent on older hosts,
+    /// which accept base64 only.
+    #[serde(default)]
+    pub envelope_record_encodings: Vec<String>,
     /// Where a machine with no local shipping state asks what the host already
     /// holds for its sources. Absent on hosts without the endpoint, which keep
     /// today's behavior: a fresh epoch from position zero.
@@ -73,6 +78,13 @@ impl StorageV2Capabilities {
             bail!("Runtime Host returned an incompatible storage-v2 capability contract");
         }
         Ok(())
+    }
+
+    /// Whether this host accepts raw records as UTF-8 text (`data`).
+    pub fn accepts_text_records(&self) -> bool {
+        self.envelope_record_encodings
+            .iter()
+            .any(|encoding| encoding == "utf8")
     }
 
     /// The encoding for envelope bodies on this host. The engine stores every
@@ -131,10 +143,56 @@ impl StorageV2BodyEncoding {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+/// One source record with its exact bytes. Valid UTF-8 (every JSON-lines
+/// record) travels as a string in `data`; anything else as base64 in
+/// `data_b64`. Exactly one is set. Base64 inside the zstd envelope halved its
+/// compression (5.2x to 2.6x on captured envelopes), so text is the default and
+/// `wire_body` converts to base64 only for a host that predates text records.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct StorageV2Record {
     pub source_position: u64,
-    pub data_b64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_b64: Option<String>,
+}
+
+impl StorageV2Record {
+    pub fn from_bytes(source_position: u64, bytes: Vec<u8>) -> Self {
+        match String::from_utf8(bytes) {
+            Ok(text) => Self {
+                source_position,
+                data: Some(text),
+                data_b64: None,
+            },
+            Err(error) => Self {
+                source_position,
+                data: None,
+                data_b64: Some(BASE64_STANDARD.encode(error.into_bytes())),
+            },
+        }
+    }
+
+    /// The record's exact source bytes, whichever form it carries.
+    pub fn bytes(&self) -> Result<Vec<u8>> {
+        match (&self.data, &self.data_b64) {
+            (Some(text), None) => Ok(text.as_bytes().to_vec()),
+            (None, Some(encoded)) => BASE64_STANDARD
+                .decode(encoded)
+                .context("decoding storage-v2 record base64"),
+            _ => bail!("storage-v2 record must carry exactly one of data or data_b64"),
+        }
+    }
+
+    /// The same record as base64, for a host that accepts only `data_b64`.
+    pub fn into_base64(self) -> Result<Self> {
+        let bytes = self.bytes()?;
+        Ok(Self {
+            source_position: self.source_position,
+            data: None,
+            data_b64: Some(BASE64_STANDARD.encode(bytes)),
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -497,8 +555,11 @@ mod tests {
             StorageV2BodyEncoding::Identity
         );
 
+        assert!(!older_host.accepts_text_records());
+
         let current_host = StorageV2Capabilities {
             envelope_content_encodings: vec!["zstd".to_string(), "identity".to_string()],
+            envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
             ..older_host
         };
@@ -506,6 +567,7 @@ mod tests {
             current_host.envelope_body_encoding(),
             StorageV2BodyEncoding::Zstd
         );
+        assert!(current_host.accepts_text_records());
     }
 
     #[test]
@@ -552,6 +614,7 @@ mod tests {
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: STORAGE_V2_LANE_HEADER.to_string(),
             envelope_content_encodings: Vec::new(),
+            envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
         }
     }
@@ -631,6 +694,7 @@ mod tests {
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: STORAGE_V2_LANE_HEADER.to_string(),
             envelope_content_encodings: Vec::new(),
+            envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
         };
         valid.validate("cinder").unwrap();
@@ -654,5 +718,61 @@ mod tests {
         };
         receipt.validate(&hash).unwrap();
         assert!(receipt.validate(&"c".repeat(64)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod record_encoding_tests {
+    use super::*;
+
+    #[test]
+    fn utf8_records_travel_as_text_and_round_trip_exactly() {
+        let bytes = "{\"t\":\"caf\u{e9} \u{1f600} \\\" \\u0000 tab\t nul\u{0}\"}\n"
+            .as_bytes()
+            .to_vec();
+        let record = StorageV2Record::from_bytes(7, bytes.clone());
+        assert!(record.data.is_some() && record.data_b64.is_none());
+
+        let wire = serde_json::to_vec(&record).unwrap();
+        let parsed: StorageV2Record = serde_json::from_slice(&wire).unwrap();
+        assert_eq!(parsed.bytes().unwrap(), bytes);
+        assert_eq!(parsed.source_position, 7);
+        assert!(!String::from_utf8(wire).unwrap().contains("data_b64"));
+    }
+
+    #[test]
+    fn invalid_utf8_records_fall_back_to_base64() {
+        let bytes = vec![0x7b, 0xff, 0xfe, 0x7d, b'\n'];
+        let record = StorageV2Record::from_bytes(3, bytes.clone());
+        assert!(record.data.is_none() && record.data_b64.is_some());
+        assert_eq!(record.bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn envelopes_stored_before_text_records_still_read() {
+        let stored = serde_json::json!({"source_position": 0, "data_b64": "aGVsbG8K"});
+        let record: StorageV2Record = serde_json::from_value(stored).unwrap();
+        assert_eq!(record.bytes().unwrap(), b"hello\n");
+    }
+
+    #[test]
+    fn a_record_must_carry_exactly_one_form() {
+        for value in [
+            serde_json::json!({"source_position": 0}),
+            serde_json::json!({"source_position": 0, "data": "x", "data_b64": "eA=="}),
+        ] {
+            let record: StorageV2Record = serde_json::from_value(value).unwrap();
+            assert!(record.bytes().is_err());
+        }
+    }
+
+    #[test]
+    fn into_base64_keeps_the_exact_bytes() {
+        let bytes = "line \u{4e2d}\n".as_bytes().to_vec();
+        let record = StorageV2Record::from_bytes(1, bytes.clone())
+            .into_base64()
+            .unwrap();
+        assert!(record.data.is_none());
+        assert_eq!(record.bytes().unwrap(), bytes);
     }
 }

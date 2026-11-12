@@ -389,7 +389,7 @@ mod tests {
                 let records: Vec<Vec<u8>> = envelope
                     .records
                     .iter()
-                    .map(|record| BASE64_STANDARD.decode(&record.data_b64).unwrap())
+                    .map(|record| record.bytes().unwrap())
                     .collect();
                 let (status, reply) = loop {
                     let mut host = state.lock().unwrap();
@@ -464,6 +464,7 @@ mod tests {
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: "X-Longhouse-Storage-Lane".to_string(),
             envelope_content_encodings: Vec::new(),
+            envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: resume.then(|| RESUME_PATH.to_string()),
         }
     }

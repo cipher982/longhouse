@@ -1422,10 +1422,7 @@ pub(super) fn prepare_next_cursor_envelope_outcome_with_limit(
             },
             records: selected
                 .into_iter()
-                .map(|record| StorageV2Record {
-                    source_position: record.source_position,
-                    data_b64: BASE64_STANDARD.encode(record.bytes),
-                })
+                .map(|record| StorageV2Record::from_bytes(record.source_position, record.bytes))
                 .collect(),
             facts: Vec::new(),
             expected_envelope_id: hex_hash(storage_v2_contract::envelope_id(&identity)?),

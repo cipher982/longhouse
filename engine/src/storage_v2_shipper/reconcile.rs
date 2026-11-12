@@ -1553,8 +1553,8 @@ pub(super) fn decode_envelope_record_bytes(records: &[StorageV2Record]) -> Resul
     records
         .iter()
         .map(|record| {
-            BASE64_STANDARD
-                .decode(&record.data_b64)
+            record
+                .bytes()
                 .context("decoding persisted storage-v2 raw record")
         })
         .collect()

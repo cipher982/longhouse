@@ -837,10 +837,7 @@ fn prepare_file_envelope(
             records: raw_batch
                 .records
                 .into_iter()
-                .map(|record| StorageV2Record {
-                    source_position: record.range_start,
-                    data_b64: BASE64_STANDARD.encode(record.bytes),
-                })
+                .map(|record| StorageV2Record::from_bytes(record.range_start, record.bytes))
                 .collect(),
             facts,
             expected_envelope_id,
@@ -933,8 +930,8 @@ pub(super) fn raw_batch_is_claude_startup_metadata(batch: &RawRecordBatch) -> bo
 pub(super) fn raw_records_are_claude_startup_metadata(records: &[StorageV2Record]) -> bool {
     !records.is_empty()
         && records.iter().all(|record| {
-            BASE64_STANDARD
-                .decode(&record.data_b64)
+            record
+                .bytes()
                 .ok()
                 .is_some_and(|bytes| is_claude_startup_metadata_bytes(&bytes))
         })

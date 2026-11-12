@@ -449,9 +449,8 @@ pub(super) fn walk_opencode_database(
                     records: selected
                         .iter()
                         .enumerate()
-                        .map(|(offset, bytes)| StorageV2Record {
-                            source_position: range_start + offset as u64,
-                            data_b64: BASE64_STANDARD.encode(bytes),
+                        .map(|(offset, bytes)| {
+                            StorageV2Record::from_bytes(range_start + offset as u64, bytes.to_vec())
                         })
                         .collect(),
                     facts: opencode_provider_facts_for_range(

@@ -2281,6 +2281,46 @@ async def test_storage_v2_commit_links_delivered_send_receipt_to_its_user_event(
         assert [(receipt["client_request_id"], receipt["event_id"]) for receipt in projected] == [("ios-req-1", "user-1")]
 
 
+@pytest.mark.parametrize(
+    "data",
+    [
+        b'{"type":"user","message":{"content":"plain"}}\n',
+        '{"t":"caf\u00e9 \u4e2d \U0001f600 \\u0000 \\" tab\t"}\n'.encode(),
+        b"\x00\x1f control bytes and a lone \\ud800 spelled as text\n",
+    ],
+)
+def test_text_records_parse_to_the_same_bytes_and_envelope_as_base64(data):
+    payload = _payload(tenant_id="tenant", machine_id="machine", epoch=UUID(int=1), data=data)
+    text_payload = json.loads(json.dumps(payload))
+    text_payload["records"] = [{"source_position": 0, "data": data.decode("utf-8")}]
+    # The engine serializes the string; the host sees whatever JSON escaping it chose.
+    text_payload = json.loads(json.dumps(text_payload, ensure_ascii=False))
+
+    base_spec, base_meta = storage_router._parse_envelope(payload, tenant_id="tenant", machine_id="machine", lane="repair")
+    text_spec, text_meta = storage_router._parse_envelope(text_payload, tenant_id="tenant", machine_id="machine", lane="repair")
+
+    assert text_spec.records == base_spec.records
+    assert text_spec.records[0].data == data
+    assert text_meta["expected_envelope_id"] == base_meta["expected_envelope_id"]
+
+
+@pytest.mark.parametrize(
+    ("record", "message"),
+    [
+        ({"source_position": 0, "data": "\ud800"}, "not valid UTF-8"),
+        ({"source_position": 0, "data": 5}, "must be a string"),
+        ({"source_position": 0, "data": "x", "data_b64": "eA=="}, "one of data or data_b64"),
+        ({"source_position": 0}, "one of data or data_b64"),
+    ],
+)
+def test_text_records_refuse_what_cannot_be_source_bytes(record, message):
+    payload = _payload(tenant_id="tenant", machine_id="machine", epoch=UUID(int=1))
+    payload["records"] = [record]
+
+    with pytest.raises(ValueError, match=message):
+        storage_router._parse_envelope(payload, tenant_id="tenant", machine_id="machine", lane="repair")
+
+
 def test_json_string_raw_record_cannot_acquire_native_provider_authority():
     native = {
         "payload": {
@@ -2309,6 +2349,7 @@ async def test_storage_v2_envelope_commits_in_each_advertised_encoding(monkeypat
     ) as stack:
         capabilities = await stack.client.get("/agents/storage/v2/capabilities")
         assert capabilities.json()["envelope_content_encodings"] == ["zstd", "identity"]
+        assert capabilities.json()["envelope_record_encodings"] == ["utf8", "base64"]
 
         payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())
         body = json.dumps(payload).encode()

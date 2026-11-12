@@ -149,8 +149,13 @@ fn preparation_result<T>(result: Result<T>) -> Result<T> {
     result.map_err(|source| StorageV2PreparationError { source }.into())
 }
 
+/// Stored envelopes go on the wire as-is, so this level is the wire's. With
+/// records as text, level 3 compresses captured envelopes 5.2x at a few
+/// milliseconds of engine CPU per envelope.
+const STORED_ENVELOPE_ZSTD_LEVEL: i32 = 3;
+
 fn encode_zstd(bytes: &[u8], label: &str) -> Result<Vec<u8>> {
-    zstd::stream::encode_all(Cursor::new(bytes), 1)
+    zstd::stream::encode_all(Cursor::new(bytes), STORED_ENVELOPE_ZSTD_LEVEL)
         .with_context(|| format!("compressing durable {label}"))
 }
 
@@ -158,16 +163,48 @@ fn encode_zstd(bytes: &[u8], label: &str) -> Result<Vec<u8>> {
 /// zstd; a host that accepts zstd gets those exact bytes, so ambiguous outcomes
 /// still retry byte-identical content. Only an identity-only host needs them
 /// decompressed.
+///
+/// Envelopes are stored with text records. A host that predates text records
+/// gets the same envelope with every record as base64; the conversion is
+/// deterministic, so its retries stay byte-identical too.
 fn wire_body(
     pending: &PendingSourceEnvelope,
     capabilities: &StorageV2Capabilities,
 ) -> Result<Vec<u8>> {
-    match capabilities.envelope_body_encoding() {
-        StorageV2BodyEncoding::Zstd => Ok(pending.request_body_zstd.clone()),
-        StorageV2BodyEncoding::Identity => {
+    let stored_is_wire_ready = capabilities.accepts_text_records();
+    match (capabilities.envelope_body_encoding(), stored_is_wire_ready) {
+        (StorageV2BodyEncoding::Zstd, true) => Ok(pending.request_body_zstd.clone()),
+        (StorageV2BodyEncoding::Identity, true) => {
             decode_zstd(&pending.request_body_zstd, "storage-v2 request body")
         }
+        (encoding, false) => {
+            let body = base64_record_body(&decode_zstd(
+                &pending.request_body_zstd,
+                "storage-v2 request body",
+            )?)?;
+            match encoding {
+                StorageV2BodyEncoding::Zstd => encode_zstd(&body, "storage-v2 request body"),
+                StorageV2BodyEncoding::Identity => Ok(body),
+            }
+        }
     }
+}
+
+/// Rewrite an envelope body so every raw record is `data_b64`, leaving every
+/// other field as stored.
+fn base64_record_body(body: &[u8]) -> Result<Vec<u8>> {
+    let mut envelope: serde_json::Value =
+        serde_json::from_slice(body).context("reading stored storage-v2 envelope")?;
+    let records = envelope
+        .get_mut("records")
+        .and_then(serde_json::Value::as_array_mut)
+        .context("stored storage-v2 envelope has no records")?;
+    for record in records.iter_mut() {
+        let parsed: StorageV2Record =
+            serde_json::from_value(record.take()).context("reading stored storage-v2 record")?;
+        *record = serde_json::to_value(parsed.into_base64()?)?;
+    }
+    serde_json::to_vec(&envelope).context("encoding storage-v2 envelope for a base64-only host")
 }
 
 fn decode_zstd(bytes: &[u8], label: &str) -> Result<Vec<u8>> {
@@ -681,6 +718,7 @@ mod tests {
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: "X-Longhouse-Storage-Lane".to_string(),
             envelope_content_encodings: Vec::new(),
+            envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
         }
     }
@@ -1120,12 +1158,7 @@ mod tests {
                 // No render manifest: the server must keep this pending, not
                 // publish an apparently complete empty transcript.
                 assert!(prepared.envelope.render.is_none());
-                assert_eq!(
-                    BASE64_STANDARD
-                        .decode(&prepared.envelope.records[0].data_b64)
-                        .unwrap(),
-                    raw
-                );
+                assert_eq!(prepared.envelope.records[0].bytes().unwrap(), raw);
                 assert_eq!(
                     prepared.envelope.session.started_at,
                     prepared.envelope.epoch_opened_at
@@ -1168,12 +1201,7 @@ mod tests {
         assert_eq!(first.envelope.session_id, session_id);
         assert_eq!(first.envelope.provider, "cursor");
         assert!(first.envelope.render.is_none());
-        assert_eq!(
-            BASE64_STANDARD
-                .decode(&first.envelope.records[0].data_b64)
-                .unwrap(),
-            raw
-        );
+        assert_eq!(first.envelope.records[0].bytes().unwrap(), raw);
         assert_eq!(
             source_epoch::lane_position(&conn, first.source_epoch, SourceLane::Durable).unwrap(),
             0,
@@ -1203,7 +1231,7 @@ mod tests {
         );
         assert!(first.envelope.render.is_none());
         assert!(first.envelope.records.iter().any(|record| {
-            let bytes = BASE64_STANDARD.decode(&record.data_b64).unwrap();
+            let bytes = record.bytes().unwrap();
             let raw: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             raw["kind"] == "meta" && raw["meta_key"] == "unknown"
         }));
@@ -3015,7 +3043,7 @@ mod tests {
             .unwrap();
         assert_eq!(prepared.envelope.provider, "cursor");
         assert!(prepared.envelope.records.iter().all(|record| {
-            let bytes = BASE64_STANDARD.decode(&record.data_b64).unwrap();
+            let bytes = record.bytes().unwrap();
             let raw: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             raw["kind"] != "root_observation"
         }));
@@ -3036,8 +3064,8 @@ mod tests {
         assert_eq!(prepared.range_start, 0);
         assert_eq!(prepared.range_end, bytes.len() as u64);
         assert_eq!(
-            prepared.envelope.records[0].data_b64,
-            BASE64_STANDARD.encode(bytes)
+            prepared.envelope.records[0].bytes().unwrap(),
+            bytes.to_vec()
         );
         assert_eq!(prepared.envelope.render.as_ref().unwrap().records.len(), 1);
         assert_eq!(
@@ -4134,12 +4162,12 @@ mod tests {
         };
         assert_eq!(lower_extension.source_epoch, source_epoch);
         assert!(lower_extension.envelope.records.iter().any(|record| {
-            let bytes = BASE64_STANDARD.decode(&record.data_b64).unwrap();
+            let bytes = record.bytes().unwrap();
             let raw: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             raw["kind"] == "blob" && raw["blob_id"] == "000-unreferenced"
         }));
         assert!(lower_extension.envelope.records.iter().any(|record| {
-            let bytes = BASE64_STANDARD.decode(&record.data_b64).unwrap();
+            let bytes = record.bytes().unwrap();
             let raw: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             raw["kind"] == "root_reference" && raw["blob_id"] == lower_message_id
         }));
@@ -4168,7 +4196,7 @@ mod tests {
             _ => panic!("a later-page blob must be captured after bounded continuation"),
         };
         assert!(tail.envelope.records.iter().any(|record| {
-            let bytes = BASE64_STANDARD.decode(&record.data_b64).unwrap();
+            let bytes = record.bytes().unwrap();
             let raw: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             raw["kind"] == "blob" && raw["blob_id"] == "zzzz-tail"
         }));
@@ -6134,7 +6162,7 @@ mod tests {
             .envelope
             .records
             .iter()
-            .flat_map(|record| BASE64_STANDARD.decode(&record.data_b64).unwrap())
+            .flat_map(|record| record.bytes().unwrap())
             .collect();
         assert_eq!(decoded, [CODEX_META, CODEX_USER, CODEX_REPLY].concat());
         acknowledge_prepared(&mut conn, &prepared);
@@ -6459,8 +6487,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            prepared.envelope.records[0].data_b64,
-            BASE64_STANDARD.encode(&bytes)
+            prepared.envelope.records[0].bytes().unwrap(),
+            bytes.to_vec()
         );
         assert_eq!(prepared.media_objects.len(), 1);
         assert_eq!(prepared.media_objects[0].bytes, vec![0; 600]);
@@ -8134,8 +8162,8 @@ mod tests {
             let first = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
                 .unwrap()
                 .unwrap();
-            assert!(!first.envelope.records.iter().any(|record| BASE64_STANDARD
-                .decode(&record.data_b64)
+            assert!(!first.envelope.records.iter().any(|record| record
+                .bytes()
                 .unwrap()
                 .windows(7)
                 .any(|w| w == b"running")));
@@ -8959,10 +8987,7 @@ mod tests {
                     .envelope
                     .records
                     .iter()
-                    .map(|record| {
-                        String::from_utf8(BASE64_STANDARD.decode(&record.data_b64).unwrap())
-                            .unwrap()
-                    })
+                    .map(|record| String::from_utf8(record.bytes().unwrap()).unwrap())
                     .collect(),
                 event_ids: prepared
                     .envelope
@@ -9429,5 +9454,58 @@ mod tests {
                 "{provider}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod wire_record_encoding_tests {
+    use super::*;
+
+    fn stored_body() -> (Vec<u8>, Vec<Vec<u8>>) {
+        let raw = vec![
+            b"{\"type\":\"user\",\"message\":\"hi \\u00e9\"}\n".to_vec(),
+            vec![0xff, 0x00, b'\n'],
+        ];
+        let body = serde_json::to_vec(&serde_json::json!({
+            "protocol_version": 2,
+            "expected_envelope_id": "a".repeat(64),
+            "records": raw
+                .iter()
+                .enumerate()
+                .map(|(index, bytes)| StorageV2Record::from_bytes(index as u64, bytes.clone()))
+                .collect::<Vec<_>>(),
+        }))
+        .unwrap();
+        (body, raw)
+    }
+
+    fn records_of(body: &[u8]) -> Vec<StorageV2Record> {
+        let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+        serde_json::from_value(value["records"].clone()).unwrap()
+    }
+
+    #[test]
+    fn base64_only_hosts_get_every_record_as_base64_with_identical_bytes() {
+        let (body, raw) = stored_body();
+        assert!(records_of(&body)[0].data.is_some());
+
+        let converted = base64_record_body(&body).unwrap();
+        let records = records_of(&converted);
+        assert!(records.iter().all(|record| record.data.is_none()));
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.bytes().unwrap())
+                .collect::<Vec<_>>(),
+            raw
+        );
+        let original: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let rewritten: serde_json::Value = serde_json::from_slice(&converted).unwrap();
+        assert_eq!(
+            original["expected_envelope_id"],
+            rewritten["expected_envelope_id"]
+        );
+        // Retries of an ambiguous outcome must send identical bytes.
+        assert_eq!(converted, base64_record_body(&body).unwrap());
     }
 }
