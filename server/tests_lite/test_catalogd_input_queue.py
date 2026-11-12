@@ -226,11 +226,14 @@ def _replace_expired_activity_head(engine, session_id, *, kind: str, age: timede
 
     The head's lease is anchored on when the host received it, so a hook provider
     that went quiet after its last transition reads as `unknown` once the short
-    activity lease lapses, however fresh the control lease still is.
+    activity lease lapses, however fresh the control lease still is. Its
+    transcript has not advanced since either: a transcript newer than the phase
+    would supersede it, which is a different case.
     """
 
     observed_at = datetime.now(UTC).replace(microsecond=0) - age
     with Session(engine) as db:
+        db.query(LiveSessionCatalog).filter_by(session_id=str(session_id)).update({"last_activity_at": observed_at})
         run = db.query(LiveSessionRun).one()
         value = {
             "authority_class": "provider_runtime",
