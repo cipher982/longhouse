@@ -9,9 +9,12 @@ on:
         default: "20"
         type: string
   schedule:
-    - cron: "43 10 * * *"
+    # Weekly (Tuesday). It ran daily until 2026-11-12 and every run that reached a
+    # runner in the two weeks before was green. GitHub starts this repository's
+    # schedules 7 to 10 hours late, so this lands at about 08:00 to 11:00 UTC.
+    - cron: "43 0 * * 2"
   # No push trigger: the soak compares against the median of recent receipts, so
-  # one run a day plus an on-demand run answers the same question, and 78
+  # a scheduled run plus an on-demand run answers the same question, and 78
   # push-triggered runs over two months bought nothing the deploy gate did not.
 
 permissions:

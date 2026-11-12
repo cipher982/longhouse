@@ -15,7 +15,9 @@ name: Terminal Truth
 #                                            ran 400 tokens at 5/s until 2026-11-12: that took about 50
 #                                            minutes a pass on the one runner slot with every push run queued
 #                                            behind it, GitHub started the 07:43Z schedule at 16:17Z in the
-#                                            working day, and in its first run it found two harness
+#                                            working day (it starts this repository's schedules 7 to 10
+#                                            hours late, so the cron is now 01:13Z to land at about 09:00
+#                                            to 11:00Z), and in its first run it found two harness
 #                                            assumptions and no product defect. The slow rate is still there
 #                                            for a dispatched run (tokens=400, rate=5). A red run is the
 #                                            finding: new failing cells are annotated as errors, and the
@@ -90,7 +92,7 @@ on:
       - "scripts/ci/terminal_truth_*.py"
       - ".github/workflows/terminal-truth.yml"
   schedule:
-    - cron: "43 7 * * *"
+    - cron: "13 1 * * *"
   workflow_dispatch:
     inputs:
       provider:
@@ -155,7 +157,11 @@ jobs:
     name: "terminal-truth"
     runs-on: grind-browser
     if: github.repository == 'cipher982/longhouse'
-    timeout-minutes: 330
+    # A push run takes 9 to 13 minutes, so 40 is three times the slowest. Only a run started by hand may
+    # use the long limit (20 passes, or 400 tokens at 5/s). Every run shares one concurrency group, so a
+    # stuck run holds every later one: the 2026-11-12 nightly sat on the queue for 3 h 40 min under the
+    # old flat 330.
+    timeout-minutes: ${{ github.event_name == 'push' && 40 || (github.event_name == 'schedule' && 150 || 330) }}
     env:
       TT_EVENT: ${{ github.event_name }}
       TT_PROVIDER: ${{ inputs.provider || 'all' }}
