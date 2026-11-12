@@ -272,7 +272,13 @@ def project_served_session_state_facts(
     )
     catalog = _mapping(catalog_facts.get("catalog"))
     normalized_now = _aware(now, "now")
-    activity = helm_activity_held_by_lease(shadow.activity, mode=served_mode, control=control, now=normalized_now)
+    activity = helm_activity_held_by_lease(
+        shadow.activity,
+        mode=served_mode,
+        control=control,
+        now=normalized_now,
+        transcript_last_at=_optional_wire_datetime(catalog.get("last_activity_at"), "last_activity_at"),
+    )
     delegation = shadow.delegation
     if (
         served_mode == "helm"

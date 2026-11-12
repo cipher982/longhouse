@@ -1600,6 +1600,44 @@ def test_helm_turn_phase_holds_on_a_degraded_but_unexpired_lease():
     assert facts.activity.valid_until == lease_until
 
 
+@pytest.mark.parametrize(
+    ("phase", "tool"),
+    [("running", "Bash"), ("thinking", None)],
+)
+def test_helm_turn_phase_is_superseded_by_a_later_transcript(phase, tool):
+    """A lost turn-end must not leave "Thinking" live for as long as the lease.
+
+    2026-11-12: an OMP Helm session's `thinking` latched at its first prompt,
+    the exit signal never arrived, and the lease kept renewing, so the session
+    read "Thinking for 2 hours" while its terminal sat idle and its transcript
+    had moved on. A transcript newer than the phase supersedes it.
+    """
+
+    lease_until = NOW + timedelta(minutes=5)
+    facts = _facts(
+        runtime=_runtime(phase=phase, confidence="stale", tool=tool),
+        liveness=_liveness(expires_at=lease_until),
+        last_activity_at=NOW - timedelta(seconds=5) + timedelta(minutes=1),
+        now=NOW + timedelta(minutes=1),
+    )
+
+    assert facts.mode == "helm"
+    assert facts.activity.state == "unknown"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.label not in {"Thinking", "Using Shell"}
+
+
+def test_helm_turn_phase_still_holds_when_the_transcript_is_the_same_moment():
+    lease_until = NOW + timedelta(minutes=5)
+    facts = _facts(
+        runtime=_runtime(phase="thinking", confidence="stale"),
+        liveness=_liveness(expires_at=lease_until),
+        last_activity_at=NOW - timedelta(seconds=5) + timedelta(seconds=10),
+    )
+
+    assert facts.activity.state == "thinking"
+
+
 def test_helm_turn_phase_decays_once_the_control_lease_is_gone():
     facts = _facts(
         runtime=_runtime(phase="running", confidence="stale", tool="Bash"),

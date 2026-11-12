@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from typing import Literal
@@ -440,6 +441,9 @@ def _activity(runtime_view: SessionRuntimeView | None) -> SessionActivityFacts:
 # Turn phases a managed Helm session leaves only through an event Longhouse
 # observes (the next hook, tool result, or Stop).
 _HELM_LEASE_HELD_KINDS = frozenset({"thinking", "running"})
+# Transcript lines are stamped by the provider and the phase by the engine, so a
+# line newer than the phase by less than this is the same moment, not progress.
+_PHASE_SUPERSEDED_SKEW = timedelta(seconds=30)
 
 
 def helm_activity_held_by_lease(
@@ -448,6 +452,7 @@ def helm_activity_held_by_lease(
     mode: SessionMode,
     control: SessionControlFacts,
     now: datetime,
+    transcript_last_at: datetime | None = None,
 ) -> SessionActivityFacts:
     """Keep a Helm turn's phase live while its control lease is.
 
@@ -457,7 +462,19 @@ def helm_activity_held_by_lease(
     while the owning process is alive, so a long tool call or a long model
     response is still exactly what was last observed. Its horizon becomes the
     lease's; losing the lease still decays it to "Last observed ...".
+
+    The hold trusts that the way out of the phase was reported. A transcript
+    that has advanced past the moment the phase was observed is direct evidence
+    it was not: the agent moved on and the exit signal was lost (2026-11-12, an
+    OMP session read "Thinking for 2 hours" with its terminal idle). Such a
+    phase is superseded, so the hold does not apply and it reads unknown.
     """
+    if (
+        activity.observed_at is not None
+        and transcript_last_at is not None
+        and transcript_last_at > activity.observed_at + _PHASE_SUPERSEDED_SKEW
+    ):
+        return activity
     if (
         mode != "helm"
         or activity.state != "unknown"
@@ -1527,7 +1544,7 @@ def build_session_state_facts(
             now=current_now,
         )
     )
-    activity = helm_activity_held_by_lease(activity, mode=mode, control=control, now=current_now)
+    activity = helm_activity_held_by_lease(activity, mode=mode, control=control, now=current_now, transcript_last_at=last_activity_at)
     interaction = _interaction(pause_request)
     transcript = _transcript(
         session=session,
