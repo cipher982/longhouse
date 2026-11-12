@@ -702,6 +702,10 @@ class TeeProxy(threading.Thread):
         self.runtime_samples: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._closing = threading.Event()
+        # Seconds each chunk is held, each way, between the engine and the host (``--engine-delay-ms``). A loopback host
+        # answers a post in milliseconds, so the engine never has two things queued behind one post in flight, and a tool
+        # call never lands behind reply text stamped after it; over a real network to a hosted tenant both happen.
+        self.delay_s = 0.0
 
     def run(self) -> None:
         while not self._closing.is_set():
@@ -734,22 +738,48 @@ class TeeProxy(threading.Thread):
 
     def _pipe(self, source: socket.socket, sink: socket.socket, scan: bool) -> None:
         scanner = RequestScanner(self._note, self._on_request) if scan else None
+        delayed: queue.Queue[tuple[float, bytes] | None] | None = None
+        sender: threading.Thread | None = None
         try:
             while True:
                 data = source.recv(65536)
                 if not data:
                     break
                 if scanner is not None:
-                    scanner.feed(data, time.monotonic())
-                sink.sendall(data)
+                    scanner.feed(data, time.monotonic())  # the engine's own send time, before any added delay
+                if self.delay_s <= 0 and delayed is None:
+                    sink.sendall(data)
+                    continue
+                if delayed is None:
+                    delayed = queue.Queue()
+                    sender = threading.Thread(target=self._send_delayed, args=(delayed, sink), daemon=True)
+                    sender.start()
+                delayed.put((time.monotonic() + self.delay_s, data))
         except OSError:
             pass
         finally:
+            if delayed is not None and sender is not None:
+                delayed.put(None)  # the bytes already taken leave before the sockets close
+                sender.join(timeout=self.delay_s + 5)
             for sock in (sink, source):
                 with contextlib.suppress(OSError):
                     sock.shutdown(socket.SHUT_RDWR)
                 with contextlib.suppress(OSError):
                     sock.close()
+
+    @staticmethod
+    def _send_delayed(pending: queue.Queue[tuple[float, bytes] | None], sink: socket.socket) -> None:
+        """Send each chunk at its due time, in order: added latency, not a throughput limit."""
+
+        while (item := pending.get()) is not None:
+            due, chunk = item
+            wait = due - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            try:
+                sink.sendall(chunk)
+            except OSError:
+                return
 
     def _sample(self, path: bytes, body: bytes, now: float) -> None:
         if not path.startswith(b"/api/agents/runtime/") or not self.MARKER.search(body) or len(self.runtime_samples) >= 600:

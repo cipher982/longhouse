@@ -51,6 +51,12 @@ class Mutation:
         ""  # thinking | tool | subagent: judge the cell with the live-kinds scenario and its published-kind check, not reply text
     )
     warm: bool = False  # live-kinds scenarios on a Helm cell: open the session and its stream before the scenario prompt (--warm-session)
+    text_before_tool: bool = False  # tool scenario: reply text is streamed right before the tool call (--text-before-tool)
+    engine_delay_ms: int = 0  # hold engine<->host bytes this long each way, as a hosted tenant's network does (--engine-delay-ms)
+
+    @property
+    def run_options(self) -> dict[str, Any]:
+        return {"warm_session": self.warm, "text_before_tool": self.text_before_tool, "engine_delay_ms": self.engine_delay_ms}
 
 
 MUTATIONS: tuple[Mutation, ...] = (
@@ -503,6 +509,32 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("host_published",),
         scenario="thinking",
     ),
+    Mutation(
+        "host-call-ordered-against-reply",
+        "the host keeps one preview per session in each post again, the one with the highest seq: behind 150 ms of network, "
+        "Antigravity's tool start shares a post with newer reply text and is not shown until the tool has finished",
+        "server",
+        "server/zerg/routers/runtime.py",
+        '        key = (sid, preview_lane(candidate) if candidate is not None else "")\n'
+        "        existing = latest_by_lane.get(key)\n"
+        "        if existing is not None:\n"
+        "            if candidate is not None and existing[2] is not None:\n"
+        "                if not candidate_supersedes(candidate, existing[2]):\n"
+        "                    continue\n"
+        "            elif _preview_seq(preview) < _preview_seq(existing[1]):\n"
+        "                continue\n",
+        '        key = (sid, "")\n'
+        "        existing = latest_by_lane.get(key)\n"
+        "        if existing is not None:\n"
+        "            if _preview_seq(preview) < _preview_seq(existing[1]):\n"
+        "                continue\n",
+        "antigravity/helm",
+        ("host_published", "stream_delivered"),
+        scenario="tool",
+        warm=True,
+        text_before_tool=True,
+        engine_delay_ms=150,
+    ),
 )
 
 
@@ -600,7 +632,7 @@ def run_mutations(args: argparse.Namespace) -> int:
         for m in selected:
             spec = tt.CellSpec(*m.cell.split("/"), m.scenario) if m.scenario else tt.CellSpec(*m.cell.split("/"))
             baseline_outcome = (
-                kinds_cell(spec, base_engine, base_cli, warm_session=m.warm)[0] if m.scenario else cell(spec, base_engine, base_cli).outcome
+                kinds_cell(spec, base_engine, base_cli, **m.run_options)[0] if m.scenario else cell(spec, base_engine, base_cli).outcome
             )
             row: dict[str, Any] = {
                 "check": f"mutation {m.name}",
@@ -620,7 +652,7 @@ def run_mutations(args: argparse.Namespace) -> int:
                 target_file.write_text(mutated_text(m, target_file.read_text()))
                 if m.scenario:
                     mutated_kinds = kinds_cell(
-                        spec, base_engine, base_cli, host_environment={"PYTHONPATH": str(copy / "server")}, warm_session=m.warm
+                        spec, base_engine, base_cli, host_environment={"PYTHONPATH": str(copy / "server")}, **m.run_options
                     )
                 else:
                     mutated = cell(spec, base_engine, base_cli, host_environment={"PYTHONPATH": str(copy / "server")})
@@ -636,7 +668,7 @@ def run_mutations(args: argparse.Namespace) -> int:
                 finally:
                     _run(["git", "checkout", "--", "."], cwd=worktree)
                 if m.scenario:
-                    mutated_kinds = kinds_cell(spec, *engine_built[m.name], warm_session=m.warm)
+                    mutated_kinds = kinds_cell(spec, *engine_built[m.name], **m.run_options)
                 else:
                     mutated = cell(spec, *engine_built[m.name])
             outcome, stage, reason = mutated_kinds if m.scenario else _verdict([mutated])

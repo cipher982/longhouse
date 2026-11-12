@@ -8,6 +8,7 @@ import json
 import queue
 import re
 import threading
+import time
 
 import pytest
 
@@ -256,3 +257,51 @@ def test_the_prompt_waits_for_the_stream_subscription_not_for_the_connection() -
 def test_a_cell_with_no_session_yet_does_not_wait() -> None:
     api = RuntimeApi("http://127.0.0.1:9", "token")  # no pinned session and no workspace: nothing is listed, no request is made
     assert kinds._wait_for_open_streams(api, timeout=5)[:2] == (0, 0)
+
+
+# ---- the proxy's added engine-to-host delay -----------------------------------------------------------------------------------
+
+
+class _EchoHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self) -> None:  # noqa: N802 - http.server's name
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args: object) -> None:
+        pass
+
+
+def test_the_proxy_delays_each_way_and_keeps_every_byte_in_order() -> None:
+    host = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _EchoHandler)
+    threading.Thread(target=host.serve_forever, daemon=True).start()
+    proxy = TeeProxy(f"http://127.0.0.1:{host.server_address[1]}")
+    proxy.start()
+    try:
+        port = int(proxy.url.rsplit(":", 1)[1])
+
+        def round_trip(body: bytes) -> tuple[float, bytes]:
+            started = time.monotonic()
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            try:
+                connection.request("POST", "/api/agents/runtime/events", body)
+                echoed = connection.getresponse().read()
+                return time.monotonic() - started, echoed
+            finally:
+                connection.close()
+
+        body = b"TTabcdef0001 " * 20000  # larger than one recv, so several chunks ride the delay
+        direct_s, echoed = round_trip(body)
+        assert echoed == body and direct_s < 0.15
+
+        proxy.delay_s = 0.1
+        delayed_s, echoed = round_trip(body)
+        assert echoed == body, "a delayed chunk must not be lost or reordered"
+        assert 0.2 <= delayed_s < 1.5, f"one delay each way, not one per chunk: {delayed_s:.2f} s"
+        assert "TTabcdef0001" in proxy.runtime_posts, "the engine's post is still noted, at its own send time"
+    finally:
+        proxy.close()
+        host.shutdown()
+        host.server_close()

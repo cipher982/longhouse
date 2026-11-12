@@ -148,8 +148,12 @@ def _marker(nonce: str, index: int) -> str:
 MUTATIONS = ("no_thinking", "no_tool", "no_subagent")  # each breaks its scenario on purpose; the cell must come out ``fail``
 
 
-def plan_kind_cell(spec: CellSpec, mutation: str | None = None) -> KindPlan:
-    """Plan one cell. ``mutation`` makes the scripted model skip the thing the scenario is about (negative control)."""
+def plan_kind_cell(spec: CellSpec, mutation: str | None = None, *, text_before_tool: bool = False) -> KindPlan:
+    """Plan one cell. ``mutation`` makes the scripted model skip the thing the scenario is about (negative control).
+
+    ``text_before_tool`` (tool scenario): the model streams a sentence of reply text and then calls the tool in the same
+    response, the usual shape of a real turn. Without it the tool call is the whole response and no reply text is near it.
+    """
 
     scenario = spec.scenario
     nonce = secrets.token_hex(3)
@@ -193,6 +197,9 @@ def plan_kind_cell(spec: CellSpec, mutation: str | None = None) -> KindPlan:
             {"id": f"{spec.key}:b", "match": last, "match_scope": b_scope, "pace": _pace(reply)},
             {"id": f"{spec.key}:a", "match": f"TTRUTH{nonce}", "match_scope": scope, "tool_call": {"type": "shell", "command": command}},
         ]
+        if text_before_tool:
+            lead = Pacing(rate=20.0, initial_delay=0.3, tokens=13, marker_every=4, marker_prefix=f"TT{secrets.token_hex(3)}")
+            turns[1]["pace"] = _pace(lead)
         if mutation == "no_tool":  # the model answers at once and never asks for the command
             turns[1] = {"id": f"{spec.key}:a", "match": f"TTRUTH{nonce}", "match_scope": scope, "pace": _pace(reply)}
         signals = (
@@ -1040,15 +1047,22 @@ def run_kinds_suite(
     warm_session: bool = False,
     observer_factory: Callable[[CellSpec], Any] | None = None,
     log: Callable[[str], None] = lambda _m: None,
+    text_before_tool: bool = False,
+    engine_delay_ms: int = 0,
 ) -> list[dict[str, Any]]:
-    """Run each scenario cell. OMP gets a pass of its own (it shares a config layout with Pi); the rest share one pass."""
+    """Run each scenario cell. OMP gets a pass of its own (it shares a config layout with Pi); the rest share one pass.
+
+    ``engine_delay_ms`` holds every chunk between the engine and the host that long, each way, as a network to a hosted tenant
+    would; ``text_before_tool`` is ``plan_kind_cell``'s. Together they are the conditions under which a call's start shares
+    a post with, or lands behind, newer reply text.
+    """
 
     import shutil
 
     drivers = drivers or PROVIDERS
     cli = longhouse_cli or (Path(shutil.which("longhouse")) if shutil.which("longhouse") else None)
     results: list[dict[str, Any]] = []
-    plans = {(s.key, s.scenario): plan_kind_cell(s, mutation) for s in specs}
+    plans = {(s.key, s.scenario): plan_kind_cell(s, mutation, text_before_tool=text_before_tool) for s in specs}
     runnable = [s for s in specs if not plans[(s.key, s.scenario)].not_measured]
     for s in specs:
         if plans[(s.key, s.scenario)].not_measured:
@@ -1085,6 +1099,7 @@ def run_kinds_suite(
                         }
                     )
                 continue
+            pas.proxy.delay_s = max(0, engine_delay_ms) / 1000.0
             try:
                 if scenario == "thinking":
                     _enable_claude_thinking(pas)

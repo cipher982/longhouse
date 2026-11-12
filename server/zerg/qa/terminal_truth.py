@@ -208,6 +208,18 @@ def main(argv: list[str] | None = None) -> int:
         help="live-kinds scenarios, Helm cells: send one unmarked warm-up turn first, so the session is listed and the stream is open when the scenario "
         "prompt goes (a frame posted in the first half second of a session's first prompt cannot otherwise be seen)",
     )
+    run.add_argument(
+        "--text-before-tool",
+        action="store_true",
+        help="tool scenario: the model streams a sentence of reply text and then calls the tool in the same response, as real turns do",
+    )
+    run.add_argument(
+        "--engine-delay-ms",
+        type=int,
+        default=0,
+        help="live-kinds scenarios: hold every chunk between the engine and the host this long, each way (a hosted tenant's network); "
+        "0 is loopback, where the engine never has a tool call and reply text queued behind one post",
+    )
     run.add_argument("--engine", type=Path, default=Path(os.environ.get("LONGHOUSE_ENGINE_BIN") or shutil.which("longhouse-engine") or ""))
     run.add_argument("--mode", action="append", choices=["shadow", "helm", "console"], help="repeatable; default console and helm")
     run.add_argument("--longhouse-cli", type=Path, default=None, help="native longhouse CLI for helm mode (default: PATH)")
@@ -275,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
             mutation=args.kinds_mutation,
             old_client=args.old_client,
             warm_session=args.warm_session,
+            text_before_tool=args.text_before_tool,
+            engine_delay_ms=args.engine_delay_ms,
             log=lambda message: print(message, file=sys.stderr, flush=True),
         )
         print(render_kinds(kind_results))

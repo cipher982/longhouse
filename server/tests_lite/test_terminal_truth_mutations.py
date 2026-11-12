@@ -27,6 +27,7 @@ def test_every_defect_of_2026_11_11_has_a_mutation_and_a_named_stage() -> None:
         "antigravity-helm-reader",
         "host-live-item-drop",
         "host-thinking-drop",
+        "host-call-ordered-against-reply",
         "claude-helm-thinking-forward",
         "claude-helm-thinking-as-reply",
         "claude-helm-tool-forward",
