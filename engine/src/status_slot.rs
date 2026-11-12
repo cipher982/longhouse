@@ -114,6 +114,42 @@ pub fn tool_arguments_summary(name: &str, input: &Value) -> String {
         .unwrap_or_else(|| input.to_string())
 }
 
+/// Post one preview as its own durable event, in order, instead of through the
+/// single-valued status slot. A tool call is a discrete event: the slot keeps
+/// only the newest preview and coalesces updates, so a call that began and
+/// moved on within one beat was never posted. `source` is the transport the
+/// producer's slot would have carried.
+pub fn enqueue_preview_event(
+    outbox_dir: &std::path::Path,
+    provider: &str,
+    session_id: &str,
+    run_id: &str,
+    source: &str,
+    preview: StatusPreview,
+) -> anyhow::Result<()> {
+    let slot = StatusSlot {
+        schema: STATUS_SLOT_SCHEMA,
+        session_id: session_id.to_string(),
+        provider: provider.to_string(),
+        runtime_key: format!("{provider}:{session_id}"),
+        run_id: run_id.to_string(),
+        source: source.to_string(),
+        phase: String::new(),
+        tool_name: None,
+        observed_at: chrono::Utc::now().to_rfc3339(),
+        payload: serde_json::json!({}),
+        preview: Some(preview),
+        producer_epoch: String::new(),
+        seq: 0,
+    };
+    let events = runtime_events_since(&slot, None);
+    let event = events
+        .iter()
+        .find(|event| event["kind"] == "progress_signal")
+        .ok_or_else(|| anyhow::anyhow!("a preview produced no progress event"))?;
+    crate::outbox::enqueue_runtime_event(outbox_dir, event)
+}
+
 /// The bound on a running tool's output tail, the same as the Runtime Host's.
 pub const MAX_TOOL_TAIL_LINES: usize = 40;
 pub const MAX_TOOL_TAIL_BYTES: usize = 4 * 1024;

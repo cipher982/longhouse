@@ -27,6 +27,8 @@ const channelPath = process.env.LONGHOUSE_OMP_HELM_CHANNEL_PATH!;
 const {
   default: registerExtension,
   agentEndIsTerminal,
+  toolArgumentsOf,
+  toolOutputTextOf,
   compactAsyncJobEvidence,
   ompProviderIsIdle,
   peerLine,
@@ -865,5 +867,28 @@ describe("busy send", () => {
       await new Promise((resolve) => server.close(resolve));
       rmSync(channelDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("tool frames for the live preview", () => {
+  it("keeps small object arguments and drops large or non-object ones", () => {
+    expect(toolArgumentsOf({ args: { command: "ls" } })).toEqual({ command: "ls" });
+    expect(toolArgumentsOf({ args: "ls" })).toBeUndefined();
+    expect(toolArgumentsOf({ args: ["ls"] })).toBeUndefined();
+    expect(toolArgumentsOf({ args: { blob: "x".repeat(5000) } })).toBeUndefined();
+  });
+
+  it("reads the text of a partial or final result and bounds it to its tail", () => {
+    expect(
+      toolOutputTextOf({
+        partialResult: { content: [{ type: "text", text: "one\n" }, { type: "image" }, { type: "text", text: "two" }] },
+      }),
+    ).toBe("one\ntwo");
+    expect(toolOutputTextOf({ result: { content: [{ type: "text", text: "done" }] } })).toBe("done");
+    expect(toolOutputTextOf({ partialResult: { details: {} } })).toBeUndefined();
+    const long = "a".repeat(5000) + "END";
+    const bounded = toolOutputTextOf({ partialResult: { content: [{ type: "text", text: long }] } });
+    expect(bounded?.length).toBe(4096);
+    expect(bounded?.endsWith("END")).toBe(true);
   });
 });

@@ -1279,6 +1279,9 @@ KIND_EXPECTATIONS: dict[tuple[str, str], tuple[str, str]] = {
     ("claude/helm", "subagent"): ("subagent_started", "subagent"),
     ("antigravity/helm", "thinking"): ("thinking", "thinking"),
     ("antigravity/helm", "tool"): ("tool_started", "tool"),
+    ("omp/helm", "thinking"): ("thinking", "thinking"),
+    ("omp/helm", "tool"): ("tool_started", "tool"),
+    ("omp/helm", "subagent"): ("subagent_started", "subagent"),
 }
 
 

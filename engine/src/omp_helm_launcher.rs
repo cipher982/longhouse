@@ -498,7 +498,22 @@ struct OmpHelmServer {
     status: Arc<crate::status_slot::StatusPublisher>,
     background_snapshot_coalescer: Arc<Mutex<BackgroundSnapshotCoalescer>>,
     coordination_token: Arc<Mutex<Option<String>>>,
+    discrete: Arc<Mutex<DiscreteLive>>,
 }
+
+/// What the extension's thinking deltas and tool frames add up to: the current
+/// message's cumulative thinking text, and one counter that orders tool previews.
+#[derive(Default)]
+struct DiscreteLive {
+    thinking: String,
+    thinking_seq: u64,
+    tool_seq: u64,
+    last_tool_update: Option<std::time::Instant>,
+}
+
+/// A tool's running output is posted at most this often, the status slot's own
+/// coalescing interval, so tool output never posts faster than reply text.
+const TOOL_UPDATE_MIN_INTERVAL: Duration = Duration::from_millis(100);
 impl OmpHelmServer {
     fn start(
         state: OmpHelmStateFile,
@@ -541,6 +556,7 @@ impl OmpHelmServer {
                 OMP_HELM_TRANSPORT,
             )),
             coordination_token: Arc::new(Mutex::new(None)),
+            discrete: Arc::new(Mutex::new(DiscreteLive::default())),
             background_snapshot_coalescer: Arc::new(Mutex::new(
                 BackgroundSnapshotCoalescer::default(),
             )),
@@ -1733,6 +1749,7 @@ impl OmpHelmServer {
                 turn_completed,
             );
         }
+        self.publish_discrete(kind, event, &current, &turn_id);
         if kind == "agent_start" {
             crate::warp_cli_agent::emit_tty_event(
                 "omp",
@@ -2070,6 +2087,140 @@ impl OmpHelmServer {
             "phase",
         );
     }
+    /// The thinking text and the tool calls the extension reports. Thinking is
+    /// cumulative per message and rides the status slot (coalesced, so no more
+    /// posts than reply text). A tool call is a discrete event, so each start,
+    /// update and end is its own durable event.
+    fn publish_discrete(
+        &self,
+        kind: &str,
+        event: Option<&Value>,
+        state: &OmpHelmStateFile,
+        turn_id: &str,
+    ) {
+        let provider_session_id =
+            (!state.native_session_id.is_empty()).then(|| state.native_session_id.clone());
+        if kind == "agent_start" || kind == "message_start" {
+            let mut discrete = self.discrete.lock();
+            discrete.thinking.clear();
+            discrete.thinking_seq = 0;
+        }
+        if let Some(delta) = omp_thinking_delta(event) {
+            let (text, seq) = {
+                let mut discrete = self.discrete.lock();
+                Self::append_live_text(&mut discrete.thinking, delta);
+                discrete.thinking_seq = discrete.thinking_seq.saturating_add(1);
+                (discrete.thinking.clone(), discrete.thinking_seq)
+            };
+            let preview = crate::status_slot::StatusPreview {
+                turn_id: format!("{turn_id}:thinking"),
+                seq,
+                live_text: text,
+                progress_kind: "omp_helm_stream".into(),
+                provider_session_id,
+                kind: Some("thinking".into()),
+                ..Default::default()
+            };
+            let (phase, tool) = {
+                let shared = self.shared.lock();
+                (shared.state.phase.clone(), shared.state.tool_name.clone())
+            };
+            self.status.publish(
+                crate::status_slot::StatusUpdate::phase(
+                    &state.session_id,
+                    &state.run_id,
+                    &state.updated_at,
+                    &phase,
+                )
+                .with_tool(tool.as_deref())
+                .with_preview(Some(preview)),
+            );
+            return;
+        }
+        if !matches!(
+            kind,
+            "tool_execution_start" | "tool_execution_update" | "tool_execution_end"
+        ) {
+            return;
+        }
+        let Some(event) = event else { return };
+        let (Some(name), Some(call_id)) = (
+            event.get("toolName").and_then(Value::as_str),
+            event.get("toolCallId").and_then(Value::as_str),
+        ) else {
+            return;
+        };
+        let input = event.get("args").filter(|args| args.is_object()).cloned();
+        let output = event
+            .get("tool_output")
+            .and_then(Value::as_str)
+            .and_then(crate::status_slot::bounded_tool_tail);
+        let summary = input
+            .as_ref()
+            .map(|args| crate::status_slot::tool_arguments_summary(name, args))
+            .unwrap_or_default();
+        let text = output
+            .clone()
+            .filter(|text| !text.trim().is_empty())
+            .or_else(|| (!summary.is_empty()).then_some(summary))
+            .unwrap_or_else(|| name.to_string());
+        let tool_state = match kind {
+            "tool_execution_end"
+                if event.get("isError").and_then(Value::as_bool) == Some(true) =>
+            {
+                "failed"
+            }
+            "tool_execution_end" => "completed",
+            _ => "running",
+        };
+        let seq = {
+            let mut discrete = self.discrete.lock();
+            if kind == "tool_execution_update" {
+                let now = std::time::Instant::now();
+                if discrete
+                    .last_tool_update
+                    .is_some_and(|last| now.duration_since(last) < TOOL_UPDATE_MIN_INTERVAL)
+                {
+                    return;
+                }
+                discrete.last_tool_update = Some(now);
+            }
+            discrete.tool_seq = discrete.tool_seq.saturating_add(1);
+            discrete.tool_seq
+        };
+        let preview = crate::status_slot::StatusPreview {
+            turn_id: turn_id.to_string(),
+            seq,
+            live_text: text,
+            turn_completed: tool_state != "running",
+            progress_kind: "omp_helm_stream".into(),
+            provider_session_id,
+            kind: Some(crate::status_slot::tool_preview_kind(name).into()),
+            tool_name: Some(name.to_string()),
+            tool_call_id: Some(call_id.to_string()),
+            tool_input: input,
+            tool_output: output,
+            tool_state: Some(tool_state.into()),
+        };
+        let outbox = match crate::config::get_agent_runtime_events_outbox_dir() {
+            Ok(outbox) => outbox,
+            Err(error) => {
+                tracing::warn!("OMP Helm tool preview has no outbox: {error}");
+                return;
+            }
+        };
+        if let Err(error) = crate::status_slot::enqueue_preview_event(
+            &outbox,
+            "omp",
+            &state.session_id,
+            &state.run_id,
+            OMP_HELM_TRANSPORT,
+            preview,
+        ) {
+            tracing::warn!("OMP Helm tool preview not queued: {error}");
+        }
+    }
+
     fn publish_live_text(
         &self,
         state: &OmpHelmStateFile,
@@ -2424,6 +2575,17 @@ fn identity_commit_authority_matches_locked(
 fn omp_live_text_delta(event: Option<&Value>) -> Option<&str> {
     let event = event?;
     if event.get("message_event_type").and_then(Value::as_str) != Some("text_delta") {
+        return None;
+    }
+    event
+        .get("delta")
+        .and_then(Value::as_str)
+        .filter(|delta| !delta.is_empty())
+}
+
+fn omp_thinking_delta(event: Option<&Value>) -> Option<&str> {
+    let event = event?;
+    if event.get("message_event_type").and_then(Value::as_str) != Some("thinking_delta") {
         return None;
     }
     event
@@ -5910,6 +6072,15 @@ mod tests {
         assert_eq!(omp_live_text_delta(Some(&text_delta)), Some("hello"));
         assert_eq!(omp_live_text_delta(Some(&thinking_delta)), None);
         assert_eq!(omp_live_text_delta(Some(&empty_delta)), None);
+    }
+
+    #[test]
+    fn thinking_deltas_are_read_only_as_thinking_never_as_reply_text() {
+        let thinking = json!({"message_event_type": "thinking_delta", "delta": "weighing it"});
+        let text = json!({"message_event_type": "text_delta", "delta": "hello"});
+        assert_eq!(omp_thinking_delta(Some(&thinking)), Some("weighing it"));
+        assert_eq!(omp_live_text_delta(Some(&thinking)), None);
+        assert_eq!(omp_thinking_delta(Some(&text)), None);
     }
 
     #[test]

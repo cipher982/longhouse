@@ -901,6 +901,39 @@ const initialPromptDeliveredAtLaunch =
 const MAX_FRAME_BYTES = 512 * 1024;
 const MAX_METADATA_STRING_LENGTH = 256;
 const MAX_LIVE_TEXT_DELTA_LENGTH = 4096;
+const MAX_TOOL_ARGS_LENGTH = 2048;
+const MAX_TOOL_OUTPUT_LENGTH = 4096;
+
+/// A tool call's arguments when they are a small object, else nothing: the
+/// preview only needs enough to say what the call is.
+export const toolArgumentsOf = (event: Frame): Frame | undefined => {
+  const args = event.args;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
+  try {
+    return JSON.stringify(args).length <= MAX_TOOL_ARGS_LENGTH
+      ? (args as Frame)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/// The text a running tool has produced so far (`partialResult`, cumulative) or
+/// finished with (`result`): the last MAX_TOOL_OUTPUT_LENGTH characters.
+export const toolOutputTextOf = (event: Frame): string | undefined => {
+  const result = event.partialResult ?? event.result;
+  if (!result || typeof result !== "object") return undefined;
+  const content = (result as Frame).content;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .map((block: Frame) =>
+      block && block.type === "text" && typeof block.text === "string"
+        ? block.text
+        : "",
+    )
+    .join("");
+  return text ? text.slice(-MAX_TOOL_OUTPUT_LENGTH) : undefined;
+};
 const qaBackgroundCapture = process.env.LONGHOUSE_QA_OMP_BACKGROUND_CAPTURE;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -1389,10 +1422,19 @@ export default function (pi: any) {
           0,
           MAX_METADATA_STRING_LENGTH,
         );
-        if (update.type === "text_delta" && typeof update.delta === "string") {
+        if (
+          (update.type === "text_delta" || update.type === "thinking_delta") &&
+          typeof update.delta === "string"
+        ) {
           compact.delta = update.delta.slice(0, MAX_LIVE_TEXT_DELTA_LENGTH);
         }
       }
+    }
+    if (kind.startsWith("tool_execution_")) {
+      const args = toolArgumentsOf(event);
+      if (args !== undefined) compact.args = args;
+      const output = toolOutputTextOf(event);
+      if (output) compact.tool_output = output;
     }
 
     for (const key of ["success", "isError", "provider_idle"]) {
