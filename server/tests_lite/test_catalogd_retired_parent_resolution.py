@@ -173,6 +173,26 @@ def test_hot_path_reads_are_pinned_to_their_indexes(tmp_path):
             assert not any("TEMP B-TREE FOR ORDER BY" in str(row) for row in plan), plan
 
 
+def test_retire_predecessor_queries_use_indexed_lookups(tmp_path):
+    """Epoch retirement runs inside the single catalogd writer and cannot scan."""
+
+    engine = _engine(tmp_path)
+    with engine.connect() as connection:
+        facts_plan = connection.exec_driver_sql(
+            "EXPLAIN QUERY PLAN DELETE FROM session_provider_facts WHERE source_epoch = 'epoch-1'"
+        ).fetchall()
+        assert any("ix_session_provider_facts_source_epoch" in str(row) for row in facts_plan), facts_plan
+        assert not any("SCAN session_provider_facts" in str(row) for row in facts_plan), facts_plan
+
+        render_plan = connection.exec_driver_sql(
+            "EXPLAIN QUERY PLAN UPDATE render_objects "
+            "SET retired_at = '2026-01-01T00:00:00Z', retirement_revision = 1 "
+            "WHERE source_envelope_id IN ('env-1') AND retired_at IS NULL"
+        ).fetchall()
+        assert any("ix_render_objects_source_envelope_id" in str(row) for row in render_plan), render_plan
+        assert not any("ix_render_objects_retired_at" in str(row) for row in render_plan), render_plan
+
+
 def _fill_required(table, **values):
     """A row with every NOT NULL column filled, for tables these tests only need to exist."""
 

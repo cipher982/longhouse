@@ -660,6 +660,7 @@ class SessionProviderFact(CatalogBase):
         # newest spawn facts and stops at the limit. The trailing columns are
         # the query's full ORDER BY, so ties on `at` need no sort either.
         Index("ix_session_provider_facts_kind_at", "kind", "at", "source_position", "id"),
+        Index("ix_session_provider_facts_source_epoch", "source_epoch"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)

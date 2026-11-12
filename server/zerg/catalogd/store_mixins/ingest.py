@@ -806,7 +806,12 @@ class IngestMixin:
                             updated_at=commit_time,
                         )
                     )
-                    predecessor_envelopes = select(raw.c.envelope_id).where(raw.c.source_epoch == expected_predecessor)
+                    predecessor_envelope_ids = tuple(
+                        str(value)
+                        for value in connection.execute(
+                            select(raw.c.envelope_id).where(raw.c.source_epoch == expected_predecessor)
+                        ).scalars()
+                    )
                     replaced_session_ids = {
                         str(value)
                         for value in connection.execute(
@@ -824,27 +829,40 @@ class IngestMixin:
                         .where(raw.c.source_epoch == expected_predecessor, raw.c.retired_at.is_(None))
                         .values(retired_at=commit_time, retirement_revision=commit_seq)
                     ).rowcount
-                    retired_render = connection.execute(
-                        update(render_object)
-                        .where(
-                            render_object.c.source_envelope_id.in_(predecessor_envelopes),
-                            render_object.c.retired_at.is_(None),
+                    # Materialize envelope IDs in chunks so SQLite uses
+                    # ix_render_objects_source_envelope_id instead of scanning
+                    # ix_render_objects_retired_at (retired_at IS NULL).
+                    retired_render = 0
+                    retired_media = 0
+                    for offset in range(0, len(predecessor_envelope_ids), 500):
+                        envelope_chunk = predecessor_envelope_ids[offset : offset + 500]
+                        retired_render += int(
+                            connection.execute(
+                                update(render_object)
+                                .where(
+                                    render_object.c.source_envelope_id.in_(envelope_chunk),
+                                    render_object.c.retired_at.is_(None),
+                                )
+                                .values(retired_at=commit_time, retirement_revision=commit_seq)
+                            ).rowcount
+                            or 0
                         )
-                        .values(retired_at=commit_time, retirement_revision=commit_seq)
-                    ).rowcount
-                    retired_media = connection.execute(
-                        update(session_media_ref)
-                        .where(
-                            session_media_ref.c.envelope_id.in_(predecessor_envelopes),
-                            session_media_ref.c.state == "active",
+                        retired_media += int(
+                            connection.execute(
+                                update(session_media_ref)
+                                .where(
+                                    session_media_ref.c.envelope_id.in_(envelope_chunk),
+                                    session_media_ref.c.state == "active",
+                                )
+                                .values(
+                                    state="retired",
+                                    retired_at=commit_time,
+                                    deletion_revision=commit_seq,
+                                    commit_seq=commit_seq,
+                                )
+                            ).rowcount
+                            or 0
                         )
-                        .values(
-                            state="retired",
-                            retired_at=commit_time,
-                            deletion_revision=commit_seq,
-                            commit_seq=commit_seq,
-                        )
-                    ).rowcount
                     # Facts derive from the predecessor's bytes; a replacement
                     # that dropped turns must not keep their durations, usage,
                     # recap or title eligible for the session's projections.
