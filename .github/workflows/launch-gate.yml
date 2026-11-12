@@ -6,6 +6,19 @@ name: Launch Gate
 # installer smoke twice and the same fresh-clone onboarding funnel twice.
 
 on:
+  # The fresh-clone onboarding funnel (5.4 minutes median on crunch, the one pool
+  # where jobs queue) ran on 45% of pushes to main on 2026-11-11/12, because this
+  # filter named all of engine/, e2e/, the Makefile and the README, and its jobs
+  # waited up to 34 minutes behind CI. Nothing reads a push run's result (a
+  # release dispatches its own run, scripts/ops/release.sh). A push now runs
+  # it only for the install and onboarding files below; the schedule runs it once
+  # a day for everything else, so an engine change that breaks a fresh install is
+  # found within a day, and CI's own onboarding smoke still runs on every push.
+  schedule:
+    # GitHub starts this repository's schedules 7 to 10 hours late (measured
+    # 2026-10-29 to 11-12 on every scheduled workflow), so this lands at about
+    # 08:00 to 11:00 UTC.
+    - cron: "23 0 * * *"
   push:
     branches:
       - "**"
@@ -26,8 +39,6 @@ on:
       - "web/src/features/runners/runnerInstallCommands.ts"
       - "web/src/features/machines/MachinesPage.tsx"
       - "desktop/LonghouseMenuBarHarness/**"
-      - "e2e/**"
-      - "engine/**"
       - "runner/**"
       - "scripts/install.sh"
       - "scripts/ci/native-installer-smoke.sh"
@@ -36,8 +47,6 @@ on:
       - "scripts/qa/qa-oss.sh"
       - "scripts/qa/test-local-runtime-packaging.sh"
       - "scripts/build/resolve-swift-product-path.sh"
-      - "Makefile"
-      - "README.md"
   pull_request:
     paths:
       - ".github/workflows/launch-gate.yml"
@@ -54,8 +63,6 @@ on:
       - "web/src/features/runners/runnerInstallCommands.ts"
       - "web/src/features/machines/MachinesPage.tsx"
       - "desktop/LonghouseMenuBarHarness/**"
-      - "e2e/**"
-      - "engine/**"
       - "runner/**"
       - "scripts/install.sh"
       - "scripts/ci/native-installer-smoke.sh"
@@ -64,8 +71,6 @@ on:
       - "scripts/qa/qa-oss.sh"
       - "scripts/qa/test-local-runtime-packaging.sh"
       - "scripts/build/resolve-swift-product-path.sh"
-      - "Makefile"
-      - "README.md"
   release:
     types: [published]
   workflow_dispatch:
