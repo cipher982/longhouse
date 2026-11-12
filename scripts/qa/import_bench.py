@@ -106,6 +106,10 @@ _WRITER_HELD = re.compile(r"catalogd writer held for (\d+)ms by (\w+)")
 _WRITER_STATS = re.compile(r"catalogd writer depth=\d+ peak=(\d+) rejected=(\d+) expired=(\d+) .*exec_p99=(\d+)ms queue_wait_p99=(\d+)ms")
 
 
+_STAGE_LINE = re.compile(r"\] (\w+) took (\d+(?:\.\d+)?)ms: ([^\n]*)")
+_STAGE_PART = re.compile(r"(\w+)=(\d+(?:\.\d+)?)ms")
+
+
 def catalog_writer_summary(container: str) -> dict[str, Any]:
     """The Runtime Host's own catalogd writer log lines, summarized.
 
@@ -121,7 +125,20 @@ def catalog_writer_summary(container: str) -> dict[str, Any]:
         holds.setdefault(match.group(2), []).append(int(match.group(1)))
     stats = _WRITER_STATS.findall(text)
     last = stats[-1] if stats else None
+    # Stage timers log only above CATALOGD_STAGE_SLOW_MS; run with
+    # `--env CATALOGD_STAGE_SLOW_MS=0` to budget every operation by stage.
+    stages: dict[str, dict[str, float]] = {}
+    counts: dict[str, int] = {}
+    for match in _STAGE_LINE.finditer(text):
+        label = match.group(1)
+        counts[label] = counts.get(label, 0) + 1
+        budget = stages.setdefault(label, {})
+        budget["total"] = budget.get("total", 0.0) + float(match.group(2))
+        for name, value in _STAGE_PART.findall(match.group(3)):
+            budget[name] = budget.get(name, 0.0) + float(value)
     return {
+        "stage_ms": {label: {"count": counts[label], **{name: round(value) for name, value in sorted(budget.items(), key=lambda item: -item[1])}}
+                     for label, budget in sorted(stages.items(), key=lambda item: -item[1]["total"])},
         "slow_holds": {label: {"count": len(values), "total_ms": sum(values), "max_ms": max(values)}
                        for label, values in sorted(holds.items(), key=lambda item: -sum(item[1]))},
         "queue_full_responses": text.count("catalog writer queue is full"),
@@ -630,6 +647,12 @@ def main() -> int:
                     result["engine_local_health"] = json.loads(status_path.read_text())
                 except json.JSONDecodeError:
                     result["engine_local_health"] = {"error": "invalid engine-status.json"}
+        if args.keep_logs and not args.remote_url:
+            RESULTS_PARENT.mkdir(mode=0o700, parents=True, exist_ok=True)
+            server_log = RESULTS_PARENT / f"{args.name}.server.log"
+            logs = subprocess.run(["docker", "logs", runtime], capture_output=True, text=True, check=False)
+            server_log.write_text(logs.stdout + logs.stderr)
+            result.setdefault("engine_logs", []).append(str(server_log))
         for container in (proxy, runtime):
             subprocess.run(["docker", "rm", "-f", container], capture_output=True, text=True, check=False)
         subprocess.run(["docker", "network", "rm", network], capture_output=True, text=True, check=False)
