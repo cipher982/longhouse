@@ -510,6 +510,7 @@ impl OmpHelmServer {
         let _ = fs::remove_file(&socket_path);
         let listener = std::os::unix::net::UnixListener::bind(&socket_path)?;
         set_private_file(&socket_path)?;
+        let native_source_bound = state.ready && !state.native_session_id.is_empty();
         let server = Self {
             shared: Arc::new(Mutex::new(SharedState {
                 state,
@@ -524,7 +525,7 @@ impl OmpHelmServer {
                 live_turn_seq: 0,
                 live_message_seq: 0,
                 identity_retry_after: None,
-                native_source_bound: false,
+                native_source_bound,
             })),
             socket_path,
             state_path: Arc::new(Mutex::new(state_path)),
@@ -699,7 +700,9 @@ impl OmpHelmServer {
     /// Whether this session's native identity has been committed to the source
     /// of truth. False means the launcher has nothing to attribute activity to.
     fn has_committed_identity(&self) -> bool {
-        !self.shared.lock().state.native_session_id.is_empty()
+        let state = self.shared.lock();
+        !state.state.native_session_id.is_empty()
+            && (state.native_source_bound || state.state.ready)
     }
     /// Guards shared by both identity-reconcile paths: a frame may only bind the
     /// session's source when it carries the base authority, the session can
@@ -715,7 +718,13 @@ impl OmpHelmServer {
     fn uncommitted_identity_needs_reconcile(&self, frame: &Value) -> bool {
         let mut state = self.shared.lock();
         let now = Instant::now();
-        let pending_source_materialized = !state.native_source_bound
+        let retry_window_open = state
+            .identity_retry_after
+            .is_none_or(|deadline| deadline <= now);
+        let pending_source_materialized = retry_window_open
+            && !state.native_source_bound
+            && !state.state.native_session_id.is_empty()
+            && extension_identity_matches_locked(&state, frame)
             && has_native_session_identity(frame)
             && frame
                 .get("session_file")
@@ -1044,7 +1053,10 @@ impl OmpHelmServer {
                 {
                     break false;
                 }
-                Err(error) if Instant::now() < deadline => {
+                Err(error)
+                    if crate::omp_session::is_transient_header_error(&error)
+                        && Instant::now() < deadline =>
+                {
                     thread::sleep(Duration::from_millis(25));
                     drop(error);
                 }
@@ -1370,6 +1382,9 @@ impl OmpHelmServer {
             if let Err(error) =
                 self.update_identity(connection_id, &frame, false, BindingAttempt::Reconcile)
             {
+                if self.identity_failure_is_current(connection_id, &frame, false) {
+                    self.mark_degraded(&error);
+                }
                 tracing::warn!("OMP activity identity binding failed: {error:#}");
                 return;
             }
@@ -4008,6 +4023,178 @@ mod tests {
                 crate::managed_omp_helm_scan::source_ownership(&source).unwrap(),
                 crate::omp_session::SourceOwnership::Managed(session_id)
             );
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn lazy_home_launch_binds_omp_relocated_tmp_source_and_reaches_idle() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        let session_root = fake_home.join(".omp/agent/sessions");
+        let bucket = session_root.join("--private-tmp--");
+        fs::create_dir_all(&bucket).unwrap();
+        let source = bucket.join("2026-11-11T15-31-02-275Z_home-native.jsonl");
+        let longhouse_home = temp.path().join("longhouse");
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let session_id = Uuid::new_v4().to_string();
+        let mut initial = state();
+        initial.session_id = session_id.clone();
+        initial.native_session_id = String::new();
+        initial.session_file = String::new();
+        initial.cwd = fake_home.display().to_string();
+        initial.session_dir = session_root.display().to_string();
+        initial.ready = false;
+        initial.status = "starting".into();
+
+        temp_env::with_vars(
+            [
+                ("HOME", Some(fake_home.as_os_str())),
+                ("LONGHOUSE_HOME", Some(longhouse_home.as_os_str())),
+            ],
+            || {
+                let server =
+                    OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+                let (sender, _receiver) = mpsc::channel();
+                {
+                    let mut shared = server.shared.lock();
+                    shared.extension_sender = Some(sender);
+                    shared.extension_connection_id = Some("connection".into());
+                }
+                let base_frame = |kind: &str, event: Value| {
+                    json!({
+                        "kind": kind,
+                        "event": event,
+                        "auth_token": "token",
+                        "session_id": session_id,
+                        "native_session_id": "home-native",
+                        "session_file": source,
+                        "connection_id": "connection",
+                        "lease_generation": "generation",
+                    })
+                };
+                server.handle_extension_frame("connection", base_frame("session_start", json!({})));
+                assert!(server.current_state().ready);
+                // First turn frame arrives before OMP flushes its JSONL header.
+                server.handle_extension_frame(
+                    "connection",
+                    base_frame("message_start", json!({"type": "message_start"})),
+                );
+                assert_eq!(server.current_state().phase, "thinking");
+
+                // OMP materializes the file under /tmp after relocating out of $HOME.
+                fs::write(
+                    &source,
+                    "{\"type\":\"session\",\"version\":3,\"id\":\"home-native\",\"cwd\":\"/tmp\"}\n",
+                )
+                .unwrap();
+                server.handle_extension_frame(
+                    "connection",
+                    base_frame("agent_end", json!({"type": "agent_end"})),
+                );
+                let final_state = server.current_state();
+                assert_eq!(final_state.status, "ready");
+                assert!(final_state.ready);
+                assert_eq!(final_state.phase, "idle");
+                assert_eq!(
+                    crate::managed_source_claim::read_claim(&session_id)
+                        .unwrap()
+                        .unwrap()
+                        .state,
+                    crate::managed_source_claim::ClaimState::Bound
+                );
+                server.shutdown();
+            },
+        );
+    }
+
+    #[test]
+    fn failed_lazy_source_materialization_degrades_fast_and_throttles_retries() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let elsewhere = temp.path().join("elsewhere");
+        let session_root = temp.path().join("sessions");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::create_dir_all(&session_root).unwrap();
+        let source = session_root.join("2026-11-11T15-31-02-275Z_lazy-mismatch.jsonl");
+        let longhouse_home = temp.path().join("longhouse");
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let session_id = Uuid::new_v4().to_string();
+        let mut initial = state();
+        initial.session_id = session_id.clone();
+        initial.native_session_id = String::new();
+        initial.session_file = String::new();
+        initial.cwd = workspace.display().to_string();
+        initial.session_dir = session_root.display().to_string();
+        initial.ready = false;
+        initial.status = "starting".into();
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            let make_frame = |kind: &str, event: Value| {
+                json!({
+                    "kind": kind,
+                    "event": event,
+                    "auth_token": "token",
+                    "session_id": session_id,
+                    "native_session_id": "lazy-mismatch",
+                    "session_file": source,
+                    "connection_id": "connection",
+                    "lease_generation": "generation",
+                })
+            };
+            server.handle_extension_frame("connection", make_frame("session_start", json!({})));
+            assert!(server.current_state().ready);
+
+            fs::write(
+                &source,
+                format!(
+                    "{}\n",
+                    json!({"type": "session", "id": "lazy-mismatch", "cwd": elsewhere})
+                ),
+            )
+            .unwrap();
+
+            let started = Instant::now();
+            server.handle_extension_frame(
+                "connection",
+                make_frame("message_start", json!({"type": "message_start"})),
+            );
+            assert!(
+                started.elapsed() < Duration::from_millis(250),
+                "a deterministic header mismatch must fail fast instead of sleeping for RECONCILE_HEADER_TIMEOUT"
+            );
+            let degraded = server.current_state();
+            assert_eq!(degraded.status, "degraded");
+            assert!(!degraded.ready);
+            assert_eq!(
+                degraded.phase, "idle",
+                "a failed lazy bind must not publish activity under an unverified source"
+            );
+            let retry_after = server.shared.lock().identity_retry_after;
+            assert!(retry_after.is_some());
+
+            // A follow-up frame inside the retry window must not re-run binding or advance retry_after.
+            server.handle_extension_frame(
+                "connection",
+                make_frame("message_update", json!({"type": "message_update"})),
+            );
+            assert_eq!(server.shared.lock().identity_retry_after, retry_after);
+            assert_eq!(server.current_state().phase, "idle");
             server.shutdown();
         });
     }

@@ -380,6 +380,27 @@ mod header_cache {
     }
 }
 
+/// Header failure that may resolve while OMP finishes flushing its first record.
+#[derive(Debug)]
+struct HeaderNotMaterialized(String);
+
+impl std::fmt::Display for HeaderNotMaterialized {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for HeaderNotMaterialized {}
+
+pub(crate) fn is_transient_header_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.is::<HeaderNotMaterialized>()
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
 fn read_session_header_uncached(path: &Path) -> Result<OmpSessionHeader> {
     let file =
         File::open(path).with_context(|| format!("opening OMP source: {}", path.display()))?;
@@ -390,7 +411,11 @@ fn read_session_header_uncached(path: &Path) -> Result<OmpSessionHeader> {
         line.clear();
         let bytes = reader.read_line(&mut line)?;
         if bytes == 0 {
-            bail!("OMP source has no session header: {}", path.display());
+            return Err(HeaderNotMaterialized(format!(
+                "OMP source has no session header: {}",
+                path.display()
+            ))
+            .into());
         }
         scanned = scanned.saturating_add(bytes as u64);
         if scanned > MAX_HEADER_SCAN_BYTES {
@@ -399,7 +424,12 @@ fn read_session_header_uncached(path: &Path) -> Result<OmpSessionHeader> {
         if line.trim().is_empty() {
             continue;
         }
-        let value = parse_record(&line).ok_or_else(|| anyhow::anyhow!("malformed OMP header"))?;
+        let Some(value) = parse_record(&line) else {
+            if !line.ends_with('\n') {
+                return Err(HeaderNotMaterialized("malformed OMP header".to_string()).into());
+            }
+            bail!("malformed OMP header");
+        };
         let kind = value
             .get("type")
             .and_then(Value::as_str)
@@ -727,7 +757,31 @@ pub fn write_auto_resume_overlay(dir: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Compare workspace identities after resolving harmless symlink aliases.
+/// Stock OMP relocates `$HOME` launches to the first accessible scratch root
+/// (`~/tmp`, `/tmp`, `/var/tmp`, or `os.tmpdir()`) when neither `--allow-home`
+/// nor `--cwd` is passed, so its session header records that scratch path while
+/// Longhouse launched from `$HOME`.
+fn omp_home_relocation_matches(actual_canonical: &Path, expected_canonical: &Path) -> bool {
+    let Ok(home_canonical) = home_dir().canonicalize() else {
+        return false;
+    };
+    if expected_canonical != home_canonical {
+        return false;
+    }
+    let candidates = [
+        home_dir().join("tmp"),
+        PathBuf::from("/tmp"),
+        PathBuf::from("/var/tmp"),
+        std::env::temp_dir(),
+    ];
+    candidates
+        .iter()
+        .filter_map(|candidate| candidate.canonicalize().ok())
+        .any(|candidate| candidate == actual_canonical)
+}
+
+/// Compare workspace identities after resolving harmless symlink aliases and
+/// OMP's own `$HOME` startup relocation.
 fn workspace_binding_matches(actual: &str, expected: &str) -> bool {
     if actual == expected {
         return true;
@@ -736,7 +790,9 @@ fn workspace_binding_matches(actual: &str, expected: &str) -> bool {
         Path::new(actual).canonicalize(),
         Path::new(expected).canonicalize(),
     ) {
-        (Ok(actual), Ok(expected)) => actual == expected,
+        (Ok(actual), Ok(expected)) => {
+            actual == expected || omp_home_relocation_matches(&actual, &expected)
+        }
         _ => false,
     }
 }
@@ -750,10 +806,17 @@ pub fn verify_session_header(
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("reading OMP native source metadata: {}", path.display()))?;
     anyhow::ensure!(
-        metadata.file_type().is_file() && metadata.len() > 0,
+        metadata.file_type().is_file(),
         "OMP native source is missing, empty, or not a regular file: {}",
         path.display()
     );
+    if metadata.len() == 0 {
+        return Err(HeaderNotMaterialized(format!(
+            "OMP native source is missing, empty, or not a regular file: {}",
+            path.display()
+        ))
+        .into());
+    }
     let header = read_session_header(path)?;
     anyhow::ensure!(
         header.native_id == expected_native_id,
@@ -1559,6 +1622,37 @@ mod tests {
             Some(real_workspace.to_str().unwrap())
         )
         .is_ok());
+    }
+
+    #[test]
+    fn verify_session_header_accepts_omp_home_directory_relocation_only_from_home() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let fake_home = dir.path().join("home");
+        let non_home = dir.path().join("project");
+        fs::create_dir(&fake_home).unwrap();
+        fs::create_dir(&non_home).unwrap();
+        let path = dir.path().join("session.jsonl");
+        fs::write(
+            &path,
+            "{\"type\":\"session\",\"version\":3,\"id\":\"native-id\",\"cwd\":\"/tmp\"}\n",
+        )
+        .unwrap();
+
+        temp_env::with_var("HOME", Some(&fake_home), || {
+            assert!(
+                verify_exact_session_file(&path, "native-id", Some(fake_home.to_str().unwrap()))
+                    .is_ok(),
+                "launching from $HOME must accept OMP's /tmp relocation"
+            );
+            let err =
+                verify_session_header(&path, "native-id", Some(non_home.to_str().unwrap()))
+                    .unwrap_err();
+            assert!(
+                !is_transient_header_error(&err),
+                "a workspace mismatch on a complete header is permanent, not transient"
+            );
+        });
     }
 
     #[test]
