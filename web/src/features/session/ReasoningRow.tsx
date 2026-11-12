@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AgentEvent } from "@/shared/api/agents";
 
+import { useLiveThinkingExpanded, useLiveThinkingHotkey, LIVE_THINKING_TOGGLE_KEY } from "./liveThinkingPreference";
 import { stripMarkdown, thoughtProse } from "@/shared/session/model/thoughtProse";
 
 export { stripMarkdown, thoughtProse };
@@ -18,6 +19,51 @@ export function reasoningText(event: AgentEvent): string {
  * A click opens the full markdown; the open state is the reader's and nothing
  * else closes it.
  */
+function isLivePreviewReasoning(event: AgentEvent): boolean {
+  return typeof event.id === "number" && event.id <= 0;
+}
+
+/**
+ * Thinking that is still arriving (a live preview, not a stored thought):
+ * one "Thinking" line, closed until the viewer opens it by click or by the
+ * toggle key; the choice is remembered and applies to every live thinking row.
+ */
+function LiveThinkingRow({ event, isSelected }: { event: AgentEvent; isSelected: boolean }) {
+  const [expanded, setExpanded] = useLiveThinkingExpanded();
+  useLiveThinkingHotkey(expanded, setExpanded);
+  const text = reasoningText(event);
+  const bodyId = `reasoning-body-${event.id}`;
+  return (
+    <div
+      id={`event-${event.id}`}
+      className={`tl-thought is-live${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
+      data-testid="session-timeline-reasoning"
+      data-row-kind="reasoning"
+      data-live="true"
+    >
+      <button
+        type="button"
+        className="tl-thought__live"
+        aria-expanded={expanded}
+        aria-controls={bodyId}
+        aria-keyshortcuts={LIVE_THINKING_TOGGLE_KEY}
+        aria-label={expanded ? "Collapse thinking" : "Expand thinking"}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="tl-thought__live-label">Thinking</span>
+        <span className="tl-thought__live-hint" aria-hidden="true">
+          {expanded ? "hide" : "show"} ({LIVE_THINKING_TOGGLE_KEY})
+        </span>
+      </button>
+      {expanded ? (
+        <div id={bodyId} className="tl-thought__body tl-msg__body" data-testid="session-timeline-reasoning-body">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function ReasoningRow({
   event,
   isSelected,
@@ -26,6 +72,19 @@ export function ReasoningRow({
   event: AgentEvent;
   isSelected: boolean;
   /** Clock label, only when the minute changed since the last thought. */
+  time?: string | null;
+}) {
+  if (isLivePreviewReasoning(event)) return <LiveThinkingRow event={event} isSelected={isSelected} />;
+  return <StoredReasoningRow event={event} isSelected={isSelected} time={time} />;
+}
+
+function StoredReasoningRow({
+  event,
+  isSelected,
+  time = null,
+}: {
+  event: AgentEvent;
+  isSelected: boolean;
   time?: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);

@@ -3762,6 +3762,34 @@
   line-height: 1.45;
   color: var(--color-text-muted);
 }
+.tl-run__tail {
+  margin: 7px 0 0 24px;
+  max-height: 12.5em;
+  overflow: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  color: var(--color-text-secondary);
+}
+.tl-thought__live {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.tl-thought__live-label {
+  font-style: italic;
+}
+.tl-thought__live-hint {
+  font-size: 11px;
+  opacity: 0.7;
+}
 .tl-run[data-run-state="uncertain"] .tl-run__note {
   color: var(--color-text-secondary);
 }

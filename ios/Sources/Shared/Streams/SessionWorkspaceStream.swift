@@ -53,6 +53,10 @@ actor SessionWorkspaceStream {
             let event_id: Int
             let text: String
             let role: String?
+            /// reply | thinking | tool | subagent. Absent from older servers.
+            /// This client never asks for thinking (`preview_kinds`), and
+            /// `SessionTranscriptPreview.shouldRender` refuses it regardless.
+            var kind: String? = nil
             let tool_name: String?
             let tool_input_json: JSONValue?
             let tool_output_text: String?
@@ -71,6 +75,7 @@ actor SessionWorkspaceStream {
                     eventId: event_id,
                     text: text,
                     role: role,
+                    kind: kind,
                     toolName: tool_name,
                     toolInputJSON: tool_input_json?.objectValue,
                     toolOutputText: tool_output_text,

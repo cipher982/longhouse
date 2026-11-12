@@ -123,6 +123,12 @@ export interface SessionTranscriptPreview {
   event_id: number;
   text: string;
   role?: string;
+  /**
+   * What the live item is. Absent on older servers: `tool` when `tool_name`
+   * is set, else `reply`. `thinking` arrives only on a stream that asked for it
+   * (`preview_kinds=thinking`) and is never part of a workspace response.
+   */
+  kind?: "reply" | "thinking" | "tool" | "subagent" | null;
   tool_name: string | null;
   /** Provider-native tool input; free-form tools may emit a JSON string. */
   tool_input_json?: unknown;
@@ -913,9 +919,14 @@ export function connectSessionWorkspaceStream(
     skipInitial?: boolean;
     knownWorkspaceFingerprint?: string | null;
     streamEpoch?: string | null;
+    /** Live item kinds this client can draw beyond reply, tool and subagent. */
+    previewKinds?: readonly string[];
   } = {},
 ): () => void {
   const params = new URLSearchParams();
+  if (options.previewKinds?.length) {
+    params.set("preview_kinds", options.previewKinds.join(","));
+  }
   if (options.skipInitial) {
     params.set("skip_initial", "true");
   }

@@ -5,6 +5,8 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
     let eventId: Int
     let text: String
     let role: String?
+    /// reply | thinking | tool | subagent; nil on older servers and caches.
+    var kind: String? = nil
     let toolName: String?
     let toolInputJSON: [String: JSONValue]?
     let toolOutputText: String?
@@ -19,7 +21,8 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
     let staleReason: String?
 
     var shouldRender: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && isStale != true
+        // Thinking is not a reply: whatever path delivers it here, it is not drawn as one.
+        kind != "thinking" && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && isStale != true
     }
 
     var syntheticEvents: [SessionEvent] {

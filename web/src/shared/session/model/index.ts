@@ -56,6 +56,7 @@ export {
   parseLonghouseOutput,
   projectionItemsWithTranscriptPreview,
   shouldRenderTranscriptPreview,
+  transcriptPreviewKind,
   splitExplorationOverflow,
   timelineItemContainsSelection,
 } from "./timelineModel";

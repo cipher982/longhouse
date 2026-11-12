@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@/shared/api/agents";
 import { ReasoningRow, stripMarkdown, thoughtProse } from "../ReasoningRow";
@@ -86,5 +86,67 @@ describe("ReasoningRow control", () => {
     act(() => current.forEach((entry) => entry.fire()));
     expect(screen.getByRole("button", { name: "Expand reasoning" })).toBeTruthy();
     vi.unstubAllGlobals();
+  });
+});
+
+describe("live thinking row", () => {
+  const live: AgentEvent = {
+    id: -1_000_000_005,
+    role: "assistant",
+    content_text: "Thinking:\nweighing the two options",
+    interaction_kind: "provider_reasoning",
+    tool_name: null,
+    tool_input_json: null,
+    tool_output_text: null,
+    tool_call_id: null,
+    timestamp: "2026-03-22T22:00:05Z",
+    in_active_context: true,
+  } as AgentEvent;
+
+  afterEach(() => {
+    window.localStorage.clear();
+    cleanup();
+  });
+
+  it("is collapsed by default as a single Thinking row", () => {
+    render(<ReasoningRow event={live} isSelected={false} />);
+    expect(screen.getByRole("button", { name: "Expand thinking" })).toBeTruthy();
+    expect(screen.queryByText(/weighing the two options/)).toBeNull();
+  });
+
+  it("opens on click and remembers the choice for the next viewer load", () => {
+    const { unmount } = render(<ReasoningRow event={live} isSelected={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Expand thinking" }));
+    expect(screen.getByText(/weighing the two options/)).toBeTruthy();
+    expect(window.localStorage.getItem("longhouse.liveThinking.expanded")).toBe("1");
+    unmount();
+    render(<ReasoningRow event={live} isSelected={false} />);
+    expect(screen.getByText(/weighing the two options/)).toBeTruthy();
+  });
+
+  it("toggles on the t key, and ignores it in a field or with a modifier", () => {
+    render(
+      <>
+        <input data-testid="field" />
+        <ReasoningRow event={live} isSelected={false} />
+      </>,
+    );
+    fireEvent.keyDown(screen.getByTestId("field"), { key: "t" });
+    expect(screen.queryByText(/weighing the two options/)).toBeNull();
+    fireEvent.keyDown(window, { key: "t", ctrlKey: true });
+    expect(screen.queryByText(/weighing the two options/)).toBeNull();
+    fireEvent.keyDown(window, { key: "t" });
+    expect(screen.getByText(/weighing the two options/)).toBeTruthy();
+    fireEvent.keyDown(window, { key: "t" });
+    expect(screen.queryByText(/weighing the two options/)).toBeNull();
+  });
+
+  it("starts collapsed when storage throws", () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    render(<ReasoningRow event={live} isSelected={false} />);
+    expect(screen.getByRole("button", { name: "Expand thinking" })).toBeTruthy();
+    vi.restoreAllMocks();
   });
 });

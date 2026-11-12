@@ -154,6 +154,11 @@ export function useSessionWorkspace(
   const onlineEpoch = useOnlineEpoch();
   const queryClient = useQueryClient();
   const [streamConnected, setStreamConnected] = useState(false);
+  // Thinking text is held beside the reply preview, not in it: the reply row
+  // keeps the last reply while the model thinks, and one live item still wins
+  // (a non-thinking frame, ingest or session change clears this).
+  const [streamThinking, setStreamThinking] =
+    useState<SessionTranscriptPreview | null>(null);
   const [streamTranscriptPreview, setStreamTranscriptPreview] = useState<
     SessionTranscriptPreview | null | undefined
   >(undefined);
@@ -176,6 +181,7 @@ export function useSessionWorkspace(
 
   useEffect(() => {
     setStreamTranscriptPreview(undefined);
+    setStreamThinking(null);
     pendingRenderBeaconRef.current = null;
     pendingStateRenderBeaconRef.current = null;
     activityFeed.reset();
@@ -294,6 +300,7 @@ export function useSessionWorkspace(
       transcriptPreview: SessionTranscriptPreview | null,
     ) => {
       setStreamTranscriptPreview(transcriptPreview);
+      setStreamThinking(null);
       queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
         { queryKey: ["agent-session-workspace", sessionId] },
         (current) => {
@@ -403,6 +410,23 @@ export function useSessionWorkspace(
             };
             setPendingStateRenderBeaconVersion((value) => value + 1);
           }
+          if (
+            data.transcript_preview?.kind === "thinking" &&
+            shouldRenderTranscriptPreview(data.transcript_preview)
+          ) {
+            setStreamThinking(data.transcript_preview);
+            pendingRenderBeaconRef.current = {
+              sessionId,
+              latestEventId: data.latest_event_id,
+              latestEventEmittedAtMs: data.latest_event_emitted_at_ms ?? null,
+              serverFanoutAtMs: data.server_fanout_at_ms ?? null,
+              clientReceivedAtMs: Date.now(),
+              pubsubSeq: data.pubsub_seq ?? null,
+            };
+            setPendingRenderBeaconVersion((version) => version + 1);
+            return;
+          }
+          if (data.change_kind === "ingest") setStreamThinking(null);
           const hasTranscriptPreview = Object.prototype.hasOwnProperty.call(
             data,
             "transcript_preview",
@@ -459,6 +483,7 @@ export function useSessionWorkspace(
         },
       },
       {
+        previewKinds: ["thinking"],
         skipInitial: workspaceReady,
         knownWorkspaceFingerprint: knownWorkspaceFingerprintRef.current,
         ...(streamEpochRef.current
@@ -632,8 +657,8 @@ export function useSessionWorkspace(
   );
 
   const visibleProjectionItems = useMemo(
-    () => projectionItemsWithTranscriptPreview(projectionItems, session),
-    [projectionItems, session],
+    () => projectionItemsWithTranscriptPreview(projectionItems, session, streamThinking),
+    [projectionItems, session, streamThinking],
   );
   // Workers this session spawned. Hidden from the timeline by design, so the
   // transcript is the only place they surface — attached to the tool call that

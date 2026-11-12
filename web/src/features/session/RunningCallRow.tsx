@@ -124,6 +124,15 @@ export function useRunningCallState(interaction: ToolInteraction) {
   };
 }
 
+const LIVE_TAIL_LINES = 12;
+
+/** The last lines of a running call's output so far, when the live preview supplied it. */
+export function liveOutputTail(interaction: ToolInteraction): string | null {
+  const text = interaction.callEvent?.tool_output_text;
+  if (typeof text !== "string" || !text.trim()) return null;
+  return text.replace(/\s+$/, "").split("\n").slice(-LIVE_TAIL_LINES).join("\n");
+}
+
 /**
  * A running call that looks alive: the agent's description as the headline,
  * the command beneath it in mono, an elapsed clock, and — when the call
@@ -159,6 +168,7 @@ export function RunningCallRow({
       ? Math.min(1, run.elapsedSeconds / run.timeoutSeconds)
       : null;
   const detailId = `${rowId}-detail`;
+  const tail = liveOutputTail(interaction);
 
   return (
     <div
@@ -207,7 +217,16 @@ export function RunningCallRow({
         </div>
       ) : null}
       {/* Expanded, the output block below says the same thing. */}
-      {expanded ? <div id={detailId}>{detail}</div> : <div className="tl-run__note" data-testid="running-call-note">{run.note}</div>}
+      {tail ? (
+        <pre className="tl-run__tail" data-testid="running-call-tail">
+          {tail}
+        </pre>
+      ) : null}
+      {expanded ? (
+        <div id={detailId}>{detail}</div>
+      ) : tail ? null : (
+        <div className="tl-run__note" data-testid="running-call-note">{run.note}</div>
+      )}
     </div>
   );
 }

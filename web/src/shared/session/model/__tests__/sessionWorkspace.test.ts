@@ -956,3 +956,101 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse antigravity");
   });
 });
+
+describe("projectionItemsWithTranscriptPreview kinds", () => {
+  const durable: AgentSessionProjectionItem[] = [
+    {
+      kind: "event",
+      session_id: "session-1",
+      timestamp: "2026-03-22T22:00:00Z",
+      event: {
+        id: 1,
+        role: "user",
+        content_text: "Prompt",
+        tool_name: null,
+        tool_input_json: null,
+        tool_output_text: null,
+        tool_call_id: null,
+        timestamp: "2026-03-22T22:00:00Z",
+        in_active_context: true,
+      },
+    },
+  ];
+  const base = {
+    event_origin: "live_provisional",
+    timestamp: "2026-03-22T22:00:05Z",
+    is_provisional: true,
+    is_complete: false,
+    is_stale: false,
+  };
+
+  it("a preview without kind projects exactly as before (reply)", () => {
+    const session = makeSession({
+      transcript_preview: { ...base, event_id: 42, text: "Partial", tool_name: null },
+    });
+    const out = projectionItemsWithTranscriptPreview(durable, session);
+    expect(out[1]?.event).toMatchObject({ id: -42, content_text: "Partial", tool_name: null });
+    expect(out[1]?.event?.interaction_kind).toBeUndefined();
+  });
+
+  it("a thinking preview becomes a live reasoning row and never replaces the reply", () => {
+    const reply = { ...base, event_id: 42, text: "Last reply", tool_name: null, kind: "reply" as const };
+    const thinking = { ...base, event_id: 42, text: "pondering", tool_name: null, kind: "thinking" as const };
+    const session = makeSession({ transcript_preview: reply });
+    const out = projectionItemsWithTranscriptPreview(durable, session, thinking);
+    expect(out).toHaveLength(3);
+    expect(out[1]?.event).toMatchObject({ content_text: "Last reply" });
+    const row = out[2]!.event!;
+    expect(row.interaction_kind).toBe("provider_reasoning");
+    expect(row.content_text).toBe("Thinking:\npondering");
+    expect(row.id).toBeLessThanOrEqual(0);
+    expect(row.id).not.toBe(out[1]!.event!.id);
+    const model = buildTimelineModel(out, { sessionId: "session-1" } as never);
+    expect(model.items.some((item) => item.kind === "reasoning")).toBe(true);
+  });
+
+  it("a thinking preview that reaches the session head is not drawn as a reply", () => {
+    const session = makeSession({
+      transcript_preview: { ...base, event_id: 9, text: "secret thoughts", tool_name: null, kind: "thinking" },
+    });
+    expect(projectionItemsWithTranscriptPreview(durable, session)).toEqual(durable);
+  });
+
+  it("a running tool carries its output tail on the call; a finished one keeps a result row", () => {
+    const running = makeSession({
+      transcript_preview: {
+        ...base,
+        event_id: 7,
+        text: "tail line",
+        tool_name: "Bash",
+        kind: "tool",
+        tool_output_text: "line 1\nline 2",
+        tool_call_state: "running",
+      },
+    });
+    const out = projectionItemsWithTranscriptPreview(durable, running);
+    expect(out).toHaveLength(2);
+    expect(out[1]?.event).toMatchObject({ tool_name: "Bash", tool_output_text: "line 1\nline 2", tool_call_state: "running" });
+    const done = makeSession({
+      transcript_preview: { ...running.transcript_preview!, tool_call_state: "completed" },
+    });
+    expect(projectionItemsWithTranscriptPreview(durable, done)).toHaveLength(3);
+  });
+
+  it("a subagent preview shows its label and latest text", () => {
+    const session = makeSession({
+      transcript_preview: {
+        ...base,
+        event_id: 8,
+        text: "ttruth subagent",
+        tool_name: "Agent",
+        kind: "subagent",
+        tool_output_text: "child says hello",
+        tool_call_state: "running",
+      },
+    });
+    const ev = projectionItemsWithTranscriptPreview(durable, session)[1]!.event!;
+    expect(ev.tool_input_json).toEqual({ description: "ttruth subagent" });
+    expect(ev.tool_output_text).toBe("child says hello");
+  });
+});

@@ -565,7 +565,58 @@ export function shouldRenderTranscriptPreview(
   return Boolean(preview && nonEmptyText(preview.text) && !preview.is_stale);
 }
 
+/** The kind a preview is, for servers that do not send `kind`. */
+export function transcriptPreviewKind(
+  preview: NonNullable<AgentSession["transcript_preview"]>,
+): "reply" | "thinking" | "tool" | "subagent" {
+  return preview.kind ?? (preview.tool_name ? "tool" : "reply");
+}
+
+function thinkingPreviewItem(
+  session: AgentSession,
+  thinking: NonNullable<AgentSession["transcript_preview"]>,
+): AgentSessionProjectionItem | null {
+  if (!shouldRenderTranscriptPreview(thinking) || !thinking.timestamp) return null;
+  return {
+    kind: "event",
+    session_id: session.id,
+    timestamp: thinking.timestamp,
+    event: {
+      id: -(Math.abs(thinking.event_id) + 1_000_000_000),
+      role: "assistant",
+      content_text: `Thinking:\n${thinking.text}`,
+      interaction_kind: "provider_reasoning",
+      tool_name: null,
+      tool_input_json: null,
+      tool_output_text: null,
+      tool_call_id: null,
+      tool_call_state: null,
+      timestamp: thinking.timestamp,
+      in_active_context: true,
+      is_head_branch: true,
+    },
+  };
+}
+
+/**
+ * Append the live preview to the durable rows. `thinking` is the separately
+ * held thinking preview (never in `session.transcript_preview`): it is added
+ * as a live reasoning row after the durable rows and is not compared with the
+ * reply text. A preview without `kind` behaves as before (tool when it has a
+ * tool name, else reply).
+ */
 export function projectionItemsWithTranscriptPreview(
+  projectionItems: AgentSessionProjectionItem[],
+  session: AgentSession | null | undefined,
+  thinking?: AgentSession["transcript_preview"] | null,
+): AgentSessionProjectionItem[] {
+  const withReply = replyProjectionItems(projectionItems, session);
+  if (!session || !thinking || transcriptPreviewKind(thinking) !== "thinking") return withReply;
+  const row = thinkingPreviewItem(session, thinking);
+  return row ? [...withReply, row] : withReply;
+}
+
+function replyProjectionItems(
   projectionItems: AgentSessionProjectionItem[],
   session: AgentSession | null | undefined,
 ): AgentSessionProjectionItem[] {
@@ -574,6 +625,8 @@ export function projectionItemsWithTranscriptPreview(
   if (!session || !preview || !shouldRenderTranscriptPreview(preview)) {
     return projectionItems;
   }
+  // A thinking preview is not a reply: never draw it as one, whichever path put it here.
+  if (transcriptPreviewKind(preview) === "thinking") return projectionItems;
   const previewTimestamp = preview.timestamp;
   if (!previewTimestamp) {
     return projectionItems;
@@ -600,6 +653,13 @@ export function projectionItemsWithTranscriptPreview(
   const syntheticId = preview.tool_name
     ? -Math.max(2, Math.abs(preview.event_id) * 2)
     : -Math.abs(preview.event_id);
+  const running = preview.tool_call_state === "running";
+  // A running tool or subagent carries the output (or latest child text) so far
+  // on the call itself, where the running row draws it; a finished one keeps
+  // the separate result row as before.
+  const kind = transcriptPreviewKind(preview);
+  const liveOutput =
+    preview.tool_name && running && preview.tool_output_text ? preview.tool_output_text : null;
   const callItem: AgentSessionProjectionItem = {
       kind: "event",
       session_id: session.id,
@@ -609,8 +669,10 @@ export function projectionItemsWithTranscriptPreview(
         role: preview.role || "assistant",
         content_text: preview.tool_name ? null : previewText,
         tool_name: preview.tool_name || null,
-        tool_input_json: preview.tool_input_json || null,
-        tool_output_text: null,
+        tool_input_json:
+          preview.tool_input_json ||
+          (kind === "subagent" && previewText ? { description: previewText } : null),
+        tool_output_text: liveOutput,
         tool_call_id: preview.tool_call_id || null,
         tool_call_state: preview.tool_call_state || null,
         timestamp: previewTimestamp,

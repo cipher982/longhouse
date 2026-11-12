@@ -367,6 +367,7 @@ describe("useSessionWorkspace", () => {
       baseSession.id,
       expect.any(Object),
       {
+        previewKinds: ["thinking"],
         skipInitial: false,
         knownWorkspaceFingerprint: null,
       },
@@ -380,6 +381,7 @@ describe("useSessionWorkspace", () => {
       baseSession.id,
       expect.any(Object),
       {
+        previewKinds: ["thinking"],
         skipInitial: true,
         knownWorkspaceFingerprint: "sha256:workspace",
       },
@@ -468,6 +470,36 @@ describe("useSessionWorkspace", () => {
     );
   });
 
+
+  it("holds a thinking preview beside the reply preview and never writes it into the session head", () => {
+    let handlers: { onWorkspaceChanged?: (data: Record<string, unknown>) => void } | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "transcript_preview",
+        latest_event_id: -5,
+        thread_session_count: 1,
+        transcript_preview: {
+          event_id: 5,
+          text: "weighing options",
+          kind: "thinking",
+          tool_name: null,
+          event_origin: "live_provisional",
+          timestamp: "2026-03-22T22:00:05Z",
+          is_provisional: true,
+          is_complete: false,
+          is_stale: false,
+        },
+      });
+    });
+    expect(result.current.session?.transcript_preview ?? null).toBeNull();
+    expect(result.current.items.filter((item) => item.kind === "reasoning")).toHaveLength(1);
+  });
 
   it("keeps runtime wakes off transcript query families", () => {
     let handlers:
