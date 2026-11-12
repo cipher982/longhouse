@@ -409,6 +409,10 @@ jobs:
             # PTY recordings and host/model/engine logs; never the provider home (h/) or the SQLite database.
             awk '{print $2}' "$TT_OUT/scratch-kept.txt" | sort -u > "$TT_OUT/scratch-new.txt"
             (cd "$scratch" && xargs -a "$TT_OUT/scratch-new.txt" tar --exclude='*/h' --exclude='*.db' --exclude='*.db-*' -czf "$TT_OUT/scratch-recordings.tgz")
+            # The Machine Agent's own logs from the provider home (Codex bridge and Console worker stderr, launcher
+            # logs): the only record of why a provider launch or a live-event POST stalled. Log files only.
+            (cd "$scratch" && while read -r d; do find "$d/h/.longhouse" -name '*.log' -type f 2>/dev/null; done < "$TT_OUT/scratch-new.txt" > "$TT_OUT/scratch-machine-logs.lst"
+              if [[ -s "$TT_OUT/scratch-machine-logs.lst" ]]; then tar -czf "$TT_OUT/scratch-machine-logs.tgz" -T "$TT_OUT/scratch-machine-logs.lst"; fi)
           fi
           ls -la "$TT_OUT"
           files=()
