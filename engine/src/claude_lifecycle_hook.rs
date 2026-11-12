@@ -135,8 +135,11 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
                 crate::claude_channel_server::update_managed_provider_session_id(managed, native);
         }
     }
-    let child_tool_event =
-        child_origin && matches!(event.as_str(), "PreToolUse" | "PostToolUse" | "PostToolUseFailure");
+    let child_tool_event = child_origin
+        && matches!(
+            event.as_str(),
+            "PreToolUse" | "PostToolUse" | "PostToolUseFailure"
+        );
     let mut payload = json!({
         "session_id": session_id,
         "tool_name": if child_origin { None } else { string(input, "tool_name") },
@@ -438,10 +441,7 @@ fn warp_deferred_stop_path(home: &Path, session_id: &str) -> PathBuf {
         .join(format!("warp-deferred-stop-{digest:x}"))
 }
 
-fn remaining_active_subagents(
-    delegation: Option<&Value>,
-    stopping_agent_id: Option<&str>,
-) -> u64 {
+fn remaining_active_subagents(delegation: Option<&Value>, stopping_agent_id: Option<&str>) -> u64 {
     let Some(snapshot) = delegation else {
         return 0;
     };
@@ -450,8 +450,9 @@ fn remaining_active_subagents(
             .iter()
             .filter(|item| item.get("kind").and_then(Value::as_str) == Some("subagent"))
             .filter(|item| {
-                stopping_agent_id
-                    .map_or(true, |stop_id| item.get("id").and_then(Value::as_str) != Some(stop_id))
+                stopping_agent_id.map_or(true, |stop_id| {
+                    item.get("id").and_then(Value::as_str) != Some(stop_id)
+                })
             })
             .count() as u64;
     }
@@ -477,8 +478,7 @@ fn warp_marker_for_event(
 ) -> Option<&'static str> {
     let deferred_path = warp_deferred_stop_path(home, session_id);
     if event == "SubagentStop" {
-        if deferred_path.exists()
-            && remaining_active_subagents(delegation, stopping_agent_id) == 0
+        if deferred_path.exists() && remaining_active_subagents(delegation, stopping_agent_id) == 0
         {
             let _ = std::fs::remove_file(&deferred_path);
             return Some("stop");

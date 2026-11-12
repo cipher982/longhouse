@@ -2939,7 +2939,8 @@ mod tests {
     }
 
     #[test]
-    fn degraded_or_keepalive_stalled_omp_helm_slot_withholds_status_assertion_without_retiring_run() {
+    fn degraded_or_keepalive_stalled_omp_helm_slot_withholds_status_assertion_without_retiring_run()
+    {
         let temp = tempfile::tempdir().expect("tempdir");
         let status_dir = crate::status_slot::status_slot_dir(temp.path());
         let mut process_facts = std::collections::HashMap::new();
