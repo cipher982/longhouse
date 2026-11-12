@@ -298,7 +298,7 @@ def gate_engine_compat(cfg: Config, sources: Sources, sha: str) -> dict[str, Any
         raise Refusal(
             f"no engine-compat receipt for {_short(sha)} ({COMPAT_KIND}/{sha}"
             f"{f', {unreadable} unreadable' if unreadable else ''}): the previous-release engine smoke has not "
-            f"reported on this commit; it is the CI job 'Engine compatibility (previous release)'"
+            f"reported on this commit; it is the engine-compat step of the CI job 'Small checks'"
         )
     reasons = []
     for stamp, receipt in found:

@@ -244,7 +244,7 @@ jobs:
           # Path detection and fixture publication are prerequisites for every
           # filtered suite; a failed prerequisite cannot turn skipped tests green.
           required_jobs: Changed paths,Fixture image,Backend tests,Engine tests,Frontend + runner tests,Provider contract tests
-          ignored_failure_jobs: Core E2E tests,Model smoke tests,OSS onboarding smoke
+          ignored_failure_jobs: Core E2E tests,Model smoke tests,Small checks
 
       - name: Wait for full CI gate (temporary opt-in)
         id: wait_full
@@ -259,8 +259,10 @@ jobs:
           covering_workflow: runtime-image.yml
           github_token: ${{ github.token }}
           event: ""
-          required_jobs: Changed paths,Fixture image,Backend tests,Engine tests,Core E2E tests,CLI wheel packaging,Provider contract tests
-          ignored_failure_jobs: OSS onboarding smoke
+          # "Small checks" carries the wheel packaging check this list used to name on its own, and
+          # the onboarding smoke it used to ignore: with the full gate on, either one now holds a deploy.
+          required_jobs: Changed paths,Fixture image,Backend tests,Engine tests,Core E2E tests,Small checks,Provider contract tests
+          ignored_failure_jobs: ""
 
       - name: Wait for exact runtime image publication
         id: wait_image

@@ -23,7 +23,8 @@ def merge_schemes() -> set[str]:
 def ci_lanes() -> list[tuple[list[str], list[tuple[str, str, str]]]]:
     """(schemes, [(scheme, only|skip, id)]) for every entry of the ios-tests matrix."""
     workflow = (ROOT / ".github/workflows/contract-first-ci.yml").read_text()
-    job = workflow.split("\n  ios-tests:\n", 1)[1].split("\n  wheel-package:", 1)[0]
+    # The job's text ends at the next job, whichever one that is.
+    job = re.split(r"\n  [a-z0-9-]+:\n", workflow.split("\n  ios-tests:\n", 1)[1], maxsplit=1)[0]
     entries = re.findall(
         r"^\s*- lane: .*\n\s+schemes: \"?([^\"\n]+?)\"?\n\s+filter: \"([^\"]*)\"", job, re.M
     )

@@ -1,0 +1,50 @@
+name: UI Sweep Nightly
+
+# Opens every menu on every fixture scene at all three sizes (scripts/ui/popover-sweep.ts).
+# CI runs the desktop size on a frontend or scripts push; this is where the wide and mobile
+# sizes run. A scheduled workflow so that a red streak pages through Sauron's
+# ci-scheduled-red, which CI's advisory sweep job never did: it was red on 14 CI runs in a
+# row (2026-11-10 to 11-12) and nobody was told.
+on:
+  schedule:
+    # GitHub starts this repository's schedules 7 to 10 hours late (measured 2026-10-29 to
+    # 11-12), so this lands at about 08:00 to 11:00 UTC.
+    - cron: "7 0 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ui-sweep-nightly-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  PIP_INDEX_URL: https://pypi.org/simple
+  PIP_EXTRA_INDEX_URL: ""
+  LONGHOUSE_TEST_CPUS: "4"
+  LONGHOUSE_TEST_MEMORY: "8g"
+
+jobs:
+  ui-sweep:
+    if: ${{ github.repository == 'cipher982/longhouse' }}
+    runs-on: crunch
+    timeout-minutes: 20
+    # One size at a time: three at once would hold all three of this repo's crunch slots.
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        viewport: [desktop, wide, mobile]
+    name: "UI popover sweep (${{ matrix.viewport }})"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+
+      - name: Build or reuse the fixture image on this runner
+        run: python3 scripts/qa/test-isolation.py --prepare
+
+      - name: Open every menu at this size
+        run: make test-ui-sweep ARGS=--viewports=${{ matrix.viewport }}
