@@ -277,6 +277,8 @@ class StreamWatcher(threading.Thread):
         if isinstance(preview, dict) and (preview.get("role") == "user" or str(preview.get("text") or "").strip() == self.prompt):
             self.prompt_echoes += 1  # the person's own prompt shown as a preview (Pi Console does) is not reply text
             return
+        if isinstance(preview, dict) and preview.get("kind") not in (None, "reply", "tool"):
+            return  # a thinking (or other non-reply) preview carries its own kind and is not reply text
         if isinstance(preview, dict) and not preview.get("tool_name") and isinstance(preview.get("text"), str):
             self.previews.setdefault(str(frame.get("session_id")), []).append(preview["text"])
         elif isinstance(preview, dict) and preview.get("tool_name"):
@@ -306,6 +308,7 @@ class StreamWatcher(threading.Thread):
                         if (
                             isinstance(preview, dict)
                             and preview.get("role") != "user"
+                            and preview.get("kind") in (None, "reply")
                             and str(preview.get("text") or "").strip() != self.prompt
                             and isinstance(preview.get("text"), str)
                         ):
