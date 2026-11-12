@@ -27,6 +27,24 @@ CONSOLE_TURN_INTERRUPT_COMMAND = "session.turn.interrupt"
 CONSOLE_INVOCATION_CLOSE_COMMAND = "session.invocation.close"
 CONSOLE_TURN_STEER_COMMAND = "session.turn.steer"
 CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS = 10
+# `session.turn.start` replies only after the provider process is up. OMP's
+# engine adapter waits for the process's `ready` frame (RPC_READY_DEADLINE, 20 s
+# in engine/src/console_rpc.rs), then for its identity (8 s, omp_print.rs), then
+# writes the prompt (COMMAND_WRITE_STALL, 10 s): 38 s before it gives up and
+# answers with an error. Measured `ready` times are 0.24 s on an idle Mac with
+# OMP 18.18.9, and 2.6-3.4 s with one 6.4 s on earlier builds, so the engine's
+# bounds are far above a healthy start and a flat 10 s is not: terminal-truth
+# run 43126815849 pass 16 got a 502 from it on a loaded runner. The host has to
+# out-wait the engine's own bound, or a slow but healthy start is reported as
+# `turn_start_outcome_unknown`. 45 s is that bound plus 7 s. Other providers
+# keep the flat wait.
+CONSOLE_TURN_START_REPLY_TIMEOUT_SECONDS_BY_PROVIDER = {"omp": 45}
+
+
+def console_turn_start_reply_timeout_seconds(provider: str) -> int:
+    return CONSOLE_TURN_START_REPLY_TIMEOUT_SECONDS_BY_PROVIDER.get(provider, CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS)
+
+
 # A wake turn's receipt text always names its trigger; this only covers a row
 # written without one.
 WAKE_FALLBACK_MESSAGE = "Background work update"
@@ -613,7 +631,7 @@ async def enqueue_catalog_console_turn(
             command_type=CONSOLE_TURN_START_COMMAND,
             payload=payload,
             command_id=str(run_id),
-            timeout_secs=CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS,
+            timeout_secs=console_turn_start_reply_timeout_seconds(provider),
         )
         response_message = dict(response.message or {})
         detail = response_message.get("error") if isinstance(response_message.get("error"), dict) else {}
@@ -910,7 +928,7 @@ async def dispatch_catalog_claimed_turn(
             command_type=CONSOLE_TURN_START_COMMAND,
             payload=payload,
             command_id=str(run_id),
-            timeout_secs=CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS,
+            timeout_secs=console_turn_start_reply_timeout_seconds(provider),
         )
         message = dict(response.message or {})
         if not response.transport_ok:

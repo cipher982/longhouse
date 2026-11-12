@@ -4751,6 +4751,10 @@ def finish_in_background(job_id, keep_pending, delay=0.2):
     assistant_message("background task completed", start=False)
     if not keep_pending:
         out({"type": "session_settled"})
+# A slow provider start: a number of seconds in `<this script>.ready_delay`.
+delay_file = os.path.abspath(sys.argv[0]) + ".ready_delay"
+if os.path.isfile(delay_file):
+    time.sleep(float(open(delay_file).read()))
 out({"type":"ready"})
 for line in sys.stdin:
     command = json.loads(line)
@@ -5643,6 +5647,53 @@ for line in sys.stdin:
         let adapters: [(&str, ScenarioRunner); 1] = [("omp", run_omp_scenario)];
         conformance::run_phase_one(&adapters).await;
     }
+    /// A provider that takes seconds to print `ready` is a slow start, not a
+    /// failed one: the launch waits for it and the run completes. The host's
+    /// `session.turn.start` budget for OMP (45 s in `console_turns.py`) is sized
+    /// to this launch's own bounds, so a start that takes this long must reply
+    /// success rather than error.
+    #[tokio::test]
+    async fn a_slow_provider_start_is_waited_for_not_failed() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = set_test_longhouse_home(temp.path().join("longhouse"));
+        let fake_omp = temp.path().join("omp");
+        write_fake_omp(&fake_omp);
+        std::fs::write(temp.path().join("omp.ready_delay"), "3").unwrap();
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        crate::turn_claims::default_registry()
+            .unwrap()
+            .claim(&run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let began = Instant::now();
+        let started = start_omp_print_turn(lifecycle_config(
+            temp.path(),
+            &fake_omp,
+            &session_id,
+            &thread_id,
+            &run_id,
+            "scenario=responding",
+            None,
+            None,
+            "user",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+        assert!(
+            began.elapsed() >= Duration::from_secs(3),
+            "the launch returned before the provider was ready"
+        );
+        let process_group_id = started.process_group_id.unwrap();
+        crate::console_lifecycle::stop_test_monitor(&started.launch_id).await;
+        crate::console_lifecycle::unregister(&started.launch_id);
+        cleanup_process_group(Some(process_group_id)).await;
+        restore_test_longhouse_home(previous_home);
+    }
+
     #[tokio::test]
     async fn console_restart_contract() {
         run_omp_restart_contract().await;

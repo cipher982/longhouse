@@ -368,3 +368,70 @@ def test_recent_model_label_matches_usage_label_naming():
 
     assert RecentModel(model="claude-opus-5-5", last_used_at="2026-10-06T00:00:00Z").label == "opus 5.5"
     assert RecentModel(model="openai/gpt-6.1-sol", last_used_at="2026-10-06T00:00:00Z").label == "gpt 6.1 sol"
+
+
+class _SlowStartRegistry(_Registry):
+    """A Machine Agent whose engine takes `start_seconds` to answer a turn start.
+
+    It answers like the real control channel does: a command whose wait budget is
+    shorter than the engine's start gets a transport timeout, not a result.
+    """
+
+    def __init__(self, start_seconds: int) -> None:
+        super().__init__()
+        self.start_seconds = start_seconds
+
+    async def send_command(self, **kwargs: object) -> SimpleNamespace:
+        self.commands.append(kwargs)
+        timeout = int(kwargs["timeout_secs"])
+        if timeout < self.start_seconds:
+            return SimpleNamespace(
+                transport_ok=False,
+                message={},
+                error=f"Machine Agent control command timed out after {timeout} seconds",
+            )
+        return SimpleNamespace(transport_ok=True, message={"ok": True, "result": {}}, error=None)
+
+
+class _FailedStartCatalog:
+    def __init__(self, turn: dict[str, object]) -> None:
+        self.turn = turn
+        self.updates: list[dict[str, object]] = []
+
+    async def call(self, method: str, params: dict[str, object], **_kwargs: object) -> dict[str, object]:
+        assert method == "session.console.turn.update.v2"
+        self.updates.append(dict(params["turn"]))
+        state = str(params["turn"].get("state") or "starting")
+        return {"found": True, "applied": True, "turn": {**self.turn, "state": state}, "next_turn": None}
+
+
+@pytest.mark.asyncio
+async def test_omp_turn_start_outwaits_a_provider_start_slower_than_ten_seconds(tmp_path):
+    # The OMP engine adapter waits up to 20 s for `ready` and 8 s for identity
+    # before it answers, so a 12 s start is healthy. A flat 10 s host wait turned
+    # it into turn_start_outcome_unknown and an HTTP 502 (terminal-truth run
+    # 43126815849, pass 16).
+    engine, store, session_id, _thread_id = _store(tmp_path)
+    try:
+        _enqueue(store, session_id=session_id, message="first", client_request_id="slow-start")
+        current = store.read_current_console_turn(session_id=session_id, owner_id=1)
+        turn = {**current["turn"], "provider": "omp"}
+        registry = _SlowStartRegistry(start_seconds=12)
+        catalog = _FailedStartCatalog(turn)
+        dispatched = await dispatch_catalog_claimed_turn(
+            owner_id=1,
+            turn=turn,
+            client=catalog,
+            registry=registry,
+        )
+        assert dispatched.error_code is None, dispatched.error
+        assert int(registry.commands[0]["timeout_secs"]) >= 38
+    finally:
+        engine.dispose()
+
+
+def test_other_providers_keep_the_ten_second_turn_start_wait():
+    from zerg.services.console_turns import console_turn_start_reply_timeout_seconds
+
+    assert console_turn_start_reply_timeout_seconds("codex") == 10
+    assert console_turn_start_reply_timeout_seconds("claude") == 10
