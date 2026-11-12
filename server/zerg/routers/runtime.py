@@ -36,11 +36,14 @@ from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.session_live_previews import LIVE_ITEM_MEMORY
 from zerg.services.session_live_previews import PREVIEW_KIND_REPLY
 from zerg.services.session_live_previews import PREVIEW_KIND_THINKING
+from zerg.services.session_live_previews import LivePreviewCandidate
 from zerg.services.session_live_previews import admit_preview_publication
 from zerg.services.session_live_previews import bounded_tail
+from zerg.services.session_live_previews import candidate_supersedes
 from zerg.services.session_live_previews import is_claude_print_live_text_event
 from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
 from zerg.services.session_live_previews import preview_kind
+from zerg.services.session_live_previews import preview_lane
 from zerg.services.session_live_previews import preview_payload_from_runtime_event
 from zerg.services.session_live_previews import reasoning_step
 from zerg.services.session_runtime import RuntimeEventBatchIngest
@@ -424,11 +427,18 @@ def _is_live_item_event(event) -> bool:
     return candidate is not None and candidate.kind != PREVIEW_KIND_REPLY
 
 
+def _observed_at_utc(event, now: datetime) -> datetime:
+    observed = event.occurred_at or now
+    return observed.replace(tzinfo=timezone.utc) if observed.tzinfo is None else observed.astimezone(timezone.utc)
+
+
 def _publish_live_transcript_previews(events, *, now: datetime) -> None:
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import publish_session_transcript_preview_update
 
-    latest_by_session: dict[str, tuple[object, dict]] = {}
+    # One winner per session and lane (the reply text, the thinking text, each tool or subagent call), not per session: a
+    # post that carries a call's start beside newer reply text must show both.
+    latest_by_lane: dict[tuple[str, str], tuple[object, dict, LivePreviewCandidate | None]] = {}
     for event in events:
         # Once per event, in order: reasoning arrives as deltas and the memory accumulates them (a replay is ignored by sequence).
         thinking_text = LIVE_ITEM_MEMORY.thinking_text(event) if event.session_id is not None else None
@@ -436,22 +446,29 @@ def _publish_live_transcript_previews(events, *, now: datetime) -> None:
         if preview is None or event.session_id is None:
             continue
         sid = str(event.session_id)
-        existing = latest_by_session.get(sid)
-        if existing is not None and _preview_seq(preview) < _preview_seq(existing[1]):
-            continue
-        latest_by_session[sid] = (event, preview)
-
-    logger = logging.getLogger("longhouse.live_transcript")
-    heads = get_pubsub().preview_heads
-    for sid, (event, preview) in latest_by_session.items():
-        # A batch the machine resent after a lost response, or one that lands
-        # behind a newer batch, must not repeat or rewind what subscribers saw.
         # Identity is the projection's: the observation the machine minted plus
         # its ordering, never the text or the timestamp alone.
         candidate = live_preview_candidate_from_runtime_event(
             event,
             observation_id=f"live:{event.source}:{event.dedupe_key}",
         )
+        key = (sid, preview_lane(candidate) if candidate is not None else "")
+        existing = latest_by_lane.get(key)
+        if existing is not None:
+            if candidate is not None and existing[2] is not None:
+                if not candidate_supersedes(candidate, existing[2]):
+                    continue
+            elif _preview_seq(preview) < _preview_seq(existing[1]):
+                continue
+        latest_by_lane[key] = (event, preview, candidate)
+
+    logger = logging.getLogger("longhouse.live_transcript")
+    heads = get_pubsub().preview_heads
+    # Oldest first, so the frame a client receives last is the newest thing that happened (the bridge merges posts in key order).
+    in_order = sorted(latest_by_lane.items(), key=lambda item: _observed_at_utc(item[1][0], now))
+    for (sid, _lane), (event, preview, candidate) in in_order:
+        # A batch the machine resent after a lost response, or one that lands
+        # behind a newer batch, must not repeat or rewind what subscribers saw.
         if candidate is None:
             # A payload with no candidate has no identity the projection will
             # ever hold, so there is nothing a replay could be compared to.

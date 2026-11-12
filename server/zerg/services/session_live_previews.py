@@ -108,10 +108,28 @@ class PublishedPreviewHead:
     last_observation_id: str
 
 
-# Heads are per session and tiny, but a Runtime Host lives for weeks. Past this
-# many sessions the least recently published head is forgotten; the cost of
-# forgetting is one extra republish for a session that resumes after a resend.
-MAX_PUBLISHED_PREVIEW_HEADS = 4096
+# Heads are per session and lane and tiny, but a Runtime Host lives for weeks. Past this
+# many the least recently published head is forgotten; the cost of
+# forgetting is one extra republish for a session or call that a resent batch names again.
+MAX_PUBLISHED_PREVIEW_HEADS = 16384
+
+
+def preview_lane(candidate: LivePreviewCandidate) -> str:
+    """Which published head a candidate is ordered against.
+
+    A client shows the reply as one piece of text and the thinking as another, so within either a preview of an older item
+    must not step that text backwards: each is one lane per session. A tool call or a subagent call is a row of its own,
+    keyed by the call. Ordering a call against the reply text lost it whenever the two crossed: the engine sends calls and
+    reply text on different lanes (the durable outbox, the status slot), and over a real network the bridge merges whatever
+    queued behind a post in flight. Measured 2026-11-12 with 150 ms of added engine-to-host delay: Antigravity Helm's tool
+    start shared a post with newer reply text and was not published until the tool finished 6 s later, and Claude Helm's
+    last reply snapshot before a tool call arrived behind the call and was refused as a straggler.
+    """
+
+    kind = candidate.effective_kind
+    if kind in (PREVIEW_KIND_REPLY, PREVIEW_KIND_THINKING):
+        return kind
+    return f"call:{candidate.tool_call_id or candidate.turn_key}"
 
 
 def admit_preview_publication(heads: OrderedDict[str, PublishedPreviewHead], candidate: LivePreviewCandidate) -> bool:
@@ -120,16 +138,18 @@ def admit_preview_publication(heads: OrderedDict[str, PublishedPreviewHead], can
     The fast path publishes before catalogd applies the batch, so a batch the
     machine resends after a lost response arrives here a second time. This is
     the projection's own ordering rule (``upsert_live_session_live_preview``),
-    applied to what was published instead of what was stored. It does not know
+    applied to what was published instead of what was stored, one head per
+    session and lane (``preview_lane``: the reply text, the thinking text, each
+    tool or subagent call). It does not know
     when durable content supersedes a turn; only durable ingest does, and the
     client already retires a preview the durable rows replace. The same
     observation is never shown twice, and a preview that is not newer than the
-    head, by seq within an item or by observation time across items, is a
+    head of its lane, by seq within an item or by observation time across items, is a
     replay or a straggler and must not step the client backwards. A later
     update to the same item carries a higher seq and passes.
     """
 
-    key = str(candidate.session_id)
+    key = f"{candidate.session_id}\x1f{preview_lane(candidate)}"
     head = heads.get(key)
     if head is not None:
         if head.last_observation_id == candidate.last_observation_id:
@@ -1242,7 +1262,15 @@ def preview_map_from_rows(rows) -> dict[str, TranscriptPreview]:
     return previews
 
 
-def _candidate_should_replace(candidate: LivePreviewCandidate, existing: SessionLivePreview | PublishedPreviewHead) -> bool:
+def candidate_supersedes(candidate: LivePreviewCandidate, other: LivePreviewCandidate) -> bool:
+    """Of two previews of one lane in one batch, whether ``candidate`` is the one to show (the projection's ordering rule)."""
+
+    return _candidate_should_replace(candidate, other)
+
+
+def _candidate_should_replace(
+    candidate: LivePreviewCandidate, existing: SessionLivePreview | PublishedPreviewHead | LivePreviewCandidate
+) -> bool:
     candidate_at = normalize_utc(candidate.preview_observed_at) or datetime.min.replace(tzinfo=timezone.utc)
     existing_at = normalize_utc(existing.preview_observed_at) or datetime.min.replace(tzinfo=timezone.utc)
     if candidate.turn_key != existing.turn_key:

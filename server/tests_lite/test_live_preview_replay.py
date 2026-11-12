@@ -19,6 +19,8 @@ from datetime import timedelta
 from datetime import timezone
 from uuid import uuid4
 
+import pytest
+
 from tests_lite.live_catalog_harness import live_catalog as live_catalog  # noqa: F401
 from tests_lite.live_catalog_harness import live_catalog_client as live_catalog_client  # noqa: F401
 from zerg.services import catalogd_supervisor
@@ -237,3 +239,95 @@ def test_publication_gate_is_bounded():
     assert len(heads) == MAX_PUBLISHED_PREVIEW_HEADS
     # The oldest was forgotten: the cost is one republish, never a lost update.
     assert admit_preview_publication(heads, _candidate(seq=1, session_id="s0"))
+
+
+# ---- one head per lane: a call is not ordered against the reply text -------------------------------------------------------
+
+
+def _call_event(session_id: str, *, seq: int, item: str, at_ms: int, tool: str = "shell") -> dict:
+    """A tool (or, as ``spawn_agent``, a subagent) call the way the Codex bridge posts it: its own item, its own seq from 1."""
+    return {
+        "runtime_key": f"codex:{session_id}",
+        "session_id": session_id,
+        "provider": "codex",
+        "device_id": "cinder",
+        "source": "codex_bridge_live",
+        "kind": "progress_signal",
+        "occurred_at": (T0 + timedelta(milliseconds=at_ms)).isoformat(),
+        "dedupe_key": f"bridge:live:{session_id}:thread-1:turn-1:{item}:{seq}",
+        "payload": {
+            "progress_kind": "console_live_tool_item",
+            "thread_id": "thread-1",
+            "turn_id": "turn-1",
+            "item_id": item,
+            "tool_name": tool,
+            "command": "count the files",
+            "status": "inProgress",
+            "seq": seq,
+        },
+    }
+
+
+def _published(batches: list[list[dict]]) -> list[tuple[str, int]]:
+    """(kind, seq) of every preview the publish step fans out for these posts, in order."""
+    from zerg.routers import runtime as runtime_router
+    from zerg.services import session_pubsub
+    from zerg.services.session_runtime import RuntimeEventIngest
+
+    reset_pubsub_for_test()
+    seen: list[tuple[str, int]] = []
+    original = session_pubsub.publish_session_transcript_preview_update
+    session_pubsub.publish_session_transcript_preview_update = lambda **kw: seen.append(
+        (kw["transcript_preview"]["kind"], kw["transcript_preview"]["event_id"])
+    )
+    try:
+        for batch in batches:
+            runtime_router._publish_live_transcript_previews([RuntimeEventIngest(**event) for event in batch], now=T0)
+    finally:
+        session_pubsub.publish_session_transcript_preview_update = original
+        reset_pubsub_for_test()
+    return seen
+
+
+SID = "8a1f6a4e-6d1f-4c5e-9a4b-0f1e2d3c4b5a"
+
+
+@pytest.mark.parametrize("tool,kind", [("shell", "tool"), ("spawn_agent", "subagent")])
+def test_a_call_start_posted_with_newer_reply_text_is_published_beside_it(tool: str, kind: str) -> None:
+    """2026-11-12, Antigravity Helm behind 150 ms of delay: the post held reply seq 6 and the tool's seq 1; only the reply was shown."""
+    reply = _live_event(SID, seq=6, item="msg-1", text="I will look at the files", at_ms=10)
+    call = _call_event(SID, seq=1, item="call-1", at_ms=20, tool=tool)
+
+    assert _published([[reply, call]]) == [("reply", 6), (kind, 1)]
+    assert _published([[call, reply]]) == [("reply", 6), (kind, 1)], "oldest first, whatever order the bridge merged them in"
+
+
+def test_a_call_start_that_arrives_behind_newer_reply_text_is_still_published() -> None:
+    """The engine sends calls and reply text on different lanes; a call stamped first can land second."""
+    newer_reply = _live_event(SID, seq=3, item="msg-2", text="done", at_ms=50)
+    older_call = _call_event(SID, seq=1, item="call-1", at_ms=20)
+
+    assert _published([[newer_reply], [older_call]]) == [("reply", 3), ("tool", 1)]
+
+
+def test_the_last_reply_snapshot_before_a_call_is_published_when_it_arrives_behind_the_call() -> None:
+    """2026-11-12, Claude Helm behind 150 ms of delay: reply seq 7 arrived after the tool call stamped 0.6 ms later and was refused."""
+    earlier_reply = _live_event(SID, seq=5, item="msg-1", text="I will look", at_ms=0)
+    call = _call_event(SID, seq=2, item="call-1", at_ms=30)
+    last_reply = _live_event(SID, seq=7, item="msg-1", text="I will look at the files", at_ms=29)
+
+    assert _published([[earlier_reply], [call], [last_reply]]) == [("reply", 5), ("tool", 2), ("reply", 7)]
+
+
+def test_within_the_reply_text_an_older_item_still_cannot_step_the_client_backwards() -> None:
+    newer = _live_event(SID, seq=1, item="msg-2", text="second message", at_ms=50)
+    straggler = _live_event(SID, seq=9, item="msg-1", text="first message, late", at_ms=40)
+
+    assert _published([[newer], [straggler]]) == [("reply", 1)]
+    assert _published([[straggler, newer]]) == [("reply", 1)], "one reply preview per post: the newest message's"
+
+
+def test_a_resent_post_republishes_neither_the_reply_nor_the_call() -> None:
+    post = [_live_event(SID, seq=6, item="msg-1", text="text", at_ms=10), _call_event(SID, seq=1, item="call-1", at_ms=20)]
+
+    assert _published([post, post]) == [("reply", 6), ("tool", 1)]
