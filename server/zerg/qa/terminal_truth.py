@@ -30,6 +30,8 @@ from pathlib import Path
 
 from zerg.qa.scripted_model_server import parse_pacing
 from zerg.qa.terminal_truth_kinds import SCENARIOS
+from zerg.qa.terminal_truth_kinds import kinds_expectation
+from zerg.qa.terminal_truth_kinds import render_expectations
 from zerg.qa.terminal_truth_kinds import render_kinds
 from zerg.qa.terminal_truth_kinds import run_kinds_suite
 from zerg.qa.terminal_truth_lanes import _PUBLISH_LINE  # noqa: F401 - re-exported: this module is the entry point and the public surface
@@ -190,6 +192,16 @@ def main(argv: list[str] | None = None) -> int:
         choices=["no_thinking", "no_tool", "no_subagent"],
         help="negative control for the thinking, tool and subagent scenarios: the scripted model skips the thing; every cell must then fail",
     )
+    run.add_argument(
+        "--expect-kinds",
+        action="store_true",
+        help="for the thinking, tool and subagent scenarios: exit 1 unless each of the six host-published cells reached the stream with the right kind",
+    )
+    run.add_argument(
+        "--old-client",
+        action="store_true",
+        help="connect the stream as a client that predates preview kinds (no preview_kinds parameter); thinking must then never arrive",
+    )
     run.add_argument("--engine", type=Path, default=Path(os.environ.get("LONGHOUSE_ENGINE_BIN") or shutil.which("longhouse-engine") or ""))
     run.add_argument("--mode", action="append", choices=["shadow", "helm", "console"], help="repeatable; default console and helm")
     run.add_argument("--longhouse-cli", type=Path, default=None, help="native longhouse CLI for helm mode (default: PATH)")
@@ -200,6 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--keep", action="store_true")
     run.add_argument("--out", type=Path, help="write all cell results here as one JSON file")
     run.add_argument("--out-dir", type=Path, help="write one JSON per cell and summary.json here")
+    render = sub.add_parser("render", help="re-render the live-kinds tables from saved --out JSON files")
+    render.add_argument("inputs", nargs="+", type=Path)
     check = sub.add_parser("selfcheck", help="fake TUI + stub lanes; exits non-zero if the harness cannot recover its own schedule")
     check.add_argument("--markers", type=int, default=12)
     check.add_argument("--spacing", type=float, default=0.5)
@@ -211,6 +225,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "fake-tui":
         fake_tui([(m, float(t)) for m, t in json.loads(args.schedule.read_text())], args.truth)
+        return 0
+    if args.command == "render":
+        merged = [r for path in args.inputs for r in json.loads(path.read_text())]
+        print(render_kinds(merged))
+        print(render_expectations(merged))
         return 0
     if args.command == "selfcheck":
         outcome = run_selfcheck(markers=args.markers, spacing_s=args.spacing)
@@ -248,12 +267,16 @@ def main(argv: list[str] | None = None) -> int:
             keep=args.keep,
             ready_timeout=args.ready_timeout,
             mutation=args.kinds_mutation,
+            old_client=args.old_client,
             log=lambda message: print(message, file=sys.stderr, flush=True),
         )
         print(render_kinds(kind_results))
+        print(render_expectations(kind_results))
         if args.out:
             args.out.write_text(json.dumps(kind_results, indent=2) + "\n")
         code = 1 if any(r["outcome"] == "fail" for r in kind_results) else 0
+        if args.expect_kinds and any(e is not None and not e["ok"] for e in map(kinds_expectation, kind_results)):
+            code = 1
         print(f"\nterminal truth {args.scenario}: {'PASS' if code == 0 else 'FAIL'} (exit {code})")
         return code
     results = run_suite(

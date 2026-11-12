@@ -39,6 +39,7 @@ from zerg.qa.scripted_model_server import paced_text
 from zerg.qa.terminal_truth_lanes import FileWatcher
 from zerg.qa.terminal_truth_lanes import LaneWatcher
 from zerg.qa.terminal_truth_lanes import RuntimeApi
+from zerg.qa.terminal_truth_lanes import StateObserver
 from zerg.qa.terminal_truth_lanes import StreamWatcher
 from zerg.qa.terminal_truth_lanes import host_publishes
 from zerg.qa.terminal_truth_providers import PROVIDERS
@@ -248,6 +249,10 @@ class KindObservation:
     engine_runtime: dict[str, float] = field(default_factory=dict)
     engine_other: dict[str, float] = field(default_factory=dict)
     provider_file: dict[str, float] = field(default_factory=dict)
+    state_timeline: list[tuple[float, dict[str, Any]]] = field(default_factory=list)  # the facts lane: (time, snapshot) per change
+    state_reads: int = 0
+    state_shaped: int = 0
+    submitted: float = 0.0
 
 
 def judge_kinds(obs: KindObservation) -> list[tuple[str, bool, str]]:
@@ -286,6 +291,178 @@ def judge_kinds(obs: KindObservation) -> list[tuple[str, bool, str]]:
             )
         )
     return checks
+
+
+# ---- the facts lane: is a thinking / tool / subagent state shown, and which --------------------------------------------------
+
+STATE_LIVE_BY = 0.5  # a state is "live" when it was up before this share of the real window had passed, "late" after
+
+
+def state_intervals(
+    timeline: Sequence[tuple[float, dict[str, Any]]], predicate: Callable[[dict[str, Any]], bool], end_t: float
+) -> list[tuple[float, float]]:
+    """Spans during which one session's served facts satisfied ``predicate``, unioned over the cell's sessions.
+
+    A snapshot holds until the next change of the same session; the last one holds until ``end_t``.
+    """
+
+    by_session: dict[str, list[tuple[float, dict[str, Any]]]] = {}
+    for t, snap in timeline:
+        by_session.setdefault(str(snap.get("session_id")), []).append((t, snap))
+    spans: list[tuple[float, float]] = []
+    for rows in by_session.values():
+        for i, (t, snap) in enumerate(rows):
+            if predicate(snap):
+                spans.append((t, rows[i + 1][0] if i + 1 < len(rows) else end_t))
+    spans.sort()
+    merged: list[tuple[float, float]] = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def _overlap(spans: Sequence[tuple[float, float]], w0: float, w1: float) -> list[tuple[float, float]]:
+    return [(max(a, w0), min(b, w1)) for a, b in spans if min(b, w1) > max(a, w0)]
+
+
+def classify_state(
+    timeline: Sequence[tuple[float, dict[str, Any]]],
+    predicate: Callable[[dict[str, Any]], bool],
+    window: tuple[float, float] | None,
+    end_t: float,
+    *,
+    describe: Callable[[dict[str, Any]], str | None] = lambda s: s.get("headline"),
+) -> dict[str, Any]:
+    """live / late / absent for one state during the span the scripted scenario really held it.
+
+    ``window`` is when the thing was truly in progress (model time for thinking, the command's own output times for a tool). The state is
+    ``live`` if the facts showed it before half the window had passed, ``late`` if only afterwards, ``absent`` if never inside the window.
+    ``coverage`` is the share of the window it was shown. ``shown`` lists the distinct strings the strip would have drawn meanwhile.
+    """
+
+    if window is None or window[1] <= window[0]:
+        return {"class": "no_window", "first_s": None, "lag_s": None, "coverage": None, "shown": []}
+    w0, w1 = window
+    spans = _overlap(state_intervals(timeline, predicate, end_t), w0, w1)
+    shown: list[str] = []
+    for t, snap in timeline:
+        if predicate(snap) and w0 <= t <= w1:
+            text = describe(snap)
+            if text and text not in shown:
+                shown.append(text)
+    # a state already up when the window opened carries over: its text is whatever was drawn then
+    for t, snap in timeline:
+        if t < w0 and predicate(snap):
+            text = describe(snap)
+            if text and text not in shown:
+                shown.append(text)
+    if not spans:
+        return {"class": "absent", "first_s": None, "lag_s": None, "coverage": 0.0, "shown": shown, "window_s": [w0, w1]}
+    first = spans[0][0]
+    covered = sum(b - a for a, b in spans)
+    live = first <= w0 + STATE_LIVE_BY * (w1 - w0)
+    return {
+        "class": "live" if live else "late",
+        "first_s": first,
+        "lag_s": first - w0,
+        "coverage": round(covered / (w1 - w0), 2),
+        "shown": shown,
+        "window_s": [w0, w1],
+    }
+
+
+def _tool_state(snap: dict[str, Any]) -> bool:
+    return snap.get("activity_state") == "executing"
+
+
+def _thinking_state(snap: dict[str, Any]) -> bool:
+    return snap.get("activity_state") == "thinking"
+
+
+def _subagent_predicate(provider: str) -> Callable[[dict[str, Any]], bool]:
+    """A subagent is shown when the delegation facts list one, or the parent's own tool is the provider's subagent-spawning tool."""
+
+    spawn = (SUBAGENT_TOOLS.get(provider) or ("",))[0].lower()
+
+    def predicate(snap: dict[str, Any]) -> bool:
+        if any(t.get("kind") == "subagent" for t in snap.get("tasks") or []):
+            return True
+        return bool(spawn) and str(snap.get("activity_tool") or "").lower() == spawn
+
+    return predicate
+
+
+def _subagent_describe(snap: dict[str, Any]) -> str | None:
+    return snap.get("detail") or (f"{snap.get('headline')}" if snap.get("headline") else None)
+
+
+def state_windows(obs: KindObservation) -> dict[str, tuple[float, float] | None]:
+    """When each state was truly in progress, from the scripted model's own writes and the command's own output file, never from a lane."""
+
+    plan = obs.plan
+
+    def span(group: str, source: dict[str, float | None]) -> tuple[float, float] | None:
+        times = [t for s in plan.group(group) if (t := source.get(s.marker)) is not None]
+        return (min(times), max(times)) if times else None
+
+    thinking = span("thinking", obs.model_sent)
+    tool = span("tool_output", obs.side) or span("tool_output", obs.model_sent) or span("tool_output", obs.terminal_any)
+    sub = span("subagent_text", obs.model_sent)
+    started = span("subagent_started", obs.model_sent)
+    if sub and started:
+        sub = (started[0], sub[1])
+    return {"thinking": thinking, "tool": tool, "subagent": sub}
+
+
+def state_lane_result(obs: KindObservation, end_t: float) -> dict[str, Any]:
+    """The facts-lane verdict for the cell's scenario, plus the evidence that the observer could see the facts at all."""
+
+    scenario, provider = obs.plan.spec.scenario, obs.plan.spec.provider
+    windows = state_windows(obs)
+    baseline = [snap for t, snap in obs.state_timeline if t < obs.submitted]
+    dirty = [s for s in baseline if s.get("activity_state") in {"thinking", "executing"} or (s.get("delegation_count") or 0) > 0]
+    out: dict[str, Any] = {
+        "reads": obs.state_reads,
+        "shaped_reads": obs.state_shaped,
+        "baseline_snapshots": len(baseline),
+        "baseline_idle": not dirty,
+        "changes": len(obs.state_timeline),
+        "timeline": [
+            {
+                "t": round(t - obs.submitted, 2),
+                **{k: snap.get(k) for k in ("headline", "activity_state", "activity_tool", "delegation_count", "detail")},
+            }
+            for t, snap in obs.state_timeline
+        ][:80],
+    }
+    if obs.state_shaped == 0:
+        out["verdict"] = {"class": "observer_blind", "reason": f"{obs.state_reads} workspace reads, none carried session.session_state"}
+        return out
+    if dirty:
+        out["verdict"] = {
+            "class": "observer_dirty",
+            "reason": "the facts already showed thinking, a tool or a subagent before the prompt was sent",
+        }
+        return out
+    if scenario == "thinking":
+        verdict = classify_state(obs.state_timeline, _thinking_state, windows["thinking"], end_t)
+    elif scenario == "tool":
+        verdict = classify_state(
+            obs.state_timeline,
+            _tool_state,
+            windows["tool"],
+            end_t,
+            describe=lambda s: f"{s.get('headline')}" + (f" [{s['activity_tool']}]" if s.get("activity_tool") else ""),
+        )
+    else:
+        verdict = classify_state(obs.state_timeline, _subagent_predicate(provider), windows["subagent"], end_t, describe=_subagent_describe)
+    out["verdict"] = {k: (_rel(v, obs.submitted) if k == "first_s" else v) for k, v in verdict.items()}
+    if "window_s" in verdict:
+        out["verdict"]["window_s"] = [_rel(x, obs.submitted) for x in verdict["window_s"]]
+    return out
 
 
 # ---- the run -----------------------------------------------------------------------------------------------------------
@@ -487,6 +664,7 @@ def run_kind_cell_in(
     ready_timeout: float,
     drivers: dict[str, ProviderDriver],
     expand_key: bool = True,
+    old_client: bool = False,
 ) -> dict[str, Any]:
     spec = plan.spec
     provider, mode = spec.provider, spec.mode
@@ -508,6 +686,7 @@ def run_kind_cell_in(
     workspace = pas.root / "w" / provider / f"{mode}-{plan.nonce}"
     workspace.mkdir(parents=True)
     api = RuntimeApi(pas.host.url, pas.host.token, workspace=workspace)
+    api.legacy_stream = old_client
     stop = threading.Event()
     session: ProviderPtySession | None = None
     recording, timing_file = (
@@ -539,6 +718,7 @@ def run_kind_cell_in(
         stream = FramingStreamWatcher("workspace stream (SSE)", lambda: api.stream_lines(stop), markers, stop)
         stream.prompt = plan.prompt
         watchers.append(stream)
+        state_observer = StateObserver(api, stop)
         console_session = ""
         if mode == "console":
             created = _create_console_session(api, provider, pas.shipper.machine_name, workspace)
@@ -553,11 +733,15 @@ def run_kind_cell_in(
         probe = SubagentProbe(api, [s.marker for s in plan.group("subagent_text")], stop) if spec.scenario == "subagent" else None
         for watcher in watchers:
             watcher.start()
+        state_observer.start()
         files.start()
         if side:
             side.start()
         if probe:
             probe.start()
+        time.sleep(
+            0.5
+        )  # the facts lane reads a few idle baselines before the prompt: a state it shows later is the scenario's, not left over
         submitted = time.monotonic()
         if mode == "console":
             api.post(
@@ -585,8 +769,10 @@ def run_kind_cell_in(
                 break
             time.sleep(0.25)
         stop.set()
+        stopped_at = time.monotonic()
         for watcher in watchers:
             watcher.join(timeout=5)
+        state_observer.join(timeout=5)
         files.join(timeout=5)
         if side:
             side.join(timeout=5)
@@ -614,6 +800,18 @@ def run_kind_cell_in(
         for watcher in watchers:
             obs.lanes[watcher.lane.name] = dict(watcher.first_seen)
         obs.provider_file = dict(files.first_seen)
+        obs.state_timeline, obs.state_reads, obs.state_shaped, obs.submitted = (
+            list(state_observer.timeline),
+            state_observer.reads,
+            state_observer.shaped,
+            submitted,
+        )
+        out["state_lane"] = state_lane_result(obs, stopped_at)
+        out["state_lane"]["errors"] = state_observer.errors
+        out["state_lane"]["resolution_s"] = state_observer.resolution_s
+        out["engine_runtime_samples"] = [
+            {**x, "t": round(x["t"] - submitted, 3)} for x in pas.proxy.runtime_samples if set(x["markers"]) & set(markers)
+        ][:400]
         wanted = set(markers)
         obs.engine_runtime = {m: t for m, t in pas.proxy.runtime_posts.items() if m in wanted}
         obs.engine_other = {m: t for m, t in pas.proxy.other_posts.items() if m in wanted}
@@ -757,6 +955,8 @@ def run_kinds_suite(
     drivers: dict[str, ProviderDriver] | None = None,
     expand_key: bool = True,
     mutation: str | None = None,
+    host_environment: dict[str, str] | None = None,
+    old_client: bool = False,
     log: Callable[[str], None] = lambda _m: None,
 ) -> list[dict[str, Any]]:
     """Run each scenario cell. OMP gets a pass of its own (it shares a config layout with Pi); the rest share one pass."""
@@ -789,7 +989,7 @@ def run_kinds_suite(
             part = [s for s in group if s.scenario == scenario]
             keyed = {s.key: plans[(s.key, s.scenario)] for s in part}
             try:
-                pas = build_pass(part, keyed, engine=engine, cli=cli, log=log, log_all_frames=True)  # type: ignore[arg-type]
+                pas = build_pass(part, keyed, engine=engine, cli=cli, host_environment=host_environment, log=log, log_all_frames=True)  # type: ignore[arg-type]
             except Exception as exc:  # noqa: BLE001
                 for s in part:
                     results.append(
@@ -810,7 +1010,11 @@ def run_kinds_suite(
                     _enable_codex_multi_agent(pas)
                 for s in part:
                     log(f"running {s.key} {scenario}")
-                    results.append(run_kind_cell_in(pas, keyed[s.key], ready_timeout=ready_timeout, drivers=drivers, expand_key=expand_key))
+                    results.append(
+                        run_kind_cell_in(
+                            pas, keyed[s.key], ready_timeout=ready_timeout, drivers=drivers, expand_key=expand_key, old_client=old_client
+                        )
+                    )
             finally:
                 stop_pass(pas, keep)
     return results
@@ -823,8 +1027,174 @@ def _f(value: float | None) -> str:
     return "-" if value is None else f"{value:.1f}"
 
 
+# Where a live signal stops when the harness saw neither the Longhouse stream nor an engine runtime post carry it.
+# (provider, mode, group) -> (the provider has a live source for it, what that source is, what drops it today).
+# From the 2026-11 provider audits (docs/archive/2026-11-provider-live-surface-audit) and the code they cite; a dated citation, the run's own
+# evidence (an engine runtime post, a stream frame) always wins over this table.
+LIVE_SOURCE: dict[tuple[str, str, str], tuple[bool, str, str]] = {
+    ("claude", "console", "thinking"): (True, "stream-json thinking_delta (--include-partial-messages, already on)", "host"),
+    ("claude", "console", "tool_started"): (True, "stream-json tool_use block and system task_started", "host"),
+    ("claude", "console", "tool_output"): (False, "no stream carries a running tool's stdout (audit claude.md)", ""),
+    ("claude", "console", "subagent_started"): (True, "stream-json tool_use Agent and system task_started", "host"),
+    ("claude", "console", "subagent_text"): (True, "--forward-subagent-text (whole child messages)", "engine: the flag is not passed"),
+    ("claude", "helm", "thinking"): (True, "mod turn.step thinking chunk", "mod: register.js liveTurnStep forwards text chunks only"),
+    ("claude", "helm", "tool_started"): (
+        True,
+        "PreToolUse hook; mod turn.step tool chunk",
+        "mod: tool chunks not forwarded (state is on the facts lane)",
+    ),
+    ("claude", "helm", "tool_output"): (False, "no hook or mod event carries a running tool's stdout", ""),
+    ("claude", "helm", "subagent_started"): (
+        True,
+        "PreToolUse/SubagentStart hooks",
+        "preview: none posted (state is on the facts lane since d0b54a8b9)",
+    ),
+    ("claude", "helm", "subagent_text"): (False, "no hook or TUI event carries child text", ""),
+    ("codex", "console", "thinking"): (True, "app-server item/reasoning/*Delta", "host"),
+    ("codex", "helm", "thinking"): (
+        True,
+        "app-server item/reasoning/summaryTextDelta",
+        "bridge: BRIDGE_OPT_OUT_NOTIFICATION_METHODS opts out",
+    ),
+    ("codex", "helm", "tool_started"): (
+        True,
+        "app-server item/started commandExecution",
+        "bridge: extract_live_transcript_delta keeps agentMessage only",
+    ),
+    ("codex", "helm", "tool_output"): (True, "app-server item/commandExecution/outputDelta", "bridge: counted as activity, text dropped"),
+    ("opencode", "console", "thinking"): (
+        True,
+        "server SSE message.part.delta on a reasoning part",
+        "engine: opencode_run posts no reasoning delta (none on the wire in the run)",
+    ),
+    ("opencode", "console", "tool_output"): (
+        True,
+        "server SSE tool part state.metadata.output",
+        "engine: forwards a tool part at status changes only",
+    ),
+    ("opencode", "console", "subagent_text"): (True, "child session SSE", "provider: child writes at its own end (measured 14.2 s of 15)"),
+    ("opencode", "helm", "thinking"): (
+        True,
+        "/global/event message.part.delta on a reasoning part",
+        "bridge: LiveTextTracker (opencode_bridge.rs) returns None for any part not declared text",
+    ),
+    ("opencode", "helm", "tool_started"): (
+        True,
+        "/global/event message.part.updated tool part (pending, running)",
+        "bridge: LiveTextTracker reads text parts only; tool parts ship from the DB when they end",
+    ),
+    ("opencode", "helm", "tool_output"): (
+        True,
+        "/global/event tool part state.metadata.output; DB tool part running",
+        "bridge: LiveTextTracker reads text parts only; tool parts ship from the DB when they end",
+    ),
+    ("opencode", "helm", "subagent_started"): (True, "/global/event tool part (task)", "bridge: tool parts ship from the DB when they end"),
+    ("opencode", "helm", "subagent_text"): (
+        True,
+        "child session on /global/event",
+        "bridge: LiveTextTracker follows this session only; child text lands in the DB at its end",
+    ),
+    ("pi", "console", "thinking"): (
+        True,
+        "RPC message_update thinking_delta",
+        "engine: console_rpc is_non_text_rpc_message_update strips thinking_* and toolcall_* frames before they are posted",
+    ),
+    ("pi", "helm", "thinking"): (True, "extension message_update thinking_delta", "extension: forwards text_delta only"),
+    ("pi", "helm", "tool_started"): (True, "extension tool_execution_start", "extension: emits phase only"),
+    ("pi", "helm", "tool_output"): (True, "extension tool_execution_update partialResult (cumulative)", "extension: emits phase only"),
+    ("omp", "console", "thinking"): (
+        True,
+        "RPC message_update thinking_delta",
+        "engine: omp_print.rs drops thinking_* and toolcall_* message_update frames (console_rpc is_non_text_rpc_message_update)",
+    ),
+    ("omp", "console", "tool_started"): (True, "print-mode tool_execution_start", "host"),
+    ("omp", "console", "tool_output"): (True, "print-mode tool_execution_update partialResult", "host"),
+    ("omp", "console", "subagent_started"): (True, "print-mode tool_execution_start (task)", "host"),
+    ("omp", "console", "subagent_text"): (True, "print-mode tool_execution_update on the task tool", "host"),
+    ("omp", "helm", "thinking"): (True, "extension message_update thinking_delta", "extension: lifecycle() keeps text_delta only"),
+    ("omp", "helm", "tool_started"): (True, "extension tool_execution_start", "extension: lifecycle event carries phase only"),
+    ("omp", "helm", "tool_output"): (
+        True,
+        "extension tool_execution_update partialResult",
+        "extension: lifecycle event carries phase only",
+    ),
+    ("omp", "helm", "subagent_started"): (True, "extension tool_execution_start (task)", "extension: lifecycle event carries phase only"),
+    ("omp", "helm", "subagent_text"): (
+        True,
+        "extension tool_execution_update on the task tool; child session file",
+        "extension; child file read at its end",
+    ),
+    ("antigravity", "console", "thinking"): (False, "agy -p stdout has no thought field; agy acp has agent_thought_chunk (not used)", ""),
+    ("antigravity", "console", "tool_started"): (True, "stdout step_update tool ACTIVE", "engine: read_print_output drops step_update"),
+    ("antigravity", "console", "tool_output"): (False, "a foreground command's output exists only at completion", ""),
+    ("antigravity", "helm", "thinking"): (False, "TUI paint only; transcript has it at step end", ""),
+    ("antigravity", "helm", "tool_started"): (True, "PreToolUse hook", "engine: hook sets presence state only"),
+    ("antigravity", "helm", "tool_output"): (False, "a foreground command's output exists only at completion", ""),
+}
+
+
+def _group_class(entry: dict[str, Any], stage: str) -> str:
+    """live / partial / late / absent / no_baseline for one stage of one signal group against the signal's own reference times."""
+
+    seen, first = entry[stage]["seen"], entry[stage]["first_s"]
+    first_ref, last_ref = entry["reference_first_s"], entry["reference_last_s"]
+    if first_ref is None:
+        return "no_baseline" if seen == 0 else "seen_no_baseline"
+    if seen == 0:
+        return "absent"
+    end = last_ref if entry["n"] > 1 else first_ref + 2.0  # one-marker signals: within 2 s of the signal; streams: before the signal ends
+    if first is not None and first > end:
+        return "late"
+    return "live" if seen >= entry["n"] else "partial"
+
+
+def reclassify(cell: dict[str, Any], group: str, entry: dict[str, Any]) -> str:
+    """Where this signal's live path ends, in the four-way split: delivered, engine posts and host drops, provider emits and our code drops, no live source."""
+
+    sse = _group_class(entry, "sse")
+    if sse in {"live", "partial"}:
+        return "delivered" if sse == "live" else "delivered (partial)"
+    posted = _group_class(entry, "engine_runtime_post")
+    if posted in {"live", "partial"}:
+        return (
+            "engine posts it; the host does not publish it"
+            if cell["mode"] == "console"
+            else "engine posts it; the host does not publish it"
+        )
+    known = LIVE_SOURCE.get((cell["provider"], cell["mode"], group))
+    if known is None:
+        return "unclassified (no engine post, no audit row)"
+    has_source, source, dropper = known
+    if not has_source:
+        return f"provider has no live source ({source})"
+    return f"provider emits it ({source}); {dropper or 'our code'} drops it"
+
+
+def _state_cell(cell: dict[str, Any]) -> str:
+    lane = cell.get("state_lane") or {}
+    verdict = lane.get("verdict") or {}
+    klass = verdict.get("class", "-")
+    if klass in {"live", "late"}:
+        shown = "; ".join(verdict.get("shown") or [])[:70]
+        return (
+            f"{klass} (up at +{_f(verdict.get('lag_s'))} s, {int(round((verdict.get('coverage') or 0) * 100))}% of window) shows: {shown}"
+        )
+    if klass == "absent":
+        return "absent (never shown in the window)" + (f"; saw: {'; '.join(verdict.get('shown') or [])}" if verdict.get("shown") else "")
+    return f"{klass}: {verdict.get('reason', '')}".strip()
+
+
+def _content_cell(entry: dict[str, Any], stage: str) -> str:
+    st = entry[stage]
+    klass = _group_class(entry, stage)
+    if st["seen"] == 0:
+        return klass
+    lag = f", median lag {_f(st['delay_median_s'])} s" if st["delay_median_s"] is not None else ""
+    return f"{klass} {st['seen']}/{entry['n']} (first {_f(st['first_s'])} s{lag})"
+
+
 def render_kinds(results: Sequence[dict[str, Any]]) -> str:
-    """One table per scenario: per cell and signal group, terminal, live (SSE), durable (events) and where it stops."""
+    """One table per scenario. STATE is the facts lane (what the runtime strip draws); CONTENT is the transcript preview (SSE) and the durable events."""
 
     lines: list[str] = []
     for scenario in SCENARIOS:
@@ -832,26 +1202,103 @@ def render_kinds(results: Sequence[dict[str, Any]]) -> str:
         if not cells:
             continue
         lines += [
-            f"### {scenario}",
+            f"### {scenario} (one run per cell; times are seconds after the prompt was sent)",
             "",
-            "| cell | outcome | signal | n | terminal first (default view) | live SSE seen / first / median delay | events seen / first | workspace seen | live stops at |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| cell | lane | signal | terminal | Longhouse state facts | content: live preview (SSE) | content: durable events | where the live path ends |",
+            "|---|---|---|---|---|---|---|---|",
         ]
         for cell in cells:
             if cell["outcome"] != "measured":
-                lines.append(f"| {cell['cell']} | {cell['outcome']} | | | | | | | {cell.get('reason', '')[:160]} |")
+                lines.append(f"| {cell['cell']} | | | | | | | {cell['outcome']}: {cell.get('reason', '')[:160]} |")
                 continue
+            lines.append(f"| {cell['cell']} | state | {scenario} in progress | | {_state_cell(cell)} | | | |")
             for group, entry in group_summary(cell["signals"]).items():
+                if group == "reply":
+                    continue
                 term = entry["terminal_any"]
                 tdef = entry["terminal_default_view"]
-                sse, ev, ws = entry["sse"], entry["events"], entry["workspace"]
                 terminal = (
                     "console"
                     if cell["mode"] == "console"
                     else f"{term['seen']}/{entry['n']} first {_f(term['first_s'])} ({tdef['seen']} before key)"
                 )
                 lines.append(
-                    f"| {cell['cell']} | measured | {group} | {entry['n']} | {terminal} | {sse['seen']} / {_f(sse['first_s'])} / {_f(sse['delay_median_s'])} | {ev['seen']} / {_f(ev['first_s'])} | {ws['seen']} | {stops_at(entry, cell['mode'])} |"
+                    f"| {cell['cell']} | content | {group} | {terminal} | | {_content_cell(entry, 'sse')} | {_content_cell(entry, 'events')} | {reclassify(cell, group, entry)} |"
                 )
         lines.append("")
+    return "\n".join(lines)
+
+
+# ---- what a published live item must look like (the six cells the host used to drop) -------------------------------------------
+
+# (cell, scenario) -> (signal group that must reach the stream live, the preview kind it must carry). Before 2026-11-11 the host published
+# none of these: it allowlisted a few `progress_kind` values and hard-coded the tool name `exec`.
+KIND_EXPECTATIONS: dict[tuple[str, str], tuple[str, str]] = {
+    ("claude/console", "thinking"): ("thinking", "thinking"),
+    ("codex/console", "thinking"): ("thinking", "thinking"),
+    ("claude/console", "tool"): ("tool_started", "tool"),
+    ("omp/console", "tool"): ("tool_output", "tool"),
+    ("claude/console", "subagent"): ("subagent_started", "subagent"),
+    ("omp/console", "subagent"): ("subagent_started", "subagent"),
+}
+
+
+def kinds_expectation(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Did this cell's live item reach the stream, with the right kind, and where did it stop if not.
+
+    The stage is the first one down the path that lost it: ``engine_posted`` (the engine's own post never carried it),
+    ``host_published`` (the engine posted it live and the stream never carried it: the host dropped it), ``stream_delivered`` (it arrived
+    only after the signal ended), ``kind`` (it arrived without the right kind, or a tool under the name ``exec``).
+    """
+
+    key = (result.get("cell"), result.get("scenario"))
+    want = KIND_EXPECTATIONS.get(key)  # type: ignore[arg-type]
+    if want is None or result.get("outcome") != "measured":
+        return None
+    group, kind = want
+    entry = group_summary(result["signals"]).get(group)
+    if entry is None:
+        return None
+    posted, sse = _group_class(entry, "engine_runtime_post"), _group_class(entry, "sse")
+    frames = [f for f in result.get("sse_frames", []) if f.get("kind") == kind]
+    stage = "-"
+    if posted not in {"live", "partial"}:
+        stage = "engine_posted"
+    elif sse == "absent":
+        stage = "host_published"
+    elif sse not in {"live", "partial"}:
+        stage = "stream_delivered"
+    elif not frames or (kind == "tool" and not any(f.get("tool_name") not in (None, "", "exec") for f in frames)):
+        stage = "kind"
+    return {
+        "cell": result["cell"],
+        "scenario": result["scenario"],
+        "group": group,
+        "expected_kind": kind,
+        "engine_posted": posted,
+        "stream": sse,
+        "stream_first_s": entry["sse"]["first_s"],
+        "stream_median_lag_s": entry["sse"]["delay_median_s"],
+        "kinds_on_stream": sorted({str(f.get("kind")) for f in result.get("sse_frames", [])}),
+        "tool_names_on_stream": sorted({str(f["tool_name"]) for f in result.get("sse_frames", []) if f.get("tool_name")}),
+        "stage": stage,
+        "ok": stage == "-",
+    }
+
+
+def render_expectations(results: Sequence[dict[str, Any]]) -> str:
+    rows = [r for r in (kinds_expectation(x) for x in results) if r]
+    if not rows:
+        return ""
+    lines = [
+        "### published kind check (the six cells the host used to drop)",
+        "",
+        "| cell | scenario | signal | expected kind | engine posted | stream | first (s) | median lag (s) | kinds on stream | tool names | stopped at | ok |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        lines.append(
+            f"| {r['cell']} | {r['scenario']} | {r['group']} | {r['expected_kind']} | {r['engine_posted']} | {r['stream']} | {_f(r['stream_first_s'])} | "
+            f"{_f(r['stream_median_lag_s'])} | {', '.join(r['kinds_on_stream']) or '-'} | {', '.join(r['tool_names_on_stream']) or '-'} | {r['stage']} | {'yes' if r['ok'] else 'NO'} |"
+        )
     return "\n".join(lines)

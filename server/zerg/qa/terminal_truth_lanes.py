@@ -334,6 +334,7 @@ class RuntimeApi:
         self.workspace = workspace.resolve() if workspace is not None else None
         self.pinned_sessions: list[str] = []
         self.known_sessions: set[str] = set()  # every id this cell's lanes ever read
+        self.legacy_stream = False  # True: connect as a client that predates preview kinds (no `preview_kinds` parameter)
 
     def _headers(self, browser: bool) -> dict[str, str]:
         headers = {"Accept": "application/json", "User-Agent": "longhouse-terminal-truth/1"}
@@ -406,7 +407,9 @@ class RuntimeApi:
             try:
                 headers = self._headers(True)
                 headers["Accept"] = "text/event-stream"
-                connection.request("GET", f"/api/timeline/sessions/{session}/workspace/stream", headers=headers)
+                # The new web client asks for thinking previews; a connection that does not is never sent them (`legacy_stream`).
+                query = "" if self.legacy_stream else "?preview_kinds=thinking"
+                connection.request("GET", f"/api/timeline/sessions/{session}/workspace/stream{query}", headers=headers)
                 response = connection.getresponse()
                 if response.status != 200:
                     out.put(TimedLine(f"harness: workspace stream HTTP {response.status} for {session}\n"))
@@ -451,6 +454,115 @@ class RuntimeApi:
                 yield out.get(timeout=0.05)
             except queue.Empty:
                 continue
+
+
+def state_snapshot(workspace_body: str, session_id: str) -> dict[str, Any] | None:
+    """The state facts a web client reads from one workspace response, reduced to what the runtime strip draws.
+
+    ``None`` when the body has no ``session.session_state`` (an observer that cannot see the facts must say so, never report "absent").
+    ``headline`` is ``presentation.primary.label`` ("Thinking", "Using Bash"); ``detail`` repeats ``delegatedWorkDetail`` in
+    ``web/src/features/session/SessionRuntimeStrip.tsx`` ("<subagent name> . Using <tool>"), the string the strip and the Mac menu bar show for a
+    delegated subagent.
+    """
+
+    try:
+        body = json.loads(workspace_body)
+    except ValueError:
+        return None
+    session = body.get("session") if isinstance(body, dict) else None
+    facts = session.get("session_state") if isinstance(session, dict) else None
+    if not isinstance(facts, dict) or not isinstance(facts.get("activity"), dict):
+        return None
+    activity = facts["activity"]
+    primary = (facts.get("presentation") or {}).get("primary") or {}
+    delegation = facts.get("delegation") or {}
+    tasks: list[dict[str, Any]] = []
+    for item in delegation.get("items") or []:
+        progress = item.get("native_progress") or {}
+        tasks.append(
+            {
+                "name": (item.get("description") or "").strip() or item.get("id"),
+                "kind": item.get("kind"),
+                "status": item.get("status"),
+                "current_tool": (progress.get("current_tool") or "").strip() or None,
+                "progress_status": progress.get("status"),
+            }
+        )
+    lead = next((t for t in tasks if t["kind"] == "subagent"), tasks[0] if tasks else None)
+    detail = None
+    if lead:
+        step = (
+            f"Using {lead['current_tool']}"
+            if lead["current_tool"]
+            else "Thinking"
+            if str(lead["progress_status"] or "").lower() == "thinking"
+            else None
+        )
+        detail = " . ".join(x for x in (lead["name"], step) if x) or None
+    return {
+        "session_id": session_id,
+        "headline_key": primary.get("key"),
+        "headline": primary.get("label"),
+        "activity_state": activity.get("state"),
+        "activity_tool": activity.get("tool"),
+        "activity_source": activity.get("source"),
+        "delegation_state": delegation.get("state"),
+        "delegation_count": delegation.get("count") or 0,
+        "tasks": tasks,
+        "detail": detail,
+        "commit_seq": facts.get("commit_seq"),
+    }
+
+
+STATE_KEY = ("headline", "activity_state", "activity_tool", "delegation_count", "detail")
+
+
+class StateObserver(threading.Thread):
+    """The session state facts as the web client reads them: ``GET /api/timeline/sessions/{id}/workspace`` (browser auth).
+
+    This is the lane behind "Thinking", "Using Bash" and "<subagent> . Using Read" in the runtime strip and the menu bar. The client
+    refetches that response on every stream wake, so polling it at ``interval`` sees what a client sees, up to the poll gap (reported).
+    Every change of what the strip would draw is kept with its time; ``reads`` and ``shaped`` count responses and how many carried the
+    facts, so an observer that read nothing is distinguishable from a session in which nothing happened.
+    """
+
+    def __init__(self, api: RuntimeApi, stop: threading.Event, interval: float = 0.1) -> None:
+        super().__init__(daemon=True, name="lane-state-facts")
+        self.api, self.interval, self._stop_event = api, interval, stop
+        self.timeline: list[tuple[float, dict[str, Any]]] = []
+        self.reads = 0
+        self.shaped = 0
+        self.errors: list[str] = []
+        self.read_times: list[float] = []
+        self._last: dict[str, tuple] = {}
+
+    @property
+    def resolution_s(self) -> float | None:
+        gaps = [b - a for a, b in zip(self.read_times, self.read_times[1:], strict=False)]
+        return max(gaps) if gaps else None
+
+    def run(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                for sid in self.api.session_ids():
+                    status, body = self.api.get(f"/api/timeline/sessions/{sid}/workspace", browser=True)
+                    now = time.monotonic()
+                    self.reads += 1
+                    self.read_times.append(now)
+                    if status != 200:
+                        raise RuntimeError(f"HTTP {status}")
+                    snap = state_snapshot(body, sid)
+                    if snap is None:
+                        continue
+                    self.shaped += 1
+                    key = tuple(json.dumps(snap.get(k), sort_keys=True) for k in STATE_KEY)
+                    if self._last.get(sid) != key:
+                        self._last[sid] = key
+                        self.timeline.append((now, snap))
+            except Exception as exc:  # noqa: BLE001 - an observer failure is data
+                if len(self.errors) < 10:
+                    self.errors.append(f"{type(exc).__name__}: {exc}")
+            self._stop_event.wait(self.interval)
 
 
 class RequestScanner:
@@ -578,6 +690,9 @@ class TeeProxy(threading.Thread):
         self.runtime_posts: dict[str, float] = {}  # marker -> first time a runtime-events request carried it
         self.other_posts: dict[str, float] = {}  # marker -> first time any other request carried it
         self.runtime_post_count = 0
+        # What each marker-bearing runtime event looked like on the wire (source, progress_kind, raw event type): the
+        # evidence for "engine posted it" and for which host path has to read it. First 600 events only.
+        self.runtime_samples: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._closing = threading.Event()
 
@@ -629,7 +744,35 @@ class TeeProxy(threading.Thread):
                 with contextlib.suppress(OSError):
                     sock.close()
 
+    def _sample(self, path: bytes, body: bytes, now: float) -> None:
+        if not path.startswith(b"/api/agents/runtime/") or not self.MARKER.search(body) or len(self.runtime_samples) >= 600:
+            return
+        try:
+            batch = json.loads(body)
+        except ValueError:
+            return
+        events = batch.get("events") if isinstance(batch, dict) else None
+        for event in events if isinstance(events, list) else []:
+            if not isinstance(event, dict) or not self.MARKER.search(json.dumps(event).encode()):
+                continue
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            raw = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+            inner = raw.get("event") if isinstance(raw.get("event"), dict) else {}
+            self.runtime_samples.append(
+                {
+                    "t": now,
+                    "source": event.get("source"),
+                    "kind": event.get("kind"),
+                    "progress_kind": payload.get("progress_kind"),
+                    "raw_type": raw.get("type") or raw.get("method"),
+                    "inner_type": inner.get("type") or (inner.get("delta") or {}).get("type") if inner else None,
+                    "payload_keys": sorted(payload)[:16],
+                    "markers": sorted({m.decode() for m in self.MARKER.findall(json.dumps(event).encode())})[:4],
+                }
+            )
+
     def _note(self, path: bytes, body: bytes, now: float) -> None:
+        self._sample(path, body, now)
         for found in self.MARKER.finditer(body):
             marker = found.group().decode()
             book = self.runtime_posts if path.startswith(b"/api/agents/runtime/") else self.other_posts
