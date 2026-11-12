@@ -123,6 +123,11 @@ class WorkflowTests(unittest.TestCase):
             f"github.event_name == 'push' && 40 || (github.event_name == 'schedule' && ({on_weekly} && 180 || 60) || 330)",
             limit,
         )
+        # The weekly run is the mutation tests alone: no passes, no nightly receipt, and never a green with no result.
+        self.assertIn(f"TT_REPEATS: ${{{{ {on_weekly} && '0' || inputs.repeats || '1' }}}}", text)
+        self.assertIn('[[ "$TT_REPEATS" == 0 && "$TT_MUTATIONS" == 1 ]]', text)
+        self.assertIn('if [[ "$TT_REPEATS" == 0 && -z "${TT_MUTATIONS_RC:-}" ]]; then', text)
+        self.assertIn('if [[ "$TT_EVENT" == schedule && "$TT_REPEATS" != 0 ]]; then', text)
         # Every schedule expression names a cron this workflow has.
         for used in re.findall(r"github\.event\.schedule == '([^']+)'", text):
             self.assertIn(used, crons)

@@ -22,7 +22,7 @@ name: Terminal Truth
 #                                            for a dispatched run (tokens=400, rate=5). A red run is the
 #                                            finding: new failing cells are annotated as errors, and the
 #                                            Sauron job ci-scheduled-red pages after three red nights in a row.
-#   schedule (weekly, Sunday)                the same two passes, then the mutation tests, which nothing
+#   schedule (weekly, Sunday)                the mutation tests alone, which nothing
 #                                            else runs: each of 41 known defects is put back into the
 #                                            engine and the gate must fail it. That is 41 engine rebuilds,
 #                                            about 85 minutes on this runner (2 minutes each, measured
@@ -182,7 +182,9 @@ jobs:
       TT_MODE: ${{ inputs.mode || 'both' }}
       TT_TOKENS: ${{ inputs.tokens || '100' }}
       TT_RATE: ${{ inputs.rate || '20' }}
-      TT_REPEATS: ${{ inputs.repeats || '1' }}
+      # The weekly run is the mutation tests alone. Its passes would repeat the nightly's, and a pass that shares
+      # the host with a push run can come out slow (codex/console, run 43306143036), which says nothing new.
+      TT_REPEATS: ${{ github.event.schedule == '37 2 * * 0' && '0' || inputs.repeats || '1' }}
       TT_RERUN: ${{ github.event_name != 'schedule' && '1' || '0' }}
       TT_SCENARIO_INPUT: ${{ inputs.scenarios || (github.event_name == 'schedule' && 'both') || 'long_reply' }}
       TT_MUTATIONS: ${{ (github.event.schedule == '37 2 * * 0' || inputs.mutations) && '1' || '0' }}
@@ -222,7 +224,9 @@ jobs:
           esac
           [[ "$TT_TOKENS" =~ ^[0-9]+$ ]] || { echo "::error::tokens must be an integer" >&2; exit 1; }
           [[ "$TT_RATE" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "::error::rate must be a number" >&2; exit 1; }
-          [[ "$TT_REPEATS" =~ ^[0-9]+$ && "$TT_REPEATS" -ge 1 && "$TT_REPEATS" -le 30 ]] || { echo "::error::repeats must be 1 to 30" >&2; exit 1; }
+          # No passes at all is allowed only for a run that is the mutation tests alone.
+          [[ "$TT_REPEATS" =~ ^[0-9]+$ && "$TT_REPEATS" -ge 1 && "$TT_REPEATS" -le 30 ]] || [[ "$TT_REPEATS" == 0 && "$TT_MUTATIONS" == 1 ]] \
+            || { echo "::error::repeats must be 1 to 30 (0 only with the mutation tests)" >&2; exit 1; }
           case "$TT_SCENARIO_INPUT" in
             both) scenarios="long_reply,two_message" ;;
             long_reply|two_message) scenarios="$TT_SCENARIO_INPUT" ;;
@@ -449,6 +453,11 @@ jobs:
           python3 scripts/ci/terminal_truth_summary.py "$TT_OUT" --repeats "$TT_REPEATS" --scenarios "$TT_SCENARIOS" "${previous[@]}" "${reruns[@]}"
           rc=$?
           cat "$TT_OUT/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          # A run with no passes has only the mutation tests to show; with no result from them it proved nothing.
+          if [[ "$TT_REPEATS" == 0 && -z "${TT_MUTATIONS_RC:-}" ]]; then
+            echo "::error::no passes ran and the mutation tests left no result"
+            rc=1
+          fi
           if [[ "$rc" != 0 || "${TT_FAILED:-0}" != 0 || "${TT_MUTATIONS_RC:-0}" != 0 ]]; then
             echo "TT_STATE=failure" >> "$GITHUB_ENV"
             exit 1
@@ -473,7 +482,8 @@ jobs:
           files=()
           for f in "$TT_OUT"/*; do [[ -f "$f" && "$f" != *.scratch ]] && files+=("$f"); done
           python3 scripts/ops/ci_receipts.py put terminal-truth "$GITHUB_SHA" "${files[@]}" || echo "::warning::receipt not stored"
-          if [[ "$TT_EVENT" == schedule ]]; then
+          # The nightly's verdict is what the next nightly compares itself with; the weekly run has no cells to compare.
+          if [[ "$TT_EVENT" == schedule && "$TT_REPEATS" != 0 ]]; then
             python3 scripts/ops/ci_receipts.py put terminal-truth-nightly nightly "$TT_OUT/gate.json" "$TT_OUT/summary.md" || echo "::warning::nightly receipt not stored"
           fi
 
