@@ -113,7 +113,8 @@ def main(argv: list[str] | None = None) -> int:
     (args.directory / "gate.json").write_text(json.dumps(gate, indent=2) + "\n")
     print(text)
     for key in new:
-        print(f"::error::terminal truth NEW failure {key}: {failing[key]}")
+        label = "NEW failure" if args.previous else "failure"
+        print(f"::error::terminal truth {label} {key}: {failing[key]}")
     for key in sorted(set(failing) - set(new)):
         print(f"::warning::terminal truth still failing {key}")
     for problem in problems:

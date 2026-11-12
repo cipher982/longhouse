@@ -346,8 +346,8 @@ jobs:
               # A Codex Helm cell leaves its bridge (and the codex and channel processes under it) running after
               # the pass (seen on the Mac, parent pid 1). Stop what this job's own binaries left behind so passes
               # do not accumulate them: only processes whose executable is this job's engine or fixture root.
-              pkill -f "$TT_ENGINE (codex-bridge|claude-channel|omp-helm|pi-helm)" 2>/dev/null
-              pkill -f "$TT_FIXTURE_ROOT/" 2>/dev/null
+              pkill -f "$TT_ENGINE (codex-bridge|claude-channel|omp-helm|pi-helm)" 2>/dev/null || true
+              pkill -f "$TT_FIXTURE_ROOT/" 2>/dev/null || true
               printf '%s\t%s\t%s\t%s\t%s\n' "$i" "$scenario" "$start" "$end" "$rc" >> "$timings"
               find "$scratch" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | comm -13 "$RUNNER_TEMP/before.txt" - > "$TT_OUT/$name.scratch"
               if [[ "$rc" != 0 ]]; then
@@ -441,10 +441,11 @@ jobs:
               grep -qxF "$name" "$TT_OUT/scratch-before.txt" 2>/dev/null || rm -rf -- "$dir"
             done
           fi
-          if [[ -n "${TT_ENGINE:-}" ]]; then pkill -f "$TT_ENGINE (codex-bridge|claude-channel|omp-helm|pi-helm)" 2>/dev/null; fi
+          # The step shell runs with errexit (bash -e), so a pkill that matches nothing must not end it.
+          if [[ -n "${TT_ENGINE:-}" ]]; then pkill -f "$TT_ENGINE (codex-bridge|claude-channel|omp-helm|pi-helm)" 2>/dev/null || true; fi
           if [[ -n "${TT_FIXTURE_ROOT:-}" && "$TT_FIXTURE_ROOT" == "$RUNNER_TEMP"/* ]]; then
-            pkill -f "$TT_FIXTURE_ROOT/" 2>/dev/null
-            chmod -R u+w "$TT_FIXTURE_ROOT" 2>/dev/null
+            pkill -f "$TT_FIXTURE_ROOT/" 2>/dev/null || true
+            chmod -R u+w "$TT_FIXTURE_ROOT" 2>/dev/null || true
             rm -rf -- "$TT_FIXTURE_ROOT" || echo "::warning::could not remove $TT_FIXTURE_ROOT"
           fi
           exit 0

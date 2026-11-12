@@ -1,1 +1,16 @@
-{"budget_s": {}}
+{
+  "status": "provisional",
+  "note": "Placeholder while the 20-pass record runs: every cell may take up to 5 s so the record measures the real medians. Replaced by the derived budgets, with their arithmetic, in the commit that lands the record.",
+  "budget_s": {
+    "antigravity/console": 5.0,
+    "claude/console": 5.0,
+    "codex/console": 5.0,
+    "codex/helm": 5.0,
+    "omp/console": 5.0,
+    "omp/helm": 5.0,
+    "opencode/console": 5.0,
+    "opencode/helm": 5.0,
+    "pi/console": 5.0,
+    "pi/helm": 5.0
+  }
+}
