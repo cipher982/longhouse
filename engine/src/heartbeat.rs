@@ -1914,6 +1914,7 @@ pub(crate) fn machine_evidence_reusing_observations(
     let mut activity = activity_evidence_from_phase_rows(
         phase_rows,
         codex_observations,
+        antigravity_observations,
         claude_observations,
         opencode_observations,
         cursor_observations,
@@ -2034,6 +2035,7 @@ fn sort_activity_evidence(activity: &mut [ActivityEvidence]) {
 fn activity_evidence_from_phase_rows(
     phase_rows: &[PhaseLedgerRow],
     codex_observations: &[CodexBridgeObservation],
+    antigravity_observations: &[AntigravityHookObservation],
     claude_observations: &[ClaudeChannelObservation],
     opencode_observations: &[OpenCodeServerObservation],
     cursor_observations: &[CursorHelmObservation],
@@ -2076,6 +2078,14 @@ fn activity_evidence_from_phase_rows(
     ))
     .chain(run_ids(
         omp_observations,
+        |o| &o.session_id,
+        |o| o.run_id.as_deref(),
+    ))
+    // The Antigravity hook writes phase rows without a run; the Helm launcher
+    // seeds the run into the hook state. Without it every Helm phase was
+    // dropped and the session served "Activity unknown" while it worked.
+    .chain(run_ids(
+        antigravity_observations,
         |o| &o.session_id,
         |o| o.run_id.as_deref(),
     ))
@@ -2920,6 +2930,7 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
     let mut activity = activity_evidence_from_phase_rows(
         phase_rows,
         codex_observations,
+        antigravity_observations,
         claude_observations,
         opencode_observations,
         cursor_observations,
@@ -8693,6 +8704,70 @@ mod tests {
             identity.fact_family == "continuation"
                 && identity.subject_key == "resume:11111111-1111-4111-8111-111111111111"
         }));
+    }
+
+    #[test]
+    fn antigravity_helm_phase_takes_the_run_from_its_hook_state() {
+        let now = DateTime::parse_from_rfc3339("2026-11-12T00:29:10Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let hook = |session_id: &str, run_id: Option<&str>| AntigravityHookObservation {
+            state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
+            schema_version: 2,
+            session_id: session_id.to_string(),
+            connection_id: run_id.map(|_| "connection".to_string()),
+            lease_generation: None,
+            run_id: run_id.map(str::to_string),
+            provider_session_id: Some(format!("{session_id}-provider")),
+            cwd: None,
+            transcript_path: None,
+            state: Some("running".to_string()),
+            updated_at: "2026-11-12T00:29:07Z".to_string(),
+            last_hook_event: Some("PreInvocation".to_string()),
+            last_hook_observed_at: Some("2026-11-12T00:29:07Z".to_string()),
+            last_claimed_message_id: None,
+            last_claimed_at: None,
+            last_claim_event: None,
+            last_response_event: None,
+            last_response_at: None,
+            last_response_status: None,
+            last_response_claimed_message_ids: Vec::new(),
+            last_continuation_requested: false,
+        };
+        // What the hook writes on cinder: a phase with no run.
+        let phase = |session_id: &str| PhaseLedgerRow {
+            session_id: session_id.to_string(),
+            provider: "antigravity".to_string(),
+            phase: "thinking".to_string(),
+            tool_name: None,
+            source: "antigravity_hook".to_string(),
+            observed_at: "2026-11-12T00:29:07Z".to_string(),
+            valid_until: "2026-11-12T00:39:07Z".to_string(),
+            run_id: None,
+        };
+
+        let evidence = machine_evidence_from_observations(
+            "cinder",
+            &[],
+            &[hook("helm", Some("run-helm")), hook("shadow", None)],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[phase("helm"), phase("shadow")],
+            true,
+            true,
+            now,
+            Some(&[]),
+            0,
+        );
+
+        // Helm carries its launch run; a Shadow session has none to borrow.
+        assert_eq!(evidence.activity.len(), 1);
+        assert_eq!(evidence.activity[0].session_id, "helm");
+        assert_eq!(evidence.activity[0].run_id.as_deref(), Some("run-helm"));
+        assert_eq!(evidence.activity[0].kind, "thinking");
     }
 
     #[test]
