@@ -20,7 +20,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import urllib.request
 from pathlib import Path
 
 try:
@@ -52,6 +51,12 @@ def clean_env(home: Path) -> dict[str, str]:
     return env
 
 
+def fetch(url: str, target: Path) -> None:
+    """curl, not urllib: omp.sh answers Python's default user agent with 403."""
+
+    subprocess.run(["curl", "-fsSL", "--retry", "3", "-o", str(target), url], check=True)
+
+
 def install(pins: dict[str, dict[str, str]], names: list[str], root: Path, home: Path) -> None:
     env = clean_env(home)
     bin_dir = home / ".local" / "bin"
@@ -65,12 +70,12 @@ def install(pins: dict[str, dict[str, str]], names: list[str], root: Path, home:
         if pin["kind"] == "omp":
             with tempfile.TemporaryDirectory() as tmp:
                 script = Path(tmp) / "omp-install.sh"
-                urllib.request.urlretrieve("https://omp.sh/install", script)
+                fetch("https://omp.sh/install", script)
                 subprocess.run(["sh", str(script), "--binary", "--ref", f"v{pin['version']}"], check=True, env=env)
         elif pin["kind"] == "agy":
             with tempfile.TemporaryDirectory() as tmp:
                 archive = Path(tmp) / "agy.tar.gz"
-                urllib.request.urlretrieve(pin["url"], archive)
+                fetch(pin["url"], archive)
                 digest = hashlib.sha512(archive.read_bytes()).hexdigest()
                 if digest != pin["sha512"]:
                     raise SystemExit(f"antigravity {pin['version']}: sha512 {digest[:16]}... does not match the pinned {pin['sha512'][:16]}...")
