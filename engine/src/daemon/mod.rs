@@ -133,6 +133,8 @@ const WATCHER_FLUSH_INTERVAL: Duration = Duration::from_millis(15);
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(30);
+/// How soon a startup scan that yielded to live work tries again.
+const STARTUP_RECONCILIATION_RETRY: Duration = Duration::from_secs(1);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 /// How long the local status projection may take before it is worth reporting.
 ///
@@ -1640,7 +1642,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             _ = &mut startup_reconciliation_timer, if state.startup_reconciliation_pending && !state.offline.is_offline => {
-                state.on_startup_reconciliation_due(&config);
+                if state.on_startup_reconciliation_due(&config) {
+                    startup_reconciliation_timer
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + STARTUP_RECONCILIATION_RETRY);
+                }
             }
 
             // Health check when offline (every 60s)
@@ -5539,6 +5545,53 @@ mod tests {
                 assert!(discovery_tasks.is_empty());
             },
         );
+    }
+
+    /// A session active at +30 s used to drop the startup scan for good, so a
+    /// fresh install's history waited for the periodic fallback scan.
+    #[tokio::test]
+    async fn test_startup_reconciliation_stays_owed_while_live_work_is_pending() {
+        let providers = vec![ProviderConfig {
+            name: "claude",
+            root: PathBuf::from("/tmp/startup-reconciliation-owed"),
+            extension: "jsonl",
+        }];
+        let deferred_retries = HashMap::new();
+
+        let mut discovery_tasks = JoinSet::new();
+        let mut busy = PathScheduler::new(4);
+        busy.enqueue(
+            PathBuf::from("/tmp/live-session.jsonl"),
+            "claude",
+            WorkPriority::Live,
+        );
+        assert!(discovery_scans::start_startup_reconciliation(
+            &mut discovery_tasks,
+            &providers,
+            &busy,
+            &deferred_retries,
+            ArchiveRepairMode::Trickle,
+        ));
+        assert!(discovery_tasks.is_empty());
+
+        let idle = PathScheduler::new(4);
+        assert!(!discovery_scans::start_startup_reconciliation(
+            &mut discovery_tasks,
+            &providers,
+            &idle,
+            &deferred_retries,
+            ArchiveRepairMode::Trickle,
+        ));
+        assert_eq!(discovery_tasks.len(), 1);
+
+        let mut paused_tasks = JoinSet::new();
+        assert!(!discovery_scans::start_startup_reconciliation(
+            &mut paused_tasks,
+            &providers,
+            &busy,
+            &deferred_retries,
+            ArchiveRepairMode::Paused,
+        ));
     }
 
     #[tokio::test]

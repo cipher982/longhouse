@@ -237,6 +237,30 @@ pub(super) fn maybe_start_reconciliation_scan_unless_live(
     true
 }
 
+/// Try the startup reconciliation scan. Returns whether it is still owed: it
+/// is not when it started, when archive repair is paused, or when another
+/// reconciliation scan is already queued.
+pub(super) fn start_startup_reconciliation(
+    discovery_tasks: &mut JoinSet<DiscoveryTaskResult>,
+    providers: &[ProviderConfig],
+    scheduler: &PathScheduler,
+    deferred_retries: &HashMap<PathBuf, DeferredRetry>,
+    archive_repair_mode: ArchiveRepairMode,
+) -> bool {
+    let started = maybe_start_reconciliation_scan_unless_live(
+        discovery_tasks,
+        providers,
+        scheduler,
+        deferred_retries,
+        archive_repair_mode,
+        "startup reconciliation",
+        false,
+    );
+    !started
+        && !archive_repair_is_paused(archive_repair_mode)
+        && !scheduler.has_pending_priority(WorkPriority::Scan)
+}
+
 /// How often the bound working set is reconciled.
 pub(super) const RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -579,16 +603,20 @@ impl DaemonState {
         }
     }
 
-    pub(super) fn on_startup_reconciliation_due(&mut self, config: &ConnectConfig) {
-        self.startup_reconciliation_pending = false;
-        maybe_start_reconciliation_scan(
+    /// The startup scan is what finds history written before the daemon
+    /// watched. It still yields to live work, but it is only done once it
+    /// starts: dropping it here left a fresh install's backlog to the periodic
+    /// fallback scan, minutes later, whenever a session was active at +30 s.
+    /// Returns whether it is still pending, so the caller retries shortly.
+    pub(super) fn on_startup_reconciliation_due(&mut self, config: &ConnectConfig) -> bool {
+        self.startup_reconciliation_pending = start_startup_reconciliation(
             &mut self.discovery_tasks,
             &self.providers,
             &self.scheduler,
             &self.deferred_retries,
             config.archive_repair_mode,
-            "startup reconciliation",
         );
+        self.startup_reconciliation_pending
     }
 
     pub(super) fn on_scope_tick(&mut self) {
