@@ -4230,6 +4230,53 @@ def _resolve_session_id_by_source_id(
     return str(rows[0][0]) if len(rows) == 1 else None
 
 
+# The native-id resolver and its retired filter run on most envelope commits.
+# Built once so each call binds values instead of rebuilding and re-keying the
+# expression tree (about 8% of commit time).
+_RETIRED_SESSIONS_AMONG = select(StorageSession.__table__.c.session_id).where(
+    StorageSession.__table__.c.session_id.in_(bindparam("session_ids", expanding=True)),
+    # The store's canonical retired test: a render retirement (a relinked
+    # legacy twin) keeps its raw_state.
+    or_(StorageSession.__table__.c.raw_state == "retired", StorageSession.__table__.c.render_state == "retired"),
+)
+_SESSIONS_BY_NATIVE_ALIAS = (
+    select(LiveSessionThread.__table__.c.session_id)
+    .select_from(
+        LiveSessionThreadAlias.__table__.join(
+            LiveSessionThread.__table__, LiveSessionThread.__table__.c.id == LiveSessionThreadAlias.__table__.c.thread_id
+        )
+    )
+    .where(LiveSessionThreadAlias.__table__.c.provider == bindparam("provider"))
+    .where(LiveSessionThreadAlias.__table__.c.alias_kind == "provider_session_id")
+    .where(LiveSessionThreadAlias.__table__.c.alias_value == bindparam("provider_session_id"))
+    .where(
+        or_(
+            select(StorageSession.__table__.c.session_id)
+            .where(
+                StorageSession.__table__.c.session_id == LiveSessionThread.__table__.c.session_id,
+                StorageSession.__table__.c.owner_id == bindparam("owner_id"),
+                StorageSession.__table__.c.machine_id == bindparam("machine_id"),
+            )
+            .exists(),
+            select(LiveSession.__table__.c.session_id)
+            .where(
+                LiveSession.__table__.c.session_id == LiveSessionThread.__table__.c.session_id,
+                LiveSession.__table__.c.owner_id == bindparam("owner_id"),
+                LiveSession.__table__.c.machine_id == bindparam("machine_id"),
+            )
+            .exists(),
+        )
+    )
+    .distinct()
+)
+_SESSIONS_BY_NATIVE_ID = select(StorageSession.__table__.c.session_id).where(
+    StorageSession.__table__.c.provider_session_id == bindparam("provider_session_id"),
+    StorageSession.__table__.c.owner_id == bindparam("owner_id"),
+    StorageSession.__table__.c.machine_id == bindparam("machine_id"),
+    StorageSession.__table__.c.provider == bindparam("provider"),
+)
+
+
 def _without_retired_sessions(connection, session_ids: set[str]) -> set[str]:
     """Drop retired sessions: a retired session is never a parent.
 
@@ -4242,18 +4289,7 @@ def _without_retired_sessions(connection, session_ids: set[str]) -> set[str]:
 
     if not session_ids:
         return session_ids
-    storage_table = StorageSession.__table__
-    retired = {
-        str(row[0])
-        for row in connection.execute(
-            select(storage_table.c.session_id).where(
-                storage_table.c.session_id.in_(sorted(session_ids)),
-                # The store's canonical retired test: a render retirement
-                # (a relinked legacy twin) keeps its raw_state.
-                or_(storage_table.c.raw_state == "retired", storage_table.c.render_state == "retired"),
-            )
-        ).all()
-    }
+    retired = {str(row[0]) for row in connection.execute(_RETIRED_SESSIONS_AMONG, {"session_ids": sorted(session_ids)}).all()}
     return session_ids - retired
 
 
@@ -4269,48 +4305,10 @@ def _resolve_session_id_by_provider_session_id(
 
     if owner_id is None or not provider_session_id:
         return None
-    alias_table = LiveSessionThreadAlias.__table__
-    thread_table = LiveSessionThread.__table__
+    scope = {"provider": provider, "provider_session_id": provider_session_id, "owner_id": str(owner_id), "machine_id": machine_id}
+    session_ids = {str(row[0]) for row in connection.execute(_SESSIONS_BY_NATIVE_ALIAS, scope).all()}
+    session_ids.update(str(row[0]) for row in connection.execute(_SESSIONS_BY_NATIVE_ID, scope).all())
     storage_table = StorageSession.__table__
-    live_table = LiveSession.__table__
-    session_key = thread_table.c.session_id
-    scope = or_(
-        select(storage_table.c.session_id)
-        .where(
-            storage_table.c.session_id == session_key,
-            storage_table.c.owner_id == str(owner_id),
-            storage_table.c.machine_id == machine_id,
-        )
-        .exists(),
-        select(live_table.c.session_id)
-        .where(
-            live_table.c.session_id == session_key,
-            live_table.c.owner_id == str(owner_id),
-            live_table.c.machine_id == machine_id,
-        )
-        .exists(),
-    )
-    rows = connection.execute(
-        select(thread_table.c.session_id)
-        .select_from(alias_table.join(thread_table, thread_table.c.id == alias_table.c.thread_id))
-        .where(alias_table.c.provider == provider)
-        .where(alias_table.c.alias_kind == "provider_session_id")
-        .where(alias_table.c.alias_value == provider_session_id)
-        .where(scope)
-        .distinct()
-    ).all()
-    session_ids = {str(row[0]) for row in rows}
-    session_ids.update(
-        str(row[0])
-        for row in connection.execute(
-            select(storage_table.c.session_id).where(
-                storage_table.c.provider_session_id == provider_session_id,
-                storage_table.c.owner_id == str(owner_id),
-                storage_table.c.machine_id == machine_id,
-                storage_table.c.provider == provider,
-            )
-        ).all()
-    )
     # Storage-v2 sessions do not necessarily have a live thread (and therefore
     # cannot have a LiveSessionThreadAlias). OpenCode preserves the parent's
     # native id in the parent's delegation.spawn fact metadata instead. Resolve

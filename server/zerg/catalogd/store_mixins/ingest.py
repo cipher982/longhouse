@@ -10,12 +10,14 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import bindparam
 from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy import insert
 from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from zerg.catalogd.fact_reducer import _advance_commit_seq
 from zerg.catalogd.fact_reducer import _current_commit_seq
@@ -143,6 +145,65 @@ def _new_epoch_admission_conflict(
         )
         return conflict, predecessor_row
     return None, predecessor_row
+
+
+# Built once: constructing this clause tree cost 12% of every envelope commit
+# (about 3 ms of SQLAlchemy expression building per call). The statement's
+# cache key is memoized on the object, so only the bound values change.
+_TITLE_GENERATION_REQUIRED = (
+    select(StorageSession.__table__.c.session_id)
+    .where(
+        StorageSession.__table__.c.session_id == bindparam("session_key"),
+        _storage_title_candidate_clause(
+            StorageSession.__table__,
+            observed_at=bindparam("observed_at", type_=StorageSession.__table__.c.title_retry_at.type),
+        ),
+    )
+    .limit(1)
+)
+
+
+_projector_state = ProjectorState.__table__
+_projector_upsert = sqlite_insert(_projector_state).values(
+    projector=bindparam("p_projector"),
+    session_id=bindparam("p_session_id"),
+    desired_revision=bindparam("p_revision", type_=_projector_state.c.desired_revision.type),
+    desired_at=bindparam("p_at", type_=_projector_state.c.desired_at.type),
+    completed_revision=0,
+    status="idle",
+    failure_count=0,
+    commit_seq=bindparam("p_revision", type_=_projector_state.c.commit_seq.type),
+    created_at=bindparam("p_at", type_=_projector_state.c.created_at.type),
+    updated_at=bindparam("p_at", type_=_projector_state.c.updated_at.type),
+)
+# One statement per projector instead of a select then an insert or update.
+# Advances only a row whose desired revision is behind this commit, exactly
+# as the old read-then-write did; the upsert fires the same telemetry triggers.
+_ADVANCE_PROJECTOR_DESIRED_REVISION = _projector_upsert.on_conflict_do_update(
+    index_elements=[_projector_state.c.projector, _projector_state.c.session_id],
+    set_={
+        "desired_revision": _projector_upsert.excluded.desired_revision,
+        "desired_at": _projector_upsert.excluded.desired_at,
+        "commit_seq": _projector_upsert.excluded.commit_seq,
+        "updated_at": _projector_upsert.excluded.updated_at,
+    },
+    where=_projector_state.c.desired_revision < _projector_upsert.excluded.desired_revision,
+)
+_storage_session = StorageSession.__table__
+_WORKER_PARENT_SESSION_ID = select(_storage_session.c.subagent_parent_session_id).where(
+    _storage_session.c.session_id == bindparam("p_session_id"),
+    or_(
+        _storage_session.c.is_subagent == 1,
+        primary_worker_only_clause(_storage_session, LiveSessionThread.__table__),
+    ),
+)
+_SCOPED_PARENT_SESSION_ID = select(_storage_session.c.session_id).where(
+    _storage_session.c.session_id == bindparam("p_session_id"),
+    _storage_session.c.owner_id == bindparam("p_owner_id"),
+    _storage_session.c.provider == bindparam("p_provider"),
+    _storage_session.c.machine_id == bindparam("p_machine_id"),
+)
+_RAW_OBJECT_BY_ENVELOPE = select(LiveRawObject.__table__).where(LiveRawObject.__table__.c.envelope_id == bindparam("p_envelope_id"))
 
 
 class IngestMixin:
@@ -1512,47 +1573,14 @@ class IngestMixin:
                         commit_seq=commit_seq,
                         commit_time=commit_time,
                     )
-            projector_table = ProjectorState.__table__
-            for projector in projectors:
-                projector_row = (
-                    connection.execute(
-                        select(projector_table).where(
-                            projector_table.c.projector == projector,
-                            projector_table.c.session_id == session_key,
-                        )
-                    )
-                    .mappings()
-                    .first()
+            if projectors:
+                connection.execute(
+                    _ADVANCE_PROJECTOR_DESIRED_REVISION,
+                    [
+                        {"p_projector": projector, "p_session_id": session_key, "p_revision": commit_seq, "p_at": commit_time}
+                        for projector in projectors
+                    ],
                 )
-                if projector_row is None:
-                    connection.execute(
-                        insert(projector_table).values(
-                            projector=projector,
-                            session_id=session_key,
-                            desired_revision=commit_seq,
-                            desired_at=commit_time,
-                            completed_revision=0,
-                            status="idle",
-                            failure_count=0,
-                            commit_seq=commit_seq,
-                            created_at=commit_time,
-                            updated_at=commit_time,
-                        )
-                    )
-                elif int(projector_row["desired_revision"]) < commit_seq:
-                    connection.execute(
-                        update(projector_table)
-                        .where(
-                            projector_table.c.projector == projector,
-                            projector_table.c.session_id == session_key,
-                        )
-                        .values(
-                            desired_revision=commit_seq,
-                            desired_at=commit_time,
-                            commit_seq=commit_seq,
-                            updated_at=commit_time,
-                        )
-                    )
             _insert_provider_facts(
                 connection,
                 session_id=session_key,
@@ -1575,35 +1603,21 @@ class IngestMixin:
             )
             delegation_parent_session_id = None
             if effective_owner_id is not None:
-                parent_session_id = connection.execute(
-                    select(storage_session.c.subagent_parent_session_id).where(
-                        storage_session.c.session_id == session_key,
-                        or_(
-                            storage_session.c.is_subagent == 1,
-                            primary_worker_only_clause(storage_session, LiveSessionThread.__table__),
-                        ),
-                    )
-                ).scalar_one_or_none()
+                parent_session_id = connection.execute(_WORKER_PARENT_SESSION_ID, {"p_session_id": session_key}).scalar_one_or_none()
                 if parent_session_id is not None:
                     delegation_parent_session_id = connection.execute(
-                        select(storage_session.c.session_id).where(
-                            storage_session.c.session_id == parent_session_id,
-                            storage_session.c.owner_id == str(effective_owner_id),
-                            storage_session.c.provider == provider,
-                            storage_session.c.machine_id == machine_id,
-                        )
+                        _SCOPED_PARENT_SESSION_ID,
+                        {
+                            "p_session_id": parent_session_id,
+                            "p_owner_id": str(effective_owner_id),
+                            "p_provider": provider,
+                            "p_machine_id": machine_id,
+                        },
                     ).scalar_one_or_none()
             timer.mark("projector_state")
-            row = connection.execute(select(raw).where(raw.c.envelope_id == envelope_id)).mappings().one()
+            row = connection.execute(_RAW_OBJECT_BY_ENVELOPE, {"p_envelope_id": envelope_id}).mappings().one()
             title_generation_required = bool(
-                connection.execute(
-                    select(StorageSession.__table__.c.session_id)
-                    .where(
-                        StorageSession.__table__.c.session_id == session_key,
-                        _storage_title_candidate_clause(StorageSession.__table__, observed_at=commit_time),
-                    )
-                    .limit(1)
-                ).first()
+                connection.execute(_TITLE_GENERATION_REQUIRED, {"session_key": session_key, "observed_at": commit_time}).first()
             )
             return {
                 "created": True,
