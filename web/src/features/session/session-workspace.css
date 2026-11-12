@@ -3717,6 +3717,14 @@
   font-family: var(--font-family-mono);
   font-variant-numeric: tabular-nums;
 }
+.tl-run__tool {
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
 .tl-run__elapsed {
   font-size: 15px;
   color: var(--color-text-secondary);

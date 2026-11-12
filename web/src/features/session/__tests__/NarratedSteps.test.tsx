@@ -162,6 +162,13 @@ describe("a running call", () => {
     expect(screen.getByTestId("running-call-note")).toHaveTextContent("Last signal from cinder 4 s ago");
   });
 
+  it("names the tool on the row when the headline is the description or the command", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    renderPane([longCall()], liveness("2026-04-15T16:20:00Z", "2026-04-15T16:11:56Z"));
+    expect(screen.getByTestId("running-call-tool")).toHaveTextContent(/^bash$/i);
+  });
+
   it("goes still and says it cannot confirm once the claim lapses", () => {
     vi.useFakeTimers();
     vi.setSystemTime(now);

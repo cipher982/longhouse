@@ -612,6 +612,24 @@ export function projectionItemsWithTranscriptPreview(
 ): AgentSessionProjectionItem[] {
   const withReply = replyProjectionItems(projectionItems, session);
   if (!session || !thinking || transcriptPreviewKind(thinking) !== "thinking") return withReply;
+  // Retired by the durable record: an assistant message or tool event at least
+  // as new as the thinking means the turn has moved on.
+  const thinkingAt = Date.parse(thinking.timestamp ?? "");
+  // Neither the user's prompt nor a durable reasoning record retires it,
+  // whatever their stamps: a provider may stamp the prompt, or write its own
+  // thinking record, after the first live frame was shown, and the live row is
+  // the only place that thinking is drawn until the reply starts.
+  const latestDurable = [...projectionItems]
+    .reverse()
+    .find(
+      (item) =>
+        item.kind === "event" &&
+        item.event &&
+        item.event.role !== "user" &&
+        item.event.interaction_kind !== "provider_reasoning",
+    );
+  const latestDurableAt = latestDurable?.event ? Date.parse(latestDurable.event.timestamp) : Number.NaN;
+  if (!Number.isNaN(thinkingAt) && !Number.isNaN(latestDurableAt) && latestDurableAt >= thinkingAt) return withReply;
   const row = thinkingPreviewItem(session, thinking);
   return row ? [...withReply, row] : withReply;
 }
@@ -680,6 +698,61 @@ function replyProjectionItems(
         is_head_branch: true,
       },
     };
+  // The durable transcript already has this call: the live preview must not
+  // draw a second row for it. Matched by tool_call_id; Antigravity's live id
+  // (the model's call id) differs from its durable one (`antigravity-<step>-<n>`),
+  // so a preview with no id match pairs with the newest unanswered durable call
+  // of the same tool name. A running call takes the output so far on its durable
+  // row; a finished one adds only its result, which pairs with the durable call.
+  const isCall = (item: AgentSessionProjectionItem) =>
+    item.kind === "event" && item.event?.role === "assistant" && Boolean(item.event.tool_name);
+  const hasResult = (callId: string | null | undefined) =>
+    Boolean(callId) && durableEvents.some((event) => event.role === "tool" && event.tool_call_id === callId);
+  let durableCallIndex = preview.tool_call_id
+    ? projectionItems.findIndex((item) => isCall(item) && item.event?.tool_call_id === preview.tool_call_id)
+    : -1;
+  if (durableCallIndex < 0 && preview.tool_name) {
+    for (let index = projectionItems.length - 1; index >= 0; index -= 1) {
+      const item = projectionItems[index]!;
+      if (
+        isCall(item) &&
+        item.event?.tool_name === preview.tool_name &&
+        item.event.tool_call_state === "running" &&
+        !hasResult(item.event.tool_call_id)
+      ) {
+        durableCallIndex = index;
+        break;
+      }
+    }
+  }
+  if (durableCallIndex >= 0) {
+    const durableCall = projectionItems[durableCallIndex]!.event!;
+    if (hasResult(durableCall.tool_call_id)) return projectionItems;
+    if (running) {
+      if (!liveOutput) return projectionItems;
+      return projectionItems.map((item, index) =>
+        index === durableCallIndex && item.event
+          ? { ...item, event: { ...item.event, tool_output_text: liveOutput } }
+          : item,
+      );
+    }
+    if (!preview.tool_output_text) return projectionItems;
+    return [
+      ...projectionItems,
+      {
+        ...callItem,
+        event: {
+          ...callItem.event!,
+          id: syntheticId - 1,
+          role: "tool",
+          content_text: null,
+          tool_input_json: null,
+          tool_output_text: preview.tool_output_text,
+          tool_call_id: durableCall.tool_call_id ?? callItem.event!.tool_call_id,
+        },
+      },
+    ];
+  }
   if (!preview.tool_name || !preview.tool_output_text || preview.tool_call_state === "running") {
     return [...projectionItems, callItem];
   }

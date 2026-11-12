@@ -298,9 +298,10 @@ export function useSessionWorkspace(
     };
     const applyStreamTranscriptPreview = (
       transcriptPreview: SessionTranscriptPreview | null,
+      { keepThinking = false }: { keepThinking?: boolean } = {},
     ) => {
       setStreamTranscriptPreview(transcriptPreview);
-      setStreamThinking(null);
+      if (!keepThinking) setStreamThinking(null);
       queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
         { queryKey: ["agent-session-workspace", sessionId] },
         (current) => {
@@ -360,7 +361,9 @@ export function useSessionWorkspace(
           runLane(lane);
         } else if (lane.retirePreview) {
           lane.retirePreview = false;
-          applyStreamTranscriptPreview(null);
+          // Retiring the reply preview after an ingest must not take a live
+          // thinking row with it: the prompt's own ingest lands while thinking.
+          applyStreamTranscriptPreview(null, { keepThinking: true });
         }
       });
     };
@@ -426,7 +429,11 @@ export function useSessionWorkspace(
             setPendingRenderBeaconVersion((version) => version + 1);
             return;
           }
-          if (data.change_kind === "ingest") setStreamThinking(null);
+          // An ingest does not clear the live thinking row: the user's own
+          // prompt is ingested a moment after thinking starts, and clearing it
+          // there dropped the row (and its `t` key) until the next frame.
+          // projectionItemsWithTranscriptPreview retires it once a durable
+          // event as new as the thinking lands.
           const hasTranscriptPreview = Object.prototype.hasOwnProperty.call(
             data,
             "transcript_preview",

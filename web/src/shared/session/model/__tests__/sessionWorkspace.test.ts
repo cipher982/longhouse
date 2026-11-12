@@ -1009,6 +1009,45 @@ describe("projectionItemsWithTranscriptPreview kinds", () => {
     expect(model.items.some((item) => item.kind === "reasoning")).toBe(true);
   });
 
+  it("a durable event as new as the thinking retires the live row; the older prompt does not", () => {
+    const thinking = { ...base, event_id: 42, text: "pondering", tool_name: null, kind: "thinking" as const };
+    const session = makeSession({});
+    expect(projectionItemsWithTranscriptPreview(durable, session, thinking)).toHaveLength(2);
+    // A prompt stamped after the first thinking frame (Antigravity) still does not retire it.
+    const lateUser = [{ ...durable[0]!, event: { ...durable[0]!.event!, timestamp: "2026-03-22T22:00:09Z" } }];
+    expect(projectionItemsWithTranscriptPreview(lateUser, session, thinking)).toHaveLength(2);
+    // Nor does the provider's own durable thinking record, written while the live frames are still coming.
+    const reasoning = [
+      ...durable,
+      {
+        ...durable[0]!,
+        timestamp: "2026-03-22T22:00:07Z",
+        event: {
+          ...durable[0]!.event!,
+          id: 3,
+          role: "assistant",
+          interaction_kind: "provider_reasoning",
+          timestamp: "2026-03-22T22:00:07Z",
+        },
+      },
+    ] as AgentSessionProjectionItem[];
+    expect(projectionItemsWithTranscriptPreview(reasoning, session, thinking)).toHaveLength(reasoning.length + 1);
+    const caughtUp: AgentSessionProjectionItem[] = [
+      ...durable,
+      {
+        ...durable[0]!,
+        timestamp: "2026-03-22T22:00:06Z",
+        event: { ...durable[0]!.event!, id: 2, role: "assistant", timestamp: "2026-03-22T22:00:06Z" },
+      },
+    ];
+    expect(projectionItemsWithTranscriptPreview(caughtUp, session, thinking)).toHaveLength(2);
+    expect(
+      projectionItemsWithTranscriptPreview(caughtUp, session, thinking).some(
+        (item) => item.event?.interaction_kind === "provider_reasoning",
+      ),
+    ).toBe(false);
+  });
+
   it("a thinking preview that reaches the session head is not drawn as a reply", () => {
     const session = makeSession({
       transcript_preview: { ...base, event_id: 9, text: "secret thoughts", tool_name: null, kind: "thinking" },
@@ -1035,6 +1074,87 @@ describe("projectionItemsWithTranscriptPreview kinds", () => {
       transcript_preview: { ...running.transcript_preview!, tool_call_state: "completed" },
     });
     expect(projectionItemsWithTranscriptPreview(durable, done)).toHaveLength(3);
+  });
+
+  it("a live tool preview for a call the transcript already has adds no second row", () => {
+    const durableCall: AgentSessionProjectionItem = {
+      ...durable[0]!,
+      event: {
+        ...durable[0]!.event!,
+        id: "call-event",
+        role: "assistant",
+        content_text: null,
+        tool_name: "bash",
+        tool_call_id: "call_1",
+        tool_call_state: "running",
+      },
+    };
+    const live = {
+      ...base,
+      event_id: 7,
+      text: "tail",
+      tool_name: "bash",
+      kind: "tool" as const,
+      tool_call_id: "call_1",
+      tool_output_text: "line 1\nline 2",
+      tool_call_state: "running" as const,
+    };
+    const items = [...durable, durableCall];
+    const out = projectionItemsWithTranscriptPreview(items, makeSession({ transcript_preview: live }));
+    expect(out).toHaveLength(items.length);
+    expect(out[out.length - 1]?.event).toMatchObject({ id: "call-event", tool_output_text: "line 1\nline 2" });
+    const model = buildTimelineModel(out, { sessionId: "session-1" } as never);
+    expect(model.items.filter((item) => item.kind === "tool")).toHaveLength(1);
+    // Finished: only the result is added, and it pairs with the durable call.
+    const done = { ...live, tool_call_state: "completed" as const };
+    const finished = projectionItemsWithTranscriptPreview(items, makeSession({ transcript_preview: done }));
+    expect(finished).toHaveLength(items.length + 1);
+    const paired = buildTimelineModel(finished, { sessionId: "session-1" } as never);
+    expect(paired.items.filter((item) => item.kind === "tool")).toHaveLength(1);
+    // The transcript has caught up with the result: nothing is added.
+    const answered: AgentSessionProjectionItem = {
+      ...durableCall,
+      event: { ...durableCall.event!, id: "result-event", role: "tool", tool_name: null, tool_call_state: null },
+    };
+    expect(projectionItemsWithTranscriptPreview([...items, answered], makeSession({ transcript_preview: done }))).toHaveLength(items.length + 1);
+  });
+
+  it("pairs a live preview whose call id differs from the durable one (Antigravity) with the running durable call", () => {
+    const durableCall: AgentSessionProjectionItem = {
+      ...durable[0]!,
+      event: {
+        ...durable[0]!.event!,
+        id: "call-event",
+        role: "assistant",
+        content_text: null,
+        tool_name: "run_command",
+        tool_call_id: "antigravity-3-0",
+        tool_call_state: "running",
+      },
+    };
+    const live = {
+      ...base,
+      event_id: 7,
+      text: "tail",
+      tool_name: "run_command",
+      kind: "tool" as const,
+      tool_call_id: "73721308-56d0-4584-870c-d96d6da98c31",
+      tool_output_text: "out",
+      tool_call_state: "running" as const,
+    };
+    const items = [...durable, durableCall];
+    const out = projectionItemsWithTranscriptPreview(items, makeSession({ transcript_preview: live }));
+    expect(out).toHaveLength(items.length);
+    expect(buildTimelineModel(out, { sessionId: "session-1" } as never).items.filter((item) => item.kind === "tool")).toHaveLength(1);
+    // A different tool is not that call.
+    const other = projectionItemsWithTranscriptPreview(items, makeSession({ transcript_preview: { ...live, tool_name: "view_file" } }));
+    expect(other).toHaveLength(items.length + 1);
+    // Nor is an old call that is no longer running.
+    const stale: AgentSessionProjectionItem[] = [
+      ...durable,
+      { ...durableCall, event: { ...durableCall.event!, tool_call_state: "completed" } },
+    ];
+    expect(projectionItemsWithTranscriptPreview(stale, makeSession({ transcript_preview: live }))).toHaveLength(stale.length + 1);
   });
 
   it("a subagent preview shows its label and latest text", () => {

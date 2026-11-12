@@ -681,7 +681,11 @@ def run_kind_cell_in(
     expand_key: bool = True,
     old_client: bool = False,
     warm_session: bool = False,
+    observer: Any = None,
 ) -> dict[str, Any]:
+    """``observer`` (optional) is a second client of the same turn, such as a real browser: ``before_submit(host_url, session_ids, plan)``
+    runs after the lanes are open and just before the prompt goes, ``turn_over()`` when the turn's last durable event has been seen and
+    the harness is about to stop, and ``finish()`` returns what it saw (stored under ``out["observer"]``) before the host is torn down."""
     spec = plan.spec
     provider, mode = spec.provider, spec.mode
     driver, binary = drivers[provider], pas.binaries[provider]
@@ -760,6 +764,8 @@ def run_kind_cell_in(
         time.sleep(
             0.5
         )  # the facts lane reads a few idle baselines before the prompt: a state it shows later is the scenario's, not left over
+        if observer is not None:
+            observer.before_submit(pas.host.url, api.session_ids(), plan)
         submitted = time.monotonic()
         if mode == "console":
             api.post(
@@ -786,6 +792,9 @@ def run_kind_cell_in(
             if session is not None and not session.alive():
                 break
             time.sleep(0.25)
+        if observer is not None:
+            observer.turn_over()
+            out["observer"] = observer.finish()
         stop.set()
         stopped_at = time.monotonic()
         for watcher in watchers:
@@ -976,6 +985,7 @@ def run_kinds_suite(
     host_environment: dict[str, str] | None = None,
     old_client: bool = False,
     warm_session: bool = False,
+    observer_factory: Callable[[CellSpec], Any] | None = None,
     log: Callable[[str], None] = lambda _m: None,
 ) -> list[dict[str, Any]]:
     """Run each scenario cell. OMP gets a pass of its own (it shares a config layout with Pi); the rest share one pass."""
@@ -1038,6 +1048,7 @@ def run_kinds_suite(
                             expand_key=expand_key,
                             old_client=old_client,
                             warm_session=warm_session,
+                            observer=observer_factory(s) if observer_factory else None,
                         )
                     )
             finally:

@@ -205,6 +205,12 @@ export function RunningCallRow({
           <span className="tl-run__elapsed">
             {run.elapsedSeconds != null ? formatElapsedClock(run.elapsedSeconds) : "—"}
           </span>
+          {/* The headline is the agent's description or the command, so the tool itself is named here. */}
+          {info.displayName && info.displayName !== headline ? (
+            <span className="tl-run__tool" data-testid="running-call-tool">
+              {info.displayName}
+            </span>
+          ) : null}
           {run.timeoutSeconds != null ? (
             <span className="tl-run__budget">of {formatElapsedClock(run.timeoutSeconds)} timeout</span>
           ) : null}

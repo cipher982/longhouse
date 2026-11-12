@@ -501,6 +501,50 @@ describe("useSessionWorkspace", () => {
     expect(result.current.items.filter((item) => item.kind === "reasoning")).toHaveLength(1);
   });
 
+  it("keeps the live thinking row through an ingest of the user's prompt", async () => {
+    let handlers: { onWorkspaceChanged?: (data: Record<string, unknown>) => void } | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "transcript_preview",
+        latest_event_id: -5,
+        thread_session_count: 1,
+        transcript_preview: {
+          event_id: 5,
+          text: "weighing options",
+          kind: "thinking",
+          tool_name: null,
+          event_origin: "live_provisional",
+          timestamp: "2026-03-22T22:00:05Z",
+          is_provisional: true,
+          is_complete: false,
+          is_stale: false,
+        },
+      });
+    });
+    expect(result.current.items.filter((item) => item.kind === "reasoning")).toHaveLength(1);
+    // The durable prompt is ingested after thinking has started (Claude writes it late).
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "ingest",
+        latest_event_id: 77,
+        thread_session_count: 1,
+        transcript_preview: null,
+      });
+    });
+    // ...and so does the retirement of the reply preview once the transcript round lands.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(result.current.items.filter((item) => item.kind === "reasoning")).toHaveLength(1);
+  });
+
   it("keeps runtime wakes off transcript query families", () => {
     let handlers:
       | {
