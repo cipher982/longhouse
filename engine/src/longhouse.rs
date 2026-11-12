@@ -1753,6 +1753,17 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
     let deferred_notices = DeferredNotices::default();
     let confirm_agent_dir = managed_launch_agent_dir();
     let confirm_notices = deferred_notices.clone();
+    let degraded_registration = match response.as_ref() {
+        Some(_) => None,
+        None => Some(start_antigravity_degraded_registration(
+            &url,
+            &token,
+            payload.clone(),
+            &session_id,
+            &deferred_notices,
+            confirm_agent_dir.clone(),
+        )),
+    };
 
     let _ = (&connection_id, &lease_generation);
     println!(
@@ -1788,10 +1799,39 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         &cwd,
         args.project.as_deref(),
     );
+    if let Some(registration) = &degraded_registration {
+        registration.provider_alive.store(false, Ordering::Release);
+    }
+    let registration_summary = degraded_registration
+        .as_ref()
+        .map(|registration| registration.provider_exit_summary());
+    drop(degraded_registration);
     for notice in deferred_notices.drain() {
         eprintln!("{notice}");
     }
+    if let Some(message) = registration_summary {
+        eprintln!("{message}");
+    }
     std::process::exit(exit);
+}
+
+fn start_antigravity_degraded_registration(
+    url: &str,
+    token: &str,
+    payload: serde_json::Value,
+    session_id: &str,
+    deferred_notices: &DeferredNotices,
+    agent_dir: PathBuf,
+) -> managed_launch_lifecycle::ManagedRegistrationRetry {
+    managed_launch_lifecycle::spawn_managed_registration_retry(
+        url,
+        token,
+        "Antigravity",
+        payload,
+        session_id,
+        deferred_notices.clone(),
+        agent_dir,
+    )
 }
 
 /// Seed the control identity the hook cannot mint for itself.
@@ -5273,6 +5313,87 @@ mod tests {
         assert!(path.ends_with(
             "managed-local/antigravity/plugins/longhouse-runtime/longhouse-antigravity-hook.sh"
         ));
+    }
+
+    #[test]
+    fn antigravity_degraded_registration_retries_and_confirms() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            let mut register_attempts = 0usize;
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let first_line = req.lines().next().unwrap_or_default().to_string();
+                let _ = tx.send(first_line.clone());
+                let (status, body) = if first_line.contains("/managed-local/this-device") {
+                    register_attempts += 1;
+                    if register_attempts == 1 {
+                        ("503 Service Unavailable", r#"{"detail":"busy"}"#)
+                    } else {
+                        (
+                            "200 OK",
+                            r#"{"session_id":"agy-degraded","run_id":"run-agy-degraded"}"#,
+                        )
+                    }
+                } else {
+                    ("200 OK", r#"{"ok":true}"#)
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                if first_line.contains("launch-outcome") {
+                    break;
+                }
+            }
+        });
+
+        let agent_dir = tempfile::tempdir().unwrap();
+        let notices = DeferredNotices::default();
+        let retry = start_antigravity_degraded_registration(
+            &format!("http://{address}"),
+            "device-token",
+            json!({"session_id": "agy-degraded", "provider": "antigravity"}),
+            "agy-degraded",
+            &notices,
+            agent_dir.path().to_path_buf(),
+        );
+        retry.provider_alive.store(true, Ordering::Release);
+
+        let mut saw_register = 0usize;
+        let mut saw_confirm = false;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline && !saw_confirm {
+            if let Ok(line) = rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                if line.contains("/managed-local/this-device") {
+                    saw_register += 1;
+                } else if line.contains("/launch-outcome") {
+                    saw_confirm = true;
+                }
+            }
+        }
+        retry.provider_alive.store(false, Ordering::Release);
+        let summary = retry.provider_exit_summary();
+        drop(retry);
+
+        assert!(
+            saw_register >= 2,
+            "expected retry after 503, got {saw_register}"
+        );
+        assert!(
+            saw_confirm,
+            "expected launch-outcome confirmation after retry"
+        );
+        assert!(summary.contains("Antigravity"), "{summary}");
     }
 
     #[test]
