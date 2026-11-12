@@ -18,6 +18,7 @@ spec = importlib.util.spec_from_file_location("ring_promoter", ROOT / "scripts" 
 promoter = importlib.util.module_from_spec(spec)
 sys.modules["ring_promoter"] = promoter
 spec.loader.exec_module(promoter)
+GONE = promoter.gone  # the real probe; setUp replaces promoter.gone with the fake world's
 
 A, B, C, X = "a" * 40, "b" * 40, "c" * 40, "e" * 40  # history A <- B <- C on main; X is off it
 HISTORY = [A, B, C]
@@ -109,6 +110,26 @@ class PromoterTests(unittest.TestCase):
         self.assertEqual((d["action"], d["waiting_on"]), ("waiting", ["engine_compat", "hosted_qa"]))
         self.assertIn("waiting on engine_compat, hosted_qa", promoter.describe(d))
 
+    def test_gone_reads_404_and_410_as_no_surface_and_other_failures_as_unreadable(self):
+        import urllib.error
+
+        def answering(code):
+            def urlopen(request, timeout=None):
+                raise urllib.error.HTTPError(request.full_url, code, "x", None, None)
+            return urlopen
+
+        original = promoter.urllib.request.urlopen
+        self.addCleanup(setattr, promoter.urllib.request, "urlopen", original)
+        for code, expected in ((404, True), (410, True), (500, False), (502, False), (403, False)):
+            promoter.urllib.request.urlopen = answering(code)
+            self.assertIs(GONE(promoter.PRODUCTION_HEALTH), expected, code)
+
+        def unreachable(request, timeout=None):
+            raise OSError("no route")
+
+        promoter.urllib.request.urlopen = unreachable
+        self.assertIs(GONE(promoter.PRODUCTION_HEALTH), False)
+
     def test_a_production_that_answers_410_is_paused_not_unreadable(self):
         self.world.served[promoter.DOGFOOD_HEALTH] = C
         self.world.served[promoter.PRODUCTION_HEALTH] = None
@@ -116,7 +137,7 @@ class PromoterTests(unittest.TestCase):
         d = promoter.decide_production(dry_run=False)
         self.assertEqual(d["action"], "paused")
         self.assertEqual(promoter.STATE["paused"], "pending")
-        self.assertIn("410 Gone", promoter.describe(d))
+        self.assertIn("404 or 410", promoter.describe(d))
         self.assertEqual(self.world.calls, [])
         self.world.gone.clear()
         self.assertEqual(promoter.decide_production(dry_run=False)["action"], "waiting")

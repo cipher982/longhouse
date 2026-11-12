@@ -76,12 +76,13 @@ def served(url: str) -> str | None:
 
 
 def gone(url: str) -> bool:
-    """True when the ring answers 410 Gone: taken down on purpose, which is not an unreadable ring."""
+    """True when the ring answers 404 or 410: no production surface is served there, which is not an
+    unreadable ring. Sauron's ring-follow job reads the same two codes the same way."""
     try:
         request = urllib.request.Request(url, headers={"User-Agent": "longhouse-ring-promoter/1"})
         urllib.request.urlopen(request, timeout=15).close()  # noqa: S310 - fixed ring health URLs
     except urllib.error.HTTPError as exc:
-        return exc.code == 410
+        return exc.code in (404, 410)
     except OSError:
         return False
     return False
@@ -156,7 +157,7 @@ def decide_production(dry_run: bool) -> dict:
     current = served(PRODUCTION_HEALTH)
     d = {"ring": "production", "served": current, "target": dogfood}
     if dogfood is not None and current is None and gone(PRODUCTION_HEALTH):
-        return {**d, "action": "paused", "reason": "production is paused: its health answers 410 Gone"}
+        return {**d, "action": "paused", "reason": "production is paused: its health answers 404 or 410"}
     if dogfood is None or current is None:
         return {**d, "action": "waiting", "reason": "a ring's health is unreadable"}
     if current == dogfood:
