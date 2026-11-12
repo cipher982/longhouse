@@ -1450,7 +1450,8 @@
       "providers": [
         "claude",
         "codex",
-        "omp"
+        "omp",
+        "opencode"
       ]
     },
     {

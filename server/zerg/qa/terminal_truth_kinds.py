@@ -1323,6 +1323,10 @@ KIND_EXPECTATIONS: dict[tuple[str, str], tuple[str, str]] = {
     ("codex/console", "tool"): ("tool_output", "tool"),
     ("codex/helm", "subagent"): ("subagent_started", "subagent"),
     ("codex/console", "subagent"): ("subagent_started", "subagent"),
+    # OpenCode Helm (2026-11-12): reasoning, tool and task parts from /global/event. Run with --warm-session.
+    ("opencode/helm", "thinking"): ("thinking", "thinking"),
+    ("opencode/helm", "tool"): ("tool_started", "tool"),
+    ("opencode/helm", "subagent"): ("subagent_started", "subagent"),
 }
 
 
@@ -1343,6 +1347,12 @@ def kinds_expectation(result: dict[str, Any]) -> dict[str, Any] | None:
     if entry is None:
         return None
     posted, sse = _group_class(entry, "engine_runtime_post"), _group_class(entry, "sse")
+    # A signal the terminal never paints (OpenCode reasoning) has no reference time, so "live" cannot be judged against it.
+    # Every marker arriving on the stream under the right kind is then the pass; none arriving still fails at its stage.
+    if posted == "seen_no_baseline" and entry["engine_runtime_post"]["seen"] >= entry["n"]:
+        posted = "live"
+    if sse == "seen_no_baseline" and entry["sse"]["seen"] >= entry["n"]:
+        sse = "live"
     frames = [f for f in result.get("sse_frames", []) if f.get("kind") == kind]
     stage = "-"
     if posted not in {"live", "partial"}:

@@ -570,38 +570,13 @@ def _opencode_helm_preview_candidate(
     *,
     observation_id: str,
 ) -> LivePreviewCandidate | None:
-    """Reply text the Helm bridge read from OpenCode's event stream.
+    """What the Helm bridge read from OpenCode's event stream: reply text, or (labelled with ``preview_kind``) reasoning, a tool or a subagent.
 
-    ``live_text`` is the cumulative text of one assistant message and ``turn_id``
-    is that message's id, so a later message in a tool loop never overwrites an
-    earlier one's preview.
+    ``live_text`` is the cumulative text of one assistant message and ``turn_id`` is that message's id, so a later message in a tool
+    loop never overwrites an earlier one's preview. The labels are the ones the other Helm launchers send.
     """
-    if event.session_id is None:
-        return None
-    text = str(payload.get("live_text") or "").strip()
-    if not text:
-        return None
-    thread_id = _optional_str(payload.get("thread_id") or event.thread_id)
-    turn_key = build_provisional_key(
-        source="opencode_server_bridge",
-        session_id=event.session_id,
-        thread_id=thread_id,
-        turn_id=_optional_str(payload.get("turn_id") or payload.get("run_id")),
-    )
-    observed_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
-    seq = _coerce_seq(payload.get("seq"))
-    return LivePreviewCandidate(
-        session_id=event.session_id,
-        thread_id=thread_id,
-        turn_key=turn_key,
-        seq=seq,
-        preview_text=text,
-        provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
-        provisional_complete=bool(payload.get("turn_completed")),
-        preview_observed_at=observed_at,
-        source="opencode_server_bridge",
-        last_observation_id=observation_id,
-    )
+
+    return _omp_helm_preview_candidate(event, payload, observation_id=observation_id, source="opencode_server_bridge")
 
 
 def _labelled_console_preview_candidate(
@@ -820,6 +795,29 @@ def _opencode_run_preview_candidate(event: Any, payload: dict[str, Any], *, obse
             source="opencode_run",
             last_observation_id=observation_id,
         )
+    if raw_type == "reasoning" and str(part.get("type") or "") == "reasoning":
+        text = str(part.get("text") or "").strip()
+        if not text:
+            return None
+        turn_key = build_provisional_key(
+            source="opencode_run",
+            session_id=event.session_id,
+            thread_id=thread_id,
+            turn_id=_item_scoped_turn_id(turn_id, "thinking"),
+        )
+        return LivePreviewCandidate(
+            session_id=event.session_id,
+            thread_id=thread_id,
+            turn_key=turn_key,
+            seq=seq,
+            preview_text=text[-THINKING_MAX_CHARS:],
+            provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
+            provisional_complete=False,
+            preview_observed_at=observed_at,
+            source="opencode_run",
+            last_observation_id=observation_id,
+            kind=PREVIEW_KIND_THINKING,
+        )
     if raw_type != "tool_use" or str(part.get("type") or "") != "tool":
         return None
     state = part.get("state") if isinstance(part.get("state"), dict) else {}
@@ -827,7 +825,9 @@ def _opencode_run_preview_candidate(event: Any, payload: dict[str, Any], *, obse
     call_id = _optional_str(part.get("callID"))
     status = str(state.get("status") or "pending")
     tool_input = state.get("input") if isinstance(state.get("input"), dict) else None
-    output = str(state.get("output") or "")
+    # A running tool's output so far is in the part's metadata; the finished output is in the state itself.
+    metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+    output = str(state.get("output") or metadata.get("output") or "")
     preview_text = output.strip() or json.dumps(tool_input or {}, ensure_ascii=False, sort_keys=True) or tool_name
     turn_key = build_provisional_key(
         source="opencode_run",

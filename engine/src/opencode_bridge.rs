@@ -583,12 +583,31 @@ async fn monitor_opencode_events_once(
                         tracing::warn!(error = %error, "OpenCode initial idle signal was not enqueued");
                     }
                 }
-                if let Some(preview) = live_text.observe(&event, std::time::Instant::now()) {
+                let now = std::time::Instant::now();
+                if let Some(preview) = live_text.observe(&event, now) {
                     if let Err(error) =
                         publish_live_text(state_path, longhouse_session_id, &preview)
                     {
                         tracing::warn!(error = %error, "OpenCode live text was not published");
                     }
+                }
+                match live_text.observe_kinds(&event, now) {
+                    Some(LiveKind::Thinking(preview)) => {
+                        if let Err(error) =
+                            publish_live_text(state_path, longhouse_session_id, &preview)
+                        {
+                            tracing::warn!(error = %error, "OpenCode thinking was not published");
+                        }
+                    }
+                    Some(LiveKind::Tool(tool)) => {
+                        let seq = live_text.next_seq();
+                        if let Err(error) =
+                            publish_live_tool(state_path, longhouse_session_id, &tool, seq)
+                        {
+                            tracing::warn!(error = %error, "OpenCode tool was not published");
+                        }
+                    }
+                    None => {}
                 }
                 if let Some((provider_session_id, phase)) = status_phase(&event) {
                     if let Err(error) = publish_phase_signal(
@@ -786,7 +805,33 @@ struct LivePreview {
     seq: u64,
     /// Everything the message has said so far.
     text: String,
+    /// `None` for reply text; `thinking` for a reasoning part.
+    kind: Option<&'static str>,
 }
+
+/// One tool call (or subagent task) part, as the event stream last stated it.
+#[derive(Debug, PartialEq)]
+struct LiveTool {
+    provider_session_id: String,
+    message_id: String,
+    call_id: String,
+    name: String,
+    /// `running`, `completed` or `failed`.
+    state: &'static str,
+    input: Option<Value>,
+    /// The output so far while running, the whole output when it ends.
+    output: Option<String>,
+}
+
+/// What `LiveTextTracker::observe_kinds` reads besides reply text.
+#[derive(Debug, PartialEq)]
+enum LiveKind {
+    Thinking(LivePreview),
+    Tool(LiveTool),
+}
+
+/// A tool's running output is restated at most this often, the rate reply text is.
+const LIVE_TOOL_OUTPUT_EVERY: Duration = Duration::from_millis(100);
 
 /// How often the newest text of one part is restated.
 const LIVE_TEXT_EVERY: Duration = Duration::from_millis(200);
@@ -803,6 +848,10 @@ struct LiveTextTracker {
     text: HashMap<String, String>,
     last_emit: HashMap<String, std::time::Instant>,
     seq: u64,
+    /// Cumulative reasoning text per reasoning part.
+    thinking: HashMap<String, String>,
+    /// What was last stated for each tool part: its status and the output length.
+    tools: HashMap<String, (String, usize)>,
 }
 
 impl LiveTextTracker {
@@ -883,11 +932,146 @@ impl LiveTextTracker {
             message_id: message_id.to_string(),
             seq: self.seq,
             text: self.text.get(part_id)?.clone(),
+            kind: None,
         })
+    }
+
+    fn next_seq(&mut self) -> u64 {
+        self.seq += 1;
+        self.seq
+    }
+
+    /// Reasoning and tool parts, which `observe` leaves alone. Call it after `observe` for the same event: `observe`
+    /// is what records each part's type.
+    fn observe_kinds(&mut self, event: &Value, now: std::time::Instant) -> Option<LiveKind> {
+        let payload = event.get("payload")?;
+        let properties = payload.get("properties")?;
+        match payload.get("type").and_then(Value::as_str)? {
+            "message.part.updated" => {
+                let part = properties.get("part")?;
+                let part_id = part.get("id").and_then(Value::as_str)?;
+                let message_id = part.get("messageID").and_then(Value::as_str)?;
+                let session_id = part.get("sessionID").and_then(Value::as_str)?;
+                match part.get("type").and_then(Value::as_str)? {
+                    "reasoning" => {
+                        // The snapshot is authoritative; a part announced empty keeps what its deltas built,
+                        // including deltas that arrived before the part was known to be reasoning.
+                        let carried = self.text.remove(part_id);
+                        match part.get("text").and_then(Value::as_str) {
+                            Some(text) if !text.is_empty() => {
+                                self.thinking.insert(part_id.to_string(), text.to_string());
+                            }
+                            _ => {
+                                if let Some(carried) = carried {
+                                    self.thinking.entry(part_id.to_string()).or_insert(carried);
+                                }
+                            }
+                        }
+                        if self.thinking.get(part_id).is_none_or(String::is_empty) {
+                            return None;
+                        }
+                        self.thinking_preview(part_id, message_id, session_id, now, true)
+                    }
+                    "tool" => {
+                        let state = part.get("state")?;
+                        let status = state.get("status").and_then(Value::as_str)?;
+                        let output = state
+                            .get("output")
+                            .or_else(|| state.get("metadata").and_then(|meta| meta.get("output")))
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        let (label, finished) = match status {
+                            "completed" => ("completed", true),
+                            "error" => ("failed", true),
+                            _ => ("running", false),
+                        };
+                        let key = status.to_string();
+                        let length = output.as_ref().map_or(0, String::len);
+                        let previous = self.tools.get(part_id);
+                        let status_changed = previous.is_none_or(|(seen, _)| *seen != key);
+                        let output_grew = !status_changed
+                            && !finished
+                            && previous.is_some_and(|(_, seen)| *seen != length);
+                        if !status_changed && !output_grew {
+                            return None;
+                        }
+                        if output_grew
+                            && self.last_emit.get(part_id).is_some_and(|last| {
+                                now.duration_since(*last) < LIVE_TOOL_OUTPUT_EVERY
+                            })
+                        {
+                            return None;
+                        }
+                        self.tools.insert(part_id.to_string(), (key, length));
+                        self.last_emit.insert(part_id.to_string(), now);
+                        Some(LiveKind::Tool(LiveTool {
+                            provider_session_id: session_id.to_string(),
+                            message_id: message_id.to_string(),
+                            call_id: part
+                                .get("callID")
+                                .and_then(Value::as_str)
+                                .unwrap_or(part_id)
+                                .to_string(),
+                            name: part.get("tool").and_then(Value::as_str)?.to_string(),
+                            state: label,
+                            input: state
+                                .get("input")
+                                .filter(|input| input.is_object())
+                                .cloned(),
+                            output,
+                        }))
+                    }
+                    _ => None,
+                }
+            }
+            "message.part.delta" => {
+                if properties.get("field").and_then(Value::as_str) != Some("text") {
+                    return None;
+                }
+                let part_id = properties.get("partID").and_then(Value::as_str)?;
+                if self.part_types.get(part_id).map(String::as_str) != Some("reasoning") {
+                    return None;
+                }
+                let delta = properties.get("delta").and_then(Value::as_str)?;
+                let message_id = properties.get("messageID").and_then(Value::as_str)?;
+                let session_id = properties.get("sessionID").and_then(Value::as_str)?;
+                let text = self.thinking.entry(part_id.to_string()).or_default();
+                crate::status_slot::append_live_text(text, delta);
+                self.thinking_preview(part_id, message_id, session_id, now, false)
+            }
+            _ => None,
+        }
+    }
+
+    fn thinking_preview(
+        &mut self,
+        part_id: &str,
+        message_id: &str,
+        session_id: &str,
+        now: std::time::Instant,
+        force: bool,
+    ) -> Option<LiveKind> {
+        let key = format!("{part_id}:thinking");
+        let due = self
+            .last_emit
+            .get(&key)
+            .is_none_or(|last| now.duration_since(*last) >= LIVE_TEXT_EVERY);
+        if !due && !force {
+            return None;
+        }
+        self.last_emit.insert(key, now);
+        self.seq += 1;
+        Some(LiveKind::Thinking(LivePreview {
+            provider_session_id: session_id.to_string(),
+            message_id: message_id.to_string(),
+            seq: self.seq,
+            text: self.thinking.get(part_id)?.clone(),
+            kind: Some("thinking"),
+        }))
     }
 }
 
-/// State the live reply text in the session's status slot: the newest text is
+/// State the live reply text, or the live reasoning text, in the session's status slot: the newest text is
 /// the whole statement, so a burst of deltas costs one slot write.
 fn publish_live_text(
     state_path: &Path,
@@ -910,13 +1094,20 @@ fn publish_live_text(
         return Ok(());
     };
     let occurred_at = chrono::Utc::now();
+    // Reasoning is shown as its own kind and states the thinking phase; reply text states running.
+    let thinking = preview.kind == Some("thinking");
+    let phase = if thinking {
+        crate::managed_phase_contract::PHASE_THINKING
+    } else {
+        crate::managed_phase_contract::PHASE_RUNNING
+    };
     crate::status_slot::publisher_for("opencode", OPENCODE_BRIDGE_TRANSPORT, longhouse_session_id)
         .publish(
             crate::status_slot::StatusUpdate::phase(
                 longhouse_session_id,
                 run_id,
                 &occurred_at.to_rfc3339(),
-                crate::managed_phase_contract::PHASE_RUNNING,
+                phase,
             )
             .with_payload(json!({"provider_session_id": preview.provider_session_id}))
             .with_preview(Some(crate::status_slot::StatusPreview {
@@ -926,8 +1117,92 @@ fn publish_live_text(
                 turn_completed: false,
                 progress_kind: "opencode_helm_stream".into(),
                 provider_session_id: Some(preview.provider_session_id.clone()),
+                kind: preview.kind.map(str::to_string),
                 ..Default::default()
             })),
+        );
+    Ok(())
+}
+
+/// Post one tool or subagent call as its own durable event, and state its name as the session's phase.
+///
+/// The status slot keeps only the newest preview and a call can start and end inside one beat, so the preview
+/// goes through the outbox. The slot still carries the phase: "Using bash" on the facts lane.
+fn publish_live_tool(
+    state_path: &Path,
+    longhouse_session_id: &str,
+    tool: &LiveTool,
+    seq: u64,
+) -> Result<()> {
+    let state: Value = serde_json::from_slice(&fs::read(state_path)?)?;
+    if state.get("provider_session_id").and_then(Value::as_str)
+        != Some(tool.provider_session_id.as_str())
+    {
+        return Ok(());
+    }
+    let Some(run_id) = state
+        .get("run_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(());
+    };
+    let summary = tool
+        .input
+        .as_ref()
+        .map(|input| crate::status_slot::tool_arguments_summary(&tool.name, input))
+        .unwrap_or_default();
+    let output = tool
+        .output
+        .as_deref()
+        .and_then(crate::status_slot::bounded_tool_tail);
+    let text = output
+        .clone()
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| (!summary.is_empty()).then_some(summary))
+        .unwrap_or_else(|| tool.name.clone());
+    let preview = crate::status_slot::StatusPreview {
+        turn_id: tool.message_id.clone(),
+        seq,
+        live_text: text,
+        turn_completed: tool.state != "running",
+        progress_kind: "opencode_helm_stream".into(),
+        provider_session_id: Some(tool.provider_session_id.clone()),
+        kind: Some(crate::status_slot::tool_preview_kind(&tool.name).into()),
+        tool_name: Some(tool.name.clone()),
+        tool_call_id: Some(tool.call_id.clone()),
+        tool_input: tool.input.clone(),
+        tool_output: output,
+        tool_state: Some(tool.state.into()),
+    };
+    let outbox = crate::config::get_agent_runtime_events_outbox_dir()?;
+    crate::status_slot::enqueue_preview_event(
+        &outbox,
+        "opencode",
+        longhouse_session_id,
+        run_id,
+        OPENCODE_BRIDGE_TRANSPORT,
+        preview,
+    )?;
+    let occurred_at = chrono::Utc::now();
+    let (phase, name) = if tool.state == "running" {
+        (
+            crate::managed_phase_contract::PHASE_RUNNING,
+            Some(tool.name.as_str()),
+        )
+    } else {
+        (crate::managed_phase_contract::PHASE_THINKING, None)
+    };
+    crate::status_slot::publisher_for("opencode", OPENCODE_BRIDGE_TRANSPORT, longhouse_session_id)
+        .publish(
+            crate::status_slot::StatusUpdate::phase(
+                longhouse_session_id,
+                run_id,
+                &occurred_at.to_rfc3339(),
+                phase,
+            )
+            .with_tool(name)
+            .with_payload(json!({"provider_session_id": tool.provider_session_id})),
         );
     Ok(())
 }
@@ -1434,6 +1709,78 @@ mod tests {
         assert!(tracker
             .observe(&delta("prt_x", "more"), t0 + LIVE_TEXT_EVERY)
             .is_none());
+    }
+
+    fn tool_updated(status: &str, output: &str) -> Value {
+        global(
+            "message.part.updated",
+            json!({"sessionID": "ses_1", "part": {"id": "prt_tool", "messageID": "msg_a",
+                   "sessionID": "ses_1", "type": "tool", "callID": "call_1", "tool": "task",
+                   "state": {"status": status, "input": {"description": "count files"},
+                             "metadata": {"output": output}}}}),
+        )
+    }
+
+    #[test]
+    fn reasoning_is_a_thinking_preview_and_never_reply_text() {
+        let mut tracker = LiveTextTracker::default();
+        let t0 = std::time::Instant::now();
+        let announce = part_updated("prt_r", "reasoning", "");
+        assert!(tracker.observe(&announce, t0).is_none());
+        assert!(tracker.observe_kinds(&announce, t0).is_none());
+        let event = delta("prt_r", "weigh options");
+        assert!(tracker.observe(&event, t0).is_none());
+        let Some(LiveKind::Thinking(preview)) = tracker.observe_kinds(&event, t0) else {
+            panic!("a reasoning delta is a thinking preview");
+        };
+        assert_eq!(
+            (preview.text.as_str(), preview.kind),
+            ("weigh options", Some("thinking"))
+        );
+        // Restated no faster than reply text is, and never lost.
+        let event = delta("prt_r", " and pick one");
+        assert!(tracker.observe_kinds(&event, t0).is_none());
+        let event = delta("prt_r", "!");
+        let Some(LiveKind::Thinking(later)) = tracker.observe_kinds(&event, t0 + LIVE_TEXT_EVERY)
+        else {
+            panic!("due");
+        };
+        assert_eq!(later.text, "weigh options and pick one!");
+    }
+
+    #[test]
+    fn a_tool_part_is_stated_at_each_status_and_while_its_output_grows() {
+        let mut tracker = LiveTextTracker::default();
+        let t0 = std::time::Instant::now();
+        let states = |tracker: &mut LiveTextTracker, event: Value, at| match tracker
+            .observe_kinds(&event, at)
+        {
+            Some(LiveKind::Tool(tool)) => Some((tool.state, tool.output, tool.name)),
+            _ => None,
+        };
+        let pending = states(&mut tracker, tool_updated("pending", ""), t0).unwrap();
+        assert_eq!((pending.0, pending.2.as_str()), ("running", "task"));
+        // The same status again is nothing; new output inside the interval waits.
+        assert!(states(&mut tracker, tool_updated("pending", ""), t0).is_none());
+        let running = states(&mut tracker, tool_updated("running", ""), t0).unwrap();
+        assert_eq!(running.0, "running");
+        assert!(states(&mut tracker, tool_updated("running", "one\n"), t0).is_none());
+        let grown = states(
+            &mut tracker,
+            tool_updated("running", "one\ntwo\n"),
+            t0 + LIVE_TOOL_OUTPUT_EVERY,
+        )
+        .unwrap();
+        assert_eq!(grown.1.as_deref(), Some("one\ntwo\n"));
+        let done = states(&mut tracker, tool_updated("completed", "one\ntwo\n"), t0).unwrap();
+        assert_eq!(done.0, "completed");
+        let failed = states(
+            &mut LiveTextTracker::default(),
+            tool_updated("error", ""),
+            t0,
+        )
+        .unwrap();
+        assert_eq!(failed.0, "failed");
     }
 
     #[cfg(unix)]

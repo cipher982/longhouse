@@ -52,6 +52,10 @@ def test_every_defect_of_2026_11_11_has_a_mutation_and_a_named_stage() -> None:
         "codex-helm-subagent-forward",
         "codex-helm-subagent-as-tool",
         "codex-console-subagent-forward",
+        "opencode-helm-thinking-forward",
+        "opencode-helm-thinking-as-reply",
+        "opencode-helm-tool-forward",
+        "opencode-helm-subagent-as-tool",
     }
     assert all(m.stages and m.cell.count("/") == 1 for m in MUTATIONS)
 

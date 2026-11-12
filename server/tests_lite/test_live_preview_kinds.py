@@ -345,3 +345,51 @@ def test_codex_helm_tool_and_collab_items_are_a_tool_and_a_subagent_under_their_
         helm("shell", 3, command="ls", output="a", status="completed", completed=True), now=NOW
     )
     assert done and done["tool_call_state"] == "completed"
+
+
+def test_opencode_helm_labelled_previews_are_thinking_tools_and_subagents_and_unlabelled_text_is_the_reply() -> None:
+    sid = uuid4()
+
+    def helm(**payload) -> RuntimeEventIngest:
+        return RuntimeEventIngest(
+            runtime_key=f"opencode:{sid}",
+            session_id=sid,
+            provider="opencode",
+            device_id="cinder",
+            source="opencode_server_bridge",
+            kind="progress_signal",
+            occurred_at=NOW,
+            dedupe_key=f"o:{payload['seq']}",
+            payload={"progress_kind": "opencode_helm_stream", "turn_id": "msg_a", "live_text": "words", **payload},
+        )
+
+    def preview(**payload):
+        return runtime_router._live_transcript_preview_payload(helm(**payload), now=NOW)
+
+    plain = preview(seq=1)
+    assert plain and plain["kind"] == "reply" and plain["tool_name"] is None
+    thinking = preview(seq=2, preview_kind="thinking")
+    assert thinking and (thinking["kind"], thinking["text"]) == ("thinking", "words")
+    tool = preview(seq=3, preview_kind="tool", tool_name="bash", tool_call_id="c1", tool_output="a\nb", tool_state="running")
+    assert tool and (tool["kind"], tool["tool_name"], tool["tool_output_text"]) == ("tool", "bash", "a\nb")
+    sub = preview(seq=4, preview_kind="subagent", tool_name="task", tool_call_id="c2", tool_state="running")
+    assert sub and (sub["kind"], sub["tool_name"]) == ("subagent", "task")
+
+
+def test_opencode_run_reasoning_is_thinking_and_a_running_tool_shows_the_output_so_far() -> None:
+    def run(raw: dict, seq: int) -> RuntimeEventIngest:
+        return _event("opencode", "opencode_run", "opencode_run_stream", raw, seq=seq)
+
+    reasoning = run({"type": "reasoning", "part": {"id": "p1", "type": "reasoning", "text": "weigh options"}}, 1)
+    cand = lp.live_preview_candidate_from_runtime_event(reasoning, observation_id="o1")
+    assert cand is not None and cand.kind == "thinking" and cand.preview_text == "weigh options" and not cand.text_is_delta
+    part = {
+        "id": "p2",
+        "type": "tool",
+        "tool": "bash",
+        "callID": "call_1",
+        "state": {"status": "running", "input": {"command": "ls"}, "metadata": {"output": "one\ntwo"}},
+    }
+    tool = lp.live_preview_candidate_from_runtime_event(run({"type": "tool_use", "part": part}, 2), observation_id="o2")
+    assert tool is not None and tool.tool_output_text == "one\ntwo" and tool.tool_call_state == "running"
+    assert (tool.effective_kind, tool.tool_name) == ("tool", "bash")
