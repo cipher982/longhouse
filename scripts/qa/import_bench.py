@@ -274,6 +274,34 @@ def all_readable(base_url: str, token: str, session_ids: set[str]) -> bool:
     return True
 
 
+def engine_scheduler_sample(status_path: Path) -> dict[str, int] | None:
+    try:
+        scheduler = json.loads(status_path.read_text())["ship_scheduler"]
+        return {key: int(scheduler[key]) for key in ("in_flight_backlog", "ready_backlog", "in_flight_live", "backlog_cap")}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def steady_ack_mbyte_s(samples: list[tuple[float, int]], total_bytes: int) -> float | None:
+    """MB/s between 10% and 90% of the corpus acknowledged, interpolated.
+
+    Completion time moves in steps of the engine's status-file cadence and
+    includes startup and the last file's tail; the middle of the curve is the
+    import rate itself.
+    """
+
+    def crossing(target: float) -> float | None:
+        for (t0, b0), (t1, b1) in zip(samples, samples[1:]):
+            if b0 <= target <= b1 and b1 > b0:
+                return t0 + (t1 - t0) * (target - b0) / (b1 - b0)
+        return None
+
+    low, high = crossing(0.1 * total_bytes), crossing(0.9 * total_bytes)
+    if low is None or high is None or high <= low:
+        return None
+    return round(0.8 * total_bytes / (high - low) / 1e6, 2)
+
+
 def corpus_import_progress(status_path: Path) -> tuple[int, int] | None:
     """(acknowledged source bytes, fully acknowledged source count) from the engine.
 
@@ -486,6 +514,8 @@ def main() -> int:
                              "filesystem supports it, so a production-sized catalog costs no time); without it the host starts empty")
     parser.add_argument("--memory", default="4g", help="local Runtime Host memory limit (docker --memory)")
     parser.add_argument("--cpus", default=None, help="local Runtime Host CPU limit (docker --cpus); default unlimited")
+    parser.add_argument("--engine-env", action="append", default=[], metavar="KEY=VALUE",
+                        help="extra environment for the Machine Agent (repeatable); recorded in the result")
     parser.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
                         help="extra Runtime Host environment, repeatable (e.g. LONGHOUSE_STORAGE_RAW_LIVE_WORKERS=8)")
     parser.add_argument("--engine-bin", type=Path, help="Machine Agent binary to run, e.g. the installed release; default builds from source")
@@ -501,7 +531,7 @@ def main() -> int:
         raise SystemExit("--seed-data applies only to a local Runtime Host")
     if args.seed_data and not args.seed_data.is_dir():
         raise SystemExit(f"seed data is not a directory: {args.seed_data}")
-    for item in args.env:
+    for item in [*args.env, *args.engine_env]:
         if "=" not in item:
             raise SystemExit(f"--env expects KEY=VALUE, got {item!r}")
     if not args.corpus_root.is_dir():
@@ -520,7 +550,7 @@ def main() -> int:
     result: dict[str, Any] = {"schema": "longhouse.import_bench.v1", "name": args.name, "image": args.image,
                               "image_commit": args.image_commit, "remote_url": args.remote_url,
                               "shaped": args.shaped, "seed_data": str(args.seed_data) if args.seed_data else None,
-                              "memory": args.memory, "cpus": args.cpus, "env": sorted(args.env), "status": "fail"}
+                              "memory": args.memory, "cpus": args.cpus, "env": sorted(args.env), "engine_env": sorted(args.engine_env), "status": "fail"}
     try:
         home = scratch / "home"
         corpus = newest_corpus(args.corpus_root, home, args.corpus_bytes)
@@ -570,7 +600,10 @@ def main() -> int:
             raise RuntimeError(f"invalid envelope encoding capability: {advertised_encodings!r}")
         result["storage_v2_advertised_encodings"] = advertised_encodings
         result["negotiated_envelope_encoding"] = "zstd" if "zstd" in advertised_encodings else "identity"
-        if not args.remote_url:
+        # Toxiproxy exists to shape the link. Unshaped, it only added a hop:
+        # every run topped out at 19 MB/s on the wire whatever the engine's
+        # concurrency, so unshaped runs connect the engine to the host directly.
+        if args.shaped and not args.remote_url:
             docker("run", "-d", "--name", proxy, "--network", network, "-p", f"127.0.0.1:{proxy_port}:8666", "-p", f"127.0.0.1:{admin_port}:8474", TOXIPROXY_IMAGE)
             proxy_api = f"http://127.0.0.1:{admin_port}"
             deadline = time.monotonic() + 30
@@ -593,7 +626,8 @@ def main() -> int:
                     if status not in (200, 201):
                         raise RuntimeError(f"Toxiproxy toxic create failed: HTTP {status}")
         engine_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home), "LONGHOUSE_HOME": str(home / ".longhouse"),
-                      "XDG_CONFIG_HOME": str(home / ".config"), "XDG_DATA_HOME": str(home / ".local/share"), "CLAUDE_CONFIG_DIR": str(home / ".claude"), "RUST_LOG": "info"}
+                      "XDG_CONFIG_HOME": str(home / ".config"), "XDG_DATA_HOME": str(home / ".local/share"), "CLAUDE_CONFIG_DIR": str(home / ".claude"), "RUST_LOG": "info",
+                      **dict(item.split("=", 1) for item in args.engine_env)}
         engine_db = scratch / "engine.db"
         engine_log = (scratch / "engine.log").open("w")
         if args.engine_bin:
@@ -604,7 +638,7 @@ def main() -> int:
             raise RuntimeError(f"Machine Agent binary not found: {engine_bin}")
         result["engine_version"] = command(engine_bin, "--version").stdout.strip()
         wire_start = interface_rx_bytes(runtime) if not args.remote_url else None
-        engine_url = base_url if args.remote_url else f"http://127.0.0.1:{proxy_port}"
+        engine_url = f"http://127.0.0.1:{proxy_port}" if args.shaped and not args.remote_url else base_url
         engine = subprocess.Popen([engine_bin, "connect", "--url", engine_url, "--token", token, "--db", str(engine_db),
                                     "--compression", "zstd", "--log-dir", str(log_dir),
                                     "--machine-name", DEVICE_ID], env=engine_env,
@@ -626,12 +660,16 @@ def main() -> int:
         # engine's own acknowledged corpus bytes (the live-probe file excluded).
         status_path = home / ".longhouse" / "agent" / "engine-status.json"
         ack_samples: list[tuple[float, int]] = []
+        scheduler_samples: list[dict[str, int]] = []
         while time.monotonic() < deadline:
             if engine.poll() is not None:
                 raise RuntimeError(f"Machine Agent exited early ({engine.returncode})")
             if args.seed_data:
                 elapsed = round(time.monotonic() - import_started, 3)
                 progress = corpus_import_progress(status_path)
+                scheduler = engine_scheduler_sample(status_path)
+                if scheduler is not None and progress and progress[0]:
+                    scheduler_samples.append(scheduler)
                 acked, done = progress if progress else (None, 0)
                 if acked is not None and (not ack_samples or acked != ack_samples[-1][1]):
                     ack_samples.append((elapsed, acked))
@@ -663,11 +701,24 @@ def main() -> int:
             result["engine_bytes_out"] = sent
             if complete:
                 result["engine_wire_mbit_s"] = round(sent * 8 / complete / 1e6, 2)
+        if scheduler_samples:
+            # Whether the engine keeps its archive slots full: in-flight
+            # against the cap, and how much ready work was waiting for a slot.
+            result["engine_scheduler"] = {
+                key: {
+                    "mean": round(sum(sample[key] for sample in scheduler_samples) / len(scheduler_samples), 2),
+                    "max": max(sample[key] for sample in scheduler_samples),
+                }
+                for key in scheduler_samples[0]
+            } | {"samples": len(scheduler_samples)}
         if ack_samples:
             # Ten evenly spaced points are enough to see a stall or a slope change.
             step = max(1, len(ack_samples) // 10)
             result["ack_progress"] = [list(sample) for sample in ack_samples[::step]] + [list(ack_samples[-1])]
             result["ack_mbyte_s"] = round(ack_samples[-1][1] / max(ack_samples[-1][0], 0.001) / 1e6, 2)
+            steady = steady_ack_mbyte_s(ack_samples, corpus["bytes"])
+            if steady is not None:
+                result["steady_mbyte_s"] = steady
         result.update({"status": "ok" if complete is not None else "timeout", "wire_bytes_client_to_server": interface_rx_bytes(runtime) - wire_start if wire_start is not None else None,
                        "wire_bytes_note": "remote Runtime Host cannot expose a client wire counter; engine logs and local health retained" if args.remote_url else None,
                        "time_to_first_timeline_s": first, "time_to_recent_readable_s": recent, "time_to_fully_imported_s": complete,
