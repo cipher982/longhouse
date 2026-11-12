@@ -10,8 +10,12 @@ name: Terminal Truth
 #   push to main, live-preview paths only   short pass of every declared cell; the verdict is the commit
 #                                            status `longhouse/terminal-truth` and a CI receipt. Nothing
 #                                            consumes the status yet (promotion is unchanged).
-#   schedule (nightly)                       400 tokens at 5/s, five repeats, long_reply and two_message
-#                                            scenarios, then the mutation tests. A red run is the finding:
+#   schedule (nightly)                       400 tokens at 5/s, one pass, long_reply and two_message
+#                                            scenarios (about 50 minutes on the runner), then the mutation
+#                                            tests. Five passes took over four hours of the one runner slot,
+#                                            every push run queued behind them, and the job's 330-minute limit
+#                                            left the mutation tests about an hour (first nightly, 2026-11-12);
+#                                            repeats are for a dispatched run. A red run is the finding:
 #                                            new failing cells are annotated as errors, and the Sauron job
 #                                            ci-scheduled-red pages after three red nights in a row.
 #   workflow_dispatch                        any of the above by hand (inputs below).
@@ -151,7 +155,7 @@ jobs:
       TT_MODE: ${{ inputs.mode || 'both' }}
       TT_TOKENS: ${{ inputs.tokens || (github.event_name == 'schedule' && '400') || '100' }}
       TT_RATE: ${{ inputs.rate || (github.event_name == 'schedule' && '5') || '20' }}
-      TT_REPEATS: ${{ inputs.repeats || (github.event_name == 'schedule' && '5') || '1' }}
+      TT_REPEATS: ${{ inputs.repeats || '1' }}
       TT_SCENARIO_INPUT: ${{ inputs.scenarios || (github.event_name == 'schedule' && 'both') || 'long_reply' }}
       TT_MUTATIONS: ${{ (github.event_name == 'schedule' || inputs.mutations) && '1' || '0' }}
       TT_PUBLISH_REQUEST: ${{ inputs.publish_status && '1' || '0' }}
