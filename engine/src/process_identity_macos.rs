@@ -228,6 +228,41 @@ mod tests {
     use super::{ProcessCommandCache, ProcessCommandIdentity};
     use std::collections::HashSet;
 
+    extern "C" {
+        fn revoke(path: *const libc::c_char) -> libc::c_int;
+    }
+
+    #[test]
+    fn a_revoked_descriptor_does_not_hide_the_process_open_files() {
+        let (mut master, mut slave) = (0, 0);
+        let mut name = [0 as libc::c_char; 128];
+        let opened = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                name.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(opened, 0);
+        // `slave` stays open, but its vnode no longer has a path.
+        assert_eq!(unsafe { revoke(name.as_ptr()) }, 0);
+        let held = tempfile::NamedTempFile::new().unwrap();
+
+        let files = super::try_collect_process_open_files(&[std::process::id()]);
+        unsafe {
+            libc::close(slave);
+            libc::close(master);
+        }
+
+        let files = files.expect("one revoked descriptor must not void the inventory");
+        let held = held.path().canonicalize().unwrap();
+        assert!(files[&std::process::id()]
+            .iter()
+            .any(|path| path.canonicalize().ok().as_ref() == Some(&held)));
+    }
+
     fn test_comm(name: &str) -> [libc::c_char; 17] {
         let mut comm = [0; 17];
         for (byte, source) in comm.iter_mut().zip(name.bytes()) {
@@ -705,9 +740,14 @@ fn process_open_files(pid: u32) -> Result<Option<Vec<PathBuf>>, ProbeError> {
                     expected as libc::c_int,
                 )
             };
+            if got <= 0 && matches!(unsafe { *libc::__error() }, libc::ENOENT | libc::EBADF) {
+                // EBADF: closed since PROC_PIDLISTFDS. ENOENT: the vnode was
+                // revoked (a Codex left on a closed terminal holds its tty this
+                // way). Neither names a file, so neither can be a transcript;
+                // failing here would hide every other process's files.
+                continue;
+            }
             if got < 0 || got as usize != expected {
-                // A vanished descriptor makes this an incomplete inventory, not
-                // evidence that the process has no open files.
                 return Err(ProbeError::Unavailable);
             }
             let info = unsafe { info.assume_init() };
