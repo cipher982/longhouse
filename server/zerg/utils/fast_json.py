@@ -18,14 +18,19 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import msgspec
+try:
+    import msgspec
+except ImportError:  # the qualification router imports this module without the server's optional dependencies
+    msgspec = None  # type: ignore[assignment]
 
-_decoder = msgspec.json.Decoder()
+_decoder = msgspec.json.Decoder() if msgspec is not None else None
 
 
 def loads(data: str | bytes | bytearray | memoryview) -> Any:
     """Decode like ``json.loads(data)``, using msgspec when it accepts the input."""
 
+    if _decoder is None:
+        return json.loads(data)
     try:
         return _decoder.decode(data)
     except msgspec.DecodeError:
