@@ -604,12 +604,35 @@ def _opencode_helm_preview_candidate(
     )
 
 
+def _labelled_console_preview_candidate(
+    event: Any,
+    payload: dict[str, Any],
+    *,
+    observation_id: str,
+    source: str,
+) -> LivePreviewCandidate | None:
+    """A preview a Console engine posts through the status slot, labelled with what its text is.
+
+    OMP and Pi Console strip the model's thinking out of the stream event they post, so the engine posts it separately as a slot preview
+    (`preview_kind: thinking`, cumulative text, no `event`). It has the Helm launchers' shape, so the Helm reader builds it.
+    """
+
+    if isinstance(payload.get("event"), dict):
+        return None
+    if _optional_str(payload.get("preview_kind")) != PREVIEW_KIND_THINKING:
+        return None
+    return _omp_helm_preview_candidate(event, payload, observation_id=observation_id, source=source)
+
+
 def _omp_print_preview_candidate(
     event: Any,
     payload: dict[str, Any],
     *,
     observation_id: str,
 ) -> LivePreviewCandidate | None:
+    labelled = _labelled_console_preview_candidate(event, payload, observation_id=observation_id, source="omp_print")
+    if labelled is not None:
+        return labelled
     raw = payload.get("event")
     if not isinstance(raw, dict) or event.session_id is None:
         return None
@@ -833,6 +856,9 @@ def _opencode_run_preview_candidate(event: Any, payload: dict[str, Any], *, obse
 
 
 def _pi_print_preview_candidate(event: Any, payload: dict[str, Any], *, observation_id: str) -> LivePreviewCandidate | None:
+    labelled = _labelled_console_preview_candidate(event, payload, observation_id=observation_id, source="pi_print")
+    if labelled is not None:
+        return labelled
     raw = payload.get("event")
     if not isinstance(raw, dict) or event.session_id is None:
         return None

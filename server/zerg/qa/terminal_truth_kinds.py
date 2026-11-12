@@ -1284,6 +1284,9 @@ KIND_EXPECTATIONS: dict[tuple[str, str], tuple[str, str]] = {
     ("omp/helm", "subagent"): ("subagent_started", "subagent"),
     ("pi/helm", "thinking"): ("thinking", "thinking"),
     ("pi/helm", "tool"): ("tool_started", "tool"),
+    # Console thinking (2026-11-12): the engine posts it through the status slot beside the stripped stream event.
+    ("omp/console", "thinking"): ("thinking", "thinking"),
+    ("pi/console", "thinking"): ("thinking", "thinking"),
 }
 
 

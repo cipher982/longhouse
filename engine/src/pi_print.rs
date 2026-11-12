@@ -921,6 +921,8 @@ struct PiStreamProjection {
     native_error: Option<String>,
     /// Pi refused the prompt before accepting it: no run will follow.
     rpc_rejected: bool,
+    /// The thinking of the message in flight, posted on its own, labelled.
+    thinking: crate::console_rpc::ThinkingTracker,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1176,6 +1178,7 @@ async fn publish_stdout_growth(
             sink.session_file = event_sink.session_file.clone();
         }
         projection.apply(&sink.provider_thread_id, &event)?;
+        projection.thinking.observe(*seq, &event);
         if let Some((phase, tool_name)) = pi_phase_from_event(&event) {
             event_sink.post_phase(phase, tool_name, *seq).await;
         }
@@ -1208,6 +1211,18 @@ async fn publish_stdout_growth(
         prev_sink
             .post_stream_event(prev_seq, &prev_event, &prev_proj)
             .await;
+    }
+    if let Some((thinking_seq, text)) = projection.thinking.take_unposted() {
+        let thinking_sink = match invocation {
+            Some(invocation) => sink.run.for_binding(&invocation.latest_turn()),
+            None => sink.run.clone(),
+        };
+        thinking_sink.publish_thinking(
+            "pi_print_stream",
+            Some(sink.provider_thread_id.as_str()),
+            thinking_seq,
+            text,
+        );
     }
     let _ = sink.ensure_transcript_binding().await?;
     if had_lines {

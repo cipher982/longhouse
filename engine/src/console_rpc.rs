@@ -390,6 +390,63 @@ pub fn is_non_text_rpc_message_update(event: &Value) -> bool {
         )
 }
 
+/// The model's thinking for the assistant message in flight, accumulated from
+/// the `thinking_delta` updates that `runtime_stream_event` strips out of the
+/// posted stream event. It is posted on its own, labelled `thinking`, so the
+/// host never takes it for reply text.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ThinkingTracker {
+    text: String,
+    seq: u64,
+    unposted: bool,
+}
+
+impl ThinkingTracker {
+    /// Take one stdout event (`seq` is its line number). A new assistant
+    /// message or run starts a new thinking text; a `thinking_delta` extends it,
+    /// up to the shared live-text cap.
+    pub fn observe(&mut self, seq: u64, event: &Value) {
+        match event.get("type").and_then(Value::as_str) {
+            Some("agent_start") => self.text.clear(),
+            Some("message_start")
+                if event.pointer("/message/role").and_then(Value::as_str) == Some("assistant") =>
+            {
+                self.text.clear();
+            }
+            Some("message_update") => {
+                let update = event.get("assistantMessageEvent");
+                if update
+                    .and_then(|update| update.get("type"))
+                    .and_then(Value::as_str)
+                    != Some("thinking_delta")
+                {
+                    return;
+                }
+                let Some(delta) = update
+                    .and_then(|update| update.get("delta"))
+                    .and_then(Value::as_str)
+                    .filter(|delta| !delta.is_empty())
+                else {
+                    return;
+                };
+                crate::status_slot::append_live_text(&mut self.text, delta);
+                self.seq = seq;
+                self.unposted = true;
+            }
+            _ => {}
+        }
+    }
+
+    /// The text to post now (its sequence number and the cumulative text), once
+    /// per batch of events and only if a delta arrived since the last post.
+    pub fn take_unposted(&mut self) -> Option<(u64, &str)> {
+        if !std::mem::take(&mut self.unposted) || self.text.is_empty() {
+            return None;
+        }
+        Some((self.seq, &self.text))
+    }
+}
+
 pub const MAX_RETAINED_RPC_STDOUT_BYTES: u64 = 4 * 1024 * 1024;
 const RETAINED_RPC_STDOUT_TAIL_BYTES: u64 = 1024 * 1024;
 
@@ -654,6 +711,43 @@ mod tests {
         assert!(!is_non_text_rpc_message_update(&text_delta));
         let bare_update = json!({"type": "message_update", "delta": "hello"});
         assert!(!is_non_text_rpc_message_update(&bare_update));
+    }
+
+    #[test]
+    fn thinking_tracker_accumulates_deltas_and_posts_once_per_batch() {
+        let delta = |text: &str| json!({"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": text}});
+        let mut tracker = ThinkingTracker::default();
+        tracker.observe(1, &delta("weigh "));
+        tracker.observe(2, &delta("it"));
+        assert_eq!(tracker.take_unposted(), Some((2, "weigh it")));
+        assert_eq!(tracker.take_unposted(), None, "already posted");
+        tracker.observe(3, &json!({"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "reply"}}));
+        assert_eq!(
+            tracker.take_unposted(),
+            None,
+            "reply text is never thinking"
+        );
+        tracker.observe(
+            4,
+            &json!({"type": "message_start", "message": {"role": "assistant"}}),
+        );
+        tracker.observe(5, &delta("next"));
+        assert_eq!(
+            tracker.take_unposted(),
+            Some((5, "next")),
+            "a new message starts a new text"
+        );
+    }
+
+    #[test]
+    fn thinking_tracker_stays_within_the_live_text_cap() {
+        let mut tracker = ThinkingTracker::default();
+        let big = "x".repeat(crate::status_slot::MAX_LIVE_TEXT_BYTES);
+        let delta = |text: &str| json!({"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": text}});
+        tracker.observe(1, &delta(&big));
+        tracker.observe(2, &delta("more"));
+        let (_, text) = tracker.take_unposted().unwrap();
+        assert_eq!(text.len(), crate::status_slot::MAX_LIVE_TEXT_BYTES);
     }
 
     #[test]

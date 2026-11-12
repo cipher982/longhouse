@@ -1808,6 +1808,7 @@ async fn monitor_omp_print(
                 .await;
                 return;
             }
+            projection.thinking.observe(seq, &event);
             if let Some(provider_thread_id) = projection.provider_thread_id.as_deref() {
                 sink.provider_thread_id = Some(provider_thread_id.to_string());
             }
@@ -2024,6 +2025,17 @@ async fn monitor_omp_print(
             sink.for_binding(&prev_binding)
                 .post_stream_event(prev_seq, &prev_routed, &prev_proj)
                 .await;
+        }
+        // Thinking is stripped from the stream event above; post it once per
+        // batch, labelled, so the host can show it without calling it the reply.
+        if let Some((thinking_seq, text)) = projection.thinking.take_unposted() {
+            sink.for_binding(&invocation.latest_turn())
+                .publish_thinking(
+                    "omp_print_stream",
+                    projection.provider_thread_id.as_deref(),
+                    thinking_seq,
+                    text,
+                );
         }
 
         if had_lines {
@@ -2803,6 +2815,8 @@ struct OmpStreamProjection {
     /// prompt that is written and never acknowledged is not a turn: nothing
     /// will follow, whatever the provider process is doing.
     prompt_acknowledged: bool,
+    /// The thinking of the message in flight, posted on its own, labelled.
+    thinking: crate::console_rpc::ThinkingTracker,
 }
 
 impl OmpStreamProjection {
@@ -3255,6 +3269,7 @@ async fn publish_stdout_growth(
             }
         };
         projection.apply(sink.provider_thread_id.as_deref(), &event)?;
+        projection.thinking.observe(*seq, &event);
         if sink.provider_thread_id.is_none() {
             sink.provider_thread_id = projection.provider_thread_id.clone();
         }
@@ -3419,6 +3434,18 @@ async fn publish_stdout_growth(
         prev_sink
             .post_stream_event(prev_seq, &prev_routed, &prev_proj)
             .await;
+    }
+    if let Some((thinking_seq, text)) = projection.thinking.take_unposted() {
+        let thinking_sink = match invocation {
+            Some(invocation) => sink.for_binding(&invocation.latest_turn()),
+            None => sink.clone(),
+        };
+        thinking_sink.publish_thinking(
+            "omp_print_stream",
+            projection.provider_thread_id.as_deref(),
+            thinking_seq,
+            text,
+        );
     }
     let _ = sink.ensure_transcript_binding().await?;
     if had_lines {
@@ -4830,13 +4857,18 @@ for line in sys.stdin:
             user_message(prompt)
             assistant_message(prompt)
             out({"type":"session_settled"})
-        elif prompt == "scenario=responding":
+        elif prompt == prompt in ("scenario=responding", "scenario=thinking"):
             user_message(prompt)
             active_response = {"id": str(uuid.uuid4()), "text": "first response"}
             with open(source + ".active", "w", encoding="utf-8") as stream:
                 stream.write("active")
             out({"type":"agent_start"})
             out({"type":"message_start","message":{"role":"assistant","content":[]}})
+            if prompt == "scenario=thinking":
+                out({"type":"message_update","assistantMessageEvent":{"type":"thinking_start"}})
+                out({"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"weighing "}})
+                out({"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"the options"}})
+                time.sleep(0.4)
             out({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"first response"}})
         elif prompt.startswith(("scenario=background", "scenario=stop", "scenario=user", "scenario=wake", "scenario=drain", "scenario=restart")):
             user_message(prompt)
@@ -5647,6 +5679,57 @@ for line in sys.stdin:
         let adapters: [(&str, ScenarioRunner); 1] = [("omp", run_omp_scenario)];
         conformance::run_phase_one(&adapters).await;
     }
+    /// The model's thinking is stripped from the posted stream event, so it
+    /// is posted on its own through the status slot, labelled `thinking`, and
+    /// never as reply text.
+    #[tokio::test]
+    async fn thinking_is_posted_labelled_through_the_status_slot_and_not_as_reply_text() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = set_test_longhouse_home(temp.path().join("longhouse"));
+        let (started, run_id) = start_fake_turn(temp.path(), "scenario=thinking", None).await;
+        let started = started.unwrap();
+        let session_id = started.session_id.clone();
+        let slot_path = crate::status_slot::slot_path(
+            &crate::status_slot::status_slot_dir(&crate::config::get_agent_dir().unwrap()),
+            &session_id,
+        );
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let preview = loop {
+            let preview = std::fs::read(&slot_path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .and_then(|slot| slot.get("preview").cloned())
+                .filter(|preview| preview["kind"] == "thinking");
+            if let Some(preview) = preview {
+                break preview;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "no thinking preview reached the status slot"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        };
+        assert_eq!(preview["live_text"], "weighing the options");
+        assert_eq!(preview["progress_kind"], "omp_print_stream");
+        wait_for_progress_text(&session_id, &run_id, "first response").await;
+        let events = runtime_events();
+        assert!(
+            events
+                .iter()
+                .filter(|event| event["session_id"] == session_id.as_str())
+                .all(|event| !event["payload"]["live_text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("weighing")),
+            "thinking text must never ride a reply-text stream event"
+        );
+        crate::console_lifecycle::stop_test_monitor(&started.launch_id).await;
+        crate::console_lifecycle::unregister(&started.launch_id);
+        cleanup_process_group(started.process_group_id).await;
+        restore_test_longhouse_home(previous_home);
+    }
+
     /// A provider that takes seconds to print `ready` is a slow start, not a
     /// failed one: the launch waits for it and the run completes. The host's
     /// `session.turn.start` budget for OMP (45 s in `console_turns.py`) is sized

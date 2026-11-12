@@ -192,6 +192,50 @@ impl ConsoleRun {
         );
     }
 
+    /// Post the model's thinking so far, labelled `thinking`, through the
+    /// session's status slot. The slot is replaceable and coalesced, so this
+    /// goes out no faster than reply text does, and a host that reads the slot
+    /// can never take it for the reply. `progress_kind` is the adapter's own
+    /// stream kind (`omp_print_stream`), which the host already admits; the
+    /// preview's `preview_kind` says what the text is.
+    pub fn publish_thinking(
+        &self,
+        progress_kind: &str,
+        provider_thread_id: Option<&str>,
+        seq: u64,
+        text: &str,
+    ) {
+        let preview = crate::status_slot::StatusPreview {
+            turn_id: self.turn_id.clone().unwrap_or_else(|| self.run_id.clone()),
+            seq,
+            live_text: text.to_string(),
+            progress_kind: progress_kind.to_string(),
+            provider_session_id: provider_thread_id.map(str::to_string),
+            kind: Some("thinking".into()),
+            ..Default::default()
+        };
+        let payload = json!({
+            "execution_lifetime": self.provider.lifetime,
+            "thread_id": self.thread_id,
+            "device_id": self.machine_name,
+        });
+        crate::status_slot::publisher_for(
+            self.provider.provider,
+            self.provider.adapter,
+            &self.session_id,
+        )
+        .publish(
+            crate::status_slot::StatusUpdate::phase(
+                &self.session_id,
+                &self.run_id,
+                &Utc::now().to_rfc3339(),
+                "thinking",
+            )
+            .with_payload(payload)
+            .with_preview(Some(preview)),
+        );
+    }
+
     pub fn persist_local_phase(
         &self,
         phase: &str,

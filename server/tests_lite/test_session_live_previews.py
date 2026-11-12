@@ -5,6 +5,7 @@ from datetime import timedelta
 from datetime import timezone
 from uuid import uuid4
 
+import pytest
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import Base
@@ -1492,3 +1493,56 @@ def test_claude_print_live_text_accumulates_into_one_preview_that_ends_complete(
     thinking = _claude_stream_event(session_id=session_id, seq=1, raw={"type": "content_block_delta", "delta": {"type": "thinking_delta"}})
     assert not is_claude_print_live_text_event(thinking)
     assert preview_payload_from_runtime_event(thinking, observation_id="t") is None
+
+
+def _console_thinking_event(*, provider: str, session_id, seq: int, text: str, labelled: bool = True) -> RuntimeEventIngest:
+    """What the OMP or Pi Console engine posts through the status slot for the model's thinking."""
+
+    source = f"{provider}_print"
+    payload = {
+        "progress_kind": f"{source}_stream",
+        "turn_id": "console-turn-1",
+        "seq": seq,
+        "run_id": "00000000-0000-0000-0000-000000000001",
+        "live_text": text,
+        "turn_completed": False,
+        "managed_transport": source,
+    }
+    if labelled:
+        payload["preview_kind"] = "thinking"
+    return RuntimeEventIngest(
+        runtime_key=f"{provider}:{session_id}",
+        session_id=session_id,
+        run_id="00000000-0000-0000-0000-000000000001",
+        provider=provider,
+        device_id="cinder",
+        source=source,
+        kind="progress_signal",
+        occurred_at=datetime.now(timezone.utc),
+        dedupe_key=f"{source}:thinking:{session_id}:{seq}",
+        payload=payload,
+    )
+
+
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_console_thinking_post_is_read_as_thinking_never_as_reply(provider):
+    from zerg.services.session_live_previews import PREVIEW_KIND_REPLY
+    from zerg.services.session_live_previews import PREVIEW_KIND_THINKING
+    from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
+
+    session_id = uuid4()
+    candidate = live_preview_candidate_from_runtime_event(
+        _console_thinking_event(provider=provider, session_id=session_id, seq=7, text="weighing the options"),
+        observation_id="obs-1",
+    )
+    assert candidate is not None
+    assert candidate.kind == PREVIEW_KIND_THINKING
+    assert candidate.kind != PREVIEW_KIND_REPLY
+    assert candidate.preview_text == "weighing the options"
+    assert candidate.source == f"{provider}_print"
+    # The same post without its label is not thinking: it falls through to the stream reader, which has no `event` to read.
+    unlabelled = live_preview_candidate_from_runtime_event(
+        _console_thinking_event(provider=provider, session_id=session_id, seq=8, text="x", labelled=False),
+        observation_id="obs-2",
+    )
+    assert unlabelled is None or unlabelled.kind != PREVIEW_KIND_THINKING
