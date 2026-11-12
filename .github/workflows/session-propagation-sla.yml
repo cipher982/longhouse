@@ -1,8 +1,9 @@
 name: Session Propagation SLA
 
 on:
-  schedule:
-    - cron: '17 11 * * *'
+  # No schedule: the daily one was gated on the repository variable
+  # SESSION_PROPAGATION_SLA_ENABLED, which was never set, so all 100 scheduled
+  # runs on record were skipped (checked 2026-11-12). Run it by hand.
   workflow_dispatch:
     inputs:
       attempts:
