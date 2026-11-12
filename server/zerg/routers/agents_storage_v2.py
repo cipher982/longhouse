@@ -8,6 +8,7 @@ import binascii
 import hashlib
 import json
 import logging
+import os
 from datetime import UTC
 from datetime import datetime
 from time import monotonic
@@ -1415,6 +1416,36 @@ async def _precheck_source_epoch(*, tenant_id: str, machine_id: str, payload: di
         return
 
 
+_ENVELOPE_COMMIT_SLOW_MS = float(os.getenv("LONGHOUSE_STORAGE_COMMIT_SLOW_MS", "1000"))
+
+
+class _CommitTimer:
+    """Where one envelope commit's wall time went, logged when it was slow.
+
+    A commit is a chain of awaits: two admissions, body read, parse, catalog
+    reads, enrichment, two seals and several catalog writes. Nothing showed
+    which of them an envelope waited on, so throughput could not be explained
+    from the server's side. Set LONGHOUSE_STORAGE_COMMIT_SLOW_MS=0 to log all.
+    """
+
+    def __init__(self) -> None:
+        self._started = self._last = monotonic()
+        self._stages: dict[str, float] = {}
+
+    def mark(self, name: str) -> None:
+        now = monotonic()
+        self._stages[name] = self._stages.get(name, 0.0) + (now - self._last) * 1000.0
+        self._last = now
+
+    def log_if_slow(self, lane: str) -> None:
+        total_ms = (monotonic() - self._started) * 1000.0
+        if total_ms < _ENVELOPE_COMMIT_SLOW_MS:
+            return
+        self.mark("rest")
+        breakdown = " ".join(f"{name}={value:.0f}ms" for name, value in sorted(self._stages.items(), key=lambda item: -item[1]))
+        logger.warning("storage_envelope_commit took %.0fms: %s lane=%s", total_ms, breakdown, lane)
+
+
 async def _commit_admitted_envelope(
     request: Request,
     auth_token: DeviceToken | object | None,
@@ -1427,14 +1458,18 @@ async def _commit_admitted_envelope(
     tenant_id = canonical_text(settings.archive_primary_tenant_id, "tenant_id", 255)
     sealed = None
     sealed_render = None
+    timer = _CommitTimer()
     try:
         # Bound body decode separately from catalog work. A slow catalog commit
         # must not retain scarce live admission and make unrelated live tips
         # look like storage-worker saturation.
         async with raw_workers.admission(lane):
+            timer.mark("admission_wait")
             payload = await _read_bounded_json(request)
+            timer.mark("read_body")
             machine_id = _authenticated_machine_id(auth_token, payload)
             await _precheck_source_epoch(tenant_id=tenant_id, machine_id=machine_id, payload=payload)
+            timer.mark("precheck_epoch")
             spec, parsed = await asyncio.to_thread(
                 _parse_envelope,
                 payload,
@@ -1442,6 +1477,7 @@ async def _commit_admitted_envelope(
                 machine_id=machine_id,
                 lane=lane,
             )
+            timer.mark("parse")
         catalogd = get_catalogd_client()
         if catalogd is None:
             raise CatalogUnavailable("catalogd is not supervised")
@@ -1449,6 +1485,7 @@ async def _commit_admitted_envelope(
             "storage.raw_object.exists.batch.v2",
             {"envelope_ids": [parsed["expected_envelope_id"]]},
         )
+        timer.mark("exists_check")
         objects = existing.get("objects")
         if not isinstance(objects, list) or len(objects) != 1 or not isinstance(objects[0], dict):
             raise CatalogUnavailable("catalog returned an invalid raw-object existence result")
@@ -1493,6 +1530,7 @@ async def _commit_admitted_envelope(
                 manifest_cache={},
                 lane=lane,
             )
+        timer.mark("enrich_render")
 
         # Admission guards the shared archive filesystem every tenant writes
         # to, so it runs for both lanes: a client that labels its own traffic
@@ -1502,8 +1540,10 @@ async def _commit_admitted_envelope(
             path="storage_v2",
             lane=lane,
         )
+        timer.mark("storage_admission")
 
         async with raw_workers.admission(lane):
+            timer.mark("seal_admission_wait")
             raw_task = asyncio.create_task(raw_workers.seal(spec, lane=parsed["lane"]))
             render_spec = parsed["render_spec"]
             render_task = asyncio.create_task(render_workers.seal(render_spec, lane=parsed["lane"])) if render_spec is not None else None
@@ -1524,6 +1564,7 @@ async def _commit_admitted_envelope(
                 # dedup. Failing here keeps the raw bytes uncommitted so the
                 # engine retries the same envelope.
                 sealed_render = await render_task
+        timer.mark("seal")
         render_manifest = None
         if sealed_render is not None and render_spec is not None:
             render_manifest = {
@@ -1593,6 +1634,7 @@ async def _commit_admitted_envelope(
             },
             timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
         )
+        timer.mark("catalog_commit")
         committed_receipt = _validated_receipt(
             committed.get("receipt"),
             expected_envelope_id=sealed.envelope_id,
@@ -1606,6 +1648,7 @@ async def _commit_admitted_envelope(
             # Longhouse AI title below, which is the single title authority
             # and promotes over a provider fallback once it lands.
             await _apply_provider_title(catalogd, spec.session_id, provider_title)
+            timer.mark("provider_title")
         if (
             committed.get("title_generation_required") is True
             and render_manifest is not None
@@ -1629,6 +1672,7 @@ async def _commit_admitted_envelope(
             # Provenance for sends: the user events in this batch are the
             # only chance to say which Longhouse receipt each one became.
             await link_ingested_user_inputs(catalogd, spec.session_id, list(render_spec.records))
+            timer.mark("link_inputs")
         # Wake clients whenever the commit changed what the read paths serve,
         # not when a message counter moved. An envelope of only system rows or
         # only excluded local-control rows still advances the session, and a
@@ -1669,6 +1713,7 @@ async def _commit_admitted_envelope(
                     },
                 )
             bus.publish(TOPIC_TIMELINE, payload)
+        timer.log_if_slow(lane)
         return committed_receipt
     except CatalogRemoteError as exc:
         if exc.code == "session_deleted" and sealed is not None:
