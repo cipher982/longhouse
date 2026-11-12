@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -204,6 +205,47 @@ class FileWatcher(threading.Thread):
             self._stop_event.wait(self.interval)
 
 
+def _frame_stage_times(data_line: str, client_wall_s: float) -> dict[str, float | None]:
+    """Wall-clock seconds of each stage a stream frame passed through, from the frame's own fields.
+
+    engine_stamp is the preview's timestamp (the Machine Agent's occurred_at), host_publish is the host's pubsub fan-out
+    time, sse_yield is when the stream handler built the frame. All four are on this machine's clock in the harness.
+    """
+
+    stages: dict[str, float | None] = {"engine_stamp": None, "host_publish": None, "sse_yield": None, "client_receive": client_wall_s}
+    if not data_line.startswith("data:"):
+        return stages
+    try:
+        frame = json.loads(data_line[5:])
+    except ValueError:
+        return stages
+    if not isinstance(frame, dict):
+        return stages
+    if isinstance(frame.get("server_fanout_at_ms"), int):
+        stages["host_publish"] = frame["server_fanout_at_ms"] / 1000.0
+    if isinstance(frame.get("server_now_ms"), int):
+        stages["sse_yield"] = frame["server_now_ms"] / 1000.0
+    preview = frame.get("transcript_preview")
+    stamp = preview.get("timestamp") if isinstance(preview, dict) else None
+    if isinstance(stamp, str):
+        with contextlib.suppress(ValueError):
+            stages["engine_stamp"] = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    return stages
+
+
+class TimedLine(str):
+    """A stream line with the monotonic and wall-clock time its reader took it off the socket."""
+
+    received_at: float
+    received_wall: float
+
+    def __new__(cls, text: str) -> TimedLine:
+        line = super().__new__(cls, text)
+        line.received_at = time.monotonic()
+        line.received_wall = time.time()
+        return line
+
+
 class StreamWatcher(threading.Thread):
     """Read a server-sent-event stream; a marker's time is when the frame carrying it arrived."""
 
@@ -223,6 +265,7 @@ class StreamWatcher(threading.Thread):
         self.prompt = ""  # the cell's prompt; a preview equal to it is an echo of the prompt, counted and set aside
         self.prompt_echoes = 0
         self.tool_steps: list[tuple[str, str, str]] = []  # (session id, tool name, text) of each tool preview frame
+        self.marker_stages: dict[str, dict[str, float | None]] = {}  # marker -> wall-clock seconds of each stage of its first frame
         self._stop_event = stop
 
     def _record_preview(self, data: str) -> None:
@@ -243,7 +286,7 @@ class StreamWatcher(threading.Thread):
         pending = set(self.markers)
         try:
             for line in self.open_stream():
-                now = time.monotonic()
+                now = getattr(line, "received_at", None) or time.monotonic()
                 self.response_times.append(now)
                 text = line.strip()
                 if text.startswith("event:"):
@@ -254,6 +297,7 @@ class StreamWatcher(threading.Thread):
                     self._record_preview(text[5:])
                 for marker in [m for m in pending if m in line]:
                     self.first_seen[marker] = now
+                    self.marker_stages[marker] = _frame_stage_times(text, getattr(line, "received_wall", None) or time.time())
                     pending.discard(marker)
                 if text.startswith("data:") and '"transcript_preview": {' in text:
                     with contextlib.suppress(ValueError):
@@ -356,7 +400,7 @@ class RuntimeApi:
             self._lane("workspace (served to web)", "/api/timeline/sessions/{id}/workspace", browser=True, interval=0.1),
         ]
 
-    def _stream_one(self, session: str, out: queue.Queue[str], stop: threading.Event) -> None:
+    def _stream_one(self, session: str, out: queue.Queue[TimedLine | str], stop: threading.Event) -> None:
         while not stop.is_set():
             connection = http.client.HTTPConnection(self.host, self.port, timeout=30)
             try:
@@ -365,13 +409,13 @@ class RuntimeApi:
                 connection.request("GET", f"/api/timeline/sessions/{session}/workspace/stream", headers=headers)
                 response = connection.getresponse()
                 if response.status != 200:
-                    out.put(f"harness: workspace stream HTTP {response.status} for {session}\n")
+                    out.put(TimedLine(f"harness: workspace stream HTTP {response.status} for {session}\n"))
                     return
                 while not stop.is_set():
                     raw = response.readline()
                     if not raw:
                         break
-                    out.put(raw.decode("utf-8", errors="replace"))
+                    out.put(TimedLine(raw.decode("utf-8", errors="replace")))
             except OSError:
                 pass
             finally:
@@ -379,18 +423,30 @@ class RuntimeApi:
             stop.wait(0.2)
 
     def stream_lines(self, stop: threading.Event) -> Iterator[str]:
-        """The workspace SSE (what the web client subscribes to) of every session, as lines, as each session appears."""
+        """The workspace SSE (what the web client subscribes to) of every session, as lines, as each session appears.
 
-        out: queue.Queue[str] = queue.Queue()
+        Each line is a ``TimedLine`` stamped when the reader thread took it off the socket. Finding new sessions is a
+        blocking HTTP GET against the same host being measured; it runs on its own thread so that a slow host answering
+        it can never hold back lines that already arrived (it did: the median read 5 s on a loaded runner while the
+        frames were on the wire).
+        """
+
+        out: queue.Queue[TimedLine | str] = queue.Queue()
         started: set[str] = set()
-        last_scan = 0.0
+
+        def scan() -> None:
+            while not stop.is_set():
+                try:
+                    for session in self.session_ids():
+                        if session not in started:
+                            started.add(session)
+                            threading.Thread(target=self._stream_one, args=(session, out, stop), daemon=True).start()
+                except Exception:  # noqa: BLE001 - a failed scan is retried; a stream error is reported by its own reader
+                    pass
+                stop.wait(0.1)
+
+        threading.Thread(target=scan, daemon=True, name="lane-stream-scan").start()
         while not stop.is_set():
-            if time.monotonic() - last_scan > 0.1:
-                last_scan = time.monotonic()
-                for session in self.session_ids():
-                    if session not in started:
-                        started.add(session)
-                        threading.Thread(target=self._stream_one, args=(session, out, stop), daemon=True).start()
             try:
                 yield out.get(timeout=0.05)
             except queue.Empty:

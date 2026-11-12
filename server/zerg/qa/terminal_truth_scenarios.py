@@ -6,8 +6,11 @@ import argparse
 import contextlib
 import dataclasses
 import json
+import os
 import secrets
 import shutil
+import signal
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -243,6 +246,45 @@ def build_pass(
         raise
 
 
+def end_codex_sessions(pas: Pass, sessions: Sequence[str]) -> dict[str, Any]:
+    """Close a Codex Helm cell's managed session the way the product does, not by killing the terminal.
+
+    Killing the PTY's process group makes the `longhouse codex` wrapper detach: the bridge, its `codex app-server`
+    child and the `claude-channel serve` grandchild stay up on purpose so the session can be reattached
+    (`longhouse codex attach`), and a detached bridge has no expiry. A harness that only kills the terminal therefore
+    leaves three processes per cell, with parent pid 1, on the machine that ran it. The product's own end-of-session
+    command ends them; anything still holding this pass's directory afterwards is recorded and killed.
+    """
+
+    stopped: list[str] = []
+    for session in sessions:
+        with contextlib.suppress(Exception):
+            done = subprocess.run(
+                [str(pas.engine), "codex-bridge", "stop", "--session-id", session, "--force", "--reason", "terminal_truth_cell_end"],
+                env=pas.provider_environments["codex"],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+            if done.returncode == 0:
+                stopped.append(session)
+    return {"bridges_stopped": stopped}
+
+
+def leaked_processes(root: Path) -> list[str]:
+    """Processes whose command line still names ``root`` (a pass's scratch directory); each one is killed and reported."""
+
+    out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, check=False).stdout
+    leaked: list[str] = []
+    for line in out.splitlines():
+        pid_text, _, command = line.strip().partition(" ")
+        if str(root) in command and pid_text.isdigit() and int(pid_text) != os.getpid():
+            leaked.append(f"{pid_text} {command[:160]}")
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(int(pid_text), signal.SIGKILL)
+    return leaked
+
+
 def stop_pass(pas: Pass, keep: bool) -> float:
     t0 = time.monotonic()
     with contextlib.suppress(Exception):
@@ -250,6 +292,9 @@ def stop_pass(pas: Pass, keep: bool) -> float:
     pas.proxy.close()
     pas.host.stop()
     pas.model.stop()
+    leaked = leaked_processes(pas.root)
+    if leaked:
+        print(f"terminal truth: {len(leaked)} process(es) outlived the pass and were killed:\n  " + "\n  ".join(leaked), flush=True)
     if not keep:
         shutil.rmtree(pas.root, ignore_errors=True)
     return time.monotonic() - t0
@@ -424,6 +469,14 @@ def run_cell_in(
                     else check_live_previews(watcher.previews, text, REASONING_WORD)
                 )
                 obs.stream_first_seen = dict(watcher.first_seen)
+                wall_at_submit = time.time() - (time.monotonic() - submitted)
+                result.stream_stage_s = {
+                    marker: {
+                        "paint": (reference[marker] - submitted) if reference.get(marker) is not None else None,
+                        **{name: (t - wall_at_submit if t is not None else None) for name, t in stage_times.items()},
+                    }
+                    for marker, stage_times in watcher.marker_stages.items()
+                }
                 obs.previews = watcher.previews
                 obs.tool_on_client = bool(plan.tool_token and (plan.tool_token in watcher.first_seen or watcher.tool_steps))
         if plan.tool_token:
@@ -461,6 +514,8 @@ def run_cell_in(
     finally:
         stop.set()
         t0 = time.monotonic()
+        if provider == "codex" and mode == "helm":
+            result.diagnostics.update(end_codex_sessions(pas, sorted(api.known_sessions)))
         if session is not None:
             session.close()
         result.timing["teardown_s"] = time.monotonic() - t0

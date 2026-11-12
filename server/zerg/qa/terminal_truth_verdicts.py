@@ -320,6 +320,9 @@ class CellResult:
     model_sent_s: dict[str, float | None] = field(default_factory=dict)
     diagnostics: dict[str, Any] = field(default_factory=dict)
     file_first_seen_s: dict[str, float | None] = field(default_factory=dict)
+    # marker -> where its first SSE frame was in time, seconds after submit: engine_stamp (the event's occurred_at), host_publish
+    # (server_fanout_at_ms), sse_yield (server_now_ms when the frame was built), client_receive; recorded, never judged
+    stream_stage_s: dict[str, dict[str, float | None]] = field(default_factory=dict)
     file_paths: list[str] = field(default_factory=list)
     file_scan_gap_s: float | None = None
     split: dict[str, Any] = field(default_factory=dict)
