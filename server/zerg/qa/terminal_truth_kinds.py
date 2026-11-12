@@ -638,6 +638,28 @@ def _warm_helm_session(session: ProviderPtySession, api: RuntimeApi, nonce: str)
     time.sleep(6)  # the warm-up reply finishes and the provider is idle again
 
 
+STREAM_OPEN_WAIT_S = 15.0
+
+
+def _wait_for_open_streams(api: RuntimeApi, timeout: float = STREAM_OPEN_WAIT_S) -> tuple[int, int, float]:
+    """Hold the prompt until the workspace stream of every session the cell already has is subscribed.
+
+    The stream reader finds a session by listing the host and then connects, on its own threads. A fixed pause before the prompt
+    lost that race about one run in four on a loaded machine (2026-11-12: three of thirteen Codex Helm subagent runs): the subagent
+    start was published 50 ms before the stream subscribed, to no subscriber, and the cell read "the host does not publish it".
+    The host does not replay previews to a first connection, so a frame published before the subscription is gone for that client.
+    ``RuntimeApi.subscribed_streams`` holds a session once its stream delivered the first ``workspace_changed``, which the host
+    sends from inside its subscription. Returns (streams subscribed, sessions known, seconds waited); a cell with no session yet (a
+    cold Helm launch) has nothing to wait for and returns at once.
+    """
+
+    started = time.monotonic()
+    wanted = set(api.session_ids())
+    while wanted - api.subscribed_streams and time.monotonic() - started < timeout:
+        time.sleep(0.02)
+    return len(wanted & api.subscribed_streams), len(wanted), time.monotonic() - started
+
+
 def _rel(value: float | None, base: float) -> float | None:
     return None if value is None else round(value - base, 3)
 
@@ -781,6 +803,7 @@ def run_kind_cell_in(
         time.sleep(
             0.5
         )  # the facts lane reads a few idle baselines before the prompt: a state it shows later is the scenario's, not left over
+        streams_open, streams_wanted, stream_wait_s = _wait_for_open_streams(api)
         if observer is not None:
             observer.before_submit(pas.host.url, api.session_ids(), plan)
         submitted = time.monotonic()
@@ -863,6 +886,8 @@ def run_kind_cell_in(
         obs.engine_other = {m: t for m, t in pas.proxy.other_posts.items() if m in wanted}
         out["sse_frames"] = [{**f, "t": round(f["t"] - submitted, 3)} for f in stream.frames]
         out["sse_event_counts"] = stream.event_counts
+        # A frame published before the stream subscribed went to nobody: the host does not replay previews to a first connection.
+        out["stream_open_before_prompt"] = {"open": streams_open, "sessions": streams_wanted, "waited_s": round(stream_wait_s, 3)}
         out["lane_errors"] = {w.lane.name: w.errors for w in watchers if w.errors}
         out["file_scan_gap_s"] = files.resolution_s
         out["file_paths"] = sorted(set(files.first_path.values()))
@@ -883,6 +908,15 @@ def run_kind_cell_in(
     receipt = _served_per_turn(pas, plan)
     obs.turns_served = receipt
     checks = judge_kinds(obs)
+    if streams_open < streams_wanted:
+        # Without this the stream lane would read "absent" and blame the host for a frame no client was attached to receive.
+        checks.append(
+            (
+                "the workspace stream was subscribed before the prompt",
+                False,
+                f"{streams_open} of {streams_wanted} session streams subscribed after {stream_wait_s:.1f} s",
+            )
+        )
     out["checks"] = [{"name": n, "ok": ok, "detail": d} for n, ok, d in checks]
     out["outcome"] = "measured" if all(ok for _, ok, _ in checks) else "fail"
     if out["outcome"] == "fail":

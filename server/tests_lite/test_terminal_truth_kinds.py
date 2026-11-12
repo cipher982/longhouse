@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import http.client
+import http.server
 import json
+import queue
 import re
 import threading
 
@@ -11,6 +13,7 @@ import pytest
 
 from zerg.qa import scripted_model_server as server_module
 from zerg.qa import terminal_truth_kinds as kinds
+from zerg.qa.terminal_truth_lanes import RuntimeApi
 from zerg.qa.terminal_truth_lanes import TeeProxy
 from zerg.qa.terminal_truth_verdicts import CellSpec
 
@@ -200,3 +203,56 @@ def test_reasoning_prefix_words_are_unique_to_the_cell_and_the_default_words_are
     assert [w for w, _ in server_module.reasoning_chunks(legacy)] == ["THINKING000 ", "THINKING001 "]
     with pytest.raises(ValueError):
         server_module.parse_pacing({"rate": 5, "reasoning_prefix": "bad prefix"})
+
+
+# ---- the prompt waits for the stream to be subscribed ------------------------------------------------------------------------
+
+
+class _SseHandler(http.server.BaseHTTPRequestHandler):
+    """A host that sends ``connected`` at once and its first ``workspace_changed`` (the subscription) only when released."""
+
+    release = threading.Event()
+
+    def do_GET(self) -> None:  # noqa: N802 - http.server's name
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        self.wfile.write(b"event: connected\r\ndata: {}\r\n\r\n")
+        self.wfile.flush()
+        self.release.wait(5)
+        self.wfile.write(b'event: workspace_changed\r\ndata: {"session_id": "s1"}\r\n\r\n')
+        self.wfile.flush()
+
+    def log_message(self, *_args: object) -> None:
+        pass
+
+
+def test_the_prompt_waits_for_the_stream_subscription_not_for_the_connection() -> None:
+    """2026-11-12: a subagent start published 50 ms before the stream subscribed went to no subscriber and read as a host drop."""
+
+    _SseHandler.release.clear()
+    host = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SseHandler)
+    threading.Thread(target=host.serve_forever, daemon=True).start()
+    stop = threading.Event()
+    try:
+        api = RuntimeApi(f"http://127.0.0.1:{host.server_address[1]}", "token")
+        api.pinned_sessions = ["s1"]
+        lines: queue.Queue = queue.Queue()
+        threading.Thread(target=api._stream_one, args=("s1", lines, stop), daemon=True).start()
+        assert "connected" in lines.get(timeout=5)  # the connection is up and the host has said so
+        opened, wanted, waited = kinds._wait_for_open_streams(api, timeout=0.3)
+        assert (opened, wanted) == (0, 1) and waited >= 0.3, "connected alone must not count as subscribed"
+
+        threading.Timer(0.2, _SseHandler.release.set).start()
+        opened, wanted, waited = kinds._wait_for_open_streams(api, timeout=5)
+        assert (opened, wanted) == (1, 1) and 0.15 <= waited < 3
+    finally:
+        stop.set()
+        _SseHandler.release.set()
+        host.shutdown()
+        host.server_close()
+
+
+def test_a_cell_with_no_session_yet_does_not_wait() -> None:
+    api = RuntimeApi("http://127.0.0.1:9", "token")  # no pinned session and no workspace: nothing is listed, no request is made
+    assert kinds._wait_for_open_streams(api, timeout=5)[:2] == (0, 0)
