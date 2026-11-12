@@ -97,7 +97,12 @@ def _stop_group(process: subprocess.Popen[Any] | None) -> None:
     except subprocess.TimeoutExpired:
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(process.pid, signal.SIGKILL)
+    try:
         process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        # SIGKILL is pending but the process is still in the kernel (a process stuck in disk wait cannot be reaped
+        # until the disk answers). Carry on: the pass is over, and one unkillable host must not discard the run.
+        print(f"terminal truth: process {process.pid} did not exit after SIGKILL; continuing", flush=True)
 
 
 def pace_json(pace: Pacing) -> dict[str, Any]:

@@ -321,10 +321,27 @@ jobs:
       # hide the passes after it. The harness judges every declared cell and exits non-zero on any non-pass, any
       # declared cell that did not run and any stale known-bad declaration. Scratch (PTY recordings, host logs)
       # is kept for the first pass and for every failing pass; other passes are deleted as they finish.
+      # The cells write a lot (SQLite, provider homes, PTY recordings). On the runner's shared disk two of the
+      # twenty passes of the 2026-11-12 record ran into 20 to 80 percent iowait and failed (one host process could
+      # not even be killed). Scratch goes on tmpfs when it can run executables. The path stays short: managed
+      # Helm binds unix sockets under it, and a socket path is limited to 108 bytes.
+      - name: Put scratch on tmpfs
+        run: |
+          set -uo pipefail
+          shm=/dev/shm/tt
+          mkdir -p "$shm" && printf '#!/bin/sh\nexit 0\n' > "$shm/.probe" && chmod +x "$shm/.probe" && "$shm/.probe"
+          if [[ $? -eq 0 ]]; then
+            echo "TT_SCRATCH_ROOT=$shm" >> "$GITHUB_ENV"
+            echo "scratch on tmpfs: $shm"
+          else
+            echo "::warning::/dev/shm cannot run executables here; scratch stays on disk"
+          fi
+          rm -f "$shm/.probe"
+
       - name: Run passes
         run: |
           set +e
-          scratch=/tmp/agents/tt
+          scratch="${TT_SCRATCH_ROOT:-/tmp/agents/tt}"
           mkdir -p "$scratch"
           find "$scratch" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort > "$TT_OUT/scratch-before.txt"
           : > "$TT_OUT/scratch-kept.txt"
@@ -404,7 +421,7 @@ jobs:
         if: always()
         run: |
           set -uo pipefail
-          scratch=/tmp/agents/tt
+          scratch="${TT_SCRATCH_ROOT:-/tmp/agents/tt}"
           if [[ -s "$TT_OUT/scratch-kept.txt" ]]; then
             # PTY recordings and host/model/engine logs; never the provider home (h/) or the SQLite database.
             awk '{print $2}' "$TT_OUT/scratch-kept.txt" | sort -u > "$TT_OUT/scratch-new.txt"
@@ -438,8 +455,9 @@ jobs:
         if: always()
         run: |
           set -uo pipefail
-          if [[ -s "${TT_OUT:-/nonexistent}/scratch-before.txt" || -d /tmp/agents/tt ]]; then
-            for dir in /tmp/agents/tt/*; do
+          scratch="${TT_SCRATCH_ROOT:-/tmp/agents/tt}"
+          if [[ -s "${TT_OUT:-/nonexistent}/scratch-before.txt" || -d "$scratch" ]]; then
+            for dir in "$scratch"/*; do
               name="$(basename "$dir")"
               [[ "$name" =~ ^[0-9a-f]{4}$ ]] || continue
               grep -qxF "$name" "$TT_OUT/scratch-before.txt" 2>/dev/null || rm -rf -- "$dir"

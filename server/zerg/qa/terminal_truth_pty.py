@@ -63,7 +63,8 @@ def clean_environ(**extra: str) -> dict[str, str]:
 
 
 # Short on purpose: managed Helm binds unix sockets under HOME and macOS caps a socket path at 104 bytes.
-SCRATCH_ROOT = Path("/tmp/agents/tt")
+# TT_SCRATCH_ROOT moves it (the CI lane puts it on tmpfs so the cells do not queue on the runner's shared disk); it must stay short.
+SCRATCH_ROOT = Path(os.environ.get("TT_SCRATCH_ROOT") or "/tmp/agents/tt")
 
 
 ROWS, COLUMNS = 40, 132
