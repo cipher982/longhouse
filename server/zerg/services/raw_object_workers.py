@@ -900,7 +900,7 @@ def get_raw_object_worker_pool() -> RawObjectWorkerPool:
         _pool = RawObjectWorkerPool(
             storage_v2_root(),
             live_workers=_env_positive_int("LONGHOUSE_STORAGE_RAW_LIVE_WORKERS", 1),
-            repair_workers=_env_positive_int("LONGHOUSE_STORAGE_RAW_REPAIR_WORKERS", 1),
+            repair_workers=_env_positive_int("LONGHOUSE_STORAGE_RAW_REPAIR_WORKERS", 2),
             user_read_workers=_env_positive_int("LONGHOUSE_STORAGE_RAW_READ_WORKERS", 1),
             queue_multiplier=_env_positive_int("LONGHOUSE_STORAGE_RAW_QUEUE_MULTIPLIER", 2),
         )

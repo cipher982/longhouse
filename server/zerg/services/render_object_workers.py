@@ -379,7 +379,7 @@ def get_render_object_worker_pool() -> RenderObjectWorkerPool:
         _pool = RenderObjectWorkerPool(
             storage_v2_root(),
             live_workers=_env_positive_int("LONGHOUSE_STORAGE_RENDER_LIVE_WORKERS", 1),
-            repair_workers=_env_positive_int("LONGHOUSE_STORAGE_RENDER_REPAIR_WORKERS", 1),
+            repair_workers=_env_positive_int("LONGHOUSE_STORAGE_RENDER_REPAIR_WORKERS", 2),
             user_read_workers=_env_positive_int("LONGHOUSE_STORAGE_RENDER_READ_WORKERS", 1),
             queue_multiplier=_env_positive_int("LONGHOUSE_STORAGE_RENDER_QUEUE_MULTIPLIER", 2),
         )

@@ -156,7 +156,13 @@ _SAFE_RETRY_METHODS = {
 # the 1 s hard-failure budget. The default client deadline is the hard bound;
 # health probes and other callers that need a tighter bound pass one explicitly.
 DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS = 1.0
-DEFAULT_CATALOG_RPC_MAX_CONCURRENCY = 8
+# The gate bounds connections, not catalog work: catalogd queues writes on its
+# one writer and reads on their own executors. At 8 it was the first queue a
+# bulk import hit (about six calls per envelope), and interactive reads waited
+# behind import commits in it. At 32 imports queue at the writer instead, which
+# is the stage that actually serializes (write-path-first-principles.md,
+# "Bottleneck tiers").
+DEFAULT_CATALOG_RPC_MAX_CONCURRENCY = 32
 
 # Launch lifecycle RPCs do not belong under the hot-read budget. They are
 # human-initiated and low-frequency, and the two costs are wildly asymmetric: a

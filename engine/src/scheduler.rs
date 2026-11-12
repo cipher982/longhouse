@@ -35,10 +35,12 @@ const LIVE_RESERVED: usize = LIVE_IN_FLIGHT_CAP;
 
 /// Concurrency budget shared by the Retry and Scan lanes.
 ///
-/// Retry and Scan share eight background slots. The Runtime Host's explicit
+/// Retry and Scan share sixteen background slots. The Runtime Host's explicit
 /// backpressure and the live-latency guard still shrink archive request sizes,
-/// but do not reduce this concurrency budget.
-pub const BACKLOG_CAP: usize = 8;
+/// but do not reduce this concurrency budget. At eight, an import from a fast
+/// link kept about 5.6 envelopes in flight and shipped about 40 MB/s while the
+/// host could take more (write-path-first-principles.md, "Bottleneck tiers").
+pub const BACKLOG_CAP: usize = 16;
 const SCAN_IN_FLIGHT_CAP: usize = BACKLOG_CAP;
 
 /// Live capacity plus the full backlog budget. CPU count remains useful for
