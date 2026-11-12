@@ -37,6 +37,9 @@ const BRIDGE_RUNTIME_SOURCE: &str =
 const DEFAULT_PROGRESS_THROTTLE_MS: u64 = 1500;
 const LIVE_RUNTIME_EVENT_TIMEOUT: Duration = Duration::from_millis(1500);
 const LIVE_RUNTIME_EVENT_SLOW_LOG_MS: u128 = 500;
+/// Pauses between attempts to send the newest live snapshot after a failed POST (see `run_live_runtime_event_worker`).
+const LIVE_RUNTIME_EVENT_RETRY_DELAYS_MS: &[u64] =
+    &[100, 250, 500, 1_000, 1_000, 1_000, 1_000, 1_000];
 // Runtime events are the live transcript/control signal. A transient Runtime
 // Host restart must not turn into a permanent blank mobile transcript. Keep a
 // batch in the bridge for a bounded retry window, while non-retryable 4xx
@@ -6075,6 +6078,15 @@ async fn fail_pending_pause_requests(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveIngest {
+    Delivered,
+    /// Refused for a reason resending cannot fix (a 4xx other than 429).
+    Dropped,
+    /// Timed out, failed to connect or got a 5xx or 429.
+    Retry,
+}
+
 fn spawn_runtime_event_worker(
     sink: BridgeRuntimeSink,
     mut rx: mpsc::UnboundedReceiver<Vec<Value>>,
@@ -6093,18 +6105,61 @@ fn spawn_runtime_event_worker(
 
 fn spawn_live_runtime_event_worker(
     sink: BridgeRuntimeSink,
-    mut rx: mpsc::UnboundedReceiver<Vec<Value>>,
+    rx: mpsc::UnboundedReceiver<Vec<Value>>,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        while let Some(first_batch) = rx.recv().await {
-            let mut batches = vec![first_batch];
-            while let Ok(next_batch) = rx.try_recv() {
-                batches.push(next_batch);
+    tokio::spawn(run_live_runtime_event_worker(
+        sink,
+        rx,
+        LIVE_RUNTIME_EVENT_RETRY_DELAYS_MS,
+    ))
+}
+
+/// Deliver live transcript snapshots, newest first, without ever making fresh text wait on stale text.
+///
+/// Every live event carries the whole reply so far, so a newer snapshot supersedes every older one. A failed POST
+/// therefore keeps its events only to merge them with whatever arrived meanwhile (`coalesce_runtime_event_batches`
+/// keeps the highest sequence per item) and sends that merge after a short pause. It used to retry the stale batch on
+/// the shared retry schedule (100 ms, 500 ms, 1 s, 2.5 s, ...) while every newer snapshot queued behind it, so one slow
+/// or failed request froze the live preview for seconds and then released it all at once. Snapshots still unsent after
+/// the delays run out are dropped: the durable transcript path carries the text the live lane cannot.
+async fn run_live_runtime_event_worker(
+    sink: BridgeRuntimeSink,
+    mut rx: mpsc::UnboundedReceiver<Vec<Value>>,
+    retry_delays_ms: &[u64],
+) {
+    let mut carried: Vec<Value> = Vec::new();
+    let mut failures = 0usize;
+    loop {
+        let mut batches = Vec::new();
+        if carried.is_empty() {
+            match rx.recv().await {
+                Some(first_batch) => batches.push(first_batch),
+                None => break,
             }
-            let events = coalesce_runtime_event_batches(batches);
-            sink.post_runtime_events_live(events).await;
+        } else {
+            batches.push(std::mem::take(&mut carried));
         }
-    })
+        while let Ok(next_batch) = rx.try_recv() {
+            batches.push(next_batch);
+        }
+        let events = coalesce_runtime_event_batches(batches);
+        match sink.post_runtime_events_live_once(&events).await {
+            LiveIngest::Retry => match retry_delays_ms.get(failures) {
+                Some(delay_ms) => {
+                    failures += 1;
+                    carried = events;
+                    tokio::time::sleep(Duration::from_millis(*delay_ms)).await;
+                }
+                None => {
+                    eprintln!(
+                        "[codex-bridge] live runtime ingest gave up after {failures} retries; newer snapshots follow"
+                    );
+                    failures = 0;
+                }
+            },
+            LiveIngest::Delivered | LiveIngest::Dropped => failures = 0,
+        }
+    }
 }
 
 fn coalesce_runtime_event_batches(batches: Vec<Vec<Value>>) -> Vec<Value> {
@@ -6469,7 +6524,14 @@ impl BridgeRuntimeSink {
         });
     }
 
+    /// Fallback for a sink with no live worker: one attempt, then the ordered retry path.
     async fn post_runtime_events_live(&self, events: Vec<Value>) {
+        if self.post_runtime_events_live_once(&events).await == LiveIngest::Retry {
+            self.post_runtime_events_blocking(events).await;
+        }
+    }
+
+    async fn post_runtime_events_live_once(&self, events: &[Value]) -> LiveIngest {
         let url = format!(
             "{}/api/agents/runtime/events/batch",
             self.api_url.trim_end_matches('/')
@@ -6498,6 +6560,7 @@ impl BridgeRuntimeSink {
                         events.len()
                     );
                 }
+                LiveIngest::Delivered
             }
             Ok(response) => {
                 let status = response.status();
@@ -6508,17 +6571,21 @@ impl BridgeRuntimeSink {
                         "[codex-bridge] live runtime ingest retrying after {status}: {}",
                         truncate_tail_chars(&body, 512)
                     );
-                    self.post_runtime_events_blocking(events).await;
+                    LiveIngest::Retry
                 } else {
                     eprintln!(
                         "[codex-bridge] live runtime ingest dropped: {status} {}",
                         truncate_tail_chars(&body, 512)
                     );
+                    LiveIngest::Dropped
                 }
             }
             Err(err) => {
-                eprintln!("[codex-bridge] live runtime ingest retrying after error: {err}");
-                self.post_runtime_events_blocking(events).await;
+                eprintln!(
+                    "[codex-bridge] live runtime ingest retrying after error: {err} (after {} ms)",
+                    started.elapsed().as_millis()
+                );
+                LiveIngest::Retry
             }
         }
     }
@@ -8608,6 +8675,160 @@ mod tests {
         assert!(!live_texts.contains(&"First.Second."));
     }
 
+    /// Local HTTP stand-in for the Runtime Host's batch endpoint: answers the first `fail_first` requests 503 and the rest
+    /// 200, and reports each request's JSON body on a channel.
+    async fn serve_runtime_batches(
+        fail_first: usize,
+    ) -> (String, mpsc::UnboundedReceiver<(Instant, Value)>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let mut served = 0usize;
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buffer = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let body = loop {
+                    let n = stream.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        break None;
+                    }
+                    buffer.extend_from_slice(&chunk[..n]);
+                    let Some(head_end) = buffer.windows(4).position(|w| w == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let head = String::from_utf8_lossy(&buffer[..head_end]).to_ascii_lowercase();
+                    let length = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if buffer.len() >= head_end + 4 + length {
+                        break Some(buffer[head_end + 4..head_end + 4 + length].to_vec());
+                    }
+                };
+                let Some(body) = body else { continue };
+                let _ = tx.send((Instant::now(), serde_json::from_slice(&body).unwrap()));
+                served += 1;
+                let status = if served <= fail_first {
+                    "503 Service Unavailable"
+                } else {
+                    "200 OK"
+                };
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}"
+                );
+                let _ = stream.write_all(reply.as_bytes()).await;
+            }
+        });
+        (url, rx)
+    }
+
+    fn live_snapshot_sink(api_url: String) -> BridgeRuntimeSink {
+        BridgeRuntimeSink {
+            http: reqwest::Client::new(),
+            api_url,
+            api_token: "token".to_string(),
+            session_id: "session-123".to_string(),
+            run_id: Some("run-123".to_string()),
+            machine_name: Some("test-box".to_string()),
+            thread_id: Some("thread-abc".to_string()),
+            local_db_path: None,
+            runtime_tx: None,
+            live_runtime_tx: None,
+        }
+    }
+
+    fn live_snapshot(sink: &BridgeRuntimeSink, seq: u64, text: &str) -> Vec<Value> {
+        vec![sink.live_transcript_delta_event(
+            "item/agentMessage/delta",
+            "x",
+            Some("turn-1"),
+            "item-1",
+            seq,
+            seq,
+            text,
+            false,
+            Utc::now(),
+        )]
+    }
+
+    /// A failed POST must not hold the live preview back: what the Runtime Host receives next is the newest snapshot,
+    /// merged with everything that arrived during the pause, not the stale batch that failed.
+    #[tokio::test]
+    async fn live_worker_sends_the_newest_snapshot_after_a_failed_post() {
+        let (url, mut requests) = serve_runtime_batches(1).await;
+        let sink = live_snapshot_sink(url);
+        let (tx, rx) = mpsc::unbounded_channel::<Vec<Value>>();
+        let worker = tokio::spawn(run_live_runtime_event_worker(sink.clone(), rx, &[300]));
+
+        tx.send(live_snapshot(&sink, 1, "A")).unwrap();
+        let (failed_at, failed) = tokio::time::timeout(Duration::from_secs(5), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed["events"][0]["payload"]["seq"], 1);
+
+        // These arrive while the worker waits to retry.
+        tx.send(live_snapshot(&sink, 2, "AB")).unwrap();
+        tx.send(live_snapshot(&sink, 3, "ABC")).unwrap();
+
+        let (retried_at, retried) = tokio::time::timeout(Duration::from_secs(5), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let events = retried["events"].as_array().unwrap();
+        assert_eq!(events.len(), 1, "one snapshot per item: {events:?}");
+        assert_eq!(events[0]["payload"]["seq"], 3);
+        assert_eq!(events[0]["payload"]["live_text"], "ABC");
+        assert!(retried_at.duration_since(failed_at) < Duration::from_secs(2));
+
+        // Fresh text after the retry goes straight out; nothing stale is replayed.
+        tx.send(live_snapshot(&sink, 4, "ABCD")).unwrap();
+        let (_, next) = tokio::time::timeout(Duration::from_secs(5), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(next["events"][0]["payload"]["seq"], 4);
+        assert!(requests.try_recv().is_err(), "no further requests expected");
+
+        drop(tx);
+        tokio::time::timeout(Duration::from_secs(5), worker)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    /// Retrying stops after the configured pauses and the worker keeps serving newer snapshots.
+    #[tokio::test]
+    async fn live_worker_gives_up_on_a_stale_snapshot_and_serves_the_next() {
+        let (url, mut requests) = serve_runtime_batches(3).await;
+        let sink = live_snapshot_sink(url);
+        let (tx, rx) = mpsc::unbounded_channel::<Vec<Value>>();
+        let worker = tokio::spawn(run_live_runtime_event_worker(sink.clone(), rx, &[10, 10]));
+
+        tx.send(live_snapshot(&sink, 1, "A")).unwrap();
+        for _ in 0..3 {
+            let (_, body) = tokio::time::timeout(Duration::from_secs(5), requests.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(body["events"][0]["payload"]["seq"], 1);
+        }
+        tx.send(live_snapshot(&sink, 2, "AB")).unwrap();
+        let (_, body) = tokio::time::timeout(Duration::from_secs(5), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(body["events"][0]["payload"]["seq"], 2);
+
+        drop(tx);
+        tokio::time::timeout(Duration::from_secs(5), worker)
+            .await
+            .unwrap()
+            .unwrap();
+    }
     #[tokio::test]
     async fn process_notification_resets_live_buffer_for_new_assistant_item() {
         let temp = tempfile::tempdir().unwrap();
