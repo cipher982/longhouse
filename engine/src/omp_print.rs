@@ -5181,9 +5181,12 @@ for line in sys.stdin:
     }
 
     fn runtime_events() -> Vec<Value> {
+        // The outbox directory is created by the first enqueued event, so
+        // a poll that runs before OMP's first one finds no directory yet.
         let directory = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
         std::fs::read_dir(directory)
-            .unwrap()
+            .into_iter()
+            .flatten()
             .filter_map(std::result::Result::ok)
             .map(|entry| entry.path())
             .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
