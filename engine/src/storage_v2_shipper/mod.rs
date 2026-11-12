@@ -700,7 +700,7 @@ mod tests {
         assert_ne!(repeated_transition[0].event_id, first_boundary_id);
     }
 
-    fn capabilities() -> StorageV2Capabilities {
+    pub(super) fn capabilities() -> StorageV2Capabilities {
         StorageV2Capabilities {
             protocol_version: 2,
             cutover: true,
@@ -9507,5 +9507,70 @@ mod wire_record_encoding_tests {
         );
         // Retries of an ambiguous outcome must send identical bytes.
         assert_eq!(converted, base64_record_body(&body).unwrap());
+    }
+
+    /// Every host shape gets a body it accepts: text records only where the
+    /// host advertises them, zstd only where it advertises that, and the same
+    /// source bytes in every case.
+    #[test]
+    fn wire_body_matches_what_each_host_accepts() {
+        let (body, raw) = stored_body();
+        let pending = PendingSourceEnvelope::new(
+            Uuid::new_v4(),
+            "/tmp/source.jsonl".to_string(),
+            0,
+            2,
+            "a".repeat(64),
+            encode_zstd(&body, "fixture").unwrap(),
+            Vec::new(),
+            raw.iter().map(|bytes| bytes.len() as u64).sum(),
+            2,
+            false,
+            false,
+        );
+        for zstd in [true, false] {
+            for text in [true, false] {
+                let mut host = super::tests::capabilities();
+                host.envelope_content_encodings = if zstd {
+                    vec!["zstd".to_string()]
+                } else {
+                    Vec::new()
+                };
+                host.envelope_record_encodings = if text {
+                    vec!["utf8".to_string(), "base64".to_string()]
+                } else {
+                    Vec::new()
+                };
+                let wire = wire_body(&pending, &host).unwrap();
+                let plain = if zstd {
+                    assert_eq!(
+                        wire == pending.request_body_zstd,
+                        text,
+                        "zstd={zstd} text={text}"
+                    );
+                    decode_zstd(&wire, "wire").unwrap()
+                } else {
+                    wire
+                };
+                let records = records_of(&plain);
+                assert_eq!(
+                    records.iter().any(|record| record.data.is_some()),
+                    text,
+                    "zstd={zstd} text={text}"
+                );
+                assert_eq!(
+                    records
+                        .iter()
+                        .map(|record| record.bytes().unwrap())
+                        .collect::<Vec<_>>(),
+                    raw
+                );
+                // An ambiguous outcome retries byte-identical content.
+                assert_eq!(
+                    wire_body(&pending, &host).unwrap(),
+                    wire_body(&pending, &host).unwrap()
+                );
+            }
+        }
     }
 }

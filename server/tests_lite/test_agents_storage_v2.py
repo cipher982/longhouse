@@ -1837,6 +1837,14 @@ async def test_storage_v2_parses_envelopes_in_a_worker_process(monkeypatch):
         assert rejected.status_code == 422, rejected.text
         assert rejected.json()["detail"]["code"] == "invalid_envelope"
 
+        # Contract errors keep their type across the process boundary, so the
+        # router still maps them to 403 and 422 rather than 500.
+        workers = storage_router.get_raw_object_worker_pool()
+        with pytest.raises(PermissionError):
+            await workers.parse_envelope(payload, tenant_id=payload["tenant_id"], machine_id="someone-else", lane="live")
+        with pytest.raises(ValueError):
+            await workers.parse_envelope(broken, tenant_id=payload["tenant_id"], machine_id="cinder", lane="live")
+
     assert parsed_in and os.getpid() not in parsed_in
 
 
@@ -2358,7 +2366,8 @@ def test_json_string_raw_record_cannot_acquire_native_provider_authority():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("encoding", ["zstd", "identity"])
-async def test_storage_v2_envelope_commits_in_each_advertised_encoding(monkeypatch, encoding):
+@pytest.mark.parametrize("record_encoding", ["utf8", "base64"])
+async def test_storage_v2_envelope_commits_in_each_advertised_encoding(monkeypatch, encoding, record_encoding):
     import zstandard
 
     async with _storage_v2_stack(
@@ -2371,9 +2380,15 @@ async def test_storage_v2_envelope_commits_in_each_advertised_encoding(monkeypat
         assert capabilities.json()["envelope_record_encodings"] == ["utf8", "base64"]
 
         payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())
+        if record_encoding == "utf8":
+            # The engine's wire form: records as text inside a zstd body.
+            payload["records"] = [
+                {"source_position": record["source_position"], "data": base64.b64decode(record["data_b64"]).decode()}
+                for record in payload["records"]
+            ]
         body = json.dumps(payload).encode()
         if encoding == "zstd":
-            body = zstandard.ZstdCompressor(level=1).compress(body)
+            body = zstandard.ZstdCompressor(level=3).compress(body)
         response = await stack.client.post(
             "/agents/storage/v2/envelopes",
             content=body,

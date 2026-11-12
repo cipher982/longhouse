@@ -132,6 +132,13 @@ _WORKER_CLOSE_TIMEOUT_SECONDS = 3.0
 logger = logging.getLogger(__name__)
 
 
+def _configure_worker_logging() -> None:
+    """Spawned workers start with bare logging; give them serve's format and level."""
+    from zerg.logging_config import configure_logging
+
+    configure_logging(os.getenv("LOG_LEVEL", "INFO"))
+
+
 def _executor_processes(executor: ProcessPoolExecutor) -> tuple[tuple[int, multiprocessing.Process], ...]:
     """Capture only the child identities owned by this executor generation."""
 
@@ -194,6 +201,7 @@ class _OwnedProcessPool:
         return ProcessPoolExecutor(
             max_workers=self.workers,
             mp_context=multiprocessing.get_context("spawn"),
+            initializer=_configure_worker_logging,
         )
 
     def submit(self, executor: ProcessPoolExecutor, fn: Callable[..., Any], *args: Any) -> asyncio.Future[Any]:
