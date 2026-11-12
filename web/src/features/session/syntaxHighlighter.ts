@@ -5,8 +5,13 @@
  * Only registers languages actually used in the app.
  *
  * This reduces bundle size by ~800KB.
+ *
+ * Import PrismLight from its own file, not from the package root: the root
+ * re-exports the full Prism build, and Vite's dev server then loads every
+ * refractor language (about 300 modules) as soon as a page uses this file.
  */
-import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
+/// <reference types="react-syntax-highlighter" />
+import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 // Import only the languages we need

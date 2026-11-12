@@ -437,6 +437,11 @@ function sceneUsesMockApi(scene: SceneName): boolean {
   );
 }
 
+// Click to launch sheet on crunch (4 vCPUs, 2 captures at a time, Vite dev server),
+// measured 2026-11-12 over 24 captures: 1.0 to 6.9 s, past the 5 s limit that
+// failed about half the launch frames. 20 s is 2.9x the slowest measurement.
+const LAUNCH_SHEET_TIMEOUT_MS = 20_000;
+
 const CSS_VARIANTS_DIR = path.join(REPO_ROOT, "scripts/ui/css-variants");
 
 function cssVariantPath(name: string): string {
@@ -1500,6 +1505,16 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
   }
 }
 
+// The launch sheet is a lazily loaded route (NewSessionPage) behind a click. Log
+// how long it takes to appear so a slow runner shows up in the capture log
+// before it turns into a timeout.
+async function openLaunchSheet(page: Page, readySelector: string): Promise<void> {
+  const clicked = Date.now();
+  await page.click("[data-testid='sessions-start-session']");
+  await page.waitForSelector(readySelector, { timeout: LAUNCH_SHEET_TIMEOUT_MS });
+  console.log(`  launch sheet visible ${Date.now() - clicked} ms after the click`);
+}
+
 async function captureBundle(
   _context: BrowserContext,
   page: Page,
@@ -1597,13 +1612,11 @@ async function captureBundle(
   // A host with sessions but no enrolled machine: the launch sheet explains
   // how to connect one.
   if (scene === "launch-no-machines") {
-    await page.click("[data-testid='sessions-start-session']");
-    await page.waitForSelector("[data-testid='launch-no-machines']", { timeout: 5000 });
+    await openLaunchSheet(page, "[data-testid='launch-no-machines']");
   }
 
   if (scene === "launch-unavailable") {
-    await page.click("[data-testid='sessions-start-session']");
-    await page.waitForSelector("[data-testid='launch-unavailable-providers']", { timeout: 5000 });
+    await openLaunchSheet(page, "[data-testid='launch-unavailable-providers']");
     await page.click("[data-testid='launch-signin-codex']");
     await page.waitForSelector("[data-testid='launch-signin-panel-codex']", { timeout: 5000 });
   }
@@ -1611,8 +1624,7 @@ async function captureBundle(
   // Open the launch sheet and expand its Model row so the frame carries the
   // recents the launch picker offers on this machine.
   if (scene === "launch-model-picker") {
-    await page.click("[data-testid='sessions-start-session']");
-    await page.waitForSelector("[data-testid='launch-model-select']", { timeout: 5000 });
+    await openLaunchSheet(page, "[data-testid='launch-model-select']");
     await page.click("[data-testid='launch-model-select'] summary");
     await page.waitForSelector("[data-testid='launch-model-select-input']", { timeout: 5000 });
   }
@@ -1620,8 +1632,7 @@ async function captureBundle(
   // Same sheet with a model actually chosen, so the collapsed row's caption
   // and value are both visible rather than assumed.
   if (scene === "launch-model-picked") {
-    await page.click("[data-testid='sessions-start-session']");
-    await page.waitForSelector("[data-testid='launch-model-select']", { timeout: 5000 });
+    await openLaunchSheet(page, "[data-testid='launch-model-select']");
     await page.click("[data-testid='launch-model-select'] summary");
     await page.getByRole("button", { name: /gpt-5\.6-luna/ }).click();
   }
