@@ -239,6 +239,23 @@ def container_rss_bytes(container: str) -> int:
     return int(float(number) * scale)
 
 
+def projection_lag(data_dir: Path) -> dict[str, int] | None:
+    """Sessions each derived projector still owes, read from the live catalog.
+
+    Import time alone rewards leaving projection behind; this is what was left.
+    """
+    path = data_dir / "longhouse-live.db"
+    if not path.exists():
+        return None
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5) as connection:
+            rows = connection.execute("select projector, count(*) from projector_state where projector in ('semantic-v2', 'search-v2') "
+                                      "and desired_revision > completed_revision group by projector").fetchall()
+    except sqlite3.Error:
+        return None
+    return {"semantic-v2": 0, "search-v2": 0} | {str(name): int(count) for name, count in rows}
+
+
 def engine_backlog(db_path: Path) -> dict[str, int] | None:
     if not db_path.exists():
         return None
@@ -514,6 +531,8 @@ def main() -> int:
                              "filesystem supports it, so a production-sized catalog costs no time); without it the host starts empty")
     parser.add_argument("--memory", default="4g", help="local Runtime Host memory limit (docker --memory)")
     parser.add_argument("--cpus", default=None, help="local Runtime Host CPU limit (docker --cpus); default unlimited")
+    parser.add_argument("--projection-timeout-secs", type=float, default=300.0,
+                        help="after a seeded local import, how long to wait for semantic and search projection to catch up")
     parser.add_argument("--engine-env", action="append", default=[], metavar="KEY=VALUE",
                         help="extra environment for the Machine Agent (repeatable); recorded in the result")
     parser.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
@@ -643,6 +662,7 @@ def main() -> int:
                                     "--compression", "zstd", "--log-dir", str(log_dir),
                                     "--machine-name", DEVICE_ID], env=engine_env,
                                   stdout=engine_log, stderr=subprocess.STDOUT, start_new_session=True)
+        lag_baseline = projection_lag(data_dir) if args.seed_data and not args.remote_url else None
         import_started = time.monotonic()
         # A transcript written before the engine watches is found only by the
         # startup reconciliation, which the engine defers 30 s on purpose. The
@@ -693,6 +713,19 @@ def main() -> int:
                 complete = elapsed
                 break
             time.sleep(1)
+        if lag_baseline is not None and complete is not None:
+            # Projection that falls behind is not a faster import: wait for both
+            # projectors to return to the seed's own backlog and time it.
+            result["projection_lag_baseline"] = lag_baseline
+            result["projection_lag_at_import"] = projection_lag(data_dir)
+            projected_deadline = time.monotonic() + args.projection_timeout_secs
+            while time.monotonic() < projected_deadline:
+                lag = projection_lag(data_dir)
+                if lag is not None and all(lag[name] <= lag_baseline[name] for name in lag_baseline):
+                    result["time_to_projected_s"] = round(time.monotonic() - import_started, 3)
+                    break
+                time.sleep(1)
+            result["projection_lag_final"] = projection_lag(data_dir)
         # The engine is fresh, so its lifetime socket bytes are the import (the
         # probe's reads are the harness's, not the engine's). A start sample
         # taken before its first socket opens reads as absent, not zero.
