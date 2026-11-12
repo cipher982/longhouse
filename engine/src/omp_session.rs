@@ -1645,9 +1645,8 @@ mod tests {
                     .is_ok(),
                 "launching from $HOME must accept OMP's /tmp relocation"
             );
-            let err =
-                verify_session_header(&path, "native-id", Some(non_home.to_str().unwrap()))
-                    .unwrap_err();
+            let err = verify_session_header(&path, "native-id", Some(non_home.to_str().unwrap()))
+                .unwrap_err();
             assert!(
                 !is_transient_header_error(&err),
                 "a workspace mismatch on a complete header is permanent, not transient"
