@@ -3052,9 +3052,8 @@
           "source": "antigravity_print runtime events"
         },
         "helm": {
-          "live_reply_text": "known_bad",
-          "source": "none",
-          "reason": "no structured source: agy acp cannot observe a TUI session (separate agent process, no attach or subscribe)"
+          "live_reply_text": "expected",
+          "source": "antigravity_helm_db runtime events (conversations/<id>.db steps row, read-only, schema-gated)"
         }
       },
       "transcript_signals": {

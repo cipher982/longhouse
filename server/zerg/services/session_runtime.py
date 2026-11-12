@@ -604,6 +604,7 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
         or is_claude_print_live_text_event(event)
         or _is_omp_helm_stream_event(event)
         or _is_pi_helm_stream_event(event)
+        or _is_antigravity_helm_stream_event(event)
     )
 
 
@@ -644,6 +645,16 @@ def _is_pi_helm_stream_event(event: RuntimeEventIngest) -> bool:
         and (event.source or "").strip().lower() == "pi_helm_channel"
         and event.kind == "progress_signal"
         and payload.get("progress_kind") == "pi_helm_stream"
+    )
+
+
+def _is_antigravity_helm_stream_event(event: RuntimeEventIngest) -> bool:
+    payload = event.payload or {}
+    return (
+        (event.provider or "").strip().lower() == "antigravity"
+        and (event.source or "").strip().lower() == "antigravity_helm_db"
+        and event.kind == "progress_signal"
+        and payload.get("progress_kind") == "antigravity_helm_stream"
     )
 
 

@@ -303,6 +303,44 @@ def test_pi_helm_stream_projects_live_text_and_completion(tmp_path):
     assert preview.provisional_complete is True
 
 
+def test_antigravity_helm_stream_projects_live_text_and_completion(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "antigravity_helm_stream.db")
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+
+    def event(session_id, offset_ms, seq, text, completed=False):
+        return RuntimeEventIngest(
+            runtime_key=f"antigravity:{session_id}",
+            session_id=session_id,
+            run_id="00000000-0000-0000-0000-000000000001",
+            provider="antigravity",
+            device_id="cinder",
+            source="antigravity_helm_db",
+            kind="progress_signal",
+            occurred_at=now + timedelta(milliseconds=offset_ms),
+            dedupe_key=f"antigravity-helm-progress:{session_id}:conv:1:{seq}",
+            payload={
+                "progress_kind": "antigravity_helm_stream",
+                "turn_id": "conv:1",
+                "seq": seq,
+                "live_text": text,
+                "turn_completed": completed,
+            },
+        )
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="antigravity")
+        batch = [event(session.id, 0, 1, "partial"), event(session.id, 10, 2, "partial answer", completed=True)]
+        assert ingest_runtime_events(db, batch).accepted == 2
+        db.commit()
+        row = db.get(SessionLivePreview, session.id)
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert row is not None
+    assert row.source == "antigravity_helm_db"
+    assert preview.text == "partial answer"
+    assert preview.provisional_complete is True
+
+
 def test_omp_print_stream_projects_partial_and_settled_assistant_message(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "omp_print_stream.db")
     now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)

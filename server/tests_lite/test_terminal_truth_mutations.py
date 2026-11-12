@@ -24,6 +24,7 @@ def test_every_defect_of_2026_11_11_has_a_mutation_and_a_named_stage() -> None:
         "omp-session-dir-rule",
         "opencode-part-type-check",
         "antigravity-step-update-arm",
+        "antigravity-helm-reader",
     }
     assert all(m.stages and m.cell.count("/") == 1 for m in MUTATIONS)
 

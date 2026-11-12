@@ -1,0 +1,1081 @@
+//! Live reply text for Antigravity Helm, read from the conversation database.
+//!
+//! Antigravity's TUI paints a reply token by token but writes its transcript
+//! only when a model step ends, and its hooks carry no text. The conversation
+//! database does carry it: while a model step streams, agy updates that step's
+//! row in `conversations/<id>.db` (SQLite, WAL mode) on every token, about
+//! 15 ms after painting it. This module follows that row read-only and states
+//! the accumulated reply text on the same live-preview path Console uses, so a
+//! client sees the reply as it streams instead of when the step ends.
+//!
+//! What the database holds (measured on agy 1.1.13 through 1.5.6, identical
+//! across all seven versions tried; `user_version` is 1 throughout):
+//!
+//! - `steps(idx, step_type, status, ..., step_payload)`, one row per step.
+//!   `step_type` 15 is a model response. `status` is 8 while it streams and 3
+//!   once it is done.
+//! - `step_payload` is protobuf without a published schema. Field 1 repeats
+//!   `step_type`; field 20 is the model response. Inside it, field 1 is the
+//!   reply text so far (plain UTF-8, cumulative, not a delta) and field 3 is
+//!   the model's thinking so far. Thinking is never read here: the preview
+//!   cannot label what kind of text it carries yet, so only the reply goes out.
+//!
+//! This is a private, undocumented surface, so the reader trusts none of it
+//! until it checks it, and stands down for the rest of the session on any
+//! surprise: an unrecognised `user_version`, a missing column, a payload that
+//! does not parse as the shape above, or repeated open and read errors. Standing
+//! down costs only the live text; the transcript still delivers each step when
+//! it ends, exactly as before.
+//!
+//! The reader must never disturb agy. It opens its own connection read-only,
+//! with `query_only` on and a 50 ms busy timeout, and holds no transaction
+//! between polls (each poll is one autocommit statement, so WAL checkpoints
+//! are never held back by it). It never writes, never opens a database whose
+//! `-wal` and `-shm` files are not both already there (opening a WAL database
+//! read-only without them would create them), and retries only on a backoff
+//! that grows to two seconds, never in a tight loop.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use rusqlite::{Connection, OpenFlags};
+use serde_json::{json, Value};
+
+/// Master switch. The terminal-truth mutation test flips this to prove the
+/// gate notices when the reader is gone.
+const READER_ENABLED: bool = true;
+
+pub const SOURCE: &str = "antigravity_helm_db";
+pub const PROGRESS_KIND: &str = "antigravity_helm_stream";
+
+/// The only `user_version` this reader understands.
+const SUPPORTED_USER_VERSION: i64 = 1;
+/// `steps.step_type` of a model response.
+const STEP_TYPE_MODEL_RESPONSE: u64 = 15;
+/// `steps.status` while a model step is streaming, and once it is done.
+const STATUS_STREAMING: i64 = 8;
+const STATUS_DONE: i64 = 3;
+
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// The thread wakes this often to see what is due and whether it should stop.
+const LOOP_SLICE: Duration = Duration::from_millis(25);
+const MAX_BACKOFF: Duration = Duration::from_secs(2);
+/// Consecutive failures after which the reader stands down for good.
+const MAX_CONSECUTIVE_ERRORS: u32 = 8;
+const BUSY_TIMEOUT: Duration = Duration::from_millis(50);
+
+/// Where the reader looks.
+#[derive(Debug, Clone)]
+pub struct HelmLiveConfig {
+    /// Hook state files, one per managed Antigravity session
+    /// (`managed-local/antigravity/sessions`). A file with a control identity
+    /// is a Helm session; it names the conversation once agy reports it.
+    pub state_dir: PathBuf,
+    /// Agy's state directory (`~/.gemini/antigravity-cli`).
+    pub store_root: PathBuf,
+    /// The runtime-event outbox the Machine Agent drains.
+    pub outbox_dir: PathBuf,
+}
+
+impl HelmLiveConfig {
+    /// The locations on this machine, or `None` when they cannot be resolved.
+    pub fn for_this_machine() -> Option<Self> {
+        let home = std::env::var_os("HOME").map(PathBuf::from)?;
+        Some(Self {
+            state_dir: crate::managed_antigravity_scan::default_antigravity_state_dir()?,
+            store_root: home.join(".gemini").join("antigravity-cli"),
+            outbox_dir: crate::config::get_agent_runtime_events_outbox_dir().ok()?,
+        })
+    }
+}
+
+/// A running reader. Dropping it stops the thread.
+pub struct HelmLive {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl HelmLive {
+    pub fn stop(mut self) {
+        self.shutdown();
+    }
+
+    fn shutdown(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for HelmLive {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+/// Start following every Helm session on this machine. One thread serves them
+/// all. `None` when disabled or when the thread cannot start.
+pub fn spawn(config: HelmLiveConfig) -> Option<HelmLive> {
+    if !READER_ENABLED {
+        return None;
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let thread = std::thread::Builder::new()
+        .name("antigravity-helm-live".into())
+        .spawn(move || run(config, flag))
+        .ok()?;
+    Some(HelmLive {
+        stop,
+        thread: Some(thread),
+    })
+}
+
+// --- protobuf (just enough, and strict) -----------------------------------
+
+/// Why a payload is not the shape this reader knows.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Surprise(pub String);
+
+fn surprise<T>(message: impl Into<String>) -> Result<T, Surprise> {
+    Err(Surprise(message.into()))
+}
+
+fn read_varint(bytes: &[u8], at: &mut usize) -> Result<u64, Surprise> {
+    let mut value = 0u64;
+    let mut shift = 0u32;
+    loop {
+        let Some(byte) = bytes.get(*at) else {
+            return surprise("truncated varint");
+        };
+        *at += 1;
+        if shift >= 64 {
+            return surprise("overlong varint");
+        }
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+        shift += 7;
+    }
+}
+
+enum Wire<'a> {
+    Varint(u64),
+    Bytes(&'a [u8]),
+    Other,
+}
+
+/// Walk the top-level fields of one message, in order.
+fn fields(bytes: &[u8]) -> Result<Vec<(u64, Wire<'_>)>, Surprise> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    while at < bytes.len() {
+        let key = read_varint(bytes, &mut at)?;
+        let number = key >> 3;
+        if number == 0 {
+            return surprise("field number 0");
+        }
+        match key & 7 {
+            0 => out.push((number, Wire::Varint(read_varint(bytes, &mut at)?))),
+            1 => {
+                if at + 8 > bytes.len() {
+                    return surprise("truncated fixed64");
+                }
+                at += 8;
+                out.push((number, Wire::Other));
+            }
+            2 => {
+                let length = read_varint(bytes, &mut at)? as usize;
+                let end = at.checked_add(length).filter(|end| *end <= bytes.len());
+                let Some(end) = end else {
+                    return surprise("truncated length-delimited field");
+                };
+                out.push((number, Wire::Bytes(&bytes[at..end])));
+                at = end;
+            }
+            5 => {
+                if at + 4 > bytes.len() {
+                    return surprise("truncated fixed32");
+                }
+                at += 4;
+                out.push((number, Wire::Other));
+            }
+            other => return surprise(format!("unsupported wire type {other}")),
+        }
+    }
+    Ok(out)
+}
+
+/// The reply text of a model-response step payload. `Ok(None)` while the
+/// response has produced no reply text yet (thinking only).
+pub fn reply_text(payload: &[u8]) -> Result<Option<String>, Surprise> {
+    let mut step_type = None;
+    let mut response: Option<&[u8]> = None;
+    for (number, value) in fields(payload)? {
+        match (number, value) {
+            (1, Wire::Varint(value)) => step_type = Some(value),
+            (20, Wire::Bytes(bytes)) => response = Some(bytes),
+            _ => {}
+        }
+    }
+    if step_type != Some(STEP_TYPE_MODEL_RESPONSE) {
+        return surprise(format!(
+            "model-response payload declares step type {step_type:?}"
+        ));
+    }
+    let Some(response) = response else {
+        return Ok(None);
+    };
+    let mut reply = None;
+    for (number, value) in fields(response)? {
+        // Field 3 is thinking and is deliberately never read.
+        if let (1, Wire::Bytes(bytes)) = (number, value) {
+            let text = std::str::from_utf8(bytes)
+                .map_err(|_| Surprise("reply text is not UTF-8".into()))?;
+            reply = Some(text.to_string());
+        }
+    }
+    Ok(reply.filter(|text| !text.is_empty()))
+}
+
+// --- what to say, given what the database shows ---------------------------
+
+/// One statement of a step's reply text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Preview {
+    pub idx: i64,
+    pub seq: u64,
+    pub text: String,
+    pub completed: bool,
+}
+
+/// Follows the newest model step and decides when it has something to say.
+pub struct StepWatch {
+    first_poll: bool,
+    current: Option<Current>,
+}
+
+struct Current {
+    idx: i64,
+    text: String,
+    seq: u64,
+    /// Seen at the first poll: already in the database when this reader
+    /// arrived, so it says nothing until the step changes or a newer one starts.
+    inherited: bool,
+    completed: bool,
+}
+
+impl StepWatch {
+    pub fn new() -> Self {
+        Self {
+            first_poll: true,
+            current: None,
+        }
+    }
+
+    /// Feed the newest model step. Returns what to publish, if anything.
+    pub fn observe(&mut self, idx: i64, status: i64, text: Option<String>) -> Option<Preview> {
+        let first = std::mem::replace(&mut self.first_poll, false);
+        let text = text.unwrap_or_default();
+        let step_changed = self
+            .current
+            .as_ref()
+            .is_none_or(|current| current.idx != idx);
+        if step_changed {
+            if self
+                .current
+                .as_ref()
+                .is_some_and(|current| idx < current.idx)
+            {
+                return None;
+            }
+            self.current = Some(Current {
+                idx,
+                text: String::new(),
+                seq: 0,
+                inherited: first,
+                completed: false,
+            });
+            if first {
+                let current = self.current.as_mut().expect("just set");
+                current.text = text;
+                current.completed = status != STATUS_STREAMING;
+                return None;
+            }
+        }
+        let current = self.current.as_mut().expect("set above");
+        let grew = !text.is_empty() && text != current.text;
+        if status == STATUS_STREAMING {
+            if !grew {
+                return None;
+            }
+            current.text = text;
+            current.seq += 1;
+            // A step that grows after this reader arrived is being streamed
+            // now, whatever it looked like when first seen.
+            current.inherited = false;
+            return Some(Preview {
+                idx,
+                seq: current.seq,
+                text: current.text.clone(),
+                completed: false,
+            });
+        }
+        if status == STATUS_DONE && !current.completed {
+            if grew {
+                current.text = text;
+            }
+            if current.text.is_empty() || (current.inherited && !grew) {
+                current.completed = true;
+                return None;
+            }
+            current.completed = true;
+            current.seq += 1;
+            return Some(Preview {
+                idx,
+                seq: current.seq,
+                text: current.text.clone(),
+                completed: true,
+            });
+        }
+        None
+    }
+}
+
+// --- the database ---------------------------------------------------------
+
+/// Open the conversation database read-only, or say why not yet.
+fn open_read_only(db: &Path) -> Result<Option<Connection>, String> {
+    let wal = sidecar(db, "-wal");
+    let shm = sidecar(db, "-shm");
+    // A read-only open of a WAL database whose sidecars are missing would
+    // create them. Agy has them while it runs; without them it is not running
+    // this conversation, so there is nothing to follow.
+    if !db.is_file() || !wal.is_file() || !shm.is_file() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(
+        db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| format!("open: {error}"))?;
+    conn.busy_timeout(BUSY_TIMEOUT)
+        .map_err(|error| format!("busy_timeout: {error}"))?;
+    conn.pragma_update(None, "query_only", true)
+        .map_err(|error| format!("query_only: {error}"))?;
+    Ok(Some(conn))
+}
+
+fn sidecar(db: &Path, suffix: &str) -> PathBuf {
+    let mut name = db.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// Fail unless the database is the schema this reader was written against.
+pub fn check_schema(conn: &Connection) -> Result<(), Surprise> {
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|error| Surprise(format!("user_version: {error}")))?;
+    if version != SUPPORTED_USER_VERSION {
+        return surprise(format!(
+            "user_version {version}, expected {SUPPORTED_USER_VERSION}"
+        ));
+    }
+    let mut statement = conn
+        .prepare("PRAGMA table_info(steps)")
+        .map_err(|error| Surprise(format!("table_info: {error}")))?;
+    let columns: Vec<String> = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| Surprise(format!("table_info: {error}")))?
+        .filter_map(Result::ok)
+        .collect();
+    for needed in ["idx", "step_type", "status", "step_payload"] {
+        if !columns.iter().any(|column| column == needed) {
+            return surprise(format!("steps has no column {needed}"));
+        }
+    }
+    Ok(())
+}
+
+/// The newest model-response step: (idx, status, payload).
+fn newest_model_step(conn: &Connection) -> rusqlite::Result<Option<(i64, i64, Vec<u8>)>> {
+    let mut statement = conn.prepare(
+        "SELECT idx, status, step_payload FROM steps WHERE step_type = ?1 ORDER BY idx DESC LIMIT 1",
+    )?;
+    let mut rows = statement.query([STEP_TYPE_MODEL_RESPONSE as i64])?;
+    match rows.next()? {
+        Some(row) => Ok(Some((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Option<Vec<u8>>>(2)?.unwrap_or_default(),
+        ))),
+        None => Ok(None),
+    }
+}
+
+// --- the loop -------------------------------------------------------------
+
+/// How often the hook state directory is rescanned for sessions.
+const SCAN_EVERY: Duration = Duration::from_secs(1);
+/// A state file untouched for this long belongs to no live session.
+const STATE_FILE_RECENT: Duration = Duration::from_secs(30 * 60);
+/// A "thinking" or "running" state older than this is a crashed turn, not a
+/// stream, so the session drops back to the idle cadence.
+const ACTIVE_STATE_MAX_AGE: Duration = Duration::from_secs(10 * 60);
+/// Poll cadence while a turn is in progress, and while the session is idle.
+const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+struct Following {
+    conn: Connection,
+    watch: StepWatch,
+}
+
+/// One Helm session being followed.
+struct Session {
+    session_id: String,
+    run_id: String,
+    conversation: String,
+    active: bool,
+    following: Option<Following>,
+    errors: u32,
+    backoff: Duration,
+    next_poll: Instant,
+    /// Set once the conversation's database proved unreadable or unknown. The
+    /// reader never touches that conversation again.
+    stood_down: bool,
+}
+
+/// What one poll of a session found.
+enum Tick {
+    /// Nothing to follow yet.
+    Wait,
+    /// A transient problem; back off.
+    Retry(String),
+    /// The database is not what this reader knows; never read it again.
+    StandDown(String),
+}
+
+impl Session {
+    fn new(session_id: String, run_id: String, conversation: String) -> Self {
+        Self {
+            session_id,
+            run_id,
+            conversation,
+            active: false,
+            following: None,
+            errors: 0,
+            backoff: POLL_INTERVAL,
+            next_poll: Instant::now(),
+            stood_down: false,
+        }
+    }
+
+    fn poll(&mut self, config: &HelmLiveConfig) {
+        let now = Instant::now();
+        let cadence = if self.active {
+            POLL_INTERVAL
+        } else {
+            IDLE_POLL_INTERVAL
+        };
+        match self.tick(config) {
+            Ok(()) => {
+                self.errors = 0;
+                self.backoff = POLL_INTERVAL;
+                self.next_poll = now + cadence;
+            }
+            Err(Tick::Wait) => self.next_poll = now + cadence,
+            Err(Tick::Retry(message)) => {
+                self.errors += 1;
+                self.following = None;
+                if self.errors >= MAX_CONSECUTIVE_ERRORS {
+                    tracing::warn!(
+                        session_id = %self.session_id,
+                        error = %message,
+                        "Antigravity live reply text stands down after repeated errors; the transcript still delivers each step"
+                    );
+                    self.stood_down = true;
+                    return;
+                }
+                self.backoff = (self.backoff * 2).min(MAX_BACKOFF);
+                self.next_poll = now + self.backoff;
+            }
+            Err(Tick::StandDown(message)) => {
+                tracing::warn!(
+                    session_id = %self.session_id,
+                    reason = %message,
+                    "Antigravity live reply text stands down: unrecognised conversation database; the transcript still delivers each step"
+                );
+                self.following = None;
+                self.stood_down = true;
+            }
+        }
+    }
+
+    fn tick(&mut self, config: &HelmLiveConfig) -> Result<(), Tick> {
+        if self.following.is_none() {
+            let db = config
+                .store_root
+                .join("conversations")
+                .join(format!("{}.db", self.conversation));
+            let Some(conn) = open_read_only(&db).map_err(Tick::Retry)? else {
+                return Err(Tick::Wait);
+            };
+            check_schema(&conn).map_err(|Surprise(message)| Tick::StandDown(message))?;
+            self.following = Some(Following {
+                conn,
+                watch: StepWatch::new(),
+            });
+        }
+        let current = self.following.as_mut().expect("opened above");
+        let row = newest_model_step(&current.conn)
+            .map_err(|error| Tick::Retry(format!("read: {error}")))?;
+        let Some((idx, status, payload)) = row else {
+            return Ok(());
+        };
+        let text = reply_text(&payload).map_err(|Surprise(message)| Tick::StandDown(message))?;
+        if let Some(preview) = current.watch.observe(idx, status, text) {
+            publish(config, self, &preview)
+                .map_err(|error| Tick::Retry(format!("enqueue: {error}")))?;
+        }
+        Ok(())
+    }
+}
+
+/// The Helm sessions with a recent state file, as (session, run, conversation,
+/// active). A session whose hook has not yet named a conversation has nothing
+/// to follow and is left out.
+fn helm_sessions(config: &HelmLiveConfig) -> Vec<(String, String, String, bool)> {
+    let now = std::time::SystemTime::now();
+    let paths: Vec<PathBuf> = crate::managed_scan::state_file_paths(&config.state_dir)
+        .into_iter()
+        .filter(|path| {
+            std::fs::metadata(path)
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|age| age <= STATE_FILE_RECENT)
+        })
+        .collect();
+    crate::managed_antigravity_scan::collect_observations_from_paths(&paths)
+        .into_iter()
+        .filter(|observation| observation.connection_id.is_some())
+        .filter_map(|observation| {
+            let conversation = observation
+                .provider_session_id
+                .filter(|id| !id.contains(['/', '\\']) && id != "." && id != "..")?;
+            let run_id = observation.run_id?;
+            let fresh = chrono::DateTime::parse_from_rfc3339(&observation.updated_at)
+                .ok()
+                .is_some_and(|updated| {
+                    chrono::Utc::now()
+                        .signed_duration_since(updated)
+                        .to_std()
+                        .is_ok_and(|age| age <= ACTIVE_STATE_MAX_AGE)
+                });
+            let streaming = matches!(observation.state.as_deref(), Some("thinking" | "running"));
+            Some((
+                observation.session_id,
+                run_id,
+                conversation,
+                streaming && fresh,
+            ))
+        })
+        .collect()
+}
+
+fn rescan(config: &HelmLiveConfig, sessions: &mut HashMap<String, Session>) {
+    let found = helm_sessions(config);
+    sessions.retain(|id, _| found.iter().any(|(found_id, ..)| found_id == id));
+    for (session_id, run_id, conversation, active) in found {
+        let session = sessions
+            .entry(session_id.clone())
+            .or_insert_with(|| Session::new(session_id, run_id.clone(), conversation.clone()));
+        if session.conversation != conversation || session.run_id != run_id {
+            // agy moved to another conversation (or the run changed): a new
+            // database, and a new chance to recognise it.
+            *session = Session::new(session.session_id.clone(), run_id, conversation);
+        }
+        session.active = active;
+    }
+}
+
+fn run(config: HelmLiveConfig, stop: Arc<AtomicBool>) {
+    let mut sessions: HashMap<String, Session> = HashMap::new();
+    let mut next_scan = Instant::now();
+    while !stop.load(Ordering::SeqCst) {
+        let now = Instant::now();
+        if now >= next_scan {
+            rescan(&config, &mut sessions);
+            next_scan = now + SCAN_EVERY;
+        }
+        for session in sessions.values_mut() {
+            if !session.stood_down && now >= session.next_poll {
+                session.poll(&config);
+            }
+        }
+        std::thread::sleep(LOOP_SLICE);
+    }
+}
+
+/// The runtime event that states a preview. Shaped like the other Helm
+/// providers' previews; the Runtime Host allowlists the source.
+fn preview_event(session: &Session, preview: &Preview, occurred_at: &str) -> Value {
+    let conversation = session.conversation.as_str();
+    let turn_id = format!("{conversation}:{}", preview.idx);
+    let mut text = String::new();
+    crate::status_slot::append_live_text(&mut text, &preview.text);
+    json!({
+        "runtime_key": format!("antigravity:{}", session.session_id),
+        "session_id": session.session_id,
+        "provider": "antigravity",
+        "run_id": session.run_id,
+        "source": SOURCE,
+        "kind": "progress_signal",
+        "occurred_at": occurred_at,
+        "dedupe_key": format!("antigravity-helm-progress:{}:{turn_id}:{}", session.session_id, preview.seq),
+        "payload": {
+            "progress_kind": PROGRESS_KIND,
+            "turn_id": turn_id,
+            "seq": preview.seq,
+            "run_id": session.run_id,
+            "live_text": text,
+            "turn_completed": preview.completed,
+            "managed_transport": SOURCE,
+            "execution_lifetime": "interactive",
+            "provider_session_id": conversation,
+        },
+    })
+}
+
+fn publish(config: &HelmLiveConfig, session: &Session, preview: &Preview) -> anyhow::Result<()> {
+    let event = preview_event(session, preview, &chrono::Utc::now().to_rfc3339());
+    crate::outbox::enqueue_runtime_event(&config.outbox_dir, &event)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn varint(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                return out;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+
+    fn field_bytes(number: u64, bytes: &[u8]) -> Vec<u8> {
+        let mut out = varint(number << 3 | 2);
+        out.extend(varint(bytes.len() as u64));
+        out.extend(bytes);
+        out
+    }
+
+    fn field_varint(number: u64, value: u64) -> Vec<u8> {
+        let mut out = varint(number << 3);
+        out.extend(varint(value));
+        out
+    }
+
+    /// A model-response payload shaped like the ones agy writes.
+    fn payload(reply: Option<&str>, thinking: Option<&str>) -> Vec<u8> {
+        let mut response = Vec::new();
+        if let Some(reply) = reply {
+            response.extend(field_bytes(1, reply.as_bytes()));
+        }
+        if let Some(thinking) = thinking {
+            response.extend(field_bytes(3, thinking.as_bytes()));
+        }
+        response.extend(field_varint(12, 2));
+        let mut out = field_varint(1, 15);
+        out.extend(field_varint(4, 8));
+        out.extend(field_bytes(5, &field_bytes(12, b"meta")));
+        out.extend(field_bytes(20, &response));
+        out
+    }
+
+    #[test]
+    fn reply_text_is_field_one_and_thinking_is_never_returned() {
+        let bytes = payload(Some("EXPM0000 birch"), Some("THINKING000 THINKING001"));
+        assert_eq!(
+            reply_text(&bytes).unwrap().as_deref(),
+            Some("EXPM0000 birch")
+        );
+        let thinking_only = payload(None, Some("THINKING000"));
+        assert_eq!(reply_text(&thinking_only).unwrap(), None);
+    }
+
+    #[test]
+    fn a_payload_that_is_not_the_known_shape_is_a_surprise() {
+        assert!(reply_text(&[0xff]).is_err(), "truncated varint");
+        let mut wrong_type = field_varint(1, 14);
+        wrong_type.extend(field_bytes(20, &field_bytes(1, b"hi")));
+        assert!(
+            reply_text(&wrong_type).is_err(),
+            "step type 14 is not a model response"
+        );
+        let mut bad_utf8 = field_varint(1, 15);
+        bad_utf8.extend(field_bytes(20, &field_bytes(1, &[0xff, 0xfe])));
+        assert!(reply_text(&bad_utf8).is_err());
+        let mut truncated = field_varint(1, 15);
+        truncated.extend(varint(20 << 3 | 2));
+        truncated.extend(varint(50));
+        assert!(reply_text(&truncated).is_err(), "length runs past the end");
+    }
+
+    #[test]
+    fn a_streaming_step_publishes_growth_then_completes_once() {
+        let mut watch = StepWatch::new();
+        assert_eq!(
+            watch.observe(1, STATUS_STREAMING, None),
+            None,
+            "thinking only says nothing"
+        );
+        let first = watch
+            .observe(1, STATUS_STREAMING, Some("EXPM0000".into()))
+            .unwrap();
+        assert_eq!(
+            (first.seq, first.completed, first.text.as_str()),
+            (1, false, "EXPM0000")
+        );
+        assert_eq!(
+            watch.observe(1, STATUS_STREAMING, Some("EXPM0000".into())),
+            None
+        );
+        let second = watch
+            .observe(1, STATUS_STREAMING, Some("EXPM0000 birch".into()))
+            .unwrap();
+        assert_eq!(second.seq, 2);
+        let done = watch
+            .observe(1, STATUS_DONE, Some("EXPM0000 birch".into()))
+            .unwrap();
+        assert!(done.completed);
+        assert_eq!((done.seq, done.text.as_str()), (3, "EXPM0000 birch"));
+        assert_eq!(
+            watch.observe(1, STATUS_DONE, Some("EXPM0000 birch".into())),
+            None
+        );
+    }
+
+    #[test]
+    fn a_step_that_finished_between_polls_still_completes() {
+        let mut watch = StepWatch::new();
+        assert_eq!(
+            watch.observe(1, STATUS_DONE, Some("old".into())),
+            None,
+            "inherited"
+        );
+        let done = watch
+            .observe(3, STATUS_DONE, Some("whole reply".into()))
+            .unwrap();
+        assert!(done.completed);
+        assert_eq!(done.text, "whole reply");
+    }
+
+    #[test]
+    fn a_step_already_there_when_the_reader_arrives_says_nothing_until_it_changes() {
+        let mut watch = StepWatch::new();
+        assert_eq!(
+            watch.observe(5, STATUS_STREAMING, Some("stale partial".into())),
+            None
+        );
+        assert_eq!(
+            watch.observe(5, STATUS_STREAMING, Some("stale partial".into())),
+            None
+        );
+        let grown = watch
+            .observe(5, STATUS_STREAMING, Some("stale partial more".into()))
+            .unwrap();
+        assert_eq!(grown.text, "stale partial more");
+    }
+
+    #[test]
+    fn a_new_step_starts_a_new_message() {
+        let mut watch = StepWatch::new();
+        watch.observe(1, STATUS_STREAMING, None);
+        watch
+            .observe(1, STATUS_STREAMING, Some("one".into()))
+            .unwrap();
+        watch.observe(1, STATUS_DONE, Some("one".into())).unwrap();
+        let next = watch
+            .observe(3, STATUS_STREAMING, Some("two".into()))
+            .unwrap();
+        assert_eq!((next.idx, next.seq, next.text.as_str()), (3, 1, "two"));
+    }
+
+    fn config(dir: &Path) -> HelmLiveConfig {
+        HelmLiveConfig {
+            state_dir: dir.join("sessions"),
+            store_root: dir.join("store"),
+            outbox_dir: dir.join("outbox"),
+        }
+    }
+
+    /// A Helm session's hook state file, as the launcher and hook leave it.
+    fn write_state(config: &HelmLiveConfig, conversation: &str, state: &str) {
+        std::fs::create_dir_all(&config.state_dir).unwrap();
+        let path = config.state_dir.join("sess.json");
+        std::fs::write(
+            &path,
+            json!({
+                "schema_version": 3,
+                "session_id": "sess",
+                "connection_id": "conn",
+                "lease_generation": "lease",
+                "run_id": "run",
+                "provider_session_id": conversation,
+                "state": state,
+                "updated_at": chrono::Utc::now().to_rfc3339(),
+            })
+            .to_string(),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fn make_db(path: &Path, user_version: i64, columns: &str) -> Connection {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let conn = Connection::open(path).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE steps ({columns}); PRAGMA user_version = {user_version};"
+        ))
+        .unwrap();
+        conn
+    }
+
+    const GOOD_COLUMNS: &str =
+        "idx integer PRIMARY KEY, step_type integer NOT NULL DEFAULT 0, status integer NOT NULL DEFAULT 0, step_payload blob";
+
+    fn db_path(config: &HelmLiveConfig, conversation: &str) -> PathBuf {
+        config
+            .store_root
+            .join("conversations")
+            .join(format!("{conversation}.db"))
+    }
+
+    fn outbox_events(config: &HelmLiveConfig) -> Vec<Value> {
+        let Ok(entries) = std::fs::read_dir(&config.outbox_dir) else {
+            return Vec::new();
+        };
+        let mut events: Vec<Value> = entries
+            .map(|entry| {
+                serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
+            })
+            .collect();
+        events.sort_by_key(|event| event["payload"]["seq"].as_u64());
+        events
+    }
+
+    #[test]
+    fn the_schema_gate_accepts_the_known_shape_and_refuses_everything_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = make_db(&dir.path().join("good.db"), 1, GOOD_COLUMNS);
+        assert!(check_schema(&good).is_ok());
+        let newer = make_db(&dir.path().join("newer.db"), 2, GOOD_COLUMNS);
+        assert!(check_schema(&newer)
+            .unwrap_err()
+            .0
+            .contains("user_version 2"));
+        let renamed = make_db(
+            &dir.path().join("renamed.db"),
+            1,
+            "idx integer, step_type integer, status integer, payload blob",
+        );
+        assert!(check_schema(&renamed)
+            .unwrap_err()
+            .0
+            .contains("step_payload"));
+    }
+
+    #[test]
+    fn an_unknown_schema_stands_the_session_down_and_posts_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path());
+        write_state(&config, "conv-1", "thinking");
+        let writer = make_db(&db_path(&config, "conv-1"), 7, GOOD_COLUMNS);
+        writer
+            .execute(
+                "INSERT INTO steps VALUES (1, 15, 8, ?1)",
+                [payload(Some("must not be read"), None)],
+            )
+            .unwrap();
+        assert!(sidecar(&db_path(&config, "conv-1"), "-wal").is_file());
+
+        let mut sessions = HashMap::new();
+        rescan(&config, &mut sessions);
+        let session = sessions.get_mut("sess").expect("a Helm session is found");
+        assert!(session.active);
+        session.poll(&config);
+        assert!(
+            session.stood_down,
+            "an unknown user_version stands the reader down"
+        );
+        assert!(session.following.is_none(), "the connection is closed");
+        assert!(outbox_events(&config).is_empty(), "nothing was posted");
+        // It stays down: a rescan of the same conversation does not reset it.
+        rescan(&config, &mut sessions);
+        assert!(sessions["sess"].stood_down);
+    }
+
+    #[test]
+    fn a_payload_that_does_not_parse_stands_the_session_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path());
+        write_state(&config, "conv-1", "thinking");
+        let writer = make_db(&db_path(&config, "conv-1"), 1, GOOD_COLUMNS);
+        writer
+            .execute(
+                "INSERT INTO steps VALUES (1, 15, 8, ?1)",
+                [vec![0xffu8, 0xff]],
+            )
+            .unwrap();
+        let mut sessions = HashMap::new();
+        rescan(&config, &mut sessions);
+        let session = sessions.get_mut("sess").unwrap();
+        session.poll(&config);
+        assert!(session.stood_down);
+        assert!(outbox_events(&config).is_empty());
+    }
+
+    #[test]
+    fn a_known_schema_streams_reply_text_to_the_outbox_and_never_thinking() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path());
+        write_state(&config, "conv-1", "thinking");
+        let writer = make_db(&db_path(&config, "conv-1"), 1, GOOD_COLUMNS);
+        writer
+            .execute(
+                "INSERT INTO steps VALUES (0, 14, 3, ?1)",
+                [field_varint(1, 14)],
+            )
+            .unwrap();
+        writer
+            .execute(
+                "INSERT INTO steps VALUES (1, 15, 8, ?1)",
+                [payload(None, Some("THINKING000"))],
+            )
+            .unwrap();
+        let mut sessions = HashMap::new();
+        rescan(&config, &mut sessions);
+        let session = sessions.get_mut("sess").unwrap();
+        session.poll(&config);
+        for (status, reply) in [
+            (8, "EXPM0000"),
+            (8, "EXPM0000 birch"),
+            (3, "EXPM0000 birch"),
+        ] {
+            writer
+                .execute(
+                    "UPDATE steps SET status = ?1, step_payload = ?2 WHERE idx = 1",
+                    rusqlite::params![
+                        status,
+                        payload(Some(reply), Some("THINKING000 THINKING001"))
+                    ],
+                )
+                .unwrap();
+            session.poll(&config);
+        }
+        assert!(!session.stood_down);
+        let events = outbox_events(&config);
+        let texts: Vec<_> = events
+            .iter()
+            .map(|event| event["payload"]["live_text"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(texts, ["EXPM0000", "EXPM0000 birch", "EXPM0000 birch"]);
+        assert!(events
+            .iter()
+            .all(|event| !event.to_string().contains("THINKING")));
+        assert_eq!(events[2]["payload"]["turn_completed"], true);
+        assert_eq!(events[0]["source"], SOURCE);
+        assert_eq!(events[0]["session_id"], "sess");
+        assert_eq!(events[0]["run_id"], "run");
+        assert_eq!(events[0]["payload"]["progress_kind"], PROGRESS_KIND);
+        assert_eq!(events[0]["payload"]["turn_id"], "conv-1:1");
+        assert_eq!(events[0]["payload"]["provider_session_id"], "conv-1");
+    }
+
+    #[test]
+    fn the_thread_follows_a_session_and_stops_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path());
+        write_state(&config, "conv-1", "thinking");
+        let writer = make_db(&db_path(&config, "conv-1"), 1, GOOD_COLUMNS);
+        writer
+            .execute(
+                "INSERT INTO steps VALUES (1, 15, 8, ?1)",
+                [payload(None, None)],
+            )
+            .unwrap();
+        let live = spawn(config.clone()).expect("enabled");
+        std::thread::sleep(Duration::from_millis(400));
+        writer
+            .execute(
+                "UPDATE steps SET step_payload = ?1 WHERE idx = 1",
+                [payload(Some("EXPM0000"), None)],
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while outbox_events(&config).is_empty() {
+            assert!(Instant::now() < deadline, "no preview arrived");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let stopping = Instant::now();
+        live.stop();
+        assert!(stopping.elapsed() < Duration::from_secs(1));
+        assert_eq!(
+            outbox_events(&config)[0]["payload"]["live_text"],
+            "EXPM0000"
+        );
+    }
+
+    #[test]
+    fn a_shadow_session_and_an_idle_one_are_not_followed_actively() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path());
+        write_state(&config, "conv-1", "idle");
+        let found = helm_sessions(&config);
+        assert_eq!(found.len(), 1);
+        assert!(!found[0].3, "an idle session is on the slow cadence");
+        // A state file with no control identity is a Shadow session.
+        let path = config.state_dir.join("sess.json");
+        let mut state: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        state.as_object_mut().unwrap().remove("connection_id");
+        std::fs::write(&path, state.to_string()).unwrap();
+        assert!(helm_sessions(&config).is_empty());
+    }
+
+    #[test]
+    fn a_database_without_its_wal_sidecars_is_not_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("c.db");
+        {
+            let conn = make_db(&db, 1, GOOD_COLUMNS);
+            conn.pragma_update(None, "journal_mode", "DELETE").unwrap();
+        }
+        assert!(!sidecar(&db, "-wal").exists());
+        assert!(open_read_only(&db).unwrap().is_none());
+        assert!(!sidecar(&db, "-wal").exists() && !sidecar(&db, "-shm").exists());
+    }
+
+    #[test]
+    fn a_conversation_id_cannot_leave_the_conversations_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path());
+        write_state(&config, "../../etc/passwd", "thinking");
+        assert!(helm_sessions(&config).is_empty());
+    }
+}

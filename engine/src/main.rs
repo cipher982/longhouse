@@ -1,4 +1,5 @@
 mod antigravity_channel_control;
+mod antigravity_helm_live;
 mod antigravity_print;
 mod antigravity_workspace;
 mod bench;

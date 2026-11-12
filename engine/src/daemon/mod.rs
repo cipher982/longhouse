@@ -1291,6 +1291,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let runtime_events_outbox_dir = config::get_agent_runtime_events_outbox_dir()?;
+    // Reply text for Antigravity Helm sessions, read from agy's conversation
+    // database while a step streams. It stops when this scope ends and never
+    // touches agy beyond a read-only connection.
+    let _antigravity_helm_live = crate::antigravity_helm_live::HelmLiveConfig::for_this_machine()
+        .and_then(crate::antigravity_helm_live::spawn);
     let status_path = config::get_agent_status_path()?;
     if let Some(parent) = status_path.parent() {
         std::fs::create_dir_all(parent)?;

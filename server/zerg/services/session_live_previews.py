@@ -31,6 +31,7 @@ LIVE_PREVIEW_SOURCES = {
     "omp_print",
     "omp_helm_channel",
     "pi_helm_channel",
+    "antigravity_helm_db",
 }
 
 
@@ -137,6 +138,8 @@ def live_preview_candidate_from_runtime_event(
         return _omp_helm_preview_candidate(event, payload, observation_id=observation_id)
     if provider == "pi" and source.lower() == "pi_helm_channel" and progress_kind == "pi_helm_stream":
         return _omp_helm_preview_candidate(event, payload, observation_id=observation_id, source="pi_helm_channel")
+    if provider == "antigravity" and source.lower() == "antigravity_helm_db" and progress_kind == "antigravity_helm_stream":
+        return _omp_helm_preview_candidate(event, payload, observation_id=observation_id, source="antigravity_helm_db")
     if progress_kind not in {"bridge_live_transcript_delta", "console_live_tool_item"}:
         return None
 

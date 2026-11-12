@@ -96,6 +96,16 @@ MUTATIONS: tuple[Mutation, ...] = (
         "antigravity/console",
         ("engine_posted",),
     ),
+    Mutation(
+        "antigravity-helm-reader",
+        "the Antigravity Helm conversation-database reader is switched off",
+        "engine",
+        "engine/src/antigravity_helm_live.rs",
+        "const READER_ENABLED: bool = true;",
+        "const READER_ENABLED: bool = false;",
+        "antigravity/helm",
+        ("engine_posted",),
+    ),
 )
 
 # The part-type check has a second guard that also hides reasoning; the mutation removes both.
