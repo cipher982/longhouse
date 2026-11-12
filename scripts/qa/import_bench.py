@@ -364,6 +364,10 @@ class LiveProbe(threading.Thread):
         self.base_url, self.token = base_url, token
         self.stop = threading.Event()
         self.latencies: list[float] = []
+        # (seconds since the probe started, latency) per append, so a stall
+        # reads as a time window rather than only a percentile.
+        self.timeline: list[tuple[float, float | None]] = []
+        self.started = time.monotonic()
         self.timeouts = 0
         self._parent: str | None = None
 
@@ -391,11 +395,13 @@ class LiveProbe(threading.Thread):
                                               token=self.token, timeout=10)
                 if status == 200 and marker in json.dumps(page):
                     self.latencies.append(round(time.monotonic() - appended, 3))
+                    self.timeline.append((round(appended - self.started, 1), self.latencies[-1]))
                     seen = True
                     break
                 time.sleep(0.25)
             if not seen and not self.stop.is_set():
                 self.timeouts += 1
+                self.timeline.append((round(appended - self.started, 1), None))
             sequence += 1
             self.stop.wait(max(0.0, LIVE_PROBE_INTERVAL_SECONDS - (time.monotonic() - appended)))
 
@@ -406,7 +412,50 @@ class LiveProbe(threading.Thread):
             return values[min(len(values) - 1, int(len(values) * fraction))] if values else None
 
         return {"session_id": self.session_id, "samples": len(values), "timeouts": self.timeouts,
-                "p50_s": pick(0.5), "p95_s": pick(0.95), "max_s": values[-1] if values else None}
+                "p50_s": pick(0.5), "p95_s": pick(0.95), "max_s": values[-1] if values else None,
+                "timeline": [list(sample) for sample in self.timeline]}
+
+
+def wait_for_engine_watching(log_dir: Path, engine: subprocess.Popen[Any], timeout: float = 60.0) -> float | None:
+    """Seconds until the Machine Agent logs that its file watcher is ready."""
+
+    started = time.monotonic()
+    while time.monotonic() - started < timeout:
+        if engine.poll() is not None:
+            raise RuntimeError(f"Machine Agent exited early ({engine.returncode})")
+        for path in log_dir.glob("engine.log*"):
+            try:
+                if "Daemon ready" in path.read_text(errors="replace"):
+                    return round(time.monotonic() - started, 3)
+            except OSError:
+                continue
+        time.sleep(0.1)
+    return None
+
+
+def seed_identity_env(seed_data: Path | None) -> list[str]:
+    """The seeded tenant's own identity, so the Runtime Host serves it as itself.
+
+    A seeded catalog belongs to one tenant and owner. Started as tenant
+    `default`, every corpus session the seed already holds is refused with
+    `session_identity_conflict`, and the owner check refuses to start at all.
+    Explicit --env values still override these.
+    """
+
+    if seed_data is None:
+        return []
+    connection = sqlite3.connect(f"file:{seed_data / 'longhouse-live.db'}?mode=ro", uri=True)
+    try:
+        tenant = connection.execute("SELECT tenant_id FROM raw_objects LIMIT 1").fetchone()
+        owner = connection.execute("SELECT email FROM users ORDER BY id LIMIT 1").fetchone()
+    finally:
+        connection.close()
+    env = []
+    if tenant and tenant[0]:
+        env.append(f"LONGHOUSE_TENANT_ID={tenant[0]}")
+    if owner and owner[0]:
+        env.append(f"OWNER_EMAIL={owner[0]}")
+    return env
 
 
 def stop_process(process: subprocess.Popen[Any] | None) -> None:
@@ -497,7 +546,7 @@ def main() -> int:
                 run_extra += ["-v", f"{data_dir}:/data"]
             if args.cpus:
                 run_extra += ["--cpus", str(args.cpus)]
-            for item in args.env:
+            for item in [*seed_identity_env(args.seed_data), *args.env]:
                 run_extra += ["-e", item]
             docker("run", "-d", "--name", runtime, "--network", network, "--memory", args.memory, *run_extra, "-p", f"127.0.0.1:{host_port}:8000",
                    "-e", "AUTH_DISABLED=0", "-e", "SINGLE_TENANT=1", "-e", f"LONGHOUSE_PASSWORD={password}",
@@ -561,6 +610,11 @@ def main() -> int:
                                     "--machine-name", DEVICE_ID], env=engine_env,
                                   stdout=engine_log, stderr=subprocess.STDOUT, start_new_session=True)
         import_started = time.monotonic()
+        # A transcript written before the engine watches is found only by the
+        # startup reconciliation, which the engine defers 30 s on purpose. The
+        # probe measures the live path, so it starts once the watcher is up;
+        # the deferral shows separately as time to first timeline.
+        result["engine_watching_s"] = wait_for_engine_watching(log_dir, engine)
         probe = LiveProbe(home, base_url, token)
         probe.start()
         first, recent, complete = None, None, None
