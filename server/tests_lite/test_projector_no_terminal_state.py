@@ -343,7 +343,7 @@ def test_claim_token_lookup_is_pinned_to_its_index_despite_stale_statistics(stor
     )
     assert len(claimed["claimed"]) == 3
 
-    assert store.refresh_planner_statistics()["projector_rows"] == 3
+    assert store.refresh_table_statistics("projector_state") == {"sampled": 0}
     with store.engine.connect() as connection:
         stat = connection.exec_driver_sql("SELECT stat FROM sqlite_stat1 WHERE idx = 'ix_projector_state_claim_token'").scalar_one()
     assert stat != "196 196"

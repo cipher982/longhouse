@@ -48,8 +48,8 @@ from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 
 
 class ProjectorsMixin:
-    def refresh_planner_statistics(self) -> dict[str, int]:
-        """Give the planner the catalog's real shape once per catalogd start.
+    def planner_statistics_tables(self) -> list[str]:
+        """Catalog tables whose planner statistics catalogd refreshes at start.
 
         Nothing refreshed sqlite_stat1, so david010's statistics described a
         catalog of a few hundred rows: raw_objects at 242 rows (964k real),
@@ -58,24 +58,40 @@ class ProjectorsMixin:
         a full scan of media_objects over its primary key, 8.7 ms against
         0.05 ms on every committed envelope, and earlier fixes pinned single
         queries to their indexes one at a time instead.
+        """
 
-        A sampled ANALYZE of the whole catalog takes 0.27 s on that 5.4 GB
-        snapshot (a full one 3.7 s) and lands within 10% of the real counts.
-        projector_state then gets a full ANALYZE, because a sample misjudges
-        its mostly-NULL claim_token index (claim lookups scanned the projector,
+        with _read_snapshot(self.engine) as connection:
+            return [
+                str(name)
+                for name in connection.exec_driver_sql(
+                    "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                ).scalars()
+            ]
+
+    def refresh_table_statistics(self, table: str) -> dict[str, int]:
+        """ANALYZE one table in its own short write transaction.
+
+        One ANALYZE of the whole catalog held the single writer 1.7 s on a warm
+        5.4 GB snapshot and 34 s under disk contention, expiring queued writes,
+        so each table is its own transaction and other writes interleave. A
+        sample of 1,000 rows per index lands within 10% of real counts;
+        projector_state gets a full pass, because a sample misjudges its
+        mostly-NULL claim_token index (claim lookups scanned the projector,
         28 ms against 0.14 ms).
         """
 
+        if not table.replace("_", "").isalnum():
+            raise ValueError(f"not a catalog table name: {table!r}")
+        sampled = table != ProjectorState.__tablename__
         with _write_transaction(self.engine) as connection:
-            connection.exec_driver_sql("PRAGMA analysis_limit=1000")
+            if sampled:
+                connection.exec_driver_sql("PRAGMA analysis_limit=1000")
             try:
-                connection.exec_driver_sql("ANALYZE")
+                connection.exec_driver_sql(f'ANALYZE "{table}"')
             finally:
-                connection.exec_driver_sql("PRAGMA analysis_limit=0")
-            connection.exec_driver_sql("ANALYZE projector_state")
-            tables = connection.exec_driver_sql("SELECT count(DISTINCT tbl) FROM sqlite_stat1").scalar_one()
-            rows = connection.execute(select(func.count()).select_from(ProjectorState.__table__)).scalar_one()
-        return {"tables": int(tables), "projector_rows": int(rows)}
+                if sampled:
+                    connection.exec_driver_sql("PRAGMA analysis_limit=0")
+        return {"sampled": int(sampled)}
 
     def scan_projector_repairs(self) -> ProjectorRepairPlan:
         """Find the sessions ``ensure_known_projector_states`` must repair.

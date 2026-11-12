@@ -54,8 +54,22 @@ def test_startup_statistics_replace_a_stale_tiny_catalog_shape(tmp_path) -> None
     engine.dispose()
     assert "SCAN media_objects" in _plan(store)
 
-    refreshed = store.refresh_planner_statistics()
+    tables = store.planner_statistics_tables()
+    for table in tables:
+        store.refresh_table_statistics(table)
     engine.dispose()
 
-    assert refreshed["tables"] > 1
+    assert {"media_objects", "projector_state", "raw_objects", "sessions"} <= set(tables)
     assert "USING INDEX sqlite_autoindex_media_objects_1" in _plan(store)
+
+
+def test_table_statistics_refuse_a_name_that_is_not_a_plain_identifier(tmp_path) -> None:
+    engine = create_catalog_engine(tmp_path / "catalog.db")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    try:
+        store.refresh_table_statistics('sessions"; DROP TABLE sessions; --')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an unsafe table name was analyzed")

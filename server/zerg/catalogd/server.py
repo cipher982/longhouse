@@ -4393,8 +4393,13 @@ class CatalogDaemon:
                 **ensured,
             )
             stage_started = time.perf_counter()
-            analyzed = await self._run_startup_write(self._store.refresh_planner_statistics)
-            _log_startup_stage("refresh_planner_statistics", stage_started, **analyzed)
+            tables = await asyncio.to_thread(self._store.planner_statistics_tables)
+            slowest_ms = 0.0
+            for table in tables:
+                table_started = time.perf_counter()
+                await self._run_startup_write(self._store.refresh_table_statistics, table)
+                slowest_ms = max(slowest_ms, (time.perf_counter() - table_started) * 1000.0)
+            _log_startup_stage("refresh_planner_statistics", stage_started, tables=len(tables), slowest_table_ms=f"{slowest_ms:.0f}")
             _log_startup_stage("deferred_projector_repair", repair_started)
         except asyncio.CancelledError:
             raise

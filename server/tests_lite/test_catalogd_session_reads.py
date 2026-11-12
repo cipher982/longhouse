@@ -1427,7 +1427,8 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
     heartbeat_statements: list[str] = []
 
     def capture_heartbeat_query(_connection, _cursor, statement, _parameters, _context, _executemany):
-        if "live_heartbeat_stamps" in statement:
+        # Reads only: catalogd's startup refresh analyzes every table by name.
+        if "live_heartbeat_stamps" in statement and not statement.lstrip().upper().startswith("ANALYZE"):
             heartbeat_statements.append(statement.lower())
 
     with engine.begin() as connection:
