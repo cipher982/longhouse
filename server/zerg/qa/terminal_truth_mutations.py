@@ -1,8 +1,10 @@
 """Mutation tests for the terminal-truth gate: each reintroduces one defect fixed on 2026-11-11 and must fail its cell.
 
 A gate that has never been shown to fail proves little. Each mutation here is a one-place source edit that puts back one
-of the five defects the harness found (or an equivalent for the part-type check), a cell that the defect breaks, and the
-stage where the verdict must say the text stopped. The command runs the unmutated cell first (it must pass), then the
+of the defects the harness found, a cell that the defect breaks, and the stage where the verdict must say the text stopped.
+(The OpenCode part-type mutation of 2026-11-11 was retired on 2026-11-12: once the bridge published reasoning as its own
+thinking preview, that write replaced the mislabelled one in the status slot before it was posted, so the edit no longer
+broke anything; ``opencode-helm-thinking-as-reply`` reintroduces the same defect, reasoning shown as the reply, and fails.) The command runs the unmutated cell first (it must pass), then the
 mutated one (it must fail at the named stage), and exits non-zero on any mismatch.
 
     make terminal-truth-mutations ARGS="--engine <engine> --longhouse-cli <longhouse>"
@@ -460,16 +462,6 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("preflight", "engine_posted"),
     ),
     Mutation(
-        "opencode-part-type-check",
-        "OpenCode reasoning parts are shown as reply text (the part-type check of c510accaf)",
-        "engine",
-        "engine/src/opencode_bridge.rs",
-        "                    Some(_) => return None,\n",
-        "                    Some(_) => {}\n",
-        "opencode/helm",
-        ("stream_delivered",),
-    ),
-    Mutation(
         "antigravity-step-update-arm",
         "Antigravity Console ignores stream-json step_update records (cdda35f88)",
         "engine",
@@ -513,24 +505,13 @@ MUTATIONS: tuple[Mutation, ...] = (
     ),
 )
 
-# The part-type check has a second guard that also hides reasoning; the mutation removes both.
-_PART_TYPE_SECOND_GUARD = (
-    'if self.part_types.get(part_id).map(String::as_str) != Some("text") {\n                    return None;\n                }\n                self.preview(part_id, message_id, session_id, now, false)',
-    "if self.part_types.get(part_id).is_none() {\n                    return None;\n                }\n                self.preview(part_id, message_id, session_id, now, false)",
-)
-
 
 def mutated_text(mutation: Mutation, text: str) -> str:
     """The file with the mutation applied; refuses unless the edit lands in exactly one place."""
 
     if text.count(mutation.old) != 1:
         raise RuntimeError(f"mutation {mutation.name}: the text to mutate occurs {text.count(mutation.old)} times in {mutation.file}")
-    out = text.replace(mutation.old, mutation.new)
-    if mutation.name == "opencode-part-type-check":
-        if out.count(_PART_TYPE_SECOND_GUARD[0]) != 1:
-            raise RuntimeError("mutation opencode-part-type-check: the second guard moved")
-        out = out.replace(*_PART_TYPE_SECOND_GUARD)
-    return out
+    return text.replace(mutation.old, mutation.new)
 
 
 def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None, timeout: float = 1800) -> None:
