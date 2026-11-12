@@ -11,7 +11,7 @@ name: Terminal Truth
 #                                            status `longhouse/terminal-truth` and a CI receipt. Nothing
 #                                            consumes the status yet (promotion is unchanged).
 #   schedule (nightly)                       the push run's short pass for both scenarios (long_reply and
-#                                            two_message), then the mutation tests, which no push runs. It
+#                                            two_message), 13 minutes measured. It
 #                                            ran 400 tokens at 5/s until 2026-11-12: that took about 50
 #                                            minutes a pass on the one runner slot with every push run queued
 #                                            behind it, GitHub started the 07:43Z schedule at 16:17Z in the
@@ -22,6 +22,11 @@ name: Terminal Truth
 #                                            for a dispatched run (tokens=400, rate=5). A red run is the
 #                                            finding: new failing cells are annotated as errors, and the
 #                                            Sauron job ci-scheduled-red pages after three red nights in a row.
+#   schedule (weekly, Sunday)                the same two passes, then the mutation tests, which nothing
+#                                            else runs: each of 41 known defects is put back into the
+#                                            engine and the gate must fail it. That is 41 engine rebuilds,
+#                                            about 85 minutes on this runner (2 minutes each, measured
+#                                            2026-11-12), so it is weekly and queues apart from the pushes.
 #   workflow_dispatch                        any of the above by hand (inputs below).
 #
 # Reruns (push and dispatch, never the nightly): a cell whose only failure is a slow live median, with every marker
@@ -92,7 +97,12 @@ on:
       - "scripts/ci/terminal_truth_*.py"
       - ".github/workflows/terminal-truth.yml"
   schedule:
+    # Nightly passes. GitHub starts this repository's schedules 7 to 10 hours late, so this lands at
+    # about 09:00 to 11:00Z.
     - cron: "13 1 * * *"
+    # Weekly mutation tests (Sunday). The job's expressions below compare github.event.schedule with
+    # this exact string; scripts/tests/terminal-truth-ci.test.py fails if they stop matching.
+    - cron: "37 2 * * 0"
   workflow_dispatch:
     inputs:
       provider:
@@ -148,8 +158,11 @@ permissions:
   contents: read
   statuses: write
 
+# One run at a time, so two runs never share a runner's CPU while one is timing a stream. A run with the
+# mutation tests (about 85 minutes of engine rebuilds, measured 2026-11-12) queues separately, so it never
+# holds a push run; grind-browser has a second slot for it.
 concurrency:
-  group: terminal-truth-${{ github.repository }}
+  group: terminal-truth-${{ github.repository }}${{ (github.event.schedule == '37 2 * * 0' || inputs.mutations) && '-mutations' || '' }}
   cancel-in-progress: false
 
 jobs:
@@ -157,11 +170,12 @@ jobs:
     name: "terminal-truth"
     runs-on: grind-browser
     if: github.repository == 'cipher982/longhouse'
-    # A push run takes 9 to 13 minutes, so 40 is three times the slowest. Only a run started by hand may
-    # use the long limit (20 passes, or 400 tokens at 5/s). Every run shares one concurrency group, so a
-    # stuck run holds every later one: the 2026-11-12 nightly sat on the queue for 3 h 40 min under the
-    # old flat 330.
-    timeout-minutes: ${{ github.event_name == 'push' && 40 || (github.event_name == 'schedule' && 150 || 330) }}
+    # A push run takes 9 to 13 minutes and the nightly's two passes 13, so 40 and 60 are three to four
+    # times the slowest seen. The weekly mutation run gets 180. Only a run started by hand may use the
+    # long limit (20 passes, or 400 tokens at 5/s). Runs of one kind share a concurrency group, so a stuck
+    # run holds every later one: the 2026-11-12 nightly sat on the queue for 3 h 40 min under the old
+    # flat 330.
+    timeout-minutes: ${{ github.event_name == 'push' && 40 || (github.event_name == 'schedule' && (github.event.schedule == '37 2 * * 0' && 180 || 60) || 330) }}
     env:
       TT_EVENT: ${{ github.event_name }}
       TT_PROVIDER: ${{ inputs.provider || 'all' }}
@@ -171,7 +185,7 @@ jobs:
       TT_REPEATS: ${{ inputs.repeats || '1' }}
       TT_RERUN: ${{ github.event_name != 'schedule' && '1' || '0' }}
       TT_SCENARIO_INPUT: ${{ inputs.scenarios || (github.event_name == 'schedule' && 'both') || 'long_reply' }}
-      TT_MUTATIONS: ${{ (github.event_name == 'schedule' || inputs.mutations) && '1' || '0' }}
+      TT_MUTATIONS: ${{ (github.event.schedule == '37 2 * * 0' || inputs.mutations) && '1' || '0' }}
       TT_PUBLISH_REQUEST: ${{ inputs.publish_status && '1' || '0' }}
       GH_TOKEN: ${{ github.token }}
       CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
