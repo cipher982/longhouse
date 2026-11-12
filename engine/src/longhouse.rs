@@ -1741,7 +1741,7 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
     // process, and a successful one never leaves pending -- which for a
     // provider with no lease adopter means launch readiness can expire to
     // orphaned while the TUI is still running.
-    let mut launch_transaction = response.as_ref().map(|response| {
+    let launch_transaction = response.as_ref().map(|response| {
         ManagedLaunchTransaction::new(
             &runtime,
             &url,
@@ -1778,26 +1778,55 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         &cwd,
         args.project.as_deref(),
     );
-    let run_result = run_foreground_command_after_spawn(&mut command, || {
-        // The child is spawned but still blocked on the terminal-release
-        // barrier, so confirmation must degrade in place rather than fail the
-        // launch: the provider starts either way and the unrecorded outcome
-        // converges in the background.
-        if let Some(transaction) = launch_transaction.as_mut() {
-            transaction.confirm_or_degrade("Antigravity", &confirm_agent_dir, &confirm_notices);
-        }
-        Ok(())
-    });
-    // Drop before draining so an un-confirmed transaction reports its abort
-    // while the terminal is already restored.
-    drop(launch_transaction);
-    let exit = run_result?;
+    let (exit, _registration_summary) = run_antigravity_foreground_with(
+        &mut command,
+        launch_transaction,
+        &confirm_agent_dir,
+        &confirm_notices,
+        degraded_registration,
+        &deferred_notices,
+        |cmd, after_spawn| run_foreground_command_after_spawn(cmd, after_spawn),
+    )?;
     warp_cli_agent::emit_session_event(
         "antigravity",
         "stop",
         &session_id,
         &cwd,
         args.project.as_deref(),
+    );
+    std::process::exit(exit);
+}
+
+fn run_antigravity_foreground_with<F>(
+    command: &mut Command,
+    mut launch_transaction: Option<ManagedLaunchTransaction>,
+    confirm_agent_dir: &Path,
+    confirm_notices: &DeferredNotices,
+    degraded_registration: Option<managed_launch_lifecycle::ManagedRegistrationRetry>,
+    deferred_notices: &DeferredNotices,
+    runner: F,
+) -> anyhow::Result<(i32, Option<String>)>
+where
+    F: FnOnce(&mut Command, Box<dyn FnOnce() -> anyhow::Result<()> + '_>) -> anyhow::Result<i32>,
+{
+    let degraded_provider_alive = degraded_registration
+        .as_ref()
+        .map(|registration| Arc::clone(&registration.provider_alive));
+    let run_result = runner(
+        command,
+        Box::new(move || {
+            if let Some(alive) = &degraded_provider_alive {
+                alive.store(true, Ordering::Release);
+            }
+            // The child is spawned but still blocked on the terminal-release
+            // barrier, so confirmation must degrade in place rather than fail the
+            // launch: the provider starts either way and the unrecorded outcome
+            // converges in the background.
+            if let Some(transaction) = launch_transaction.as_mut() {
+                transaction.confirm_or_degrade("Antigravity", confirm_agent_dir, confirm_notices);
+            }
+            Ok(())
+        }),
     );
     if let Some(registration) = &degraded_registration {
         registration.provider_alive.store(false, Ordering::Release);
@@ -1809,10 +1838,11 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
     for notice in deferred_notices.drain() {
         eprintln!("{notice}");
     }
-    if let Some(message) = registration_summary {
+    if let Some(message) = &registration_summary {
         eprintln!("{message}");
     }
-    std::process::exit(exit);
+    let exit = run_result?;
+    Ok((exit, registration_summary))
 }
 
 fn start_antigravity_degraded_registration(
@@ -5367,24 +5397,35 @@ mod tests {
             &notices,
             agent_dir.path().to_path_buf(),
         );
-        retry.provider_alive.store(true, Ordering::Release);
 
+        let mut command = Command::new("agy");
         let mut saw_register = 0usize;
         let mut saw_confirm = false;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        while std::time::Instant::now() < deadline && !saw_confirm {
-            if let Ok(line) = rx.recv_timeout(std::time::Duration::from_millis(200)) {
-                if line.contains("/managed-local/this-device") {
-                    saw_register += 1;
-                } else if line.contains("/launch-outcome") {
-                    saw_confirm = true;
+        let (exit, summary) = run_antigravity_foreground_with(
+            &mut command,
+            None,
+            agent_dir.path(),
+            &notices,
+            Some(retry),
+            &notices,
+            |_cmd, after_spawn| {
+                after_spawn()?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+                while std::time::Instant::now() < deadline && !saw_confirm {
+                    if let Ok(line) = rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                        if line.contains("/managed-local/this-device") {
+                            saw_register += 1;
+                        } else if line.contains("/launch-outcome") {
+                            saw_confirm = true;
+                        }
+                    }
                 }
-            }
-        }
-        retry.provider_alive.store(false, Ordering::Release);
-        let summary = retry.provider_exit_summary();
-        drop(retry);
+                Ok(0)
+            },
+        )
+        .unwrap();
 
+        assert_eq!(exit, 0);
         assert!(
             saw_register >= 2,
             "expected retry after 503, got {saw_register}"
@@ -5393,7 +5434,38 @@ mod tests {
             saw_confirm,
             "expected launch-outcome confirmation after retry"
         );
+        let summary = summary.expect("expected exit summary");
         assert!(summary.contains("Antigravity"), "{summary}");
+    }
+
+    #[test]
+    fn antigravity_degraded_registration_cleans_up_on_spawn_error() {
+        let agent_dir = tempfile::tempdir().unwrap();
+        let notices = DeferredNotices::default();
+        notices.push("deferred-warning".to_string());
+        let retry = start_antigravity_degraded_registration(
+            "http://127.0.0.1:1",
+            "device-token",
+            json!({"session_id": "agy-spawn-err", "provider": "antigravity"}),
+            "agy-spawn-err",
+            &notices,
+            agent_dir.path().to_path_buf(),
+        );
+        let provider_alive = Arc::clone(&retry.provider_alive);
+        let mut command = Command::new("agy");
+        let result = run_antigravity_foreground_with(
+            &mut command,
+            None,
+            agent_dir.path(),
+            &notices,
+            Some(retry),
+            &notices,
+            |_cmd, _after_spawn| Err(anyhow::anyhow!("spawn failed")),
+        );
+
+        assert!(result.is_err());
+        assert!(!provider_alive.load(Ordering::Acquire));
+        assert!(notices.drain().is_empty());
     }
 
     #[test]
