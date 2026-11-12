@@ -2152,9 +2152,7 @@ impl OmpHelmServer {
             .or_else(|| (!summary.is_empty()).then_some(summary))
             .unwrap_or_else(|| name.to_string());
         let tool_state = match kind {
-            "tool_execution_end"
-                if event.get("isError").and_then(Value::as_bool) == Some(true) =>
-            {
+            "tool_execution_end" if event.get("isError").and_then(Value::as_bool) == Some(true) => {
                 "failed"
             }
             "tool_execution_end" => "completed",

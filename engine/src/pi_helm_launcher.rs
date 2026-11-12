@@ -623,7 +623,10 @@ impl PiHelmServer {
                     .expect("Pi Helm state mutex poisoned")
                     .live
                     .start_message();
-                self.discrete.lock().expect("Pi Helm discrete mutex poisoned").reset_thinking();
+                self.discrete
+                    .lock()
+                    .expect("Pi Helm discrete mutex poisoned")
+                    .reset_thinking();
             }
             "tool_call" => self.publish_tool_call(&frame),
             "message_update" => {
@@ -656,7 +659,10 @@ impl PiHelmServer {
             )
         };
         let (text, seq) = {
-            let mut discrete = self.discrete.lock().expect("Pi Helm discrete mutex poisoned");
+            let mut discrete = self
+                .discrete
+                .lock()
+                .expect("Pi Helm discrete mutex poisoned");
             crate::status_slot::append_live_text(&mut discrete.thinking, delta);
             discrete.thinking_seq = discrete.thinking_seq.saturating_add(1);
             (discrete.thinking.clone(), discrete.thinking_seq)
