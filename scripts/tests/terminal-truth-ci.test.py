@@ -132,6 +132,17 @@ class WorkflowTests(unittest.TestCase):
         for used in re.findall(r"github\.event\.schedule == '([^']+)'", text):
             self.assertIn(used, crons)
 
+    def test_a_mutation_run_keeps_its_rows_and_puts_each_miss_and_its_reason_in_the_summary(self):
+        # The first complete run on the runner had 9 rows that were not ok and said only "fail" (2026-11-12).
+        text = WORKFLOW.read_text()
+        make = next(line for line in text.splitlines() if "make terminal-truth-mutations" in line)
+        self.assertIn("--out $TT_OUT/mutations.json", make)
+        self.assertIn("$only", make)
+        self.assertIn('for name in $TT_MUTATION_NAMES; do only+=" --only $name"; done', text)
+        self.assertIn("TT_MUTATION_NAMES: ${{ inputs.mutation_names || '' }}", text)
+        self.assertIn("""grep -E '^NO ' "$TT_OUT/mutations.log" | sed 's/^/- /'""", text)
+        self.assertIn('[[ "$TT_MUTATION_NAMES" =~ $names_ok ]]', text)
+
     def test_the_budget_file_names_every_declared_cell(self):
         data = json.loads(BUDGET.read_text())
         for cell, value in data["budget_s"].items():

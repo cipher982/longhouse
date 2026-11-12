@@ -80,3 +80,50 @@ def test_every_process_the_mutation_runner_starts_gets_a_scrubbed_environment(mo
     assert len(seen) == 2
     for environment in seen:
         assert environment is not None and not {"LONGHOUSE_HOOK_URL", "LONGHOUSE_HOOK_TOKEN", "INFISICAL_TOKEN"} & set(environment)
+
+
+def test_a_row_that_is_not_ok_says_which_cell_went_wrong_and_why() -> None:
+    baseline = {"check": "mutation x", "expected_stage": "kind", "baseline": "fail", "baseline_stage": "preflight",
+                "baseline_reason": "the provider\nnever became ready", "observed": "not run", "ok": False}  # fmt: skip
+    assert mutations.why_not(baseline) == (
+        "the unmutated cell came out fail at preflight, so the mutated one was not run: the provider never became ready"
+    )
+    mutated = {"check": "mutation x", "expected_stage": "kind", "baseline": "pass", "observed_outcome": "fail",
+               "observed_stage": "state_shown", "reason": "woke nobody", "ok": False}  # fmt: skip
+    assert mutations.why_not(mutated) == "expected a failure at kind, saw fail at state_shown: woke nobody"
+    half_speed = {"check": "half-speed fake model", "expected_stage": "(pass)", "observed_outcome": "fail",
+                  "observed_stage": "client_received", "reason": "", "ok": False}  # fmt: skip
+    assert mutations.why_not(half_speed) == "expected a pass, saw fail at client_received: no reason recorded"
+
+
+def test_a_failing_unmutated_cell_is_reported_with_its_reason_and_its_mutation_is_not_built(monkeypatch, tmp_path, capsys) -> None:
+    """On the Linux runner 7 unmutated cells failed (2026-11-12) and the log said only "fail": 14 minutes of rebuilds, no reason."""
+
+    import json
+
+    engine_mutation = next(m for m in MUTATIONS if m.side == "engine" and m.scenario)
+    monkeypatch.setattr(mutations, "SCRATCH", tmp_path / "tt-mut")
+    monkeypatch.setattr(mutations, "_run", lambda *a, **k: None)
+    monkeypatch.setattr(mutations, "_clone_dir", lambda *a, **k: None)
+    monkeypatch.setattr(mutations.tt, "load_expectations", lambda: {})
+
+    def no_build(*_a, **_k):
+        raise AssertionError("the engine was rebuilt for a row that had already failed")
+
+    monkeypatch.setattr(mutations, "_build_engine", no_build)
+    failed = {"outcome": "fail", "reason": "preflight: the provider never became ready", "checks": [{"name": "preflight", "ok": False}]}
+    monkeypatch.setattr(mutations, "run_kinds_suite", lambda *a, **k: [failed])
+    out = tmp_path / "rows.json"
+    args = mutations.argparse.Namespace(
+        engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", cargo_target=tmp_path / "target", only=[engine_mutation.name],
+        skip_engine=False, tokens=100, rate=20.0, out=out,
+    )  # fmt: skip
+
+    assert mutations.run_mutations(args) == 1
+
+    (row,) = json.loads(out.read_text())
+    assert row["baseline"] == "fail" and row["observed"] == "not run" and row["ok"] is False
+    assert row["baseline_reason"] == "preflight: the provider never became ready"
+    printed = capsys.readouterr().out
+    assert f"NO mutation {engine_mutation.name}: the unmutated cell came out fail at preflight" in printed
+    assert "the provider never became ready" in printed

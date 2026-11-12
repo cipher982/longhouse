@@ -5,7 +5,9 @@ of the defects the harness found, a cell that the defect breaks, and the stage w
 (The OpenCode part-type mutation of 2026-11-11 was retired on 2026-11-12: once the bridge published reasoning as its own
 thinking preview, that write replaced the mislabelled one in the status slot before it was posted, so the edit no longer
 broke anything; ``opencode-helm-thinking-as-reply`` reintroduces the same defect, reasoning shown as the reply, and fails.) The command runs the unmutated cell first (it must pass), then the
-mutated one (it must fail at the named stage), and exits non-zero on any mismatch.
+mutated one (it must fail at the named stage), and exits non-zero on any mismatch. When the unmutated cell fails, the row
+is a miss already, so its mutation is not built or run. Every row that is not ok is printed again under the table with
+the harness's reason, and ``--out`` holds the rows as JSON, rewritten after each one.
 
     make terminal-truth-mutations ARGS="--engine <engine> --longhouse-cli <longhouse>"
 
@@ -605,7 +607,23 @@ def _clone_dir(source: Path, destination: Path) -> None:
 
 def _verdict(results: list[tt.CellResult]) -> tuple[str, str | None, str]:
     cell = results[0]
-    return cell.outcome, cell.first_failed_stage, (cell.reason or "").splitlines()[0][:200] if cell.reason else ""
+    return cell.outcome, cell.first_failed_stage, (cell.reason or "").strip()
+
+
+def why_not(row: dict[str, Any]) -> str:
+    """One line saying why a row is not ok: which of the two cells went wrong, where, and the harness's own reason."""
+
+    if row.get("note"):
+        return str(row["note"])
+    if row.get("baseline", "pass") != "pass":
+        said = f"the unmutated cell came out {row['baseline']} at {row.get('baseline_stage') or '-'}, so the mutated one was not run"
+        reason = row.get("baseline_reason")
+    else:
+        wanted = "a pass" if row["expected_stage"] == "(pass)" else f"a failure at {row['expected_stage']}"
+        said = f"expected {wanted}, saw {row.get('observed_outcome')} at {row.get('observed_stage') or '-'}"
+        reason = row.get("reason")
+    first_line = " ".join(str(reason or "no reason recorded").split())
+    return f"{said}: {first_line[:600]}"
 
 
 def run_mutations(args: argparse.Namespace) -> int:
@@ -615,6 +633,14 @@ def run_mutations(args: argparse.Namespace) -> int:
     expectations = tt.load_expectations()
     base_engine, base_cli = args.engine.resolve(), args.longhouse_cli.resolve()
     rows: list[dict[str, Any]] = []
+
+    def record(row: dict[str, Any]) -> None:
+        """Keep the row, and the file up to date: a run that hits its time limit still leaves every row it finished."""
+
+        rows.append(row)
+        if args.out:
+            args.out.write_text(json.dumps(rows, indent=2) + "\n")
+
     selected = [m for m in MUTATIONS if not args.only or m.name in args.only]
     SCRATCH.mkdir(parents=True, exist_ok=True)
     worktree = SCRATCH / "worktree"
@@ -628,7 +654,7 @@ def run_mutations(args: argparse.Namespace) -> int:
             failed = [check["name"] for check in result.get("checks", []) if not check["ok"]]
             # The one failure that is about the product rather than the run: the host served a state and woke nobody.
             stage = "state_shown" if failed == [WOKEN_STATE_CHECK] else "preflight"
-            return "fail", stage, str(result.get("reason", ""))[:200]
+            return "fail", stage, str(result.get("reason", ""))
         check = kinds_expectation(result)
         if check is None:
             return "fail", "preflight", "the cell has no published-kind expectation"
@@ -648,8 +674,8 @@ def run_mutations(args: argparse.Namespace) -> int:
             _clone_dir(Path(args.cargo_target).resolve(), SCRATCH / "target")
         for m in selected:
             spec = tt.CellSpec(*m.cell.split("/"), m.scenario) if m.scenario else tt.CellSpec(*m.cell.split("/"))
-            baseline_outcome = (
-                kinds_cell(spec, base_engine, base_cli, **m.run_options)[0] if m.scenario else cell(spec, base_engine, base_cli).outcome
+            baseline_outcome, baseline_stage, baseline_reason = (
+                kinds_cell(spec, base_engine, base_cli, **m.run_options) if m.scenario else _verdict([cell(spec, base_engine, base_cli)])
             )
             row: dict[str, Any] = {
                 "check": f"mutation {m.name}",
@@ -658,6 +684,11 @@ def run_mutations(args: argparse.Namespace) -> int:
                 "expected_stage": "/".join(m.stages),
                 "baseline": baseline_outcome,
             }
+            if baseline_outcome != "pass":
+                # The row is a miss whatever the mutated cell does, and an engine mutation costs a rebuild: keep the reason, skip it.
+                row.update(baseline_stage=baseline_stage, baseline_reason=baseline_reason, observed="not run", ok=False)
+                record(row)
+                continue
             started = time.monotonic()
             if m.side == "server":
                 copy = SCRATCH / f"server-{m.name}"
@@ -675,7 +706,7 @@ def run_mutations(args: argparse.Namespace) -> int:
                     mutated = cell(spec, base_engine, base_cli, host_environment={"PYTHONPATH": str(copy / "server")})
             elif args.skip_engine:
                 row.update(observed="skipped", ok=False, note="--skip-engine")
-                rows.append(row)
+                record(row)
                 continue
             else:
                 path = worktree / m.file
@@ -690,15 +721,15 @@ def run_mutations(args: argparse.Namespace) -> int:
                     mutated = cell(spec, *engine_built[m.name])
             outcome, stage, reason = mutated_kinds if m.scenario else _verdict([mutated])
             row.update(observed_outcome=outcome, observed_stage=stage, reason=reason, seconds=round(time.monotonic() - started))
-            row["ok"] = baseline_outcome == "pass" and outcome == "fail" and stage in m.stages
-            rows.append(row)
+            row["ok"] = outcome == "fail" and stage in m.stages
+            record(row)
 
         if not args.only or "reworded-ready-string" in args.only:
             codex = tt.PROVIDERS["codex"]
             reworded = {**tt.PROVIDERS, "codex": dataclasses.replace(codex, ready_text="Ask Codex to do anything, v2")}
             result = cell(tt.CellSpec("codex", "helm"), base_engine, base_cli, drivers=reworded, ready_timeout=12.0)
             outcome, stage, reason = _verdict([result])
-            rows.append(
+            record(
                 {"check": "reworded ready string", "cell": "codex/helm", "expected_stage": "preflight", "observed_outcome": outcome,
                  "observed_stage": stage, "reason": reason, "ok": outcome == "fail" and stage == "preflight"}
             )  # fmt: skip
@@ -706,7 +737,7 @@ def run_mutations(args: argparse.Namespace) -> int:
             half = dataclasses.replace(pace, rate=pace.rate / 2)
             result = cell(tt.CellSpec("codex", "helm"), base_engine, base_cli, pace=half)
             outcome, stage, reason = _verdict([result])
-            rows.append(
+            record(
                 {"check": "half-speed fake model", "cell": "codex/helm", "expected_stage": "(pass)", "observed_outcome": outcome,
                  "observed_stage": stage, "reason": reason, "ok": outcome == "pass"}
             )  # fmt: skip
@@ -721,8 +752,9 @@ def run_mutations(args: argparse.Namespace) -> int:
             f"| {row['check']} | {row['cell']} | {row.get('baseline', '-')} | {row['expected_stage']} | "
             f"{row.get('observed_outcome', row.get('observed'))} | {row.get('observed_stage') or '-'} | {'yes' if row['ok'] else 'NO'} |"
         )
-    if args.out:
-        args.out.write_text(json.dumps(rows, indent=2) + "\n")
+    for row in rows:
+        if not row["ok"]:
+            print(f"NO {row['check']}: {why_not(row)}")
     return 0 if rows and all(row["ok"] for row in rows) else 1
 
 

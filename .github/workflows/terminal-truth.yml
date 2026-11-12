@@ -149,6 +149,11 @@ on:
         required: false
         default: false
         type: boolean
+      mutation_names:
+        description: "With mutations: run only these, names separated by spaces (empty runs all 41)"
+        required: false
+        default: ""
+        type: string
       publish_status:
         description: "Publish the commit status for this SHA (only honoured on main with all providers, both modes, the short stream, one pass, long_reply)"
         required: false
@@ -191,6 +196,7 @@ jobs:
       TT_RERUN: ${{ github.event_name != 'schedule' && '1' || '0' }}
       TT_SCENARIO_INPUT: ${{ inputs.scenarios || (github.event_name == 'schedule' && 'both') || 'long_reply' }}
       TT_MUTATIONS: ${{ (github.event.schedule == '37 2 * * 0' || inputs.mutations) && '1' || '0' }}
+      TT_MUTATION_NAMES: ${{ inputs.mutation_names || '' }}
       TT_PUBLISH_REQUEST: ${{ inputs.publish_status && '1' || '0' }}
       GH_TOKEN: ${{ github.token }}
       CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
@@ -230,6 +236,8 @@ jobs:
           # No passes at all is allowed only for a run that is the mutation tests alone.
           [[ "$TT_REPEATS" =~ ^[0-9]+$ && "$TT_REPEATS" -ge 1 && "$TT_REPEATS" -le 30 ]] || [[ "$TT_REPEATS" == 0 && "$TT_MUTATIONS" == 1 ]] \
             || { echo "::error::repeats must be 1 to 30 (0 only with the mutation tests)" >&2; exit 1; }
+          names_ok='^([a-z0-9-]+( [a-z0-9-]+)*)?$'
+          [[ "$TT_MUTATION_NAMES" =~ $names_ok ]] || { echo "::error::mutation_names must be names separated by single spaces" >&2; exit 1; }
           case "$TT_SCENARIO_INPUT" in
             both) scenarios="long_reply,two_message" ;;
             long_reply|two_message) scenarios="$TT_SCENARIO_INPUT" ;;
@@ -427,15 +435,21 @@ jobs:
           echo "TT_FAILED=$failed" >> "$GITHUB_ENV"
 
       # The mutation tests put each 2026-11-11 defect back and require the gate to fail it. They rebuild the
-      # engine in a scratch worktree, so they run in the nightly (or when asked), not on every push.
+      # engine in a scratch worktree, so they run weekly (or when asked), not on every push. The first complete
+      # run on this runner (43306143036) had 9 rows that were not ok and its log said only "fail", so the rows
+      # are kept as mutations.json and the table, with a reason line for each row that is not ok, goes in the
+      # job summary.
       - name: Mutation tests
         if: env.TT_MUTATIONS == '1'
         run: |
           set +e
-          make terminal-truth-mutations ARGS="--engine $TT_ENGINE --longhouse-cli $TT_CLI" 2>&1 | tee "$TT_OUT/mutations.log"
+          only=""
+          for name in $TT_MUTATION_NAMES; do only+=" --only $name"; done
+          make terminal-truth-mutations ARGS="--engine $TT_ENGINE --longhouse-cli $TT_CLI$only --out $TT_OUT/mutations.json" 2>&1 | tee "$TT_OUT/mutations.log"
           rc="${PIPESTATUS[0]}"
+          { echo "### Mutation tests"; echo; grep -E '^\| ' "$TT_OUT/mutations.log"; echo; grep -E '^NO ' "$TT_OUT/mutations.log" | sed 's/^/- /'; echo; } >> "$GITHUB_STEP_SUMMARY"
           echo "TT_MUTATIONS_RC=$rc" >> "$GITHUB_ENV"
-          if [[ "$rc" != 0 ]]; then echo "::error::mutation tests exited $rc (the gate no longer fails a defect it must fail)"; fi
+          if [[ "$rc" != 0 ]]; then echo "::error::mutation tests exited $rc: a row is not ok, its reason line is in the job summary"; fi
 
       # Fail closed: the exit status alone is not trusted. Every pass must have a result file, every row a
       # verdict that is a pass or a declared known-bad, and every measured cell's scripted model must have
