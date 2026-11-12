@@ -305,3 +305,106 @@ def test_the_proxy_delays_each_way_and_keeps_every_byte_in_order() -> None:
         proxy.close()
         host.shutdown()
         host.server_close()
+
+
+def _state(sid: str, headline: str, detail: str | None = None) -> dict:
+    return {"session_id": sid, "headline": headline, "detail": detail}
+
+
+def test_a_state_served_with_no_wake_is_unshown_for_as_long_as_it_is_served():
+    """2026-11-12, Antigravity Helm: the host served "Using run_command" and the page said "Thinking" until the tool ended."""
+    from zerg.qa.terminal_truth_lanes import woken_view_lags
+
+    polled = [
+        (0.0, _state("s", "Idle")),
+        (10.4, _state("s", "Thinking")),
+        (11.4, _state("s", "Using run_command")),
+        (16.6, _state("s", "Thinking")),
+        (17.6, _state("s", "Idle")),
+    ]
+    # Woken at the runtime event (state still "Thinking"), then not again until the tool's result.
+    woken = [
+        (0.1, _state("s", "Idle")),
+        (10.5, _state("s", "Thinking")),
+        (10.7, _state("s", "Thinking")),
+        (16.7, _state("s", "Thinking")),
+        (17.0, _state("s", "Thinking")),
+    ]
+    lags = {lag["headline"] + str(i): lag for i, lag in enumerate(woken_view_lags(polled, woken, since=10.0, end_t=22.0))}
+
+    assert lags["Thinking0"]["shown"] and lags["Thinking0"]["lag_s"] == 0.1
+    assert not lags["Using run_command1"]["shown"] and lags["Using run_command1"]["lag_s"] == 5.2
+    assert lags["Thinking2"]["shown"] and lags["Thinking2"]["lag_s"] == 0.1
+    # The turn is over and nothing wakes the page: "Thinking" stays up until the run stops looking.
+    assert not lags["Idle3"]["shown"] and lags["Idle3"]["lag_s"] == 4.4
+
+
+def test_a_state_announced_when_it_is_served_is_shown_at_once_and_a_blip_is_not_a_finding():
+    from zerg.qa.terminal_truth_lanes import woken_view_lags
+
+    polled = [
+        (0.0, _state("s", "Idle")),
+        (10.4, _state("s", "Thinking")),
+        (10.5, _state("s", "Using Bash")),
+        (16.6, _state("s", "Idle")),
+        (9.0, _state("other", "Idle")),
+    ]
+    # The reader read "Using Bash" a tick before the poller did, and never read the 0.1 s "Thinking" at all.
+    woken = [
+        (0.1, _state("s", "Idle")),
+        (10.45, _state("s", "Using Bash")),
+        (16.65, _state("s", "Idle")),
+        (16.7, _state("other", "Thinking")),
+    ]
+    lags = woken_view_lags(polled, woken, since=10.0, end_t=22.0)
+
+    assert [(lag["headline"], lag["shown"], lag["lag_s"]) for lag in lags] == [
+        ("Thinking", False, 0.1),
+        ("Using Bash", True, 0.0),
+        ("Idle", True, 0.05),
+    ]
+    # Before the prompt nothing is judged, and one session's reads never stand in for another's.
+    assert all(lag["session_id"] == "s" for lag in lags)
+
+
+def test_the_woken_reader_reads_once_per_wake_and_once_more_for_a_wake_that_lands_mid_read():
+    import threading as _threading
+
+    from zerg.qa.terminal_truth_lanes import WokenStateReader
+
+    release = _threading.Event()
+    started = _threading.Event()
+    bodies = iter(["Thinking", "Using Bash", "Idle"])
+
+    class _Api:
+        calls = 0
+
+        def get(self, path, *, browser=False, timeout=10):
+            _Api.calls += 1
+            started.set()
+            if _Api.calls == 1:
+                release.wait(5)
+            label = next(bodies)
+            return 200, json.dumps(
+                {"session": {"session_state": {"activity": {"state": "x"}, "presentation": {"primary": {"label": label}}}}}
+            )
+
+    stop = _threading.Event()
+    reader = WokenStateReader(_Api(), stop)
+    reader.start()
+    try:
+        reader.wake("s")
+        assert started.wait(5)
+        reader.wake("s")  # lands during the first read: one more read, however many wakes
+        reader.wake("s")
+        release.set()
+        deadline = time.monotonic() + 5
+        while reader.reads < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.3)
+    finally:
+        stop.set()
+        reader.join(timeout=5)
+
+    assert (reader.wakes, reader.reads) == (3, 2)
+    assert [snap["headline"] for _, snap in reader.timeline] == ["Thinking", "Using Bash"]

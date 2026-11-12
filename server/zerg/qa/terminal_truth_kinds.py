@@ -41,7 +41,9 @@ from zerg.qa.terminal_truth_lanes import LaneWatcher
 from zerg.qa.terminal_truth_lanes import RuntimeApi
 from zerg.qa.terminal_truth_lanes import StateObserver
 from zerg.qa.terminal_truth_lanes import StreamWatcher
+from zerg.qa.terminal_truth_lanes import WokenStateReader
 from zerg.qa.terminal_truth_lanes import host_publishes
+from zerg.qa.terminal_truth_lanes import woken_view_lags
 from zerg.qa.terminal_truth_providers import PROVIDERS
 from zerg.qa.terminal_truth_providers import ProviderDriver
 from zerg.qa.terminal_truth_providers import _version
@@ -646,6 +648,10 @@ def _warm_helm_session(session: ProviderPtySession, api: RuntimeApi, nonce: str)
 
 
 STREAM_OPEN_WAIT_S = 15.0
+# The longest a state the host serves may go unshown by a client that refetches only when the stream wakes it. The other live
+# budgets are 1.0 s; a state that changes with no frame is unshown until an unrelated frame arrives, which is seconds.
+WOKEN_STATE_BUDGET_S = 1.0
+WOKEN_STATE_CHECK = "a client that reads state only when woken shows every served state"
 
 
 def _wait_for_open_streams(api: RuntimeApi, timeout: float = STREAM_OPEN_WAIT_S) -> tuple[int, int, float]:
@@ -766,6 +772,9 @@ def run_kind_cell_in(
     submitted = started
     key = EXPAND_KEYS.get((provider, spec.scenario)) if (expand_key and mode != "console") else None
     anchor_marker = plan.group(ANCHOR_GROUP[spec.scenario])[0].marker
+    # Read after the try: a cell that fails before the prompt has neither.
+    streams_open, streams_wanted, stream_wait_s = 0, 0, 0.0
+    woken_worst: dict[str, Any] | None = None
     try:
         if mode != "console":
             if pas.cli is None:
@@ -787,6 +796,8 @@ def run_kind_cell_in(
         stream.prompt = plan.prompt
         watchers.append(stream)
         state_observer = StateObserver(api, stop)
+        woken_reader = WokenStateReader(api, stop)
+        api.on_wake = woken_reader.wake
         console_session = ""
         if mode == "console":
             created = _create_console_session(api, provider, pas.shipper.machine_name, workspace)
@@ -802,6 +813,7 @@ def run_kind_cell_in(
         for watcher in watchers:
             watcher.start()
         state_observer.start()
+        woken_reader.start()
         files.start()
         if side:
             side.start()
@@ -813,6 +825,7 @@ def run_kind_cell_in(
         streams_open, streams_wanted, stream_wait_s = _wait_for_open_streams(api)
         if observer is not None:
             observer.before_submit(pas.host.url, api.session_ids(), plan)
+        prompted_sessions = set(api.known_sessions)
         submitted = time.monotonic()
         if mode == "console":
             api.post(
@@ -849,6 +862,7 @@ def run_kind_cell_in(
         for watcher in watchers:
             watcher.join(timeout=5)
         state_observer.join(timeout=5)
+        woken_reader.join(timeout=5)
         files.join(timeout=5)
         if side:
             side.join(timeout=5)
@@ -885,6 +899,24 @@ def run_kind_cell_in(
         out["state_lane"] = state_lane_result(obs, stopped_at)
         out["state_lane"]["errors"] = state_observer.errors
         out["state_lane"]["resolution_s"] = state_observer.resolution_s
+        woken_lags = woken_view_lags(state_observer.timeline, woken_reader.timeline, since=submitted, end_t=stopped_at)
+        # Judged on the sessions the prompt went to. A subagent's child session appears mid-turn and its stream opens when the harness
+        # finds it, so its states are recorded below and not gated.
+        woken_worst = max((lag for lag in woken_lags if lag["session_id"] in prompted_sessions), key=lambda lag: lag["lag_s"], default=None)
+        out["state_lane"]["woken_view"] = {
+            "wakes": woken_reader.wakes,
+            "reads": woken_reader.reads,
+            "errors": woken_reader.errors,
+            "states": [
+                {
+                    "t": round(lag["served_at"] - submitted, 2),
+                    "prompted_session": lag["session_id"] in prompted_sessions,
+                    **{k: lag[k] for k in ("headline", "detail", "served_for_s", "shown", "lag_s")},
+                }
+                for lag in woken_lags
+            ][:80],
+            "max_lag_s": woken_worst["lag_s"] if woken_worst else None,
+        }
         out["engine_runtime_samples"] = [
             {**x, "t": round(x["t"] - submitted, 3)} for x in pas.proxy.runtime_samples if set(x["markers"]) & set(markers)
         ][:400]
@@ -915,6 +947,17 @@ def run_kind_cell_in(
     receipt = _served_per_turn(pas, plan)
     obs.turns_served = receipt
     checks = judge_kinds(obs)
+    if woken_worst is not None and woken_worst["lag_s"] > WOKEN_STATE_BUDGET_S:
+        # The poller sees every state the host serves; a client sees only what it is woken to read.
+        shown = "showed it" if woken_worst["shown"] else "never showed it"
+        checks.append(
+            (
+                WOKEN_STATE_CHECK,
+                False,
+                f"the host served {woken_worst['headline']!r} for {woken_worst['served_for_s']:.1f} s and a woken-only client {shown} "
+                f"({woken_worst['lag_s']:.1f} s behind, budget {WOKEN_STATE_BUDGET_S:.1f} s)",
+            )
+        )
     if streams_open < streams_wanted:
         # Without this the stream lane would read "absent" and blame the host for a frame no client was attached to receive.
         checks.append(

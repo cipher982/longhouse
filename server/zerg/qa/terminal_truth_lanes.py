@@ -338,6 +338,7 @@ class RuntimeApi:
         self.pinned_sessions: list[str] = []
         self.known_sessions: set[str] = set()  # every id this cell's lanes ever read
         self.subscribed_streams: set[str] = set()  # sessions whose workspace stream the host has subscribed (first workspace_changed seen)
+        self.on_wake: Callable[[str], None] | None = None  # called with the session id for every workspace_changed frame
         self.legacy_stream = True  # True: connect as a client that predates preview kinds (no `preview_kinds` parameter); the live-kinds scenarios set False so thinking frames arrive
 
     def _headers(self, browser: bool) -> dict[str, str]:
@@ -425,6 +426,8 @@ class RuntimeApi:
                     if raw.startswith(b"event: workspace_changed"):
                         # The host sends this first one from inside its subscription, so the stream is attached from here on.
                         self.subscribed_streams.add(session)
+                        if self.on_wake is not None:
+                            self.on_wake(session)
                     out.put(TimedLine(raw.decode("utf-8", errors="replace")))
             except OSError:
                 pass
@@ -570,6 +573,105 @@ class StateObserver(threading.Thread):
                 if len(self.errors) < 10:
                     self.errors.append(f"{type(exc).__name__}: {exc}")
             self._stop_event.wait(self.interval)
+
+
+class WokenStateReader(threading.Thread):
+    """The session state facts as a client that reads only when the stream wakes it is left showing them.
+
+    The web and iOS clients refetch the workspace when the stream sends a frame and at no other time while the stream is healthy.
+    ``StateObserver`` polls, so it sees a state the host serves and never announces; this reader does not. One read in flight, and a
+    wake that lands during it runs one more: the web client's own rule, which is what makes a frame sent before the state is readable
+    cost that client the state. 2026-11-12: the host served "Using run_command" 0.9 s after the frame that should have carried it
+    and sent nothing when it did, so the page said "Thinking" for the whole tool run while the poller reported the lane live.
+    """
+
+    def __init__(self, api: RuntimeApi, stop: threading.Event) -> None:
+        super().__init__(daemon=True, name="lane-state-woken")
+        self.api, self._stop_event = api, stop
+        self.timeline: list[tuple[float, dict[str, Any]]] = []  # every shaped read, in order
+        self.wakes = 0
+        self.reads = 0
+        self.errors: list[str] = []
+        self._dirty: list[str] = []
+        self._cond = threading.Condition()
+
+    def wake(self, session: str) -> None:
+        with self._cond:
+            self.wakes += 1
+            if session not in self._dirty:
+                self._dirty.append(session)
+            self._cond.notify()
+
+    def run(self) -> None:
+        while not self._stop_event.is_set():
+            with self._cond:
+                if not self._dirty:
+                    self._cond.wait(0.1)
+                    continue
+                sid = self._dirty.pop(0)
+            try:
+                status, body = self.api.get(f"/api/timeline/sessions/{sid}/workspace", browser=True)
+                now = time.monotonic()
+                self.reads += 1
+                if status != 200:
+                    raise RuntimeError(f"HTTP {status}")
+                snap = state_snapshot(body, sid)
+                if snap is not None:
+                    self.timeline.append((now, snap))
+            except Exception as exc:  # noqa: BLE001 - an observer failure is data
+                if len(self.errors) < 10:
+                    self.errors.append(f"{type(exc).__name__}: {exc}")
+
+
+def _strip_text(snap: dict[str, Any]) -> tuple[Any, Any]:
+    return snap.get("headline"), snap.get("detail")
+
+
+def woken_view_lags(
+    polled: Sequence[tuple[float, dict[str, Any]]],
+    woken: Sequence[tuple[float, dict[str, Any]]],
+    *,
+    since: float,
+    end_t: float,
+) -> list[dict[str, Any]]:
+    """For each state the host served from ``since`` on: how long a woken-only client took to show it, or how long it went unshown.
+
+    ``polled`` is ``StateObserver.timeline`` (one entry per change), ``woken`` is ``WokenStateReader.timeline`` (one per read). A state
+    is what the runtime strip draws: the headline and the delegated-work detail. ``lag_s`` is from the poller first seeing the state to
+    the woken reader holding it; a state the reader never held before the host moved on (or the run ended) has ``shown`` false and
+    ``lag_s`` equal to the time it was served. A state served for less than the lag budget cannot fail it, so a blip is not a finding.
+    """
+
+    out: list[dict[str, Any]] = []
+    for sid in sorted({snap.get("session_id") for _, snap in polled if snap.get("session_id")}):
+        changes: list[tuple[float, tuple[Any, Any]]] = []
+        for t, snap in polled:
+            if snap.get("session_id") == sid and (not changes or changes[-1][1] != _strip_text(snap)):
+                changes.append((t, _strip_text(snap)))
+        reads = [(t, _strip_text(snap)) for t, snap in woken if snap.get("session_id") == sid]
+        for index, (t, text) in enumerate(changes):
+            if t < since:
+                continue
+            until = changes[index + 1][0] if index + 1 < len(changes) else end_t
+            # The reader may have read the state a moment before the poller's next tick did.
+            window_from = changes[index - 1][0] if index else float("-inf")
+            held_before = [text_r for t_r, text_r in reads if window_from <= t_r <= t]
+            if held_before and held_before[-1] == text:
+                shown_at: float | None = t
+            else:
+                shown_at = next((t_r for t_r, text_r in reads if t < t_r < until and text_r == text), None)
+            out.append(
+                {
+                    "session_id": sid,
+                    "headline": text[0],
+                    "detail": text[1],
+                    "served_at": t,
+                    "served_for_s": round(max(0.0, until - t), 3),
+                    "shown": shown_at is not None,
+                    "lag_s": round(max(0.0, (shown_at if shown_at is not None else until) - t), 3),
+                }
+            )
+    return out
 
 
 class RequestScanner:

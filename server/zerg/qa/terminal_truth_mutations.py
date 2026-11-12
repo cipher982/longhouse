@@ -30,6 +30,7 @@ from typing import Any
 
 from zerg.qa import terminal_truth as tt
 from zerg.qa.scripted_model_server import parse_pacing
+from zerg.qa.terminal_truth_kinds import WOKEN_STATE_CHECK
 from zerg.qa.terminal_truth_kinds import kinds_expectation
 from zerg.qa.terminal_truth_kinds import run_kinds_suite
 
@@ -510,6 +511,19 @@ MUTATIONS: tuple[Mutation, ...] = (
         scenario="thinking",
     ),
     Mutation(
+        "heartbeat-state-change-not-announced",
+        "a heartbeat that changes a session's served state wakes nobody again: the page keeps the label it read at the "
+        "runtime event (Antigravity Helm said Thinking through a tool run and after the turn had ended)",
+        "server",
+        "server/zerg/routers/heartbeat.py",
+        "        _publish_state_changes(result, commit_seq=commit_seq, exact_replay=exact_replay)\n",
+        "        pass\n",
+        "antigravity/helm",
+        ("state_shown",),
+        scenario="tool",
+        warm=True,
+    ),
+    Mutation(
         "host-call-ordered-against-reply",
         "the host keeps one preview per session in each post again, the one with the highest seq: behind 150 ms of network, "
         "Antigravity's tool start shares a post with newer reply text and is not shown until the tool has finished",
@@ -611,7 +625,10 @@ def run_mutations(args: argparse.Namespace) -> int:
 
         result = run_kinds_suite([spec], engine=engine, longhouse_cli=cli, **extra)[0]
         if result["outcome"] != "measured":
-            return "fail", "preflight", str(result.get("reason", ""))[:200]
+            failed = [check["name"] for check in result.get("checks", []) if not check["ok"]]
+            # The one failure that is about the product rather than the run: the host served a state and woke nobody.
+            stage = "state_shown" if failed == [WOKEN_STATE_CHECK] else "preflight"
+            return "fail", stage, str(result.get("reason", ""))[:200]
         check = kinds_expectation(result)
         if check is None:
             return "fail", "preflight", "the cell has no published-kind expectation"

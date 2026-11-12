@@ -28,6 +28,7 @@ def test_every_defect_of_2026_11_11_has_a_mutation_and_a_named_stage() -> None:
         "host-live-item-drop",
         "host-thinking-drop",
         "host-call-ordered-against-reply",
+        "heartbeat-state-change-not-announced",
         "claude-helm-thinking-forward",
         "claude-helm-thinking-as-reply",
         "claude-helm-tool-forward",
