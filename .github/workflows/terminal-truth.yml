@@ -23,6 +23,11 @@ name: Terminal Truth
 #                                            ci-scheduled-red pages after three red nights in a row.
 #   workflow_dispatch                        any of the above by hand (inputs below).
 #
+# Reruns (push and dispatch, never the nightly): a cell whose only failure is a slow live median, with every marker
+# delivered in order and complete, is run once more alone, and the pass counts if the rerun passes. At most two cells a
+# pass; both results are kept and gate.json lists them under passed_on_rerun. The rule and its reason are in
+# scripts/ci/terminal_truth_summary.py.
+#
 # THE LIVE-PREVIEW PATH LIST BELOW IS THE ONE COPY. It is the push filter. When the promotion requirement is
 # switched on (branch terminal-truth-promotion-gate), scripts/ops/dogfood-sensitive-paths.toml carries the same
 # list in a marked block and a test fails if the two differ.
@@ -159,6 +164,7 @@ jobs:
       TT_TOKENS: ${{ inputs.tokens || (github.event_name == 'schedule' && '400') || '100' }}
       TT_RATE: ${{ inputs.rate || (github.event_name == 'schedule' && '5') || '20' }}
       TT_REPEATS: ${{ inputs.repeats || '1' }}
+      TT_RERUN: ${{ github.event_name != 'schedule' && '1' || '0' }}
       TT_SCENARIO_INPUT: ${{ inputs.scenarios || (github.event_name == 'schedule' && 'both') || 'long_reply' }}
       TT_MUTATIONS: ${{ (github.event_name == 'schedule' || inputs.mutations) && '1' || '0' }}
       TT_PUBLISH_REQUEST: ${{ inputs.publish_status && '1' || '0' }}
@@ -350,6 +356,25 @@ jobs:
               rc="${PIPESTATUS[0]}"
               end="$(date +%s.%N)"
               echo "::endgroup::"
+              # A cell whose only failure is a slow live median (every marker arrived, in order, complete) is run
+              # once more, alone: on this shared host about one cell in 240 is slowed by a neighbour's disk burst.
+              # terminal_truth_summary.py names the cells (none if anything else failed, or more than two are slow)
+              # and is also what accepts or refuses the reruns in the Verdict step. Never on the nightly, which
+              # measures the raw rate.
+              cleared=0
+              if [[ "$rc" != 0 && "$TT_RERUN" == 1 ]]; then
+                python3 scripts/ci/terminal_truth_summary.py --rerun-candidates "$TT_OUT/$name.json" > "$RUNNER_TEMP/rerun.txt"
+                if [[ -s "$RUNNER_TEMP/rerun.txt" ]]; then
+                  cleared=1
+                  while read -r provider mode; do
+                    again="$name.rerun-$provider-$mode"
+                    echo "::group::$again"
+                    make terminal-truth ARGS="run --provider $provider --mode $mode --scenario $scenario --tokens $TT_TOKENS --rate $TT_RATE --engine $TT_ENGINE --longhouse-cli $TT_CLI --keep --out $TT_OUT/$again.json" < /dev/null 2>&1 | tee "$TT_OUT/$again.log"
+                    [[ "${PIPESTATUS[0]}" == 0 ]] || cleared=0
+                    echo "::endgroup::"
+                  done < "$RUNNER_TEMP/rerun.txt"
+                fi
+              fi
               # A Codex Helm cell leaves its bridge (and the codex and channel processes under it) running after
               # the pass (seen on the Mac, parent pid 1). Stop what this job's own binaries left behind so passes
               # do not accumulate them: only processes whose executable is this job's engine or fixture root.
@@ -357,7 +382,9 @@ jobs:
               pkill -f "$TT_FIXTURE_ROOT/" 2>/dev/null || true
               printf '%s\t%s\t%s\t%s\t%s\n' "$i" "$scenario" "$start" "$end" "$rc" >> "$timings"
               find "$scratch" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | comm -13 "$RUNNER_TEMP/before.txt" - > "$TT_OUT/$name.scratch"
-              if [[ "$rc" != 0 ]]; then
+              if [[ "$rc" != 0 && "$cleared" == 1 ]]; then
+                echo "::warning::$name exited $rc on a slow live median and passed on a rerun: $(tr '\n' ' ' < "$RUNNER_TEMP/rerun.txt")"
+              elif [[ "$rc" != 0 ]]; then
                 echo "::error::$name exited $rc"
                 failed=1
               fi
@@ -398,7 +425,9 @@ jobs:
               previous=(--previous "$RUNNER_TEMP/previous-nightly")
             fi
           fi
-          python3 scripts/ci/terminal_truth_summary.py "$TT_OUT" --repeats "$TT_REPEATS" --scenarios "$TT_SCENARIOS" "${previous[@]}"
+          reruns=()
+          [[ "$TT_RERUN" == 1 ]] && reruns=(--allow-reruns)
+          python3 scripts/ci/terminal_truth_summary.py "$TT_OUT" --repeats "$TT_REPEATS" --scenarios "$TT_SCENARIOS" "${previous[@]}" "${reruns[@]}"
           rc=$?
           cat "$TT_OUT/summary.md" >> "$GITHUB_STEP_SUMMARY"
           if [[ "$rc" != 0 || "${TT_FAILED:-0}" != 0 || "${TT_MUTATIONS_RC:-0}" != 0 ]]; then

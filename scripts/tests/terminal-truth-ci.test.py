@@ -29,6 +29,19 @@ def row(cell: str, outcome: str = "pass", median: float | None = 0.2, requests: 
     }
 
 
+def slow(cell: str, median: float = 1.7, **failed_checks: bool) -> dict:
+    """A cell that delivered everything but with a live median over budget; ``failed_checks`` fails more checks."""
+    out = row(cell, "fail", median, stage="stream_delivered")
+    checks = {"every_marker_delivered": {"ok": True}, "markers_in_order": {"ok": True}, "median_delay_within_budget": {"ok": False}}
+    for name in failed_checks:
+        checks[name] = {"ok": False}
+    out["stages"].update(
+        provider_emitted={"ok": True}, engine_posted={"ok": True}, host_published={"ok": True},
+        stream_delivered={"ok": False, "reason": "median_delay_within_budget: median 1.7 s, budget 1.0 s", "evidence": {"checks": checks}},
+    )
+    return out
+
+
 class PinsTests(unittest.TestCase):
     def test_every_provider_the_lane_installs_has_an_exact_pin(self):
         pins = tomllib.loads(PINS.read_text())
@@ -82,6 +95,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("upload-artifact", text)
         self.assertNotIn("--live", text)  # never a real model
 
+    def test_reruns_are_asked_of_the_verdict_script_and_never_run_on_the_nightly(self):
+        text = WORKFLOW.read_text()
+        self.assertIn("TT_RERUN: ${{ github.event_name != 'schedule' && '1' || '0' }}", text)
+        self.assertIn('--rerun-candidates "$TT_OUT/$name.json"', text)
+        self.assertIn('[[ "$TT_RERUN" == 1 ]] && reruns=(--allow-reruns)', text)
+        # The rerun loop reads its cells from a file; a harness that read stdin would eat the rest of them.
+        rerun_make = next(line for line in text.splitlines() if "make terminal-truth" in line and "$again.json" in line)
+        self.assertIn("< /dev/null", rerun_make)
+
     def test_the_budget_file_names_every_declared_cell(self):
         data = json.loads(BUDGET.read_text())
         for cell, value in data["budget_s"].items():
@@ -104,14 +126,96 @@ class StatusTests(unittest.TestCase):
 
 
 class SummaryTests(unittest.TestCase):
-    def run_summary(self, passes: dict[str, list[dict]], repeats: int, scenarios: str = "long_reply"):
+    def run_summary(self, passes: dict[str, list[dict]], repeats: int, scenarios: str = "long_reply", extra: tuple[str, ...] = ()):
         with tempfile.TemporaryDirectory() as tmp:
             for name, rows in passes.items():
                 (Path(tmp) / name).write_text(json.dumps(rows))
             result = subprocess.run(
-                [sys.executable, str(SUMMARY), tmp, "--repeats", str(repeats), "--scenarios", scenarios], capture_output=True, text=True
+                [sys.executable, str(SUMMARY), tmp, "--repeats", str(repeats), "--scenarios", scenarios, *extra],
+                capture_output=True, text=True,
             )
             return result, json.loads((Path(tmp) / "gate.json").read_text())
+
+    def candidates(self, rows: list[dict]) -> list[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pass-1-long_reply.json"
+            path.write_text(json.dumps(rows))
+            result = subprocess.run([sys.executable, str(SUMMARY), "--rerun-candidates", str(path)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.splitlines()
+
+    def test_only_a_cell_that_delivered_everything_but_slowly_is_offered_a_rerun(self):
+        self.assertEqual(self.candidates([row("codex/helm"), slow("claude/console")]), ["claude console"])
+        self.assertEqual(self.candidates([row("codex/helm")]), [])
+        # Text missing as well as slow is not a slow cell.
+        self.assertEqual(self.candidates([slow("claude/console", every_marker_delivered=True)]), [])
+        # A stage before the stream failed.
+        self.assertEqual(self.candidates([row("codex/helm", "fail", None, stage="host_published")]), [])
+        # A slow cell beside a real failure: the pass fails whatever the rerun says, so none is run.
+        self.assertEqual(self.candidates([slow("claude/console"), row("codex/helm", "fail", None, stage="engine_posted")]), [])
+        # Three slow cells in one pass is a slow product or a slow runner.
+        self.assertEqual(self.candidates([slow("claude/console"), slow("pi/console"), slow("omp/console")]), [])
+        self.assertEqual(self.candidates([slow("claude/console"), slow("pi/console")]), ["claude console", "pi console"])
+
+    def test_a_slow_cell_that_passes_its_rerun_clears_the_pass_and_both_results_are_kept(self):
+        files = {
+            "pass-1-long_reply.json": [row("codex/helm"), slow("claude/console", 1.7)],
+            "pass-1-long_reply.rerun-claude-console.json": [row("claude/console", median=0.1)],
+        }
+        result, gate = self.run_summary(files, 1, extra=("--allow-reruns",))
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(gate["state"], "success")
+        self.assertEqual(gate["failing_cells"], [])
+        self.assertEqual(
+            gate["passed_on_rerun"], [{"cell": "claude/console [long_reply]", "pass": 1, "first_median_s": 1.7, "rerun_median_s": 0.1}]
+        )
+        self.assertEqual(gate["medians"]["claude/console [long_reply]"], [1.7])  # the slow first try stays in the record
+        self.assertIn("1 on a rerun", gate["description"])
+        self.assertIn("::warning::terminal truth passed on a rerun claude/console [long_reply] pass 1", result.stdout)
+
+    def test_the_nightly_never_accepts_a_rerun(self):
+        files = {
+            "pass-1-long_reply.json": [slow("claude/console")],
+            "pass-1-long_reply.rerun-claude-console.json": [row("claude/console")],
+        }
+        result, gate = self.run_summary(files, 1)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(gate["failing_cells"], ["claude/console [long_reply]"])
+        self.assertEqual(gate["passed_on_rerun"], [])
+
+    def test_a_rerun_that_is_slow_again_missing_or_served_nothing_fails_the_pass(self):
+        first = {"pass-1-long_reply.json": [slow("claude/console")]}
+        for name, again in (
+            ("slow again", [slow("claude/console")]),
+            ("served nothing", [row("claude/console", requests=0)]),
+            ("another cell's row", [row("pi/console")]),
+            ("missing", None),
+        ):
+            files = dict(first)
+            if again is not None:
+                files["pass-1-long_reply.rerun-claude-console.json"] = again
+            result, gate = self.run_summary(files, 1, extra=("--allow-reruns",))
+            self.assertEqual(result.returncode, 1, name)
+            self.assertEqual(gate["failing_cells"], ["claude/console [long_reply]"], name)
+
+    def test_one_cell_that_fails_its_rerun_fails_the_other_slow_cell_of_that_pass_too(self):
+        files = {
+            "pass-1-long_reply.json": [slow("claude/console"), slow("pi/console")],
+            "pass-1-long_reply.rerun-claude-console.json": [row("claude/console")],
+            "pass-1-long_reply.rerun-pi-console.json": [slow("pi/console")],
+        }
+        result, gate = self.run_summary(files, 1, extra=("--allow-reruns",))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(gate["failing_cells"], ["claude/console [long_reply]", "pi/console [long_reply]"])
+
+    def test_a_rerun_file_cannot_clear_a_cell_that_failed_for_another_reason(self):
+        files = {
+            "pass-1-long_reply.json": [row("codex/helm", "fail", None, stage="host_published")],
+            "pass-1-long_reply.rerun-codex-helm.json": [row("codex/helm")],
+        }
+        result, gate = self.run_summary(files, 1, extra=("--allow-reruns",))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(gate["failing_cells"], ["codex/helm [long_reply]"])
 
     def test_all_passing_passes_succeed(self):
         rows = [row("codex/helm"), row("claude/helm", "known_bad", None, stage="engine_posted")]
