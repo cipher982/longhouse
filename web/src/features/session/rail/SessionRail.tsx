@@ -8,13 +8,24 @@
  * entry the unfiltered timeline uses), so the rail adds no endpoint, and no
  * extra fetch when the user arrives from an unfiltered timeline.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate } from "react-router";
 import type { TimelineSessionCard } from "@/shared/api/agents";
 import { useAgentSessions } from "@/shared/api/useAgentSessions";
 import { useMobileNavSlot } from "@/app/headerSlot";
 import { useMediaQuery } from "@/shared/hooks/useMediaQuery";
+import { useStoredState } from "@/shared/hooks/useStoredState";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import type { StatusLampState } from "@/shared/instruments/StatusLamp";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
@@ -40,6 +51,26 @@ import "./session-rail.css";
 /** The timeline's default first page; sharing its filters shares its cache. */
 const RAIL_SESSION_FILTERS = { limit: 50 } as const;
 const RAIL_HOTKEY_COUNT = 9;
+export const RAIL_WIDTH_STORAGE_KEY = "longhouse.session.railWidth";
+export const RAIL_WIDTH_MIN = 200;
+export const RAIL_WIDTH_MAX = 560;
+const RAIL_WIDTH_DEFAULT = 288;
+const RAIL_MAIN_MIN = 420;
+const RAIL_KEYBOARD_STEP = 16;
+const RAIL_KEYBOARD_STEP_LARGE = 48;
+
+export function parseRailWidth(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+  return Math.round(Math.min(RAIL_WIDTH_MAX, Math.max(RAIL_WIDTH_MIN, raw)));
+}
+
+export function clampRailWidth(width: number, frameWidth?: number): number {
+  const maxForFrame =
+    typeof frameWidth === "number" && frameWidth > 0
+      ? Math.max(RAIL_WIDTH_MIN, Math.min(RAIL_WIDTH_MAX, frameWidth - RAIL_MAIN_MIN))
+      : RAIL_WIDTH_MAX;
+  return Math.round(Math.min(maxForFrame, Math.max(RAIL_WIDTH_MIN, width)));
+}
 
 export function isMacPlatform(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -529,10 +560,26 @@ export function SessionRailFrame({
   // Below this the docked rail would squeeze the transcript: the rail
   // becomes a strip of glyphs that opens over the page instead.
   const compact = useMediaQuery("(max-width: 1199px)");
+  const docked = !narrow && !compact;
   const mobileSlot = useMobileNavSlot();
   const [turnsTarget, setTurnsTarget] = useState<HTMLElement | null>(null);
   const [activeSession, setActiveSession] = useState<RailActiveSession | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [storedWidth, setStoredWidth] = useStoredState<number | null>(
+    RAIL_WIDTH_STORAGE_KEY,
+    null,
+    parseRailWidth,
+  );
+  const [resizing, setResizing] = useState(false);
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+    frameWidth: number;
+    liveWidth: number;
+  } | null>(null);
+  const rafRef = useRef<number | null>(null);
 
   const reportActiveSession = useCallback((next: RailActiveSession | null) => {
     setActiveSession((previous) =>
@@ -545,6 +592,14 @@ export function SessionRailFrame({
   }, [compact]);
 
   useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!expanded) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setExpanded(false);
@@ -552,6 +607,94 @@ export function SessionRailFrame({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [expanded]);
+
+  const currentDockedWidth = useCallback((): number => {
+    if (storedWidth !== null) return storedWidth;
+    const railEl = frameRef.current?.querySelector<HTMLElement>(".session-rail--docked");
+    const measured = railEl?.getBoundingClientRect().width;
+    return measured && measured > 0 ? Math.round(measured) : RAIL_WIDTH_DEFAULT;
+  }, [storedWidth]);
+
+  const handleResizerPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!docked || (event.button !== undefined && event.button !== 0)) return;
+      event.preventDefault();
+      const frameEl = frameRef.current;
+      const frameWidth = frameEl?.getBoundingClientRect().width ?? 0;
+      const startWidth = currentDockedWidth();
+      const startX = Number.isFinite(event.clientX) ? event.clientX : 0;
+      dragRef.current = {
+        pointerId: event.pointerId,
+        startX,
+        startWidth,
+        frameWidth,
+        liveWidth: startWidth,
+      };
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      setResizing(true);
+    },
+    [currentDockedWidth, docked],
+  );
+
+  const handleResizerPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !Number.isFinite(event.clientX)) return;
+    const nextWidth = clampRailWidth(drag.startWidth + (event.clientX - drag.startX), drag.frameWidth);
+    drag.liveWidth = nextWidth;
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      const current = dragRef.current;
+      if (!current || !frameRef.current) return;
+      frameRef.current.style.setProperty("--session-rail-width", `${current.liveWidth}px`);
+    });
+  }, []);
+
+  const finishResize = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      dragRef.current = null;
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      const finalWidth = Number.isFinite(event.clientX)
+        ? clampRailWidth(drag.startWidth + (event.clientX - drag.startX), drag.frameWidth)
+        : drag.liveWidth;
+      frameRef.current?.style.setProperty("--session-rail-width", `${finalWidth}px`);
+      setResizing(false);
+      setStoredWidth(finalWidth);
+    },
+    [setStoredWidth],
+  );
+
+  const handleResizerKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (!docked) return;
+      const step = event.shiftKey ? RAIL_KEYBOARD_STEP_LARGE : RAIL_KEYBOARD_STEP;
+      const frameWidth = frameRef.current?.getBoundingClientRect().width;
+      const base = currentDockedWidth();
+      let next: number | null = null;
+      if (event.key === "ArrowLeft") next = clampRailWidth(base - step, frameWidth);
+      else if (event.key === "ArrowRight") next = clampRailWidth(base + step, frameWidth);
+      else if (event.key === "Home") next = RAIL_WIDTH_MIN;
+      else if (event.key === "End") next = clampRailWidth(RAIL_WIDTH_MAX, frameWidth);
+      if (next === null) return;
+      event.preventDefault();
+      setStoredWidth(next);
+    },
+    [currentDockedWidth, docked, setStoredWidth],
+  );
+
+  const handleResizerDoubleClick = useCallback(() => {
+    if (!docked) return;
+    frameRef.current?.style.removeProperty("--session-rail-width");
+    setStoredWidth(null);
+  }, [docked, setStoredWidth]);
 
   const context = useMemo<SessionRailContextValue>(
     () => ({ turnsTarget, reportActiveSession }),
@@ -588,10 +731,40 @@ export function SessionRailFrame({
     rail = railFor(compact ? "strip" : "docked");
   }
 
+  const frameStyle: CSSProperties | undefined =
+    docked && storedWidth !== null
+      ? ({ "--session-rail-width": `${storedWidth}px` } as CSSProperties)
+      : undefined;
+
   return (
     <SessionRailContext.Provider value={context}>
-      <div className={`session-rail-frame${compact && !narrow ? " session-rail-frame--compact" : ""}`}>
+      <div
+        ref={frameRef}
+        className={`session-rail-frame${compact && !narrow ? " session-rail-frame--compact" : ""}`}
+        data-resizing={resizing ? "true" : undefined}
+        style={frameStyle}
+      >
         {rail}
+        {docked ? (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize session rail"
+            aria-valuemin={RAIL_WIDTH_MIN}
+            aria-valuemax={RAIL_WIDTH_MAX}
+            aria-valuenow={storedWidth ?? RAIL_WIDTH_DEFAULT}
+            tabIndex={0}
+            className="session-rail-resizer"
+            data-testid="session-rail-resizer"
+            title="Drag to resize · Double-click to reset"
+            onPointerDown={handleResizerPointerDown}
+            onPointerMove={handleResizerPointerMove}
+            onPointerUp={finishResize}
+            onPointerCancel={finishResize}
+            onKeyDown={handleResizerKeyDown}
+            onDoubleClick={handleResizerDoubleClick}
+          />
+        ) : null}
         <div className="session-rail-frame__main">{children}</div>
       </div>
     </SessionRailContext.Provider>

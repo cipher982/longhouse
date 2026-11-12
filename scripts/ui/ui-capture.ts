@@ -23,8 +23,9 @@
  * each opened overlay.
  *
  * --action runs steps after the page settles and before the screenshot, so a
- * frame can show an opened popover or dialog: `click:<selector>` or
- * `press:<key>` (Playwright key names, e.g. `press:Meta+k`), separated by ";".
+ * frame can show an opened popover, dialog, or dragged split: `click:<selector>`,
+ * `press:<key>` (Playwright key names, e.g. `press:Meta+k`), or
+ * `drag:<selector>:<dx>[,<dy>]`, separated by ";".
  *
  * --css-variant injects scripts/ui/css-variants/<X>.css after the page loads:
  * a layout experiment to look at, never shipped CSS (e.g. terminal density).
@@ -1684,12 +1685,36 @@ async function captureBundle(
 
   for (const step of actions) {
     const separator = step.indexOf(":");
-    if (separator === -1) throw new Error(`--action step "${step}" needs a verb: click:<selector> or press:<key>`);
+    if (separator === -1) {
+      throw new Error(`--action step "${step}" needs a verb: click:<selector>, press:<key>, or drag:<selector>:<dx>[,<dy>]`);
+    }
     const verb = step.slice(0, separator);
     const target = step.slice(separator + 1);
-    if (verb === "click") await page.click(target);
-    else if (verb === "press") await page.keyboard.press(target);
-    else throw new Error(`Unknown --action step "${step}"; use click:<selector> or press:<key>`);
+    if (verb === "click") {
+      await page.click(target);
+    } else if (verb === "press") {
+      await page.keyboard.press(target);
+    } else if (verb === "drag") {
+      const lastColon = target.lastIndexOf(":");
+      if (lastColon === -1) throw new Error(`drag action "${step}" needs drag:<selector>:<dx>[,<dy>]`);
+      const selector = target.slice(0, lastColon);
+      const [dxStr, dyStr = "0"] = target.slice(lastColon + 1).split(",");
+      const dx = Number(dxStr);
+      const dy = Number(dyStr);
+      if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+        throw new Error(`drag action "${step}" has invalid offset`);
+      }
+      const box = await page.locator(selector).first().boundingBox();
+      if (!box) throw new Error(`drag selector "${selector}" not found`);
+      const startX = box.x + box.width / 2;
+      const startY = box.y + box.height / 2;
+      await page.mouse.move(startX, startY);
+      await page.mouse.down();
+      await page.mouse.move(startX + dx, startY + dy, { steps: 10 });
+      await page.mouse.up();
+    } else {
+      throw new Error(`Unknown --action step "${step}"; use click:<selector>, press:<key>, or drag:<selector>:<dx>[,<dy>]`);
+    }
     await page.waitForTimeout(150);
   }
 

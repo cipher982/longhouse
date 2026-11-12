@@ -5,11 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession, TimelineSessionsListResponse } from "@/shared/api/agents";
 import { makeSessionStateFacts } from "@/shared/test/sessionState";
 import {
+  RAIL_WIDTH_MAX,
+  RAIL_WIDTH_MIN,
+  RAIL_WIDTH_STORAGE_KEY,
   SessionRailFrame,
   buildRailRows,
+  clampRailWidth,
   isNewSessionHotkey,
   isSwitcherHotkey,
   newSessionHotkeyLabel,
+  parseRailWidth,
   railHotkeyIndex,
   railHotkeyLabel,
   railStatusFlag,
@@ -634,5 +639,78 @@ describe("rail rows follow the Timeline's tiers", () => {
 
     expect(railStatusFlag(failed)).toBe("Failed");
     expect(railStatusFlag(question)).toBe("Needs you");
+  });
+});
+
+describe("rail resizing", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.stubGlobal("PointerEvent", MouseEvent);
+    fetchAgentSessionsMock.mockResolvedValue(list(["a", "b"]));
+    fetchWorkspaceMock.mockResolvedValue({ session: session("a", "Session a"), timeline: { events: [] } });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.localStorage.clear();
+  });
+
+  it("parses and clamps rail width bounds", () => {
+    expect(parseRailWidth(null)).toBeNull();
+    expect(parseRailWidth("300")).toBeNull();
+    expect(parseRailWidth(Number.NaN)).toBeNull();
+    expect(parseRailWidth(120)).toBe(RAIL_WIDTH_MIN);
+    expect(parseRailWidth(900)).toBe(RAIL_WIDTH_MAX);
+    expect(parseRailWidth(342.4)).toBe(342);
+
+    expect(clampRailWidth(100, 1440)).toBe(RAIL_WIDTH_MIN);
+    expect(clampRailWidth(800, 1440)).toBe(RAIL_WIDTH_MAX);
+    expect(clampRailWidth(520, 800)).toBe(380);
+  });
+
+  it("drags the separator to resize, persists width, and double-clicks to reset", async () => {
+    const { container } = renderRail("a");
+    await screen.findAllByTestId("session-rail-row");
+
+    const frame = container.querySelector<HTMLElement>(".session-rail-frame")!;
+    const resizer = screen.getByTestId("session-rail-resizer");
+
+    expect(resizer).toHaveAttribute("role", "separator");
+    expect(resizer).toHaveAttribute("aria-orientation", "vertical");
+
+    fireEvent.pointerDown(resizer, { pointerId: 1, button: 0, clientX: 288 });
+    expect(frame).toHaveAttribute("data-resizing", "true");
+
+    fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 368 });
+    fireEvent.pointerUp(resizer, { pointerId: 1, clientX: 368 });
+
+    expect(frame).not.toHaveAttribute("data-resizing");
+    expect(frame.style.getPropertyValue("--session-rail-width")).toBe("368px");
+    expect(resizer).toHaveAttribute("aria-valuenow", "368");
+    expect(window.localStorage.getItem(RAIL_WIDTH_STORAGE_KEY)).toBe("368");
+
+    fireEvent.doubleClick(resizer);
+    expect(frame.style.getPropertyValue("--session-rail-width")).toBe("");
+    expect(window.localStorage.getItem(RAIL_WIDTH_STORAGE_KEY)).toBe("null");
+  });
+
+  it("supports keyboard resizing on the separator", async () => {
+    const { container } = renderRail("a");
+    await screen.findAllByTestId("session-rail-row");
+
+    const frame = container.querySelector<HTMLElement>(".session-rail-frame")!;
+    const resizer = screen.getByTestId("session-rail-resizer");
+
+    fireEvent.keyDown(resizer, { key: "ArrowRight" });
+    expect(frame.style.getPropertyValue("--session-rail-width")).toBe("304px");
+
+    fireEvent.keyDown(resizer, { key: "ArrowLeft", shiftKey: true });
+    expect(frame.style.getPropertyValue("--session-rail-width")).toBe("256px");
+
+    fireEvent.keyDown(resizer, { key: "Home" });
+    expect(frame.style.getPropertyValue("--session-rail-width")).toBe(`${RAIL_WIDTH_MIN}px`);
+
+    fireEvent.keyDown(resizer, { key: "End" });
+    expect(frame.style.getPropertyValue("--session-rail-width")).toBe(`${RAIL_WIDTH_MAX}px`);
   });
 });

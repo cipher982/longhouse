@@ -14,6 +14,7 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  contain: layout style;
 }
 
 .session-rail-frame__main > * {
@@ -22,8 +23,8 @@
 }
 
 .session-rail {
-  flex: 0 0 288px;
-  width: 288px;
+  flex: 0 0 var(--session-rail-width, 288px);
+  width: var(--session-rail-width, 288px);
   min-height: 0;
   overflow-y: auto;
   display: flex;
@@ -32,13 +33,56 @@
   padding: 6px 6px 16px;
   border-right: 1px solid var(--color-border-subtle);
   background: rgba(7, 6, 5, 0.45);
+  contain: layout style;
 }
 
 @media (min-width: 1600px) {
   .session-rail {
-    flex-basis: 312px;
-    width: 312px;
+    flex-basis: var(--session-rail-width, 312px);
+    width: var(--session-rail-width, 312px);
   }
+}
+
+.session-rail-resizer {
+  position: relative;
+  flex: 0 0 8px;
+  inline-size: 8px;
+  margin-inline: -4px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.session-rail-resizer::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 50%;
+  inline-size: 2px;
+  transform: translateX(-50%);
+  background: var(--color-brand-primary);
+  opacity: 0;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+}
+
+.session-rail-resizer:hover::after,
+.session-rail-resizer:focus-visible::after {
+  opacity: 0.75;
+}
+
+.session-rail-frame[data-resizing="true"] .session-rail-resizer::after {
+  opacity: 1;
+}
+
+.session-rail-resizer:focus-visible {
+  outline: none;
+}
+
+.session-rail-frame[data-resizing="true"] {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .session-rail__head {
