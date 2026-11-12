@@ -1663,7 +1663,12 @@ async def _live_catalog_workspace_stream(
             preview_event_id = _workspace_preview_event_id(preview)
             latest_event_id = -abs(preview_event_id) if preview_event_id is not None else 0
             catalog_commit_seq = _workspace_catalog_commit_seq(message.payload)
-            if catalog_commit_seq is None and owner_id is not None:
+            # A live preview wake is provisional text that arrives before its durable write; it has no commit of its
+            # own. Looking up the current commit would only attach an unrelated one, and the lookup is a catalog read
+            # in a worker thread behind every other read on the host: on a busy host each preview frame waited for it
+            # and the live reply reached the client seconds late, in a burst.
+            if catalog_commit_seq is None and owner_id is not None and _workspace_change_kind(message.payload) != "transcript_preview":
+                _lookup_started = monotonic()
                 try:
                     _session, _provider_alias, raw_commit_seq = await asyncio.to_thread(
                         read_live_catalog_session,
@@ -1678,6 +1683,9 @@ async def _live_catalog_workspace_stream(
                         session_id,
                         exc_info=True,
                     )
+                _lookup_s = monotonic() - _lookup_started
+                if _lookup_s > 0.25:
+                    logger.info("workspace stream commit lookup slow session=%s took_ms=%.0f", session_id, _lookup_s * 1000)
             yield {
                 "event": "workspace_changed",
                 "id": str(message.seq),

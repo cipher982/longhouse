@@ -1121,3 +1121,61 @@ def test_live_catalog_workspace_event_matches_ios_required_contract():
     assert isinstance(changed["transcript_preview"]["event_origin"], str)
     assert isinstance(changed["transcript_preview"]["timestamp"], str)
     assert isinstance(changed["transcript_preview"]["is_provisional"], bool)
+
+
+def test_live_preview_frame_does_not_wait_for_a_catalog_read():
+    """A transcript_preview wake is yielded as soon as it is published.
+
+    The stream used to look up the current catalog commit for every wake that carried none, in a worker thread, before
+    yielding. Under host load that read queued behind every other catalog read and delayed each live preview frame.
+    """
+    import time
+
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import publish_session_transcript_preview_update
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
+
+    reset_pubsub_for_test()
+    session_id = uuid4()
+    lookups: list[float] = []
+
+    def slow_lookup(*_args, **_kwargs):
+        lookups.append(time.monotonic())
+        time.sleep(1.0)
+        raise timeline_mod.CatalogReadError("catalog_unavailable", "slow")
+
+    async def _run():
+        started = time.monotonic()
+        frames: list[tuple[float, dict]] = []
+        stream = timeline_mod._live_catalog_workspace_stream(
+            _DisconnectAfterNCycles(50),
+            session_id=session_id,
+            skip_initial=True,
+            last_event_id=None,
+            owner_id=7,
+        )
+        async for event in stream:
+            if event.get("event") == "workspace_changed" and json.loads(event["data"]).get("pubsub_seq") == 0:
+                publish_session_transcript_preview_update(
+                    session_id=str(session_id),
+                    provider="codex",
+                    source="codex_bridge_live",
+                    transcript_preview={"text": "hello", "role": "assistant", "event_id": 1},
+                )
+                continue
+            if event.get("event") == "workspace_changed":
+                frames.append((time.monotonic() - started, json.loads(event["data"])))
+                break
+        return frames
+
+    assert get_pubsub().peek_latest_seq(topic_session(str(session_id))) == 0
+    with patch.object(timeline_mod, "read_live_catalog_session", slow_lookup):
+        frames = asyncio.run(_run())
+
+    assert frames, "the preview frame never arrived"
+    elapsed, frame = frames[0]
+    assert frame["transcript_preview"]["text"] == "hello"
+    assert frame["change_kind"] == "transcript_preview"
+    assert lookups == [], "a preview frame must not trigger a catalog commit lookup"
+    assert elapsed < 0.9
