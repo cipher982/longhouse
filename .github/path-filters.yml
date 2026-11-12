@@ -69,6 +69,15 @@ models:
 scripts:
   - 'scripts/**'
 
+# What the UI popover sweep renders and what drives it. The job used the frontend
+# and scripts filters, so 18 of the 25 commits that started it on 2026-11-11/12
+# changed only scripts/ci, scripts/qa, scripts/tests or scripts/ops.
+ui_sweep:
+  - 'web/**'
+  - 'bun.lock'
+  - 'package.json'
+  - 'scripts/ui/**'
+
 runtime_image:
   - '.dockerignore'
   - 'bun.lock'

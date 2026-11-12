@@ -76,6 +76,7 @@ jobs:
       e2e: ${{ steps.filter.outputs.e2e }}
       models: ${{ steps.filter.outputs.models }}
       scripts: ${{ steps.filter.outputs.scripts }}
+      ui_sweep: ${{ steps.filter.outputs.ui_sweep }}
       image_tag: ${{ steps.image.outputs.tag }}
     permissions:
       contents: read
@@ -380,7 +381,7 @@ jobs:
   ui-sweep:
     timeout-minutes: 15
     needs: [changes, test-image]
-    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.ui_sweep == 'true' || github.event_name == 'workflow_dispatch') }}
     runs-on: crunch
     # Opens every menu on every fixture scene at three sizes and fails when one
     # lands off-screen, covered or clipped (scripts/ui/popover-sweep.ts). A
@@ -394,7 +395,9 @@ jobs:
     # repo's three crunch slots for about 4.7 minutes each on every frontend or
     # scripts push (155 slot-minutes a day on 2026-11-11/12) for a result
     # nothing reads, and its one red streak that week hit every size at once.
-    # ui-sweep-nightly.yml runs all three once a day, where Sauron's
+    # It runs for the web app and scripts/ui only (the ui_sweep path filter), not
+    # for every scripts/ change. ui-sweep-nightly.yml runs all three once a day
+    # whatever changed, where Sauron's
     # ci-scheduled-red watches it; a manual run here also does all three.
     strategy:
       fail-fast: false

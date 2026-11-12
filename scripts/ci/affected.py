@@ -79,6 +79,11 @@ FILTER_PLANS: dict[str, FilterPlan] = {
         ("make test",),
         "Script changes use the backend/helper CI coverage (the full backend suite).",
     ),
+    "ui_sweep": FilterPlan(
+        ("ubuntu-24.04-arm",),
+        ("make test-ui-sweep ARGS=--viewports=desktop",),
+        "A push sweeps the desktop size; the nightly sweep covers wide and mobile.",
+    ),
     "runtime_image": FilterPlan(
         ("cube-maint",),
         (),
