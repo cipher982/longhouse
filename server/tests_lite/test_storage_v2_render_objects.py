@@ -23,6 +23,7 @@ from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.storage_v2_semantics import SemanticRecoveryStats
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import _repaired_interaction_kind
+from zerg.services.storage_v2_semantics import _semantic_repair_replay_set
 from zerg.services.storage_v2_semantics import enrich_render_interaction_kinds
 from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
 from zerg.services.storage_v2_semantics import repair_storage_session_semantic_projection
@@ -608,6 +609,149 @@ async def test_multi_page_semantic_repair_uses_final_catalog_completion(monkeypa
 
 async def _empty_async_mapping():
     return {}
+
+
+def _stream_fixture(count: int, *, pending: set[int], other_stream_pending: bool = False):
+    """Render objects and raw manifests for one Claude stream of ``count`` envelopes."""
+
+    raw_manifests: dict[str, dict[str, object]] = {}
+    objects: list[dict[str, object]] = []
+    for index in range(count):
+        envelope = f"{index:064x}"
+        raw_manifests[envelope] = {
+            "envelope_id": envelope,
+            "machine_id": "cinder",
+            "provider": "claude",
+            "opaque_source_id": "history.jsonl",
+            "source_epoch": "epoch-1",
+            # Listed out of order: the window follows the stream's ranges.
+            "range_start": index * 10,
+            "range_end": index * 10 + 10,
+        }
+        objects.append(
+            {
+                "object_id": f"object-{index}",
+                "source_envelope_id": envelope,
+                "semantic_projection_version": 0 if index in pending else 1,
+                "abandoned_events": 0,
+            }
+        )
+    other = "f" * 64
+    raw_manifests[other] = {
+        "envelope_id": other,
+        "machine_id": "cinder",
+        "provider": "claude",
+        "opaque_source_id": "other.jsonl",
+        "source_epoch": "epoch-1",
+        "range_start": 0,
+        "range_end": 10,
+    }
+    objects.append(
+        {
+            "object_id": "object-other",
+            "source_envelope_id": other,
+            "semantic_projection_version": 0 if other_stream_pending else 1,
+            "abandoned_events": 0,
+        }
+    )
+    return objects, dict(reversed(list(raw_manifests.items())))
+
+
+@pytest.mark.parametrize(
+    ("pending", "expected"),
+    [
+        # An appended envelope can change the two before it.
+        ({7}, {5, 6, 7}),
+        # An envelope landing mid-stream can change two on each side.
+        ({3}, {1, 2, 3, 4, 5}),
+        ({0, 7}, {0, 1, 2, 5, 6, 7}),
+    ],
+)
+def test_semantic_repair_replays_only_the_pending_neighborhood(pending, expected):
+    objects, raw_manifests = _stream_fixture(8, pending=pending)
+
+    selected = _semantic_repair_replay_set(objects, raw_manifests=raw_manifests)
+
+    assert selected == {f"object-{index}" for index in expected}
+
+
+def test_semantic_repair_neighborhood_stays_inside_its_source_stream():
+    objects, raw_manifests = _stream_fixture(4, pending=set(), other_stream_pending=True)
+
+    assert _semantic_repair_replay_set(objects, raw_manifests=raw_manifests) == {"object-other"}
+
+
+def test_semantic_repair_replays_everything_without_a_pending_object_or_manifests():
+    objects, raw_manifests = _stream_fixture(4, pending=set())
+
+    assert _semantic_repair_replay_set(objects, raw_manifests=raw_manifests) is None
+    assert _semantic_repair_replay_set(_stream_fixture(4, pending={1})[0], raw_manifests={}) is None
+
+
+def test_semantic_repair_treats_missing_abandoned_events_as_pending():
+    objects, raw_manifests = _stream_fixture(6, pending=set())
+    objects[0]["abandoned_events"] = None
+
+    assert _semantic_repair_replay_set(objects, raw_manifests=raw_manifests) == {"object-0", "object-1", "object-2"}
+
+
+@pytest.mark.asyncio
+async def test_semantic_repair_reads_only_the_pending_neighborhood(monkeypatch) -> None:
+    objects, raw_manifests = _stream_fixture(8, pending={7})
+    base = _spec()
+    for item in objects:
+        item.update(object_path=item["object_id"], object_hash=f"hash-{item['object_id']}")
+
+    class Catalog:
+        def __init__(self):
+            self.repairs: list[dict[str, object]] = []
+
+        async def call(self, method, params, **_kwargs):
+            if method == "storage.session.projector.read.v2":
+                return {"found": True, "commit_seq": 9}
+            if method == "storage.session.render_objects.list.v2":
+                return {
+                    "found": True,
+                    "generation_id": str(base.render_generation),
+                    "snapshot_object_count": len(objects),
+                    "objects": objects,
+                    "has_more": False,
+                }
+            if method == "storage.session.semantic_projection.repair.v2":
+                self.repairs.append(params)
+                return {"complete": True, "updated_object_count": len(params["objects"])}
+            raise AssertionError(method)
+
+    read_paths: list[str] = []
+
+    class RenderWorkers:
+        async def read(self, path, expected_hash, *, lane, queue_timeout_seconds=None):
+            read_paths.append(path)
+            envelope = next(item["source_envelope_id"] for item in objects if item["object_path"] == path)
+            return SimpleNamespace(spec=replace(base, source_envelope_id=envelope), object_hash=expected_hash)
+
+    async def no_recovery(**_kwargs):
+        return {}
+
+    async def manifests(*_args, **_kwargs):
+        return raw_manifests
+
+    catalog = Catalog()
+    monkeypatch.setattr("zerg.services.storage_v2_semantics._load_raw_manifests", manifests)
+    monkeypatch.setattr("zerg.services.storage_v2_semantics.recover_render_interaction_kinds", no_recovery)
+
+    result = await repair_storage_session_semantic_projection(
+        catalog=catalog,
+        render_workers=RenderWorkers(),
+        raw_workers=object(),
+        session_id=str(base.session_id),
+        owner_id="42",
+        generation_id=str(base.render_generation),
+    )
+
+    assert result["complete"] is True
+    assert sorted(read_paths) == ["object-5", "object-6", "object-7"]
+    assert [item["object_id"] for item in catalog.repairs[0]["objects"]] == ["object-5", "object-6", "object-7"]
 
 
 def test_render_object_rejects_unstable_semantic_order(tmp_path):

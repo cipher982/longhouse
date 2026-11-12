@@ -55,3 +55,23 @@ def test_command_prefilter_still_parses_escaped_markup():
         )
         is False
     )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"type":"user","promptId":"p","message":{"role":"user","content":"<command-name>/effort</command-name>"}}',
+        '{"type":"user","promptId":"p","message":{"role":"user","content":"\\u003ccommand-name>/effort\\u003c/command-name>"}}',
+        '{"type":"user","promptId":"p","message":{"role":"user","content":"plain prompt \u00e9\u4e2d"}}',
+        '{"type":"assistant","message":{"role":"assistant","content":"<command-name>/x</command-name>"}}',
+        "not json \\u",
+    ],
+)
+def test_command_prefilter_on_bytes_matches_text(raw):
+    from zerg.services.provider_interaction_semantics import claude_sequence_dependent_control_candidate
+
+    data = raw.encode("utf-8")
+    for content_text in (None, "<command-name>/effort</command-name>", "hello"):
+        expected = claude_sequence_dependent_control_candidate(content_text=content_text, raw_json=raw)
+        assert claude_sequence_dependent_control_candidate(content_text=content_text, raw_json=data) is expected
+        assert claude_sequence_dependent_control_candidate(content_text=content_text, raw_json=bytearray(data)) is expected

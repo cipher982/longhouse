@@ -629,6 +629,14 @@ def claude_sequence_dependent_control_candidate(
     """
 
     content_candidate = claude_sequence_dependent_control_content_candidate(content_text)
+    if isinstance(raw_json, (bytes, bytearray, memoryview)):
+        raw_json = bytes(raw_json)
+        # Raw record bytes as stored. Both markers are ASCII and UTF-8 never
+        # puts an ASCII byte inside a multi-byte character, so the byte test
+        # matches the decoded-text test without decoding every record.
+        if not content_candidate and b"command-" not in raw_json and b"\\u" not in raw_json:
+            return False
+        raw_json = raw_json.decode("utf-8", errors="replace")
     if not content_candidate and isinstance(raw_json, str) and "command-" not in raw_json and "\\u" not in raw_json:
         # Both markup patterns below contain "command-"; skip parsing the
         # full record JSON (every Claude row on the ingest event loop) when

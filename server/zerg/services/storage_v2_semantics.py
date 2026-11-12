@@ -226,10 +226,9 @@ def _claude_sequence_candidate_ordinals(*, raw_records: tuple[object, ...], reco
         raw_ordinal = int(getattr(record, "raw_record_ordinal", 0))
         if raw_ordinal < 0 or raw_ordinal >= len(raw_records):
             raise StorageV2SemanticRecoveryError("render record raw locator is outside its raw companion")
-        raw_text = raw_records[raw_ordinal].data.decode("utf-8", errors="replace")
         if claude_sequence_dependent_control_candidate(
             content_text=getattr(record, "content_text", None),
-            raw_json=raw_text,
+            raw_json=raw_records[raw_ordinal].data,
         ):
             candidates.add(ordinal)
     return candidates
@@ -263,10 +262,9 @@ async def enrich_render_interaction_kinds(
         raw_ordinal = int(record.raw_record_ordinal)
         if raw_ordinal < 0 or raw_ordinal >= len(raw_spec.records):
             raise StorageV2SemanticRecoveryError("render record raw locator is outside its raw companion")
-        raw_text = raw_spec.records[raw_ordinal].data.decode("utf-8", errors="replace")
         needs_claude_sequence_replay = reclassify_claude and claude_sequence_dependent_control_candidate(
             content_text=record.content_text,
-            raw_json=raw_text,
+            raw_json=raw_spec.records[raw_ordinal].data,
         )
         if (
             getattr(record, "interaction_kind", None) is None
@@ -802,10 +800,16 @@ async def repair_storage_session_semantic_projection(
         if len(manifest_pages) >= 10_000:
             raise StorageV2SemanticRecoveryError("semantic repair exceeded its bounded object page limit")
 
+    replay_object_ids = _semantic_repair_replay_set(
+        [item for objects in manifest_pages for item in objects],
+        raw_manifests=raw_manifest_cache.get(session_id),
+    )
     for page_index, objects in enumerate(manifest_pages):
         corrections: list[dict[str, object]] = []
         for item in objects:
             object_id = str(item.get("object_id") or "")
+            if replay_object_ids is not None and object_id not in replay_object_ids:
+                continue
             try:
                 decoded = await render_workers.read(
                     str(item["object_path"]),
@@ -890,6 +894,55 @@ async def repair_storage_session_semantic_projection(
         "pages": pages,
         "updated_object_count": updated_object_count,
     }
+
+
+def _semantic_repair_replay_set(
+    objects: list[dict[str, object]],
+    *,
+    raw_manifests: Mapping[str, Mapping[str, object]] | None,
+) -> set[str] | None:
+    """Return the render objects whose semantic kinds can differ from their stored facts.
+
+    Replay of one object reads only its raw companion and the
+    ``_SEQUENCE_CONTEXT_NEIGHBOR_OBJECTS`` companions on each side of it in
+    the same source stream. An object already at projection version 1 was
+    therefore projected from that window, and only a pending object inside
+    the window can change its result. Every Claude commit marks the whole
+    session pending, so replaying every object made each append cost the
+    session's full history (15% of serve during a 2 GB import).
+
+    ``None`` means replay everything: no raw manifests to locate neighbors,
+    or no pending object to explain why the session is pending.
+    """
+
+    if not raw_manifests:
+        return None
+    pending = {
+        str(item.get("source_envelope_id"))
+        for item in objects
+        if int(item.get("semantic_projection_version") or 0) < 1 or item.get("abandoned_events", 0) is None
+    }
+    if not pending:
+        return None
+    streams: dict[tuple[str, str, str, str], list[Mapping[str, object]]] = {}
+    for item in raw_manifests.values():
+        key = (
+            str(item.get("machine_id")),
+            str(item.get("provider")).strip().lower(),
+            str(item.get("opaque_source_id")),
+            str(item.get("source_epoch")),
+        )
+        streams.setdefault(key, []).append(item)
+    affected = set(pending)
+    for stream in streams.values():
+        stream.sort(key=lambda item: (_manifest_range_start(item), _manifest_range_end(item), str(item.get("envelope_id"))))
+        envelopes = [str(item.get("envelope_id") or "") for item in stream]
+        for index, envelope_id in enumerate(envelopes):
+            if envelope_id in pending:
+                affected.update(
+                    envelopes[max(0, index - _SEQUENCE_CONTEXT_NEIGHBOR_OBJECTS) : index + _SEQUENCE_CONTEXT_NEIGHBOR_OBJECTS + 1]
+                )
+    return {str(item.get("object_id") or "") for item in objects if str(item.get("source_envelope_id")) in affected}
 
 
 def _repaired_interaction_kind(existing: str | None, recovered: str | None) -> str | None:
