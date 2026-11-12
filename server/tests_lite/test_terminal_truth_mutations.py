@@ -20,6 +20,7 @@ def test_each_mutation_applies_exactly_once_and_changes_the_file(mutation) -> No
 def test_every_defect_of_2026_11_11_has_a_mutation_and_a_named_stage() -> None:
     assert {m.name for m in MUTATIONS} == {
         "pi-helm-text-forward",
+        "claude-helm-text-forward",
         "opencode-host-publish",
         "omp-session-dir-rule",
         "opencode-part-type-check",

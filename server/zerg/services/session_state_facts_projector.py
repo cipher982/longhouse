@@ -271,14 +271,48 @@ def project_served_session_state_facts(
         ),
     )
     catalog = _mapping(catalog_facts.get("catalog"))
-    activity = helm_activity_held_by_lease(shadow.activity, mode=served_mode, control=control, now=_aware(now, "now"))
+    normalized_now = _aware(now, "now")
+    activity = helm_activity_held_by_lease(shadow.activity, mode=served_mode, control=control, now=normalized_now)
+    delegation = shadow.delegation
+    if (
+        served_mode == "helm"
+        and shadow.delegation.observed_at is not None
+        and control.connection in {"connected", "degraded"}
+        and control.valid_until is not None
+        and control.valid_until > normalized_now
+        and (
+            shadow.delegation.state == "unknown"
+            or (
+                shadow.delegation.state == "pending"
+                and shadow.delegation.valid_until is not None
+                and shadow.delegation.valid_until < control.valid_until
+            )
+        )
+    ):
+        durable_run_id = _active_run_id(catalog_facts)
+        delegation_head, _ = _effective_head(
+            heads,
+            session_id=session_id,
+            family="delegation",
+            now=normalized_now,
+            expected_run_id=durable_run_id,
+            require_run_binding=True,
+            retain_expired=True,
+        )
+        delegation = _project_delegation(
+            delegation_head,
+            now=normalized_now,
+            children=_mapping(catalog_facts.get("delegation_children")),
+            heads=heads,
+            lease_valid_until=control.valid_until,
+        )
     return assemble_session_state_facts(
         mode=served_mode,
         disposition=shadow.disposition,
         launch=shadow.launch,
         run=shadow.run,
         activity=activity,
-        delegation=shadow.delegation,
+        delegation=delegation,
         control=control,
         pending_interaction=pending_interaction,
         transcript=transcript,
@@ -941,12 +975,11 @@ def _registry_items_with_lifecycle(
             or value.get("provider") != registry.get("provider")
             or value.get("authority_class") != "provider_runtime"
             or head.get("source_epoch") != registry.get("run_id")
-            or edge_at < observed_at
         ):
             continue
         values.append((edge_at, value))
     result = list(items)
-    for _edge_at, value in sorted(values, key=lambda pair: pair[0]):
+    for edge_at, value in sorted(values, key=lambda pair: pair[0]):
         edge = _mapping(value.get("item"))
         if edge.get("kind") != "subagent":
             continue
@@ -967,12 +1000,24 @@ def _registry_items_with_lifecycle(
             continue
         index = matches[0]
         if value.get("operation") == "remove":
+            if edge_at < observed_at:
+                continue
             result.pop(index)
         elif value.get("operation") == "observe":
+            registered_at = _optional_wire_datetime(result[index].get("registered_at"), "registered_at")
+            if registered_at is not None and edge_at < registered_at:
+                continue
             item = dict(result[index])
-            if tool_id:
+            if tool_id and (edge_at >= observed_at or not item.get("parent_tool_call_id")):
                 item["parent_tool_call_id"] = tool_id
-            item["status"] = edge["status"]
+            if edge_at >= observed_at:
+                item["status"] = edge["status"]
+            raw_progress = edge.get("native_progress")
+            if isinstance(raw_progress, Mapping):
+                existing_progress = _mapping(item.get("native_progress"))
+                existing_progress_at = _optional_wire_datetime(existing_progress.get("observed_at"), "native_progress.observed_at")
+                if existing_progress_at is None or edge_at >= existing_progress_at:
+                    item["native_progress"] = dict(raw_progress)
             result[index] = item
     return result
 
@@ -1003,18 +1048,23 @@ def _project_delegation(
     now: datetime,
     children: Mapping[str, Any],
     heads: Collection[Mapping[str, Any]] = (),
+    lease_valid_until: datetime | None = None,
 ) -> SessionDelegationFacts:
     """Project the delegated-work axis, expired evidence included.
 
-    An expired observation is not a claim that nothing is running — it is the
+    An expired observation is not a claim that nothing is running - it is the
     absence of a claim. It keeps its timestamps so a client can render the age,
-    but it never asserts `pending` or `none`.
+    but it never asserts `pending` or `none`. On a connected Helm session, a
+    live control lease holds active delegated work (`count > 0`) just as it
+    holds `thinking` / `running`, because the owning process is still attached
+    and reports subagent/task exits through its hooks.
     """
     if winner is None:
         return SessionDelegationFacts()
     head, value, observed_at, valid_until = winner
     source = str(head.get("source") or "").strip() or None
-    if valid_until <= now:
+    lease_active = lease_valid_until is not None and lease_valid_until > now
+    if valid_until <= now and not lease_active:
         return SessionDelegationFacts(
             state="unknown",
             # Retain the last explicit empty registry for presentation only;
@@ -1045,6 +1095,18 @@ def _project_delegation(
         items = [_project_delegation_task(item, children) for item in raw_items]
     raw_recent = value.get("recent_items")
     recent_items = [_project_delegation_task(item, children) for item in raw_recent] if isinstance(raw_recent, list) else None
+    if count == 0 and valid_until <= now:
+        return SessionDelegationFacts(
+            state="unknown",
+            items=[] if value.get("items") == [] else None,
+            recent_items=recent_items,
+            source=source,
+            observed_at=observed_at,
+            valid_until=valid_until,
+        )
+    effective_valid_until = (
+        max(valid_until, lease_valid_until) if count > 0 and lease_active and lease_valid_until is not None else valid_until
+    )
     return SessionDelegationFacts(
         state="pending" if count > 0 else "none",
         count=count,
@@ -1053,7 +1115,7 @@ def _project_delegation(
         recent_items=recent_items,
         source=source,
         observed_at=observed_at,
-        valid_until=valid_until,
+        valid_until=effective_valid_until,
     )
 
 

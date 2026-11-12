@@ -1349,8 +1349,36 @@ export function buildSessionToneFixture(tone: SessionTone): SessionDetailFixture
       return fixture;
     case "active":
       fixture.session.session_state = makeSessionState({
-        activity: { state: "executing", raw_kind: "running", tool: "hub", source: "managed_local_transport", observed_at: now, valid_until: "2026-04-15T16:26:35Z" },
-        presentation: { primary: primary("executing", "Using hub"), access, transcript: null },
+        activity: { state: "quiescent", raw_kind: "idle", tool: null, source: "managed_local_transport", observed_at: now, valid_until: null },
+        delegation: {
+          state: "pending",
+          count: 2,
+          kinds: { subagent: 1, shell: 1 },
+          items: [
+            {
+              id: "agent-validate",
+              kind: "subagent",
+              status: "running",
+              description: "Rebasing worktree and rerunning make validate",
+              native_progress: {
+                observed_at: now,
+                status: "running",
+                current_tool: "Bash",
+              },
+            },
+            {
+              id: "shell-watch",
+              kind: "shell",
+              status: "running",
+              description: "make ship-watch",
+            },
+          ],
+          recent_items: [],
+          source: "claude_background_tasks",
+          observed_at: now,
+          valid_until: "2026-04-15T16:55:00Z",
+        },
+        presentation: { primary: primary("delegated_work", "Background · 1 agent · 1 command"), access, transcript: null },
       });
       return fixture;
     case "idle":

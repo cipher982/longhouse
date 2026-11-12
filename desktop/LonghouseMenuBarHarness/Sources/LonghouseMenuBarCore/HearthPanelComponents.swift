@@ -20,18 +20,23 @@ enum HearthSessionKind: Int, Comparable {
 }
 
 extension ManagedSessionSnapshot {
-    var hearthKind: HearthSessionKind {
-        if explicitlyNeedsUser { return .needsYou }
-        if menuBarAttentionKind == .blocked { return .blocked }
+    var hearthKind: HearthSessionKind { hearthKind(asOf: Date()) }
+
+    func hearthKind(asOf now: Date) -> HearthSessionKind {
+        let attention = menuBarAttentionKind(asOf: now)
+        if isExplicitlyNeedsUser(attentionKind: attention) { return .needsYou }
+        if attention == .blocked { return .blocked }
         if needsManagedSessionAttention { return .lostControl }
-        if menuBarAttentionKind == .working { return .working }
+        if attention == .working { return .working }
         return .quiet
     }
 
     /// Fire size, 0...1. Executing burns hottest; waiting keeps a low flame;
     /// anything below ~0.12 is an unlit coal bed.
-    var hearthHeat: Double {
-        switch hearthKind {
+    var hearthHeat: Double { hearthHeat(asOf: Date()) }
+
+    func hearthHeat(asOf now: Date) -> Double {
+        switch hearthKind(asOf: now) {
         case .needsYou: return 0.26
         case .blocked: return 0.16
         case .lostControl, .quiet: return 0.04
@@ -45,6 +50,12 @@ extension ManagedSessionSnapshot {
     }
 }
 
+struct HearthSubagentLink: Identifiable {
+    let id: String
+    let title: String
+    let openAction: () -> Void
+}
+
 struct HearthSessionEntry: Identifiable {
     let id: String
     let provider: String
@@ -53,15 +64,56 @@ struct HearthSessionEntry: Identifiable {
     let heat: Double
     /// Workspace and live detail ("zerg / main · Bash"), or what it waits for.
     let subtitle: String
+    /// Optional secondary detail line (e.g., active background subagent description + tool).
+    let detail: String?
+    let detailLead: String?
+    let detailSuffix: String?
+    let helpText: String?
     let ageLabel: String
     let seed: Int
     let openAction: (() -> Void)?
+    let subagentLinks: [HearthSubagentLink]
+
+    init(
+        id: String,
+        provider: String,
+        title: String,
+        kind: HearthSessionKind,
+        heat: Double,
+        subtitle: String,
+        detail: String? = nil,
+        detailLead: String? = nil,
+        detailSuffix: String? = nil,
+        helpText: String? = nil,
+        ageLabel: String,
+        seed: Int,
+        openAction: (() -> Void)?,
+        subagentLinks: [HearthSubagentLink] = []
+    ) {
+        self.id = id
+        self.provider = provider
+        self.title = title
+        self.kind = kind
+        self.heat = heat
+        self.subtitle = subtitle
+        self.detail = detail
+        self.detailLead = detailLead
+        self.detailSuffix = detailSuffix
+        self.helpText = helpText
+        self.ageLabel = ageLabel
+        self.seed = seed
+        self.openAction = openAction
+        self.subagentLinks = subagentLinks
+    }
 
     /// What a row says to VoiceOver: the title plus the subtitle, which is
     /// where state that is not drawn (waiting, no live status, lost control)
     /// lives.
     var accessibilityOpenLabel: String {
-        subtitle.isEmpty ? "Open \(title) in Longhouse" : "Open \(title) in Longhouse, \(subtitle)"
+        let parts = [subtitle, detail ?? ""].filter { !$0.isEmpty }
+        return parts.isEmpty
+            ? "Open \(title) in Longhouse"
+            : "Open \(title) in Longhouse, \(parts.joined(separator: ", "))"
     }
 }
 
@@ -169,6 +221,26 @@ struct HearthSessionRow: View {
                     }
                     .font(.system(size: 11))
                     .foregroundStyle(subtitleColor)
+                    if let lead = entry.detailLead, !lead.isEmpty {
+                        HStack(spacing: 3) {
+                            Text(lead)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            if let suffix = entry.detailSuffix, !suffix.isEmpty {
+                                Text("· \(suffix)")
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }
+                        }
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Color.secondary.opacity(0.82))
+                    } else if let detail = entry.detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Color.secondary.opacity(0.82))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                 }
 
                 Spacer(minLength: 6)
@@ -186,6 +258,7 @@ struct HearthSessionRow: View {
         }
         .buttonStyle(.plain)
         .disabled(entry.openAction == nil)
+        .help(entry.helpText ?? "")
         .accessibilityLabel(Text(entry.accessibilityOpenLabel))
         .contextMenu { HearthSessionMenu(entry: entry) }
     }
@@ -225,6 +298,7 @@ struct HearthQuietRow: View {
         }
         .buttonStyle(.plain)
         .disabled(entry.openAction == nil)
+        .help(entry.helpText ?? "")
         .accessibilityLabel(Text(entry.accessibilityOpenLabel))
         .contextMenu { HearthSessionMenu(entry: entry) }
     }
@@ -258,6 +332,12 @@ private struct HearthSessionMenu: View {
     var body: some View {
         if let openAction = entry.openAction {
             Button("Open in Longhouse", action: openAction)
+        }
+        if !entry.subagentLinks.isEmpty {
+            Divider()
+            ForEach(entry.subagentLinks) { link in
+                Button("Open subagent: \(link.title)", action: link.openAction)
+            }
         }
     }
 }

@@ -145,7 +145,7 @@ class DelegationUpdateIn(UTCBaseModel):
     membership: Literal["existing_exact_link_only"]
     item: DelegationTaskIn
     observed_at: datetime
-    source_event: Literal["SubagentStart", "SubagentStop"]
+    source_event: Literal["SubagentStart", "SubagentStop", "PreToolUse", "PostToolUse", "PostToolUseFailure"]
     source_agent_id: str = Field(min_length=1, max_length=256)
     source_agent_type: str | None = Field(default=None, max_length=256)
     source_agent_transcript_path: str | None = Field(default=None, max_length=2048)

@@ -110,6 +110,10 @@
   white-space: nowrap;
 }
 
+.session-ledger__detail--prose {
+  font-family: inherit;
+}
+
 .session-ledger__elapsed {
   font-size: 18px;
   font-weight: 400;

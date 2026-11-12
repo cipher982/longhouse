@@ -63,7 +63,7 @@ export interface SessionLedgerState {
   tone: LedgerTone;
   headline: string;
   detail: string | null;
-  detailKind: "literal" | "explanation";
+  detailKind: "literal" | "delegated" | "explanation";
   observation: string;
   connection: LedgerConnection;
   animateWork: boolean;
@@ -409,9 +409,13 @@ export function SessionLedger({
                 >
                   {state.headline}
                 </span>
-                {displayDetail && state.detailKind === "literal" ? (
+                {displayDetail && (state.detailKind === "literal" || state.detailKind === "delegated") ? (
                   <span
-                    className="session-ledger__detail"
+                    className={
+                      state.detailKind === "delegated"
+                        ? "session-ledger__detail session-ledger__detail--prose"
+                        : "session-ledger__detail"
+                    }
                     title={state.detail ?? undefined}
                   >
                     {state.tone === "unknown" ? "Last observed: " : ""}

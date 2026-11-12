@@ -242,15 +242,21 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 .session-chat-composer__head-label {
+  flex-shrink: 0;
   font-size: 14px;
   font-weight: 600;
   color: var(--color-text-primary);
 }
 .session-chat-composer__head-detail {
+  min-width: 0;
+  overflow: hidden;
   font-size: 12px;
   color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* The evidence-disclosure icon (runtime strip, compact) — far right of the
    head row, exactly where the mock's info glyph sits. */

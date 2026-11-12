@@ -2939,6 +2939,76 @@ mod tests {
     }
 
     #[test]
+    fn degraded_or_keepalive_stalled_omp_helm_slot_withholds_status_assertion_without_retiring_run() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let status_dir = crate::status_slot::status_slot_dir(temp.path());
+        let mut process_facts = std::collections::HashMap::new();
+        process_facts.insert(
+            2,
+            crate::process_identity::ProcessFact {
+                pid: 2,
+                tty: "??".into(),
+                stat: "S".into(),
+                lstart: "start".into(),
+                command: "omp".into(),
+                start_time: None,
+            },
+        );
+
+        let mut degraded_obs = omp_observation(None, true);
+        degraded_obs.status = "degraded".into();
+        degraded_obs.control_ready = false;
+        let degraded_scan = super::ManagedObservationScanResult {
+            process_inventory_valid: true,
+            omp_observations: vec![degraded_obs],
+            ..Default::default()
+        };
+        let degraded_owners =
+            super::status_owner_evidence_from_scan(&degraded_scan, &process_facts);
+        assert!(
+            degraded_owners.active.is_empty() && degraded_owners.ended.is_empty(),
+            "degraded OMP state must neither assert active status nor claim run ended"
+        );
+
+        let live_obs = omp_observation(None, true);
+        let live_scan = super::ManagedObservationScanResult {
+            process_inventory_valid: true,
+            omp_observations: vec![live_obs.clone()],
+            ..Default::default()
+        };
+        let live_owners = super::status_owner_evidence_from_scan(&live_scan, &process_facts);
+        let stale_slot = crate::status_slot::StatusSlot {
+            schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+            session_id: live_obs.session_id.clone(),
+            provider: "omp".into(),
+            runtime_key: "omp:session-omp".into(),
+            run_id: live_obs.run_id.clone().unwrap(),
+            source: "omp_helm_channel".into(),
+            phase: "thinking".into(),
+            tool_name: None,
+            observed_at: (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339(),
+            payload: serde_json::json!({}),
+            preview: None,
+            producer_epoch: "epoch".into(),
+            seq: 2,
+        };
+        crate::status_slot::publish(&status_dir, &stale_slot).expect("publish stale slot");
+        let stalled = super::reconcile_status_slots(
+            &status_dir,
+            crate::status_slot::read_all(&status_dir),
+            &live_owners,
+        );
+        assert!(
+            stalled.is_empty(),
+            "an OMP thinking slot that missed >4 keepalives must stop re-asserting active status"
+        );
+        assert!(
+            crate::status_slot::slot_path(&status_dir, "session-omp").exists(),
+            "the slot file stays on disk so a recovering extension can overwrite it"
+        );
+    }
+
+    #[test]
     fn rejected_status_slots_retry_on_cadence_and_newer_versions_replace_them() {
         use std::time::{Duration, Instant};
 

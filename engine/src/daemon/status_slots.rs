@@ -467,6 +467,32 @@ fn status_owner_process_facts(
     Some(facts)
 }
 
+/// OMP's TypeScript Helm extension emits `extension_keepalive` every 20 seconds
+/// (`KEEPALIVE_INTERVAL_MS = 20_000`), and `record_keepalive_with_policy`
+/// republishes the phase slot on every keepalive even while `thinking` or
+/// `running`. 90 seconds allows 4 missed 20s keepalives plus a 10s scheduler
+/// and disk-flush margin before withholding `status_assertion` on a non-idle
+/// slot so a wedged OMP runtime stops pinning "Thinking" indefinitely.
+const OMP_STATUS_KEEPALIVE_HORIZON: std::time::Duration = std::time::Duration::from_secs(90);
+
+fn omp_status_slot_keepalive_expired(
+    slot: &crate::status_slot::StatusSlot,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if !slot.provider.eq_ignore_ascii_case("omp")
+        || slot.source != "omp_helm_channel"
+        || slot.phase.eq_ignore_ascii_case("idle")
+    {
+        return false;
+    }
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&slot.observed_at) else {
+        return true;
+    };
+    let age = now.signed_duration_since(parsed.with_timezone(&chrono::Utc));
+    age.to_std()
+        .is_ok_and(|elapsed| elapsed > OMP_STATUS_KEEPALIVE_HORIZON)
+}
+
 /// Keep only statuses backed by the exact current run owner.
 ///
 /// Unknown ownership never renews liveness. A terminal event whose durable
@@ -476,6 +502,7 @@ pub(super) fn reconcile_status_slots(
     slots: Vec<crate::status_slot::StatusSlot>,
     owners: &StatusOwnerEvidence,
 ) -> Vec<crate::status_slot::StatusSlot> {
+    let now = chrono::Utc::now();
     slots
         .into_iter()
         .filter_map(|slot| {
@@ -487,6 +514,9 @@ pub(super) fn reconcile_status_slots(
                 return None;
             }
             if key.as_ref().is_some_and(|key| owners.active.contains(key)) {
+                if omp_status_slot_keepalive_expired(&slot, now) {
+                    return None;
+                }
                 return Some(slot);
             }
             if key.as_ref().is_some_and(|key| owners.ended.contains(key)) {
@@ -501,7 +531,7 @@ pub(super) fn reconcile_status_slots(
                     );
                 }
             } else if let Err(error) = crate::status_slot::discard_expired_observation(
-                dir, &slot, chrono::Utc::now(),
+                dir, &slot, now,
             ) {
                 tracing::warn!(session_id = %slot.session_id, %error, "Could not discard expired status observation");
             }
@@ -879,7 +909,10 @@ pub(super) fn status_owner_evidence_from_scan(
         );
     }
     for observation in &scan.pi_observations {
-        let state = if scan.process_inventory_valid {
+        let ended = observation.status.eq_ignore_ascii_case("stopped")
+            || observation.status.eq_ignore_ascii_case("failed");
+        let degraded = observation.status.eq_ignore_ascii_case("degraded");
+        let state = if scan.process_inventory_valid && (!degraded || ended) {
             recorded_process_owner_state(
                 process_facts,
                 &[
@@ -902,13 +935,16 @@ pub(super) fn status_owner_evidence_from_scan(
             &observation.session_id,
             observation.run_id.as_deref(),
             state,
-            observation.status.eq_ignore_ascii_case("stopped")
-                || observation.status.eq_ignore_ascii_case("failed"),
+            ended,
             scan.process_inventory_valid,
         );
     }
     for observation in &scan.omp_observations {
-        let state = if scan.process_inventory_valid {
+        let ended = observation.status.eq_ignore_ascii_case("stopped")
+            || observation.status.eq_ignore_ascii_case("failed");
+        let degraded = observation.status.eq_ignore_ascii_case("degraded")
+            || (observation.live && !observation.control_ready);
+        let state = if scan.process_inventory_valid && (!degraded || ended) {
             recorded_process_owner_state(
                 process_facts,
                 &[
@@ -931,7 +967,7 @@ pub(super) fn status_owner_evidence_from_scan(
             &observation.session_id,
             observation.run_id.as_deref(),
             state,
-            observation.status.eq_ignore_ascii_case("stopped"),
+            ended,
             scan.process_inventory_valid,
         );
     }

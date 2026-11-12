@@ -917,6 +917,28 @@ def project_machine_session_delta(
                     mode="json",
                     include={"state", "raw_kind", "tool", "source", "observed_at", "valid_until"},
                 ),
+                "delegation": {
+                    "state": state.delegation.state,
+                    "count": state.delegation.count,
+                    "kinds": state.delegation.kinds,
+                    "observed_at": state.delegation.observed_at.isoformat() if state.delegation.observed_at else None,
+                    "valid_until": state.delegation.valid_until.isoformat() if state.delegation.valid_until else None,
+                    "items": (
+                        [
+                            {
+                                **item.model_dump(
+                                    mode="json",
+                                    include={"id", "kind", "status", "session_id", "native_progress"},
+                                    exclude_none=True,
+                                ),
+                                **({"description": item.description[:96]} if item.description else {}),
+                            }
+                            for item in state.delegation.items[:4]
+                        ]
+                        if state.delegation.items is not None
+                        else None
+                    ),
+                },
                 "control": {
                     "ownership": state.control.ownership,
                     "connection": state.control.connection,

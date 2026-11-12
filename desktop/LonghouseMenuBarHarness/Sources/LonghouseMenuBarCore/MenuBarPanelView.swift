@@ -600,7 +600,7 @@ public struct MenuBarPanelView: View {
     private func quietTitle(_ quiet: [HearthSessionEntry]) -> String {
         let quietIDs = Set(quiet.map(\.id))
         let noStatus = snapshot.currentManagedSessions
-            .filter { quietIDs.contains($0.id) && $0.menuBarAttentionKind == .phaseUnavailable }
+            .filter { quietIDs.contains($0.id) && $0.menuBarAttentionKind(asOf: presentationDate) == .phaseUnavailable }
             .count
         if noStatus == 0 { return "\(quiet.count) quiet" }
         if noStatus == quiet.count { return "\(quiet.count) without live status" }
@@ -625,27 +625,59 @@ public struct MenuBarPanelView: View {
         .padding(.vertical, 4)
     }
 
-    private var hearthEntries: [HearthSessionEntry] {
+    var hearthEntries: [HearthSessionEntry] {
         let ranked: [(offset: Int, session: ManagedSessionSnapshot, kind: HearthSessionKind)] =
-            snapshot.currentManagedSessions.enumerated().map { ($0.offset, $0.element, $0.element.hearthKind) }
+            snapshot.currentManagedSessions.enumerated().map {
+                ($0.offset, $0.element, $0.element.hearthKind(asOf: presentationDate))
+            }
         let sorted = ranked.sorted { lhs, rhs in
             lhs.kind == rhs.kind ? lhs.offset < rhs.offset : lhs.kind < rhs.kind
         }
         return sorted.map { hearthEntry(for: $0.session, kind: $0.kind) }
     }
 
-    private func hearthEntry(for session: ManagedSessionSnapshot, kind: HearthSessionKind) -> HearthSessionEntry {
+    func hearthEntry(for session: ManagedSessionSnapshot, kind: HearthSessionKind) -> HearthSessionEntry {
         let provider = (session.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let subagentLinks: [HearthSubagentLink] = session
+            .activeDelegationTasks(asOf: presentationDate)
+            .compactMap { item in
+                guard let childID = item.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !childID.isEmpty
+                else {
+                    return nil
+                }
+                let rawDescription = (item.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let title = rawDescription.isEmpty ? item.id : rawDescription
+                return HearthSubagentLink(
+                    id: "\(item.id):\(childID)",
+                    title: title,
+                    openAction: {
+                        setFeedback(
+                            actionSink.handleOpenManagedSession(
+                                sessionID: childID,
+                                title: title,
+                                snapshot: snapshot
+                            )
+                        )
+                    }
+                )
+            }
+        let delegatedSummary = kind == .working ? session.delegatedWorkSummary(asOf: presentationDate) : nil
         return HearthSessionEntry(
             id: session.id,
             provider: provider.isEmpty ? "unknown" : provider,
             title: managedSessionTitle(session),
             kind: kind,
-            heat: session.hearthHeat,
+            heat: session.hearthHeat(asOf: presentationDate),
             subtitle: hearthSubtitle(session, kind: kind),
+            detail: kind == .working ? session.delegatedWorkDetail(asOf: presentationDate) : nil,
+            detailLead: delegatedSummary?.lead,
+            detailSuffix: delegatedSummary?.suffix,
+            helpText: kind == .working ? session.delegatedWorkTooltip(asOf: presentationDate) : nil,
             ageLabel: snapshot.compactTimestampLabel(session.lastActivityAt, relativeTo: presentationDate),
             seed: Self.stableSeed(session.id),
-            openAction: managedOpenAction(for: session)
+            openAction: managedOpenAction(for: session),
+            subagentLinks: subagentLinks
         )
     }
 
@@ -658,7 +690,7 @@ public struct MenuBarPanelView: View {
         return Int(hash % 997)
     }
 
-    private func hearthSubtitle(_ session: ManagedSessionSnapshot, kind: HearthSessionKind) -> String {
+    func hearthSubtitle(_ session: ManagedSessionSnapshot, kind: HearthSessionKind) -> String {
         let workspace = managedSessionWorkspaceContext(session)
         let label = session.presentation?.primary?.label.trimmingCharacters(in: .whitespacesAndNewlines)
         switch kind {
@@ -673,12 +705,16 @@ public struct MenuBarPanelView: View {
         case .blocked:
             return compactDetailParts([label?.isEmpty == false ? label! : "Blocked", workspace])
         case .working:
-            let tool = session.activity?.tool?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return compactDetailParts([workspace, tool?.isEmpty == false ? tool! : (label ?? "Working")])
+            let isExecuting = session.activity?.state == "executing"
+            let tool = isExecuting ? session.activity?.tool?.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+            let status = tool?.isEmpty == false ? tool! : (label ?? "Working")
+            let workspaceOnly = (session.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let context = status.count > 18 && !workspaceOnly.isEmpty ? workspaceOnly : workspace
+            return compactDetailParts([context, status])
         case .lostControl:
             return managedSessionDetail(session)
         case .quiet:
-            switch session.menuBarAttentionKind {
+            switch session.menuBarAttentionKind(asOf: presentationDate) {
             case .unknown:
                 return managedSessionDetail(session)
             case .phaseUnavailable:
@@ -776,7 +812,7 @@ public struct MenuBarPanelView: View {
     private func managedSessionDetail(_ session: ManagedSessionSnapshot) -> String {
         let workspaceContext = managedSessionWorkspaceContext(session)
         if session.normalizedState == "attached",
-           case .unknown = session.menuBarAttentionKind {
+           case .unknown = session.menuBarAttentionKind(asOf: presentationDate) {
             if let rawPhase = session.rawPhase?.trimmingCharacters(in: .whitespacesAndNewlines),
                !rawPhase.isEmpty {
                 return compactDetailParts([workspaceContext, "Unexpected local phase: \(rawPhase)"])

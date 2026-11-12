@@ -4848,6 +4848,7 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
     head_table = FactHead.__table__
     facts: list[ReducerFact] = []
     prior_by_run: dict[tuple[str, str], dict[str, Any]] = {}
+    removed_lifecycle_agents: dict[tuple[str, str, str], datetime | None] = {}
     # One source observation may report a registry and an exact child edge.
     # Reduce both independently, with the edge following its own snapshot.
     for event, lane in (
@@ -4899,10 +4900,16 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                 continue
             raw_item = update.get("item")
             operation = update.get("operation")
+            source_event = update.get("source_event")
+            valid_source_event = (
+                source_event in {"SubagentStart", "PreToolUse", "PostToolUse", "PostToolUseFailure"}
+                if operation == "observe"
+                else source_event == "SubagentStop"
+            )
             if (
                 update.get("membership") != "existing_exact_link_only"
                 or operation not in {"observe", "remove"}
-                or update.get("source_event") != ("SubagentStart" if operation == "observe" else "SubagentStop")
+                or not valid_source_event
                 or not isinstance(raw_item, Mapping)
                 or not isinstance(raw_item.get("id"), str)
                 or not 0 < len(raw_item["id"]) <= 256
@@ -4912,6 +4919,76 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                 or raw_item.get("id") != update.get("source_agent_id")
             ):
                 continue
+            agent_id = raw_item["id"]
+            clean_item: dict[str, Any] = {
+                "id": agent_id,
+                "kind": "subagent",
+                "status": raw_item["status"],
+            }
+            if isinstance(raw_item.get("description"), str):
+                clean_item["description"] = raw_item["description"][:512]
+            tool_call_id = raw_item.get("parent_tool_call_id")
+            if isinstance(tool_call_id, str) and 0 < len(tool_call_id) <= 256:
+                clean_item["parent_tool_call_id"] = tool_call_id
+            progress = raw_item.get("native_progress")
+            if progress is not None:
+                if not isinstance(progress, Mapping):
+                    continue
+                try:
+                    clean_item["native_progress"] = SessionDelegationProgress.model_validate(progress).model_dump(
+                        mode="json", exclude_none=True
+                    )
+                except ValueError:
+                    continue
+            agent_coordinate = (raw_source, run_id, agent_id)
+            subject_key = f"run:{run_id}:agent:{agent_id}"
+            if operation == "remove":
+                removed_lifecycle_agents[agent_coordinate] = occurred_at
+                facts = [
+                    existing
+                    for existing in facts
+                    if not (
+                        existing.family == "delegation_lifecycle"
+                        and existing.subject_key == subject_key
+                        and existing.source == raw_source
+                        and existing.source_epoch == run_id
+                        and existing.value.get("operation") == "observe"
+                        and existing.value.get("source_event") in {"PreToolUse", "PostToolUse", "PostToolUseFailure"}
+                    )
+                ]
+            elif source_event in {"PreToolUse", "PostToolUse", "PostToolUseFailure"}:
+                if agent_coordinate not in removed_lifecycle_agents:
+                    existing_lifecycle = connection.execute(
+                        select(head_table.c.value_json).where(
+                            head_table.c.family == "delegation_lifecycle",
+                            head_table.c.subject_key == subject_key,
+                            head_table.c.source == raw_source,
+                            head_table.c.source_epoch == run_id,
+                        )
+                    ).scalar_one_or_none()
+                    existing_payload = json.loads(existing_lifecycle) if existing_lifecycle else {}
+                    removed_at: datetime | None = None
+                    if existing_payload.get("operation") == "remove":
+                        raw_removed_at = existing_payload.get("observed_at")
+                        if isinstance(raw_removed_at, str):
+                            try:
+                                removed_at = datetime.fromisoformat(raw_removed_at.replace("Z", "+00:00"))
+                            except ValueError:
+                                removed_at = occurred_at
+                        else:
+                            removed_at = occurred_at
+                    removed_lifecycle_agents[agent_coordinate] = removed_at
+                removed_at = removed_lifecycle_agents[agent_coordinate]
+                if removed_at is not None:
+                    prior_observed_raw = prior.get("observed_at")
+                    prior_observed: datetime | None = None
+                    if isinstance(prior_observed_raw, str):
+                        try:
+                            prior_observed = datetime.fromisoformat(prior_observed_raw.replace("Z", "+00:00"))
+                        except ValueError:
+                            prior_observed = None
+                    if prior_observed is None or prior_observed <= removed_at:
+                        continue
             value = {
                 "authority_class": "provider_runtime",
                 "provider": str(event.provider),
@@ -4920,8 +4997,8 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                 "source": raw_source,
                 "observed_at": occurred_at.isoformat(),
                 "operation": operation,
-                "item": dict(raw_item),
-                "source_event": update["source_event"],
+                "item": clean_item,
+                "source_event": source_event,
             }
             if len(canonical_value_json(value).encode()) > MAX_VALUE_JSON_BYTES:
                 continue
@@ -4929,7 +5006,7 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
             facts.append(
                 ReducerFact(
                     family="delegation_lifecycle",
-                    subject_key=f"run:{run_id}:agent:{raw_item['id']}",
+                    subject_key=subject_key,
                     source=raw_source,
                     source_epoch=run_id,
                     source_seq=None,

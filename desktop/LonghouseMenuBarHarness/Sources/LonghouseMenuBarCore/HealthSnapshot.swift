@@ -2180,6 +2180,72 @@ public struct SessionActivitySnapshot: Codable, Equatable, Sendable {
     public let observedAt: String?
 }
 
+public struct SessionDelegationProgressSnapshot: Codable, Equatable, Sendable {
+    public let observedAt: String?
+    public let status: String?
+    public let currentTool: String?
+
+    public init(
+        observedAt: String? = nil,
+        status: String? = nil,
+        currentTool: String? = nil
+    ) {
+        self.observedAt = observedAt
+        self.status = status
+        self.currentTool = currentTool
+    }
+}
+
+public struct SessionDelegationTaskSnapshot: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let kind: String
+    public let status: String
+    public let description: String?
+    public let sessionId: String?
+    public let nativeProgress: SessionDelegationProgressSnapshot?
+
+    public init(
+        id: String,
+        kind: String,
+        status: String,
+        description: String? = nil,
+        sessionId: String? = nil,
+        nativeProgress: SessionDelegationProgressSnapshot? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.status = status
+        self.description = description
+        self.sessionId = sessionId
+        self.nativeProgress = nativeProgress
+    }
+}
+
+public struct SessionDelegationSnapshot: Codable, Equatable, Sendable {
+    public let state: String
+    public let count: Int?
+    public let kinds: [String: Int]?
+    public let observedAt: String?
+    public let validUntil: String?
+    public let items: [SessionDelegationTaskSnapshot]?
+
+    public init(
+        state: String,
+        count: Int? = nil,
+        kinds: [String: Int]? = nil,
+        observedAt: String? = nil,
+        validUntil: String? = nil,
+        items: [SessionDelegationTaskSnapshot]? = nil
+    ) {
+        self.state = state
+        self.count = count
+        self.kinds = kinds
+        self.observedAt = observedAt
+        self.validUntil = validUntil
+        self.items = items
+    }
+}
+
 public struct SessionActionSnapshot: Codable, Equatable, Sendable {
     public let state: String
     public let reason: String?
@@ -2240,6 +2306,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     public let mode: String?
     public let presentation: SessionPresentationSnapshot?
     public let activity: SessionActivitySnapshot?
+    public let delegation: SessionDelegationSnapshot?
     public let control: SessionControlSnapshot?
 
     public init(
@@ -2273,6 +2340,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         mode: String? = nil,
         presentation: SessionPresentationSnapshot? = nil,
         activity: SessionActivitySnapshot? = nil,
+        delegation: SessionDelegationSnapshot? = nil,
         control: SessionControlSnapshot? = nil
     ) {
         self.sessionId = sessionId
@@ -2305,6 +2373,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         self.mode = mode
         self.presentation = presentation
         self.activity = activity
+        self.delegation = delegation
         self.control = control
     }
 
@@ -2341,6 +2410,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             mode: projection.mode,
             presentation: projection.presentation,
             activity: projection.activity,
+            delegation: projection.delegation,
             control: projection.control
         )
     }
@@ -2377,6 +2447,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             mode: projection.mode ?? mode,
             presentation: projection.presentation ?? presentation,
             activity: projection.activity ?? activity,
+            delegation: projection.delegation ?? delegation,
             control: projection.control ?? control
         )
     }
@@ -2397,7 +2468,8 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             uiAttached: uiAttached, uiPresence: uiPresence, reasonCodes: reasonCodes,
             authority: authority, stateContractVersion: stateContractVersion,
             presentationPolicyVersion: presentationPolicyVersion, commitSeq: commitSeq,
-            mode: mode, presentation: presentation, activity: activity, control: control
+            mode: mode, presentation: presentation, activity: activity, delegation: delegation,
+            control: control
         )
     }
 
@@ -2420,7 +2492,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             authority: nil, stateContractVersion: stateContractVersion,
             presentationPolicyVersion: presentationPolicyVersion,
             commitSeq: commitSeq, mode: mode,
-            presentation: nil, activity: nil, control: nil
+            presentation: nil, activity: nil, delegation: nil, control: nil
         )
     }
 
@@ -2444,8 +2516,65 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             presentationPolicyVersion: previous.presentationPolicyVersion,
             commitSeq: previous.commitSeq, mode: previous.mode,
             presentation: previous.presentation, activity: previous.activity,
+            delegation: previous.delegation,
             control: previous.control
         )
+    }
+
+    public func activeDelegationTasks(asOf now: Date = Date()) -> [SessionDelegationTaskSnapshot] {
+        guard let delegation, delegation.state == "pending" else { return [] }
+        if let deadline = delegation.validUntil.flatMap(HealthSnapshot.parseISO8601),
+           now >= deadline {
+            return []
+        }
+        return delegation.items ?? []
+    }
+
+    public func delegatedWorkSummary(asOf now: Date = Date()) -> (lead: String, suffix: String?)? {
+        guard presentation?.primary?.key == "delegated_work" else { return nil }
+        let active = activeDelegationTasks(asOf: now)
+        guard !active.isEmpty else { return nil }
+        let subagents = active.filter { $0.kind == "subagent" }
+        guard let lead = subagents.first ?? active.first else { return nil }
+        let rawDescription = (lead.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = rawDescription.isEmpty ? lead.id : rawDescription
+        let tool = (lead.nativeProgress?.currentTool ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let progressStatus = (lead.nativeProgress?.status ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let step = !tool.isEmpty ? tool : (progressStatus == "thinking" ? "Thinking" : "")
+        let totalActive = max(delegation?.count ?? active.count, active.count)
+        let remaining = totalActive - 1
+        var suffixParts: [String] = []
+        if !step.isEmpty { suffixParts.append(step) }
+        if remaining > 0 { suffixParts.append("+\(remaining)") }
+        let suffix = suffixParts.isEmpty ? nil : suffixParts.joined(separator: " · ")
+        return (lead: name, suffix: suffix)
+    }
+
+    public func delegatedWorkDetail(asOf now: Date = Date()) -> String? {
+        guard let summary = delegatedWorkSummary(asOf: now) else { return nil }
+        if let suffix = summary.suffix {
+            return "\(summary.lead) · \(suffix)"
+        }
+        return summary.lead
+    }
+
+    public func delegatedWorkTooltip(asOf now: Date = Date()) -> String? {
+        let active = activeDelegationTasks(asOf: now)
+        guard !active.isEmpty else { return nil }
+        let shown = Array(active.prefix(6))
+        let lines = shown.map { item -> String in
+            let rawDescription = (item.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = rawDescription.isEmpty ? item.id : rawDescription
+            let tool = (item.nativeProgress?.currentTool ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let progressStatus = (item.nativeProgress?.status ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let step = !tool.isEmpty ? " (\(tool))" : (progressStatus == "thinking" ? " (Thinking)" : "")
+            return "• [\(item.kind)] \(name)\(step)"
+        }
+        let totalActive = max(delegation?.count ?? shown.count, active.count)
+        if totalActive > shown.count {
+            return (lines + ["• +\(totalActive - shown.count) more"]).joined(separator: "\n")
+        }
+        return lines.joined(separator: "\n")
     }
 
     public var normalizedState: String {

@@ -89,7 +89,7 @@ def _head(
 ) -> dict:
     subject_key = (
         f"run:{value['run_id']}"
-        if family == "activity"
+        if family in {"activity", "delegation"}
         else (
             f"connection:{value['connection_id']}:{value['lease_generation']}" if family == "control" else f"resume:{value['session_id']}"
         )
@@ -787,6 +787,134 @@ def test_served_projector_keeps_a_stale_helm_idle_observation_plain_idle():
     assert served.presentation.primary.key == "idle"
     assert served.presentation.primary.label == "Idle"
     assert served.presentation.primary.tone == "idle"
+
+
+def test_served_projector_holds_helm_delegation_on_control_lease_until_lease_expires():
+    """Background subagents and shells on a live Helm session often run longer
+    than the 30-minute unmanaged delegation horizon. While the Helm control
+    lease renews, active delegated work stays pending; when the lease expires
+    or the registry is empty, delegation decays to unknown."""
+
+    delegation_head = _head(
+        family="delegation",
+        source="claude_hook",
+        source_epoch="run-1",
+        value={
+            "authority_class": "provider_runtime",
+            "provider": "claude",
+            "session_id": "session-1",
+            "run_id": "run-1",
+            "count": 2,
+            "kinds": {"subagent": 1, "shell": 1},
+            "items": [
+                {
+                    "id": "agent-1",
+                    "kind": "subagent",
+                    "status": "running",
+                    "description": "Rebasing worktree and rerunning make validate",
+                    "first_observed_at": NOW.isoformat(),
+                },
+                {
+                    "id": "shell-1",
+                    "kind": "shell",
+                    "status": "running",
+                    "description": "make dev",
+                    "first_observed_at": NOW.isoformat(),
+                },
+            ],
+            "source": "claude_hook",
+            "observed_at": NOW.isoformat(),
+            "valid_until": (NOW + timedelta(minutes=30)).isoformat(),
+        },
+    )
+    later = NOW + timedelta(minutes=45)
+    heads = [
+        _activity(observed_at=NOW, valid_until=NOW + timedelta(seconds=15), kind="idle"),
+        delegation_head,
+        _control(observed_at=later - timedelta(seconds=10), grants=["interrupt", "send_input"]),
+    ]
+
+    shadow = project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=84,
+        catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
+        heads=heads,
+        supported_operations={"send_input", "interrupt"},
+        now=later,
+    )
+    assert shadow.delegation.state == "unknown"
+
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=84,
+        catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
+        heads=heads,
+        supported_operations={"send_input", "interrupt"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
+        host=SessionHostFacts(state="online", observed_at=later),
+        now=later,
+    )
+    assert served.mode == "helm"
+    assert served.control.connection == "connected"
+    assert served.delegation.state == "pending"
+    assert served.delegation.count == 2
+    assert served.delegation.kinds == {"subagent": 1, "shell": 1}
+    assert served.delegation.valid_until == served.control.valid_until
+    assert served.presentation.primary is not None
+    assert served.presentation.primary.key == "delegated_work"
+    assert served.presentation.signal.valid_until == served.control.valid_until
+
+    # Once the Helm control lease itself expires, delegation decays to unknown.
+    after_lease = later + timedelta(minutes=2)
+    expired_served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=84,
+        catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
+        heads=heads,
+        supported_operations={"send_input", "interrupt"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
+        host=SessionHostFacts(state="online", observed_at=after_lease),
+        now=after_lease,
+    )
+    assert expired_served.control.connection == "unknown"
+    assert expired_served.delegation.state == "unknown"
+
+    # An empty registry is not held past its natural horizon.
+    empty_head = _head(
+        family="delegation",
+        source="claude_hook",
+        source_epoch="run-1",
+        value={
+            "authority_class": "provider_runtime",
+            "provider": "claude",
+            "session_id": "session-1",
+            "run_id": "run-1",
+            "count": 0,
+            "kinds": {},
+            "items": [],
+            "source": "claude_hook",
+            "observed_at": NOW.isoformat(),
+            "valid_until": (NOW + timedelta(minutes=30)).isoformat(),
+        },
+    )
+    empty_served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=85,
+        catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
+        heads=[
+            _activity(observed_at=NOW, valid_until=NOW + timedelta(seconds=15), kind="idle"),
+            empty_head,
+            _control(observed_at=later - timedelta(seconds=10), grants=["interrupt", "send_input"]),
+        ],
+        supported_operations={"send_input", "interrupt"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
+        host=SessionHostFacts(state="online", observed_at=later),
+        now=later,
+    )
+    assert empty_served.delegation.state == "unknown"
 
 
 def test_served_projector_without_control_head_fails_actions_closed():

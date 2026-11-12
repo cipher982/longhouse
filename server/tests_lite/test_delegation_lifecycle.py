@@ -1107,3 +1107,229 @@ def test_bad_recent_history_does_not_discard_a_valid_active_observation(live_cat
     assert served["delegation"]["kinds"] == {"subagent": 1}
     assert [item["id"] for item in served["delegation"]["items"]] == ["active-worker"]
     assert [item["id"] for item in served["delegation"]["recent_items"]] == ["done-job"]
+
+
+def test_child_tool_hooks_update_native_progress_and_stream_delta_without_resurrecting_stopped_subagent(
+    live_catalog,
+    live_catalog_client,
+):
+    from zerg.services.live_catalog_timeline import TimelineSessionListParams
+    from zerg.services.live_catalog_timeline import list_live_catalog_timeline
+    from zerg.services.live_catalog_timeline import project_machine_session_delta
+
+    email = "delegation-child-tool-progress@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, _thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    base = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=30)
+
+    # Parent posts an idle stop with one running background subagent.
+    parent_stop = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "state": "idle",
+            "occurred_at": base.isoformat(),
+            "dedupe_key": "parent-stop-with-bg-subagent",
+            "delegation": {
+                "items": [_task("agent-bg-1", "subagent", "running", "Wire terminal-truth into CI")],
+                "observed_at": base.isoformat(),
+            },
+        },
+    )
+    assert parent_stop.status_code == 204, parent_stop.text
+    initial = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    initial_activity = initial["activity"]
+    initial_valid_until = initial["delegation"]["valid_until"]
+
+    # Child PreToolUse reports live tool execution without touching parent activity or renewing delegation TTL.
+    t_pre = base + timedelta(seconds=4)
+    child_pre = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": t_pre.isoformat(),
+            "dedupe_key": "child-pre-bash-1",
+            "delegation_update": {
+                "operation": "observe",
+                "membership": "existing_exact_link_only",
+                "source_event": "PreToolUse",
+                "source_agent_id": "agent-bg-1",
+                "observed_at": t_pre.isoformat(),
+                "item": {
+                    "id": "agent-bg-1",
+                    "kind": "subagent",
+                    "status": "running",
+                    "parent_tool_call_id": "toolu_bg_1",
+                    "native_progress": {
+                        "observed_at": t_pre.isoformat(),
+                        "status": "running",
+                        "current_tool": "Bash",
+                    },
+                },
+            },
+        },
+    )
+    assert child_pre.status_code == 204, child_pre.text
+    after_pre = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert after_pre["activity"] == initial_activity
+    assert after_pre["delegation"]["valid_until"] == initial_valid_until
+    progress_pre = after_pre["delegation"]["items"][0]["native_progress"]
+    assert progress_pre["observed_at"] == t_pre.isoformat().replace("+00:00", "Z")
+    assert progress_pre["status"] == "running"
+    assert progress_pre["current_tool"] == "Bash"
+
+    # Canonical machine session_delta includes compact delegation + native_progress for menu bar rendering.
+    timeline_page = list_live_catalog_timeline(
+        params=TimelineSessionListParams(
+            project=None,
+            provider=None,
+            environment=None,
+            include_test=True,
+            hide_autonomous=False,
+            include_automation=True,
+            include_hidden=True,
+            device_id=None,
+            days_back=7,
+            query=None,
+            limit=20,
+            offset=0,
+            sort="recent",
+            mode="all",
+            context_mode="all",
+        ),
+        owner_id=owner,
+    )
+    timeline_row = next(card.head for card in timeline_page.sessions if str(card.head.id) == str(session_id))
+    delta = project_machine_session_delta(timeline_row, commit_seq=1, canonical=True)
+    assert delta["delegation"]["state"] == "pending"
+    assert delta["delegation"]["count"] == 1
+    assert delta["delegation"]["kinds"] == {"subagent": 1}
+    assert delta["delegation"]["items"][0]["description"] == "Wire terminal-truth into CI"
+    assert delta["delegation"]["items"][0]["native_progress"]["current_tool"] == "Bash"
+
+    # A subsequent parent registry snapshot (which lacks native_progress) preserves the running child's progress.
+    t_parent = base + timedelta(seconds=8)
+    parent_refresh = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": t_parent.isoformat(),
+            "dedupe_key": "parent-registry-refresh",
+            "delegation": {
+                "items": [_task("agent-bg-1", "subagent", "running", "Wire terminal-truth into CI")],
+                "observed_at": t_parent.isoformat(),
+            },
+        },
+    )
+    assert parent_refresh.status_code == 204, parent_refresh.text
+    after_parent_refresh = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert after_parent_refresh["delegation"]["items"][0]["native_progress"]["current_tool"] == "Bash"
+
+    # Child PostToolUse transitions native_progress back to thinking (clearing current_tool).
+    t_post = base + timedelta(seconds=10)
+    child_post = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": t_post.isoformat(),
+            "dedupe_key": "child-post-bash-1",
+            "delegation_update": {
+                "operation": "observe",
+                "membership": "existing_exact_link_only",
+                "source_event": "PostToolUse",
+                "source_agent_id": "agent-bg-1",
+                "observed_at": t_post.isoformat(),
+                "item": {
+                    "id": "agent-bg-1",
+                    "kind": "subagent",
+                    "status": "running",
+                    "native_progress": {
+                        "observed_at": t_post.isoformat(),
+                        "status": "thinking",
+                    },
+                },
+            },
+        },
+    )
+    assert child_post.status_code == 204, child_post.text
+    after_post = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    progress_post = after_post["delegation"]["items"][0]["native_progress"]
+    assert progress_post["observed_at"] == t_post.isoformat().replace("+00:00", "Z")
+    assert progress_post["status"] == "thinking"
+    assert progress_post["current_tool"] is None
+
+    # SubagentStop removes the subagent cleanly, and a late straggler PostToolUse cannot resurrect it.
+    t_stop = base + timedelta(seconds=12)
+    child_stop = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": t_stop.isoformat(),
+            "dedupe_key": "child-stop-1",
+            "delegation_update": {
+                "operation": "remove",
+                "membership": "existing_exact_link_only",
+                "source_event": "SubagentStop",
+                "source_agent_id": "agent-bg-1",
+                "observed_at": t_stop.isoformat(),
+                "item": {
+                    "id": "agent-bg-1",
+                    "kind": "subagent",
+                    "status": "completed",
+                },
+            },
+        },
+    )
+    assert child_stop.status_code == 204, child_stop.text
+    after_stop = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert after_stop["delegation"]["state"] == "none"
+    assert after_stop["delegation"]["count"] == 0
+
+    t_straggler = base + timedelta(seconds=13)
+    straggler = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": t_straggler.isoformat(),
+            "dedupe_key": "child-straggler-post-1",
+            "delegation_update": {
+                "operation": "observe",
+                "membership": "existing_exact_link_only",
+                "source_event": "PostToolUse",
+                "source_agent_id": "agent-bg-1",
+                "observed_at": t_straggler.isoformat(),
+                "item": {
+                    "id": "agent-bg-1",
+                    "kind": "subagent",
+                    "status": "running",
+                    "native_progress": {
+                        "observed_at": t_straggler.isoformat(),
+                        "status": "thinking",
+                    },
+                },
+            },
+        },
+    )
+    assert straggler.status_code == 204, straggler.text
+    after_straggler = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert after_straggler["delegation"]["state"] == "none"
+    assert after_straggler["delegation"]["count"] == 0

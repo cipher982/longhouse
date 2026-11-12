@@ -4425,7 +4425,7 @@ export interface components {
              * Source Event
              * @enum {string}
              */
-            source_event: "SubagentStart" | "SubagentStop";
+            source_event: "SubagentStart" | "SubagentStop" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure";
             /** Source Agent Id */
             source_agent_id: string;
             /** Source Agent Type */

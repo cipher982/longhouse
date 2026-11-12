@@ -4007,6 +4007,150 @@ struct LonghouseMenuBarCoreTests {
 
     @Test
     @MainActor
+    func hearthDelegatedWorkShowsBackgroundSummaryLeadProgressAndSubagentLinks() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/hearth-delegated-work.json")
+        let snapshot = try FixtureHealthSnapshotSource(fileURL: fixtureURL).load()
+        let collectedAt = try #require(HealthSnapshot.parseISO8601("2026-04-21T18:35:00Z"))
+        let view = panel(snapshot, presentationDate: collectedAt)
+        let entries = view.hearthEntries
+        let delegated = try #require(entries.first { $0.id == "sess-ux-progress" })
+
+        #expect(delegated.kind == .working)
+        // Stale quiescent tool ("Edit") must never override the Background primary label.
+        #expect(delegated.subtitle == "longhouse · Background · 2 agents · 1 command")
+        #expect(delegated.detail == "Rebasing worktree and rerunning make validate · Bash · +2")
+        #expect(delegated.detailSuffix == "Bash · +2")
+        #expect(delegated.helpText?.contains("[subagent] Rebasing worktree and rerunning make validate (Bash)") == true)
+        #expect(delegated.helpText?.contains("[subagent] Monitoring terminal-truth.yml CI run (Thinking)") == true)
+        #expect(delegated.subagentLinks.map(\.title) == [
+            "Rebasing worktree and rerunning make validate",
+            "Monitoring terminal-truth.yml CI run",
+        ])
+
+        let expiredAt = try #require(HealthSnapshot.parseISO8601("2026-04-21T19:06:00Z"))
+        let expiredEntry = panel(snapshot, presentationDate: expiredAt)
+            .hearthEntries
+            .first { $0.id == "sess-ux-progress" }
+        #expect(expiredEntry?.detail == nil)
+        #expect(expiredEntry?.helpText == nil)
+        #expect(expiredEntry?.subagentLinks.isEmpty == true)
+    }
+
+    @Test
+    func sessionProjectionPreservesAndClearsDelegationAcrossRefreshAndExpiry() throws {
+        let localRow = ManagedSessionSnapshot(
+            sessionId: "sess-1",
+            provider: "claude",
+            workspaceLabel: "longhouse",
+            branch: "main",
+            state: "attached",
+            phase: "idle",
+            lastActivityAt: "2026-04-21T18:34:00Z",
+            bridgeStatus: "running",
+            bridgePid: 42,
+            bridgeHeartbeatAt: "2026-04-21T18:34:59Z",
+            reasonCodes: []
+        )
+        let delegation = SessionDelegationSnapshot(
+            state: "pending",
+            count: 5,
+            kinds: ["subagent": 2, "shell": 3],
+            observedAt: "2026-04-21T18:34:55Z",
+            validUntil: "2026-04-21T19:05:00Z",
+            items: [
+                SessionDelegationTaskSnapshot(
+                    id: "a-1",
+                    kind: "subagent",
+                    status: "running",
+                    description: "Run test suite",
+                    sessionId: "child-1",
+                    nativeProgress: SessionDelegationProgressSnapshot(
+                        observedAt: "2026-04-21T18:34:54Z",
+                        status: "executing",
+                        currentTool: "Bash"
+                    )
+                ),
+            ]
+        )
+        let projected = localRow.applying(
+            SessionProjection(
+                sessionId: "sess-1",
+                timelineTitle: "Parent session",
+                summaryTitle: nil,
+                firstUserMessage: nil,
+                titleState: "ready",
+                titleSource: "user",
+                runtimePhase: "working",
+                displayPhase: "Background · 2 agents · 3 commands",
+                lastActivityAt: "2026-04-21T18:34:55Z",
+                source: "runtime_host",
+                authority: "runtime_host",
+                mode: "helm",
+                presentation: SessionPresentationSnapshot(
+                    primary: SessionPresentationLabelSnapshot(
+                        key: "delegated_work",
+                        label: "Background · 2 agents · 3 commands",
+                        tone: "neutral"
+                    ),
+                    signal: SessionSignalSnapshot(state: "working", validUntil: "2026-04-21T19:05:00Z"),
+                    access: nil
+                ),
+                activity: SessionActivitySnapshot(
+                    state: "quiescent",
+                    rawKind: "idle",
+                    tool: "Edit",
+                    observedAt: "2026-04-21T18:30:00Z"
+                ),
+                delegation: delegation
+            )
+        )
+
+        let now = try #require(HealthSnapshot.parseISO8601("2026-04-21T18:35:00Z"))
+        // Even when session_delta caps items at 1..4 while count is 5, "+4" reflects total count.
+        #expect(projected.delegatedWorkDetail(asOf: now) == "Run test suite · Bash · +4")
+
+        let preserved = localRow.preservingRuntimeHostProjection(from: projected)
+        #expect(preserved.delegation == delegation)
+
+        let finished = preserved.applying(
+            SessionProjection(
+                sessionId: "sess-1",
+                timelineTitle: "Parent session",
+                summaryTitle: nil,
+                firstUserMessage: nil,
+                titleState: "ready",
+                titleSource: "user",
+                runtimePhase: "idle",
+                displayPhase: "Idle",
+                lastActivityAt: "2026-04-21T18:36:00Z",
+                source: "runtime_host",
+                authority: "runtime_host",
+                mode: "helm",
+                presentation: SessionPresentationSnapshot(
+                    primary: SessionPresentationLabelSnapshot(key: "idle", label: "Idle", tone: "neutral"),
+                    signal: SessionSignalSnapshot(state: "quiet", validUntil: nil),
+                    access: nil
+                ),
+                delegation: SessionDelegationSnapshot(
+                    state: "none",
+                    count: 0,
+                    kinds: [:],
+                    observedAt: "2026-04-21T18:36:00Z",
+                    validUntil: "2026-04-21T19:06:00Z",
+                    items: []
+                )
+            )
+        )
+        #expect(finished.activeDelegationTasks(asOf: now).isEmpty)
+        #expect(projected.clearingRuntimeHostProjection().delegation == nil)
+    }
+
+    @Test
+    @MainActor
     func hearthAnimationRespectsDesktopFrameBudget() {
         #expect(HearthClock.frameInterval >= 0.1)
     }

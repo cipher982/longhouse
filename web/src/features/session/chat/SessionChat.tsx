@@ -52,6 +52,7 @@ import {
   formatElapsedClock,
   getSessionHeaderState,
 } from "../sessionHeaderState";
+import { delegatedWorkDetailFromFacts } from "../SessionRuntimeStrip";
 import ModelPicker from "@/features/launch/ModelPicker";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import {
@@ -2527,6 +2528,10 @@ export function SessionChat({
   // The server's label, verbatim, exactly as the session header shows it. It
   // only renders while the header's freshness gate calls the session live.
   const composerWorkingLabel = workingStatusLabel(session.session_state);
+  const composerDelegatedDetail =
+    composerState.tone === "live"
+      ? delegatedWorkDetailFromFacts(session.session_state, activityNowMs)
+      : null;
   const composerObservedClock = formatClockTime(Date.parse(activity.observed_at ?? ""));
   // Dock: the status line shows only while something runs or needs a
   // decision; at rest on an open session the placeholder carries it ("Idle
@@ -2880,6 +2885,15 @@ export function SessionChat({
                 <span className="session-chat-composer__head-label">
                   {composerWorkingLabel}
                 </span>
+                {composerDelegatedDetail ? (
+                  <span
+                    className="session-chat-composer__head-detail"
+                    title={composerDelegatedDetail}
+                    data-testid="session-chat-composer-delegated-detail"
+                  >
+                    {composerDelegatedDetail}
+                  </span>
+                ) : null}
                 {composerElapsedSeconds != null ? (
                   <Nixie
                     value={formatElapsedClock(composerElapsedSeconds)}

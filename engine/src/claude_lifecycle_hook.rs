@@ -134,12 +134,14 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
                 crate::claude_channel_server::update_managed_provider_session_id(managed, native);
         }
     }
+    let child_tool_event =
+        child_origin && matches!(event.as_str(), "PreToolUse" | "PostToolUse" | "PostToolUseFailure");
     let mut payload = json!({
         "session_id": session_id,
-        "tool_name": string(input, "tool_name"),
+        "tool_name": if child_origin { None } else { string(input, "tool_name") },
         "cwd": cwd,
         "provider": "claude",
-        "transcript_path": transcript_path,
+        "transcript_path": if child_tool_event { None } else { transcript_path },
         "control_path": if managed_session_id.is_some() { "managed" } else { "unmanaged" },
         // This is the hook's observation time, not the daemon's delivery time.
         "occurred_at": occurred_at,
@@ -208,16 +210,12 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     {
         crate::hook_outbox::enqueue_presence(&longhouse_home()?, &payload)?;
     }
-    if let Some(edge) = observation.edge.as_ref() {
-        enqueue_interaction_edge(&session_id, edge)?;
+    if !child_origin {
+        if let Some(edge) = observation.edge.as_ref() {
+            enqueue_interaction_edge(&session_id, edge)?;
+        }
     }
-    let marker_event = match event.as_str() {
-        "UserPromptSubmit" => Some("prompt_submit"),
-        "PermissionRequest" => Some("permission_request"),
-        "Stop" => Some("stop"),
-        _ => None,
-    };
-    if let Some(marker_event) = marker_event {
+    if let Some(marker_event) = warp_marker_for_event(&event, child_origin, payload.get("delegation")) {
         crate::warp_cli_agent::emit_tty_event(
             "claude",
             marker_event,
@@ -360,12 +358,20 @@ fn bounded_tool_use_id(value: Option<&Value>) -> Option<String> {
     (!value.chars().any(char::is_control)).then_some(value)
 }
 
-/// Read only the exact provider sidecar named by a parent-scoped lifecycle
-/// event (`Stop`, `SubagentStart`, or `SubagentStop`).
+/// Read only the exact provider sidecar named by a lifecycle or child tool
+/// event (`Stop`, `SubagentStart`, `SubagentStop`, `PreToolUse`,
+/// `PostToolUse`, or `PostToolUseFailure`).
 fn parent_tool_call_id(input: &Value, task_id: &str) -> Option<String> {
     if !matches!(
         input.get("hook_event_name").and_then(Value::as_str),
-        Some("Stop" | "SubagentStart" | "SubagentStop")
+        Some(
+            "Stop"
+                | "SubagentStart"
+                | "SubagentStop"
+                | "PreToolUse"
+                | "PostToolUse"
+                | "PostToolUseFailure"
+        )
     ) || !safe_task_path_component(task_id)
     {
         return None;
@@ -411,18 +417,73 @@ fn parent_tool_call_id(input: &Value, task_id: &str) -> Option<String> {
 /// operation and source fields; the consumer must not treat a start as a
 /// replacement snapshot or refresh an unrelated item.
 const DELEGATION_UPDATE_PATH_MAX_CHARS: usize = 1024;
+const DELEGATION_PROGRESS_TOOL_MAX_CHARS: usize = 128;
+
+fn warp_marker_for_event(
+    event: &str,
+    child_origin: bool,
+    delegation: Option<&Value>,
+) -> Option<&'static str> {
+    if child_origin {
+        return None;
+    }
+    match event {
+        "UserPromptSubmit" => Some("prompt_submit"),
+        "PermissionRequest" => Some("permission_request"),
+        "Stop" => {
+            let active_subagents = delegation
+                .and_then(|snapshot| snapshot.get("kinds"))
+                .and_then(|kinds| kinds.get("subagent"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            (active_subagents == 0).then_some("stop")
+        }
+        _ => None,
+    }
+}
 
 fn lifecycle_update_for_event(event: &str, input: &Value, observed_at: &str) -> Option<Value> {
-    let (operation, id, kind, status) = match event {
+    let (operation, id, kind, status, native_progress) = match event {
         // A start proves native child identity, not background membership.
         // The consumer may enrich an already-linked item, but must not add a
         // count from this event alone.
-        "SubagentStart" => ("observe", string(input, "agent_id")?, "subagent", "running"),
+        "SubagentStart" => (
+            "observe",
+            string(input, "agent_id")?,
+            "subagent",
+            "running",
+            None,
+        ),
         "SubagentStop" => (
             "remove",
             string(input, "agent_id")?,
             "subagent",
             "completed",
+            None,
+        ),
+        "PreToolUse" => {
+            let id = string(input, "agent_id")?;
+            let mut progress = json!({
+                "observed_at": observed_at,
+                "status": "running",
+            });
+            if let Some(tool) = bounded_required_task_text(
+                input.get("tool_name"),
+                DELEGATION_PROGRESS_TOOL_MAX_CHARS,
+            ) {
+                progress["current_tool"] = json!(tool);
+            }
+            ("observe", id, "subagent", "running", Some(progress))
+        }
+        "PostToolUse" | "PostToolUseFailure" => (
+            "observe",
+            string(input, "agent_id")?,
+            "subagent",
+            "running",
+            Some(json!({
+                "observed_at": observed_at,
+                "status": "thinking",
+            })),
         ),
         _ => return None,
     };
@@ -444,6 +505,9 @@ fn lifecycle_update_for_event(event: &str, input: &Value, observed_at: &str) -> 
             bounded_required_task_text(input.get("agent_type"), DELEGATION_STATUS_MAX_CHARS)
         {
             item["agent_type"] = json!(agent_type);
+        }
+        if let Some(progress) = native_progress {
+            item["native_progress"] = progress;
         }
     }
 
@@ -1874,16 +1938,119 @@ mod tests {
             "a parent-thread tool event must still write presence"
         );
 
-        let subagent_wrote = with_home(home.path(), || {
+        let subagent_files = with_home(home.path(), || {
             handle_input(&tool_use_payload(
                 json!({"agent_id": "a123", "agent_type": "Explore"}),
             ))
             .unwrap();
-            outbox_files(home.path()).len()
+            handle_input(&json!({
+                "hook_event_name": "PostToolUse",
+                "session_id": "sess-1",
+                "tool_name": "Bash",
+                "cwd": "/tmp",
+                "agent_id": "a123",
+                "agent_type": "Explore",
+            }))
+            .unwrap();
+            let runtime_outbox = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
+            let runtime_files: Vec<_> = std::fs::read_dir(&runtime_outbox)
+                .map(|entries| entries.flatten().collect())
+                .unwrap_or_default();
+            assert!(
+                runtime_files.is_empty(),
+                "child tool completions must not emit parent pause_resolution runtime events"
+            );
+            outbox_files(home.path())
         });
         assert_eq!(
-            subagent_wrote, 1,
-            "a subagent tool event must not add a second presence observation"
+            subagent_files.len(),
+            3,
+            "child tool events emit bounded delegation_update records alongside parent presence"
+        );
+        let outbox_dir = home.path().join("agent").join("outbox");
+        let payloads: Vec<Value> = subagent_files
+            .iter()
+            .map(|name| {
+                serde_json::from_slice(&std::fs::read(outbox_dir.join(name)).unwrap()).unwrap()
+            })
+            .collect();
+        let child_updates: Vec<&Value> = payloads
+            .iter()
+            .filter(|payload| payload.get("delegation_update").is_some())
+            .collect();
+        assert_eq!(child_updates.len(), 2);
+        for payload in &child_updates {
+            assert!(
+                payload.get("state").is_none(),
+                "child tool events must never set parent state"
+            );
+            assert!(payload["tool_name"].is_null());
+            assert!(payload["transcript_path"].is_null());
+            assert_eq!(
+                payload["delegation_update"]["membership"],
+                "existing_exact_link_only"
+            );
+            assert_eq!(payload["delegation_update"]["operation"], "observe");
+            assert_eq!(payload["delegation_update"]["source_agent_id"], "a123");
+        }
+        let pre = child_updates
+            .iter()
+            .find(|p| p["delegation_update"]["source_event"] == "PreToolUse")
+            .expect("PreToolUse update");
+        assert_eq!(
+            pre["delegation_update"]["item"]["native_progress"]["status"],
+            "running"
+        );
+        assert_eq!(
+            pre["delegation_update"]["item"]["native_progress"]["current_tool"],
+            "Bash"
+        );
+        let post = child_updates
+            .iter()
+            .find(|p| p["delegation_update"]["source_event"] == "PostToolUse")
+            .expect("PostToolUse update");
+        assert_eq!(
+            post["delegation_update"]["item"]["native_progress"]["status"],
+            "thinking"
+        );
+        assert!(post["delegation_update"]["item"]["native_progress"]
+            .get("current_tool")
+            .is_none());
+    }
+
+    #[test]
+    fn warp_stop_marker_is_suppressed_only_while_background_subagents_are_active() {
+        assert_eq!(warp_marker_for_event("Stop", false, None), Some("stop"));
+        assert_eq!(
+            warp_marker_for_event(
+                "Stop",
+                false,
+                Some(&json!({"count": 0, "kinds": {}}))
+            ),
+            Some("stop")
+        );
+        assert_eq!(
+            warp_marker_for_event(
+                "Stop",
+                false,
+                Some(&json!({"count": 2, "kinds": {"shell": 2}}))
+            ),
+            Some("stop"),
+            "background shells like dev servers must not keep Warp spinning"
+        );
+        assert_eq!(
+            warp_marker_for_event(
+                "Stop",
+                false,
+                Some(&json!({"count": 2, "kinds": {"subagent": 1, "shell": 1}}))
+            ),
+            None,
+            "active background subagents keep Warp active until the post-notification Stop"
+        );
+        assert_eq!(
+            warp_marker_for_event("Stop", true, None),
+            None,
+            "child-origin hooks never emit parent Warp markers"
         );
     }
 

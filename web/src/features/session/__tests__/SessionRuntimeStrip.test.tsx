@@ -667,4 +667,59 @@ describe("SessionRuntimeStrip background registry", () => {
     };
     expect(buildSessionLedgerState(current, interaction, start + 22_000, true).backgroundInspector!.count).toBe(0);
   });
+
+  it("surfaces lead subagent description and current tool in detail when delegated_work is primary", () => {
+    const start = Date.parse("2026-09-09T19:00:00Z");
+    const current = session("delegated-detail", {
+      activity: "quiescent",
+      terminalAttached: true,
+      observedAt: new Date(start).toISOString(),
+      activityValidUntil: new Date(start + 5_000).toISOString(),
+    });
+    current.session_state.delegation = {
+      state: "pending",
+      count: 2,
+      kinds: { subagent: 1, shell: 1 },
+      observed_at: new Date(start).toISOString(),
+      valid_until: new Date(start + 60_000).toISOString(),
+      items: [
+        {
+          id: "shell-1",
+          kind: "shell",
+          status: "running",
+          description: "make dev",
+          first_observed_at: new Date(start).toISOString(),
+        },
+        {
+          id: "agent-1",
+          kind: "subagent",
+          status: "running",
+          description: "Rebasing worktree and rerunning make validate",
+          first_observed_at: new Date(start).toISOString(),
+          native_progress: {
+            observed_at: new Date(start + 2_000).toISOString(),
+            status: "running",
+            current_tool: "Bash",
+          },
+        },
+      ],
+    };
+    const primary = {
+      key: "delegated_work",
+      label: "Background · 1 agent · 1 command",
+      tone: "active",
+      observed_at: new Date(start).toISOString(),
+    };
+    current.session_state.presentation = {
+      primary,
+      signal: mirrorServedSignal(primary, {
+        delegation: current.session_state.delegation,
+      }),
+      access: current.session_state.presentation.access,
+    };
+    const state = buildSessionLedgerState(current, interaction, start + 10_000, true);
+    expect(state.tone).toBe("working");
+    expect(state.detailKind).toBe("delegated");
+    expect(state.detail).toBe("Rebasing worktree and rerunning make validate · Using Bash (+1 more)");
+  });
 });

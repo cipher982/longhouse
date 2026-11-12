@@ -19,6 +19,7 @@ struct SessionProjection: Sendable {
     let mode: String?
     let presentation: SessionPresentationSnapshot?
     let activity: SessionActivitySnapshot?
+    let delegation: SessionDelegationSnapshot?
     let control: SessionControlSnapshot?
 
     var activityObservedAt: String? { activity?.observedAt }
@@ -41,6 +42,7 @@ struct SessionProjection: Sendable {
         mode: String? = nil,
         presentation: SessionPresentationSnapshot? = nil,
         activity: SessionActivitySnapshot? = nil,
+        delegation: SessionDelegationSnapshot? = nil,
         control: SessionControlSnapshot? = nil
     ) {
         self.sessionId = sessionId
@@ -60,6 +62,7 @@ struct SessionProjection: Sendable {
         self.mode = mode
         self.presentation = presentation
         self.activity = activity
+        self.delegation = delegation
         self.control = control
     }
 }
@@ -212,6 +215,7 @@ enum SessionProjectionStream {
         let mode: String?
         let presentation: SessionPresentationSnapshot?
         let activity: SessionActivitySnapshot?
+        let delegation: SessionDelegationSnapshot?
         let control: SessionControlSnapshot?
     }
 
@@ -432,6 +436,7 @@ enum SessionProjectionStream {
                             mode: delta.mode,
                             presentation: delta.presentation,
                             activity: delta.activity,
+                            delegation: delta.delegation,
                             control: delta.control
                         ))
                     )

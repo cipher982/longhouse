@@ -93,6 +93,29 @@ function buildBackgroundInspector(
   };
 }
 
+export function delegatedWorkDetailFromFacts(
+  facts: AgentSession["session_state"],
+  nowMs: number,
+): string | null {
+  if (facts.presentation.primary?.key !== "delegated_work") return null;
+  return delegatedWorkDetail(buildBackgroundInspector(facts, nowMs));
+}
+
+function delegatedWorkDetail(inspector: SessionBackgroundInspector | null): string | null {
+  if (!inspector) return null;
+  const activeTasks = inspector.tasks.filter((task) => !task.recent);
+  if (activeTasks.length === 0) return null;
+  const subagents = activeTasks.filter((task) => task.type === "subagent");
+  const lead = subagents[0] ?? activeTasks[0];
+  const tool = lead.nativeProgress?.current_tool?.trim();
+  const progressStatus = lead.nativeProgress?.status?.trim().toLowerCase();
+  const step = tool ? `Using ${tool}` : progressStatus === "thinking" ? "Thinking" : null;
+  const leadSummary = [lead.name, step].filter(Boolean).join(" · ");
+  if (!leadSummary) return null;
+  const extra = activeTasks.length - 1;
+  return extra > 0 ? `${leadSummary} (+${extra} more)` : leadSummary;
+}
+
 
 type ProviderEvidence = Pick<SessionLedgerState, "tone"> & {
   sessionId: string;
@@ -342,6 +365,10 @@ export function buildSessionLedgerState(
     inputDetail.trim()
       ? `${typeof input?.command === "string" ? "$ " : ""}${inputDetail.trim().split(/\r?\n/, 1)[0]}`
       : null;
+  const delegatedDetail =
+    facts.presentation.primary?.key === "delegated_work" && tone === "working"
+      ? delegatedWorkDetail(backgroundInspector)
+      : null;
   const detail =
     literalDetail ??
     (pending
@@ -354,7 +381,7 @@ export function buildSessionLedgerState(
             : transcriptConcern
               ? "Transcript is lagging the observed session state."
               : "No fresh provider evidence. The agent may still be working."
-          : display.detail);
+          : delegatedDetail ?? display.detail);
   const connection: SessionLedgerState["connection"] = !openSession
     ? "recorded"
     : streamConnected
@@ -405,7 +432,7 @@ export function buildSessionLedgerState(
     tone,
     headline,
     detail,
-    detailKind: literalDetail ? "literal" : "explanation",
+    detailKind: literalDetail ? "literal" : delegatedDetail ? "delegated" : "explanation",
     observation,
     connection,
     animateWork: tone === "working" && providerWorking && streamConnected,

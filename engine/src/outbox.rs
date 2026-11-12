@@ -475,8 +475,14 @@ fn collect_outbox_impl(
         PendingPresenceFile,
     > = HashMap::new();
     let mut delegation_paths = HashSet::new();
-    // Partial lifecycle edges are not replaceable snapshots. Keep every edge.
+    // Partial lifecycle edges: completion (`remove`) and snapshot-bearing
+    // callbacks are retained verbatim; pure child `observe` updates coalesce
+    // to the newest progress per (provider, session, run, agent).
     let mut delegation_updates: Vec<PendingPresenceFile> = Vec::new();
+    let mut delegation_observe_by_agent: HashMap<
+        (String, String, Option<String>, String),
+        PendingPresenceFile,
+    > = HashMap::new();
     // Local phase observations are durable evidence for the engine's own
     // health projection. Keep them separate: they must reach SQLite but never
     // become hosted presence traffic.
@@ -575,10 +581,47 @@ fn collect_outbox_impl(
         };
 
         if update_required {
-            // A callback can carry a full snapshot and an exact completion
-            // edge together. Retain the whole source observation: coalescing
-            // the snapshot must never discard that nonreplaceable edge.
-            delegation_updates.push(next_file);
+            let pure_observe_agent = if !delegation_required {
+                next_file
+                    .payload
+                    .delegation_update
+                    .as_ref()
+                    .filter(|u| u.get("operation").and_then(Value::as_str) == Some("observe"))
+                    .and_then(|u| u.get("source_agent_id").and_then(Value::as_str))
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+            } else {
+                None
+            };
+            if let Some(agent_id) = pure_observe_agent {
+                let key = (
+                    normalize_provider(next_file.payload.provider.as_deref()).to_string(),
+                    sid.clone(),
+                    next_file.payload.run_id.clone(),
+                    agent_id,
+                );
+                match delegation_observe_by_agent.get(&key) {
+                    Some(existing) => {
+                        if next_file.observed_at >= existing.observed_at {
+                            if !managed_binding_paths.contains(&existing.path) {
+                                let _ = std::fs::remove_file(&existing.path);
+                            }
+                            delegation_observe_by_agent.insert(key, next_file);
+                        } else if !managed_binding_paths.contains(&path) {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                    None => {
+                        delegation_observe_by_agent.insert(key, next_file);
+                    }
+                }
+            } else {
+                // A callback can carry a full snapshot and an exact completion
+                // edge together. Retain the whole source observation: coalescing
+                // the snapshot must never discard that nonreplaceable edge.
+                delegation_updates.push(next_file);
+            }
             continue;
         }
         if delegation_required {
@@ -651,7 +694,8 @@ fn collect_outbox_impl(
         && (!by_session.is_empty()
             || !local_phase_by_session.is_empty()
             || !delegation_by_session_run.is_empty()
-            || !delegation_updates.is_empty())
+            || !delegation_updates.is_empty()
+            || !delegation_observe_by_agent.is_empty())
     {
         match crate::state::db::resolve_db_path(db_path)
             .and_then(|path| crate::state::db::open_connection(&path))
@@ -730,6 +774,7 @@ fn collect_outbox_impl(
     selected_paths.extend(
         delegation_updates
             .iter()
+            .chain(delegation_observe_by_agent.values())
             .map(|pending| pending.path.clone()),
     );
     for path in persisted_binding_paths.difference(&selected_paths) {
@@ -757,6 +802,7 @@ fn collect_outbox_impl(
         }
     }
     selected_presence.extend(delegation_updates);
+    selected_presence.extend(delegation_observe_by_agent.into_values());
     selected_presence.sort_by_key(|pending| pending.observed_at);
     for pending in selected_presence {
         let PendingPresenceFile {
@@ -2340,6 +2386,67 @@ mod tests {
         assert!(
             drained.signals.is_empty(),
             "child lifecycle evidence must not become parent activity"
+        );
+    }
+
+    #[test]
+    fn child_tool_observe_updates_coalesce_per_agent_without_dropping_completion_edges() {
+        let dir = make_outbox();
+        let older_pre = write_presence_payload(
+            dir.path(),
+            "prs.child-pre-1.json",
+            json!({
+                "session_id": "parent", "provider": "claude", "run_id": "run",
+                "occurred_at": "2026-09-30T15:00:01Z",
+                "delegation_update": {
+                    "operation": "observe", "membership": "existing_exact_link_only",
+                    "source_event": "PreToolUse", "source_agent_id": "agent-a",
+                    "observed_at": "2026-09-30T15:00:01Z",
+                    "item": {
+                        "id": "agent-a", "kind": "subagent", "status": "running",
+                        "native_progress": {"observed_at": "2026-09-30T15:00:01Z", "status": "running", "current_tool": "Read"}
+                    }
+                }
+            }),
+        );
+        let newest_pre = write_presence_payload(
+            dir.path(),
+            "prs.child-pre-2.json",
+            json!({
+                "session_id": "parent", "provider": "claude", "run_id": "run",
+                "occurred_at": "2026-09-30T15:00:03Z",
+                "delegation_update": {
+                    "operation": "observe", "membership": "existing_exact_link_only",
+                    "source_event": "PreToolUse", "source_agent_id": "agent-a",
+                    "observed_at": "2026-09-30T15:00:03Z",
+                    "item": {
+                        "id": "agent-a", "kind": "subagent", "status": "running",
+                        "native_progress": {"observed_at": "2026-09-30T15:00:03Z", "status": "running", "current_tool": "Bash"}
+                    }
+                }
+            }),
+        );
+        let stop_b = write_presence_payload(
+            dir.path(),
+            "prs.child-stop-b.json",
+            json!({
+                "session_id": "parent", "provider": "claude", "run_id": "run",
+                "occurred_at": "2026-09-30T15:00:02Z",
+                "delegation_update": {
+                    "operation": "remove", "membership": "existing_exact_link_only",
+                    "source_event": "SubagentStop", "source_agent_id": "agent-b",
+                    "observed_at": "2026-09-30T15:00:02Z",
+                    "item": {"id": "agent-b", "kind": "subagent", "status": "completed"}
+                }
+            }),
+        );
+
+        let drained = collect_outbox_impl(dir.path(), None, false);
+        let paths: Vec<_> = drained.posts.iter().map(|post| post.path.clone()).collect();
+        assert_eq!(paths, vec![stop_b, newest_pre]);
+        assert!(
+            !older_pre.exists(),
+            "superseded child observe outbox file should be removed during coalescing"
         );
     }
 
