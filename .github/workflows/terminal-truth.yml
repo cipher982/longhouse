@@ -12,10 +12,13 @@ name: Terminal Truth
 #                                            consumes the status yet (promotion is unchanged).
 #   schedule (nightly)                       400 tokens at 5/s, one pass, long_reply and two_message
 #                                            scenarios (about 50 minutes on the runner), then the mutation
-#                                            tests. Five passes took over four hours of the one runner slot,
-#                                            every push run queued behind them, and the job's 330-minute limit
-#                                            left the mutation tests about an hour (first nightly, 2026-11-12);
-#                                            repeats are for a dispatched run. A red run is the finding:
+#                                            tests. Five passes would hold the one runner slot for over four
+#                                            hours (the first nightly, 2026-11-12, measured 51 and 49 minutes
+#                                            for its first two), with every push run queued behind them and
+#                                            about an hour of the job's 330-minute limit left for the mutation
+#                                            tests. GitHub started that 07:43Z schedule at 16:17Z, so the
+#                                            nightly cannot be assumed to run while nobody is pushing.
+#                                            Repeats are for a dispatched run. A red run is the finding:
 #                                            new failing cells are annotated as errors, and the Sauron job
 #                                            ci-scheduled-red pages after three red nights in a row.
 #   workflow_dispatch                        any of the above by hand (inputs below).
