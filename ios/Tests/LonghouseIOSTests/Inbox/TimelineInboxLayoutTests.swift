@@ -272,7 +272,7 @@ struct TimelineInboxLayoutTests {
         #expect(TimelineSignal.resolve(for: exitedHelm, asOf: now) == .closed)
         #expect(exitedHelm.spokenStatusLabel(asOf: now) == "Ended")
         #expect(stateDurationLabel(for: exitedHelm) == nil)
-        #expect(HearthSnapshot.from(session: exitedHelm, now: now).mode == .ended)
+        #expect(HearthSnapshot(session: exitedHelm, suppressed: false, now: now).mode == .ended)
 
         let layout = buildTimelineInboxLayout([olderRecent, exitedHelm])
         #expect(layout.recent.map(\.id) == ["exited-helm", "older-recent"])
