@@ -1258,7 +1258,7 @@ def test_live_stream_signals_are_declared_and_strictly_validated():
     for item in managed_provider_contract_manifest()["providers"]:
         _validate_live_stream_signals(item)
     by_provider = {item["provider"]: item["live_stream_signals"] for item in managed_provider_contract_manifest()["providers"]}
-    assert by_provider["claude"]["helm"]["live_reply_text"] == "known_bad"
+    assert by_provider["claude"]["helm"]["live_reply_text"] == "expected"
     assert by_provider["antigravity"]["helm"]["live_reply_text"] == "expected"
     assert by_provider["cursor"]["console"]["live_reply_text"] == "not_measurable"
     assert by_provider["codex"]["helm"]["live_reply_text"] == "expected"

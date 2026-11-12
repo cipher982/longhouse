@@ -564,6 +564,88 @@ struct BridgeState {
     terminal_dedupe_key: Option<String>,
 }
 
+/// The variable the Claude mod reads for the live-text relay's socket
+/// (`engine/src/claude_helm_live.rs`).
+const CLAUDE_LIVE_SOCKET_ENV: &str = "LONGHOUSE_CLAUDE_LIVE_SOCKET";
+
+/// `longhouse-engine claude-live-relay`, run beside Claude Helm for the
+/// session's life. It ends when this handle closes its standard input, which
+/// also happens if this process dies.
+struct ClaudeLiveRelay {
+    child: std::process::Child,
+    stdin: Option<std::process::ChildStdin>,
+    socket: String,
+}
+
+impl ClaudeLiveRelay {
+    /// `None` when the relay did not come up in time: Claude then starts with no
+    /// socket named, and the mod forwards nothing.
+    fn start(
+        engine: &str,
+        session_id: &str,
+        run_id: &str,
+        provider_session_id: &str,
+    ) -> Option<Self> {
+        #[cfg(unix)]
+        {
+            let suffix = session_id.split('-').next().unwrap_or("session");
+            let user_id = unsafe { libc::geteuid() };
+            let socket = PathBuf::from("/tmp")
+                .join(format!(
+                    "longhouse-claude-{user_id}-{suffix}-{}",
+                    Uuid::new_v4().simple()
+                ))
+                .join("live.sock");
+            let mut child = Command::new(engine)
+                .args(["claude-live-relay", "--socket"])
+                .arg(&socket)
+                .args(["--session", session_id, "--run", run_id])
+                .args(["--provider-session", provider_session_id])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .ok()?;
+            let stdin = child.stdin.take();
+            let stdout = child.stdout.take()?;
+            let (ready_sender, ready) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut line = String::new();
+                let _ = BufReader::new(stdout).read_line(&mut line);
+                let _ = ready_sender.send(line.trim() == "ready");
+            });
+            let relay = Self {
+                child,
+                stdin,
+                socket: socket.to_string_lossy().into_owned(),
+            };
+            match ready.recv_timeout(Duration::from_secs(3)) {
+                Ok(true) => Some(relay),
+                _ => None, // dropping `relay` ends the child
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (engine, session_id, run_id, provider_session_id);
+            None
+        }
+    }
+}
+
+impl Drop for ClaudeLiveRelay {
+    fn drop(&mut self) {
+        drop(self.stdin.take());
+        for _ in 0..40 {
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 fn paired_engine_path() -> anyhow::Result<PathBuf> {
     if let Some(override_path) = std::env::var_os("LONGHOUSE_ENGINE_BIN") {
         return Ok(PathBuf::from(override_path));
@@ -2186,6 +2268,16 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     if owner_input_route.uses_mod() {
         identity_env.push((claude_owner_input::ENGINE_ENV, &engine_path));
     }
+    // Reply text, as Claude streams it, goes from the mod to this relay and out
+    // as the live preview. Without a relay the mod forwards nothing.
+    let live_relay = if owner_input_route.uses_mod() {
+        ClaudeLiveRelay::start(&engine_path, &session_id, &run_id, &provider_session_id)
+    } else {
+        None
+    };
+    if let Some(relay) = &live_relay {
+        identity_env.push((CLAUDE_LIVE_SOCKET_ENV, relay.socket.as_str()));
+    }
     ManagedIdentity::new(ManagedProvider::Claude, &session_id)
         .with_run_id(&run_id)
         .apply(&mut command, &identity_env);
@@ -2241,6 +2333,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             return Err(error);
         }
     };
+    drop(live_relay);
     warp_cli_agent::emit_session_event(
         "claude",
         "stop",

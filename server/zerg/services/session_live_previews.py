@@ -32,6 +32,7 @@ LIVE_PREVIEW_SOURCES = {
     "omp_helm_channel",
     "pi_helm_channel",
     "antigravity_helm_db",
+    "claude_helm_channel",
 }
 
 
@@ -136,6 +137,8 @@ def live_preview_candidate_from_runtime_event(
         return _opencode_helm_preview_candidate(event, payload, observation_id=observation_id)
     if provider == "omp" and source.lower() == "omp_helm_channel" and progress_kind == "omp_helm_stream":
         return _omp_helm_preview_candidate(event, payload, observation_id=observation_id)
+    if provider == "claude" and source.lower() == "claude_helm_channel" and progress_kind == "claude_helm_stream":
+        return _omp_helm_preview_candidate(event, payload, observation_id=observation_id, source="claude_helm_channel")
     if provider == "pi" and source.lower() == "pi_helm_channel" and progress_kind == "pi_helm_stream":
         return _omp_helm_preview_candidate(event, payload, observation_id=observation_id, source="pi_helm_channel")
     if provider == "antigravity" and source.lower() == "antigravity_helm_db" and progress_kind == "antigravity_helm_stream":

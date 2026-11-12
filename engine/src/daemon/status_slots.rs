@@ -13,6 +13,9 @@ pub(super) fn record_status_slot_phases(
     let pending: Vec<&crate::status_slot::StatusSlot> = slots
         .iter()
         .filter(|slot| already_recorded.get(&slot.session_id) != Some(&slot.version()))
+        // A slot with no phase states only a preview (Claude Helm's live text);
+        // the provider's own hooks own that session's phase.
+        .filter(|slot| !slot.phase.is_empty())
         .collect();
     if pending.is_empty() {
         return Vec::new();

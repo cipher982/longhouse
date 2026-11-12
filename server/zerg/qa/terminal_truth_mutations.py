@@ -57,6 +57,16 @@ MUTATIONS: tuple[Mutation, ...] = (
         ("engine_posted",),
     ),
     Mutation(
+        "claude-helm-text-forward",
+        "drop the Claude Helm mod's forwarding of reply text from the turn.step stream",
+        "engine",
+        "engine/assets/claude-mod/hooks/register.js",
+        "if (chunk.kind === 'text' && typeof chunk.text === 'string' && chunk.text !== '') {",
+        "if (false) {",
+        "claude/helm",
+        ("engine_posted",),
+    ),
+    Mutation(
         "opencode-host-publish",
         "the host stops publishing OpenCode's nested live text (c510accaf)",
         "server",

@@ -2147,6 +2147,18 @@ mod tests {
         );
         assert_eq!(advanced.len(), 1, "a real transition is recorded");
 
+        // A slot with no phase carries only a preview (Claude Helm's live
+        // text): the phase the session's own hooks set is left as it is.
+        let preview_only = super::record_status_slot_phases(
+            Some(&db_path),
+            &[slot(3, "", "2026-09-17T15:00:03Z")],
+            &recorded,
+        );
+        assert!(
+            preview_only.is_empty(),
+            "a preview-only slot records no phase"
+        );
+
         let connection = crate::state::db::open_connection(&db_path).expect("open ledger");
         let phase: String = connection
             .query_row(

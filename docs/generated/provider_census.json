@@ -2769,6 +2769,7 @@
       "path": "server/zerg/services/session_runtime.py",
       "providers": [
         "antigravity",
+        "claude",
         "codex",
         "cursor",
         "omp",

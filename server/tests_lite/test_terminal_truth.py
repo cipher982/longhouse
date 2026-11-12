@@ -255,7 +255,7 @@ def test_the_two_message_check_wants_a_reset_a_complete_first_message_and_the_to
 
 def test_expectations_come_from_the_ledger() -> None:
     expectations = tt.load_expectations()
-    assert expectations[("claude", "helm")].live_reply_text == "known_bad"
+    assert expectations[("claude", "helm")].live_reply_text == "expected"
     assert expectations[("antigravity", "helm")].live_reply_text == "expected"
     assert expectations[("cursor", "console")].live_reply_text == "not_measurable"
     assert expectations[("codex", "helm")].live_reply_text == "expected"

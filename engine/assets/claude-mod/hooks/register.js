@@ -6,6 +6,13 @@
 // running turn when the owner aborts it ($.turn.abort). Messages from other
 // sessions never come this way: they stay on the channel, labelled as peers'.
 //
+// The mod also forwards the reply text Claude is streaming, as it arrives, to
+// the `longhouse claude` launcher (engine/src/claude_helm_live.rs), which
+// publishes it as the session's live preview. Claude writes an assistant line
+// to its transcript only when the whole message has ended, and its `MessageDisplay`
+// hook changes how Claude paints, so the `turn.step` stream is the source.
+// Only reply text goes: thinking, tool names and tool arguments are dropped.
+//
 // longhouse-engine owns the queue and the record of what was delivered
 // (engine/src/claude_owner_input.rs). `claude-owner-input watch` streams this
 // session's owner inputs as JSON lines; `claude-owner-input claim` takes one
@@ -190,14 +197,120 @@ function watch($, quickRestarts) {
   })
 }
 
+// ---- Live reply text ----------------------------------------------------
+//
+// Runs inside the person's Claude process, in the path of every streamed
+// piece, so each piece costs one string append and nothing else: the pieces are
+// passed on unchanged and unawaited, nothing here throws into Claude, and
+// every failure ends in silence. The launcher listens on a Unix socket named by
+// LONGHOUSE_CLAUDE_LIVE_SOCKET; without it (or after repeated refusals) the
+// mod forwards nothing.
+
+// A new send waits this long after the last one began to finish, so a fast
+// model costs about ten posts a second, not one per token.
+const LIVE_SPACING_MS = 100
+const LIVE_MAX_FAILURES = 3
+
+let liveSocket
+// Set once a reply text has been forwarded: a turn end means nothing to the
+// launcher before that, and a Claude Code without `turn.step` never gets here.
+let liveSeen = false
+let liveBusy = false
+let liveFailures = 0
+// Not yet sent, oldest first: { turn, step, text } for reply text, { turn,
+// done: true } when a turn ends. Text of one step is joined into one entry.
+const liveQueue = []
+
+function liveEnqueue($, entry) {
+  if (liveSocket === undefined) return
+  if (entry.text !== undefined) liveSeen = true
+  const last = liveQueue[liveQueue.length - 1]
+  if (
+    entry.text !== undefined &&
+    last !== undefined &&
+    last.text !== undefined &&
+    last.turn === entry.turn &&
+    last.step === entry.step
+  ) {
+    last.text += entry.text
+  } else {
+    liveQueue.push(entry)
+  }
+  liveKick($)
+}
+
+function liveKick($) {
+  if (liveSocket === undefined || liveBusy || liveQueue.length === 0) return
+  liveBusy = true
+  void liveSend($)
+}
+
+async function liveSend($) {
+  const batch = liveQueue.splice(0)
+  try {
+    const response = await $.http.fetch('http://longhouse.invalid/live', {
+      method: 'POST',
+      body: JSON.stringify(batch),
+      socketPath: liveSocket,
+    })
+    if (!response.ok) throw new Error('status ' + response.status)
+    liveFailures = 0
+  } catch (error) {
+    liveFailures += 1
+    if (liveFailures >= LIVE_MAX_FAILURES) {
+      liveSocket = undefined
+      liveQueue.length = 0
+    }
+    try {
+      $.ui.log('longhouse: live text not delivered: ' + String(error), { to: 'debug' })
+    } catch (ignored) {}
+  }
+  try {
+    $.clock.after(LIVE_SPACING_MS, () => {
+      liveBusy = false
+      liveKick($)
+    })
+  } catch (error) {
+    liveBusy = false
+  }
+}
+
+// Passes every chunk on as it came. Only the main loop's reply text is
+// forwarded; `thinking`, `tool`, `input` and `stop` chunks are not.
+async function* liveTurnStep($, e, next) {
+  if (liveSocket === undefined || e.agentId !== undefined) return yield* next(e)
+  for await (const chunk of next(e)) {
+    try {
+      if (chunk.kind === 'text' && typeof chunk.text === 'string' && chunk.text !== '') {
+        liveEnqueue($, { turn: e.turnId, step: e.index, text: chunk.text })
+      }
+    } catch (ignored) {}
+    yield chunk
+  }
+}
+
 export function register(on) {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     engine = await $.env.get('LONGHOUSE_OWNER_INPUT_ENGINE')
     sessionId = await $.env.get('LONGHOUSE_CHANNEL_SESSION_ID')
     if (engine && sessionId) watch($, 0)
+    try {
+      const socket = await $.env.get('LONGHOUSE_CLAUDE_LIVE_SOCKET')
+      if (socket) {
+        liveSocket = socket
+      }
+    } catch (error) {
+      $.ui.log('longhouse: live text unavailable: ' + String(error), { to: 'debug' })
+    }
     return started
   })
+
+  // A Claude Code without `turn.step` has no such event to subscribe to: the
+  // mod then loads and forwards nothing, and owner input works as before.
+  try {
+    on('turn.step', liveTurnStep)
+  } catch (error) {}
 
   on('turn.start', async ($, e, next) => {
     turnId = e.turnId
@@ -214,6 +327,7 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     const completed = await next(e)
     if (e.agentId !== undefined) return completed
+    if (liveSeen) liveEnqueue($, { turn: e.turnId, done: true })
     if (e.turnId === turnId) turnId = undefined
     const ownerAborted = e.turnId === abortedByOwner
     if (ownerAborted) abortedByOwner = undefined

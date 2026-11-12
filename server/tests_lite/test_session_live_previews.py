@@ -341,6 +341,82 @@ def test_antigravity_helm_stream_projects_live_text_and_completion(tmp_path):
     assert preview.provisional_complete is True
 
 
+def test_claude_helm_stream_projects_live_text_per_message_and_completion(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "claude_helm_stream.db")
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+
+    def event(session_id, offset_ms, turn_id, seq, text, completed=False, source="claude_helm_channel"):
+        return RuntimeEventIngest(
+            runtime_key=f"claude:{session_id}",
+            session_id=session_id,
+            run_id="00000000-0000-0000-0000-000000000001",
+            provider="claude",
+            device_id="cinder",
+            source=source,
+            kind="progress_signal",
+            occurred_at=now + timedelta(milliseconds=offset_ms),
+            dedupe_key=f"claude-progress:{session_id}:{turn_id}:{seq}",
+            payload={
+                "progress_kind": "claude_helm_stream",
+                "turn_id": turn_id,
+                "seq": seq,
+                "live_text": text,
+                "turn_completed": completed,
+            },
+        )
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="claude")
+        batch = [
+            event(session.id, 0, "run:1:1", 1, "before the tool"),
+            event(session.id, 10, "run:1:2", 1, "partial"),
+            event(session.id, 20, "run:1:2", 2, "partial answer"),
+            event(session.id, 30, "run:1:2", 3, "partial answer", completed=True),
+        ]
+        assert ingest_runtime_events(db, batch).accepted == 4
+        db.commit()
+        row = db.get(SessionLivePreview, session.id)
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert row is not None
+    assert row.source == "claude_helm_channel"
+    assert row.turn_key == f"claude_helm_channel:{session.id}:unknown-thread:run:1:2"
+    # The second message replaced the first rather than extending it.
+    assert preview.text == "partial answer"
+    assert preview.provisional_complete is True
+
+
+def test_claude_live_text_is_published_only_from_the_helm_channel_source(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "claude_helm_source.db")
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+
+    def event(session_id, source, progress_kind):
+        return RuntimeEventIngest(
+            runtime_key=f"claude:{session_id}",
+            session_id=session_id,
+            run_id="00000000-0000-0000-0000-000000000001",
+            provider="claude",
+            device_id="cinder",
+            source=source,
+            kind="progress_signal",
+            occurred_at=now,
+            dedupe_key=f"claude-progress:{session_id}:{source}:{progress_kind}",
+            payload={"progress_kind": progress_kind, "turn_id": "t", "seq": 1, "live_text": "text"},
+        )
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="claude")
+        ingest_runtime_events(
+            db,
+            [
+                event(session.id, "claude_hook", "claude_helm_stream"),
+                event(session.id, "claude_helm_channel", "something_else"),
+            ],
+        )
+        db.commit()
+        assert db.get(SessionLivePreview, session.id) is None
+
+
 def test_omp_print_stream_projects_partial_and_settled_assistant_message(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "omp_print_stream.db")
     now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)

@@ -1111,9 +1111,8 @@ providers:
       live_reply_text: expected
       source: claude_print runtime events (stream-json text deltas)
     helm:
-      live_reply_text: known_bad
-      source: none
-      reason: "no landed source: the MessageDisplay hook makes Claude's own TUI hold unterminated text, work is on origin/claude-helm-message-display and not landed"
+      live_reply_text: expected
+      source: claude_helm_channel runtime events (claude_helm_stream; the Longhouse Claude Code mod forwards turn.step text)
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented

@@ -3,15 +3,24 @@
 import { describe, expect, it } from "bun:test";
 
 type Hook = ($: unknown, e: Record<string, unknown>, next: (e: unknown) => Promise<unknown>) => Promise<unknown>;
+type FetchInit = { url: string; method?: string; body: string; socketPath?: string };
 
 let loads = 0;
 
 /** A fresh copy of the module (its state is per copy, as in Claude Code) and a fake $. */
-async function loadMod(lines: string[], options: { claimExit?: number; refuse?: string } = {}) {
+async function loadMod(
+  lines: string[],
+  options: { claimExit?: number; refuse?: string; liveSocket?: string; fetch?: (init: FetchInit) => Promise<{ ok: boolean; status: number }>; noTurnStep?: boolean } = {},
+) {
   loads += 1;
   const { register } = await import(`./claude-mod/hooks/register.js?copy=${loads}`);
   const hooks = new Map<string, Hook>();
-  register((event: string, hook: Hook) => hooks.set(event, hook));
+  register((event: string, hook: Hook) => {
+    // A Claude Code before `turn.step` has no such event to subscribe to.
+    if (options.noTurnStep && event === "turn.step") throw new Error("unknown event: turn.step");
+    hooks.set(event, hook);
+  });
+  const fetches: FetchInit[] = [];
 
   const runs: string[][] = [];
   const submits: Array<{ text: string; asUser: boolean }> = [];
@@ -26,7 +35,18 @@ async function loadMod(lines: string[], options: { claimExit?: number; refuse?: 
   const $ = {
     env: {
       get: async (name: string) =>
-        ({ LONGHOUSE_OWNER_INPUT_ENGINE: "/opt/longhouse-engine", LONGHOUSE_CHANNEL_SESSION_ID: "session-1" })[name],
+        ({
+          LONGHOUSE_OWNER_INPUT_ENGINE: "/opt/longhouse-engine",
+          LONGHOUSE_CHANNEL_SESSION_ID: "session-1",
+          LONGHOUSE_CLAUDE_LIVE_SOCKET: options.liveSocket,
+        })[name],
+    },
+    http: {
+      fetch: async (url: string, init: { method?: string; body: string; socketPath?: string }) => {
+        const call = { url, ...init };
+        fetches.push(call);
+        return options.fetch ? options.fetch(call) : { ok: true, status: 200 };
+      },
     },
     clock: {
       now: async () => Date.now(),
@@ -35,7 +55,7 @@ async function loadMod(lines: string[], options: { claimExit?: number; refuse?: 
       after: (ms: number, fn: () => Promise<void>) => {
         timers += 1;
         if (timers === 1) void fn();
-        else if (ms === 200) setTimeout(fn, 0);
+        else if (ms === 200 || ms === 100) setTimeout(fn, 0);
         return { cancel: () => undefined };
       },
     },
@@ -87,7 +107,24 @@ async function loadMod(lines: string[], options: { claimExit?: number; refuse?: 
     runs
       .filter((argv) => argv[1] === "claude-owner-input" && argv[2] !== "watch")
       .map((argv) => argv.slice(2).join(" "));
-  return { fire, settle, runs, submits, aborts, appended, acks, resolveTurn: () => resolveTurn() };
+  // One model request: `chunks` come up through the mod's turn.step hook, which
+  // must hand every one on unchanged. Returns what the hook yielded.
+  const step = async (e: Record<string, unknown>, chunks: Array<Record<string, unknown>>) => {
+    const hook = hooks.get("turn.step") as unknown as (
+      $: unknown,
+      e: Record<string, unknown>,
+      next: (e: unknown) => AsyncGenerator<Record<string, unknown>>,
+    ) => AsyncGenerator<Record<string, unknown>>;
+    const next = (async function* () {
+      for (const chunk of chunks) yield chunk;
+      return { turnId: e.turnId };
+    }) as (e: unknown) => AsyncGenerator<Record<string, unknown>>;
+    const yielded: Array<Record<string, unknown>> = [];
+    for await (const chunk of hook($, e, next)) yielded.push(chunk);
+    return yielded;
+  };
+  const sent = () => fetches.flatMap((call) => JSON.parse(call.body) as Array<Record<string, unknown>>);
+  return { fire, settle, runs, submits, aborts, appended, acks, step, fetches, sent, hooks, resolveTurn: () => resolveTurn() };
 }
 
 const line = (value: object) => JSON.stringify(value) + "\n";
@@ -240,5 +277,132 @@ describe("Longhouse Claude mod", () => {
     await ended.fire("session.start");
     await ended.settle();
     expect(ended.aborts).toEqual([]);
+  });
+});
+
+describe("Longhouse Claude mod: live reply text", () => {
+  const SOCKET = "/tmp/longhouse-claude-live.sock";
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const text = (index: number, value: string) => ({ kind: "text", index, text: value });
+
+  async function started(options: Parameters<typeof loadMod>[1] = {}) {
+    const mod = await loadMod([], { liveSocket: SOCKET, ...options });
+    await mod.fire("session.start");
+    await mod.settle();
+    return mod;
+  }
+
+  it("forwards reply text only, and hands every chunk on unchanged", async () => {
+    const mod = await started();
+    const chunks = [
+      { kind: "thinking", index: 0, text: "secret reasoning" },
+      text(1, "Hel"),
+      text(1, "lo"),
+      { kind: "tool", index: 2, id: "toolu_1", name: "Bash" },
+      { kind: "input", index: 2, json: '{"command":"cat /etc/secret"}' },
+      { kind: "stop", stopReason: "end_turn", usage: null },
+    ];
+    const yielded = await mod.step({ turnId: "t1", index: 0, model: "m", messageCount: 1 }, chunks);
+    await settle();
+    expect(yielded).toEqual(chunks);
+    yielded.forEach((chunk, i) => expect(chunk).toBe(chunks[i]));
+    expect(mod.fetches.every((call) => call.socketPath === SOCKET && call.method === "POST")).toBe(true);
+    const sent = mod.sent();
+    expect(sent.map((entry) => entry.text).join("")).toBe("Hello");
+    expect(sent.every((entry) => entry.turn === "t1" && entry.step === 0)).toBe(true);
+    const wire = mod.fetches.map((call) => call.body).join("");
+    for (const dropped of ["secret reasoning", "toolu_1", "Bash", "cat /etc/secret", "end_turn"]) {
+      expect(wire).not.toContain(dropped);
+    }
+  });
+
+  it("coalesces a fast stream: the first piece goes at once, the rest wait for the spacing", async () => {
+    let release: () => void = () => undefined;
+    let calls = 0;
+    const mod = await started({
+      fetch: () => {
+        calls += 1;
+        if (calls > 1) return Promise.resolve({ ok: true, status: 200 });
+        return new Promise((resolve) => {
+          release = () => resolve({ ok: true, status: 200 });
+        });
+      },
+    });
+    const pieces = Array.from({ length: 50 }, (_, i) => text(0, `w${i} `));
+    await mod.step({ turnId: "t1", index: 0, model: "m", messageCount: 1 }, pieces);
+    // The first post is still in flight: nothing else has gone out.
+    expect(mod.fetches.length).toBe(1);
+    release();
+    await settle();
+    expect(mod.fetches.length).toBe(2);
+    expect(mod.sent().map((entry) => entry.text).join("")).toBe(pieces.map((piece) => piece.text).join(""));
+    // 50 pieces, two posts, one entry per post.
+    expect(mod.sent().length).toBe(2);
+  });
+
+  it("names the step of each piece and says when a turn ends", async () => {
+    const mod = await started();
+    await mod.step({ turnId: "t1", index: 0, model: "m", messageCount: 1 }, [text(0, "before the tool")]);
+    await settle();
+    await mod.step({ turnId: "t1", index: 1, model: "m", messageCount: 3 }, [text(0, "after")]);
+    await settle();
+    await mod.fire("turn.complete", { turnId: "t1", reason: "answer" });
+    await settle();
+    expect(mod.sent()).toEqual([
+      { turn: "t1", step: 0, text: "before the tool" },
+      { turn: "t1", step: 1, text: "after" },
+      { turn: "t1", done: true },
+    ]);
+  });
+
+  it("forwards nothing for a subagent's steps, and sends no done for its turn", async () => {
+    const mod = await started();
+    const chunks = [text(0, "sub text")];
+    const yielded = await mod.step({ turnId: "t9", index: 0, model: "m", messageCount: 1, agentId: "sub-1" }, chunks);
+    await mod.fire("turn.complete", { turnId: "t9", agentId: "sub-1" });
+    await settle();
+    expect(yielded).toEqual(chunks);
+    expect(mod.fetches).toEqual([]);
+  });
+
+  it("stays silent without the launcher's socket, and still passes chunks on", async () => {
+    const mod = await loadMod([]);
+    await mod.fire("session.start");
+    await mod.settle();
+    const chunks = [text(0, "hi")];
+    expect(await mod.step({ turnId: "t1", index: 0, model: "m", messageCount: 1 }, chunks)).toEqual(chunks);
+    await mod.fire("turn.complete", { turnId: "t1" });
+    await settle();
+    expect(mod.fetches).toEqual([]);
+  });
+
+  it("gives up after repeated refusals without throwing into Claude", async () => {
+    const mod = await started({ fetch: () => Promise.reject(new Error("connect ENOENT")) });
+    for (let i = 0; i < 6; i++) {
+      const chunks = [text(0, `piece ${i}`)];
+      expect(await mod.step({ turnId: "t1", index: i, model: "m", messageCount: 1 }, chunks)).toEqual(chunks);
+      await settle();
+    }
+    expect(mod.fetches.length).toBe(3);
+    await mod.fire("turn.complete", { turnId: "t1" });
+    await settle();
+    expect(mod.fetches.length).toBe(3);
+  });
+
+  it("loads and does nothing for live text on a Claude Code without turn.step", async () => {
+    const mod = await started({ noTurnStep: true });
+    expect(mod.hooks.has("turn.step")).toBe(false);
+    // Owner input works as it did.
+    expect(mod.hooks.has("session.start") && mod.hooks.has("turn.start") && mod.hooks.has("turn.complete")).toBe(true);
+    await mod.fire("turn.complete", { turnId: "t1", reason: "answer" });
+    expect(mod.fetches).toEqual([]);
+  });
+
+  it("does not hold a chunk back while it posts", async () => {
+    // The post never completes; the stream must still run to its end.
+    const mod = await started({ fetch: () => new Promise(() => undefined) });
+    const pieces = [text(0, "a"), text(0, "b"), text(0, "c")];
+    const yielded = await mod.step({ turnId: "t1", index: 0, model: "m", messageCount: 1 }, pieces);
+    expect(yielded).toEqual(pieces);
   });
 });

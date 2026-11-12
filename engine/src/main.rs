@@ -6,6 +6,7 @@ mod bench;
 mod build_identity;
 mod claude_channel_control;
 mod claude_channel_server;
+mod claude_helm_live;
 mod claude_lifecycle_hook;
 // Shared with the longhouse launcher, which uses the launch half (the route).
 #[allow(dead_code)]
@@ -750,6 +751,22 @@ enum Commands {
     ClaudeOwnerInput {
         #[command(subcommand)]
         command: ClaudeOwnerInputCommands,
+    },
+
+    /// Receives the reply text Longhouse's Claude Code mod forwards and publishes
+    /// it as the live preview; `longhouse claude` starts it and closes its stdin.
+    ClaudeLiveRelay {
+        #[arg(long)]
+        socket: PathBuf,
+
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        run: String,
+
+        #[arg(long, default_value = "")]
+        provider_session: String,
     },
 
     /// Native Claude PreToolUse permission hook (installed by the device facade).
@@ -2366,6 +2383,20 @@ fn main() -> anyhow::Result<()> {
             }
         },
         Commands::ClaudeOwnerInput { command } => run_claude_owner_input(command)?,
+        Commands::ClaudeLiveRelay {
+            socket,
+            session,
+            run,
+            provider_session,
+        } => {
+            #[cfg(unix)]
+            claude_helm_live::run(&socket, &session, &run, &provider_session)?;
+            #[cfg(not(unix))]
+            {
+                let _ = (socket, session, run, provider_session);
+                anyhow::bail!("claude-live-relay needs Unix sockets");
+            }
+        }
         Commands::ClaudePermissionGate => {
             claude_permission_gate::run()?;
         }
