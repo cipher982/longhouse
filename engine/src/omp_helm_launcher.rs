@@ -2090,6 +2090,7 @@ impl OmpHelmServer {
             progress_kind: "omp_helm_stream".into(),
             provider_session_id: (!state.native_session_id.is_empty())
                 .then(|| state.native_session_id.clone()),
+            ..Default::default()
         };
         let (phase, tool) = {
             let shared = self.shared.lock();
@@ -5045,6 +5046,7 @@ mod tests {
                     turn_completed: false,
                     progress_kind: "omp_helm_stream".into(),
                     provider_session_id: None,
+                    ..Default::default()
                 })),
             );
             let opening = slot().expect("slot");
@@ -5066,6 +5068,7 @@ mod tests {
                     turn_completed: true,
                     progress_kind: "omp_helm_stream".into(),
                     provider_session_id: None,
+                    ..Default::default()
                 })),
             );
             let completed = slot().expect("slot").preview.expect("preview");

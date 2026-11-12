@@ -37,8 +37,14 @@ pub const STATUS_SLOT_SCHEMA: u32 = 1;
 /// Expiry discards only this reconstructable status, never lifecycle evidence.
 const UNKNOWN_OBSERVATION_RETENTION: chrono::Duration = chrono::Duration::hours(24);
 
+/// What a preview's cumulative text is. `None` on the preview means reply text,
+/// which is what every producer sent before kinds existed; a producer that
+/// carries thinking, a running tool or a subagent says so with one of these, and
+/// the host never shows labelled text as the reply.
+pub const PREVIEW_KINDS: [&str; 4] = ["reply", "thinking", "tool", "subagent"];
+
 /// The live preview carried alongside a phase.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct StatusPreview {
     pub turn_id: String,
     pub seq: u64,
@@ -48,6 +54,51 @@ pub struct StatusPreview {
     pub progress_kind: String,
     #[serde(default)]
     pub provider_session_id: Option<String>,
+    /// `thinking`, `tool` or `subagent` (see `PREVIEW_KINDS`); absent for reply
+    /// text. Sent on the wire as `preview_kind`.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// The real tool name for a `tool` or `subagent` preview.
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
+    /// The tool's arguments, when the producer has them.
+    #[serde(default)]
+    pub tool_input: Option<Value>,
+    /// The tail of the running tool's output, at most `MAX_TOOL_TAIL_LINES`
+    /// lines and `MAX_TOOL_TAIL_BYTES` bytes (`bounded_tool_tail`).
+    #[serde(default)]
+    pub tool_output: Option<String>,
+    /// `running`, `completed` or `failed`.
+    #[serde(default)]
+    pub tool_state: Option<String>,
+}
+
+/// The bound on a running tool's output tail, the same as the Runtime Host's.
+pub const MAX_TOOL_TAIL_LINES: usize = 40;
+pub const MAX_TOOL_TAIL_BYTES: usize = 4 * 1024;
+
+/// The last lines of a running tool's output: at most 40 lines and 4 KiB, cut on
+/// a character boundary. Text already within both bounds is returned unchanged.
+pub fn bounded_tool_tail(text: &str) -> Option<String> {
+    if text.is_empty() {
+        return None;
+    }
+    let lines = text.lines().count();
+    if text.len() <= MAX_TOOL_TAIL_BYTES && lines <= MAX_TOOL_TAIL_LINES {
+        return Some(text.to_string());
+    }
+    let skip = lines.saturating_sub(MAX_TOOL_TAIL_LINES);
+    let mut tail = text.lines().skip(skip).collect::<Vec<_>>().join("\n");
+    if tail.len() > MAX_TOOL_TAIL_BYTES {
+        let mut start = tail.len() - MAX_TOOL_TAIL_BYTES;
+        while !tail.is_char_boundary(start) {
+            start += 1;
+        }
+        tail = tail[start..].to_string();
+    }
+    (!tail.is_empty()).then_some(tail)
 }
 
 /// Cap on the cumulative reply text a Helm launcher carries in a preview.
@@ -181,6 +232,50 @@ pub fn runtime_events_since(slot: &StatusSlot, stated: Option<&PreviewIdentity>)
             .is_some_and(|carried| &carried == stated)
     });
     if let Some(preview) = slot.preview.as_ref().filter(|_| !preview_already_stated) {
+        let mut payload = serde_json::json!({
+                "progress_kind": preview.progress_kind,
+                "turn_id": preview.turn_id,
+                "seq": preview.seq,
+                "run_id": slot.run_id,
+                "live_text": preview.live_text,
+                "turn_completed": preview.turn_completed,
+                "managed_transport": slot.source,
+                "execution_lifetime": "interactive",
+                "provider_session_id": preview.provider_session_id,
+        });
+        // Reply text carries none of these, so its payload is what it was.
+        if let Some(fields) = payload.as_object_mut() {
+            let labelled = [
+                (
+                    "preview_kind",
+                    preview
+                        .kind
+                        .as_deref()
+                        .filter(|kind| *kind != "reply" && PREVIEW_KINDS.contains(kind))
+                        .map(Value::from),
+                ),
+                ("tool_name", preview.tool_name.clone().map(Value::from)),
+                (
+                    "tool_call_id",
+                    preview.tool_call_id.clone().map(Value::from),
+                ),
+                ("tool_input", preview.tool_input.clone()),
+                (
+                    "tool_output",
+                    preview
+                        .tool_output
+                        .as_deref()
+                        .and_then(bounded_tool_tail)
+                        .map(Value::from),
+                ),
+                ("tool_state", preview.tool_state.clone().map(Value::from)),
+            ];
+            for (key, value) in labelled {
+                if let Some(value) = value {
+                    fields.insert(key.into(), value);
+                }
+            }
+        }
         events.push(serde_json::json!({
             "runtime_key": slot.runtime_key,
             "session_id": slot.session_id,
@@ -193,17 +288,7 @@ pub fn runtime_events_since(slot: &StatusSlot, stated: Option<&PreviewIdentity>)
                 "{}-progress:{}:{}:{}:{}",
                 slot.provider, slot.session_id, slot.run_id, preview.turn_id, preview.seq
             ),
-            "payload": {
-                "progress_kind": preview.progress_kind,
-                "turn_id": preview.turn_id,
-                "seq": preview.seq,
-                "run_id": slot.run_id,
-                "live_text": preview.live_text,
-                "turn_completed": preview.turn_completed,
-                "managed_transport": slot.source,
-                "execution_lifetime": "interactive",
-                "provider_session_id": preview.provider_session_id,
-            },
+            "payload": payload,
         }));
     }
     events
@@ -817,6 +902,7 @@ mod tests {
             turn_completed: false,
             progress_kind: "omp_helm_stream".into(),
             provider_session_id: Some("native-1".into()),
+            ..Default::default()
         });
 
         let events = runtime_events(&value);
@@ -833,6 +919,113 @@ mod tests {
         assert!(events[1]["payload"].get("delta").is_none());
     }
 
+    fn labelled_slot(kind: Option<&str>) -> StatusSlot {
+        let mut value = slot("s1", "running", 7);
+        value.preview = Some(StatusPreview {
+            turn_id: "turn-9".into(),
+            seq: 3,
+            live_text: "line one".into(),
+            progress_kind: "claude_helm_stream".into(),
+            kind: kind.map(str::to_string),
+            tool_name: kind
+                .filter(|k| *k != "thinking")
+                .map(|_| "Bash".to_string()),
+            tool_call_id: Some("call-1".into()),
+            tool_output: Some("line one".into()),
+            tool_state: Some("running".into()),
+            ..Default::default()
+        });
+        value
+    }
+
+    /// Reply text has no label, and its payload is byte-for-byte what it was
+    /// before kinds existed.
+    #[test]
+    fn reply_text_states_none_of_the_kind_fields() {
+        let mut value = slot("s1", "running", 7);
+        value.preview = Some(StatusPreview {
+            turn_id: "turn-9".into(),
+            seq: 3,
+            live_text: "the answer".into(),
+            progress_kind: "claude_helm_stream".into(),
+            ..Default::default()
+        });
+        let payload = &runtime_events(&value)[1]["payload"];
+        for key in [
+            "preview_kind",
+            "tool_name",
+            "tool_call_id",
+            "tool_input",
+            "tool_output",
+            "tool_state",
+        ] {
+            assert!(
+                payload.get(key).is_none(),
+                "{key} must be absent on a reply"
+            );
+        }
+    }
+
+    /// A thinking preview names itself. It must never reach the host looking
+    /// like reply text, so the kind is on the wire and no reply-shaped payload
+    /// is produced for it.
+    #[test]
+    fn a_thinking_preview_is_labelled_thinking_on_the_wire() {
+        let events = runtime_events(&labelled_slot(Some("thinking")));
+        let payload = &events[1]["payload"];
+        assert_eq!(payload["preview_kind"], "thinking");
+        assert_ne!(payload["preview_kind"], "reply");
+        assert!(payload.get("tool_name").is_none(), "thinking is not a tool");
+    }
+
+    #[test]
+    fn a_tool_preview_carries_its_name_id_state_and_output_tail() {
+        let events = runtime_events(&labelled_slot(Some("tool")));
+        let payload = &events[1]["payload"];
+        assert_eq!(payload["preview_kind"], "tool");
+        assert_eq!(payload["tool_name"], "Bash");
+        assert_eq!(payload["tool_call_id"], "call-1");
+        assert_eq!(payload["tool_state"], "running");
+        assert_eq!(payload["tool_output"], "line one");
+    }
+
+    /// An old slot file (written before these fields) still reads, as reply
+    /// text, and a new file read by an old reader is the reader's concern: the
+    /// fields are additive.
+    #[test]
+    fn a_slot_written_before_kinds_reads_as_reply_text() {
+        let old =
+            r#"{"turn_id":"t","seq":1,"live_text":"x","turn_completed":false,"progress_kind":"k"}"#;
+        let preview: StatusPreview = serde_json::from_str(old).expect("old preview reads");
+        assert_eq!(preview.kind, None);
+        assert_eq!(preview.tool_output, None);
+    }
+
+    #[test]
+    fn a_tool_output_tail_is_bounded_in_lines_and_bytes() {
+        assert_eq!(bounded_tool_tail(""), None);
+        assert_eq!(bounded_tool_tail("a\nb").as_deref(), Some("a\nb"));
+        let many = (0..500)
+            .map(|n| format!("line{n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tail = bounded_tool_tail(&many).unwrap();
+        assert_eq!(tail.lines().count(), MAX_TOOL_TAIL_LINES);
+        assert!(tail.ends_with("line499") && tail.starts_with("line460"));
+        let wide = "é".repeat(10_000);
+        let tail = bounded_tool_tail(&wide).unwrap();
+        assert!(tail.len() <= MAX_TOOL_TAIL_BYTES);
+        assert!(
+            tail.chars().all(|c| c == 'é'),
+            "cut on a character boundary"
+        );
+        // The payload bounds an oversized tail a producer handed over.
+        let mut value = labelled_slot(Some("tool"));
+        value.preview.as_mut().unwrap().tool_output = Some(many);
+        let payload = &runtime_events(&value)[1]["payload"];
+        assert_eq!(payload["tool_output"].as_str().unwrap().lines().count(), 40);
+    }
+
     /// A rewrite of the slot is a new observation of the phase, not a new
     /// preview. What the host already holds is left out; anything else, a new
     /// sequence, a new turn, a new run, still goes, and a turn completing is a
@@ -847,6 +1040,7 @@ mod tests {
             turn_completed: false,
             progress_kind: "omp_helm_stream".into(),
             provider_session_id: None,
+            ..Default::default()
         });
         let held = carrying.preview_identity();
         assert!(held.is_some());
@@ -906,6 +1100,7 @@ mod tests {
             turn_completed: true,
             progress_kind: "cursor_print_stream".into(),
             provider_session_id: None,
+            ..Default::default()
         });
 
         let events = runtime_events(&finished);
@@ -1149,6 +1344,7 @@ mod tests {
                             turn_completed: false,
                             progress_kind: "omp_helm_stream".into(),
                             provider_session_id: None,
+                            ..Default::default()
                         });
                         publish(&dir, &value).expect("publish");
                     }
@@ -1190,6 +1386,7 @@ mod tests {
                     turn_completed: false,
                     progress_kind: "omp_helm_stream".into(),
                     provider_session_id: None,
+                    ..Default::default()
                 });
                 publish(&writer_dir, &value).expect("publish");
             }

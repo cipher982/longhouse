@@ -3196,6 +3196,7 @@ mod tests {
                 turn_completed: false,
                 progress_kind: "omp_helm_stream".into(),
                 provider_session_id: None,
+                ..Default::default()
             }),
             producer_epoch: "epoch-1".into(),
             seq,

@@ -642,6 +642,7 @@ impl PiHelmServer {
                 progress_kind: "pi_helm_stream".into(),
                 provider_session_id: (!guard.state.provider_session_id.is_empty())
                     .then(|| guard.state.provider_session_id.clone()),
+                ..Default::default()
             };
             (guard.state.clone(), preview)
         };

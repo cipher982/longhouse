@@ -116,6 +116,7 @@ pub fn status_preview(
         progress_kind: PROGRESS_KIND.into(),
         provider_session_id: (!provider_session_id.is_empty())
             .then(|| provider_session_id.to_string()),
+        ..Default::default()
     }
 }
 

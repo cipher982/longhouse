@@ -926,6 +926,7 @@ fn publish_live_text(
                 turn_completed: false,
                 progress_kind: "opencode_helm_stream".into(),
                 provider_session_id: Some(preview.provider_session_id.clone()),
+                ..Default::default()
             })),
         );
     Ok(())
