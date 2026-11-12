@@ -461,7 +461,6 @@
     {
       "path": "engine/src/status_slot.rs",
       "providers": [
-        "claude",
         "codex",
         "omp",
         "pi"

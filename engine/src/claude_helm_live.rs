@@ -293,7 +293,7 @@ mod relay {
     use std::io::{Read, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::{UnixListener, UnixStream};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -306,16 +306,16 @@ mod relay {
         run_id: String,
         provider_session_id: String,
         live: Mutex<LiveText>,
-        /// The tool or subagent preview last published, and when.
-        discrete: Mutex<Option<(String, std::time::Instant)>>,
+        /// Where tool and subagent previews go (see `publish`), and whether one
+        /// may still be waiting there.
+        outbox_dir: PathBuf,
+        call_in_outbox: Mutex<bool>,
         status: crate::status_slot::StatusPublisher,
     }
 
-    /// The slot holds one preview and the daemon reads it on its own beat, so a
-    /// tool call that the next step's text replaces within milliseconds (an
-    /// async subagent returns at once) would never be seen. A different item
-    /// waits until the call's preview has stood this long.
-    const DISCRETE_HOLD: Duration = Duration::from_millis(250);
+    /// How long text that follows a tool call waits for the call's event to
+    /// leave the outbox (the Machine Agent posts it and removes the file).
+    const OUTBOX_DRAIN_WAIT: Duration = Duration::from_millis(1500);
 
     impl Relay {
         fn apply(&self, entries: &[Entry]) {
@@ -331,19 +331,37 @@ mod relay {
             }
         }
 
+        /// A tool or subagent call is a discrete event, and an async subagent
+        /// returns within milliseconds, so the next step's text follows its
+        /// arguments at once. The status slot holds one preview and the Machine
+        /// Agent reads it on its own beat, so the call would be overwritten
+        /// before it was ever posted. Calls therefore go through the durable
+        /// runtime-event outbox, which keeps every event and posts it in turn.
+        /// Text or thinking that follows a call waits (bounded) for that event
+        /// to be posted, so the host sees the call first and the text after it.
+        /// Reply text and thinking stay on the slot, which coalesces a stream.
         fn publish(&self, preview: &Preview) {
-            {
-                let mut last = self
-                    .discrete
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if let Some((turn_id, at)) = last.as_ref() {
-                    if *turn_id != preview.turn_id {
-                        std::thread::sleep(DISCRETE_HOLD.saturating_sub(at.elapsed()));
+            let mut pending = self
+                .call_in_outbox
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if preview.tool_name.is_some() {
+                let slot = self.slot_for(preview);
+                let events = crate::status_slot::runtime_events_since(&slot, None);
+                if let Some(event) = events
+                    .iter()
+                    .find(|event| event["kind"] == "progress_signal")
+                {
+                    if crate::outbox::enqueue_runtime_event(&self.outbox_dir, event).is_ok() {
+                        *pending = true;
                     }
                 }
-                if preview.tool_name.is_some() {
-                    *last = Some((preview.turn_id.clone(), std::time::Instant::now()));
+                return;
+            }
+            if std::mem::take(&mut *pending) {
+                let deadline = std::time::Instant::now() + OUTBOX_DRAIN_WAIT;
+                while std::time::Instant::now() < deadline && outbox_has_events(&self.outbox_dir) {
+                    std::thread::sleep(Duration::from_millis(20));
                 }
             }
             self.status.publish(
@@ -356,6 +374,33 @@ mod relay {
                 .with_preview(Some(status_preview(preview, &self.provider_session_id))),
             );
         }
+
+        /// The status slot a preview would be stated from, for its event.
+        fn slot_for(&self, preview: &Preview) -> crate::status_slot::StatusSlot {
+            crate::status_slot::StatusSlot {
+                schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+                session_id: self.session_id.clone(),
+                provider: "claude".into(),
+                runtime_key: format!("claude:{}", self.session_id),
+                run_id: self.run_id.clone(),
+                source: TRANSPORT.into(),
+                phase: String::new(),
+                tool_name: None,
+                observed_at: chrono::Utc::now().to_rfc3339(),
+                payload: serde_json::json!({}),
+                preview: Some(status_preview(preview, &self.provider_session_id)),
+                producer_epoch: String::new(),
+                seq: 0,
+            }
+        }
+    }
+
+    fn outbox_has_events(dir: &Path) -> bool {
+        std::fs::read_dir(dir).is_ok_and(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
+        })
     }
 
     /// Serve the mod's posts on `socket` until standard input closes, which is
@@ -377,7 +422,9 @@ mod relay {
             run_id: run_id.to_string(),
             provider_session_id: provider_session_id.to_string(),
             live: Mutex::new(LiveText::default()),
-            discrete: Mutex::new(None),
+            outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()
+                .context("runtime-event outbox directory")?,
+            call_in_outbox: Mutex::new(false),
             status: crate::status_slot::StatusPublisher::for_provider("claude", TRANSPORT),
         });
         {
@@ -475,7 +522,8 @@ mod relay {
                 run_id: "run-1".into(),
                 provider_session_id: "native-1".into(),
                 live: Mutex::new(LiveText::default()),
-                discrete: Mutex::new(None),
+                outbox_dir: dir.join("outbox"),
+                call_in_outbox: Mutex::new(false),
                 status: crate::status_slot::StatusPublisher::new(
                     dir.to_path_buf(),
                     "claude",
@@ -537,8 +585,21 @@ mod relay {
             assert_eq!(preview.live_text, "Hello world");
         }
 
+        /// The progress events waiting in the runtime-event outbox, oldest first.
+        fn outbox_events(dir: &Path) -> Vec<serde_json::Value> {
+            let mut events: Vec<serde_json::Value> = std::fs::read_dir(dir.join("outbox"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|entry| std::fs::read(entry.path()).ok())
+                .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
+                .collect();
+            events.sort_by_key(|event| event["payload"]["seq"].as_u64());
+            events
+        }
+
         #[test]
-        fn thinking_and_tool_posts_reach_the_slot_labelled_and_never_as_the_reply() {
+        fn thinking_reaches_the_slot_labelled_and_never_as_the_reply() {
             let temp = tempfile::tempdir().unwrap();
             let relay = Arc::new(relay_in(temp.path()));
             let mut client = serving(&relay);
@@ -554,24 +615,16 @@ mod relay {
             let events = crate::status_slot::runtime_events(&slot);
             let payload = &events.last().unwrap()["payload"];
             assert_eq!(payload["preview_kind"], "thinking");
-
-            std::thread::sleep(Duration::from_millis(120));
-            post(
-                &mut client,
-                r#"[{"turn":"t1","step":0,"kind":"tool","id":"toolu_1","name":"Bash"}]"#,
+            assert!(
+                outbox_events(temp.path()).is_empty(),
+                "a stream stays on the slot"
             );
-            let slot = crate::status_slot::read_all(temp.path()).pop().unwrap();
-            let preview = slot.preview.expect("preview");
-            assert_eq!(preview.kind.as_deref(), Some("tool"));
-            assert_eq!(preview.tool_name.as_deref(), Some("Bash"));
-            assert_eq!(preview.tool_state.as_deref(), Some("running"));
         }
 
-        /// The tool's name and its arguments arrive within milliseconds of each
-        /// other. The arguments are the newer preview and the slot must end up
-        /// holding them once the coalescing window has passed.
+        /// A tool call is a discrete event: it goes through the durable outbox
+        /// with its name, id, state and arguments, and not through the slot.
         #[test]
-        fn a_tool_start_and_its_arguments_in_one_batch_end_as_the_arguments() {
+        fn a_tool_call_goes_through_the_outbox_with_its_name_state_and_arguments() {
             let temp = tempfile::tempdir().unwrap();
             let relay = Arc::new(relay_in(temp.path()));
             let mut client = serving(&relay);
@@ -579,30 +632,54 @@ mod relay {
                 &mut client,
                 r#"[{"turn":"t1","step":0,"kind":"tool","index":1,"id":"toolu_1","name":"Agent"},{"turn":"t1","step":0,"kind":"input","index":1,"json":"{\"description\":\"survey the repo\"}"}]"#,
             );
-            std::thread::sleep(Duration::from_millis(400));
-            let slot = crate::status_slot::read_all(temp.path()).pop().unwrap();
-            let preview = slot.preview.expect("preview");
-            assert_eq!(preview.live_text, "survey the repo");
-            assert_eq!(preview.kind.as_deref(), Some("subagent"));
+            let events = outbox_events(temp.path());
+            assert_eq!(events.len(), 2, "the start and the arguments");
+            let started = &events[0]["payload"];
+            assert_eq!(started["preview_kind"], "subagent");
+            assert_eq!(started["tool_name"], "Agent");
+            assert_eq!(started["tool_call_id"], "toolu_1");
+            assert_eq!(started["tool_state"], "running");
+            assert_eq!(events[0]["source"], TRANSPORT);
+            assert_eq!(events[0]["kind"], "progress_signal");
+            let arguments = &events[1]["payload"];
+            assert_eq!(arguments["live_text"], "survey the repo");
+            assert_eq!(arguments["tool_input"]["description"], "survey the repo");
+            assert_eq!(arguments["turn_id"], started["turn_id"]);
+            assert!(arguments["seq"].as_u64() > started["seq"].as_u64());
+            assert!(
+                crate::status_slot::read_all(temp.path()).is_empty(),
+                "the slot carries no tool preview"
+            );
         }
 
         /// An async subagent returns at once, so the next step's text follows its
-        /// arguments within milliseconds. The call's preview stands for the hold
-        /// before that text replaces it.
+        /// arguments within milliseconds. The text waits until the call's event
+        /// has left the outbox, so the host sees the call first.
         #[test]
-        fn a_tool_call_stands_before_the_next_steps_text_replaces_it() {
+        fn text_after_a_tool_call_waits_for_the_call_to_be_posted() {
             let temp = tempfile::tempdir().unwrap();
             let relay = Arc::new(relay_in(temp.path()));
+            let outbox = temp.path().join("outbox");
+            let drainer = std::thread::spawn({
+                let outbox = outbox.clone();
+                move || {
+                    std::thread::sleep(Duration::from_millis(300));
+                    for entry in std::fs::read_dir(&outbox).unwrap().flatten() {
+                        std::fs::remove_file(entry.path()).unwrap();
+                    }
+                }
+            });
             let started = std::time::Instant::now();
             relay.apply(
                 &serde_json::from_str::<Vec<Entry>>(
-                    r#"[{"turn":"t1","step":0,"kind":"tool","index":1,"id":"toolu_1","name":"Agent"},{"turn":"t1","step":0,"kind":"input","index":1,"json":"{\"description\":\"survey\"}"},{"turn":"t1","step":1,"text":"next step"}]"#,
+                    r#"[{"turn":"t1","step":0,"kind":"tool","index":1,"id":"toolu_1","name":"Agent"},{"turn":"t1","step":1,"text":"next step"}]"#,
                 )
                 .unwrap(),
             );
+            drainer.join().unwrap();
             assert!(
-                started.elapsed() >= DISCRETE_HOLD,
-                "the next step waited for the call's preview to stand"
+                started.elapsed() >= Duration::from_millis(300),
+                "the text waited"
             );
             let preview = crate::status_slot::read_all(temp.path())
                 .pop()
@@ -610,6 +687,7 @@ mod relay {
                 .preview
                 .unwrap();
             assert_eq!(preview.live_text, "next step");
+            assert_eq!(preview.kind, None);
         }
 
         #[test]
