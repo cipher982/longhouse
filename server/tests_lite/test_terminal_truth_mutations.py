@@ -123,7 +123,7 @@ def test_a_failing_unmutated_cell_is_reported_with_its_reason_and_its_mutation_i
 
     (row,) = json.loads(out.read_text())
     assert row["baseline"] == "fail" and row["observed"] == "not run" and row["ok"] is False
-    assert row["baseline_retried"] is True  # it never reached the prompt, so it got one more try
+    assert row["baseline_retried"] is True and row["baseline_first_failure"].startswith("preflight: ")  # it got one more try
     assert row["evidence"]["checks"] == failed["checks"]
     assert row["baseline_reason"] == "preflight: the provider never became ready"
     printed = capsys.readouterr().out
@@ -190,7 +190,7 @@ def test_an_unshown_state_with_the_item_intact_upstream_is_still_reported_at_sta
     assert status == 1
 
 
-def test_an_unmutated_cell_that_never_reached_the_prompt_is_run_once_more(monkeypatch, tmp_path) -> None:
+def test_an_unmutated_cell_that_fails_is_run_once_more_and_the_first_failure_stays_on_the_row(monkeypatch, tmp_path, capsys) -> None:
     never_ready = {
         "outcome": "fail",
         "reason": "provider_ran: provider exited before it was ready",
@@ -205,3 +205,50 @@ def test_an_unmutated_cell_that_never_reached_the_prompt_is_run_once_more(monkey
 
     assert (row["baseline"], row["baseline_retried"], row["observed_stage"], row["ok"]) == ("pass", True, "kind", True)
     assert (status, cells) == (0, 3)
+    printed = capsys.readouterr().out
+    assert "| pass (second try) |" in printed
+    assert "RETRIED mutation codex-helm-thinking-as-reply: the unmutated cell failed once at preflight: provider_ran" in printed
+
+
+def test_a_late_state_in_the_unmutated_cell_is_a_finding_and_does_not_stop_a_mutation_about_another_stage(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """Runner, 2026-11-12: OpenCode Console's "Thinking" expired with no frame, and three mutations about other stages never ran."""
+
+    lost = {"outcome": "measured", "lost": True}
+
+    def expectation(result):
+        return {"ok": not result.get("lost"), "stage": "kind" if result.get("lost") else "-", "engine_posted": "live", "stream": "live"}
+
+    status, (row,), cells = _run_one_engine_mutation(monkeypatch, tmp_path, [_WOKEN_ONLY, lost], expectation)
+
+    assert (row["baseline"], row["observed_stage"], row["ok"]) == ("pass", "kind", True)
+    assert "never showed it" in row["state_finding"] and row["state_finding_evidence"]["checks"] == _WOKEN_ONLY["checks"]
+    assert "baseline_retried" not in row
+    assert (status, cells) == (0, 2)  # a finding is reported, it is not a miss
+    printed = capsys.readouterr().out
+    assert "| pass (state finding) |" in printed
+    assert "FINDING codex/helm (thinking), unmutated: " in printed
+
+
+def test_a_late_state_stops_the_one_mutation_that_is_about_that_stage(monkeypatch, tmp_path) -> None:
+    import json
+
+    mutation = next(m for m in MUTATIONS if m.name == "heartbeat-state-change-not-announced")
+    assert mutation.stages == ("state_shown",) and mutation.side == "server"
+    monkeypatch.setattr(mutations, "SCRATCH", tmp_path / "tt-mut")
+    monkeypatch.setattr(mutations.tt, "load_expectations", lambda: {})
+    calls = []
+    monkeypatch.setattr(mutations, "run_kinds_suite", lambda *a, **k: [calls.append(1) or _WOKEN_ONLY])
+    monkeypatch.setattr(mutations, "kinds_expectation", lambda _r: {"ok": True, "stage": "-", "engine_posted": "live", "stream": "live"})
+    out = tmp_path / "rows.json"
+    args = mutations.argparse.Namespace(
+        engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", cargo_target=tmp_path / "target", only=[mutation.name],
+        skip_engine=False, tokens=100, rate=20.0, out=out,
+    )  # fmt: skip
+
+    assert mutations.run_mutations(args) == 1
+
+    (row,) = json.loads(out.read_text())
+    assert (row["baseline"], row["baseline_stage"], row["observed"], row["ok"]) == ("fail", "state_shown", "not run", False)
+    assert "state_finding" not in row and len(calls) == 2  # one retry, then a miss

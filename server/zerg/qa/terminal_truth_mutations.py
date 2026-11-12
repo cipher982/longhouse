@@ -6,9 +6,11 @@ of the defects the harness found, a cell that the defect breaks, and the stage w
 thinking preview, that write replaced the mislabelled one in the status slot before it was posted, so the edit no longer
 broke anything; ``opencode-helm-thinking-as-reply`` reintroduces the same defect, reasoning shown as the reply, and fails.) The command runs the unmutated cell first (it must pass), then the
 mutated one (it must fail at the named stage), and exits non-zero on any mismatch. When the unmutated cell fails, the row
-is a miss already, so its mutation is not built or run; one that never reached the prompt is run once more first. Every
-row that is not ok is printed again under the table with the harness's reason, and ``--out`` holds the rows as JSON,
-rewritten after each one, with what the failing live-kinds cell saw (checks, states served and shown) under ``evidence``.
+is a miss already, so its mutation is not built or run; it is run once more first, and the first failure stays on the row
+(``RETRIED``). An unmutated cell whose one fault is a served state shown late does not stop a mutation about another stage:
+the mutation is judged and the late state is printed as a ``FINDING``, which does not change the exit status. Every row that
+is not ok is printed again under the table with the harness's reason (``NO``), and ``--out`` holds the rows as JSON, rewritten
+after each one, with what the failing live-kinds cell saw (checks, states served and shown) under ``evidence``.
 
     make terminal-truth-mutations ARGS="--engine <engine> --longhouse-cli <longhouse>"
 
@@ -698,16 +700,30 @@ def run_mutations(args: argparse.Namespace) -> int:
                     else _verdict([cell(spec, base_engine, base_cli)])
                 )
 
-            baseline_outcome, baseline_stage, baseline_reason = unmutated()
-            retried = baseline_outcome != "pass" and baseline_stage == "preflight"
-            if retried:
-                # The provider never got as far as the prompt (on the runner, 2026-11-12: Codex's app-server announced no
-                # URL), which says nothing about the gate. One more try; the mutated cell gets none.
-                print(
-                    f"{m.name}: the unmutated cell failed before the prompt ({baseline_reason[:300]}); running it once more",
-                    file=sys.stderr,
-                )
-                baseline_outcome, baseline_stage, baseline_reason = unmutated()
+            def judged_unmutated() -> tuple[str, str | None, str, dict[str, Any] | None]:
+                """The unmutated cell as this mutation needs it: (outcome, stage, reason, state finding).
+
+                A mutation is judged on the stage it puts a defect in. When the only thing wrong with the unmutated cell is
+                a served state a woken-only client showed late, and the mutation is not about that stage, the item's path
+                is intact and the mutation can be judged; the late state is kept as a finding of its own. (Runner,
+                2026-11-12: OpenCode Console took 19 s to its first model output, "Thinking" expired at 15 s with no frame,
+                and three mutations about reasoning and tool output could not be run.)
+                """
+
+                outcome, stage, reason = unmutated()
+                if m.scenario and outcome == "fail" and stage == "state_shown" and "state_shown" not in m.stages:
+                    return "pass", None, "", {"reason": reason, "evidence": dict(last_kinds)}
+                return outcome, stage, reason, None
+
+            baseline_outcome, baseline_stage, baseline_reason, state_finding = judged_unmutated()
+            first_failure = ""
+            if baseline_outcome != "pass":
+                # The unmutated cell is real providers on a shared runner (2026-11-12: Codex's app-server announced no URL
+                # once, and a warm-up overlapped the prompt once). One more try; the mutated cell gets none, and the
+                # first failure stays on the row.
+                first_failure = f"{baseline_stage or '-'}: {baseline_reason}"
+                print(f"{m.name}: the unmutated cell failed ({first_failure[:300]}); running it once more", file=sys.stderr)
+                baseline_outcome, baseline_stage, baseline_reason, state_finding = judged_unmutated()
             row: dict[str, Any] = {
                 "check": f"mutation {m.name}",
                 "defect": m.defect,
@@ -715,8 +731,10 @@ def run_mutations(args: argparse.Namespace) -> int:
                 "expected_stage": "/".join(m.stages),
                 "baseline": baseline_outcome,
             }
-            if retried:
-                row["baseline_retried"] = True
+            if first_failure:
+                row.update(baseline_retried=True, baseline_first_failure=first_failure)
+            if state_finding:
+                row.update(state_finding=state_finding["reason"], state_finding_evidence=state_finding["evidence"])
             if baseline_outcome != "pass":
                 # The row is a miss whatever the mutated cell does, and an engine mutation costs a rebuild: keep the reason, skip it.
                 row.update(baseline_stage=baseline_stage, baseline_reason=baseline_reason, observed="not run", ok=False)
@@ -781,13 +799,22 @@ def run_mutations(args: argparse.Namespace) -> int:
     print("| check | cell | baseline | expected | observed | stage | ok |")
     print("|---|---|---|---|---|---|---|")
     for row in rows:
+        notes = [note for note, on in (("second try", row.get("baseline_retried")), ("state finding", row.get("state_finding"))) if on]
+        baseline = f"{row.get('baseline', '-')}{' (' + ', '.join(notes) + ')' if notes else ''}"
         print(
-            f"| {row['check']} | {row['cell']} | {row.get('baseline', '-')} | {row['expected_stage']} | "
+            f"| {row['check']} | {row['cell']} | {baseline} | {row['expected_stage']} | "
             f"{row.get('observed_outcome', row.get('observed'))} | {row.get('observed_stage') or '-'} | {'yes' if row['ok'] else 'NO'} |"
         )
     for row in rows:
         if not row["ok"]:
             print(f"NO {row['check']}: {why_not(row)}")
+    # Not misses: the gate caught the defect. They are what the unmutated cells showed on the way, and this run is the
+    # only one that puts the live-kinds cells on the Linux runner, so they are printed where the misses are.
+    for row in rows:
+        if row.get("state_finding"):
+            print(f"FINDING {row['cell']}, unmutated: {' '.join(str(row['state_finding']).split())[:600]}")
+        if row.get("baseline_retried") and row.get("baseline") == "pass":
+            print(f"RETRIED {row['check']}: the unmutated cell failed once at {' '.join(row['baseline_first_failure'].split())[:600]}")
     return 0 if rows and all(row["ok"] for row in rows) else 1
 
 

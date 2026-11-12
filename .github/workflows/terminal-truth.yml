@@ -437,8 +437,9 @@ jobs:
       # The mutation tests put each 2026-11-11 defect back and require the gate to fail it. They rebuild the
       # engine in a scratch worktree, so they run weekly (or when asked), not on every push. The first complete
       # run on this runner (43306143036) had 9 rows that were not ok and its log said only "fail", so the rows
-      # are kept as mutations.json and the table, with a reason line for each row that is not ok, goes in the
-      # job summary.
+      # are kept as mutations.json and the table goes in the job summary with a line for each row that is not
+      # ok (NO), each unmutated cell that needed a second try (RETRIED) and each state an unmutated cell showed
+      # late (FINDING).
       - name: Mutation tests
         if: env.TT_MUTATIONS == '1'
         run: |
@@ -447,7 +448,10 @@ jobs:
           for name in $TT_MUTATION_NAMES; do only+=" --only $name"; done
           make terminal-truth-mutations ARGS="--engine $TT_ENGINE --longhouse-cli $TT_CLI$only --out $TT_OUT/mutations.json" 2>&1 | tee "$TT_OUT/mutations.log"
           rc="${PIPESTATUS[0]}"
-          { echo "### Mutation tests"; echo; grep -E '^\| ' "$TT_OUT/mutations.log"; echo; grep -E '^NO ' "$TT_OUT/mutations.log" | sed 's/^/- /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "### Mutation tests"; echo; grep -E '^\| ' "$TT_OUT/mutations.log"; echo; grep -E '^(NO|FINDING|RETRIED) ' "$TT_OUT/mutations.log" | sed 's/^/- /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+          # A finding is what an unmutated cell showed on the way (a state shown late); it does not fail the run.
+          findings=$(grep -c '^FINDING ' "$TT_OUT/mutations.log")
+          if [[ "$findings" != 0 ]]; then echo "::warning::$findings unmutated live-kinds cells showed a state late on this runner; the FINDING lines are in the job summary"; fi
           echo "TT_MUTATIONS_RC=$rc" >> "$GITHUB_ENV"
           if [[ "$rc" != 0 ]]; then echo "::error::mutation tests exited $rc: a row is not ok, its reason line is in the job summary"; fi
 

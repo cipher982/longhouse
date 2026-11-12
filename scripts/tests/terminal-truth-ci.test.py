@@ -140,7 +140,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("$only", make)
         self.assertIn('for name in $TT_MUTATION_NAMES; do only+=" --only $name"; done', text)
         self.assertIn("TT_MUTATION_NAMES: ${{ inputs.mutation_names || '' }}", text)
-        self.assertIn("""grep -E '^NO ' "$TT_OUT/mutations.log" | sed 's/^/- /'""", text)
+        self.assertIn("""grep -E '^(NO|FINDING|RETRIED) ' "$TT_OUT/mutations.log" | sed 's/^/- /'""", text)
         self.assertIn('[[ "$TT_MUTATION_NAMES" =~ $names_ok ]]', text)
 
     def test_the_budget_file_names_every_declared_cell(self):
