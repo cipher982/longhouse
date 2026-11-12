@@ -48,6 +48,17 @@ const SERVER_DOWN_AFTER: Duration = Duration::from_secs(15);
 const STALL_GRACE: Duration = Duration::from_secs(5);
 /// The newest text preview per part is re-emitted at most this often.
 const TEXT_PREVIEW_EVERY: Duration = Duration::from_millis(200);
+/// A running tool's output so far is restated at most this often, the rate reply text is posted at.
+const TOOL_OUTPUT_PREVIEW_EVERY: Duration = Duration::from_millis(100);
+
+/// The output a running tool part has produced so far (the part's metadata carries it until the tool ends).
+fn running_tool_output(part: &Value) -> Option<&str> {
+    part.get("state")?
+        .get("metadata")?
+        .get("output")?
+        .as_str()
+        .filter(|output| !output.is_empty())
+}
 
 #[derive(Clone, Debug)]
 pub struct OpenCodeRunConfig {
@@ -417,6 +428,11 @@ struct Projector {
     /// the part id, and a reasoning part's deltas are `field: "text"` too, so
     /// this is the only way to tell reply text from reasoning.
     part_types: HashMap<String, String>,
+    /// Cumulative reasoning text per reasoning part.
+    reasoning: HashMap<String, String>,
+    /// Length of the output last restated for each running tool part.
+    tool_output_len: HashMap<String, usize>,
+    last_tool_emit: HashMap<String, Instant>,
 }
 
 impl Projector {
@@ -428,6 +444,9 @@ impl Projector {
             text: HashMap::new(),
             last_text_emit: HashMap::new(),
             part_types: HashMap::new(),
+            reasoning: HashMap::new(),
+            tool_output_len: HashMap::new(),
+            last_tool_emit: HashMap::new(),
         }
     }
 
@@ -483,6 +502,21 @@ impl Projector {
             };
             self.mark_delivered(id, &key);
         }
+    }
+
+    fn reasoning_part(
+        part_id: &str,
+        message_id: Option<&Value>,
+        session_id: &str,
+        text: &str,
+    ) -> Value {
+        json!({
+            "id": part_id,
+            "messageID": message_id,
+            "sessionID": session_id,
+            "type": "reasoning",
+            "text": text,
+        })
     }
 
     fn stream_event(kind: &str, part: &Value) -> Action {
@@ -560,17 +594,77 @@ impl Projector {
                         }
                         vec![Self::stream_event("text", part)]
                     }
+                    Some("reasoning") => {
+                        // The snapshot is authoritative; a part announced empty keeps what its deltas built,
+                        // including deltas that arrived before the part was known to be reasoning.
+                        let carried = self.text.remove(part_id);
+                        match part.get("text").and_then(Value::as_str) {
+                            Some(text) if !text.is_empty() => {
+                                self.reasoning.insert(part_id.to_string(), text.to_string());
+                            }
+                            _ => {
+                                if let Some(carried) = carried {
+                                    self.reasoning.entry(part_id.to_string()).or_insert(carried);
+                                }
+                            }
+                        }
+                        match self.reasoning.get(part_id).filter(|text| !text.is_empty()) {
+                            Some(text) => vec![Self::stream_event(
+                                "reasoning",
+                                &Self::reasoning_part(
+                                    part_id,
+                                    part.get("messageID"),
+                                    &self.session_id,
+                                    text,
+                                ),
+                            )],
+                            None => Vec::new(),
+                        }
+                    }
                     Some("tool") => {
-                        let status = part
-                            .get("state")
+                        let state = part.get("state");
+                        let status = state
                             .and_then(|state| state.get("status"))
                             .and_then(Value::as_str)
                             .unwrap_or("pending")
                             .to_string();
                         if self.mark_delivered(part_id, &status) {
-                            vec![Self::stream_event("tool_use", part)]
-                        } else {
-                            Vec::new()
+                            if status == "running" {
+                                self.last_tool_emit.insert(part_id.to_string(), now);
+                                self.tool_output_len.insert(
+                                    part_id.to_string(),
+                                    running_tool_output(part).map_or(0, str::len),
+                                );
+                            }
+                            return vec![Self::stream_event("tool_use", part)];
+                        }
+                        // A running tool restates its output so far, as often as reply text is restated.
+                        let Some(output) =
+                            running_tool_output(part).filter(|_| status == "running")
+                        else {
+                            return Vec::new();
+                        };
+                        if self.tool_output_len.get(part_id) == Some(&output.len())
+                            || self.last_tool_emit.get(part_id).is_some_and(|last| {
+                                now.duration_since(*last) < TOOL_OUTPUT_PREVIEW_EVERY
+                            })
+                        {
+                            return Vec::new();
+                        }
+                        self.tool_output_len
+                            .insert(part_id.to_string(), output.len());
+                        self.last_tool_emit.insert(part_id.to_string(), now);
+                        let mut trimmed = part.clone();
+                        trimmed["state"]["metadata"]["output"] = json!(
+                            crate::status_slot::bounded_tool_tail(output).unwrap_or_default()
+                        );
+                        match Self::stream_event("tool_use", &trimmed) {
+                            // Marked so the phase is not restated for every update.
+                            Action::Stream(mut event) => {
+                                event["update"] = json!(true);
+                                vec![Action::Stream(event)]
+                            }
+                            other => vec![other],
                         }
                     }
                     _ => Vec::new(),
@@ -595,6 +689,27 @@ impl Projector {
                 // part is known to be text.
                 let known_text = match self.part_types.get(part_id).map(String::as_str) {
                     Some("text") => true,
+                    Some("reasoning") => {
+                        let text = self.reasoning.entry(part_id.to_string()).or_default();
+                        crate::status_slot::append_live_text(text, delta);
+                        let due = self
+                            .last_text_emit
+                            .get(part_id)
+                            .is_none_or(|last| now.duration_since(*last) >= TEXT_PREVIEW_EVERY);
+                        if !due {
+                            return Vec::new();
+                        }
+                        self.last_text_emit.insert(part_id.to_string(), now);
+                        return vec![Self::stream_event(
+                            "reasoning",
+                            &Self::reasoning_part(
+                                part_id,
+                                props.get("messageID"),
+                                &self.session_id,
+                                text,
+                            ),
+                        )];
+                    }
                     Some(_) => return Vec::new(),
                     None => false,
                 };
@@ -2475,7 +2590,9 @@ impl OpenCodeRunSink {
     }
 
     async fn post_stream_event(&self, seq: u64, event: Value, provider_thread_id: Option<&str>) {
-        if event.get("type").and_then(Value::as_str) == Some("tool_use") {
+        if event.get("type").and_then(Value::as_str) == Some("tool_use")
+            && event.get("update").and_then(Value::as_bool) != Some(true)
+        {
             let part = event.get("part").and_then(Value::as_object);
             let status = part
                 .and_then(|part| part.get("state"))
@@ -3133,6 +3250,49 @@ mod tests {
     }
 
     #[test]
+    fn a_running_tool_restates_its_output_and_a_finished_one_is_stated_once() {
+        let mut projector = Projector::new("ses_1");
+        let start = Instant::now();
+        let tool = |status: &str, output: &str| {
+            frame(
+                "message.part.updated",
+                json!({"part": {"id": "prt_tool", "messageID": "msg_a", "sessionID": "ses_1",
+                                "type": "tool", "tool": "bash", "callID": "call_1",
+                                "state": {"status": status, "input": {"command": "ls"},
+                                          "metadata": {"output": output}}}}),
+            )
+        };
+        let first = projector.interpret(&tool("running", ""), start);
+        assert!(
+            matches!(first.as_slice(), [Action::Stream(event)] if event.get("update").is_none())
+        );
+        // New output inside the interval is held; after it the output so far is restated, marked as an update.
+        assert!(projector
+            .interpret(&tool("running", "one\n"), start)
+            .is_empty());
+        let grown = projector.interpret(
+            &tool("running", "one\ntwo\n"),
+            start + TOOL_OUTPUT_PREVIEW_EVERY,
+        );
+        let [Action::Stream(event)] = grown.as_slice() else {
+            panic!("the output so far is restated");
+        };
+        assert_eq!(event["update"], true);
+        assert_eq!(event["part"]["state"]["metadata"]["output"], "one\ntwo\n");
+        // The same output again is nothing.
+        assert!(projector
+            .interpret(
+                &tool("running", "one\ntwo\n"),
+                start + TOOL_OUTPUT_PREVIEW_EVERY * 3
+            )
+            .is_empty());
+        let done = projector.interpret(&tool("completed", "one\ntwo\n"), start);
+        assert!(
+            matches!(done.as_slice(), [Action::Stream(event)] if event.get("update").is_none())
+        );
+    }
+
+    #[test]
     fn reasoning_deltas_are_never_previewed_as_reply_text() {
         let mut projector = Projector::new("ses_1");
         let start = Instant::now();
@@ -3152,9 +3312,13 @@ mod tests {
         };
         projector.interpret(&part("prt_r", "reasoning"), start);
         projector.interpret(&part("prt_t", "text"), start);
-        assert!(projector
-            .interpret(&delta("prt_r", "pondering"), start)
-            .is_empty());
+        // Reasoning is its own event type, so the host never reads it as the reply.
+        let thought = projector.interpret(&delta("prt_r", "pondering"), start);
+        let Some(Action::Stream(thought)) = thought.first() else {
+            panic!("reasoning is previewed as reasoning");
+        };
+        assert_eq!(thought["type"], "reasoning");
+        assert_eq!(thought["part"]["text"], "pondering");
         let reply = projector.interpret(&delta("prt_t", "Answer"), start);
         let Some(Action::Stream(event)) = reply.first() else {
             panic!("reply text is previewed");
