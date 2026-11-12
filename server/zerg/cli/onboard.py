@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import webbrowser
+from enum import Enum
 from pathlib import Path
 
 import httpx
@@ -34,6 +35,14 @@ from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.services.local_runtime_installer import install_local_runtime
 from zerg.services.runtime_artifacts import desktop_app_canonical_bundle_path
 from zerg.services.shipper import load_token
+
+
+class Topology(str, Enum):
+    """Typer >= 0.29 dropped click_type=; an Enum gives the same case-insensitive choice on every version."""
+
+    local = "local"
+    remote = "remote"
+
 
 logger = logging.getLogger(__name__)
 
@@ -463,17 +472,17 @@ def onboard(
         "--remote-url",
         help="Skip local runtime and connect to an existing Longhouse at this URL",
     ),
-    topology: str | None = typer.Option(
+    topology: Topology | None = typer.Option(
         None,
         "--topology",
         help="Skip the interactive topology prompt: local or remote.",
-        click_type=Choice(["local", "remote"], case_sensitive=False),
+        case_sensitive=False,
     ),
 ) -> None:
     """Run the default local quickstart or connect to existing Longhouse."""
     # httpx logs every health probe at INFO; on a first run they drown the steps.
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    normalized_topology = topology.lower() if topology else None
+    normalized_topology = topology.value if topology else None
 
     if remote_url and normalized_topology == "local":
         raise typer.BadParameter("--topology local cannot be combined with --remote-url.")
