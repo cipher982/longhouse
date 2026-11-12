@@ -558,7 +558,7 @@ def main() -> int:
         engine_url = base_url if args.remote_url else f"http://127.0.0.1:{proxy_port}"
         engine = subprocess.Popen([engine_bin, "connect", "--url", engine_url, "--token", token, "--db", str(engine_db),
                                     "--compression", "zstd", "--log-dir", str(log_dir),
-                                    "--machine-name", DEVICE_ID, "--fallback-scan-secs", "1", "--spool-replay-secs", "1"], env=engine_env,
+                                    "--machine-name", DEVICE_ID], env=engine_env,
                                   stdout=engine_log, stderr=subprocess.STDOUT, start_new_session=True)
         import_started = time.monotonic()
         probe = LiveProbe(home, base_url, token)
